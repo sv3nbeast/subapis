@@ -49,7 +49,8 @@ const (
 	antigravityDailyBaseURL = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 )
 
-// defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置，默认 1.20.5
+// defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置。
+// 同时用于 User-Agent 和 loadCodeAssist.metadata.ideVersion，避免两处版本不一致。
 var defaultUserAgentVersion = "1.21.9"
 
 // defaultClientSecret 可通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置
@@ -66,9 +67,17 @@ func init() {
 	}
 }
 
+// GetClientVersion 返回当前配置的 Antigravity 客户端版本。
+func GetClientVersion() string {
+	if version := strings.TrimSpace(defaultUserAgentVersion); version != "" {
+		return version
+	}
+	return "1.21.9"
+}
+
 // GetUserAgent 返回当前配置的 User-Agent
 func GetUserAgent() string {
-	return fmt.Sprintf("antigravity/%s windows/amd64", defaultUserAgentVersion)
+	return fmt.Sprintf("antigravity/%s windows/amd64", GetClientVersion())
 }
 
 func getClientSecret() (string, error) {

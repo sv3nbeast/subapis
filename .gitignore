@@ -117,7 +117,11 @@ backend/.installed
 tests
 CLAUDE.md
 .claude
-scripts
+scripts/*
+!scripts/deploy-prod.sh
+!scripts/rebuild-prod-sub2api.sh
+!scripts/rollback-prod.sh
+!scripts/rollback-prod-sub2api.sh
 .code-review-state
 #openspec/
 code-reviews/
@@ -132,4 +136,3 @@ docs/*
 frontend/coverage/
 aicodex
 output/
-

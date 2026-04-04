@@ -85,6 +85,26 @@ func TestGetClientSecret_环境变量有前后空格(t *testing.T) {
 	}
 }
 
+func TestGetClientVersion_去除空格(t *testing.T) {
+	old := defaultUserAgentVersion
+	defaultUserAgentVersion = "  1.21.9  "
+	t.Cleanup(func() { defaultUserAgentVersion = old })
+
+	if got := GetClientVersion(); got != "1.21.9" {
+		t.Fatalf("GetClientVersion 不匹配: got %q, want %q", got, "1.21.9")
+	}
+}
+
+func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
+	old := defaultUserAgentVersion
+	defaultUserAgentVersion = "1.21.9"
+	t.Cleanup(func() { defaultUserAgentVersion = old })
+
+	if got := GetUserAgent(); got != "antigravity/1.21.9 windows/amd64" {
+		t.Fatalf("GetUserAgent 不匹配: got %q", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ForwardBaseURLs
 // ---------------------------------------------------------------------------
