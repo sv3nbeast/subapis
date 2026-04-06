@@ -375,6 +375,8 @@ type GatewayConfig struct {
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
+	// Antigravity 配额耗尽时自动临时不可调度时长（分钟），0 表示关闭自动摘除
+	AntigravityQuotaExhaustedTempUnschedMinutes int `mapstructure:"antigravity_quota_exhausted_temp_unsched_minutes"`
 
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
@@ -1317,6 +1319,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.error_rate", 0.8)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.ttft", 0.5)
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
+	viper.SetDefault("gateway.antigravity_quota_exhausted_temp_unsched_minutes", 60)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", int64(8*1024*1024))

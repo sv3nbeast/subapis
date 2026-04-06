@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
@@ -82,11 +83,18 @@ type extraUpdateCall struct {
 	updates   map[string]any
 }
 
+type antigravityTempUnschedCall struct {
+	accountID int64
+	until     time.Time
+	reason    string
+}
+
 type stubAntigravityAccountRepo struct {
 	AccountRepository
 	rateCalls           []rateLimitCall
 	modelRateLimitCalls []modelRateLimitCall
 	extraUpdateCalls    []extraUpdateCall
+	tempUnschedCalls    []antigravityTempUnschedCall
 }
 
 func (s *stubAntigravityAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
@@ -101,6 +109,11 @@ func (s *stubAntigravityAccountRepo) SetModelRateLimit(ctx context.Context, id i
 
 func (s *stubAntigravityAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	s.extraUpdateCalls = append(s.extraUpdateCalls, extraUpdateCall{accountID: id, updates: updates})
+	return nil
+}
+
+func (s *stubAntigravityAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	s.tempUnschedCalls = append(s.tempUnschedCalls, antigravityTempUnschedCall{accountID: id, until: until, reason: reason})
 	return nil
 }
 
@@ -223,6 +236,31 @@ func TestHandleUpstreamError_429_NonModelRateLimit_UsesMappedModelKey(t *testing
 	require.Nil(t, result)
 	require.Len(t, repo.modelRateLimitCalls, 1)
 	require.Equal(t, "claude-opus-4-6-thinking", repo.modelRateLimitCalls[0].modelKey)
+}
+
+func TestHandleUpstreamError_429_QuotaExhausted_TempUnschedulesAccount(t *testing.T) {
+	repo := &stubAntigravityAccountRepo{}
+	cfg := &config.Config{}
+	cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes = 60
+	rlSvc := NewRateLimitService(repo, nil, cfg, nil, nil)
+	svc := &AntigravityGatewayService{
+		accountRepo:      repo,
+		rateLimitService: rlSvc,
+		settingService:   &SettingService{cfg: cfg},
+	}
+	account := &Account{ID: 21, Name: "acc-21", Platform: PlatformAntigravity}
+
+	body := []byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)
+
+	result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "claude-sonnet-4-5", 0, "", false)
+
+	require.NotNil(t, result)
+	require.True(t, result.Handled)
+	require.NotNil(t, result.SwitchError)
+	require.Len(t, repo.tempUnschedCalls, 1)
+	require.Empty(t, repo.modelRateLimitCalls, "quota exhausted should prefer temp unsched over model cooldown")
+	require.NotNil(t, account.TempUnschedulableUntil)
+	require.NotEmpty(t, account.TempUnschedulableReason)
 }
 
 // TestHandleUpstreamError_503_ModelCapacityExhausted 测试 503 模型容量不足场景

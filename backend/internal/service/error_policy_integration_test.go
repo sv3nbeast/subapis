@@ -260,6 +260,46 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		require.Equal(t, 1, upstream.calls, "should not retry")
 	})
 
+	t.Run("429_quota_exhausted_auto_temp_unschedules", func(t *testing.T) {
+		saveAndSetBaseURLs(t)
+
+		upstream := &epFixedUpstream{
+			statusCode: 429,
+			body:       `{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`,
+		}
+		repo := &epAccountRepo{}
+		cfg := &config.Config{}
+		cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes = 60
+		rlSvc := NewRateLimitService(repo, nil, cfg, nil, nil)
+		svc := &AntigravityGatewayService{
+			accountRepo:      repo,
+			rateLimitService: rlSvc,
+			settingService:   &SettingService{cfg: cfg},
+		}
+
+		account := &Account{
+			ID:          201,
+			Type:        AccountTypeOAuth,
+			Platform:    PlatformAntigravity,
+			Schedulable: true,
+			Status:      StatusActive,
+			Concurrency: 1,
+		}
+		p := newRetryParams(account, upstream, func(_ context.Context, _ string, _ *Account, _ int, _ http.Header, _ []byte, _ string, _ int64, _ string, _ bool) *handleModelRateLimitResult {
+			t.Error("handleError should not be called for auto quota temp unschedulable")
+			return nil
+		})
+
+		result, err := svc.antigravityRetryLoop(p)
+
+		require.Nil(t, result)
+		var switchErr *AntigravityAccountSwitchError
+		require.ErrorAs(t, err, &switchErr)
+		require.Equal(t, account.ID, switchErr.OriginalAccountID)
+		require.Equal(t, 1, upstream.calls, "quota exhausted should switch immediately")
+		require.Equal(t, 1, repo.tempCalls)
+	})
+
 	t.Run("503_body_no_match_continues_default_retry", func(t *testing.T) {
 		saveAndSetBaseURLs(t)
 

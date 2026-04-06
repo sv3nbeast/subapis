@@ -33,6 +33,21 @@ var (
 		"quota exhausted",
 	}
 
+	antigravityQuotaTempUnschedKeywords = []string{
+		"quota_exhausted",
+		"quota exhausted",
+		"check quota",
+		"insufficient google_one_ai credits",
+		"not enough credit",
+		"not enough credits",
+		"credit exhausted",
+		"credits exhausted",
+		"credit balance",
+		"minimumcreditamountforusage",
+		"minimum credit amount for usage",
+		"minimum credit",
+	}
+
 	creditsExhaustedKeywords = []string{
 		"google_one_ai",
 		"insufficient credit",
@@ -108,6 +123,19 @@ func classifyAntigravity429(body []byte) antigravity429Category {
 		return antigravity429RateLimited
 	}
 	return antigravity429Unknown
+}
+
+func matchAntigravityQuotaTempUnschedKeyword(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	lowerBody := strings.ToLower(string(body))
+	for _, keyword := range antigravityQuotaTempUnschedKeywords {
+		if strings.Contains(lowerBody, keyword) {
+			return keyword
+		}
+	}
+	return ""
 }
 
 // injectEnabledCreditTypes 在已序列化的 v1internal JSON body 中注入 AI Credits 类型。

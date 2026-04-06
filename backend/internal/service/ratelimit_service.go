@@ -1413,6 +1413,61 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 	return false
 }
 
+func buildTempUnschedState(now, until time.Time, statusCode int, matchedKeyword string, ruleIndex int, responseBody []byte) *TempUnschedState {
+	return &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      statusCode,
+		MatchedKeyword:  matchedKeyword,
+		RuleIndex:       ruleIndex,
+		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
+	}
+}
+
+func marshalTempUnschedReason(state *TempUnschedState) string {
+	if state == nil {
+		return ""
+	}
+	if raw, err := json.Marshal(state); err == nil {
+		return string(raw)
+	}
+	return strings.TrimSpace(state.ErrorMessage)
+}
+
+func (s *RateLimitService) persistTempUnschedulableState(ctx context.Context, accountID int64, until time.Time, state *TempUnschedState, setLogKey, cacheLogKey string) bool {
+	if state == nil {
+		return false
+	}
+	reason := marshalTempUnschedReason(state)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+		slog.Warn(setLogKey, "account_id", accountID, "error", err)
+		return false
+	}
+
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, accountID, state); err != nil {
+			slog.Warn(cacheLogKey, "account_id", accountID, "error", err)
+		}
+	}
+
+	return true
+}
+
+func (s *RateLimitService) TriggerSystemTempUnschedulable(ctx context.Context, account *Account, statusCode int, duration time.Duration, matchedKeyword string, responseBody []byte) (time.Time, string, bool) {
+	if account == nil || duration <= 0 {
+		return time.Time{}, "", false
+	}
+
+	now := time.Now()
+	until := now.Add(duration)
+	state := buildTempUnschedState(now, until, statusCode, matchedKeyword, -1, responseBody)
+	if !s.persistTempUnschedulableState(ctx, account.ID, until, state, "system_temp_unsched_set_failed", "system_temp_unsched_cache_set_failed") {
+		return time.Time{}, "", false
+	}
+
+	return until, marshalTempUnschedReason(state), true
+}
+
 func wasTempUnschedByStatusCode(reason string, statusCode int) bool {
 	if statusCode <= 0 {
 		return false
@@ -1455,33 +1510,9 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 
 	now := time.Now()
 	until := now.Add(time.Duration(rule.DurationMinutes) * time.Minute)
-
-	state := &TempUnschedState{
-		UntilUnix:       until.Unix(),
-		TriggeredAtUnix: now.Unix(),
-		StatusCode:      statusCode,
-		MatchedKeyword:  matchedKeyword,
-		RuleIndex:       ruleIndex,
-		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
-	}
-
-	reason := ""
-	if raw, err := json.Marshal(state); err == nil {
-		reason = string(raw)
-	}
-	if reason == "" {
-		reason = strings.TrimSpace(state.ErrorMessage)
-	}
-
-	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
+	state := buildTempUnschedState(now, until, statusCode, matchedKeyword, ruleIndex, responseBody)
+	if !s.persistTempUnschedulableState(ctx, account.ID, until, state, "temp_unsched_set_failed", "temp_unsched_cache_set_failed") {
 		return false
-	}
-
-	if s.tempUnschedCache != nil {
-		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
-		}
 	}
 
 	slog.Info("account_temp_unschedulable", "account_id", account.ID, "until", until, "rule_index", ruleIndex, "status_code", statusCode)
@@ -1559,33 +1590,9 @@ func (s *RateLimitService) HandleStreamTimeout(ctx context.Context, account *Acc
 func (s *RateLimitService) triggerStreamTimeoutTempUnsched(ctx context.Context, account *Account, settings *StreamTimeoutSettings, model string) bool {
 	now := time.Now()
 	until := now.Add(time.Duration(settings.TempUnschedMinutes) * time.Minute)
-
-	state := &TempUnschedState{
-		UntilUnix:       until.Unix(),
-		TriggeredAtUnix: now.Unix(),
-		StatusCode:      0, // 超时没有状态码
-		MatchedKeyword:  "stream_timeout",
-		RuleIndex:       -1, // 表示系统级规则
-		ErrorMessage:    "Stream data interval timeout for model: " + model,
-	}
-
-	reason := ""
-	if raw, err := json.Marshal(state); err == nil {
-		reason = string(raw)
-	}
-	if reason == "" {
-		reason = state.ErrorMessage
-	}
-
-	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		slog.Warn("stream_timeout_set_temp_unsched_failed", "account_id", account.ID, "error", err)
+	state := buildTempUnschedState(now, until, 0, "stream_timeout", -1, []byte("Stream data interval timeout for model: "+model))
+	if !s.persistTempUnschedulableState(ctx, account.ID, until, state, "stream_timeout_set_temp_unsched_failed", "stream_timeout_set_temp_unsched_cache_failed") {
 		return false
-	}
-
-	if s.tempUnschedCache != nil {
-		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			slog.Warn("stream_timeout_set_temp_unsched_cache_failed", "account_id", account.ID, "error", err)
-		}
 	}
 
 	// 重置超时计数

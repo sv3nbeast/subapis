@@ -132,6 +132,7 @@ deploy/.monitor_state
 .gocache/
 vite.config.js
 docs/*
+!docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
 .serena/
 .codex/
 frontend/coverage/
