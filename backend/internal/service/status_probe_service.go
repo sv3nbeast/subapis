@@ -39,18 +39,18 @@ type StatusProbeConfig struct {
 
 // ProbeFailure represents a single recent failure event.
 type ProbeFailure struct {
-	Timestamp    time.Time `json:"timestamp"`
-	ErrorMessage string    `json:"error_message"`
+	Timestamp    time.Time `json:"time"`
+	ErrorMessage string    `json:"error"`
 	LatencyMs    int       `json:"latency_ms"`
 }
 
 // HourlyStat contains aggregated probe statistics for one hour.
 type HourlyStat struct {
-	Hour         time.Time `json:"hour"`
-	TotalProbes  int       `json:"total_probes"`
-	SuccessCount int       `json:"success_count"`
-	FailCount    int       `json:"fail_count"`
-	AvgLatencyMs float64   `json:"avg_latency_ms"`
+	Hour         time.Time      `json:"hour"`
+	TotalProbes  int            `json:"total"`
+	SuccessCount int            `json:"success"`
+	Failures     []ProbeFailure `json:"failures,omitempty"`
+	AvgLatencyMs float64        `json:"avg_latency_ms"`
 }
 
 // ModelStatus describes the current state and history of a single monitored model.
@@ -58,7 +58,7 @@ type ModelStatus struct {
 	Model           string        `json:"model"`
 	DisplayName     string        `json:"display_name"`
 	CurrentStatus   string        `json:"current_status"`
-	UptimePercent   float64       `json:"uptime_percent"`
+	UptimePercent   float64       `json:"uptime_percentage"`
 	AvgLatencyMs    float64       `json:"avg_latency_ms"`
 	TotalProbes     int           `json:"total_probes"`
 	RecentFailures  []ProbeFailure `json:"recent_failures"`
@@ -67,8 +67,9 @@ type ModelStatus struct {
 
 // ServiceStatusResponse is the top-level response returned by GetStatus.
 type ServiceStatusResponse struct {
-	Models    []ModelStatus `json:"models"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	OverallStatus string        `json:"overall_status"`
+	Models        []ModelStatus `json:"models"`
+	UpdatedAt     time.Time     `json:"last_updated"`
 }
 
 // ─── Internal raw result type ────────────────────────────────────────────────
@@ -357,8 +358,9 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 
 	if len(metaMap) == 0 {
 		return &ServiceStatusResponse{
-			Models:    []ModelStatus{},
-			UpdatedAt: time.Now().UTC(),
+			OverallStatus: "operational",
+			Models:        []ModelStatus{},
+			UpdatedAt:     time.Now().UTC(),
 		}, nil
 	}
 
@@ -402,9 +404,21 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 		models = append(models, ms)
 	}
 
+	// Compute overall status from all model statuses.
+	overallStatus := "operational"
+	for _, ms := range models {
+		if ms.CurrentStatus == "down" {
+			overallStatus = "major_outage"
+			break
+		} else if ms.CurrentStatus == "degraded" {
+			overallStatus = "degraded"
+		}
+	}
+
 	return &ServiceStatusResponse{
-		Models:    models,
-		UpdatedAt: time.Now().UTC(),
+		OverallStatus: overallStatus,
+		Models:        models,
+		UpdatedAt:     time.Now().UTC(),
 	}, nil
 }
 
@@ -484,7 +498,15 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 		if r.Status == "ok" {
 			hs.SuccessCount++
 		} else {
-			hs.FailCount++
+			errStr := ""
+			if r.ErrorMessage.Valid {
+				errStr = r.ErrorMessage.String
+			}
+			hs.Failures = append(hs.Failures, ProbeFailure{
+				Timestamp:    r.CreatedAt,
+				ErrorMessage: errStr,
+				LatencyMs:    r.LatencyMs,
+			})
 		}
 		hs.AvgLatencyMs += float64(r.LatencyMs)
 	}
