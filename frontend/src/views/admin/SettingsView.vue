@@ -667,6 +667,179 @@
           </div>
         </div>
 
+        <!-- Status Probe Settings -->
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('adminStatus.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('adminStatus.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <!-- Loading State -->
+            <div v-if="statusProbeLoading" class="flex items-center gap-2 text-gray-500">
+              <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+              {{ t('common.loading') }}
+            </div>
+
+            <template v-else>
+              <!-- Enable Probe -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">{{
+                    t('adminStatus.enabled')
+                  }}</label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t('adminStatus.enabledHint') }}
+                  </p>
+                </div>
+                <Toggle v-model="statusProbeForm.enabled" />
+              </div>
+
+              <!-- Settings - Only show when enabled -->
+              <div
+                v-if="statusProbeForm.enabled"
+                class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <!-- Interval -->
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('adminStatus.interval') }}
+                  </label>
+                  <select v-model.number="statusProbeForm.interval_minutes" class="input w-48">
+                    <option :value="1">1</option>
+                    <option :value="2">2</option>
+                    <option :value="3">3</option>
+                    <option :value="5">5</option>
+                    <option :value="10">10</option>
+                    <option :value="15">15</option>
+                  </select>
+                </div>
+
+                <!-- Retention Days -->
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('adminStatus.retention') }}
+                  </label>
+                  <input
+                    v-model.number="statusProbeForm.retention_days"
+                    type="number"
+                    min="1"
+                    max="365"
+                    class="input w-32"
+                  />
+                </div>
+
+                <!-- Model List -->
+                <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <label class="mb-3 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('adminStatus.models') }}
+                  </label>
+
+                  <!-- Table Header -->
+                  <div
+                    v-if="statusProbeForm.models.length > 0"
+                    class="mb-2 grid grid-cols-12 gap-2 text-xs font-medium text-gray-500 dark:text-gray-400"
+                  >
+                    <div class="col-span-4">{{ t('adminStatus.modelId') }}</div>
+                    <div class="col-span-3">{{ t('adminStatus.displayName') }}</div>
+                    <div class="col-span-2">{{ t('adminStatus.sortOrder') }}</div>
+                    <div class="col-span-2">{{ t('adminStatus.modelEnabled') }}</div>
+                    <div class="col-span-1"></div>
+                  </div>
+
+                  <!-- Model Rows -->
+                  <div
+                    v-for="(model, index) in statusProbeForm.models"
+                    :key="index"
+                    class="mb-2 grid grid-cols-12 items-center gap-2"
+                  >
+                    <div class="col-span-4">
+                      <input
+                        v-model="model.model_id"
+                        type="text"
+                        class="input input-sm w-full"
+                        :placeholder="t('adminStatus.modelId')"
+                      />
+                    </div>
+                    <div class="col-span-3">
+                      <input
+                        v-model="model.display_name"
+                        type="text"
+                        class="input input-sm w-full"
+                        :placeholder="t('adminStatus.displayName')"
+                      />
+                    </div>
+                    <div class="col-span-2">
+                      <input
+                        v-model.number="model.sort_order"
+                        type="number"
+                        min="0"
+                        class="input input-sm w-full"
+                      />
+                    </div>
+                    <div class="col-span-2 flex items-center justify-center">
+                      <Toggle v-model="model.enabled" />
+                    </div>
+                    <div class="col-span-1 flex items-center justify-center">
+                      <button
+                        type="button"
+                        @click="removeStatusProbeModel(index)"
+                        class="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
+                      >
+                        <Icon name="x" size="sm" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Add Model Button -->
+                  <button
+                    type="button"
+                    @click="addStatusProbeModel"
+                    class="btn btn-secondary btn-sm mt-2"
+                  >
+                    {{ t('adminStatus.addModel') }}
+                  </button>
+                </div>
+              </div>
+
+              <!-- Save Button -->
+              <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
+                <button
+                  type="button"
+                  @click="saveStatusProbeSettings"
+                  :disabled="statusProbeSaving"
+                  class="btn btn-primary btn-sm"
+                >
+                  <svg
+                    v-if="statusProbeSaving"
+                    class="mr-1 h-4 w-4 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="4"
+                    ></circle>
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  {{ statusProbeSaving ? t('common.saving') : t('adminStatus.save') }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
         </div><!-- /Tab: Gateway -->
 
         <!-- Tab: Security — Registration, Turnstile, LinuxDo -->
@@ -2062,6 +2235,21 @@ const betaPolicyForm = reactive({
   }>
 })
 
+// Status Probe 状态
+const statusProbeLoading = ref(true)
+const statusProbeSaving = ref(false)
+const statusProbeForm = reactive({
+  enabled: false,
+  interval_minutes: 5,
+  retention_days: 30,
+  models: [] as Array<{
+    model_id: string
+    display_name: string
+    sort_order: number
+    enabled: boolean
+  }>
+})
+
 interface DefaultSubscriptionGroupOption {
   value: number
   label: string
@@ -2756,6 +2944,58 @@ async function saveBetaPolicySettings() {
   }
 }
 
+// Status Probe 方法
+async function loadStatusProbeSettings() {
+  statusProbeLoading.value = true
+  try {
+    const settings = await adminAPI.settings.getStatusProbeSettings()
+    statusProbeForm.enabled = settings.enabled
+    statusProbeForm.interval_minutes = settings.interval_minutes
+    statusProbeForm.retention_days = settings.retention_days
+    statusProbeForm.models = Array.isArray(settings.models) ? settings.models : []
+  } catch (error: any) {
+    console.error('Failed to load status probe settings:', error)
+  } finally {
+    statusProbeLoading.value = false
+  }
+}
+
+async function saveStatusProbeSettings() {
+  statusProbeSaving.value = true
+  try {
+    const updated = await adminAPI.settings.updateStatusProbeSettings({
+      enabled: statusProbeForm.enabled,
+      interval_minutes: statusProbeForm.interval_minutes,
+      retention_days: statusProbeForm.retention_days,
+      models: statusProbeForm.models
+    })
+    statusProbeForm.enabled = updated.enabled
+    statusProbeForm.interval_minutes = updated.interval_minutes
+    statusProbeForm.retention_days = updated.retention_days
+    statusProbeForm.models = Array.isArray(updated.models) ? updated.models : []
+    appStore.showSuccess(t('adminStatus.saved'))
+  } catch (error: any) {
+    appStore.showError(
+      t('adminStatus.saveFailed') + ': ' + (error.message || t('common.unknownError'))
+    )
+  } finally {
+    statusProbeSaving.value = false
+  }
+}
+
+function addStatusProbeModel() {
+  statusProbeForm.models.push({
+    model_id: '',
+    display_name: '',
+    sort_order: statusProbeForm.models.length,
+    enabled: true
+  })
+}
+
+function removeStatusProbeModel(index: number) {
+  statusProbeForm.models.splice(index, 1)
+}
+
 onMounted(() => {
   loadSettings()
   loadSubscriptionGroups()
@@ -2764,6 +3004,7 @@ onMounted(() => {
   loadStreamTimeoutSettings()
   loadRectifierSettings()
   loadBetaPolicySettings()
+  loadStatusProbeSettings()
 })
 </script>
 

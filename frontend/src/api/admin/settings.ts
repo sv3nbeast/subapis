@@ -392,6 +392,52 @@ export async function updateBetaPolicySettings(
   return data
 }
 
+// ==================== Status Probe Settings ====================
+
+/**
+ * Status probe model configuration
+ */
+export interface StatusProbeModel {
+  model_id: string
+  display_name: string
+  sort_order: number
+  enabled: boolean
+}
+
+/**
+ * Status probe settings interface
+ */
+export interface StatusProbeSettings {
+  enabled: boolean
+  interval_minutes: number
+  retention_days: number
+  models: StatusProbeModel[]
+}
+
+/**
+ * Get status probe settings
+ * @returns Status probe settings
+ */
+export async function getStatusProbeSettings(): Promise<StatusProbeSettings> {
+  const { data } = await apiClient.get<StatusProbeSettings>('/admin/settings/status-probe')
+  return data
+}
+
+/**
+ * Update status probe settings
+ * @param settings - Status probe settings to update
+ * @returns Updated settings
+ */
+export async function updateStatusProbeSettings(
+  settings: StatusProbeSettings
+): Promise<StatusProbeSettings> {
+  const { data } = await apiClient.put<StatusProbeSettings>(
+    '/admin/settings/status-probe',
+    settings
+  )
+  return data
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -407,7 +453,9 @@ export const settingsAPI = {
   getRectifierSettings,
   updateRectifierSettings,
   getBetaPolicySettings,
-  updateBetaPolicySettings
+  updateBetaPolicySettings,
+  getStatusProbeSettings,
+  updateStatusProbeSettings
 }
 
 export default settingsAPI

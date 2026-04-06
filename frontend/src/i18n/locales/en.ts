@@ -353,7 +353,8 @@ export default {
     mySubscriptions: 'My Subscriptions',
     buySubscription: 'Recharge / Subscription',
     docs: 'Docs',
-    sora: 'Sora Studio'
+    sora: 'Sora Studio',
+    serviceStatus: 'Service Status'
   },
 
   // Auth
@@ -4992,6 +4993,48 @@ export default {
         description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click to confirm and create your API key.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the key (sk-xxx) immediately after creation</li><li>Key is only shown once, need to regenerate if lost</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>🚀 How to Use:</b><br/>Configure the key in any OpenAI-compatible client (like ChatBox, OpenCat, etc.) and start using!</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
       }
     }
+  },
+
+  status: {
+    title: 'Service Status',
+    description: 'Real-time availability of all services',
+    allOperational: 'All services are operational',
+    degraded: 'Some services are affected',
+    majorOutage: 'Service outage',
+    operational: 'Operational',
+    degradedStatus: 'Degraded',
+    outage: 'Outage',
+    uptime: 'uptime',
+    daysAgo: '30 days ago',
+    today: 'Today',
+    probes: 'probes',
+    success: 'successful',
+    failed: 'Failed',
+    avgLatency: 'Avg latency',
+    duration: 'Duration',
+    lessThan: 'Less than',
+    minutes: 'minutes',
+    collecting: 'Collecting monitoring data...',
+    lastUpdated: 'Last updated',
+  },
+
+  adminStatus: {
+    title: 'Service Status Probe',
+    description: 'Configure automated probing of model endpoints to monitor service availability.',
+    enabled: 'Enable Probe',
+    enabledHint: 'When enabled, the system will periodically probe configured model endpoints.',
+    interval: 'Probe Interval (minutes)',
+    retention: 'Data Retention (days)',
+    models: 'Monitored Models',
+    modelId: 'Model ID',
+    displayName: 'Display Name',
+    sortOrder: 'Sort Order',
+    modelEnabled: 'Enabled',
+    addModel: 'Add Model',
+    deleteModel: 'Delete',
+    save: 'Save',
+    saved: 'Configuration saved',
+    saveFailed: 'Failed to save status probe settings',
   },
 
 }
