@@ -218,6 +218,13 @@ const (
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
+
+	// =========================
+	// Service Status Probe
+	// =========================
+
+	// SettingKeyStatusProbeConfig stores JSON config for service status probe monitoring.
+	SettingKeyStatusProbeConfig = "status_probe_config"
 )
 
 // AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).

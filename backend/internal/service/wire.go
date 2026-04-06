@@ -378,6 +378,13 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	return svc
 }
 
+// ProvideStatusProbeService creates and starts StatusProbeService.
+func ProvideStatusProbeService(db *sql.DB, settingService *SettingService) *StatusProbeService {
+	svc := NewStatusProbeService(db, settingService)
+	svc.Start()
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -460,4 +467,5 @@ var ProviderSet = wire.NewSet(
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,
+	ProvideStatusProbeService,
 )
