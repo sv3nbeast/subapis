@@ -182,6 +182,7 @@ import {
   isRegistrationEmailSuffixAllowed,
   normalizeRegistrationEmailSuffixWhitelist
 } from '@/utils/registrationEmailPolicy'
+import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
 
 const { t, locale } = useI18n()
 
@@ -212,7 +213,7 @@ const hasRegisterData = ref<boolean>(false)
 // Public settings
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
-const siteName = ref<string>('Sub2API')
+const siteName = ref<string>(DEFAULT_SITE_NAME)
 const registrationEmailSuffixWhitelist = ref<string[]>([])
 
 // Turnstile for resend
@@ -249,7 +250,7 @@ onMounted(async () => {
     const settings = await getPublicSettings()
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
-    siteName.value = settings.site_name || 'Sub2API'
+    siteName.value = normalizeSiteName(settings.site_name)
     registrationEmailSuffixWhitelist.value = normalizeRegistrationEmailSuffixWhitelist(
       settings.registration_email_suffix_whitelist || []
     )

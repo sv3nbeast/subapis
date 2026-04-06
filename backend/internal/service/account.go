@@ -452,6 +452,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 				"gemini-3.1-pro-high",
 				"gemini-3.1-pro-low",
 			})
+			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
 		return result
 	}
@@ -513,6 +514,21 @@ func ensureAntigravityDefaultPassthroughs(mapping map[string]string, models []st
 	for _, model := range models {
 		ensureAntigravityDefaultPassthrough(mapping, model)
 	}
+}
+
+func ensureAntigravityDefaultAlias(mapping map[string]string, model string, target string) {
+	if mapping == nil || model == "" || target == "" {
+		return
+	}
+	if _, exists := mapping[model]; exists {
+		return
+	}
+	for pattern := range mapping {
+		if matchWildcard(pattern, model) {
+			return
+		}
+	}
+	mapping[model] = target
 }
 
 func normalizeRequestedModelForLookup(platform, requestedModel string) string {

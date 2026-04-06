@@ -336,6 +336,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 	// 标准化模型名称（转小写）
 	model = strings.ToLower(model)
+	model = normalizeBillingModelAlias(model)
 
 	// 1. 优先从动态价格服务获取
 	if s.pricingService != nil {
@@ -374,6 +375,15 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 	}
 
 	return nil, fmt.Errorf("pricing not found for model: %s", model)
+}
+
+func normalizeBillingModelAlias(model string) string {
+	switch strings.TrimSpace(strings.ToLower(model)) {
+	case "claude-haiku-4-6":
+		return "claude-sonnet-4-6"
+	default:
+		return model
+	}
 }
 
 // GetModelPricingWithChannel 获取模型定价，渠道配置的价格覆盖默认值

@@ -700,6 +700,68 @@ func TestGatewayService_SelectAccountForModelWithExclusions_ForcePlatform(t *tes
 	require.Equal(t, PlatformAntigravity, acc.Platform)
 }
 
+func TestGatewayService_SelectAccountForModelWithPlatform_ShufflesSamePriorityColdAccounts(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockAccountRepoForPlatform{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformAnthropic, Priority: 1, Status: StatusActive, Schedulable: true},
+			{ID: 2, Platform: PlatformAnthropic, Priority: 1, Status: StatusActive, Schedulable: true},
+			{ID: 3, Platform: PlatformAnthropic, Priority: 1, Status: StatusActive, Schedulable: true},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+
+	svc := &GatewayService{
+		accountRepo: repo,
+		cfg:         testConfig(),
+	}
+
+	seen := map[int64]bool{}
+	for i := 0; i < 100; i++ {
+		acc, err := svc.selectAccountForModelWithPlatform(ctx, nil, "", "claude-3-5-sonnet-20241022", nil, PlatformAnthropic)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		seen[acc.ID] = true
+	}
+
+	require.GreaterOrEqual(t, len(seen), 2, "same-priority cold accounts should be shuffled instead of always picking the head account")
+}
+
+func TestGatewayService_SelectAccountForModelWithExclusions_ShufflesMixedSchedulingCandidates(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockAccountRepoForPlatform{
+		accounts: []Account{
+			{ID: 101, Platform: PlatformAntigravity, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			{ID: 102, Platform: PlatformAntigravity, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			{ID: 103, Platform: PlatformAntigravity, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+
+	svc := &GatewayService{
+		accountRepo: repo,
+		cfg:         testConfig(),
+	}
+
+	seen := map[int64]bool{}
+	for i := 0; i < 100; i++ {
+		acc, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "claude-sonnet-4-5", nil)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		seen[acc.ID] = true
+	}
+
+	require.GreaterOrEqual(t, len(seen), 2, "mixed scheduling should not always hit the same head antigravity account")
+}
+
 func TestGatewayService_SelectAccountForModelWithPlatform_RoutedStickySessionClears(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10)

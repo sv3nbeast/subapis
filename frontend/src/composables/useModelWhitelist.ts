@@ -44,6 +44,7 @@ export const claudeModels = [
   'claude-opus-4-5-20251101',
   'claude-opus-4-6',
   'claude-sonnet-4-6',
+  'claude-haiku-4-6',
   'claude-2.1', 'claude-2.0', 'claude-instant-1.2'
 ]
 

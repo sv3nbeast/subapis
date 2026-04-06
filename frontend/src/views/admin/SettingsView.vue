@@ -1984,6 +1984,7 @@ import {
   normalizeRegistrationEmailSuffixDomains,
   parseRegistrationEmailSuffixWhitelistInput
 } from '@/utils/registrationEmailPolicy'
+import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -2089,7 +2090,7 @@ const form = reactive<SettingsForm>({
   default_balance: 0,
   default_concurrency: 1,
   default_subscriptions: [],
-  site_name: 'Sub2API',
+  site_name: DEFAULT_SITE_NAME,
   site_logo: '',
   site_subtitle: 'Subscription to API Conversion Platform',
   api_base_url: '',
@@ -2288,7 +2289,10 @@ async function loadSettings() {
   loadFailed.value = false
   try {
     const settings = await adminAPI.settings.getSettings()
-    Object.assign(form, settings)
+    Object.assign(form, {
+      ...settings,
+      site_name: normalizeSiteName(settings.site_name)
+    })
     form.backend_mode_enabled = settings.backend_mode_enabled
     form.default_subscriptions = Array.isArray(settings.default_subscriptions)
       ? settings.default_subscriptions
@@ -2454,7 +2458,10 @@ async function saveSettings() {
       enable_metadata_passthrough: form.enable_metadata_passthrough
     }
     const updated = await adminAPI.settings.updateSettings(payload)
-    Object.assign(form, updated)
+    Object.assign(form, {
+      ...updated,
+      site_name: normalizeSiteName(updated.site_name)
+    })
     registrationEmailSuffixWhitelistTags.value = normalizeRegistrationEmailSuffixDomains(
       updated.registration_email_suffix_whitelist
     )

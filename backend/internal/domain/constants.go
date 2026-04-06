@@ -81,6 +81,7 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"claude-opus-4-5-20251101":   "claude-opus-4-6-thinking", // 迁移旧模型
 	"claude-sonnet-4-5-20250929": "claude-sonnet-4-5",
 	// Claude Haiku → Sonnet（无 Haiku 支持）
+	"claude-haiku-4-6":          "claude-sonnet-4-6",
 	"claude-haiku-4-5":          "claude-sonnet-4-6",
 	"claude-haiku-4-5-20251001": "claude-sonnet-4-6",
 	// Gemini 2.5 白名单

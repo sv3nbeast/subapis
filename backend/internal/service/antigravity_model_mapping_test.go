@@ -57,6 +57,12 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-opus-4-6-thinking",
 		},
 		{
+			name:           "默认映射 - claude-haiku-4-6 → claude-sonnet-4-6",
+			requestedModel: "claude-haiku-4-6",
+			accountMapping: nil,
+			expected:       "claude-sonnet-4-6",
+		},
+		{
 			name:           "默认映射 - claude-haiku-4-5 → claude-sonnet-4-6",
 			requestedModel: "claude-haiku-4-5",
 			accountMapping: nil,

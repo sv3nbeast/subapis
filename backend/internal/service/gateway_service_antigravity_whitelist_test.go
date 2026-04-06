@@ -26,6 +26,7 @@ func TestGatewayService_isModelSupportedByAccount_AntigravityModelMapping(t *tes
 
 	// claude-* 通配符匹配
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-sonnet-4-5"))
+	require.True(t, svc.isModelSupportedByAccount(account, "claude-haiku-4-6"))
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-haiku-4-5"))
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-opus-4-6"))
 
@@ -58,6 +59,7 @@ func TestGatewayService_isModelSupportedByAccount_AntigravityNoMapping(t *testin
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-sonnet-4-5"))
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-3-flash"))
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-2.5-pro"))
+	require.True(t, svc.isModelSupportedByAccount(account, "claude-haiku-4-6"))
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-haiku-4-5"))
 
 	// 不在默认映射中的模型不被支持

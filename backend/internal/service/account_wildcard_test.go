@@ -432,6 +432,22 @@ func TestAccountGetModelMapping_AntigravityEnsuresGeminiDefaultPassthroughs(t *t
 	}
 }
 
+func TestAccountGetModelMapping_AntigravityEnsuresClaudeHaiku46Alias(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-6": "claude-sonnet-4-6",
+			},
+		},
+	}
+
+	mapping := account.GetModelMapping()
+	if mapping["claude-haiku-4-6"] != "claude-sonnet-4-6" {
+		t.Fatalf("expected claude-haiku-4-6 alias to be auto-filled, got: %q", mapping["claude-haiku-4-6"])
+	}
+}
+
 func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
@@ -453,6 +469,25 @@ func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T
 		t.Fatalf("did not expect explicit gemini-3.1-pro-low passthrough when wildcard already exists")
 	}
 	if mapped := account.GetMappedModel("gemini-3-flash"); mapped != "gemini-3.1-pro-high" {
+		t.Fatalf("expected wildcard mapping to stay effective, got: %q", mapped)
+	}
+}
+
+func TestAccountGetModelMapping_AntigravityRespectsClaudeWildcardOverride(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-haiku-*": "custom-haiku-target",
+			},
+		},
+	}
+
+	mapping := account.GetModelMapping()
+	if _, exists := mapping["claude-haiku-4-6"]; exists {
+		t.Fatalf("did not expect explicit claude-haiku-4-6 alias when wildcard already exists")
+	}
+	if mapped := account.GetMappedModel("claude-haiku-4-6"); mapped != "custom-haiku-target" {
 		t.Fatalf("expected wildcard mapping to stay effective, got: %q", mapped)
 	}
 }

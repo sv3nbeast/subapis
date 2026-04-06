@@ -2651,6 +2651,71 @@ func sameLastUsedAt(a, b *time.Time) bool {
 	}
 }
 
+func (s *GatewayService) selectLegacyEligibleAccount(
+	ctx context.Context,
+	groupID *int64,
+	accounts []Account,
+	excludedIDs map[int64]struct{},
+	requestedModel string,
+	platform string,
+	allowMixedScheduling bool,
+	schedGroup *Group,
+	routingSet map[int64]struct{},
+	preferOAuth bool,
+	needsUpstreamCheck bool,
+) *Account {
+	candidates := make([]*Account, 0, len(accounts))
+	for i := range accounts {
+		acc := &accounts[i]
+		if len(routingSet) > 0 {
+			if _, ok := routingSet[acc.ID]; !ok {
+				continue
+			}
+		}
+		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
+		// avoid selecting accounts that were recently rate-limited/overloaded.
+		if !s.isAccountSchedulableForSelection(acc) {
+			continue
+		}
+		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
+		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
+			_ = s.accountRepo.SetError(ctx, acc.ID,
+				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
+			continue
+		}
+		if isPlatformFilteredForSelection(acc, platform, allowMixedScheduling) {
+			continue
+		}
+		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		if needsUpstreamCheck && groupID != nil && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForQuota(acc) {
+			continue
+		}
+		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
+			continue
+		}
+		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
+			continue
+		}
+		candidates = append(candidates, acc)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sortAccountsByPriorityAndLastUsed(candidates, preferOAuth)
+	return candidates[0]
+}
+
 // sortCandidatesForFallback 根据配置选择排序策略
 // mode: "last_used"(按最后使用时间) 或 "random"(随机)
 func (s *GatewayService) sortCandidatesForFallback(accounts []*Account, preferOAuth bool, mode string) {
@@ -2711,6 +2776,8 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
 	}
+	// 仅在主选择循环中检查 upstream 模型渠道限制；粘性会话命中时跳过。
+	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 
 	var accounts []Account
 	accountsLoaded := false
@@ -2769,64 +2836,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			}
 		}
 
-		var selected *Account
-		for i := range accounts {
-			acc := &accounts[i]
-			if _, ok := routingSet[acc.ID]; !ok {
-				continue
-			}
-			if _, excluded := excludedIDs[acc.ID]; excluded {
-				continue
-			}
-			// Scheduler snapshots can be temporarily stale; re-check schedulability here to
-			// avoid selecting accounts that were recently rate-limited/overloaded.
-			if !s.isAccountSchedulableForSelection(acc) {
-				continue
-			}
-			// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
-			if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-				_ = s.accountRepo.SetError(ctx, acc.ID,
-					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-				continue
-			}
-			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
-				continue
-			}
-			if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
-				continue
-			}
-			if !s.isAccountSchedulableForQuota(acc) {
-				continue
-			}
-			if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
-				continue
-			}
-			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
-				continue
-			}
-			if selected == nil {
-				selected = acc
-				continue
-			}
-			if acc.Priority < selected.Priority {
-				selected = acc
-			} else if acc.Priority == selected.Priority {
-				switch {
-				case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-					selected = acc
-				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-					// keep selected (never used is preferred)
-				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
-				default:
-					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-						selected = acc
-					}
-				}
-			}
-		}
+		selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, platform, false, schedGroup, routingSet, preferOAuth, needsUpstreamCheck)
 
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
@@ -2880,67 +2890,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
 	// 3. 按优先级+最久未用选择（考虑模型支持）
-	// needsUpstreamCheck 仅在主选择循环中使用；粘性会话命中时跳过此检查，
-	// 因为粘性会话优先保持连接一致性，且 upstream 计费基准极少使用。
-	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
-	var selected *Account
-	for i := range accounts {
-		acc := &accounts[i]
-		if _, excluded := excludedIDs[acc.ID]; excluded {
-			continue
-		}
-		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
-		// avoid selecting accounts that were recently rate-limited/overloaded.
-		if !s.isAccountSchedulableForSelection(acc) {
-			continue
-		}
-		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-			_ = s.accountRepo.SetError(ctx, acc.ID,
-				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-			continue
-		}
-		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
-			continue
-		}
-		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, acc, requestedModel) {
-			continue
-		}
-		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
-			continue
-		}
-		if !s.isAccountSchedulableForQuota(acc) {
-			continue
-		}
-		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
-			continue
-		}
-		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
-			continue
-		}
-		if selected == nil {
-			selected = acc
-			continue
-		}
-		if acc.Priority < selected.Priority {
-			selected = acc
-		} else if acc.Priority == selected.Priority {
-			switch {
-			case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-				selected = acc
-			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-				// keep selected (never used is preferred)
-			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
-			default:
-				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-					selected = acc
-				}
-			}
-		}
-	}
+	selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, platform, false, schedGroup, nil, preferOAuth, needsUpstreamCheck)
 
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, false)
@@ -2971,6 +2921,8 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
 	}
+	// 仅在主选择循环中检查 upstream 模型渠道限制；粘性会话命中时跳过。
+	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 
 	var accounts []Account
 	accountsLoaded := false
@@ -3025,68 +2977,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			}
 		}
 
-		var selected *Account
-		for i := range accounts {
-			acc := &accounts[i]
-			if _, ok := routingSet[acc.ID]; !ok {
-				continue
-			}
-			if _, excluded := excludedIDs[acc.ID]; excluded {
-				continue
-			}
-			// Scheduler snapshots can be temporarily stale; re-check schedulability here to
-			// avoid selecting accounts that were recently rate-limited/overloaded.
-			if !s.isAccountSchedulableForSelection(acc) {
-				continue
-			}
-			// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
-			if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-				_ = s.accountRepo.SetError(ctx, acc.ID,
-					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-				continue
-			}
-			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
-			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
-				continue
-			}
-			if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
-				continue
-			}
-			if !s.isAccountSchedulableForQuota(acc) {
-				continue
-			}
-			if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
-				continue
-			}
-			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
-				continue
-			}
-			if selected == nil {
-				selected = acc
-				continue
-			}
-			if acc.Priority < selected.Priority {
-				selected = acc
-			} else if acc.Priority == selected.Priority {
-				switch {
-				case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-					selected = acc
-				case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-					// keep selected (never used is preferred)
-				case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-					if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-						selected = acc
-					}
-				default:
-					if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-						selected = acc
-					}
-				}
-			}
-		}
+		selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, nativePlatform, true, schedGroup, routingSet, preferOAuth, needsUpstreamCheck)
 
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
@@ -3138,70 +3029,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
 	// 3. 按优先级+最久未用选择（考虑模型支持和混合调度）
-	// needsUpstreamCheck 仅在主选择循环中使用；粘性会话命中时跳过此检查。
-	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
-	var selected *Account
-	for i := range accounts {
-		acc := &accounts[i]
-		if _, excluded := excludedIDs[acc.ID]; excluded {
-			continue
-		}
-		// Scheduler snapshots can be temporarily stale; re-check schedulability here to
-		// avoid selecting accounts that were recently rate-limited/overloaded.
-		if !s.isAccountSchedulableForSelection(acc) {
-			continue
-		}
-		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-			_ = s.accountRepo.SetError(ctx, acc.ID,
-				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
-			continue
-		}
-		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-			continue
-		}
-		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
-			continue
-		}
-		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, acc, requestedModel) {
-			continue
-		}
-		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
-			continue
-		}
-		if !s.isAccountSchedulableForQuota(acc) {
-			continue
-		}
-		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
-			continue
-		}
-		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
-			continue
-		}
-		if selected == nil {
-			selected = acc
-			continue
-		}
-		if acc.Priority < selected.Priority {
-			selected = acc
-		} else if acc.Priority == selected.Priority {
-			switch {
-			case acc.LastUsedAt == nil && selected.LastUsedAt != nil:
-				selected = acc
-			case acc.LastUsedAt != nil && selected.LastUsedAt == nil:
-				// keep selected (never used is preferred)
-			case acc.LastUsedAt == nil && selected.LastUsedAt == nil:
-				if preferOAuth && acc.Platform == PlatformGemini && selected.Platform == PlatformGemini && acc.Type != selected.Type && acc.Type == AccountTypeOAuth {
-					selected = acc
-				}
-			default:
-				if acc.LastUsedAt.Before(*selected.LastUsedAt) {
-					selected = acc
-				}
-			}
-		}
-	}
+	selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, nativePlatform, true, schedGroup, nil, preferOAuth, needsUpstreamCheck)
 
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs, true)

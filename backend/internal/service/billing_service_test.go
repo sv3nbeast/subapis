@@ -133,6 +133,20 @@ func TestGetModelPricing_CaseInsensitive(t *testing.T) {
 	require.Equal(t, p1.InputPricePerToken, p2.InputPricePerToken)
 }
 
+func TestGetModelPricing_ClaudeHaiku46AliasUsesSonnet46Pricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	aliasPricing, err := svc.GetModelPricing("claude-haiku-4-6")
+	require.NoError(t, err)
+
+	sonnetPricing, err := svc.GetModelPricing("claude-sonnet-4-6")
+	require.NoError(t, err)
+
+	require.Equal(t, sonnetPricing.InputPricePerToken, aliasPricing.InputPricePerToken)
+	require.Equal(t, sonnetPricing.OutputPricePerToken, aliasPricing.OutputPricePerToken)
+	require.Equal(t, sonnetPricing.CacheReadPricePerToken, aliasPricing.CacheReadPricePerToken)
+}
+
 func TestGetModelPricing_UnknownClaudeModelFallsBackToSonnet(t *testing.T) {
 	svc := newTestBillingService()
 
