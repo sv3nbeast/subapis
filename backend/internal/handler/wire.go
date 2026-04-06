@@ -34,6 +34,7 @@ func ProvideAdminHandlers(
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	channelHandler *admin.ChannelHandler,
+	statusProbeSettingsHandler *admin.StatusProbeSettingsHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:             dashboardHandler,
@@ -61,6 +62,7 @@ func ProvideAdminHandlers(
 		APIKey:                apiKeyHandler,
 		ScheduledTest:         scheduledTestHandler,
 		Channel:               channelHandler,
+		StatusProbeSettings:   statusProbeSettingsHandler,
 	}
 }
 
@@ -88,6 +90,7 @@ func ProvideHandlers(
 	openaiGatewayHandler *OpenAIGatewayHandler,
 	settingHandler *SettingHandler,
 	totpHandler *TotpHandler,
+	statusHandler *StatusHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -104,6 +107,7 @@ func ProvideHandlers(
 		OpenAIGateway: openaiGatewayHandler,
 		Setting:       settingHandler,
 		Totp:          totpHandler,
+		Status:        statusHandler,
 	}
 }
 
@@ -120,6 +124,7 @@ var ProviderSet = wire.NewSet(
 	NewGatewayHandler,
 	NewOpenAIGatewayHandler,
 	NewTotpHandler,
+	NewStatusHandler,
 	ProvideSettingHandler,
 
 	// Admin handlers
@@ -148,6 +153,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewChannelHandler,
+	admin.NewStatusProbeSettingsHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

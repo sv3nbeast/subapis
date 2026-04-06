@@ -31,6 +31,7 @@ type AdminHandlers struct {
 	APIKey                *admin.AdminAPIKeyHandler
 	ScheduledTest         *admin.ScheduledTestHandler
 	Channel               *admin.ChannelHandler
+	StatusProbeSettings   *admin.StatusProbeSettingsHandler
 }
 
 // Handlers contains all HTTP handlers
@@ -47,6 +48,7 @@ type Handlers struct {
 	OpenAIGateway *OpenAIGatewayHandler
 	Setting       *SettingHandler
 	Totp          *TotpHandler
+	Status        *StatusHandler
 }
 
 // BuildInfo contains build-time information

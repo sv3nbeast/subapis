@@ -88,6 +88,9 @@ func RegisterAdminRoutes(
 
 		// 渠道管理
 		registerChannelRoutes(admin, h)
+
+		// 状态探测配置
+		registerStatusProbeSettingsRoutes(admin, h)
 	}
 }
 
@@ -556,5 +559,13 @@ func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		channels.POST("", h.Admin.Channel.Create)
 		channels.PUT("/:id", h.Admin.Channel.Update)
 		channels.DELETE("/:id", h.Admin.Channel.Delete)
+	}
+}
+
+func registerStatusProbeSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	group := admin.Group("/settings/status-probe")
+	{
+		group.GET("", h.Admin.StatusProbeSettings.GetConfig)
+		group.PUT("", h.Admin.StatusProbeSettings.UpdateConfig)
 	}
 }
