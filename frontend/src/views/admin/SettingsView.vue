@@ -763,7 +763,10 @@
                         @change="onStatusProbeModelSelect(model)"
                       >
                         <option value="" disabled>{{ t('adminStatus.modelId') }}</option>
-                        <option v-for="m in availableProbeModels" :key="m" :value="m">{{ m }}</option>
+                        <optgroup v-for="group in availableProbeModels" :key="group.label" :label="group.label">
+                          <option v-for="m in group.models" :key="m" :value="m">{{ m }}</option>
+                        </optgroup>
+                        <option v-if="model.model_id" :value="model.model_id" hidden>{{ model.model_id }}</option>
                       </select>
                     </div>
                     <div class="col-span-3">
@@ -2162,6 +2165,14 @@ import {
 import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
 import { getModelsByPlatform } from '@/composables/useModelWhitelist'
 
+const probePlatforms = ['antigravity', 'claude', 'openai', 'gemini'] as const
+const probePlatformLabels: Record<string, string> = {
+  antigravity: 'Antigravity',
+  claude: 'Claude (Direct)',
+  openai: 'OpenAI',
+  gemini: 'Gemini'
+}
+
 const { t } = useI18n()
 const appStore = useAppStore()
 const adminSettingsStore = useAdminSettingsStore()
@@ -3001,7 +3012,10 @@ function removeStatusProbeModel(index: number) {
 
 const availableProbeModels = computed(() => {
   const used = new Set(statusProbeForm.models.map(m => m.model_id))
-  return getModelsByPlatform('antigravity').filter(v => !used.has(v))
+  return probePlatforms.map(p => ({
+    label: probePlatformLabels[p],
+    models: getModelsByPlatform(p).filter(v => !used.has(v))
+  })).filter(g => g.models.length > 0)
 })
 
 function onStatusProbeModelSelect(model: { model_id: string; display_name: string }) {
