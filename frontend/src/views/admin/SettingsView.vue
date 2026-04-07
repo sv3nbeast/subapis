@@ -757,12 +757,14 @@
                     class="mb-2 grid grid-cols-12 items-center gap-2"
                   >
                     <div class="col-span-4">
-                      <input
+                      <select
                         v-model="model.model_id"
-                        type="text"
                         class="input input-sm w-full"
-                        :placeholder="t('adminStatus.modelId')"
-                      />
+                        @change="onStatusProbeModelSelect(model)"
+                      >
+                        <option value="" disabled>{{ t('adminStatus.modelId') }}</option>
+                        <option v-for="m in availableProbeModels" :key="m" :value="m">{{ m }}</option>
+                      </select>
                     </div>
                     <div class="col-span-3">
                       <input
@@ -2158,6 +2160,7 @@ import {
   parseRegistrationEmailSuffixWhitelistInput
 } from '@/utils/registrationEmailPolicy'
 import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
+import { allModels } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -2994,6 +2997,17 @@ function addStatusProbeModel() {
 
 function removeStatusProbeModel(index: number) {
   statusProbeForm.models.splice(index, 1)
+}
+
+const availableProbeModels = computed(() => {
+  const used = new Set(statusProbeForm.models.map(m => m.model_id))
+  return allModels.map(m => m.value).filter(v => !used.has(v))
+})
+
+function onStatusProbeModelSelect(model: { model_id: string; display_name: string }) {
+  if (model.model_id && !model.display_name) {
+    model.display_name = model.model_id
+  }
 }
 
 onMounted(() => {
