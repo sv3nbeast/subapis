@@ -2160,7 +2160,7 @@ import {
   parseRegistrationEmailSuffixWhitelistInput
 } from '@/utils/registrationEmailPolicy'
 import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
-import { allModels } from '@/composables/useModelWhitelist'
+import { getModelsByPlatform } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -3001,7 +3001,7 @@ function removeStatusProbeModel(index: number) {
 
 const availableProbeModels = computed(() => {
   const used = new Set(statusProbeForm.models.map(m => m.model_id))
-  return allModels.map(m => m.value).filter(v => !used.has(v))
+  return getModelsByPlatform('antigravity').filter(v => !used.has(v))
 })
 
 function onStatusProbeModelSelect(model: { model_id: string; display_name: string }) {
