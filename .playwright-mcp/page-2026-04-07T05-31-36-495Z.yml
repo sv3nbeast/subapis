@@ -1,0 +1,278 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - img "Logo" [ref=e7]
+      - generic [ref=e8]:
+        - generic [ref=e9]: SubAPIs
+        - button "v0.1.108" [ref=e11] [cursor=pointer]:
+          - generic [ref=e12]: v0.1.108
+    - navigation [ref=e13]:
+      - generic [ref=e14]:
+        - link "仪表盘" [ref=e15] [cursor=pointer]:
+          - /url: /admin/dashboard
+          - img [ref=e16]
+          - generic [ref=e18]: 仪表盘
+        - link "运维监控" [ref=e19] [cursor=pointer]:
+          - /url: /admin/ops
+          - img [ref=e20]
+          - generic [ref=e22]: 运维监控
+        - link "用户管理" [ref=e23] [cursor=pointer]:
+          - /url: /admin/users
+          - img [ref=e24]
+          - generic [ref=e26]: 用户管理
+        - link "分组管理" [ref=e27] [cursor=pointer]:
+          - /url: /admin/groups
+          - img [ref=e28]
+          - generic [ref=e30]: 分组管理
+        - link "渠道管理" [ref=e31] [cursor=pointer]:
+          - /url: /admin/channels
+          - img [ref=e32]
+          - generic [ref=e34]: 渠道管理
+        - link "订阅管理" [ref=e35] [cursor=pointer]:
+          - /url: /admin/subscriptions
+          - img [ref=e36]
+          - generic [ref=e38]: 订阅管理
+        - link "账号管理" [ref=e39] [cursor=pointer]:
+          - /url: /admin/accounts
+          - img [ref=e40]
+          - generic [ref=e42]: 账号管理
+        - link "公告" [ref=e43] [cursor=pointer]:
+          - /url: /admin/announcements
+          - img [ref=e44]
+          - generic [ref=e46]: 公告
+        - link "IP管理" [ref=e47] [cursor=pointer]:
+          - /url: /admin/proxies
+          - img [ref=e48]
+          - generic [ref=e50]: IP管理
+        - link "兑换码" [ref=e51] [cursor=pointer]:
+          - /url: /admin/redeem
+          - img [ref=e52]
+          - generic [ref=e54]: 兑换码
+        - link "优惠码" [ref=e55] [cursor=pointer]:
+          - /url: /admin/promo-codes
+          - img [ref=e56]
+          - generic [ref=e58]: 优惠码
+        - link "使用记录" [ref=e59] [cursor=pointer]:
+          - /url: /admin/usage
+          - img [ref=e60]
+          - generic [ref=e62]: 使用记录
+        - link "系统设置" [ref=e63] [cursor=pointer]:
+          - /url: /admin/settings
+          - img [ref=e64]
+          - generic [ref=e67]: 系统设置
+      - generic [ref=e68]:
+        - generic [ref=e69]: 我的账户
+        - link "API 密钥" [ref=e70] [cursor=pointer]:
+          - /url: /keys
+          - img [ref=e71]
+          - generic [ref=e73]: API 密钥
+        - link "使用记录" [ref=e74] [cursor=pointer]:
+          - /url: /usage
+          - img [ref=e75]
+          - generic [ref=e77]: 使用记录
+        - link "我的订阅" [ref=e78] [cursor=pointer]:
+          - /url: /subscriptions
+          - img [ref=e79]
+          - generic [ref=e81]: 我的订阅
+        - link "兑换" [ref=e82] [cursor=pointer]:
+          - /url: /redeem
+          - img [ref=e83]
+          - generic [ref=e85]: 兑换
+        - link "服务状态" [ref=e86] [cursor=pointer]:
+          - /url: /status
+          - img [ref=e87]
+          - generic [ref=e89]: 服务状态
+        - link "个人资料" [ref=e90] [cursor=pointer]:
+          - /url: /profile
+          - img [ref=e91]
+          - generic [ref=e93]: 个人资料
+    - generic [ref=e94]:
+      - button "深色模式" [ref=e95] [cursor=pointer]:
+        - img [ref=e96]
+        - generic [ref=e98]: 深色模式
+      - button "收起" [ref=e99] [cursor=pointer]:
+        - img [ref=e100]
+        - generic [ref=e102]: 收起
+  - generic [ref=e103]:
+    - banner [ref=e104]:
+      - generic [ref=e105]:
+        - generic [ref=e107]:
+          - heading "系统设置" [level=1] [ref=e108]
+          - paragraph [ref=e109]: 管理注册、邮箱验证、默认值和 SMTP 设置
+        - generic [ref=e110]:
+          - button "公告" [ref=e112] [cursor=pointer]:
+            - img [ref=e113]
+          - button "🇨🇳 ZH" [ref=e116] [cursor=pointer]:
+            - generic [ref=e117]: 🇨🇳
+            - generic [ref=e118]: ZH
+            - img [ref=e119]
+          - generic [ref=e121]:
+            - img [ref=e122]
+            - generic [ref=e124]: $0.00
+          - button "User Menu" [ref=e126] [cursor=pointer]:
+            - generic [ref=e127]: AD
+            - generic [ref=e128]:
+              - generic [ref=e129]: admin
+              - generic [ref=e130]: admin
+            - img [ref=e131]
+    - main [ref=e133]:
+      - generic [ref=e135]:
+        - navigation [ref=e137]:
+          - button "通用设置" [ref=e138] [cursor=pointer]:
+            - img [ref=e140]
+            - generic [ref=e142]: 通用设置
+          - button "安全与认证" [ref=e143] [cursor=pointer]:
+            - img [ref=e145]
+            - generic [ref=e147]: 安全与认证
+          - button "用户默认值" [ref=e148] [cursor=pointer]:
+            - img [ref=e150]
+            - generic [ref=e152]: 用户默认值
+          - button "网关服务" [active] [ref=e153] [cursor=pointer]:
+            - img [ref=e155]
+            - generic [ref=e157]: 网关服务
+          - button "邮件设置" [ref=e158] [cursor=pointer]:
+            - img [ref=e160]
+            - generic [ref=e162]: 邮件设置
+          - button "数据备份" [ref=e163] [cursor=pointer]:
+            - img [ref=e165]
+            - generic [ref=e167]: 数据备份
+        - generic [ref=e258]:
+          - generic [ref=e259]:
+            - generic [ref=e260]:
+              - heading "529 过载冷却" [level=2] [ref=e261]
+              - paragraph [ref=e262]: 配置上游返回 529（过载）时的账号调度暂停策略
+            - generic [ref=e263]:
+              - generic [ref=e264]:
+                - generic [ref=e265]:
+                  - text: 启用过载冷却
+                  - paragraph [ref=e266]: 收到 529 错误时暂停该账号的调度，冷却后自动恢复
+                - switch [checked] [ref=e267] [cursor=pointer]
+              - generic [ref=e269]:
+                - generic [ref=e270]: 冷却时长（分钟）
+                - spinbutton [ref=e271]: "10"
+                - paragraph [ref=e272]: 账号暂停调度的持续时间（1-120 分钟）
+              - button "保存" [ref=e274] [cursor=pointer]
+          - generic [ref=e275]:
+            - generic [ref=e276]:
+              - heading "流超时处理" [level=2] [ref=e277]
+              - paragraph [ref=e278]: 配置上游响应超时时的账户处理策略，避免问题账户持续被选中
+            - generic [ref=e279]:
+              - generic [ref=e280]:
+                - generic [ref=e281]:
+                  - text: 启用流超时处理
+                  - paragraph [ref=e282]: 当上游响应超时时，自动处理问题账户
+                - switch [ref=e283] [cursor=pointer]
+              - button "保存" [ref=e285] [cursor=pointer]
+          - generic [ref=e286]:
+            - generic [ref=e287]:
+              - heading "请求整流器" [level=2] [ref=e288]
+              - paragraph [ref=e289]: 当上游返回特定错误时，自动修正请求参数并重试，提高请求成功率
+            - generic [ref=e290]:
+              - generic [ref=e291]:
+                - generic [ref=e292]:
+                  - text: 启用请求整流器
+                  - paragraph [ref=e293]: 总开关，关闭后所有整流功能均不生效
+                - switch [checked] [ref=e294] [cursor=pointer]
+              - generic [ref=e295]:
+                - generic [ref=e296]:
+                  - generic [ref=e297]:
+                    - text: Thinking 签名整流
+                    - paragraph [ref=e298]: 当上游返回 thinking block 签名校验错误时，自动去除签名并重试
+                  - switch [checked] [ref=e299] [cursor=pointer]
+                - generic [ref=e300]:
+                  - generic [ref=e301]:
+                    - text: Thinking Budget 整流
+                    - paragraph [ref=e302]: 当上游返回 budget_tokens 约束错误（≥1024）时，自动将 budget 设为 32000 并重试
+                  - switch [checked] [ref=e303] [cursor=pointer]
+                - generic [ref=e304]:
+                  - generic [ref=e305]:
+                    - text: API Key 签名整流
+                    - paragraph [ref=e306]: 当 API Key 账号的上游返回签名相关错误时，自动去除签名并重试（内置规则始终生效）
+                  - switch [ref=e307] [cursor=pointer]
+              - button "保存" [ref=e309] [cursor=pointer]
+          - generic [ref=e310]:
+            - generic [ref=e311]:
+              - heading "Beta 策略" [level=2] [ref=e312]
+              - paragraph [ref=e313]: 配置转发 Anthropic API 请求时如何处理 Beta 特性。仅适用于 /v1/messages 接口。
+            - generic [ref=e314]:
+              - generic [ref=e315]:
+                - generic [ref=e316]:
+                  - generic [ref=e317]: Fast Mode
+                  - generic [ref=e318]: fast-mode-2026-02-01
+                - generic [ref=e319]:
+                  - generic [ref=e320]:
+                    - generic [ref=e321]: 处理方式
+                    - button "Select option" [ref=e323] [cursor=pointer]:
+                      - generic [ref=e324]: 过滤（移除）
+                      - img [ref=e326]
+                  - generic [ref=e328]:
+                    - generic [ref=e329]: 生效范围
+                    - button "Select option" [ref=e331] [cursor=pointer]:
+                      - generic [ref=e332]: 全部账号
+                      - img [ref=e334]
+              - generic [ref=e336]:
+                - generic [ref=e337]:
+                  - generic [ref=e338]: Context 1M
+                  - generic [ref=e339]: context-1m-2025-08-07
+                - generic [ref=e340]:
+                  - generic [ref=e341]:
+                    - generic [ref=e342]: 处理方式
+                    - button "Select option" [ref=e344] [cursor=pointer]:
+                      - generic [ref=e345]: 过滤（移除）
+                      - img [ref=e347]
+                  - generic [ref=e349]:
+                    - generic [ref=e350]: 生效范围
+                    - button "Select option" [ref=e352] [cursor=pointer]:
+                      - generic [ref=e353]: 全部账号
+                      - img [ref=e355]
+              - button "保存" [ref=e358] [cursor=pointer]
+          - generic [ref=e359]:
+            - generic [ref=e360]:
+              - heading "服务状态探针" [level=2] [ref=e361]
+              - paragraph [ref=e362]: 配置自动探测模型端点以监控服务可用性。
+            - generic [ref=e363]:
+              - generic [ref=e364]:
+                - generic [ref=e365]:
+                  - text: 启用探针
+                  - paragraph [ref=e366]: 启用后，系统将定期探测已配置的模型端点。
+                - switch [ref=e367] [cursor=pointer]
+              - button "保存" [ref=e369] [cursor=pointer]
+        - generic [ref=e370]:
+          - generic [ref=e371]:
+            - generic [ref=e372]:
+              - heading "Claude Code 设置" [level=2] [ref=e373]
+              - paragraph [ref=e374]: 控制 Claude Code 客户端访问要求
+            - generic [ref=e375]:
+              - generic [ref=e376]:
+                - generic [ref=e377]: 最低版本号
+                - textbox "例如 2.1.63" [ref=e378]
+                - paragraph [ref=e379]: 拒绝低于此版本的 Claude Code 客户端请求（semver 格式）。留空则不检查版本。
+              - generic [ref=e380]:
+                - generic [ref=e381]: 最高版本号
+                - textbox "例如 2.5.0" [ref=e382]
+                - paragraph [ref=e383]: 拒绝高于此版本的 Claude Code 客户端请求（semver 格式）。留空则不限制最高版本。
+          - generic [ref=e384]:
+            - generic [ref=e385]:
+              - heading "网关调度设置" [level=2] [ref=e386]
+              - paragraph [ref=e387]: 控制 API Key 的调度行为
+            - generic [ref=e389]:
+              - generic [ref=e390]:
+                - text: 允许未分组 Key 调度
+                - paragraph [ref=e391]: 关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。
+              - checkbox [ref=e393]
+          - generic [ref=e394]:
+            - generic [ref=e395]:
+              - heading "请求转发行为" [level=2] [ref=e396]
+              - paragraph [ref=e397]: 控制请求转发到上游 OAuth 账号时的行为
+            - generic [ref=e398]:
+              - generic [ref=e399]:
+                - generic [ref=e400]:
+                  - text: 指纹统一化
+                  - paragraph [ref=e401]: 统一共享同一 OAuth 账号的用户的 X-Stainless-* 请求头。关闭后透传客户端原始请求头。
+                - switch [checked] [ref=e402] [cursor=pointer]
+              - generic [ref=e403]:
+                - generic [ref=e404]:
+                  - text: Metadata 透传
+                  - paragraph [ref=e405]: 透传客户端原始 metadata.user_id，不进行重写。可能提高上游缓存命中率。
+                - switch [ref=e406] [cursor=pointer]
+        - button "保存设置" [ref=e257] [cursor=pointer]

@@ -142,6 +142,8 @@ type antigravityRetryLoopParams struct {
 	isStickySession bool   // 是否为粘性会话（用于账号切换时的缓存计费判断）
 	groupID         int64  // 用于模型级限流时清除粘性会话
 	sessionHash     string // 用于模型级限流时清除粘性会话
+	// 显式账号测试/计划测试需要实际探测上游恢复情况，不能被已有 model_rate_limits 预检查直接短路。
+	bypassModelRateLimitPrecheck bool
 }
 
 // antigravityRetryLoopResult 重试循环的结果
@@ -583,6 +585,9 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 			// 已注入积分的请求不再受普通模型限流预检查阻断。
 			if overagesInjected {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: credits_injected_ignore_rate_limit remaining=%v model=%s account=%d",
+					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
+			} else if p.bypassModelRateLimitPrecheck {
+				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: bypass_model_rate_limit_for_probe remaining=%v model=%s account=%d",
 					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
 			} else if isSingleAccountRetry(p.ctx) {
 				// 单账号 503 退避重试模式：跳过限流预检查，直接发请求。
@@ -1034,6 +1039,19 @@ type TestConnectionResult struct {
 	MappedModel string // 实际使用的模型
 }
 
+func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *AntigravityAccountSwitchError) error {
+	if account != nil {
+		var state TempUnschedState
+		if reason := strings.TrimSpace(account.TempUnschedulableReason); reason != "" && json.Unmarshal([]byte(reason), &state) == nil {
+			if state.StatusCode == http.StatusTooManyRequests && state.MatchedKeyword != "" && state.UntilUnix > 0 {
+				until := time.Unix(state.UntilUnix, 0).Local().Format("15:04:05")
+				return fmt.Errorf("该账号模型 %s 当前命中上游配额限制，已临时不可调度至 %s", switchErr.RateLimitedModel, until)
+			}
+		}
+	}
+	return fmt.Errorf("该账号模型 %s 当前限流中，请稍后重试", switchErr.RateLimitedModel)
+}
+
 // TestConnection 测试 Antigravity 账号连接。
 // 复用 antigravityRetryLoop 的完整重试 / credits overages / 智能重试逻辑，
 // 与真实调度行为一致。差异：不做账号切换（测试指定账号）、不记录 ops 错误。
@@ -1090,6 +1108,8 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		accountRepo:    s.accountRepo,
 		requestedModel: modelID,
 		handleError:    testConnectionHandleError,
+		// 账号测试/计划测试用于探测恢复，不能被已有 model cooldown 直接挡住。
+		bypassModelRateLimitPrecheck: true,
 	}
 
 	result, err := s.antigravityRetryLoop(p)
@@ -1097,7 +1117,7 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		// AccountSwitchError → 测试时不切换账号，返回友好提示
 		var switchErr *AntigravityAccountSwitchError
 		if errors.As(err, &switchErr) {
-			return nil, fmt.Errorf("该账号模型 %s 当前限流中，请稍后重试", switchErr.RateLimitedModel)
+			return nil, buildAntigravityTestConnectionSwitchError(account, switchErr)
 		}
 		return nil, err
 	}

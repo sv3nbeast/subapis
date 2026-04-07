@@ -12,7 +12,7 @@ Description:
   then trigger a remote image rebuild and a zero-data-impact sub2api rollout.
 
 Options:
-  --host HOST                    SSH host alias. Default: sub2api-prod
+  --host HOST                    SSH host alias. Required if REMOTE_HOST is unset
   --src-dir DIR                  Remote source directory. Default: /root/sub2api-src
   --deploy-dir DIR               Remote deploy directory. Default: /root/sub2api-deploy
   --tag TAG                      Docker image tag suffix. Default: prod-YYYYmmdd-HHMMSS-<gitsha>
@@ -24,9 +24,9 @@ Options:
   -h, --help                     Show this help
 
 Examples:
-  scripts/deploy-prod.sh
+  scripts/deploy-prod.sh --host your-prod-host
   scripts/deploy-prod.sh --tag prod-manual-001
-  scripts/deploy-prod.sh --skip-sync --tag prod-hotfix-001
+  scripts/deploy-prod.sh --host your-prod-host --skip-sync --tag prod-hotfix-001
 EOF
 }
 
@@ -40,7 +40,7 @@ require_cmd() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-REMOTE_HOST="${REMOTE_HOST:-sub2api-prod}"
+REMOTE_HOST="${REMOTE_HOST:-}"
 REMOTE_SRC_DIR="${REMOTE_SRC_DIR:-/root/sub2api-src}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
@@ -101,6 +101,12 @@ while (($# > 0)); do
 done
 
 require_cmd ssh
+
+if [[ -z "${REMOTE_HOST}" ]]; then
+  echo "REMOTE_HOST is required. Use --host or set REMOTE_HOST." >&2
+  usage >&2
+  exit 1
+fi
 
 if [[ -z "${IMAGE_TAG}" ]]; then
   timestamp="$(date +%Y%m%d-%H%M%S)"

@@ -13,7 +13,7 @@ Description:
   the sub2api container.
 
 Options:
-  --host HOST             SSH host alias. Default: sub2api-prod
+  --host HOST             SSH host alias. Required if REMOTE_HOST is unset
   --deploy-dir DIR        Remote deploy directory. Default: /root/sub2api-deploy
   --service NAME          Compose service name. Default: sub2api
   --backup FILE           Explicit remote backup file to restore
@@ -22,9 +22,9 @@ Options:
   -h, --help              Show this help
 
 Examples:
-  scripts/rollback-prod.sh --list
-  scripts/rollback-prod.sh
-  scripts/rollback-prod.sh --backup /root/sub2api-deploy/docker-compose.override.yml.bak-20260404-215321
+  scripts/rollback-prod.sh --host your-prod-host --list
+  scripts/rollback-prod.sh --host your-prod-host
+  scripts/rollback-prod.sh --host your-prod-host --backup /root/sub2api-deploy/docker-compose.override.yml.bak-20260404-215321
 EOF
 }
 
@@ -38,7 +38,7 @@ require_cmd() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE_SCRIPT="${SCRIPT_DIR}/rollback-prod-sub2api.sh"
 
-REMOTE_HOST="${REMOTE_HOST:-sub2api-prod}"
+REMOTE_HOST="${REMOTE_HOST:-}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 SERVICE_NAME="${SERVICE_NAME:-sub2api}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
@@ -84,6 +84,12 @@ while (($# > 0)); do
 done
 
 require_cmd ssh
+
+if [[ -z "${REMOTE_HOST}" ]]; then
+  echo "REMOTE_HOST is required. Use --host or set REMOTE_HOST." >&2
+  usage >&2
+  exit 1
+fi
 
 if [[ ! -f "${REMOTE_SCRIPT}" ]]; then
   echo "Remote helper script not found: ${REMOTE_SCRIPT}" >&2

@@ -5205,6 +5205,13 @@ export default {
     minutes: '分钟',
     collecting: '监控数据收集中...',
     lastUpdated: '最近更新',
+    never: '从未',
+    justNow: '刚刚',
+    minutesAgo: '分钟前',
+    hoursAgo: '小时前',
+    daysAgoRelative: '天前',
+    noData: '无数据',
+    successful: '次成功',
   },
 
   adminStatus: {

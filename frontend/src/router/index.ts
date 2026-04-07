@@ -179,6 +179,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/status',
+    name: 'ServiceStatus',
+    component: () => import('@/views/user/StatusView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Service Status',
+      titleKey: 'status.title',
+      descriptionKey: 'status.description'
+    }
+  },
+  {
     path: '/subscriptions',
     name: 'Subscriptions',
     component: () => import('@/views/user/SubscriptionsView.vue'),

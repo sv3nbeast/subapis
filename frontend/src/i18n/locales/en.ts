@@ -5016,6 +5016,13 @@ export default {
     minutes: 'minutes',
     collecting: 'Collecting monitoring data...',
     lastUpdated: 'Last updated',
+    never: 'Never',
+    justNow: 'Just now',
+    minutesAgo: 'min ago',
+    hoursAgo: 'hours ago',
+    daysAgoRelative: 'days ago',
+    noData: 'No data',
+    successful: 'successful',
   },
 
   adminStatus: {

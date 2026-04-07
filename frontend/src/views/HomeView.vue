@@ -369,6 +369,13 @@
             >
           </div>
         </div>
+
+        <!-- Service Status -->
+        <section class="mt-16 px-6">
+          <div class="mx-auto max-w-6xl">
+            <ServiceStatusOverview />
+          </div>
+        </section>
       </div>
     </main>
 
@@ -410,6 +417,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
+import ServiceStatusOverview from '@/components/status/ServiceStatusOverview.vue'
 import { normalizeSiteName } from '@/utils/siteBrand'
 
 const { t } = useI18n()

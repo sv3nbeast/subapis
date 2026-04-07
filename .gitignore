@@ -135,6 +135,7 @@ docs/*
 !docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
 .serena/
 .codex/
+.superpowers/
 frontend/coverage/
 aicodex
 output/

@@ -256,6 +256,30 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
+			name: "filter_by_status_active_excludes_temp_unschedulable",
+			setup: func(client *dbent.Client) {
+				normal := mustCreateAccount(s.T(), client, &service.Account{Name: "normal-active", Status: service.StatusActive})
+				tempUnsched := mustCreateAccount(s.T(), client, &service.Account{Name: "temp-unsched-active", Status: service.StatusActive})
+				until := time.Now().Add(15 * time.Minute).UTC().Truncate(time.Second)
+				reason := `{"status_code":429,"matched_keyword":"check quota"}`
+				_, err := client.Account.UpdateOneID(tempUnsched.ID).
+					SetTempUnschedulableUntil(until).
+					SetTempUnschedulableReason(reason).
+					Save(context.Background())
+				s.Require().NoError(err)
+
+				got, err := client.Account.Get(context.Background(), normal.ID)
+				s.Require().NoError(err)
+				s.Require().Nil(got.TempUnschedulableUntil)
+			},
+			status:    service.StatusActive,
+			wantCount: 1,
+			validate: func(accounts []service.Account) {
+				s.Require().Equal("normal-active", accounts[0].Name)
+				s.Require().Nil(accounts[0].TempUnschedulableUntil)
+			},
+		},
+		{
 			name: "filter_by_search",
 			setup: func(client *dbent.Client) {
 				mustCreateAccount(s.T(), client, &service.Account{Name: "alpha-account"})

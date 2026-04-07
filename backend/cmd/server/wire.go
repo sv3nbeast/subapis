@@ -95,6 +95,7 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	backupSvc *service.BackupService,
+	statusProbeService *service.StatusProbeService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -234,6 +235,12 @@ func provideCleanup(
 			{"BackupService", func() error {
 				if backupSvc != nil {
 					backupSvc.Stop()
+				}
+				return nil
+			}},
+			{"StatusProbeService", func() error {
+				if statusProbeService != nil {
+					statusProbeService.Stop()
 				}
 				return nil
 			}},

@@ -407,7 +407,7 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 	// Compute overall status from all model statuses.
 	overallStatus := "operational"
 	for _, ms := range models {
-		if ms.CurrentStatus == "down" {
+		if ms.CurrentStatus == "outage" {
 			overallStatus = "major_outage"
 			break
 		} else if ms.CurrentStatus == "degraded" {
@@ -453,7 +453,7 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 	case failCount < recentCount:
 		ms.CurrentStatus = "degraded"
 	default:
-		ms.CurrentStatus = "down"
+		ms.CurrentStatus = "outage"
 	}
 
 	// Compute totals and uptime.

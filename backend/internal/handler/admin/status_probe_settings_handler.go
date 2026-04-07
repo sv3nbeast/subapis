@@ -3,6 +3,7 @@ package admin
 import (
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -24,7 +25,7 @@ func (h *StatusProbeSettingsHandler) GetConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": cfg})
+	response.Success(c, cfg)
 }
 
 // UpdateConfig validates and persists a new status probe configuration.
@@ -44,5 +45,7 @@ func (h *StatusProbeSettingsHandler) UpdateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": cfg, "message": "ok"})
+	// Restart the cron scheduler with updated config.
+	h.statusProbeService.Restart()
+	response.Success(c, cfg)
 }
