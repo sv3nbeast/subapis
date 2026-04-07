@@ -226,7 +226,8 @@ func TestAntigravityGatewayService_TestConnection_QuotaExhaustedReturnsAccurateM
 
 	_, err := svc.TestConnection(context.Background(), account, "claude-opus-4-6-thinking")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "上游配额限制")
+	require.Contains(t, err.Error(), "本次测试已请求上游")
+	require.Contains(t, err.Error(), "429 配额耗尽响应")
 	require.Contains(t, err.Error(), "已临时不可调度至")
 	require.NotContains(t, err.Error(), "当前限流中")
 }

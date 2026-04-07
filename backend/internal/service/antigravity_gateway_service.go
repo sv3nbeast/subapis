@@ -1045,7 +1045,7 @@ func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *Anti
 		if reason := strings.TrimSpace(account.TempUnschedulableReason); reason != "" && json.Unmarshal([]byte(reason), &state) == nil {
 			if state.StatusCode == http.StatusTooManyRequests && state.MatchedKeyword != "" && state.UntilUnix > 0 {
 				until := time.Unix(state.UntilUnix, 0).Local().Format("15:04:05")
-				return fmt.Errorf("该账号模型 %s 当前命中上游配额限制，已临时不可调度至 %s", switchErr.RateLimitedModel, until)
+				return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已临时不可调度至 %s", switchErr.RateLimitedModel, until)
 			}
 		}
 	}
