@@ -758,7 +758,7 @@
                   >
                     <div class="col-span-4">
                       <select
-                        v-model="model.model_id"
+                        v-model="model.model"
                         class="input input-sm w-full"
                         @change="onStatusProbeModelSelect(model)"
                       >
@@ -766,7 +766,7 @@
                         <optgroup v-for="group in availableProbeModels" :key="group.label" :label="group.label">
                           <option v-for="m in group.models" :key="m" :value="m">{{ m }}</option>
                         </optgroup>
-                        <option v-if="model.model_id" :value="model.model_id" hidden>{{ model.model_id }}</option>
+                        <option v-if="model.model" :value="model.model" hidden>{{ model.model }}</option>
                       </select>
                     </div>
                     <div class="col-span-3">
@@ -2257,7 +2257,7 @@ const statusProbeForm = reactive({
   interval_minutes: 5,
   retention_days: 30,
   models: [] as Array<{
-    model_id: string
+    model: string
     display_name: string
     sort_order: number
     enabled: boolean
@@ -2999,7 +2999,7 @@ async function saveStatusProbeSettings() {
 
 function addStatusProbeModel() {
   statusProbeForm.models.push({
-    model_id: '',
+    model: '',
     display_name: '',
     sort_order: statusProbeForm.models.length,
     enabled: true
@@ -3011,16 +3011,16 @@ function removeStatusProbeModel(index: number) {
 }
 
 const availableProbeModels = computed(() => {
-  const used = new Set(statusProbeForm.models.map(m => m.model_id))
+  const used = new Set(statusProbeForm.models.map(m => m.model))
   return probePlatforms.map(p => ({
     label: probePlatformLabels[p],
     models: getModelsByPlatform(p).filter(v => !used.has(v))
   })).filter(g => g.models.length > 0)
 })
 
-function onStatusProbeModelSelect(model: { model_id: string; display_name: string }) {
-  if (model.model_id && !model.display_name) {
-    model.display_name = model.model_id
+function onStatusProbeModelSelect(model: { model: string; display_name: string }) {
+  if (model.model && !model.display_name) {
+    model.display_name = model.model
   }
 }
 

@@ -398,7 +398,7 @@ export async function updateBetaPolicySettings(
  * Status probe model configuration
  */
 export interface StatusProbeModel {
-  model_id: string
+  model: string
   display_name: string
   sort_order: number
   enabled: boolean
