@@ -151,11 +151,7 @@
         </div>
         <span class="flex items-center gap-1">
           <Icon name="chat" size="sm" :stroke-width="2" />
-          {{
-            supportsGeminiImageTest
-              ? t('admin.accounts.geminiImageTestMode')
-              : t('admin.accounts.testPrompt')
-          }}
+          {{ testRequestSummary }}
         </span>
       </div>
     </div>
@@ -257,6 +253,29 @@ const supportsGeminiImageTest = computed(() => {
   if (!modelID.startsWith('gemini-') || !modelID.includes('-image')) return false
 
   return props.account?.platform === 'gemini' || (props.account?.platform === 'antigravity' && props.account?.type === 'apikey')
+})
+const usesAntigravityMinimalProbe = computed(() => props.account?.platform === 'antigravity' && props.account?.type !== 'apikey')
+const testRequestSummary = computed(() => {
+  if (supportsGeminiImageTest.value) {
+    return t('admin.accounts.geminiImageTestMode')
+  }
+
+  if (usesAntigravityMinimalProbe.value) {
+    return t('admin.accounts.antigravityProbeLabel')
+  }
+
+  return t('admin.accounts.testPrompt')
+})
+const testRequestLine = computed(() => {
+  if (supportsGeminiImageTest.value) {
+    return t('admin.accounts.sendingGeminiImageRequest')
+  }
+
+  if (usesAntigravityMinimalProbe.value) {
+    return t('admin.accounts.sendingMinimalProbeRequest')
+  }
+
+  return t('admin.accounts.sendingTestMessage')
 })
 
 const sortTestModels = (models: ClaudeModel[]) => {
@@ -436,16 +455,11 @@ const handleEvent = (event: {
 }) => {
   switch (event.type) {
     case 'test_start':
-      addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      addLine(t('admin.accounts.requestStarted'), 'text-green-400')
       if (event.model) {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }
-      addLine(
-        supportsGeminiImageTest.value
-            ? t('admin.accounts.sendingGeminiImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
-        'text-gray-400'
-      )
+      addLine(testRequestLine.value, 'text-gray-400')
       addLine('', 'text-gray-300')
       addLine(t('admin.accounts.response'), 'text-yellow-400')
       break

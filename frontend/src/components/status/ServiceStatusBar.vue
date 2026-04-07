@@ -9,38 +9,46 @@
       <span v-if="!compact" class="text-xs text-gray-500 dark:text-gray-400">{{ formattedUptime }}</span>
     </div>
 
-    <!-- Availability bar: 720 slots (30 days * 24 hours) -->
-    <div class="flex gap-px h-3 relative" @mouseleave="hoveredSlot = null">
+    <!-- Hover wrapper -->
+    <div
+      style="padding-top: 5rem; margin-top: -5rem;"
+      @mouseleave="activeSlot = null"
+    >
+      <!-- Bar: 24 slots = 24 hours -->
       <div
-        v-for="(slot, i) in slots"
-        :key="i"
-        class="flex-1 rounded-[1px] cursor-pointer transition-opacity"
-        :class="slotColorClass(slot)"
-        @mouseenter="hoveredSlot = i"
-      />
-
-      <!-- Tooltip on hover -->
-      <div
-        v-if="hoveredSlot !== null"
-        class="absolute z-50 bottom-full mb-2 px-3 py-2 bg-gray-900 dark:bg-gray-800 text-white text-xs rounded-lg shadow-lg whitespace-nowrap pointer-events-none"
-        :style="tooltipStyle"
+        ref="barRef"
+        class="flex gap-px h-3 relative"
+        @mousemove="onBarMouseMove"
       >
-        <div class="font-medium">{{ tooltipData?.timeRange }}</div>
-        <div class="text-gray-300">{{ tooltipData?.probeInfo }}</div>
-        <div v-if="tooltipData?.failures?.length" class="mt-1 border-t border-gray-700 pt-1">
-          <div v-for="f in tooltipData.failures" :key="f.time" class="text-red-300">
-            {{ formatTime(f.time) }} {{ t('status.failed') }} ({{ f.error }})
+        <div
+          v-for="(slot, i) in slots"
+          :key="i"
+          class="flex-1 rounded-[1px] transition-opacity"
+          :class="slotColorClass(slot)"
+        />
+
+        <!-- Tooltip -->
+        <div
+          v-show="activeSlot !== null"
+          class="absolute z-50 bottom-full mb-2 px-3 py-2 bg-gray-900 dark:bg-gray-800 text-white text-xs rounded-lg shadow-lg whitespace-nowrap pointer-events-none"
+          :style="tooltipStyle"
+        >
+          <div class="font-medium">{{ tooltipData?.timeRange }}</div>
+          <div class="text-gray-300">{{ tooltipData?.probeInfo }}</div>
+          <div v-if="tooltipData?.failCount" class="text-red-300">
+            {{ t('status.outage') }} {{ tooltipData.failDuration }}
           </div>
-          <div class="text-gray-400 mt-0.5">{{ t('status.duration') }}: {{ tooltipData.duration }}</div>
+          <div v-if="tooltipData?.avgLatency" class="text-gray-400">
+            {{ t('status.avgLatency') }}: {{ tooltipData.avgLatency }}ms
+          </div>
         </div>
-        <div v-if="tooltipData?.avgLatency" class="text-gray-400">{{ t('status.avgLatency') }}: {{ tooltipData.avgLatency }}ms</div>
       </div>
     </div>
 
-    <!-- Date labels (hidden in compact) -->
+    <!-- Time labels (hidden in compact) -->
     <div v-if="!compact" class="flex justify-between mt-1">
-      <span class="text-[10px] text-gray-400 dark:text-gray-500">{{ t('status.daysAgo') }}</span>
-      <span class="text-[10px] text-gray-400 dark:text-gray-500">{{ t('status.today') }}</span>
+      <span class="text-[10px] text-gray-400 dark:text-gray-500">{{ t('status.hoursAgoLabel') }}</span>
+      <span class="text-[10px] text-gray-400 dark:text-gray-500">{{ t('status.now') }}</span>
     </div>
   </div>
 </template>
@@ -52,18 +60,31 @@ import type { ModelStatus, HourlyStat, ProbeFailure } from '@/api/status'
 
 interface Props {
   modelStatus: ModelStatus
+  intervalMinutes?: number
   compact?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  intervalMinutes: 5,
   compact: false
 })
 
 const { t } = useI18n()
 
-const hoveredSlot = ref<number | null>(null)
+const barRef = ref<HTMLElement | null>(null)
+const activeSlot = ref<number | null>(null)
 
-const TOTAL_SLOTS = 720 // 30 days * 24 hours
+// 24 hours / interval = total slots
+const totalSlots = computed(() => Math.floor(24 * 60 / props.intervalMinutes))
+
+function onBarMouseMove(e: MouseEvent) {
+  if (!barRef.value) return
+  const rect = barRef.value.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const count = totalSlots.value
+  const index = Math.floor((x / rect.width) * count)
+  activeSlot.value = Math.max(0, Math.min(count - 1, index))
+}
 
 interface SlotData {
   hour: string
@@ -74,33 +95,30 @@ interface SlotData {
   hasData: boolean
 }
 
-/**
- * Build a map of hourly stats keyed by the hour string (truncated to hour).
- */
 function buildStatsMap(): Map<string, HourlyStat> {
   const map = new Map<string, HourlyStat>()
+  const intervalMs = props.intervalMinutes * 60_000
   for (const stat of props.modelStatus.hourly_stats) {
-    // Normalize the hour key to the start of the hour
+    // Truncate to interval window to match backend aggregation
     const d = new Date(stat.hour)
-    d.setMinutes(0, 0, 0)
+    d.setTime(Math.floor(d.getTime() / intervalMs) * intervalMs)
     map.set(d.toISOString(), stat)
   }
   return map
 }
 
-/**
- * Generate 720 slot entries covering the past 30 days, one per hour.
- */
 const slots = computed<SlotData[]>(() => {
   const statsMap = buildStatsMap()
   const now = new Date()
-  // Start at the current hour
-  const currentHour = new Date(now)
-  currentHour.setMinutes(0, 0, 0)
+  const currentSlot = new Date(now)
+  const intervalMs = props.intervalMinutes * 60_000
+  // Truncate to current interval window
+  currentSlot.setTime(Math.floor(currentSlot.getTime() / intervalMs) * intervalMs)
 
+  const count = totalSlots.value
   const result: SlotData[] = []
-  for (let i = 0; i < TOTAL_SLOTS; i++) {
-    const slotTime = new Date(currentHour.getTime() - (TOTAL_SLOTS - 1 - i) * 3600_000)
+  for (let i = 0; i < count; i++) {
+    const slotTime = new Date(currentSlot.getTime() - (count - 1 - i) * intervalMs)
     const key = slotTime.toISOString()
     const stat = statsMap.get(key)
 
@@ -127,15 +145,9 @@ const slots = computed<SlotData[]>(() => {
   return result
 })
 
-/**
- * Determine the color class for a given slot.
- * - No data or all success: green
- * - Has failures but < 50% fail rate: yellow
- * - >= 50% fail rate: red
- */
 function slotColorClass(slot: SlotData): string {
   if (!slot.hasData || slot.total === 0) {
-    return 'bg-emerald-500 opacity-60'
+    return 'bg-gray-200 dark:bg-gray-700 opacity-60'
   }
   const failRate = (slot.total - slot.success) / slot.total
   if (failRate >= 0.5) {
@@ -144,12 +156,9 @@ function slotColorClass(slot: SlotData): string {
   if (failRate > 0) {
     return 'bg-amber-400 opacity-80'
   }
-  return 'bg-emerald-500 opacity-60'
+  return 'bg-emerald-500 opacity-80'
 }
 
-/**
- * Status dot color based on current_status.
- */
 const dotClass = computed<string>(() => {
   switch (props.modelStatus.current_status) {
     case 'operational':
@@ -163,21 +172,14 @@ const dotClass = computed<string>(() => {
   }
 })
 
-/**
- * Formatted uptime percentage string.
- */
 const formattedUptime = computed<string>(() => {
   return `${props.modelStatus.uptime_percentage.toFixed(2)}% ${t('status.uptime')}`
 })
 
-/**
- * Tooltip position style: calculate left offset and clamp to stay in bounds.
- */
 const tooltipStyle = computed(() => {
-  if (hoveredSlot.value === null) return {}
-  const pct = (hoveredSlot.value / TOTAL_SLOTS) * 100
-  // Clamp so tooltip doesn't overflow edges
-  const clamped = Math.max(10, Math.min(90, pct))
+  if (activeSlot.value === null) return {}
+  const pct = (activeSlot.value / totalSlots.value) * 100
+  const clamped = Math.max(15, Math.min(85, pct))
   return {
     left: `${clamped}%`,
     transform: 'translateX(-50%)'
@@ -187,23 +189,19 @@ const tooltipStyle = computed(() => {
 interface TooltipInfo {
   timeRange: string
   probeInfo: string
-  failures: ProbeFailure[]
-  duration: string
+  failCount: number
+  failDuration: string
   avgLatency: number | null
 }
 
-/**
- * Compute tooltip data for the currently hovered slot.
- */
 const tooltipData = computed<TooltipInfo | null>(() => {
-  if (hoveredSlot.value === null) return null
-  const slot = slots.value[hoveredSlot.value]
+  if (activeSlot.value === null) return null
+  const slot = slots.value[activeSlot.value]
   if (!slot) return null
 
   const start = new Date(slot.hour)
-  const end = new Date(start.getTime() + 3600_000)
-
-  const timeRange = `${formatTime(start.toISOString())} - ${formatTime(end.toISOString())}`
+  const end = new Date(start.getTime() + props.intervalMinutes * 60_000)
+  const timeRange = `${formatHour(start)} - ${formatHour(end)}`
 
   let probeInfo: string
   if (!slot.hasData || slot.total === 0) {
@@ -212,34 +210,37 @@ const tooltipData = computed<TooltipInfo | null>(() => {
     probeInfo = `${slot.success}/${slot.total} ${t('status.successful')}`
   }
 
-  let duration = ''
-  if (slot.failures.length > 0) {
+  const failCount = slot.total - slot.success
+  let failDuration = ''
+  if (failCount > 0 && slot.failures.length > 0) {
     if (slot.failures.length === 1) {
-      duration = `< 5 ${t('status.minutes')}`
+      failDuration = '< 5' + t('status.minutes')
     } else {
-      const first = new Date(slot.failures[0].time)
-      const last = new Date(slot.failures[slot.failures.length - 1].time)
-      duration = `${formatTime(first.toISOString())} - ${formatTime(last.toISOString())}`
+      const times = slot.failures.map(f => new Date(f.time).getTime())
+      const minT = Math.min(...times)
+      const maxT = Math.max(...times)
+      const diffMin = Math.round((maxT - minT) / 60000)
+      if (diffMin < 5) {
+        failDuration = '< 5' + t('status.minutes')
+      } else if (diffMin < 60) {
+        failDuration = '~' + diffMin + t('status.minutes')
+      } else {
+        failDuration = '~' + Math.round(diffMin / 60) + t('status.hours')
+      }
     }
   }
 
   return {
     timeRange,
     probeInfo,
-    failures: slot.failures,
-    duration,
+    failCount,
+    failDuration,
     avgLatency: slot.hasData && slot.total > 0 ? Math.round(slot.avgLatency) : null
   }
 })
 
-/**
- * Format an ISO time string to a short local time representation.
- */
-function formatTime(isoString: string): string {
-  const d = new Date(isoString)
+function formatHour(d: Date): string {
   return d.toLocaleTimeString(undefined, {
-    month: 'short',
-    day: 'numeric',
     hour: '2-digit',
     minute: '2-digit'
   })

@@ -24,7 +24,10 @@ vi.mock('@/composables/useClipboard', () => ({
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   const messages: Record<string, string> = {
-    'admin.accounts.geminiImagePromptDefault': 'Generate a cute orange cat astronaut sticker on a clean pastel background.'
+    'admin.accounts.geminiImagePromptDefault': 'Generate a cute orange cat astronaut sticker on a clean pastel background.',
+    'admin.accounts.requestStarted': 'Started test request',
+    'admin.accounts.sendingMinimalProbeRequest': 'Sending minimal probe request: "." (max_tokens=1)',
+    'admin.accounts.antigravityProbeLabel': 'Probe: "." (max_tokens=1)'
   }
   return {
     ...actual,
@@ -59,7 +62,7 @@ function createStreamResponse(lines: string[]) {
   } as Response
 }
 
-function mountModal() {
+function mountModal(accountOverrides: Record<string, any> = {}) {
   return mount(AccountTestModal, {
     props: {
       show: false,
@@ -68,7 +71,8 @@ function mountModal() {
         name: 'Gemini Image Test',
         platform: 'gemini',
         type: 'apikey',
-        status: 'active'
+        status: 'active',
+        ...accountOverrides
       }
     } as any,
     global: {
@@ -143,5 +147,39 @@ describe('AccountTestModal', () => {
     const preview = wrapper.find('img[alt="gemini-test-image-1"]')
     expect(preview.exists()).toBe(true)
     expect(preview.attributes('src')).toBe('data:image/png;base64,QUJD')
+  })
+
+  it('antigravity oauth 测试会展示最小探测请求而不是 hi', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'claude-opus-4-6', display_name: 'Claude Opus 4.6' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_start","model":"claude-opus-4-6"}\n',
+        'data: {"type":"error","error":"该账号模型 claude-opus-4-6 当前命中上游配额限制，已临时不可调度至 16:19:16"}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      name: 'Antigravity OAuth Test',
+      platform: 'antigravity',
+      type: 'oauth'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Probe: "." (max_tokens=1)')
+
+    const buttons = wrapper.findAll('button')
+    const startButton = buttons.find((button) => button.text().includes('admin.accounts.startTest'))
+    expect(startButton).toBeTruthy()
+
+    await startButton!.trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Started test request')
+    expect(wrapper.text()).toContain('Sending minimal probe request: "." (max_tokens=1)')
+    expect(wrapper.text()).not.toContain('admin.accounts.sendingTestMessage')
   })
 })

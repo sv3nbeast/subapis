@@ -153,6 +153,7 @@ import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
+import { statusAPI } from '@/api/status'
 
 interface NavItem {
   path: string
@@ -506,7 +507,7 @@ const userNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
-    { path: '/status', label: t('nav.serviceStatus'), icon: StatusIcon },
+    ...(appStore.statusProbeEnabled ? [{ path: '/status', label: t('nav.serviceStatus'), icon: StatusIcon }] : []),
     { path: '/profile', label: t('nav.profile'), icon: UserIcon },
     ...customMenuItemsForUser.value.map((item): NavItem => ({
       path: `/custom/${item.id}`,
@@ -535,7 +536,7 @@ const personalNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
-    { path: '/status', label: t('nav.serviceStatus'), icon: StatusIcon },
+    ...(appStore.statusProbeEnabled ? [{ path: '/status', label: t('nav.serviceStatus'), icon: StatusIcon }] : []),
     { path: '/profile', label: t('nav.profile'), icon: UserIcon },
     ...customMenuItemsForUser.value.map((item): NavItem => ({
       path: `/custom/${item.id}`,
@@ -659,9 +660,16 @@ watch(
   { immediate: true }
 )
 
-onMounted(() => {
+onMounted(async () => {
   if (isAdmin.value) {
     adminSettingsStore.fetch()
+  }
+  // Check if status probe is enabled (for menu visibility)
+  try {
+    const data = await statusAPI.getStatus()
+    appStore.statusProbeEnabled = data.overall_status !== 'unknown' && data.models.length > 0
+  } catch {
+    appStore.statusProbeEnabled = false
   }
 })
 </script>

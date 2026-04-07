@@ -25,6 +25,7 @@ export interface ModelStatus {
 
 export interface ServiceStatusResponse {
   overall_status: 'operational' | 'degraded' | 'major_outage' | 'unknown'
+  interval_minutes: number
   models: ModelStatus[]
   last_updated: string | null
 }

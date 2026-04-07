@@ -42,6 +42,9 @@ export const useAppStore = defineStore('app', () => {
   const buildType = ref<string>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
+  // Status probe visibility (set by ServiceStatusOverview on fetch)
+  const statusProbeEnabled = ref<boolean>(false)
+
   // Auto-incrementing ID for toasts
   let toastIdCounter = 0
 
@@ -408,6 +411,9 @@ export const useAppStore = defineStore('app', () => {
     hasUpdate,
     buildType,
     releaseInfo,
+
+    // Status probe
+    statusProbeEnabled,
 
     // Computed
     hasActiveToasts,

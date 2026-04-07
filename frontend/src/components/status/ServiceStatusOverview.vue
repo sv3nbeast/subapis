@@ -5,10 +5,12 @@
     @click="compact ? router.push('/status') : null"
   >
     <!-- Overall status header (hidden in compact mode) -->
-    <div v-if="!compact" class="flex items-center gap-2 mb-4">
-      <span :class="overallDotClass" class="w-2.5 h-2.5 rounded-full" />
-      <span class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ overallText }}</span>
-      <span class="ml-auto text-xs text-gray-400">{{ t('status.lastUpdated') }}: {{ relativeTime }}</span>
+    <div v-if="!compact" class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2">
+        <span :class="overallDotClass" class="w-2.5 h-2.5 rounded-full" />
+        <span class="text-base font-semibold text-gray-900 dark:text-gray-100">{{ overallText }}</span>
+      </div>
+      <span class="text-sm font-mono tabular-nums text-gray-500 dark:text-gray-400">{{ currentTime }}</span>
     </div>
 
     <!-- Model bars -->
@@ -17,6 +19,7 @@
         v-for="model in status.models"
         :key="model.model"
         :model-status="model"
+        :interval-minutes="status.interval_minutes || 5"
         :compact="compact"
       />
     </div>
@@ -31,11 +34,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { statusAPI } from '@/api/status'
 import type { ServiceStatusResponse } from '@/api/status'
+import { useAppStore } from '@/stores/app'
 import ServiceStatusBar from '@/components/status/ServiceStatusBar.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
@@ -49,30 +53,46 @@ withDefaults(defineProps<Props>(), {
 
 const router = useRouter()
 const { t } = useI18n()
+const appStore = useAppStore()
 
 const status = ref<ServiceStatusResponse | null>(null)
 const loading = ref(true)
+const currentTime = ref('')
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+function updateClock() {
+  currentTime.value = new Date().toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
 
 onMounted(async () => {
+  updateClock()
+  clockTimer = setInterval(updateClock, 1000)
   try {
     const data = await statusAPI.getStatus()
     if (data.overall_status === 'unknown') {
       // Treat unknown as disabled; render nothing
       status.value = null
+      appStore.statusProbeEnabled = false
     } else {
       status.value = data
+      appStore.statusProbeEnabled = data.models.length > 0
     }
   } catch {
     // Fetch failed; render nothing
     status.value = null
+    appStore.statusProbeEnabled = false
   } finally {
     loading.value = false
   }
 })
 
-/**
- * Overall status dot color class.
- */
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
+})
 const overallDotClass = computed<string>(() => {
   if (!status.value) return 'bg-gray-400'
   switch (status.value.overall_status) {
@@ -104,23 +124,4 @@ const overallText = computed<string>(() => {
   }
 })
 
-/**
- * Relative time since last update.
- */
-const relativeTime = computed<string>(() => {
-  if (!status.value?.last_updated) return t('status.never')
-
-  const updated = new Date(status.value.last_updated)
-  const now = new Date()
-  const diffMs = now.getTime() - updated.getTime()
-  const diffSec = Math.floor(diffMs / 1000)
-  const diffMin = Math.floor(diffSec / 60)
-  const diffHour = Math.floor(diffMin / 60)
-  const diffDay = Math.floor(diffHour / 24)
-
-  if (diffSec < 60) return t('status.justNow')
-  if (diffMin < 60) return `${diffMin} ${t('status.minutesAgo')}`
-  if (diffHour < 24) return `${diffHour} ${t('status.hoursAgo')}`
-  return `${diffDay} ${t('status.daysAgoRelative')}`
-})
 </script>

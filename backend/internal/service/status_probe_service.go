@@ -1,15 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"math"
-	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -67,9 +64,10 @@ type ModelStatus struct {
 
 // ServiceStatusResponse is the top-level response returned by GetStatus.
 type ServiceStatusResponse struct {
-	OverallStatus string        `json:"overall_status"`
-	Models        []ModelStatus `json:"models"`
-	UpdatedAt     time.Time     `json:"last_updated"`
+	OverallStatus   string        `json:"overall_status"`
+	IntervalMinutes int           `json:"interval_minutes"`
+	Models          []ModelStatus `json:"models"`
+	UpdatedAt       time.Time     `json:"last_updated"`
 }
 
 // ─── Internal raw result type ────────────────────────────────────────────────
@@ -90,11 +88,13 @@ var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | 
 
 // ─── Service struct ──────────────────────────────────────────────────────────
 
-// StatusProbeService periodically probes monitored models via the local
-// /v1/messages endpoint and records the results for uptime monitoring.
+// StatusProbeService periodically probes monitored models via the internal
+// AccountTestService and records the results for uptime monitoring.
 type StatusProbeService struct {
-	db             *sql.DB
-	settingService *SettingService
+	db              *sql.DB
+	settingService  *SettingService
+	accountTestSvc  *AccountTestService
+	accountRepo     AccountRepository
 
 	cron      *cron.Cron
 	startOnce sync.Once
@@ -102,10 +102,12 @@ type StatusProbeService struct {
 }
 
 // NewStatusProbeService creates a new StatusProbeService.
-func NewStatusProbeService(db *sql.DB, settingService *SettingService) *StatusProbeService {
+func NewStatusProbeService(db *sql.DB, settingService *SettingService, accountTestSvc *AccountTestService, accountRepo AccountRepository) *StatusProbeService {
 	return &StatusProbeService{
-		db:             db,
-		settingService: settingService,
+		db:              db,
+		settingService:  settingService,
+		accountTestSvc:  accountTestSvc,
+		accountRepo:     accountRepo,
 	}
 }
 
@@ -253,62 +255,53 @@ func (s *StatusProbeService) runAllProbes() {
 	}
 }
 
-// runProbe sends a minimal /v1/messages request to the local server and measures latency.
+// runProbe simulates the gateway scheduling path: it lists all schedulable
+// accounts that support the requested model, then tries each in turn until
+// one succeeds. This mirrors real user experience — a single account's
+// rate-limit (429) does not mean the service is down.
 func (s *StatusProbeService) runProbe(ctx context.Context, model string) (latencyMs int, errMsg string) {
-	start := time.Now()
-
-	port := 8080
-	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Server.Port != 0 {
-		port = s.settingService.cfg.Server.Port
+	if s.accountTestSvc == nil || s.accountRepo == nil {
+		return 0, "probe service not fully initialized"
 	}
 
-	reqBody := []byte(fmt.Sprintf(`{"model":"%s","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, model))
-
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("http://127.0.0.1:%d/v1/messages", port), bytes.NewReader(reqBody))
+	// List all schedulable accounts (status=active, schedulable=true).
+	accounts, err := s.accountRepo.ListSchedulable(ctx)
 	if err != nil {
-		return int(time.Since(start).Milliseconds()), fmt.Sprintf("create request: %v", err)
+		return 0, fmt.Sprintf("list schedulable accounts: %v", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	// Use admin API key for authentication.
-	adminKey, keyErr := s.settingService.GetAdminAPIKey(ctx)
-	if keyErr != nil {
-		return int(time.Since(start).Milliseconds()), fmt.Sprintf("get admin api key: %v", keyErr)
+	// Filter to accounts that support the requested model.
+	var candidates []Account
+	for _, acc := range accounts {
+		if acc.IsModelSupported(model) {
+			candidates = append(candidates, acc)
+		}
 	}
-	if adminKey == "" {
-		return int(time.Since(start).Milliseconds()), "admin api key not configured"
-	}
-	req.Header.Set("x-api-key", adminKey)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	latencyMs = int(time.Since(start).Milliseconds())
-	if err != nil {
-		return latencyMs, fmt.Sprintf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Read body (limited to 4KB to avoid memory issues).
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-
-	if resp.StatusCode >= 500 {
-		return latencyMs, fmt.Sprintf("server error %d: %s", resp.StatusCode, truncateString(string(body), 256))
-	}
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return latencyMs, fmt.Sprintf("auth error %d: %s", resp.StatusCode, truncateString(string(body), 256))
-	}
-	// 2xx and 4xx (e.g. 400 from max_tokens=1) are considered successful probes —
-	// they prove the upstream model is reachable and the gateway is functioning.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-		// 4xx other than auth errors means the request reached the model layer.
-		// This is a successful probe — the model is reachable.
-		return latencyMs, ""
+	if len(candidates) == 0 {
+		return 0, "no schedulable account supports this model"
 	}
 
-	return latencyMs, ""
+	// Try each candidate until one succeeds (simulating gateway scheduling
+	// with exclusion on failure).
+	var lastErr string
+	var lastLatency int
+	for _, acc := range candidates {
+		result, err := s.accountTestSvc.RunTestBackground(ctx, acc.ID, model)
+		if err != nil {
+			lastErr = fmt.Sprintf("account %d: %v", acc.ID, err)
+			continue
+		}
+		latency := int(result.LatencyMs)
+		if result.Status == "success" {
+			return latency, ""
+		}
+		// Record failure but keep trying next account.
+		lastLatency = latency
+		lastErr = result.ErrorMessage
+	}
+
+	// All candidates exhausted — report the last error.
+	return lastLatency, lastErr
 }
 
 // ─── Record & cleanup ────────────────────────────────────────────────────────
@@ -337,11 +330,26 @@ func (s *StatusProbeService) cleanup(ctx context.Context, retentionDays int) err
 
 // ─── GetStatus — public query ────────────────────────────────────────────────
 
-// GetStatus queries the last 30 days of probe results and builds the response.
+// GetStatus queries the last 24 hours of probe results and builds the response.
 func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusResponse, error) {
 	cfg, err := s.LoadConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	intervalMin := cfg.IntervalMinutes
+	if intervalMin <= 0 {
+		intervalMin = 5
+	}
+
+	// If probe is disabled, return empty response.
+	if !cfg.Enabled {
+		return &ServiceStatusResponse{
+			OverallStatus:   "unknown",
+			IntervalMinutes: intervalMin,
+			Models:          []ModelStatus{},
+			UpdatedAt:       time.Now().UTC(),
+		}, nil
 	}
 
 	// Build a map of display names and sort orders from config.
@@ -358,14 +366,15 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 
 	if len(metaMap) == 0 {
 		return &ServiceStatusResponse{
-			OverallStatus: "operational",
-			Models:        []ModelStatus{},
-			UpdatedAt:     time.Now().UTC(),
+			OverallStatus:   "operational",
+			IntervalMinutes: intervalMin,
+			Models:          []ModelStatus{},
+			UpdatedAt:       time.Now().UTC(),
 		}, nil
 	}
 
-	// Query all results from the last 30 days.
-	cutoff := time.Now().UTC().AddDate(0, 0, -30)
+	// Query all results from the last 24 hours.
+	cutoff := time.Now().UTC().Add(-24 * time.Hour)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, model, status, latency_ms, error_message, created_at
 		 FROM status_probe_results
@@ -400,30 +409,39 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 			continue
 		}
 		results := resultsByModel[m.Model]
-		ms := s.buildModelStatus(m.Model, m.DisplayName, results)
+		ms := s.buildModelStatus(m.Model, m.DisplayName, results, intervalMin)
 		models = append(models, ms)
 	}
 
 	// Compute overall status from all model statuses.
+	// All outage → major_outage; some outage/degraded → degraded; all ok → operational.
 	overallStatus := "operational"
+	outageCount := 0
 	for _, ms := range models {
 		if ms.CurrentStatus == "outage" {
-			overallStatus = "major_outage"
-			break
+			outageCount++
 		} else if ms.CurrentStatus == "degraded" {
+			overallStatus = "degraded"
+		}
+	}
+	if outageCount > 0 {
+		if outageCount == len(models) {
+			overallStatus = "major_outage"
+		} else {
 			overallStatus = "degraded"
 		}
 	}
 
 	return &ServiceStatusResponse{
-		OverallStatus: overallStatus,
-		Models:        models,
-		UpdatedAt:     time.Now().UTC(),
+		OverallStatus:   overallStatus,
+		IntervalMinutes: intervalMin,
+		Models:          models,
+		UpdatedAt:       time.Now().UTC(),
 	}, nil
 }
 
-// buildModelStatus computes current status, uptime, and hourly stats from raw results.
-func (s *StatusProbeService) buildModelStatus(model, displayName string, results []probeRawResult) ModelStatus {
+// buildModelStatus computes current status, uptime, and interval stats from raw results.
+func (s *StatusProbeService) buildModelStatus(model, displayName string, results []probeRawResult, intervalMin int) ModelStatus {
 	ms := ModelStatus{
 		Model:          model,
 		DisplayName:    displayName,
@@ -485,14 +503,15 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 		ms.AvgLatencyMs = math.Round(float64(totalLatency)/float64(ms.TotalProbes)*100) / 100
 	}
 
-	// Aggregate by hour.
+	// Aggregate by probe interval window.
+	intervalDur := time.Duration(intervalMin) * time.Minute
 	hourlyMap := make(map[time.Time]*HourlyStat)
 	for _, r := range results {
-		hour := r.CreatedAt.UTC().Truncate(time.Hour)
-		hs, ok := hourlyMap[hour]
+		window := r.CreatedAt.UTC().Truncate(intervalDur)
+		hs, ok := hourlyMap[window]
 		if !ok {
-			hs = &HourlyStat{Hour: hour}
-			hourlyMap[hour] = hs
+			hs = &HourlyStat{Hour: window}
+			hourlyMap[window] = hs
 		}
 		hs.TotalProbes++
 		if r.Status == "ok" {
