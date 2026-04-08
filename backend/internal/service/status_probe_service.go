@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -96,6 +97,15 @@ type probeRawResult struct {
 
 var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
+var (
+	statusProbeLoadConfigTimeout = 5 * time.Second
+	// Keep per-model probes bounded without letting one slow upstream starve the rest of the batch.
+	statusProbePerModelTimeout = 25 * time.Second
+	statusProbeRecordTimeout   = 5 * time.Second
+	statusProbeCleanupTimeout  = 15 * time.Second
+	statusProbeErrorBodyLimit  int64 = 4096
+)
+
 // ─── Service struct ──────────────────────────────────────────────────────────
 
 // StatusProbeService periodically probes monitored models via HTTP requests
@@ -160,7 +170,7 @@ func (s *StatusProbeService) Start() {
 	}
 	s.startOnce.Do(func() {
 		// Load config to check if enabled.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), statusProbeLoadConfigTimeout)
 		defer cancel()
 		cfg, err := s.LoadConfig(ctx)
 		if err != nil {
@@ -231,7 +241,7 @@ func (s *StatusProbeService) Restart() {
 
 // runAllProbes iterates enabled models, probes each, and records results.
 func (s *StatusProbeService) runAllProbes() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), statusProbeLoadConfigTimeout)
 	defer cancel()
 
 	cfg, err := s.LoadConfig(ctx)
@@ -251,21 +261,27 @@ func (s *StatusProbeService) runAllProbes() {
 			slog.Warn("[StatusProbe] skipped: api_key or base_url not configured", "model", m.Model)
 			continue
 		}
-		latencyMs, errMsg := s.runProbe(ctx, m)
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), statusProbePerModelTimeout)
+		latencyMs, errMsg := s.runProbe(probeCtx, m)
+		probeCancel()
 		status := "ok"
 		if errMsg != "" {
 			status = "error"
 		}
-		if err := s.recordResult(ctx, m.Model, status, latencyMs, errMsg); err != nil {
+		recordCtx, recordCancel := context.WithTimeout(context.Background(), statusProbeRecordTimeout)
+		if err := s.recordResult(recordCtx, m.Model, status, latencyMs, errMsg); err != nil {
 			slog.Warn("[StatusProbe] failed to record result", "model", m.Model, "error", err)
 		}
+		recordCancel()
 	}
 
 	// Cleanup old data.
 	if cfg.RetentionDays > 0 {
-		if err := s.cleanup(ctx, cfg.RetentionDays); err != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), statusProbeCleanupTimeout)
+		if err := s.cleanup(cleanupCtx, cfg.RetentionDays); err != nil {
 			slog.Warn("[StatusProbe] cleanup failed", "error", err)
 		}
+		cleanupCancel()
 	}
 }
 
@@ -292,23 +308,10 @@ func normalizeStatusProbeConfig(cfg StatusProbeConfig) StatusProbeConfig {
 // runProbe makes an actual HTTP request to the gateway API, just like monitor.sh.
 // It sends a minimal chat completion request and checks for HTTP 200.
 func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelConfig) (latencyMs int, errMsg string) {
-	reqBody, err := json.Marshal(map[string]any{
-		"model":      m.Model,
-		"max_tokens": 10,
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
-	})
+	req, err := newStatusProbeRequest(ctx, m)
 	if err != nil {
-		return 0, fmt.Sprintf("marshal request: %v", err)
+		return 0, err.Error()
 	}
-
-	url := strings.TrimRight(m.BaseURL, "/") + "/v1/messages"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return 0, fmt.Sprintf("create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", m.ApiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
 
 	start := time.Now()
 	resp, err := s.httpClient.Do(req)
@@ -326,8 +329,8 @@ func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelCon
 		return latencyMs, ""
 	}
 
-	// Read error body (limited to 512 bytes)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	// Read a bounded error body for richer diagnostics without storing huge payloads.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, statusProbeErrorBodyLimit))
 	var apiErr struct {
 		Error struct {
 			Message string `json:"message"`
@@ -337,6 +340,67 @@ func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelCon
 		return latencyMs, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, apiErr.Error.Message)
 	}
 	return latencyMs, fmt.Sprintf("HTTP %d", resp.StatusCode)
+}
+
+func newStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	if isStatusProbeGeminiModel(m.Model) {
+		return newGeminiStatusProbeRequest(ctx, m)
+	}
+	return newMessagesStatusProbeRequest(ctx, m)
+}
+
+func newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	reqBody, err := json.Marshal(map[string]any{
+		"model":      m.Model,
+		"max_tokens": 10,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %v", err)
+	}
+
+	fullURL := strings.TrimRight(m.BaseURL, "/") + "/v1/messages"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", m.ApiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	return req, nil
+}
+
+func newGeminiStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	reqBody, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{
+				"role": "user",
+				"parts": []map[string]string{
+					{"text": "hi"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %v", err)
+	}
+
+	fullURL := fmt.Sprintf(
+		"%s/v1beta/models/%s:generateContent",
+		strings.TrimRight(m.BaseURL, "/"),
+		url.PathEscape(m.Model),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", m.ApiKey)
+	return req, nil
+}
+
+func isStatusProbeGeminiModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gemini-")
 }
 
 // ─── Record & cleanup ────────────────────────────────────────────────────────
