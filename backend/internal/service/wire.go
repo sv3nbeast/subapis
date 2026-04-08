@@ -379,8 +379,8 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 }
 
 // ProvideStatusProbeService creates and starts StatusProbeService.
-func ProvideStatusProbeService(db *sql.DB, settingService *SettingService, accountTestSvc *AccountTestService, accountRepo AccountRepository) *StatusProbeService {
-	svc := NewStatusProbeService(db, settingService, accountTestSvc, accountRepo)
+func ProvideStatusProbeService(db *sql.DB, settingService *SettingService) *StatusProbeService {
+	svc := NewStatusProbeService(db, settingService)
 	svc.Start()
 	return svc
 }

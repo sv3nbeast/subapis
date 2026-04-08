@@ -834,6 +834,39 @@
                   />
                 </div>
 
+                <!-- Base URL -->
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('adminStatus.baseUrl') }}
+                  </label>
+                  <input
+                    v-model="statusProbeForm.base_url"
+                    type="text"
+                    :placeholder="t('adminStatus.baseUrlPlaceholder')"
+                    class="input w-full max-w-md"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('adminStatus.baseUrlHint') }}
+                  </p>
+                </div>
+
+                <!-- API Key -->
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('adminStatus.apiKey') }}
+                  </label>
+                  <input
+                    v-model="statusProbeForm.api_key"
+                    type="password"
+                    :placeholder="t('adminStatus.apiKeyPlaceholder')"
+                    class="input w-full max-w-md"
+                    autocomplete="off"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('adminStatus.apiKeyHint') }}
+                  </p>
+                </div>
+
                 <!-- Model List -->
                 <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                   <label class="mb-3 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2361,6 +2394,8 @@ const statusProbeForm = reactive({
   enabled: false,
   interval_minutes: 5,
   retention_days: 30,
+  api_key: '',
+  base_url: '',
   models: [] as Array<{
     model: string
     display_name: string
@@ -3123,6 +3158,8 @@ async function loadStatusProbeSettings() {
     statusProbeForm.enabled = settings.enabled
     statusProbeForm.interval_minutes = settings.interval_minutes
     statusProbeForm.retention_days = settings.retention_days
+    statusProbeForm.api_key = settings.api_key || ''
+    statusProbeForm.base_url = settings.base_url || ''
     statusProbeForm.models = Array.isArray(settings.models) ? settings.models : []
   } catch (error: any) {
     console.error('Failed to load status probe settings:', error)
@@ -3138,11 +3175,15 @@ async function saveStatusProbeSettings() {
       enabled: statusProbeForm.enabled,
       interval_minutes: statusProbeForm.interval_minutes,
       retention_days: statusProbeForm.retention_days,
+      api_key: statusProbeForm.api_key,
+      base_url: statusProbeForm.base_url,
       models: statusProbeForm.models
     })
     statusProbeForm.enabled = updated.enabled
     statusProbeForm.interval_minutes = updated.interval_minutes
     statusProbeForm.retention_days = updated.retention_days
+    statusProbeForm.api_key = updated.api_key || ''
+    statusProbeForm.base_url = updated.base_url || ''
     statusProbeForm.models = Array.isArray(updated.models) ? updated.models : []
     appStore.showSuccess(t('adminStatus.saved'))
   } catch (error: any) {

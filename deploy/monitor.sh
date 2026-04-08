@@ -49,6 +49,7 @@ BARK_GROUP="${BARK_GROUP:-sub2api}"
 BARK_SOUND_ALERT="${BARK_SOUND_ALERT:-alarm}"
 BARK_SOUND_RECOVER="${BARK_SOUND_RECOVER:-chord}"
 TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
+SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
 
 # ---------------------------------------------------------------------------
 # 状态管理 - 仅记录已通知标记，防止重复推送
@@ -62,6 +63,7 @@ init_state() {
     cat > "$STATE_FILE" <<EOF
 health_notified=0
 api_notified=0
+scheduling_notified=0
 EOF
   fi
 }
@@ -74,6 +76,7 @@ write_state() {
   cat > "$STATE_FILE" <<EOF
 health_notified=${health_notified}
 api_notified=${api_notified}
+scheduling_notified=${scheduling_notified}
 EOF
 }
 
@@ -221,6 +224,74 @@ check_api() {
 }
 
 # ---------------------------------------------------------------------------
+# 检查 3：调度可用率（可用账号 < SCHEDULING_THRESHOLD% 时预警）
+# 直接查询本地数据库，无需暴露 API 端点
+# ---------------------------------------------------------------------------
+check_scheduling() {
+  local pg_container="${PG_CONTAINER:-sub2api-postgres}"
+  local pg_user="${PG_USER:-sub2api}"
+  local pg_db="${PG_DB:-sub2api}"
+
+  # 通过 docker exec 查询账号调度状态
+  local query_result
+  query_result=$(docker exec "$pg_container" psql -U "$pg_user" -d "$pg_db" -t -A -F',' -c "
+    SELECT
+      COUNT(*) FILTER (WHERE schedulable = true AND status = 'active') AS total,
+      COUNT(*) FILTER (WHERE schedulable = true AND status = 'active'
+        AND (rate_limit_reset_at IS NULL OR rate_limit_reset_at <= NOW())
+        AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until <= NOW())) AS available,
+      COUNT(*) FILTER (WHERE schedulable = true AND status = 'active'
+        AND rate_limit_reset_at IS NOT NULL AND rate_limit_reset_at > NOW()) AS rate_limited,
+      COUNT(*) FILTER (WHERE schedulable = true AND status = 'active'
+        AND temp_unschedulable_until IS NOT NULL AND temp_unschedulable_until > NOW()) AS temp_unsched
+    FROM accounts WHERE deleted_at IS NULL;
+  " 2>/dev/null || echo "")
+
+  if [ -z "$query_result" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] 无法查询数据库调度状态"
+    return
+  fi
+
+  local total available rate_limited temp_unsched
+  IFS=',' read -r total available rate_limited temp_unsched <<< "$query_result"
+
+  # 去掉空格
+  total=$(echo "$total" | tr -d ' ')
+  available=$(echo "$available" | tr -d ' ')
+  rate_limited=$(echo "$rate_limited" | tr -d ' ')
+  temp_unsched=$(echo "$temp_unsched" | tr -d ' ')
+
+  if [ "$total" = "0" ] || [ -z "$total" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] 无可调度账号"
+    return
+  fi
+
+  local available_pct
+  available_pct=$(awk "BEGIN {printf \"%.1f\", ($available / $total) * 100}")
+
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] 调度状态: 可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}"
+
+  local is_low
+  is_low=$(awk "BEGIN {print ($available_pct < $SCHEDULING_THRESHOLD) ? 1 : 0}")
+
+  if [ "$is_low" = "1" ]; then
+    if [ "$scheduling_notified" = "0" ]; then
+      bark_send "账号可用率过低" "可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}" "$BARK_SOUND_ALERT"
+      scheduling_notified=1
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 调度可用率 ${available_pct}% < ${SCHEDULING_THRESHOLD}%, 已发送 Bark 告警"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 调度可用率仍低，已通知过"
+    fi
+  else
+    if [ "$scheduling_notified" = "1" ]; then
+      bark_send "账号可用率恢复" "可用 ${available}/${total} (${available_pct}%)" "$BARK_SOUND_RECOVER"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 调度可用率恢复正常"
+    fi
+    scheduling_notified=0
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 main() {
@@ -231,10 +302,11 @@ main() {
 
   check_health
   check_api
+  check_scheduling
 
   write_state
 
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 检查完成 (health_ok=${health_ok}, health_notified=${health_notified}, api_notified=${api_notified})"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 检查完成 (health_ok=${health_ok}, health_notified=${health_notified}, api_notified=${api_notified}, scheduling_notified=${scheduling_notified})"
 }
 
 main "$@"

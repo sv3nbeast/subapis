@@ -1,13 +1,17 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +33,8 @@ type StatusProbeConfig struct {
 	Enabled         bool                     `json:"enabled"`
 	IntervalMinutes int                      `json:"interval_minutes"`
 	RetentionDays   int                      `json:"retention_days"`
+	ApiKey          string                   `json:"api_key"`
+	BaseURL         string                   `json:"base_url"`
 	Models          []StatusProbeModelConfig  `json:"models"`
 }
 
@@ -88,13 +94,12 @@ var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | 
 
 // ─── Service struct ──────────────────────────────────────────────────────────
 
-// StatusProbeService periodically probes monitored models via the internal
-// AccountTestService and records the results for uptime monitoring.
+// StatusProbeService periodically probes monitored models via HTTP requests
+// to the gateway API and records the results for uptime monitoring.
 type StatusProbeService struct {
 	db              *sql.DB
 	settingService  *SettingService
-	accountTestSvc  *AccountTestService
-	accountRepo     AccountRepository
+	httpClient      *http.Client
 
 	cron      *cron.Cron
 	startOnce sync.Once
@@ -102,12 +107,11 @@ type StatusProbeService struct {
 }
 
 // NewStatusProbeService creates a new StatusProbeService.
-func NewStatusProbeService(db *sql.DB, settingService *SettingService, accountTestSvc *AccountTestService, accountRepo AccountRepository) *StatusProbeService {
+func NewStatusProbeService(db *sql.DB, settingService *SettingService) *StatusProbeService {
 	return &StatusProbeService{
 		db:              db,
 		settingService:  settingService,
-		accountTestSvc:  accountTestSvc,
-		accountRepo:     accountRepo,
+		httpClient:      &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -232,12 +236,16 @@ func (s *StatusProbeService) runAllProbes() {
 	if !cfg.Enabled {
 		return
 	}
+	if cfg.ApiKey == "" || cfg.BaseURL == "" {
+		slog.Warn("[StatusProbe] skipped: api_key or base_url not configured")
+		return
+	}
 
 	for _, m := range cfg.Models {
 		if !m.Enabled {
 			continue
 		}
-		latencyMs, errMsg := s.runProbe(ctx, m.Model)
+		latencyMs, errMsg := s.runProbe(ctx, cfg, m.Model)
 		status := "ok"
 		if errMsg != "" {
 			status = "error"
@@ -255,53 +263,54 @@ func (s *StatusProbeService) runAllProbes() {
 	}
 }
 
-// runProbe simulates the gateway scheduling path: it lists all schedulable
-// accounts that support the requested model, then tries each in turn until
-// one succeeds. This mirrors real user experience — a single account's
-// rate-limit (429) does not mean the service is down.
-func (s *StatusProbeService) runProbe(ctx context.Context, model string) (latencyMs int, errMsg string) {
-	if s.accountTestSvc == nil || s.accountRepo == nil {
-		return 0, "probe service not fully initialized"
-	}
-
-	// List all schedulable accounts (status=active, schedulable=true).
-	accounts, err := s.accountRepo.ListSchedulable(ctx)
+// runProbe makes an actual HTTP request to the gateway API, just like monitor.sh.
+// It sends a minimal chat completion request and checks for HTTP 200.
+func (s *StatusProbeService) runProbe(ctx context.Context, cfg *StatusProbeConfig, model string) (latencyMs int, errMsg string) {
+	reqBody, err := json.Marshal(map[string]any{
+		"model":      model,
+		"max_tokens": 10,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+	})
 	if err != nil {
-		return 0, fmt.Sprintf("list schedulable accounts: %v", err)
+		return 0, fmt.Sprintf("marshal request: %v", err)
 	}
 
-	// Filter to accounts that support the requested model.
-	var candidates []Account
-	for _, acc := range accounts {
-		if acc.IsModelSupported(model) {
-			candidates = append(candidates, acc)
-		}
+	url := strings.TrimRight(cfg.BaseURL, "/") + "/v1/messages"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return 0, fmt.Sprintf("create request: %v", err)
 	}
-	if len(candidates) == 0 {
-		return 0, "no schedulable account supports this model"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", cfg.ApiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	start := time.Now()
+	resp, err := s.httpClient.Do(req)
+	elapsed := time.Since(start)
+	latencyMs = int(elapsed.Milliseconds())
+
+	if err != nil {
+		return latencyMs, fmt.Sprintf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		// Drain body to allow connection reuse
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return latencyMs, ""
 	}
 
-	// Try each candidate until one succeeds (simulating gateway scheduling
-	// with exclusion on failure).
-	var lastErr string
-	var lastLatency int
-	for _, acc := range candidates {
-		result, err := s.accountTestSvc.RunTestBackground(ctx, acc.ID, model)
-		if err != nil {
-			lastErr = fmt.Sprintf("account %d: %v", acc.ID, err)
-			continue
-		}
-		latency := int(result.LatencyMs)
-		if result.Status == "success" {
-			return latency, ""
-		}
-		// Record failure but keep trying next account.
-		lastLatency = latency
-		lastErr = result.ErrorMessage
+	// Read error body (limited to 512 bytes)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	var apiErr struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-
-	// All candidates exhausted — report the last error.
-	return lastLatency, lastErr
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
+		return latencyMs, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, apiErr.Error.Message)
+	}
+	return latencyMs, fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
 // ─── Record & cleanup ────────────────────────────────────────────────────────

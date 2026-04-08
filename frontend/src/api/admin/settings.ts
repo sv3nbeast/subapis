@@ -414,6 +414,8 @@ export interface StatusProbeSettings {
   enabled: boolean
   interval_minutes: number
   retention_days: number
+  api_key: string
+  base_url: string
   models: StatusProbeModel[]
 }
 
