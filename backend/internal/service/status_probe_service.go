@@ -473,12 +473,13 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 		return ms
 	}
 
-	if isStatusProbeStale(results[0].CreatedAt, intervalMin, now) {
+	stale := isStatusProbeStale(results[0].CreatedAt, intervalMin, now)
+	if stale {
 		ms.CurrentStatus = "unknown"
 	}
 
 	// Results are ordered DESC by created_at. Determine current status from last 3 probes.
-	if ms.CurrentStatus != "unknown" {
+	if !stale {
 		recentCount := 3
 		if len(results) < recentCount {
 			recentCount = len(results)

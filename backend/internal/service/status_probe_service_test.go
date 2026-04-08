@@ -55,6 +55,19 @@ func TestStatusProbeService_buildModelStatus_MarksStaleResultsUnknown(t *testing
 	require.Equal(t, 3, ms.TotalProbes)
 }
 
+func TestStatusProbeService_buildModelStatus_UsesRecentStatusesWhenFresh(t *testing.T) {
+	svc := &StatusProbeService{}
+	now := time.Date(2026, 4, 9, 0, 42, 0, 0, time.UTC)
+	results := []probeRawResult{
+		{Model: "claude-sonnet-4-6", Status: "ok", CreatedAt: now.Add(-2 * time.Minute)},
+		{Model: "claude-sonnet-4-6", Status: "error", CreatedAt: now.Add(-7 * time.Minute)},
+		{Model: "claude-sonnet-4-6", Status: "error", CreatedAt: now.Add(-12 * time.Minute)},
+	}
+
+	ms := svc.buildModelStatus("claude-sonnet-4-6", "Claude", results, 5, now)
+	require.Equal(t, "degraded", ms.CurrentStatus)
+}
+
 func TestComputeOverallStatus_DegradesWhenAllModelsAreUnknown(t *testing.T) {
 	status := computeOverallStatus([]ModelStatus{
 		{Model: "a", CurrentStatus: "unknown"},
