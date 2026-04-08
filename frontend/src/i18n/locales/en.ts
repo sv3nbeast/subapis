@@ -2076,6 +2076,7 @@ export default {
       setPrivacy: 'Set Privacy',
       subscriptionAbnormal: 'Abnormal',
       subscriptionExpires: 'Expires',
+      searchAvailabilityModel: 'Filter availability by model, e.g. claude-sonnet-4-6',
       // Capacity status tooltips
       capacity: {
         windowCost: {

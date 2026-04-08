@@ -454,11 +454,12 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
-	return r.ListWithFilters(ctx, params, "", "", "", "", 0, "")
+	return r.ListWithFilters(ctx, params, "", "", "", "", "", 0, "")
 }
 
-func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
+func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search, model string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.client.Account.Query()
+	now := time.Now()
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -473,7 +474,7 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 				dbaccount.StatusEQ(service.StatusActive),
 				dbaccount.Or(
 					dbaccount.RateLimitResetAtIsNil(),
-					dbaccount.RateLimitResetAtLTE(time.Now()),
+					dbaccount.RateLimitResetAtLTE(now),
 				),
 				dbpredicate.Account(func(s *entsql.Selector) {
 					col := s.C("temp_unschedulable_until")
@@ -483,8 +484,18 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 					))
 				}),
 			)
+			if model != "" {
+				q = q.Where(modelRateLimitInactivePredicate(model, now))
+			}
 		case "rate_limited":
-			q = q.Where(dbaccount.RateLimitResetAtGT(time.Now()))
+			if model != "" {
+				q = q.Where(dbaccount.Or(
+					dbaccount.RateLimitResetAtGT(now),
+					modelRateLimitActivePredicate(model, now),
+				))
+			} else {
+				q = q.Where(dbaccount.RateLimitResetAtGT(now))
+			}
 		case "temp_unschedulable":
 			q = q.Where(dbpredicate.Account(func(s *entsql.Selector) {
 				col := s.C("temp_unschedulable_until")
@@ -539,6 +550,28 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		return nil, nil, err
 	}
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
+}
+
+func modelRateLimitActivePredicate(model string, now time.Time) dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		path := sqljson.Path("model_rate_limits", model, "rate_limit_reset_at")
+		s.Where(entsql.And(
+			sqljson.HasKey(dbaccount.FieldExtra, path),
+			entsql.Not(sqljson.ValueEQ(dbaccount.FieldExtra, "", path)),
+			sqljson.ValueGT(dbaccount.FieldExtra, now.UTC(), path, sqljson.Cast("timestamptz")),
+		))
+	})
+}
+
+func modelRateLimitInactivePredicate(model string, now time.Time) dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		path := sqljson.Path("model_rate_limits", model, "rate_limit_reset_at")
+		s.Where(entsql.Or(
+			entsql.Not(sqljson.HasKey(dbaccount.FieldExtra, path)),
+			sqljson.ValueEQ(dbaccount.FieldExtra, "", path),
+			sqljson.ValueLTE(dbaccount.FieldExtra, now.UTC(), path, sqljson.Cast("timestamptz")),
+		))
+	})
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {

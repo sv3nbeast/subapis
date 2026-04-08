@@ -22,6 +22,7 @@ describe('AccountTableFilters', () => {
           platform: '',
           type: '',
           status: '',
+          model: '',
           group: '',
           privacy_mode: ''
         },
