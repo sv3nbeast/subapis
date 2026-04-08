@@ -225,6 +225,8 @@ const (
 
 	// SettingKeyStatusProbeConfig stores JSON config for service status probe monitoring.
 	SettingKeyStatusProbeConfig = "status_probe_config"
+	// SettingKeyEnableCCHSigning 是否对 billing header 中的 cch 进行 xxHash64 签名（默认 false）
+	SettingKeyEnableCCHSigning = "enable_cch_signing"
 )
 
 // AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).
