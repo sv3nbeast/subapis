@@ -43,12 +43,18 @@ func (u *epFixedUpstream) DoWithTLS(req *http.Request, proxyURL string, accountI
 // epAccountRepo records SetTempUnschedulable / SetError calls.
 type epAccountRepo struct {
 	mockAccountRepoForGemini
-	tempCalls   int
-	setErrCalls int
+	tempCalls           int
+	setErrCalls         int
+	modelRateLimitCalls int
 }
 
 func (r *epAccountRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
 	r.tempCalls++
+	return nil
+}
+
+func (r *epAccountRepo) SetModelRateLimit(_ context.Context, _ int64, _ string, _ time.Time) error {
+	r.modelRateLimitCalls++
 	return nil
 }
 
@@ -260,7 +266,7 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		require.Equal(t, 1, upstream.calls, "should not retry")
 	})
 
-	t.Run("429_quota_exhausted_auto_temp_unschedules", func(t *testing.T) {
+	t.Run("429_quota_exhausted_auto_model_rate_limits", func(t *testing.T) {
 		saveAndSetBaseURLs(t)
 
 		upstream := &epFixedUpstream{
@@ -297,7 +303,8 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		require.ErrorAs(t, err, &switchErr)
 		require.Equal(t, account.ID, switchErr.OriginalAccountID)
 		require.Equal(t, 1, upstream.calls, "quota exhausted should switch immediately")
-		require.Equal(t, 1, repo.tempCalls)
+		require.Equal(t, 1, repo.modelRateLimitCalls)
+		require.Zero(t, repo.tempCalls)
 	})
 
 	t.Run("503_body_no_match_continues_default_retry", func(t *testing.T) {
