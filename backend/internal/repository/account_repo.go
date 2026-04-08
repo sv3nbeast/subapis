@@ -565,11 +565,25 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 func filterAccountsByModelAvailability(ctx context.Context, accounts []service.Account, model, status string, now time.Time) []service.Account {
 	filtered := make([]service.Account, 0, len(accounts))
 	for _, account := range accounts {
-		modelLimited := account.GetModelRateLimitRemainingTimeWithContext(ctx, model) > 0
+		candidates := matchingModelAvailabilityCandidates(account, model)
+		if len(candidates) == 0 {
+			continue
+		}
+		modelLimited := false
+		modelAvailable := false
+		for _, candidate := range candidates {
+			if account.GetModelRateLimitRemainingTimeWithContext(ctx, candidate) > 0 {
+				modelLimited = true
+				continue
+			}
+			if account.IsModelSupported(candidate) {
+				modelAvailable = true
+			}
+		}
 		accountRateLimited := account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now)
 		switch status {
 		case service.StatusActive:
-			if !modelLimited {
+			if modelAvailable {
 				filtered = append(filtered, account)
 			}
 		case "rate_limited":
@@ -581,6 +595,45 @@ func filterAccountsByModelAvailability(ctx context.Context, accounts []service.A
 		}
 	}
 	return filtered
+}
+
+func matchingModelAvailabilityCandidates(account service.Account, modelQuery string) []string {
+	query := strings.ToLower(strings.TrimSpace(modelQuery))
+	if query == "" {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, 8)
+	addCandidate := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			return
+		}
+		if _, exists := seen[model]; exists {
+			return
+		}
+		seen[model] = struct{}{}
+		candidates = append(candidates, model)
+	}
+
+	addCandidate(strings.TrimSpace(modelQuery))
+
+	for requestedModel, mappedModel := range account.GetModelMapping() {
+		if strings.Contains(strings.ToLower(requestedModel), query) || strings.Contains(strings.ToLower(mappedModel), query) {
+			addCandidate(requestedModel)
+			addCandidate(mappedModel)
+		}
+	}
+
+	rawLimits, _ := account.Extra["model_rate_limits"].(map[string]any)
+	for key := range rawLimits {
+		if strings.Contains(strings.ToLower(key), query) {
+			addCandidate(key)
+		}
+	}
+
+	return candidates
 }
 
 func paginateAccounts(accounts []service.Account, params pagination.PaginationParams) []service.Account {
