@@ -407,6 +407,8 @@ export interface StatusProbeModel {
   display_name: string
   sort_order: number
   enabled: boolean
+  api_key: string
+  base_url: string
 }
 
 /**
@@ -416,8 +418,6 @@ export interface StatusProbeSettings {
   enabled: boolean
   interval_minutes: number
   retention_days: number
-  api_key: string
-  base_url: string
   models: StatusProbeModel[]
 }
 

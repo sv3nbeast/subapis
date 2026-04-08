@@ -26,15 +26,9 @@ func (h *StatusProbeSettingsHandler) GetConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Mask api_key in response to avoid exposing secrets
+	// Mask api_key per model to avoid exposing secrets
 	masked := *cfg
-	if masked.ApiKey != "" {
-		if len(masked.ApiKey) > 8 {
-			masked.ApiKey = masked.ApiKey[:4] + "****" + masked.ApiKey[len(masked.ApiKey)-4:]
-		} else {
-			masked.ApiKey = "****"
-		}
-	}
+	masked.Models = maskModelApiKeys(cfg.Models)
 	response.Success(c, &masked)
 }
 
@@ -51,14 +45,26 @@ func (h *StatusProbeSettingsHandler) UpdateConfig(c *gin.Context) {
 	if cfg.RetentionDays <= 0 {
 		cfg.RetentionDays = 30
 	}
-	// Normalize base_url: trim trailing slashes
-	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 
-	// If api_key is masked or empty, preserve the existing key
-	if cfg.ApiKey == "" || strings.Contains(cfg.ApiKey, "****") {
-		existing, err := h.statusProbeService.LoadConfig(c.Request.Context())
-		if err == nil && existing != nil {
-			cfg.ApiKey = existing.ApiKey
+	// Load existing config to preserve masked api_keys
+	existing, _ := h.statusProbeService.LoadConfig(c.Request.Context())
+	existingKeyMap := make(map[string]string)
+	if existing != nil {
+		for _, m := range existing.Models {
+			if m.ApiKey != "" {
+				existingKeyMap[m.Model] = m.ApiKey
+			}
+		}
+	}
+
+	for i := range cfg.Models {
+		// Normalize base_url per model
+		cfg.Models[i].BaseURL = strings.TrimRight(cfg.Models[i].BaseURL, "/")
+		// If api_key is masked or empty, preserve the existing key
+		if cfg.Models[i].ApiKey == "" || strings.Contains(cfg.Models[i].ApiKey, "****") {
+			if key, ok := existingKeyMap[cfg.Models[i].Model]; ok {
+				cfg.Models[i].ApiKey = key
+			}
 		}
 	}
 
@@ -71,12 +77,27 @@ func (h *StatusProbeSettingsHandler) UpdateConfig(c *gin.Context) {
 
 	// Return masked response
 	masked := cfg
-	if masked.ApiKey != "" {
-		if len(masked.ApiKey) > 8 {
-			masked.ApiKey = masked.ApiKey[:4] + "****" + masked.ApiKey[len(masked.ApiKey)-4:]
-		} else {
-			masked.ApiKey = "****"
-		}
-	}
+	masked.Models = maskModelApiKeys(cfg.Models)
 	response.Success(c, &masked)
+}
+
+// maskApiKey returns a masked version of an API key.
+func maskApiKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) > 8 {
+		return key[:4] + "****" + key[len(key)-4:]
+	}
+	return "****"
+}
+
+// maskModelApiKeys returns a copy of models with api_keys masked.
+func maskModelApiKeys(models []service.StatusProbeModelConfig) []service.StatusProbeModelConfig {
+	result := make([]service.StatusProbeModelConfig, len(models))
+	copy(result, models)
+	for i := range result {
+		result[i].ApiKey = maskApiKey(result[i].ApiKey)
+	}
+	return result
 }

@@ -26,6 +26,8 @@ type StatusProbeModelConfig struct {
 	DisplayName string `json:"display_name"`
 	SortOrder   int    `json:"sort_order"`
 	Enabled     bool   `json:"enabled"`
+	ApiKey      string `json:"api_key"`
+	BaseURL     string `json:"base_url"`
 }
 
 // StatusProbeConfig is the JSON-serialised configuration stored in the settings table.
@@ -33,8 +35,6 @@ type StatusProbeConfig struct {
 	Enabled         bool                     `json:"enabled"`
 	IntervalMinutes int                      `json:"interval_minutes"`
 	RetentionDays   int                      `json:"retention_days"`
-	ApiKey          string                   `json:"api_key"`
-	BaseURL         string                   `json:"base_url"`
 	Models          []StatusProbeModelConfig  `json:"models"`
 }
 
@@ -236,16 +236,16 @@ func (s *StatusProbeService) runAllProbes() {
 	if !cfg.Enabled {
 		return
 	}
-	if cfg.ApiKey == "" || cfg.BaseURL == "" {
-		slog.Warn("[StatusProbe] skipped: api_key or base_url not configured")
-		return
-	}
 
 	for _, m := range cfg.Models {
 		if !m.Enabled {
 			continue
 		}
-		latencyMs, errMsg := s.runProbe(ctx, cfg, m.Model)
+		if m.ApiKey == "" || m.BaseURL == "" {
+			slog.Warn("[StatusProbe] skipped: api_key or base_url not configured", "model", m.Model)
+			continue
+		}
+		latencyMs, errMsg := s.runProbe(ctx, m)
 		status := "ok"
 		if errMsg != "" {
 			status = "error"
@@ -265,9 +265,9 @@ func (s *StatusProbeService) runAllProbes() {
 
 // runProbe makes an actual HTTP request to the gateway API, just like monitor.sh.
 // It sends a minimal chat completion request and checks for HTTP 200.
-func (s *StatusProbeService) runProbe(ctx context.Context, cfg *StatusProbeConfig, model string) (latencyMs int, errMsg string) {
+func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelConfig) (latencyMs int, errMsg string) {
 	reqBody, err := json.Marshal(map[string]any{
-		"model":      model,
+		"model":      m.Model,
 		"max_tokens": 10,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
 	})
@@ -275,13 +275,13 @@ func (s *StatusProbeService) runProbe(ctx context.Context, cfg *StatusProbeConfi
 		return 0, fmt.Sprintf("marshal request: %v", err)
 	}
 
-	url := strings.TrimRight(cfg.BaseURL, "/") + "/v1/messages"
+	url := strings.TrimRight(m.BaseURL, "/") + "/v1/messages"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return 0, fmt.Sprintf("create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", cfg.ApiKey)
+	req.Header.Set("x-api-key", m.ApiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	start := time.Now()

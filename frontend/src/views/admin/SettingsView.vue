@@ -834,103 +834,87 @@
                   />
                 </div>
 
-                <!-- Base URL -->
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t('adminStatus.baseUrl') }}
-                  </label>
-                  <input
-                    v-model="statusProbeForm.base_url"
-                    type="text"
-                    :placeholder="t('adminStatus.baseUrlPlaceholder')"
-                    class="input w-full max-w-md"
-                  />
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('adminStatus.baseUrlHint') }}
-                  </p>
-                </div>
-
-                <!-- API Key -->
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t('adminStatus.apiKey') }}
-                  </label>
-                  <input
-                    v-model="statusProbeForm.api_key"
-                    type="password"
-                    :placeholder="t('adminStatus.apiKeyPlaceholder')"
-                    class="input w-full max-w-md"
-                    autocomplete="off"
-                  />
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('adminStatus.apiKeyHint') }}
-                  </p>
-                </div>
-
                 <!-- Model List -->
                 <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
                   <label class="mb-3 block text-sm font-medium text-gray-700 dark:text-gray-300">
                     {{ t('adminStatus.models') }}
                   </label>
 
-                  <!-- Table Header -->
-                  <div
-                    v-if="statusProbeForm.models.length > 0"
-                    class="mb-2 grid grid-cols-12 gap-2 text-xs font-medium text-gray-500 dark:text-gray-400"
-                  >
-                    <div class="col-span-4">{{ t('adminStatus.modelId') }}</div>
-                    <div class="col-span-3">{{ t('adminStatus.displayName') }}</div>
-                    <div class="col-span-2">{{ t('adminStatus.sortOrder') }}</div>
-                    <div class="col-span-2">{{ t('adminStatus.modelEnabled') }}</div>
-                    <div class="col-span-1"></div>
-                  </div>
-
-                  <!-- Model Rows -->
+                  <!-- Model Cards -->
                   <div
                     v-for="(model, index) in statusProbeForm.models"
                     :key="index"
-                    class="mb-2 grid grid-cols-12 items-center gap-2"
+                    class="mb-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600"
                   >
-                    <div class="col-span-4">
-                      <select
-                        v-model="model.model"
-                        class="input input-sm w-full"
-                        @change="onStatusProbeModelSelect(model)"
-                      >
-                        <option value="" disabled>{{ t('adminStatus.modelId') }}</option>
-                        <optgroup v-for="group in availableProbeModels" :key="group.label" :label="group.label">
-                          <option v-for="m in group.models" :key="m" :value="m">{{ m }}</option>
-                        </optgroup>
-                        <option v-if="model.model" :value="model.model" hidden>{{ model.model }}</option>
-                      </select>
+                    <!-- Row 1: Model ID, Display Name, Sort, Enabled, Delete -->
+                    <div class="grid grid-cols-12 items-center gap-2">
+                      <div class="col-span-4">
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.modelId') }}</label>
+                        <select
+                          v-model="model.model"
+                          class="input input-sm w-full"
+                          @change="onStatusProbeModelSelect(model)"
+                        >
+                          <option value="" disabled>{{ t('adminStatus.modelId') }}</option>
+                          <optgroup v-for="group in availableProbeModels" :key="group.label" :label="group.label">
+                            <option v-for="m in group.models" :key="m" :value="m">{{ m }}</option>
+                          </optgroup>
+                          <option v-if="model.model" :value="model.model" hidden>{{ model.model }}</option>
+                        </select>
+                      </div>
+                      <div class="col-span-3">
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.displayName') }}</label>
+                        <input
+                          v-model="model.display_name"
+                          type="text"
+                          class="input input-sm w-full"
+                          :placeholder="t('adminStatus.displayName')"
+                        />
+                      </div>
+                      <div class="col-span-2">
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.sortOrder') }}</label>
+                        <input
+                          v-model.number="model.sort_order"
+                          type="number"
+                          min="0"
+                          class="input input-sm w-full"
+                        />
+                      </div>
+                      <div class="col-span-2 flex flex-col items-center">
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.modelEnabled') }}</label>
+                        <Toggle v-model="model.enabled" />
+                      </div>
+                      <div class="col-span-1 flex items-center justify-center pt-4">
+                        <button
+                          type="button"
+                          @click="removeStatusProbeModel(index)"
+                          class="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
+                        >
+                          <Icon name="x" size="sm" />
+                        </button>
+                      </div>
                     </div>
-                    <div class="col-span-3">
-                      <input
-                        v-model="model.display_name"
-                        type="text"
-                        class="input input-sm w-full"
-                        :placeholder="t('adminStatus.displayName')"
-                      />
-                    </div>
-                    <div class="col-span-2">
-                      <input
-                        v-model.number="model.sort_order"
-                        type="number"
-                        min="0"
-                        class="input input-sm w-full"
-                      />
-                    </div>
-                    <div class="col-span-2 flex items-center justify-center">
-                      <Toggle v-model="model.enabled" />
-                    </div>
-                    <div class="col-span-1 flex items-center justify-center">
-                      <button
-                        type="button"
-                        @click="removeStatusProbeModel(index)"
-                        class="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
-                      >
-                        <Icon name="x" size="sm" />
-                      </button>
+                    <!-- Row 2: Base URL and API Key -->
+                    <div class="mt-3 grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.baseUrl') }}</label>
+                        <input
+                          v-model="model.base_url"
+                          type="text"
+                          :placeholder="t('adminStatus.baseUrlPlaceholder')"
+                          class="input input-sm w-full"
+                        />
+                      </div>
+                      <div>
+                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('adminStatus.apiKey') }}</label>
+                        <input
+                          v-model="model.api_key"
+                          type="password"
+                          :placeholder="t('adminStatus.apiKeyPlaceholder')"
+                          class="input input-sm w-full"
+                          autocomplete="off"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -2407,13 +2391,13 @@ const statusProbeForm = reactive({
   enabled: false,
   interval_minutes: 5,
   retention_days: 30,
-  api_key: '',
-  base_url: '',
   models: [] as Array<{
     model: string
     display_name: string
     sort_order: number
     enabled: boolean
+    api_key: string
+    base_url: string
   }>
 })
 
@@ -3173,9 +3157,11 @@ async function loadStatusProbeSettings() {
     statusProbeForm.enabled = settings.enabled
     statusProbeForm.interval_minutes = settings.interval_minutes
     statusProbeForm.retention_days = settings.retention_days
-    statusProbeForm.api_key = settings.api_key || ''
-    statusProbeForm.base_url = settings.base_url || ''
-    statusProbeForm.models = Array.isArray(settings.models) ? settings.models : []
+    statusProbeForm.models = Array.isArray(settings.models) ? settings.models.map(m => ({
+      ...m,
+      api_key: m.api_key || '',
+      base_url: m.base_url || ''
+    })) : []
   } catch (error: any) {
     console.error('Failed to load status probe settings:', error)
   } finally {
@@ -3190,16 +3176,16 @@ async function saveStatusProbeSettings() {
       enabled: statusProbeForm.enabled,
       interval_minutes: statusProbeForm.interval_minutes,
       retention_days: statusProbeForm.retention_days,
-      api_key: statusProbeForm.api_key,
-      base_url: statusProbeForm.base_url,
       models: statusProbeForm.models
     })
     statusProbeForm.enabled = updated.enabled
     statusProbeForm.interval_minutes = updated.interval_minutes
     statusProbeForm.retention_days = updated.retention_days
-    statusProbeForm.api_key = updated.api_key || ''
-    statusProbeForm.base_url = updated.base_url || ''
-    statusProbeForm.models = Array.isArray(updated.models) ? updated.models : []
+    statusProbeForm.models = Array.isArray(updated.models) ? updated.models.map(m => ({
+      ...m,
+      api_key: m.api_key || '',
+      base_url: m.base_url || ''
+    })) : []
     appStore.showSuccess(t('adminStatus.saved'))
   } catch (error: any) {
     appStore.showError(
@@ -3215,7 +3201,9 @@ function addStatusProbeModel() {
     model: '',
     display_name: '',
     sort_order: statusProbeForm.models.length,
-    enabled: true
+    enabled: true,
+    api_key: '',
+    base_url: ''
   })
 }
 
