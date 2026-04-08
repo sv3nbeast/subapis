@@ -343,6 +343,36 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
+			name: "filter_by_status_active_and_model_respects_antigravity_model_alias",
+			setup: func(client *dbent.Client) {
+				mustCreateAccount(s.T(), client, &service.Account{
+					Name:     "opus-available",
+					Status:   service.StatusActive,
+					Platform: service.PlatformAntigravity,
+					Type:     service.AccountTypeOAuth,
+				})
+				mustCreateAccount(s.T(), client, &service.Account{
+					Name:     "opus-thinking-limited",
+					Status:   service.StatusActive,
+					Platform: service.PlatformAntigravity,
+					Type:     service.AccountTypeOAuth,
+					Extra: map[string]any{
+						"model_rate_limits": map[string]any{
+							"claude-opus-4-6-thinking": map[string]any{
+								"rate_limit_reset_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+							},
+						},
+					},
+				})
+			},
+			status:    service.StatusActive,
+			model:     "claude-opus-4-6",
+			wantCount: 1,
+			validate: func(accounts []service.Account) {
+				s.Require().Equal("opus-available", accounts[0].Name)
+			},
+		},
+		{
 			name: "filter_by_search",
 			setup: func(client *dbent.Client) {
 				mustCreateAccount(s.T(), client, &service.Account{Name: "alpha-account"})

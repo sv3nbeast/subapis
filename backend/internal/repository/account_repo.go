@@ -460,6 +460,7 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search, model string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.client.Account.Query()
 	now := time.Now()
+	modelAwareAvailabilityFilter := strings.TrimSpace(model) != "" && (status == service.StatusActive || status == "rate_limited")
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -484,16 +485,8 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 					))
 				}),
 			)
-			if model != "" {
-				q = q.Where(modelRateLimitInactivePredicate(model, now))
-			}
 		case "rate_limited":
-			if model != "" {
-				q = q.Where(dbaccount.Or(
-					dbaccount.RateLimitResetAtGT(now),
-					modelRateLimitActivePredicate(model, now),
-				))
-			} else {
+			if !modelAwareAvailabilityFilter {
 				q = q.Where(dbaccount.RateLimitResetAtGT(now))
 			}
 		case "temp_unschedulable":
@@ -531,6 +524,23 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		}))
 	}
 
+	if modelAwareAvailabilityFilter {
+		accounts, err := q.
+			Order(dbent.Desc(dbaccount.FieldID)).
+			All(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		outAccounts, err := r.accountsToService(ctx, accounts)
+		if err != nil {
+			return nil, nil, err
+		}
+		filtered := filterAccountsByModelAvailability(ctx, outAccounts, model, status, now)
+		paged := paginateAccounts(filtered, params)
+		return paged, paginationResultFromTotal(int64(len(filtered)), params), nil
+	}
+
 	total, err := q.Count(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -552,26 +562,40 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
 }
 
-func modelRateLimitActivePredicate(model string, now time.Time) dbpredicate.Account {
-	return dbpredicate.Account(func(s *entsql.Selector) {
-		path := sqljson.Path("model_rate_limits", model, "rate_limit_reset_at")
-		s.Where(entsql.And(
-			sqljson.HasKey(dbaccount.FieldExtra, path),
-			entsql.Not(sqljson.ValueEQ(dbaccount.FieldExtra, "", path)),
-			sqljson.ValueGT(dbaccount.FieldExtra, now.UTC(), path, sqljson.Cast("timestamptz")),
-		))
-	})
+func filterAccountsByModelAvailability(ctx context.Context, accounts []service.Account, model, status string, now time.Time) []service.Account {
+	filtered := make([]service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		modelLimited := account.GetModelRateLimitRemainingTimeWithContext(ctx, model) > 0
+		accountRateLimited := account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now)
+		switch status {
+		case service.StatusActive:
+			if !modelLimited {
+				filtered = append(filtered, account)
+			}
+		case "rate_limited":
+			if modelLimited || accountRateLimited {
+				filtered = append(filtered, account)
+			}
+		default:
+			filtered = append(filtered, account)
+		}
+	}
+	return filtered
 }
 
-func modelRateLimitInactivePredicate(model string, now time.Time) dbpredicate.Account {
-	return dbpredicate.Account(func(s *entsql.Selector) {
-		path := sqljson.Path("model_rate_limits", model, "rate_limit_reset_at")
-		s.Where(entsql.Or(
-			entsql.Not(sqljson.HasKey(dbaccount.FieldExtra, path)),
-			sqljson.ValueEQ(dbaccount.FieldExtra, "", path),
-			sqljson.ValueLTE(dbaccount.FieldExtra, now.UTC(), path, sqljson.Cast("timestamptz")),
-		))
-	})
+func paginateAccounts(accounts []service.Account, params pagination.PaginationParams) []service.Account {
+	if len(accounts) == 0 {
+		return []service.Account{}
+	}
+	start := params.Offset()
+	if start >= len(accounts) {
+		return []service.Account{}
+	}
+	end := start + params.Limit()
+	if end > len(accounts) {
+		end = len(accounts)
+	}
+	return accounts[start:end]
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
