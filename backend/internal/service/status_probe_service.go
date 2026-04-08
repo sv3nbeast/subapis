@@ -32,10 +32,14 @@ type StatusProbeModelConfig struct {
 
 // StatusProbeConfig is the JSON-serialised configuration stored in the settings table.
 type StatusProbeConfig struct {
-	Enabled         bool                     `json:"enabled"`
-	IntervalMinutes int                      `json:"interval_minutes"`
-	RetentionDays   int                      `json:"retention_days"`
-	Models          []StatusProbeModelConfig  `json:"models"`
+	Enabled         bool `json:"enabled"`
+	IntervalMinutes int  `json:"interval_minutes"`
+	RetentionDays   int  `json:"retention_days"`
+	// Deprecated: kept for backward compatibility with pre-1bd4bfb4 configs.
+	ApiKey string `json:"api_key,omitempty"`
+	// Deprecated: kept for backward compatibility with pre-1bd4bfb4 configs.
+	BaseURL string                   `json:"base_url,omitempty"`
+	Models  []StatusProbeModelConfig `json:"models"`
 }
 
 // ─── Response types ──────────────────────────────────────────────────────────
@@ -58,14 +62,14 @@ type HourlyStat struct {
 
 // ModelStatus describes the current state and history of a single monitored model.
 type ModelStatus struct {
-	Model           string        `json:"model"`
-	DisplayName     string        `json:"display_name"`
-	CurrentStatus   string        `json:"current_status"`
-	UptimePercent   float64       `json:"uptime_percentage"`
-	AvgLatencyMs    float64       `json:"avg_latency_ms"`
-	TotalProbes     int           `json:"total_probes"`
-	RecentFailures  []ProbeFailure `json:"recent_failures"`
-	HourlyStats     []HourlyStat  `json:"hourly_stats"`
+	Model          string         `json:"model"`
+	DisplayName    string         `json:"display_name"`
+	CurrentStatus  string         `json:"current_status"`
+	UptimePercent  float64        `json:"uptime_percentage"`
+	AvgLatencyMs   float64        `json:"avg_latency_ms"`
+	TotalProbes    int            `json:"total_probes"`
+	RecentFailures []ProbeFailure `json:"recent_failures"`
+	HourlyStats    []HourlyStat   `json:"hourly_stats"`
 }
 
 // ServiceStatusResponse is the top-level response returned by GetStatus.
@@ -97,9 +101,9 @@ var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | 
 // StatusProbeService periodically probes monitored models via HTTP requests
 // to the gateway API and records the results for uptime monitoring.
 type StatusProbeService struct {
-	db              *sql.DB
-	settingService  *SettingService
-	httpClient      *http.Client
+	db             *sql.DB
+	settingService *SettingService
+	httpClient     *http.Client
 
 	cron      *cron.Cron
 	startOnce sync.Once
@@ -109,9 +113,9 @@ type StatusProbeService struct {
 // NewStatusProbeService creates a new StatusProbeService.
 func NewStatusProbeService(db *sql.DB, settingService *SettingService) *StatusProbeService {
 	return &StatusProbeService{
-		db:              db,
-		settingService:  settingService,
-		httpClient:      &http.Client{Timeout: 60 * time.Second},
+		db:             db,
+		settingService: settingService,
+		httpClient:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -133,12 +137,14 @@ func (s *StatusProbeService) LoadConfig(ctx context.Context) (*StatusProbeConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal status probe config: %w", err)
 	}
+	cfg = normalizeStatusProbeConfig(cfg)
 	return &cfg, nil
 }
 
 // SaveConfig writes the probe configuration to the settings table.
 func (s *StatusProbeService) SaveConfig(ctx context.Context, cfg *StatusProbeConfig) error {
-	data, err := json.Marshal(cfg)
+	normalized := normalizeStatusProbeConfig(*cfg)
+	data, err := json.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("marshal status probe config: %w", err)
 	}
@@ -261,6 +267,26 @@ func (s *StatusProbeService) runAllProbes() {
 			slog.Warn("[StatusProbe] cleanup failed", "error", err)
 		}
 	}
+}
+
+func normalizeStatusProbeConfig(cfg StatusProbeConfig) StatusProbeConfig {
+	legacyAPIKey := strings.TrimSpace(cfg.ApiKey)
+	legacyBaseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+
+	for i := range cfg.Models {
+		if strings.TrimSpace(cfg.Models[i].ApiKey) == "" && legacyAPIKey != "" {
+			cfg.Models[i].ApiKey = legacyAPIKey
+		}
+		if strings.TrimSpace(cfg.Models[i].BaseURL) == "" && legacyBaseURL != "" {
+			cfg.Models[i].BaseURL = legacyBaseURL
+		}
+		cfg.Models[i].BaseURL = strings.TrimRight(strings.TrimSpace(cfg.Models[i].BaseURL), "/")
+	}
+
+	// Do not keep deprecated top-level credentials when returning/saving normalized config.
+	cfg.ApiKey = ""
+	cfg.BaseURL = ""
+	return cfg
 }
 
 // runProbe makes an actual HTTP request to the gateway API, just like monitor.sh.
@@ -413,33 +439,17 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 
 	// Build ModelStatus for each configured model.
 	var models []ModelStatus
+	now := time.Now().UTC()
 	for _, m := range cfg.Models {
 		if !m.Enabled {
 			continue
 		}
 		results := resultsByModel[m.Model]
-		ms := s.buildModelStatus(m.Model, m.DisplayName, results, intervalMin)
+		ms := s.buildModelStatus(m.Model, m.DisplayName, results, intervalMin, now)
 		models = append(models, ms)
 	}
 
-	// Compute overall status from all model statuses.
-	// All outage → major_outage; some outage/degraded → degraded; all ok → operational.
-	overallStatus := "operational"
-	outageCount := 0
-	for _, ms := range models {
-		if ms.CurrentStatus == "outage" {
-			outageCount++
-		} else if ms.CurrentStatus == "degraded" {
-			overallStatus = "degraded"
-		}
-	}
-	if outageCount > 0 {
-		if outageCount == len(models) {
-			overallStatus = "major_outage"
-		} else {
-			overallStatus = "degraded"
-		}
-	}
+	overallStatus := computeOverallStatus(models)
 
 	return &ServiceStatusResponse{
 		OverallStatus:   overallStatus,
@@ -450,7 +460,7 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 }
 
 // buildModelStatus computes current status, uptime, and interval stats from raw results.
-func (s *StatusProbeService) buildModelStatus(model, displayName string, results []probeRawResult, intervalMin int) ModelStatus {
+func (s *StatusProbeService) buildModelStatus(model, displayName string, results []probeRawResult, intervalMin int, now time.Time) ModelStatus {
 	ms := ModelStatus{
 		Model:          model,
 		DisplayName:    displayName,
@@ -463,24 +473,30 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 		return ms
 	}
 
+	if isStatusProbeStale(results[0].CreatedAt, intervalMin, now) {
+		ms.CurrentStatus = "unknown"
+	}
+
 	// Results are ordered DESC by created_at. Determine current status from last 3 probes.
-	recentCount := 3
-	if len(results) < recentCount {
-		recentCount = len(results)
-	}
-	failCount := 0
-	for i := 0; i < recentCount; i++ {
-		if results[i].Status != "ok" {
-			failCount++
+	if ms.CurrentStatus != "unknown" {
+		recentCount := 3
+		if len(results) < recentCount {
+			recentCount = len(results)
 		}
-	}
-	switch {
-	case failCount == 0:
-		ms.CurrentStatus = "operational"
-	case failCount < recentCount:
-		ms.CurrentStatus = "degraded"
-	default:
-		ms.CurrentStatus = "outage"
+		failCount := 0
+		for i := 0; i < recentCount; i++ {
+			if results[i].Status != "ok" {
+				failCount++
+			}
+		}
+		switch {
+		case failCount == 0:
+			ms.CurrentStatus = "operational"
+		case failCount < recentCount:
+			ms.CurrentStatus = "degraded"
+		default:
+			ms.CurrentStatus = "outage"
+		}
 	}
 
 	// Compute totals and uptime.
@@ -550,4 +566,48 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 	})
 
 	return ms
+}
+
+func isStatusProbeStale(latest time.Time, intervalMin int, now time.Time) bool {
+	if latest.IsZero() {
+		return true
+	}
+	if intervalMin <= 0 {
+		intervalMin = 5
+	}
+	threshold := time.Duration(intervalMin*2) * time.Minute
+	return now.UTC().After(latest.UTC().Add(threshold))
+}
+
+func computeOverallStatus(models []ModelStatus) string {
+	if len(models) == 0 {
+		return "operational"
+	}
+
+	unknownCount := 0
+	degradedCount := 0
+	outageCount := 0
+
+	for _, ms := range models {
+		switch ms.CurrentStatus {
+		case "outage":
+			outageCount++
+		case "degraded":
+			degradedCount++
+		case "unknown":
+			unknownCount++
+		}
+	}
+
+	freshCount := len(models) - unknownCount
+	switch {
+	case freshCount == 0:
+		return "degraded"
+	case outageCount == freshCount && unknownCount == 0:
+		return "major_outage"
+	case outageCount > 0 || degradedCount > 0 || unknownCount > 0:
+		return "degraded"
+	default:
+		return "operational"
+	}
 }
