@@ -207,7 +207,7 @@ func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
 	require.Empty(t, repo.modelRateLimitCalls)
 }
 
-func TestAntigravityRetryLoop_ModelRateLimited_InjectsCredits(t *testing.T) {
+func TestAntigravityRetryLoop_ModelRateLimitedNonClaude_InjectsCredits(t *testing.T) {
 	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
 	oldAvailability := antigravity.DefaultURLAvailability
 	defer func() {
@@ -228,7 +228,7 @@ func TestAntigravityRetryLoop_ModelRateLimited_InjectsCredits(t *testing.T) {
 		},
 		errors: []error{nil},
 	}
-	// 模型已限流 + overages 启用 + 无 AICredits key → 应直接注入积分
+	// 非 Claude 模型已限流 + overages 启用 + 无 AICredits key → 仍允许注入积分
 	account := &Account{
 		ID:          103,
 		Name:        "acc-103",
@@ -239,7 +239,7 @@ func TestAntigravityRetryLoop_ModelRateLimited_InjectsCredits(t *testing.T) {
 		Extra: map[string]any{
 			"allow_overages": true,
 			modelRateLimitsKey: map[string]any{
-				"claude-sonnet-4-5": map[string]any{
+				"gemini-3-flash": map[string]any{
 					"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
 					"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
 				},
@@ -254,9 +254,9 @@ func TestAntigravityRetryLoop_ModelRateLimited_InjectsCredits(t *testing.T) {
 		account:        account,
 		accessToken:    "token",
 		action:         "generateContent",
-		body:           []byte(`{"model":"claude-sonnet-4-5","request":{}}`),
+		body:           []byte(`{"model":"gemini-3-flash","request":{}}`),
 		httpUpstream:   upstream,
-		requestedModel: "claude-sonnet-4-5",
+		requestedModel: "gemini-3-flash",
 		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
 			return nil
 		},
@@ -266,6 +266,48 @@ func TestAntigravityRetryLoop_ModelRateLimited_InjectsCredits(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, upstream.requestBodies, 1)
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+}
+
+func TestAntigravityRetryLoop_ModelRateLimitedClaude_DoesNotInjectCredits(t *testing.T) {
+	account := &Account{
+		ID:          106,
+		Name:        "acc-106",
+		Type:        AccountTypeOAuth,
+		Platform:    PlatformAntigravity,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"allow_overages": true,
+			modelRateLimitsKey: map[string]any{
+				"claude-sonnet-4-6": map[string]any{
+					"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
+					"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	upstream := &queuedHTTPUpstreamStub{}
+
+	svc := &AntigravityGatewayService{}
+	_, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+		ctx:            context.Background(),
+		prefix:         "[test]",
+		account:        account,
+		accessToken:    "token",
+		action:         "generateContent",
+		body:           []byte(`{"model":"claude-sonnet-4-6","request":{}}`),
+		httpUpstream:   upstream,
+		requestedModel: "claude-sonnet-4-6",
+		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
+			return nil
+		},
+	})
+
+	require.Error(t, err)
+	var switchErr *AntigravityAccountSwitchError
+	require.ErrorAs(t, err, &switchErr)
+	require.Equal(t, "claude-sonnet-4-6", switchErr.RateLimitedModel)
+	require.Empty(t, upstream.requestBodies, "Claude 模型限流时不应再走 credits 注入请求")
 }
 
 func TestAntigravityRetryLoop_CreditsExhausted_DoesNotInject(t *testing.T) {
@@ -344,7 +386,7 @@ func TestAntigravityRetryLoop_CreditErrorMarksExhausted(t *testing.T) {
 		},
 		errors: []error{nil},
 	}
-	// 模型限流 + overages 启用 + 积分可用 → 注入积分但上游返回积分不足
+	// 非 Claude 模型限流 + overages 启用 + 积分可用 → 注入积分但上游返回积分不足
 	account := &Account{
 		ID:          105,
 		Name:        "acc-105",
@@ -355,7 +397,7 @@ func TestAntigravityRetryLoop_CreditErrorMarksExhausted(t *testing.T) {
 		Extra: map[string]any{
 			"allow_overages": true,
 			modelRateLimitsKey: map[string]any{
-				"claude-sonnet-4-5": map[string]any{
+				"gemini-3-flash": map[string]any{
 					"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
 					"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
 				},
@@ -370,10 +412,10 @@ func TestAntigravityRetryLoop_CreditErrorMarksExhausted(t *testing.T) {
 		account:        account,
 		accessToken:    "token",
 		action:         "generateContent",
-		body:           []byte(`{"model":"claude-sonnet-4-5","request":{}}`),
+		body:           []byte(`{"model":"gemini-3-flash","request":{}}`),
 		httpUpstream:   upstream,
 		accountRepo:    repo,
-		requestedModel: "claude-sonnet-4-5",
+		requestedModel: "gemini-3-flash",
 		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
 			return nil
 		},

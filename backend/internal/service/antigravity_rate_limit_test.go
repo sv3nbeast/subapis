@@ -355,6 +355,31 @@ func TestAccountIsSchedulableForModel_AntigravityRateLimits(t *testing.T) {
 	require.True(t, account.IsSchedulableForModel("gemini-3-flash"))
 }
 
+func TestAccountIsSchedulableForModel_ModelRateLimitedOveragesOnlyBypassNonClaude(t *testing.T) {
+	future := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+	account := &Account{
+		ID:          11,
+		Name:        "acc-overages",
+		Platform:    PlatformAntigravity,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"allow_overages": true,
+			modelRateLimitsKey: map[string]any{
+				"claude-sonnet-4-6": map[string]any{
+					"rate_limit_reset_at": future,
+				},
+				"gemini-3-flash": map[string]any{
+					"rate_limit_reset_at": future,
+				},
+			},
+		},
+	}
+
+	require.False(t, account.IsSchedulableForModel("claude-sonnet-4-6"), "Claude 模型限流后不应再被 credits 绕过")
+	require.True(t, account.IsSchedulableForModel("gemini-3-flash"), "非 Claude 模型仍可通过 credits 绕过模型限流")
+}
+
 func buildGeminiRateLimitBody(delay string) []byte {
 	return []byte(fmt.Sprintf(`{"error":{"message":"too many requests","details":[{"metadata":{"quotaResetDelay":%q}}]}}`, delay))
 }

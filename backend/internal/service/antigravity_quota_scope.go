@@ -18,6 +18,21 @@ func resolveAntigravityModelKey(requestedModel string) string {
 	return normalizeAntigravityModelName(requestedModel)
 }
 
+func shouldAllowCreditsRateLimitBypass(ctx context.Context, account *Account, requestedModel string) bool {
+	if account == nil || account.Platform != PlatformAntigravity {
+		return false
+	}
+	if !account.IsOveragesEnabled() || account.isCreditsExhausted() {
+		return false
+	}
+	modelKey := resolveCreditsOveragesModelKey(ctx, account, "", requestedModel)
+	return !isClaudeModelFamily(modelKey) && !isClaudeModelFamily(requestedModel)
+}
+
+func isClaudeModelFamily(model string) bool {
+	return strings.HasPrefix(normalizeAntigravityModelName(model), "claude-")
+}
+
 // IsSchedulableForModel 结合模型级限流判断是否可调度。
 // 保持旧签名以兼容既有调用方；默认使用 context.Background()。
 func (a *Account) IsSchedulableForModel(requestedModel string) bool {
@@ -32,8 +47,8 @@ func (a *Account) IsSchedulableForModelWithContext(ctx context.Context, requeste
 		return false
 	}
 	if a.isModelRateLimitedWithContext(ctx, requestedModel) {
-		// Antigravity + overages 启用 + 积分未耗尽 → 放行（有积分可用）
-		if a.Platform == PlatformAntigravity && a.IsOveragesEnabled() && !a.isCreditsExhausted() {
+		// 非 Claude 模型允许通过 AI Credits 绕过模型级限流；Claude 保持严格隔离。
+		if shouldAllowCreditsRateLimitBypass(ctx, a, requestedModel) {
 			return true
 		}
 		return false
