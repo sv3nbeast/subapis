@@ -22,6 +22,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -142,6 +143,7 @@ type antigravityRetryLoopParams struct {
 	isStickySession bool   // 是否为粘性会话（用于账号切换时的缓存计费判断）
 	groupID         int64  // 用于模型级限流时清除粘性会话
 	sessionHash     string // 用于模型级限流时清除粘性会话
+	tlsProfile      *tlsfingerprint.Profile
 	// 显式账号测试/计划测试需要实际探测上游恢复情况，不能被已有 model_rate_limits 预检查直接短路。
 	bypassModelRateLimitPrecheck bool
 }
@@ -327,7 +329,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				}
 			}
 
-			retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
 				// 重试成功，清除 MODEL_CAPACITY_EXHAUSTED cooldown
@@ -513,7 +515,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 			break
 		}
 
-		retryResp, retryErr := p.httpUpstream.Do(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+		retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d single_account_503_retry_success attempt=%d/%d total_waited=%v",
 				p.prefix, retryResp.StatusCode, attempt, antigravitySingleAccountSmartRetryMaxAttempts, totalWaited)
@@ -659,7 +661,7 @@ urlFallbackLoop:
 				p.c.Set(OpsUpstreamRequestBodyKey, string(p.body))
 			}
 
-			resp, err = p.httpUpstream.Do(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+			resp, err = p.httpUpstream.DoWithTLS(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 			if err == nil && resp == nil {
 				err = errors.New("upstream returned nil response")
 			}
@@ -896,14 +898,15 @@ func logPrefix(sessionID, accountName string) string {
 
 // AntigravityGatewayService 处理 Antigravity 平台的 API 转发
 type AntigravityGatewayService struct {
-	accountRepo       AccountRepository
-	tokenProvider     *AntigravityTokenProvider
-	rateLimitService  *RateLimitService
-	httpUpstream      HTTPUpstream
-	settingService    *SettingService
-	cache             GatewayCache // 用于模型级限流时清除粘性会话绑定
-	schedulerSnapshot *SchedulerSnapshotService
-	internal500Cache  Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	accountRepo         AccountRepository
+	tokenProvider       *AntigravityTokenProvider
+	rateLimitService    *RateLimitService
+	httpUpstream        HTTPUpstream
+	settingService      *SettingService
+	tlsFPProfileService *TLSFingerprintProfileService
+	cache               GatewayCache // 用于模型级限流时清除粘性会话绑定
+	schedulerSnapshot   *SchedulerSnapshotService
+	internal500Cache    Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
 }
 
 func NewAntigravityGatewayService(
@@ -914,23 +917,32 @@ func NewAntigravityGatewayService(
 	rateLimitService *RateLimitService,
 	httpUpstream HTTPUpstream,
 	settingService *SettingService,
+	tlsFPProfileService *TLSFingerprintProfileService,
 	internal500Cache Internal500CounterCache,
 ) *AntigravityGatewayService {
 	return &AntigravityGatewayService{
-		accountRepo:       accountRepo,
-		tokenProvider:     tokenProvider,
-		rateLimitService:  rateLimitService,
-		httpUpstream:      httpUpstream,
-		settingService:    settingService,
-		cache:             cache,
-		schedulerSnapshot: schedulerSnapshot,
-		internal500Cache:  internal500Cache,
+		accountRepo:         accountRepo,
+		tokenProvider:       tokenProvider,
+		rateLimitService:    rateLimitService,
+		httpUpstream:        httpUpstream,
+		settingService:      settingService,
+		tlsFPProfileService: tlsFPProfileService,
+		cache:               cache,
+		schedulerSnapshot:   schedulerSnapshot,
+		internal500Cache:    internal500Cache,
 	}
 }
 
 // GetTokenProvider 返回 token provider
 func (s *AntigravityGatewayService) GetTokenProvider() *AntigravityTokenProvider {
 	return s.tokenProvider
+}
+
+func (s *AntigravityGatewayService) resolveTLSProfile(account *Account) *tlsfingerprint.Profile {
+	if s == nil || s.tlsFPProfileService == nil {
+		return nil
+	}
+	return s.tlsFPProfileService.ResolveTLSProfile(account)
 }
 
 // getLogConfig 获取上游错误日志配置
@@ -1121,6 +1133,7 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		accountRepo:    s.accountRepo,
 		requestedModel: modelID,
 		handleError:    testConnectionHandleError,
+		tlsProfile:     s.resolveTLSProfile(account),
 		// 账号测试/计划测试用于探测恢复，不能被已有 model cooldown 直接挡住。
 		bypassModelRateLimitPrecheck: true,
 	}
@@ -1473,6 +1486,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		isStickySession: isStickySession, // Forward 由上层判断粘性会话
 		groupID:         0,               // Forward 方法没有 groupID，由上层处理粘性会话清除
 		sessionHash:     "",              // Forward 方法没有 sessionHash，由上层处理粘性会话清除
+		tlsProfile:      s.resolveTLSProfile(account),
 	})
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
@@ -2228,6 +2242,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		isStickySession: isStickySession, // ForwardGemini 由上层判断粘性会话
 		groupID:         0,               // ForwardGemini 方法没有 groupID，由上层处理粘性会话清除
 		sessionHash:     "",              // ForwardGemini 方法没有 sessionHash，由上层处理粘性会话清除
+		tlsProfile:      s.resolveTLSProfile(account),
 	})
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
@@ -2269,7 +2284,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
-						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						fallbackResp, err := s.httpUpstream.DoWithTLS(fallbackReq, proxyURL, account.ID, account.Concurrency, s.resolveTLSProfile(account))
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
@@ -4365,7 +4380,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveTLSProfile(account))
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)

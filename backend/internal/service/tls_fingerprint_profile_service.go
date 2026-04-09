@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -190,8 +192,24 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 			return p
 		}
 	}
+	if account.Platform == PlatformAntigravity {
+		return tlsfingerprint.NewAccountScopedBuiltinProfile(accountTLSFingerprintSeed(account))
+	}
 	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
-	return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}
+	return tlsfingerprint.BuiltInDefaultProfile()
+}
+
+func accountTLSFingerprintSeed(account *Account) uint64 {
+	if account == nil {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(fmt.Sprintf("%s|%d|%s", account.Platform, account.ID, account.Name)))
+	seed := h.Sum64()
+	if seed == 0 {
+		return 1
+	}
+	return seed
 }
 
 // --- 缓存管理 ---

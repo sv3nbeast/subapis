@@ -238,38 +238,35 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			buffer := a.GetRPMStickyBuffer()
 			out.RPMStickyBuffer = &buffer
 		}
-		// 用户消息队列模式
 		if mode := a.GetUserMsgQueueMode(); mode != "" {
 			out.UserMsgQueueMode = &mode
 		}
-		// TLS指纹伪装开关
-		if a.IsTLSFingerprintEnabled() {
-			enabled := true
-			out.EnableTLSFingerprint = &enabled
-		}
-		// TLS指纹模板ID
-		if profileID := a.GetTLSFingerprintProfileID(); profileID > 0 {
-			out.TLSFingerprintProfileID = &profileID
-		}
-		// 会话ID伪装开关
 		if a.IsSessionIDMaskingEnabled() {
 			enabled := true
 			out.EnableSessionIDMasking = &enabled
 		}
-		// 缓存 TTL 强制替换
 		if a.IsCacheTTLOverrideEnabled() {
 			enabled := true
 			out.CacheTTLOverrideEnabled = &enabled
 			target := a.GetCacheTTLOverrideTarget()
 			out.CacheTTLOverrideTarget = &target
 		}
-		// 自定义 Base URL 中继转发
 		if a.IsCustomBaseURLEnabled() {
 			enabled := true
 			out.CustomBaseURLEnabled = &enabled
 			if customURL := a.GetCustomBaseURL(); customURL != "" {
 				out.CustomBaseURL = &customURL
 			}
+		}
+	}
+
+	if a.SupportsTLSFingerprint() {
+		if a.IsTLSFingerprintEnabled() {
+			enabled := true
+			out.EnableTLSFingerprint = &enabled
+		}
+		if profileID := a.GetTLSFingerprintProfileID(); profileID != 0 {
+			out.TLSFingerprintProfileID = &profileID
 		}
 	}
 

@@ -2390,7 +2390,8 @@ export default {
           label: 'TLS Fingerprint Simulation',
           hint: 'Simulate Node.js/Claude Code client TLS fingerprint',
           defaultProfile: 'Built-in Default',
-          randomProfile: 'Random'
+          randomProfile: 'Random',
+          antigravityAutoHint: 'For Antigravity, leaving the profile empty uses an account-scoped built-in random TLS fingerprint.'
         },
         sessionIdMasking: {
           label: 'Session ID Masking',
