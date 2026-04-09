@@ -2541,6 +2541,24 @@ function supportsTLSFingerprint(account: Account) {
   return account.platform === 'antigravity' || (account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token'))
 }
 
+function resolveTLSFingerprintEnabled(account: Account, extra?: Record<string, unknown>) {
+  if (account.enable_tls_fingerprint === true) {
+    return true
+  }
+  return extra?.enable_tls_fingerprint === true
+}
+
+function resolveTLSFingerprintProfileId(account: Account, extra?: Record<string, unknown>) {
+  if (account.tls_fingerprint_profile_id != null) {
+    return account.tls_fingerprint_profile_id
+  }
+  const raw = extra?.tls_fingerprint_profile_id
+  if (typeof raw === 'number') {
+    return raw
+  }
+  return null
+}
+
 // Load quota control settings from account (Anthropic OAuth/SetupToken only)
 function loadQuotaControlSettings(account: Account) {
   // Reset all quota control state first
@@ -2565,10 +2583,11 @@ function loadQuotaControlSettings(account: Account) {
 
   // TLS fingerprint applies to Antigravity and Anthropic OAuth/SetupToken accounts
   if (supportsTLSFingerprint(account)) {
-    if (account.enable_tls_fingerprint === true) {
+    const extra = (account.extra as Record<string, unknown>) || undefined
+    if (resolveTLSFingerprintEnabled(account, extra)) {
       tlsFingerprintEnabled.value = true
     }
-    tlsFingerprintProfileId.value = account.tls_fingerprint_profile_id ?? null
+    tlsFingerprintProfileId.value = resolveTLSFingerprintProfileId(account, extra)
   }
 
   // Only the remaining advanced controls apply to Anthropic OAuth/SetupToken accounts
