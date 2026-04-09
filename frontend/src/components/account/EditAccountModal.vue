@@ -2537,6 +2537,10 @@ function loadTempUnschedRules(credentials?: Record<string, unknown>) {
   })
 }
 
+function supportsTLSFingerprint(account: Account) {
+  return account.platform === 'antigravity' || (account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token'))
+}
+
 // Load quota control settings from account (Anthropic OAuth/SetupToken only)
 function loadQuotaControlSettings(account: Account) {
   // Reset all quota control state first
@@ -2559,7 +2563,15 @@ function loadQuotaControlSettings(account: Account) {
   customBaseUrlEnabled.value = false
   customBaseUrl.value = ''
 
-  // Only applies to Anthropic OAuth/SetupToken accounts
+  // TLS fingerprint applies to Antigravity and Anthropic OAuth/SetupToken accounts
+  if (supportsTLSFingerprint(account)) {
+    if (account.enable_tls_fingerprint === true) {
+      tlsFingerprintEnabled.value = true
+    }
+    tlsFingerprintProfileId.value = account.tls_fingerprint_profile_id ?? null
+  }
+
+  // Only the remaining advanced controls apply to Anthropic OAuth/SetupToken accounts
   if (account.platform !== 'anthropic' || (account.type !== 'oauth' && account.type !== 'setup-token')) {
     return
   }
@@ -2587,12 +2599,6 @@ function loadQuotaControlSettings(account: Account) {
 
   // UMQ mode（独立于 RPM 加载，防止编辑无 RPM 账号时丢失已有配置）
   userMsgQueueMode.value = account.user_msg_queue_mode ?? ''
-
-  // Load TLS fingerprint setting
-  if (account.enable_tls_fingerprint === true) {
-    tlsFingerprintEnabled.value = true
-  }
-  tlsFingerprintProfileId.value = account.tls_fingerprint_profile_id ?? null
 
   // Load session ID masking setting
   if (account.session_id_masking_enabled === true) {
@@ -2980,6 +2986,17 @@ const handleSubmit = async () => {
         newExtra.allow_overages = true
       } else {
         delete newExtra.allow_overages
+      }
+      if (tlsFingerprintEnabled.value) {
+        newExtra.enable_tls_fingerprint = true
+        if (tlsFingerprintProfileId.value) {
+          newExtra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+        } else {
+          delete newExtra.tls_fingerprint_profile_id
+        }
+      } else {
+        delete newExtra.enable_tls_fingerprint
+        delete newExtra.tls_fingerprint_profile_id
       }
       updatePayload.extra = newExtra
     }
