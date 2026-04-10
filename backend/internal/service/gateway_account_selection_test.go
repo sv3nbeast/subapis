@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -109,6 +110,43 @@ func TestSortAccountsByPriorityAndLastUsed_MixedPriorityAndTime(t *testing.T) {
 	// 优先级2排后：nil < time
 	require.Equal(t, int64(1), accounts[2].ID, "优先级2 + nil")
 	require.Equal(t, int64(4), accounts[3].ID, "优先级2 + 有时间")
+}
+
+func TestPrioritizeDifferentEmailDomainSuffixesWithinPriority(t *testing.T) {
+	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
+	accounts := []*Account{
+		{ID: 1, Priority: 1, Credentials: map[string]any{"email": "a@same.com"}},
+		{ID: 2, Priority: 1, Credentials: map[string]any{"email": "b@other.com"}},
+		{ID: 3, Priority: 1, Credentials: map[string]any{"email": "c@same.com"}},
+		{ID: 4, Priority: 2, Credentials: map[string]any{"email": "d@other.com"}},
+	}
+
+	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, accounts)
+
+	require.Equal(t, []int64{2, 1, 3, 4}, []int64{accounts[0].ID, accounts[1].ID, accounts[2].ID, accounts[3].ID})
+}
+
+func TestFilterByPreferredEmailDomainSuffixes(t *testing.T) {
+	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
+	candidates := []accountWithLoad{
+		makeAccWithLoad(1, 1, 10, nil, AccountTypeOAuth),
+		makeAccWithLoad(2, 1, 20, nil, AccountTypeOAuth),
+	}
+	candidates[0].account.Credentials = map[string]any{"email": "a@same.com"}
+	candidates[1].account.Credentials = map[string]any{"email": "b@other.com"}
+
+	filtered := filterByPreferredEmailDomainSuffixes(ctx, candidates)
+	require.Len(t, filtered, 1)
+	require.Equal(t, int64(2), filtered[0].account.ID)
+
+	allAvoided := []accountWithLoad{
+		makeAccWithLoad(3, 1, 10, nil, AccountTypeOAuth),
+		makeAccWithLoad(4, 1, 20, nil, AccountTypeOAuth),
+	}
+	allAvoided[0].account.Credentials = map[string]any{"email": "c@same.com"}
+	allAvoided[1].account.Credentials = map[string]any{"email": "d@same.com"}
+	filtered = filterByPreferredEmailDomainSuffixes(ctx, allAvoided)
+	require.Len(t, filtered, 2)
 }
 
 // --- filterByMinPriority ---

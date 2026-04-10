@@ -1057,6 +1057,13 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 // RunTestBackground executes an account test in-memory (no real HTTP client),
 // capturing SSE output via httptest.NewRecorder, then parses the result.
 func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+	if s.accountRepo != nil {
+		if account, err := s.accountRepo.GetByID(ctx, accountID); err == nil && account != nil &&
+			account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
+			return s.runAntigravityBackgroundTest(ctx, account, modelID)
+		}
+	}
+
 	startedAt := time.Now()
 
 	w := httptest.NewRecorder()
@@ -1085,6 +1092,50 @@ func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID in
 		StartedAt:    startedAt,
 		FinishedAt:   finishedAt,
 	}, nil
+}
+
+func (s *AccountTestService) runAntigravityBackgroundTest(ctx context.Context, account *Account, modelID string) (*ScheduledTestResult, error) {
+	startedAt := time.Now()
+
+	testModelID := modelID
+	if testModelID == "" {
+		testModelID = "claude-sonnet-4-5"
+	}
+
+	if s.antigravityGatewayService == nil {
+		finishedAt := time.Now()
+		return &ScheduledTestResult{
+			Status:       "failed",
+			ErrorMessage: "Antigravity gateway service not configured",
+			LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
+			StartedAt:    startedAt,
+			FinishedAt:   finishedAt,
+		}, nil
+	}
+
+	result, err := s.antigravityGatewayService.TestConnectionWithOptions(ctx, account, testModelID, AntigravityTestConnectionOptions{
+		Prefix:                        fmt.Sprintf("[antigravity-ScheduledTest] account=%d(%s)", account.ID, account.Name),
+		BypassModelRateLimitPrecheck:  true,
+		ModelCapacityRetryMaxAttempts: antigravityProbeModelCapacityRetryMaxAttempts,
+	})
+
+	finishedAt := time.Now()
+	scheduledResult := &ScheduledTestResult{
+		Status:     "success",
+		LatencyMs:  finishedAt.Sub(startedAt).Milliseconds(),
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}
+	if err != nil {
+		scheduledResult.Status = "failed"
+		scheduledResult.ErrorMessage = err.Error()
+		return scheduledResult, nil
+	}
+	if result != nil {
+		scheduledResult.ResponseText = result.Text
+	}
+
+	return scheduledResult, nil
 }
 
 // parseTestSSEOutput extracts response text and error message from captured SSE output.

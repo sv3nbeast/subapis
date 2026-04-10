@@ -53,6 +53,8 @@ func TestNewFailoverState(t *testing.T) {
 		require.Empty(t, fs.FailedAccountIDs)
 		require.NotNil(t, fs.SameAccountRetryCount)
 		require.Empty(t, fs.SameAccountRetryCount)
+		require.NotNil(t, fs.AvoidEmailDomainSuffixes)
+		require.Empty(t, fs.AvoidEmailDomainSuffixes)
 		require.Nil(t, fs.LastFailoverErr)
 		require.False(t, fs.ForceCacheBilling)
 		require.True(t, fs.hasBoundSession)
@@ -217,6 +219,17 @@ func TestHandleFailoverError_BasicSwitch(t *testing.T) {
 		require.Equal(t, 0, fs.SwitchCount)
 		require.Contains(t, fs.FailedAccountIDs, int64(100))
 	})
+}
+
+func TestFailoverState_RecordAvoidEmailDomainSuffix(t *testing.T) {
+	fs := NewFailoverState(3, false)
+
+	fs.RecordAvoidEmailDomainSuffix("Example.com")
+	fs.RecordAvoidEmailDomainSuffix("@example.com")
+	fs.RecordAvoidEmailDomainSuffix("other.net")
+	fs.RecordAvoidEmailDomainSuffix("")
+
+	require.Equal(t, []string{"example.com", "other.net"}, fs.AvoidEmailDomainSuffixesList())
 }
 
 // ---------------------------------------------------------------------------

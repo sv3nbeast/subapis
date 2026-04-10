@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -41,23 +43,51 @@ const (
 
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
-	SwitchCount           int
-	MaxSwitches           int
-	FailedAccountIDs      map[int64]struct{}
-	SameAccountRetryCount map[int64]int
-	LastFailoverErr       *service.UpstreamFailoverError
-	ForceCacheBilling     bool
-	hasBoundSession       bool
+	SwitchCount              int
+	MaxSwitches              int
+	FailedAccountIDs         map[int64]struct{}
+	SameAccountRetryCount    map[int64]int
+	AvoidEmailDomainSuffixes map[string]struct{}
+	LastFailoverErr          *service.UpstreamFailoverError
+	ForceCacheBilling        bool
+	hasBoundSession          bool
 }
 
 // NewFailoverState 创建 failover 状态
 func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 	return &FailoverState{
-		MaxSwitches:           maxSwitches,
-		FailedAccountIDs:      make(map[int64]struct{}),
-		SameAccountRetryCount: make(map[int64]int),
-		hasBoundSession:       hasBoundSession,
+		MaxSwitches:              maxSwitches,
+		FailedAccountIDs:         make(map[int64]struct{}),
+		SameAccountRetryCount:    make(map[int64]int),
+		AvoidEmailDomainSuffixes: make(map[string]struct{}),
+		hasBoundSession:          hasBoundSession,
 	}
+}
+
+func (s *FailoverState) RecordAvoidEmailDomainSuffix(suffix string) {
+	if s == nil {
+		return
+	}
+	normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(suffix, "@")))
+	if normalized == "" {
+		return
+	}
+	if s.AvoidEmailDomainSuffixes == nil {
+		s.AvoidEmailDomainSuffixes = make(map[string]struct{})
+	}
+	s.AvoidEmailDomainSuffixes[normalized] = struct{}{}
+}
+
+func (s *FailoverState) AvoidEmailDomainSuffixesList() []string {
+	if s == nil || len(s.AvoidEmailDomainSuffixes) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(s.AvoidEmailDomainSuffixes))
+	for suffix := range s.AvoidEmailDomainSuffixes {
+		values = append(values, suffix)
+	}
+	sort.Strings(values)
+	return values
 }
 
 // HandleFailoverError 处理 UpstreamFailoverError，返回下一步动作。

@@ -15,6 +15,7 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	ctx = WithPrefetchedStickySession(ctx, 123, 456, false)
 	ctx = WithSingleAccountRetry(ctx, true, false)
 	ctx = WithAccountSwitchCount(ctx, 2, false)
+	ctx = WithAvoidEmailDomainSuffixes(ctx, []string{"Example.com", "example.com", "other.net"}, false)
 
 	isHaiku, ok := IsMaxTokensOneHaikuRequestFromContext(ctx)
 	require.True(t, ok)
@@ -39,6 +40,9 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	switchCount, ok := AccountSwitchCountFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, 2, switchCount)
+
+	avoidSuffixes := AvoidEmailDomainSuffixesFromContext(ctx)
+	require.Equal(t, []string{"example.com", "other.net"}, avoidSuffixes)
 
 	require.Nil(t, ctx.Value(ctxkey.IsMaxTokensOneHaikuRequest))
 	require.Nil(t, ctx.Value(ctxkey.ThinkingEnabled))

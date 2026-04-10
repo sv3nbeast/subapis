@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,6 +127,15 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		return
 	}
 
+	if shouldDeleteScheduledTestPlan(result) {
+		if err := s.planRepo.Delete(ctx, plan.ID); err != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d delete stale plan error: %v", plan.ID, err)
+		} else {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d deleted stale plan after account lookup failure", plan.ID)
+		}
+		return
+	}
+
 	if err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
 	}
@@ -144,6 +154,14 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
+}
+
+func shouldDeleteScheduledTestPlan(result *ScheduledTestResult) bool {
+	if result == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(result.ErrorMessage))
+	return msg == "account not found"
 }
 
 // tryRecoverAccount attempts to recover an account from recoverable runtime state.

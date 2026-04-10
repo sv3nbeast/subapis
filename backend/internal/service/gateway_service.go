@@ -1554,6 +1554,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 				})
 				shuffleWithinSortGroups(routingAvailable)
+				prioritizeDifferentEmailDomainSuffixesWithinPriorityWithLoad(ctx, routingAvailable)
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
@@ -1736,6 +1737,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		for len(available) > 0 {
 			// 1. 取优先级最小的集合
 			candidates := filterByMinPriority(available)
+			// 1.5 同优先级下，优先尝试不同邮箱域名后缀的账号
+			candidates = filterByPreferredEmailDomainSuffixes(ctx, candidates)
 			// 2. 取负载率最低的集合
 			candidates = filterByMinLoadRate(candidates)
 			// 3. LRU 选择最久未用的账号
@@ -1775,6 +1778,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	// ============ Layer 3: 兜底排队 ============
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
+	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, candidates)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -1796,6 +1800,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool) {
 	ordered := append([]*Account(nil), candidates...)
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
+	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, ordered)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -1817,6 +1822,105 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 	}
 
 	return nil, false
+}
+
+func avoidedEmailDomainSuffixSetFromContext(ctx context.Context) map[string]struct{} {
+	values := normalizeEmailDomainSuffixes(AvoidEmailDomainSuffixesFromContext(ctx))
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
+}
+
+func isAvoidedEmailDomainSuffix(account *Account, avoided map[string]struct{}) bool {
+	if account == nil || len(avoided) == 0 {
+		return false
+	}
+	suffix := account.EmailDomainSuffix()
+	if suffix == "" {
+		return false
+	}
+	_, ok := avoided[suffix]
+	return ok
+}
+
+func prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx context.Context, accounts []*Account) {
+	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
+	if len(avoided) == 0 || len(accounts) <= 1 {
+		return
+	}
+	start := 0
+	for start < len(accounts) {
+		end := start + 1
+		priority := accounts[start].Priority
+		for end < len(accounts) && accounts[end].Priority == priority {
+			end++
+		}
+		preferred := make([]*Account, 0, end-start)
+		deprioritized := make([]*Account, 0, end-start)
+		for _, account := range accounts[start:end] {
+			if isAvoidedEmailDomainSuffix(account, avoided) {
+				deprioritized = append(deprioritized, account)
+			} else {
+				preferred = append(preferred, account)
+			}
+		}
+		if len(preferred) > 0 && len(deprioritized) > 0 {
+			copy(accounts[start:], preferred)
+			copy(accounts[start+len(preferred):], deprioritized)
+		}
+		start = end
+	}
+}
+
+func prioritizeDifferentEmailDomainSuffixesWithinPriorityWithLoad(ctx context.Context, accounts []accountWithLoad) {
+	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
+	if len(avoided) == 0 || len(accounts) <= 1 {
+		return
+	}
+	start := 0
+	for start < len(accounts) {
+		end := start + 1
+		priority := accounts[start].account.Priority
+		for end < len(accounts) && accounts[end].account.Priority == priority {
+			end++
+		}
+		preferred := make([]accountWithLoad, 0, end-start)
+		deprioritized := make([]accountWithLoad, 0, end-start)
+		for _, item := range accounts[start:end] {
+			if isAvoidedEmailDomainSuffix(item.account, avoided) {
+				deprioritized = append(deprioritized, item)
+			} else {
+				preferred = append(preferred, item)
+			}
+		}
+		if len(preferred) > 0 && len(deprioritized) > 0 {
+			copy(accounts[start:], preferred)
+			copy(accounts[start+len(preferred):], deprioritized)
+		}
+		start = end
+	}
+}
+
+func filterByPreferredEmailDomainSuffixes(ctx context.Context, accounts []accountWithLoad) []accountWithLoad {
+	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
+	if len(avoided) == 0 || len(accounts) == 0 {
+		return accounts
+	}
+	preferred := make([]accountWithLoad, 0, len(accounts))
+	for _, item := range accounts {
+		if !isAvoidedEmailDomainSuffix(item.account, avoided) {
+			preferred = append(preferred, item)
+		}
+	}
+	if len(preferred) == 0 {
+		return accounts
+	}
+	return preferred
 }
 
 func (s *GatewayService) schedulingConfig() config.GatewaySchedulingConfig {
@@ -2713,6 +2817,7 @@ func (s *GatewayService) selectLegacyEligibleAccount(
 		return nil
 	}
 	sortAccountsByPriorityAndLastUsed(candidates, preferOAuth)
+	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, candidates)
 	return candidates[0]
 }
 

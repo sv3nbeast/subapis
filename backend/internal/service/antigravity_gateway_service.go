@@ -48,6 +48,8 @@ const (
 	// 模型容量不足时保留有限的原地重试窗口，兼顾短暂恢复机会和请求时延。
 	antigravityModelCapacityRetryMaxAttempts = 15
 	antigravityModelCapacityRetryWait        = 1 * time.Second
+	// 计划测试仅做轻量探测，避免与生产流量争抢过多容量。
+	antigravityProbeModelCapacityRetryMaxAttempts = 3
 
 	// Google RPC 状态和类型常量
 	googleRPCStatusResourceExhausted      = "RESOURCE_EXHAUSTED"
@@ -146,6 +148,8 @@ type antigravityRetryLoopParams struct {
 	tlsProfile      *tlsfingerprint.Profile
 	// 显式账号测试/计划测试需要实际探测上游恢复情况，不能被已有 model_rate_limits 预检查直接短路。
 	bypassModelRateLimitPrecheck bool
+	// 计划测试等轻量探测可覆盖 MODEL_CAPACITY_EXHAUSTED 的最大重试次数。
+	modelCapacityRetryMaxAttempts int
 }
 
 // antigravityRetryLoopResult 重试循环的结果
@@ -279,6 +283,9 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 		maxAttempts := antigravitySmartRetryMaxAttempts
 		if isModelCapacityExhausted {
 			maxAttempts = antigravityModelCapacityRetryMaxAttempts
+			if p.modelCapacityRetryMaxAttempts > 0 {
+				maxAttempts = p.modelCapacityRetryMaxAttempts
+			}
 			waitDuration = antigravityModelCapacityRetryWait
 
 			// 全局去重：如果其他 goroutine 已在重试同一模型且尚在 cooldown 中，直接返回 503
@@ -1060,6 +1067,12 @@ type TestConnectionResult struct {
 	MappedModel string // 实际使用的模型
 }
 
+type AntigravityTestConnectionOptions struct {
+	Prefix                        string
+	BypassModelRateLimitPrecheck  bool
+	ModelCapacityRetryMaxAttempts int
+}
+
 func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *AntigravityAccountSwitchError) error {
 	if switchErr != nil && switchErr.RateLimitResetAt != nil {
 		until := switchErr.RateLimitResetAt.Local().Format("15:04:05")
@@ -1081,7 +1094,13 @@ func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *Anti
 // 复用 antigravityRetryLoop 的完整重试 / credits overages / 智能重试逻辑，
 // 与真实调度行为一致。差异：不做账号切换（测试指定账号）、不记录 ops 错误。
 func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account *Account, modelID string) (*TestConnectionResult, error) {
+	return s.TestConnectionWithOptions(ctx, account, modelID, AntigravityTestConnectionOptions{
+		Prefix:                       fmt.Sprintf("[antigravity-Test] account=%d(%s)", account.ID, account.Name),
+		BypassModelRateLimitPrecheck: true,
+	})
+}
 
+func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Context, account *Account, modelID string, opts AntigravityTestConnectionOptions) (*TestConnectionResult, error) {
 	// 获取 token
 	if s.tokenProvider == nil {
 		return nil, errors.New("antigravity token provider not configured")
@@ -1118,24 +1137,27 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 	}
 
 	// 复用 antigravityRetryLoop：完整的重试 / credits overages / 智能重试
-	prefix := fmt.Sprintf("[antigravity-Test] account=%d(%s)", account.ID, account.Name)
+	prefix := strings.TrimSpace(opts.Prefix)
+	if prefix == "" {
+		prefix = fmt.Sprintf("[antigravity-Test] account=%d(%s)", account.ID, account.Name)
+	}
 	p := antigravityRetryLoopParams{
-		ctx:            ctx,
-		prefix:         prefix,
-		account:        account,
-		proxyURL:       proxyURL,
-		accessToken:    accessToken,
-		action:         "streamGenerateContent",
-		body:           requestBody,
-		c:              nil, // 无 gin.Context → 跳过 ops 追踪
-		httpUpstream:   s.httpUpstream,
-		settingService: s.settingService,
-		accountRepo:    s.accountRepo,
-		requestedModel: modelID,
-		handleError:    testConnectionHandleError,
-		tlsProfile:     s.resolveTLSProfile(account),
-		// 账号测试/计划测试用于探测恢复，不能被已有 model cooldown 直接挡住。
-		bypassModelRateLimitPrecheck: true,
+		ctx:                           ctx,
+		prefix:                        prefix,
+		account:                       account,
+		proxyURL:                      proxyURL,
+		accessToken:                   accessToken,
+		action:                        "streamGenerateContent",
+		body:                          requestBody,
+		c:                             nil, // 无 gin.Context → 跳过 ops 追踪
+		httpUpstream:                  s.httpUpstream,
+		settingService:                s.settingService,
+		accountRepo:                   s.accountRepo,
+		requestedModel:                modelID,
+		handleError:                   testConnectionHandleError,
+		tlsProfile:                    s.resolveTLSProfile(account),
+		bypassModelRateLimitPrecheck:  opts.BypassModelRateLimitPrecheck,
+		modelCapacityRetryMaxAttempts: opts.ModelCapacityRetryMaxAttempts,
 	}
 
 	result, err := s.antigravityRetryLoop(p)

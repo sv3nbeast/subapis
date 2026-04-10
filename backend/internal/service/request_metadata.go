@@ -18,6 +18,7 @@ type RequestMetadata struct {
 	PrefetchedStickyGroupID    *int64
 	SingleAccountRetry         *bool
 	AccountSwitchCount         *int
+	AvoidEmailDomainSuffixes   []string
 }
 
 var (
@@ -114,6 +115,17 @@ func WithAccountSwitchCount(ctx context.Context, value int, bridgeOldKeys bool) 
 	}, func(base context.Context) context.Context {
 		return context.WithValue(base, ctxkey.AccountSwitchCount, value)
 	})
+}
+
+func WithAvoidEmailDomainSuffixes(ctx context.Context, values []string, bridgeOldKeys bool) context.Context {
+	normalized := normalizeEmailDomainSuffixes(values)
+	return updateRequestMetadata(ctx, bridgeOldKeys, func(md *RequestMetadata) {
+		if len(normalized) == 0 {
+			md.AvoidEmailDomainSuffixes = nil
+			return
+		}
+		md.AvoidEmailDomainSuffixes = append([]string(nil), normalized...)
+	}, nil)
 }
 
 func IsMaxTokensOneHaikuRequestFromContext(ctx context.Context) (bool, bool) {
@@ -213,4 +225,11 @@ func AccountSwitchCountFromContext(ctx context.Context) (int, bool) {
 		return int(t), true
 	}
 	return 0, false
+}
+
+func AvoidEmailDomainSuffixesFromContext(ctx context.Context) []string {
+	if md := metadataFromContext(ctx); md != nil && len(md.AvoidEmailDomainSuffixes) > 0 {
+		return append([]string(nil), md.AvoidEmailDomainSuffixes...)
+	}
+	return nil
 }
