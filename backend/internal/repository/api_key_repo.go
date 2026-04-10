@@ -164,6 +164,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldSupportedModelScopes,
 				group.FieldAllowMessagesDispatch,
 				group.FieldDefaultMappedModel,
+				group.FieldMessagesDispatchModelConfig,
 			)
 		}).
 		Only(ctx)
@@ -654,6 +655,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		RequireOAuthOnly:                g.RequireOauthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		DefaultMappedModel:              g.DefaultMappedModel,
+		MessagesDispatchModelConfig:     g.MessagesDispatchModelConfig,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
 	}
