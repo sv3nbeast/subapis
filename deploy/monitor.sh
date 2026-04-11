@@ -42,6 +42,8 @@ source "$ENV_FILE"
 
 # 默认值
 TIMEOUT="${TIMEOUT:-15}"
+# 保持 Bark 的 API 测试超时保守即可，默认 60s。
+# 若网络抖动较明显，建议最多调到 90s，避免监控请求本身拖得过长。
 API_TIMEOUT="${API_TIMEOUT:-60}"
 RETRY_COUNT="${RETRY_COUNT:-2}"
 RETRY_INTERVAL="${RETRY_INTERVAL:-5}"

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -100,10 +101,14 @@ var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | 
 var (
 	statusProbeLoadConfigTimeout = 5 * time.Second
 	// Keep per-model probes bounded without letting one slow upstream starve the rest of the batch.
-	statusProbePerModelTimeout = 25 * time.Second
-	statusProbeRecordTimeout   = 5 * time.Second
-	statusProbeCleanupTimeout  = 15 * time.Second
+	// This timeout applies to the whole probe flow, including at most one lightweight retry.
+	statusProbePerModelTimeout       = 45 * time.Second
+	statusProbeRecordTimeout         = 5 * time.Second
+	statusProbeCleanupTimeout        = 15 * time.Second
 	statusProbeErrorBodyLimit  int64 = 4096
+	// A single lightweight retry smooths transient 429/5xx blips without materially increasing probe pressure.
+	statusProbeRetryMaxAttempts = 2
+	statusProbeRetryDelay       = 2 * time.Second
 )
 
 // ─── Service struct ──────────────────────────────────────────────────────────
@@ -308,38 +313,83 @@ func normalizeStatusProbeConfig(cfg StatusProbeConfig) StatusProbeConfig {
 // runProbe makes an actual HTTP request to the gateway API, just like monitor.sh.
 // It sends a minimal chat completion request and checks for HTTP 200.
 func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelConfig) (latencyMs int, errMsg string) {
-	req, err := newStatusProbeRequest(ctx, m)
-	if err != nil {
-		return 0, err.Error()
+	start := time.Now()
+	lastErrMsg := ""
+
+	for attempt := 1; attempt <= statusProbeRetryMaxAttempts; attempt++ {
+		req, err := newStatusProbeRequest(ctx, m)
+		if err != nil {
+			return int(time.Since(start).Milliseconds()), err.Error()
+		}
+
+		resp, err := s.httpClient.Do(req)
+		errMsg, retryable := classifyStatusProbeAttempt(resp, err)
+		if errMsg == "" {
+			return int(time.Since(start).Milliseconds()), ""
+		}
+		lastErrMsg = errMsg
+
+		if attempt >= statusProbeRetryMaxAttempts || !retryable || ctx.Err() != nil {
+			return int(time.Since(start).Milliseconds()), lastErrMsg
+		}
+		if !sleepStatusProbeRetry(ctx, statusProbeRetryDelay) {
+			if ctx.Err() != nil {
+				return int(time.Since(start).Milliseconds()), fmt.Sprintf("request failed: %v", ctx.Err())
+			}
+			return int(time.Since(start).Milliseconds()), lastErrMsg
+		}
 	}
 
-	start := time.Now()
-	resp, err := s.httpClient.Do(req)
-	elapsed := time.Since(start)
-	latencyMs = int(elapsed.Milliseconds())
+	return int(time.Since(start).Milliseconds()), lastErrMsg
+}
 
+func classifyStatusProbeAttempt(resp *http.Response, err error) (errMsg string, retryable bool) {
 	if err != nil {
-		return latencyMs, fmt.Sprintf("request failed: %v", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Sprintf("request failed: %v", err), false
+		}
+		return fmt.Sprintf("request failed: %v", err), true
+	}
+	if resp == nil {
+		return "request failed: empty response", true
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		// Drain body to allow connection reuse
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return latencyMs, ""
+		return "", false
 	}
 
 	// Read a bounded error body for richer diagnostics without storing huge payloads.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, statusProbeErrorBodyLimit))
+	message := fmt.Sprintf("HTTP %d", resp.StatusCode)
 	var apiErr struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-		return latencyMs, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, apiErr.Error.Message)
+		message = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, apiErr.Error.Message)
 	}
-	return latencyMs, fmt.Sprintf("HTTP %d", resp.StatusCode)
+	return message, isStatusProbeRetryableStatus(resp.StatusCode)
+}
+
+func isStatusProbeRetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+func sleepStatusProbeRetry(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func newStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {

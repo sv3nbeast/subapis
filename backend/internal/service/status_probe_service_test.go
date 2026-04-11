@@ -119,12 +119,15 @@ func TestStatusProbeService_runProbe_UsesGeminiEndpointAndPayload(t *testing.T) 
 func TestStatusProbeService_runAllProbes_PerModelTimeoutDoesNotStarveLaterModels(t *testing.T) {
 	origProbeTimeout := statusProbePerModelTimeout
 	origRecordTimeout := statusProbeRecordTimeout
+	origRetryDelay := statusProbeRetryDelay
 	defer func() {
 		statusProbePerModelTimeout = origProbeTimeout
 		statusProbeRecordTimeout = origRecordTimeout
+		statusProbeRetryDelay = origRetryDelay
 	}()
 	statusProbePerModelTimeout = 20 * time.Millisecond
 	statusProbeRecordTimeout = 100 * time.Millisecond
+	statusProbeRetryDelay = 1 * time.Millisecond
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") == "claude-key" {
@@ -168,4 +171,36 @@ func TestStatusProbeService_runAllProbes_PerModelTimeoutDoesNotStarveLaterModels
 	svc.runAllProbes()
 
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestStatusProbeService_runProbe_RetriesOnceOnTransient503(t *testing.T) {
+	origRetryDelay := statusProbeRetryDelay
+	defer func() {
+		statusProbeRetryDelay = origRetryDelay
+	}()
+	statusProbeRetryDelay = 1 * time.Millisecond
+
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"No available accounts"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"message","id":"msg_1"}`))
+	}))
+	defer ts.Close()
+
+	svc := &StatusProbeService{httpClient: ts.Client()}
+	latencyMs, errMsg := svc.runProbe(context.Background(), StatusProbeModelConfig{
+		Model:   "claude-sonnet-4-6",
+		ApiKey:  "test-key",
+		BaseURL: ts.URL,
+	})
+
+	require.Empty(t, errMsg)
+	require.GreaterOrEqual(t, latencyMs, 0)
+	require.Equal(t, 2, attempts)
 }
