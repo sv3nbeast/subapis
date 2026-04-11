@@ -71,16 +71,29 @@ func isAntigravityCapacityOrQuotaExhaustedBody(body []byte) bool {
 
 	parsed := gjson.ParseBytes(body)
 	message := strings.ToLower(strings.TrimSpace(parsed.Get("error.message").String()))
+	status := strings.ToUpper(strings.TrimSpace(parsed.Get("error.status").String()))
 	if strings.Contains(message, "no capacity available for model") ||
-		strings.Contains(message, "exhausted your capacity on this model") {
+		strings.Contains(message, "exhausted your capacity on this model") ||
+		strings.Contains(message, "quota_exhausted") ||
+		strings.Contains(message, "quota exhausted") ||
+		strings.Contains(message, "check quota") {
+		return true
+	}
+	if status == googleRPCStatusResourceExhausted &&
+		(strings.Contains(message, "resource has been exhausted") || strings.Contains(message, "quota")) {
 		return true
 	}
 
 	for _, detail := range parsed.Get("error.details").Array() {
-		if strings.EqualFold(strings.TrimSpace(detail.Get("reason").String()), googleRPCReasonModelCapacityExhausted) {
+		reason := strings.TrimSpace(detail.Get("reason").String())
+		if strings.EqualFold(reason, googleRPCReasonModelCapacityExhausted) ||
+			strings.EqualFold(reason, googleRPCReasonRateLimitExceeded) {
 			return true
 		}
 	}
 
-	return strings.Contains(strings.ToUpper(string(body)), googleRPCReasonModelCapacityExhausted)
+	bodyUpper := strings.ToUpper(string(body))
+	return strings.Contains(bodyUpper, googleRPCReasonModelCapacityExhausted) ||
+		strings.Contains(bodyUpper, googleRPCReasonRateLimitExceeded) ||
+		strings.Contains(bodyUpper, googleRPCStatusResourceExhausted)
 }

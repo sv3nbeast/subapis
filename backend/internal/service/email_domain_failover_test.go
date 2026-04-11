@@ -31,6 +31,22 @@ func TestShouldPreferDifferentEmailDomainSuffixForFailover(t *testing.T) {
 		require.True(t, ShouldPreferDifferentEmailDomainSuffixForFailover(PlatformAntigravity, err))
 	})
 
+	t.Run("antigravity 429 check quota message", func(t *testing.T) {
+		err := &UpstreamFailoverError{
+			StatusCode:   429,
+			ResponseBody: []byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`),
+		}
+		require.True(t, ShouldPreferDifferentEmailDomainSuffixForFailover(PlatformAntigravity, err))
+	})
+
+	t.Run("antigravity 429 rate limit exceeded reason", func(t *testing.T) {
+		err := &UpstreamFailoverError{
+			StatusCode: 429,
+			ResponseBody: []byte(`{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"}]}}`),
+		}
+		require.True(t, ShouldPreferDifferentEmailDomainSuffixForFailover(PlatformAntigravity, err))
+	})
+
 	t.Run("non antigravity ignored", func(t *testing.T) {
 		err := &UpstreamFailoverError{
 			StatusCode:   503,
