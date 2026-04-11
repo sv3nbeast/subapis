@@ -416,6 +416,7 @@ export interface StatusProbeModel {
  */
 export interface StatusProbeSettings {
   enabled: boolean
+  public_visible: boolean
   interval_minutes: number
   retention_days: number
   models: StatusProbeModel[]

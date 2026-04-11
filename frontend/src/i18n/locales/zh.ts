@@ -5242,6 +5242,8 @@ export default {
     description: '配置自动探测模型端点以监控服务可用性。',
     enabled: '启用探针',
     enabledHint: '启用后，系统将定期探测已配置的模型端点。',
+    publicVisible: '对用户展示',
+    publicVisibleHint: '关闭后，状态探针和 Bark 监控仍会运行，但普通用户不再看到服务状态页面与入口。',
     interval: '探测间隔（分钟）',
     retention: '数据保留天数',
     baseUrl: '网关地址',

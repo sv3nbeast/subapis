@@ -5053,6 +5053,8 @@ export default {
     description: 'Configure automated probing of model endpoints to monitor service availability.',
     enabled: 'Enable Probe',
     enabledHint: 'When enabled, the system will periodically probe configured model endpoints.',
+    publicVisible: 'Show to Users',
+    publicVisibleHint: 'When disabled, probing and Bark monitoring still run, but regular users no longer see the service status page or entry.',
     interval: 'Probe Interval (minutes)',
     retention: 'Data Retention (days)',
     baseUrl: 'Gateway Base URL',

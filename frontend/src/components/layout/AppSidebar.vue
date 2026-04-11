@@ -667,7 +667,10 @@ onMounted(async () => {
   // Check if status probe is enabled (for menu visibility)
   try {
     const data = await statusAPI.getStatus()
-    appStore.statusProbeEnabled = data.overall_status !== 'unknown' && data.models.length > 0
+    appStore.statusProbeEnabled =
+      data.overall_status !== 'unknown' &&
+      data.models.length > 0 &&
+      (data.public_visible || isAdmin.value)
   } catch {
     appStore.statusProbeEnabled = false
   }

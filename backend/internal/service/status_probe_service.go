@@ -35,6 +35,7 @@ type StatusProbeModelConfig struct {
 // StatusProbeConfig is the JSON-serialised configuration stored in the settings table.
 type StatusProbeConfig struct {
 	Enabled         bool `json:"enabled"`
+	PublicVisible   bool `json:"public_visible"`
 	IntervalMinutes int  `json:"interval_minutes"`
 	RetentionDays   int  `json:"retention_days"`
 	// Deprecated: kept for backward compatibility with pre-1bd4bfb4 configs.
@@ -77,9 +78,20 @@ type ModelStatus struct {
 // ServiceStatusResponse is the top-level response returned by GetStatus.
 type ServiceStatusResponse struct {
 	OverallStatus   string        `json:"overall_status"`
+	PublicVisible   bool          `json:"public_visible"`
 	IntervalMinutes int           `json:"interval_minutes"`
 	Models          []ModelStatus `json:"models"`
 	UpdatedAt       time.Time     `json:"last_updated"`
+}
+
+// StatusProbeMonitorResponse is a lightweight single-model view for external monitors.
+type StatusProbeMonitorResponse struct {
+	Model           string    `json:"model"`
+	DisplayName     string    `json:"display_name"`
+	CurrentStatus   string    `json:"current_status"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+	IntervalMinutes int       `json:"interval_minutes"`
+	LastUpdated     time.Time `json:"last_updated"`
 }
 
 // ─── Internal raw result type ────────────────────────────────────────────────
@@ -98,17 +110,20 @@ type probeRawResult struct {
 
 var statusProbeCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
+var ErrStatusProbeModelNotFound = errors.New("status probe model not found")
+
 var (
 	statusProbeLoadConfigTimeout = 5 * time.Second
 	// Keep per-model probes bounded without letting one slow upstream starve the rest of the batch.
-	// This timeout applies to the whole probe flow, including at most one lightweight retry.
+	// This timeout applies to the whole probe flow, including lightweight retries.
 	statusProbePerModelTimeout       = 45 * time.Second
 	statusProbeRecordTimeout         = 5 * time.Second
 	statusProbeCleanupTimeout        = 15 * time.Second
 	statusProbeErrorBodyLimit  int64 = 4096
-	// A single lightweight retry smooths transient 429/5xx blips without materially increasing probe pressure.
-	statusProbeRetryMaxAttempts = 2
-	statusProbeRetryDelay       = 2 * time.Second
+	// Mirror deploy/monitor.sh defaults so the status page and Bark monitor
+	// classify the same transient blips with the same retry budget.
+	statusProbeRetryMaxAttempts = 3
+	statusProbeRetryDelay       = 5 * time.Second
 )
 
 // ─── Service struct ──────────────────────────────────────────────────────────
@@ -143,12 +158,15 @@ func (s *StatusProbeService) LoadConfig(ctx context.Context) (*StatusProbeConfig
 		// Not found — return defaults.
 		return &StatusProbeConfig{
 			Enabled:         false,
+			PublicVisible:   true,
 			IntervalMinutes: 5,
 			RetentionDays:   30,
 			Models:          nil,
 		}, nil
 	}
-	var cfg StatusProbeConfig
+	cfg := StatusProbeConfig{
+		PublicVisible: true,
+	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal status probe config: %w", err)
 	}
@@ -495,6 +513,7 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 	if !cfg.Enabled {
 		return &ServiceStatusResponse{
 			OverallStatus:   "unknown",
+			PublicVisible:   cfg.PublicVisible,
 			IntervalMinutes: intervalMin,
 			Models:          []ModelStatus{},
 			UpdatedAt:       time.Now().UTC(),
@@ -516,6 +535,7 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 	if len(metaMap) == 0 {
 		return &ServiceStatusResponse{
 			OverallStatus:   "operational",
+			PublicVisible:   cfg.PublicVisible,
 			IntervalMinutes: intervalMin,
 			Models:          []ModelStatus{},
 			UpdatedAt:       time.Now().UTC(),
@@ -567,10 +587,61 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 
 	return &ServiceStatusResponse{
 		OverallStatus:   overallStatus,
+		PublicVisible:   cfg.PublicVisible,
 		IntervalMinutes: intervalMin,
 		Models:          models,
 		UpdatedAt:       time.Now().UTC(),
 	}, nil
+}
+
+// GetMonitorStatus returns a lightweight single-model snapshot for monitor integrations.
+func (s *StatusProbeService) GetMonitorStatus(ctx context.Context, model string) (*StatusProbeMonitorResponse, error) {
+	requestedModel := strings.TrimSpace(model)
+	if requestedModel == "" {
+		return nil, errors.New("model is required")
+	}
+
+	resp, err := s.GetStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	monitorResp, ok := buildStatusProbeMonitorResponse(requestedModel, resp)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrStatusProbeModelNotFound, requestedModel)
+	}
+	return monitorResp, nil
+}
+
+func buildStatusProbeMonitorResponse(requestedModel string, resp *ServiceStatusResponse) (*StatusProbeMonitorResponse, bool) {
+	if resp == nil {
+		return nil, false
+	}
+
+	for _, ms := range resp.Models {
+		if ms.Model != requestedModel {
+			continue
+		}
+
+		errMsg := ""
+		if len(ms.RecentFailures) > 0 {
+			errMsg = ms.RecentFailures[0].ErrorMessage
+		}
+		if ms.CurrentStatus == "unknown" && errMsg == "" {
+			errMsg = "status probe has no fresh data"
+		}
+
+		return &StatusProbeMonitorResponse{
+			Model:           ms.Model,
+			DisplayName:     ms.DisplayName,
+			CurrentStatus:   ms.CurrentStatus,
+			ErrorMessage:    errMsg,
+			IntervalMinutes: resp.IntervalMinutes,
+			LastUpdated:     resp.UpdatedAt,
+		}, true
+	}
+
+	return nil, false
 }
 
 // buildModelStatus computes current status, uptime, and interval stats from raw results.
@@ -592,25 +663,16 @@ func (s *StatusProbeService) buildModelStatus(model, displayName string, results
 		ms.CurrentStatus = "unknown"
 	}
 
-	// Results are ordered DESC by created_at. Determine current status from last 3 probes.
+	// Results are ordered DESC by created_at. Match Bark semantics:
+	// the latest completed probe round decides the current model state.
 	if !stale {
-		recentCount := 3
-		if len(results) < recentCount {
-			recentCount = len(results)
-		}
-		failCount := 0
-		for i := 0; i < recentCount; i++ {
-			if results[i].Status != "ok" {
-				failCount++
-			}
-		}
-		switch {
-		case failCount == 0:
+		switch results[0].Status {
+		case "ok":
 			ms.CurrentStatus = "operational"
-		case failCount < recentCount:
-			ms.CurrentStatus = "degraded"
-		default:
+		case "error":
 			ms.CurrentStatus = "outage"
+		default:
+			ms.CurrentStatus = "unknown"
 		}
 	}
 

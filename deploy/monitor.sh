@@ -4,7 +4,7 @@
 # =============================================================================
 # 功能：
 #   1. 检测 /health 端点是否正常
-#   2. 实际调用 AI API 验证上游连通性（claude-opus-4-6）
+#   2. 读取服务状态探针结果验证模型可用性（不再重复发起模型请求）
 #   3. 状态变化时通过 Bark 推送通知（异常/恢复），不重复提醒
 #
 # 用法：
@@ -38,19 +38,18 @@ source "$ENV_FILE"
 # 校验必填项
 : "${BARK_URL:?请在 monitor.env 中设置 BARK_URL}"
 : "${API_BASE_URL:?请在 monitor.env 中设置 API_BASE_URL}"
-: "${API_KEY:?请在 monitor.env 中设置 API_KEY}"
 
 # 默认值
 TIMEOUT="${TIMEOUT:-15}"
-# 保持 Bark 的 API 测试超时保守即可，默认 60s。
-# 若网络抖动较明显，建议最多调到 90s，避免监控请求本身拖得过长。
-API_TIMEOUT="${API_TIMEOUT:-60}"
+# 服务状态接口读取超时（默认 15s）。
+API_TIMEOUT="${API_TIMEOUT:-15}"
 RETRY_COUNT="${RETRY_COUNT:-2}"
 RETRY_INTERVAL="${RETRY_INTERVAL:-5}"
 BARK_GROUP="${BARK_GROUP:-sub2api}"
 BARK_SOUND_ALERT="${BARK_SOUND_ALERT:-alarm}"
 BARK_SOUND_RECOVER="${BARK_SOUND_RECOVER:-chord}"
 TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
+STATUS_API_PATH="${STATUS_API_PATH:-/api/v1/status/models}"
 SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
 
 # ---------------------------------------------------------------------------
@@ -102,6 +101,16 @@ bark_send() {
     }" \
     "${BARK_URL}" \
     2>/dev/null || true
+}
+
+extract_json_string_field() {
+  local field="$1"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$last_body" | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null || true
+    return
+  fi
+
+  echo "$last_body" | tr -d '\n' | sed -n "s/.*\"${field}\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1
 }
 
 # ---------------------------------------------------------------------------
@@ -177,50 +186,68 @@ check_health() {
 }
 
 # ---------------------------------------------------------------------------
-# 检查 2：实际 API 调用
+# 检查 2：服务状态探针结果
 # ---------------------------------------------------------------------------
 check_api() {
   # 如果 health 都不通，跳过 API 测试
   if [ "$health_ok" = "0" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] Health 异常，跳过 API 调用测试"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] Health 异常，跳过服务状态检查"
     return
   fi
 
-  if request_with_retry "API" \
+  local status_url="${API_BASE_URL%/}${STATUS_API_PATH%/}/${TEST_MODEL}"
+
+  if request_with_retry "StatusProbe" \
     curl -s -w "\n__HTTP_CODE__%{http_code}" \
     --max-time "$API_TIMEOUT" \
-    -H "x-api-key: ${API_KEY}" \
-    -H "Content-Type: application/json" \
-    -H "anthropic-version: 2023-06-01" \
-    -d "{
-      \"model\": \"${TEST_MODEL}\",
-      \"max_tokens\": 10,
-      \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]
-    }" \
-    "${API_BASE_URL}/v1/messages"; then
-    # 成功
-    if [ "$api_notified" = "1" ]; then
-      bark_send "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常" "$BARK_SOUND_RECOVER"
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] API 调用恢复正常"
+    "${status_url}"; then
+    local current_status error_msg
+    current_status=$(extract_json_string_field "current_status")
+    error_msg=$(extract_json_string_field "error_message")
+
+    if [ "$current_status" = "operational" ]; then
+      if [ "$api_notified" = "1" ]; then
+        bark_send "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常" "$BARK_SOUND_RECOVER"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 模型 ${TEST_MODEL} 恢复正常"
+      fi
+      api_notified=0
+      return
     fi
-    api_notified=0
+
+    if [ -z "$current_status" ]; then
+      current_status="unknown"
+    fi
+    if [ -z "$error_msg" ]; then
+      error_msg="当前状态为 ${current_status}"
+    fi
+    error_msg="${error_msg:0:160}"
+
+    if [ "$api_notified" = "0" ]; then
+      bark_send "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}" "$BARK_SOUND_ALERT"
+      api_notified=1
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 当前状态 ${current_status}, 已发送 Bark 告警"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 模型 ${TEST_MODEL} 仍为 ${current_status}，已通知过"
+    fi
   else
     # 全部重试失败
     if [ "$api_notified" = "0" ]; then
       local error_msg=""
-      if command -v jq &>/dev/null; then
+      if [ "$last_http_code" = "404" ]; then
+        error_msg="模型 ${TEST_MODEL} 未配置到服务状态探针"
+      elif command -v jq &>/dev/null; then
         error_msg=$(echo "$last_body" | jq -r '.error.message // .error // .message // empty' 2>/dev/null || true)
       fi
       if [ -z "$error_msg" ]; then
         error_msg="HTTP ${last_http_code}"
       fi
-      error_msg="${error_msg:0:100}"
+      error_msg="${error_msg:0:160}"
 
-      bark_send "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}, 已重试 ${RETRY_COUNT} 次" "$BARK_SOUND_ALERT"
+      bark_send "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次" "$BARK_SOUND_ALERT"
       api_notified=1
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
     else
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] API 仍异常，已通知过，不重复推送"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 服务状态读取仍异常，已通知过，不重复推送"
     fi
   fi
 }

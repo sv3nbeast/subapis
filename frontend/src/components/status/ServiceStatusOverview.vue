@@ -40,6 +40,7 @@ import { useI18n } from 'vue-i18n'
 import { statusAPI } from '@/api/status'
 import type { ServiceStatusResponse } from '@/api/status'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import ServiceStatusBar from '@/components/status/ServiceStatusBar.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
@@ -54,6 +55,7 @@ withDefaults(defineProps<Props>(), {
 const router = useRouter()
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const status = ref<ServiceStatusResponse | null>(null)
 const loading = ref(true)
@@ -73,13 +75,18 @@ onMounted(async () => {
   clockTimer = setInterval(updateClock, 1000)
   try {
     const data = await statusAPI.getStatus()
-    if (data.overall_status === 'unknown') {
+    const visible =
+      data.overall_status !== 'unknown' &&
+      data.models.length > 0 &&
+      (data.public_visible || authStore.isAdmin)
+
+    if (!visible) {
       // Treat unknown as disabled; render nothing
       status.value = null
       appStore.statusProbeEnabled = false
     } else {
       status.value = data
-      appStore.statusProbeEnabled = data.models.length > 0
+      appStore.statusProbeEnabled = true
     }
   } catch {
     // Fetch failed; render nothing

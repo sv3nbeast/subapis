@@ -800,6 +800,18 @@
                 <Toggle v-model="statusProbeForm.enabled" />
               </div>
 
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">{{
+                    t('adminStatus.publicVisible')
+                  }}</label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t('adminStatus.publicVisibleHint') }}
+                  </p>
+                </div>
+                <Toggle v-model="statusProbeForm.public_visible" />
+              </div>
+
               <!-- Settings - Only show when enabled -->
               <div
                 v-if="statusProbeForm.enabled"
@@ -2389,6 +2401,7 @@ const statusProbeLoading = ref(true)
 const statusProbeSaving = ref(false)
 const statusProbeForm = reactive({
   enabled: false,
+  public_visible: true,
   interval_minutes: 5,
   retention_days: 30,
   models: [] as Array<{
@@ -3155,6 +3168,7 @@ async function loadStatusProbeSettings() {
   try {
     const settings = await adminAPI.settings.getStatusProbeSettings()
     statusProbeForm.enabled = settings.enabled
+    statusProbeForm.public_visible = settings.public_visible ?? true
     statusProbeForm.interval_minutes = settings.interval_minutes
     statusProbeForm.retention_days = settings.retention_days
     statusProbeForm.models = Array.isArray(settings.models) ? settings.models.map(m => ({
@@ -3174,11 +3188,13 @@ async function saveStatusProbeSettings() {
   try {
     const updated = await adminAPI.settings.updateStatusProbeSettings({
       enabled: statusProbeForm.enabled,
+      public_visible: statusProbeForm.public_visible,
       interval_minutes: statusProbeForm.interval_minutes,
       retention_days: statusProbeForm.retention_days,
       models: statusProbeForm.models
     })
     statusProbeForm.enabled = updated.enabled
+    statusProbeForm.public_visible = updated.public_visible ?? true
     statusProbeForm.interval_minutes = updated.interval_minutes
     statusProbeForm.retention_days = updated.retention_days
     statusProbeForm.models = Array.isArray(updated.models) ? updated.models.map(m => ({

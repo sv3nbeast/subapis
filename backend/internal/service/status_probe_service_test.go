@@ -41,8 +41,31 @@ func TestStatusProbeService_LoadConfig_LegacyGlobalCredentialsPopulateModelConfi
 	require.Equal(t, "https://api.subapis.com", cfg.Models[0].BaseURL)
 	require.Equal(t, "model-key", cfg.Models[1].ApiKey)
 	require.Equal(t, "https://other.example.com", cfg.Models[1].BaseURL)
+	require.True(t, cfg.PublicVisible)
 	require.Empty(t, cfg.ApiKey)
 	require.Empty(t, cfg.BaseURL)
+}
+
+func TestStatusProbeService_LoadConfig_PreservesExplicitPublicVisibleFalse(t *testing.T) {
+	repo := &settingRepoStub{
+		values: map[string]string{
+			SettingKeyStatusProbeConfig: `{
+				"enabled": true,
+				"public_visible": false,
+				"interval_minutes": 5,
+				"retention_days": 7,
+				"models": [
+					{"model":"claude-sonnet-4-6","display_name":"Claude","sort_order":0,"enabled":true,"api_key":"key","base_url":"https://api.subapis.com/"}
+				]
+			}`,
+		},
+	}
+	svc := NewStatusProbeService(nil, NewSettingService(repo, &config.Config{}))
+
+	cfg, err := svc.LoadConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, cfg.PublicVisible)
+	require.Equal(t, "https://api.subapis.com", cfg.Models[0].BaseURL)
 }
 
 func TestStatusProbeService_buildModelStatus_MarksStaleResultsUnknown(t *testing.T) {
@@ -59,7 +82,7 @@ func TestStatusProbeService_buildModelStatus_MarksStaleResultsUnknown(t *testing
 	require.Equal(t, 3, ms.TotalProbes)
 }
 
-func TestStatusProbeService_buildModelStatus_UsesRecentStatusesWhenFresh(t *testing.T) {
+func TestStatusProbeService_buildModelStatus_UsesLatestProbeStatusWhenFresh(t *testing.T) {
 	svc := &StatusProbeService{}
 	now := time.Date(2026, 4, 9, 0, 42, 0, 0, time.UTC)
 	results := []probeRawResult{
@@ -69,7 +92,20 @@ func TestStatusProbeService_buildModelStatus_UsesRecentStatusesWhenFresh(t *test
 	}
 
 	ms := svc.buildModelStatus("claude-sonnet-4-6", "Claude", results, 5, now)
-	require.Equal(t, "degraded", ms.CurrentStatus)
+	require.Equal(t, "operational", ms.CurrentStatus)
+}
+
+func TestStatusProbeService_buildModelStatus_LatestFailureMarksOutage(t *testing.T) {
+	svc := &StatusProbeService{}
+	now := time.Date(2026, 4, 9, 0, 42, 0, 0, time.UTC)
+	results := []probeRawResult{
+		{Model: "claude-sonnet-4-6", Status: "error", CreatedAt: now.Add(-2 * time.Minute)},
+		{Model: "claude-sonnet-4-6", Status: "ok", CreatedAt: now.Add(-7 * time.Minute)},
+		{Model: "claude-sonnet-4-6", Status: "ok", CreatedAt: now.Add(-12 * time.Minute)},
+	}
+
+	ms := svc.buildModelStatus("claude-sonnet-4-6", "Claude", results, 5, now)
+	require.Equal(t, "outage", ms.CurrentStatus)
 }
 
 func TestComputeOverallStatus_DegradesWhenAllModelsAreUnknown(t *testing.T) {
@@ -78,6 +114,40 @@ func TestComputeOverallStatus_DegradesWhenAllModelsAreUnknown(t *testing.T) {
 		{Model: "b", CurrentStatus: "unknown"},
 	})
 	require.Equal(t, "degraded", status)
+}
+
+func TestBuildStatusProbeMonitorResponse_ReturnsLatestModelSnapshot(t *testing.T) {
+	resp, ok := buildStatusProbeMonitorResponse("claude-sonnet-4-6", &ServiceStatusResponse{
+		IntervalMinutes: 5,
+		UpdatedAt:       time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC),
+		Models: []ModelStatus{
+			{
+				Model:         "claude-sonnet-4-6",
+				DisplayName:   "Claude Sonnet 4.6",
+				CurrentStatus: "outage",
+				RecentFailures: []ProbeFailure{
+					{ErrorMessage: "HTTP 503: No available accounts"},
+				},
+			},
+		},
+	})
+
+	require.True(t, ok)
+	require.Equal(t, "claude-sonnet-4-6", resp.Model)
+	require.Equal(t, "outage", resp.CurrentStatus)
+	require.Equal(t, "HTTP 503: No available accounts", resp.ErrorMessage)
+	require.Equal(t, 5, resp.IntervalMinutes)
+}
+
+func TestBuildStatusProbeMonitorResponse_MissingModelReturnsFalse(t *testing.T) {
+	resp, ok := buildStatusProbeMonitorResponse("claude-sonnet-4-6", &ServiceStatusResponse{
+		Models: []ModelStatus{
+			{Model: "gpt-5.4", CurrentStatus: "operational"},
+		},
+	})
+
+	require.False(t, ok)
+	require.Nil(t, resp)
 }
 
 func TestStatusProbeService_runProbe_UsesGeminiEndpointAndPayload(t *testing.T) {
@@ -203,4 +273,36 @@ func TestStatusProbeService_runProbe_RetriesOnceOnTransient503(t *testing.T) {
 	require.Empty(t, errMsg)
 	require.GreaterOrEqual(t, latencyMs, 0)
 	require.Equal(t, 2, attempts)
+}
+
+func TestStatusProbeService_runProbe_RetriesUpToThirdAttemptOnTransient503(t *testing.T) {
+	origRetryDelay := statusProbeRetryDelay
+	defer func() {
+		statusProbeRetryDelay = origRetryDelay
+	}()
+	statusProbeRetryDelay = 1 * time.Millisecond
+
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"No available accounts"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"message","id":"msg_1"}`))
+	}))
+	defer ts.Close()
+
+	svc := &StatusProbeService{httpClient: ts.Client()}
+	latencyMs, errMsg := svc.runProbe(context.Background(), StatusProbeModelConfig{
+		Model:   "claude-sonnet-4-6",
+		ApiKey:  "test-key",
+		BaseURL: ts.URL,
+	})
+
+	require.Empty(t, errMsg)
+	require.GreaterOrEqual(t, latencyMs, 0)
+	require.Equal(t, 3, attempts)
 }

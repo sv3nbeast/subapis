@@ -108,6 +108,7 @@ func registerRoutes(
 
 	// Public status endpoint (no auth required)
 	v1.GET("/status", h.Status.GetStatus)
+	v1.GET("/status/models/:model", h.Status.GetModelStatus)
 
 	// 注册各模块路由
 	routes.RegisterAuthRoutes(v1, h, jwtAuth, redisClient, settingService)
