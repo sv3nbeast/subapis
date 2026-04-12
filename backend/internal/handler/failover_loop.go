@@ -48,6 +48,7 @@ type FailoverState struct {
 	FailedAccountIDs         map[int64]struct{}
 	SameAccountRetryCount    map[int64]int
 	AvoidEmailDomainSuffixes map[string]struct{}
+	ModelCapacityRetryState  *service.ModelCapacityRetryState
 	LastFailoverErr          *service.UpstreamFailoverError
 	ForceCacheBilling        bool
 	hasBoundSession          bool
@@ -60,6 +61,7 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		FailedAccountIDs:         make(map[int64]struct{}),
 		SameAccountRetryCount:    make(map[int64]int),
 		AvoidEmailDomainSuffixes: make(map[string]struct{}),
+		ModelCapacityRetryState:  service.NewModelCapacityRetryState(0),
 		hasBoundSession:          hasBoundSession,
 	}
 }

@@ -160,6 +160,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	// 3. Account selection + failover loop
 	fs := NewFailoverState(h.maxAccountSwitches, false)
+	c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 
 	for {
 		selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())

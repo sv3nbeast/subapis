@@ -149,6 +149,25 @@ func TestFilterByPreferredEmailDomainSuffixes(t *testing.T) {
 	require.Len(t, filtered, 2)
 }
 
+func TestFilterAccountsByPreferredEmailDomainSuffixes(t *testing.T) {
+	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
+	accounts := []*Account{
+		{ID: 1, Priority: 1, Credentials: map[string]any{"email": "a@same.com"}},
+		{ID: 2, Priority: 1, Credentials: map[string]any{"email": "b@other.com"}},
+	}
+
+	filtered := filterAccountsByPreferredEmailDomainSuffixes(ctx, accounts)
+	require.Len(t, filtered, 1)
+	require.Equal(t, int64(2), filtered[0].ID)
+
+	allAvoided := []*Account{
+		{ID: 3, Priority: 1, Credentials: map[string]any{"email": "c@same.com"}},
+		{ID: 4, Priority: 1, Credentials: map[string]any{"email": "d@same.com"}},
+	}
+	filtered = filterAccountsByPreferredEmailDomainSuffixes(ctx, allAvoided)
+	require.Len(t, filtered, 2)
+}
+
 // --- filterByMinPriority ---
 
 func TestFilterByMinPriority_Empty(t *testing.T) {

@@ -55,6 +55,7 @@ func TestNewFailoverState(t *testing.T) {
 		require.Empty(t, fs.SameAccountRetryCount)
 		require.NotNil(t, fs.AvoidEmailDomainSuffixes)
 		require.Empty(t, fs.AvoidEmailDomainSuffixes)
+		require.NotNil(t, fs.ModelCapacityRetryState)
 		require.Nil(t, fs.LastFailoverErr)
 		require.False(t, fs.ForceCacheBilling)
 		require.True(t, fs.hasBoundSession)

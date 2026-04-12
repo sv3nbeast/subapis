@@ -46,7 +46,7 @@ const (
 
 	// MODEL_CAPACITY_EXHAUSTED 专用重试参数
 	// 模型容量不足时保留有限的原地重试窗口，兼顾短暂恢复机会和请求时延。
-	antigravityModelCapacityRetryMaxAttempts = 15
+	antigravityModelCapacityRetryMaxAttempts = 3
 	antigravityModelCapacityRetryWait        = 1 * time.Second
 	// 计划测试仅做轻量探测，避免与生产流量争抢过多容量。
 	antigravityProbeModelCapacityRetryMaxAttempts = 3
@@ -97,9 +97,11 @@ const (
 // 当账号限流时间超过阈值时，通知上层切换账号
 type AntigravityAccountSwitchError struct {
 	OriginalAccountID int64
+	StatusCode        int
 	RateLimitedModel  string
 	IsStickySession   bool // 是否为粘性会话切换（决定是否缓存计费）
 	RateLimitResetAt  *time.Time
+	ResponseBody      []byte
 }
 
 func (e *AntigravityAccountSwitchError) Error() string {
@@ -230,9 +232,11 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				action: smartRetryActionBreakWithResp,
 				switchError: &AntigravityAccountSwitchError{
 					OriginalAccountID: p.account.ID,
+					StatusCode:        resp.StatusCode,
 					RateLimitedModel:  displayModel,
 					IsStickySession:   p.isStickySession,
 					RateLimitResetAt:  &resetAt,
+					ResponseBody:      append([]byte(nil), respBody...),
 				},
 			}
 		}
@@ -267,9 +271,11 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			action: smartRetryActionBreakWithResp,
 			switchError: &AntigravityAccountSwitchError{
 				OriginalAccountID: p.account.ID,
+				StatusCode:        resp.StatusCode,
 				RateLimitedModel:  modelName,
 				IsStickySession:   p.isStickySession,
 				RateLimitResetAt:  &resetAt,
+				ResponseBody:      append([]byte(nil), respBody...),
 			},
 		}
 	}
@@ -278,8 +284,19 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 	if shouldSmartRetry {
 		var lastRetryResp *http.Response
 		var lastRetryBody []byte
+		attemptsMade := 0
+		modelCapacityRetryState := ModelCapacityRetryStateFromContext(p.ctx)
+		buildSwitchError := func(statusCode int, body []byte) *AntigravityAccountSwitchError {
+			return &AntigravityAccountSwitchError{
+				OriginalAccountID: p.account.ID,
+				StatusCode:        statusCode,
+				RateLimitedModel:  modelName,
+				IsStickySession:   p.isStickySession,
+				ResponseBody:      append([]byte(nil), body...),
+			}
+		}
 
-		// MODEL_CAPACITY_EXHAUSTED 使用独立的重试参数（60 次，固定 1s 间隔）
+		// MODEL_CAPACITY_EXHAUSTED 使用独立的轻量重试参数，并受单请求总等待预算约束。
 		maxAttempts := antigravitySmartRetryMaxAttempts
 		if isModelCapacityExhausted {
 			maxAttempts = antigravityModelCapacityRetryMaxAttempts
@@ -288,7 +305,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			}
 			waitDuration = antigravityModelCapacityRetryWait
 
-			// 全局去重：如果其他 goroutine 已在重试同一模型且尚在 cooldown 中，直接返回 503
+			// 全局去重：如果其他 goroutine 已在重试同一模型且尚在 cooldown 中，多账号场景直接切号。
 			if modelName != "" {
 				modelCapacityExhaustedMu.RLock()
 				cooldownUntil, exists := modelCapacityExhaustedUntil[modelName]
@@ -296,6 +313,12 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				if exists && time.Now().Before(cooldownUntil) {
 					log.Printf("%s status=%d model_capacity_exhausted_dedup model=%s account=%d cooldown_until=%v (skip retry)",
 						p.prefix, resp.StatusCode, modelName, p.account.ID, cooldownUntil.Format("15:04:05"))
+					if !isSingleAccountRetry(p.ctx) {
+						return &smartRetryResult{
+							action:      smartRetryActionBreakWithResp,
+							switchError: buildSwitchError(resp.StatusCode, respBody),
+						}
+					}
 					return &smartRetryResult{
 						action: smartRetryActionBreakWithResp,
 						resp: &http.Response{
@@ -309,6 +332,11 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 		}
 
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			if isModelCapacityExhausted && modelCapacityRetryState != nil && !modelCapacityRetryState.CanSpend(waitDuration) {
+				log.Printf("%s status=%d model_capacity_retry_budget_exhausted model=%s account=%d remaining=%v",
+					p.prefix, resp.StatusCode, modelName, p.account.ID, modelCapacityRetryState.Remaining().Truncate(time.Millisecond))
+				break
+			}
 			log.Printf("%s status=%d oauth_smart_retry attempt=%d/%d delay=%v model=%s account=%d",
 				p.prefix, resp.StatusCode, attempt, maxAttempts, waitDuration, modelName, p.account.ID)
 
@@ -319,6 +347,11 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				log.Printf("%s status=context_canceled_during_smart_retry", p.prefix)
 				return &smartRetryResult{action: smartRetryActionBreakWithResp, err: p.ctx.Err()}
 			case <-timer.C:
+			}
+			if isModelCapacityExhausted && modelCapacityRetryState != nil && !modelCapacityRetryState.Spend(waitDuration) {
+				log.Printf("%s status=%d model_capacity_retry_budget_exhausted model=%s account=%d remaining=%v",
+					p.prefix, resp.StatusCode, modelName, p.account.ID, modelCapacityRetryState.Remaining().Truncate(time.Millisecond))
+				break
 			}
 
 			// 智能重试：创建新请求
@@ -336,6 +369,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				}
 			}
 
+			attemptsMade++
 			retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
@@ -383,8 +417,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			retryBody = respBody
 		}
 
-		// MODEL_CAPACITY_EXHAUSTED：模型容量不足，切换账号无意义
-		// 直接返回上游错误响应，不设置模型限流，不切换账号
+		// MODEL_CAPACITY_EXHAUSTED：保留全局 dedup cooldown，但多账号场景下改为尽快切号。
 		if isModelCapacityExhausted {
 			// 设置 cooldown，让后续请求快速失败，避免重复重试
 			if modelName != "" {
@@ -392,8 +425,14 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				modelCapacityExhaustedUntil[modelName] = time.Now().Add(antigravityModelCapacityCooldown)
 				modelCapacityExhaustedMu.Unlock()
 			}
-			log.Printf("%s status=%d smart_retry_exhausted_model_capacity attempts=%d model=%s account=%d body=%s (model capacity exhausted, not switching account)",
-				p.prefix, resp.StatusCode, maxAttempts, modelName, p.account.ID, truncateForLog(retryBody, 200))
+			log.Printf("%s status=%d smart_retry_exhausted_model_capacity attempts=%d model=%s account=%d body=%s (switch account)",
+				p.prefix, resp.StatusCode, attemptsMade, modelName, p.account.ID, truncateForLog(retryBody, 200))
+			if !isSingleAccountRetry(p.ctx) {
+				return &smartRetryResult{
+					action:      smartRetryActionBreakWithResp,
+					switchError: buildSwitchError(resp.StatusCode, retryBody),
+				}
+			}
 			return &smartRetryResult{
 				action: smartRetryActionBreakWithResp,
 				resp: &http.Response{
@@ -443,9 +482,11 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			action: smartRetryActionBreakWithResp,
 			switchError: &AntigravityAccountSwitchError{
 				OriginalAccountID: p.account.ID,
+				StatusCode:        resp.StatusCode,
 				RateLimitedModel:  modelName,
 				IsStickySession:   p.isStickySession,
 				RateLimitResetAt:  &resetAt,
+				ResponseBody:      append([]byte(nil), retryBody...),
 			},
 		}
 	}
@@ -619,6 +660,7 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
 				return nil, &AntigravityAccountSwitchError{
 					OriginalAccountID: p.account.ID,
+					StatusCode:        http.StatusTooManyRequests,
 					RateLimitedModel:  p.requestedModel,
 					IsStickySession:   p.isStickySession,
 				}
@@ -996,7 +1038,13 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 	case ErrorPolicyTempUnscheduled:
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
-		return true, statusCode, &AntigravityAccountSwitchError{OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession}
+		return true, statusCode, &AntigravityAccountSwitchError{
+			OriginalAccountID: p.account.ID,
+			StatusCode:        statusCode,
+			RateLimitedModel:  p.requestedModel,
+			IsStickySession:   p.isStickySession,
+			ResponseBody:      append([]byte(nil), respBody...),
+		}
 	}
 	return false, statusCode, nil
 }
@@ -1513,8 +1561,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
+			statusCode := switchErr.StatusCode
+			if statusCode == 0 {
+				statusCode = http.StatusServiceUnavailable
+			}
 			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
+				StatusCode:        statusCode,
+				ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
 				ForceCacheBilling: switchErr.IsStickySession,
 			}
 		}
@@ -2269,8 +2322,13 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	if err != nil {
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
+			statusCode := switchErr.StatusCode
+			if statusCode == 0 {
+				statusCode = http.StatusServiceUnavailable
+			}
 			return nil, &UpstreamFailoverError{
-				StatusCode:        http.StatusServiceUnavailable,
+				StatusCode:        statusCode,
+				ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
 				ForceCacheBilling: switchErr.IsStickySession,
 			}
 		}
@@ -2396,16 +2454,21 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					}
 				} else {
 					if switchErr, ok := IsAntigravityAccountSwitchError(retryErr); ok {
+						statusCode := switchErr.StatusCode
+						if statusCode == 0 {
+							statusCode = http.StatusServiceUnavailable
+						}
 						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 							Platform:           account.Platform,
 							AccountID:          account.ID,
 							AccountName:        account.Name,
-							UpstreamStatusCode: http.StatusServiceUnavailable,
+							UpstreamStatusCode: statusCode,
 							Kind:               "failover",
 							Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
 						})
 						return nil, &UpstreamFailoverError{
-							StatusCode:        http.StatusServiceUnavailable,
+							StatusCode:        statusCode,
+							ResponseBody:      append([]byte(nil), switchErr.ResponseBody...),
 							ForceCacheBilling: switchErr.IsStickySession,
 						}
 					}
@@ -2889,8 +2952,10 @@ func (s *AntigravityGatewayService) handleModelRateLimit(p *handleModelRateLimit
 		Handled: true,
 		SwitchError: &AntigravityAccountSwitchError{
 			OriginalAccountID: p.account.ID,
+			StatusCode:        p.statusCode,
 			RateLimitedModel:  info.ModelName,
 			IsStickySession:   p.isStickySession,
+			ResponseBody:      append([]byte(nil), p.body...),
 		},
 	}
 }
@@ -3038,9 +3103,11 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 				Handled: true,
 				SwitchError: &AntigravityAccountSwitchError{
 					OriginalAccountID: account.ID,
+					StatusCode:        429,
 					RateLimitedModel:  displayModel,
 					IsStickySession:   isStickySession,
 					RateLimitResetAt:  &resetAt,
+					ResponseBody:      append([]byte(nil), body...),
 				},
 			}
 		}

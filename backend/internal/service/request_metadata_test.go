@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/stretchr/testify/require"
@@ -10,12 +11,14 @@ import (
 
 func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	ctx := context.Background()
+	state := NewModelCapacityRetryState(3 * time.Second)
 	ctx = WithIsMaxTokensOneHaikuRequest(ctx, true, false)
 	ctx = WithThinkingEnabled(ctx, true, false)
 	ctx = WithPrefetchedStickySession(ctx, 123, 456, false)
 	ctx = WithSingleAccountRetry(ctx, true, false)
 	ctx = WithAccountSwitchCount(ctx, 2, false)
 	ctx = WithAvoidEmailDomainSuffixes(ctx, []string{"Example.com", "example.com", "other.net"}, false)
+	ctx = WithModelCapacityRetryState(ctx, state, false)
 
 	isHaiku, ok := IsMaxTokensOneHaikuRequestFromContext(ctx)
 	require.True(t, ok)
@@ -43,6 +46,9 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 
 	avoidSuffixes := AvoidEmailDomainSuffixesFromContext(ctx)
 	require.Equal(t, []string{"example.com", "other.net"}, avoidSuffixes)
+
+	retryState := ModelCapacityRetryStateFromContext(ctx)
+	require.Same(t, state, retryState)
 
 	require.Nil(t, ctx.Value(ctxkey.IsMaxTokensOneHaikuRequest))
 	require.Nil(t, ctx.Value(ctxkey.ThinkingEnabled))
@@ -120,4 +126,16 @@ func TestRequestMetadataRead_PreferMetadataOverLegacy(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, thinking)
 	require.Equal(t, false, ctx.Value(ctxkey.ThinkingEnabled))
+}
+
+func TestModelCapacityRetryState_SpendAndRemaining(t *testing.T) {
+	state := NewModelCapacityRetryState(3 * time.Second)
+	require.True(t, state.CanSpend(1*time.Second))
+	require.True(t, state.Spend(1*time.Second))
+	require.Equal(t, 2*time.Second, state.Remaining())
+	require.True(t, state.CanSpend(2*time.Second))
+	require.True(t, state.Spend(2*time.Second))
+	require.Equal(t, time.Duration(0), state.Remaining())
+	require.False(t, state.CanSpend(1*time.Second))
+	require.False(t, state.Spend(1*time.Second))
 }

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
@@ -19,6 +21,58 @@ type RequestMetadata struct {
 	SingleAccountRetry         *bool
 	AccountSwitchCount         *int
 	AvoidEmailDomainSuffixes   []string
+	ModelCapacityRetryState    *ModelCapacityRetryState
+}
+
+const defaultModelCapacityRetryTotalBudget = 8 * time.Second
+
+type ModelCapacityRetryState struct {
+	mu        sync.Mutex
+	remaining time.Duration
+}
+
+func NewModelCapacityRetryState(total time.Duration) *ModelCapacityRetryState {
+	if total <= 0 {
+		total = defaultModelCapacityRetryTotalBudget
+	}
+	return &ModelCapacityRetryState{remaining: total}
+}
+
+func (s *ModelCapacityRetryState) CanSpend(wait time.Duration) bool {
+	if s == nil {
+		return true
+	}
+	if wait <= 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.remaining >= wait
+}
+
+func (s *ModelCapacityRetryState) Spend(wait time.Duration) bool {
+	if s == nil {
+		return true
+	}
+	if wait <= 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.remaining < wait {
+		return false
+	}
+	s.remaining -= wait
+	return true
+}
+
+func (s *ModelCapacityRetryState) Remaining() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.remaining
 }
 
 var (
@@ -128,6 +182,12 @@ func WithAvoidEmailDomainSuffixes(ctx context.Context, values []string, bridgeOl
 	}, nil)
 }
 
+func WithModelCapacityRetryState(ctx context.Context, state *ModelCapacityRetryState, bridgeOldKeys bool) context.Context {
+	return updateRequestMetadata(ctx, bridgeOldKeys, func(md *RequestMetadata) {
+		md.ModelCapacityRetryState = state
+	}, nil)
+}
+
 func IsMaxTokensOneHaikuRequestFromContext(ctx context.Context) (bool, bool) {
 	if md := metadataFromContext(ctx); md != nil && md.IsMaxTokensOneHaikuRequest != nil {
 		return *md.IsMaxTokensOneHaikuRequest, true
@@ -230,6 +290,13 @@ func AccountSwitchCountFromContext(ctx context.Context) (int, bool) {
 func AvoidEmailDomainSuffixesFromContext(ctx context.Context) []string {
 	if md := metadataFromContext(ctx); md != nil && len(md.AvoidEmailDomainSuffixes) > 0 {
 		return append([]string(nil), md.AvoidEmailDomainSuffixes...)
+	}
+	return nil
+}
+
+func ModelCapacityRetryStateFromContext(ctx context.Context) *ModelCapacityRetryState {
+	if md := metadataFromContext(ctx); md != nil {
+		return md.ModelCapacityRetryState
 	}
 	return nil
 }

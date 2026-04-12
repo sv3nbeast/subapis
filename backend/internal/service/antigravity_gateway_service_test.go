@@ -321,7 +321,7 @@ func TestAntigravityGatewayService_Forward_ModelRateLimitTriggersFailover(t *tes
 	// 核心验证：错误应该是 UpstreamFailoverError，而不是普通 502 错误
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	// 非粘性会话请求，ForceCacheBilling 应为 false
 	require.False(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be false for non-sticky session")
 }
@@ -377,7 +377,7 @@ func TestAntigravityGatewayService_ForwardGemini_ModelRateLimitTriggersFailover(
 	// 核心验证：错误应该是 UpstreamFailoverError，而不是普通 502 错误
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	// 非粘性会话请求，ForceCacheBilling 应为 false
 	require.False(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be false for non-sticky session")
 }
@@ -432,7 +432,7 @@ func TestAntigravityGatewayService_Forward_StickySessionForceCacheBilling(t *tes
 	// 核心验证：粘性会话切换时，ForceCacheBilling 应为 true
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.True(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be true for sticky session switch")
 }
 
@@ -487,7 +487,7 @@ func TestAntigravityGatewayService_ForwardGemini_StickySessionForceCacheBilling(
 	// 核心验证：粘性会话切换时，ForceCacheBilling 应为 true
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr, "error should be UpstreamFailoverError to trigger account switch")
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.True(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be true for sticky session switch")
 }
 
@@ -759,7 +759,7 @@ func TestAntigravityGatewayService_ForwardGemini_SignatureRetryPropagatesFailove
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr, "signature retry should propagate failover instead of falling back to the original 400")
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.True(t, failoverErr.ForceCacheBilling)
 	require.Len(t, upstream.requestBodies, 1, "retry should stop at preflight failover and not issue a second upstream request")
 

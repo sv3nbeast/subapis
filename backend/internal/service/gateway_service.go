@@ -1778,7 +1778,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	// ============ Layer 3: 兜底排队 ============
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
-	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, candidates)
+	candidates = filterAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -1800,7 +1800,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool) {
 	ordered := append([]*Account(nil), candidates...)
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
-	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, ordered)
+	ordered = filterAccountsByPreferredEmailDomainSuffixes(ctx, ordered)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -1875,6 +1875,23 @@ func prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx context.Context, a
 		}
 		start = end
 	}
+}
+
+func filterAccountsByPreferredEmailDomainSuffixes(ctx context.Context, accounts []*Account) []*Account {
+	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
+	if len(avoided) == 0 || len(accounts) == 0 {
+		return accounts
+	}
+	preferred := make([]*Account, 0, len(accounts))
+	for _, account := range accounts {
+		if !isAvoidedEmailDomainSuffix(account, avoided) {
+			preferred = append(preferred, account)
+		}
+	}
+	if len(preferred) == 0 {
+		return accounts
+	}
+	return preferred
 }
 
 func prioritizeDifferentEmailDomainSuffixesWithinPriorityWithLoad(ctx context.Context, accounts []accountWithLoad) {
@@ -2817,7 +2834,7 @@ func (s *GatewayService) selectLegacyEligibleAccount(
 		return nil
 	}
 	sortAccountsByPriorityAndLastUsed(candidates, preferOAuth)
-	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, candidates)
+	candidates = filterAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
 	return candidates[0]
 }
 
