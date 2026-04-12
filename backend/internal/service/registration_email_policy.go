@@ -38,14 +38,54 @@ func IsRegistrationEmailSuffixAllowed(email string, whitelist []string) bool {
 	return false
 }
 
+// IsRegistrationEmailSuffixBlocked checks whether an email is blocked by suffix blacklist.
+func IsRegistrationEmailSuffixBlocked(email string, blacklist []string) bool {
+	if len(blacklist) == 0 {
+		return false
+	}
+	suffix := RegistrationEmailSuffix(email)
+	if suffix == "" {
+		return false
+	}
+	for _, blocked := range blacklist {
+		if registrationEmailSuffixMatchesOrSubdomain(suffix, blocked) {
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizeRegistrationEmailSuffixWhitelist normalizes and validates suffix whitelist items.
 func NormalizeRegistrationEmailSuffixWhitelist(raw []string) ([]string, error) {
+	return normalizeRegistrationEmailSuffixWhitelist(raw, true)
+}
+
+// NormalizeRegistrationEmailSuffixBlacklist normalizes and validates suffix blacklist items.
+func NormalizeRegistrationEmailSuffixBlacklist(raw []string) ([]string, error) {
 	return normalizeRegistrationEmailSuffixWhitelist(raw, true)
 }
 
 // ParseRegistrationEmailSuffixWhitelist parses persisted JSON into normalized suffixes.
 // Invalid entries are ignored to keep old misconfigurations from breaking runtime reads.
 func ParseRegistrationEmailSuffixWhitelist(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []string{}
+	}
+	normalized, _ := normalizeRegistrationEmailSuffixWhitelist(items, false)
+	if len(normalized) == 0 {
+		return []string{}
+	}
+	return normalized
+}
+
+// ParseRegistrationEmailSuffixBlacklist parses persisted JSON into normalized suffixes.
+// Invalid entries are ignored to keep old misconfigurations from breaking runtime reads.
+func ParseRegistrationEmailSuffixBlacklist(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{}
@@ -120,4 +160,18 @@ func splitEmailForPolicy(raw string) (local string, domain string, ok bool) {
 		return "", "", false
 	}
 	return local, domain, true
+}
+
+func registrationEmailSuffixMatchesOrSubdomain(suffix string, rule string) bool {
+	if suffix == rule {
+		return true
+	}
+
+	suffixDomain := strings.TrimPrefix(suffix, "@")
+	ruleDomain := strings.TrimPrefix(rule, "@")
+	if suffixDomain == "" || ruleDomain == "" || suffixDomain == ruleDomain {
+		return false
+	}
+
+	return strings.HasSuffix(suffixDomain, "."+ruleDomain)
 }

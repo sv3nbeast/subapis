@@ -4188,6 +4188,11 @@ export default {
           "Only email addresses from the specified domains can register (for example, {'@'}qq.com, {'@'}gmail.com)",
         emailSuffixWhitelistPlaceholder: 'example.com',
         emailSuffixWhitelistInputHint: 'Leave empty for no restriction',
+        emailSuffixBlacklist: 'Email Domain Blacklist',
+        emailSuffixBlacklistHint:
+          "Block registration from the specified email domains and their subdomains (for example, {'@'}accesswiki.net also blocks {'@'}cfg.accesswiki.net)",
+        emailSuffixBlacklistPlaceholder: 'example.com',
+        emailSuffixBlacklistInputHint: 'Any email matching these domains will be rejected',
         promoCode: 'Promo Code',
         promoCodeHint: 'Allow users to use promo codes during registration',
         invitationCode: 'Invitation Code Registration',

@@ -36,6 +36,7 @@ var (
 	ErrRefreshTokenReused      = infraerrors.Unauthorized("REFRESH_TOKEN_REUSED", "refresh token has been reused")
 	ErrEmailVerifyRequired     = infraerrors.BadRequest("EMAIL_VERIFY_REQUIRED", "email verification is required")
 	ErrEmailSuffixNotAllowed   = infraerrors.BadRequest("EMAIL_SUFFIX_NOT_ALLOWED", "email suffix is not allowed")
+	ErrEmailSuffixBlocked      = infraerrors.BadRequest("EMAIL_SUFFIX_BLOCKED", "email suffix is blocked")
 	ErrRegDisabled             = infraerrors.Forbidden("REGISTRATION_DISABLED", "registration is currently disabled")
 	ErrServiceUnavailable      = infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "service temporarily unavailable")
 	ErrInvitationCodeRequired  = infraerrors.BadRequest("INVITATION_CODE_REQUIRED", "invitation code is required")
@@ -756,11 +757,29 @@ func (s *AuthService) validateRegistrationEmailPolicy(ctx context.Context, email
 	if s.settingService == nil {
 		return nil
 	}
+	blacklist := s.settingService.GetRegistrationEmailSuffixBlacklist(ctx)
+	if IsRegistrationEmailSuffixBlocked(email, blacklist) {
+		return buildEmailSuffixBlockedError(email)
+	}
 	whitelist := s.settingService.GetRegistrationEmailSuffixWhitelist(ctx)
 	if !IsRegistrationEmailSuffixAllowed(email, whitelist) {
 		return buildEmailSuffixNotAllowedError(whitelist)
 	}
 	return nil
+}
+
+func buildEmailSuffixBlockedError(email string) error {
+	suffix := RegistrationEmailSuffix(email)
+	if suffix == "" {
+		return ErrEmailSuffixBlocked
+	}
+
+	return infraerrors.BadRequest(
+		"EMAIL_SUFFIX_BLOCKED",
+		fmt.Sprintf("email suffix %s is blocked", suffix),
+	).WithMetadata(map[string]string{
+		"blocked_suffix": suffix,
+	})
 }
 
 func buildEmailSuffixNotAllowedError(whitelist []string) error {

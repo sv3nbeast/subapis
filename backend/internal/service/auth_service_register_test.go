@@ -250,6 +250,20 @@ func TestAuthService_Register_EmailSuffixNotAllowed(t *testing.T) {
 	require.Equal(t, "@example.com,@company.com", appErr.Metadata["allowed_suffixes"])
 }
 
+func TestAuthService_Register_EmailSuffixBlocked(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixBlacklist: `["@spam.com","@bot.net"]`,
+	}, nil)
+
+	_, _, err := service.Register(context.Background(), "user@spam.com", "password")
+	require.ErrorIs(t, err, ErrEmailSuffixBlocked)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "EMAIL_SUFFIX_BLOCKED", appErr.Reason)
+	require.Equal(t, "@spam.com", appErr.Metadata["blocked_suffix"])
+}
+
 func TestAuthService_Register_EmailSuffixAllowed(t *testing.T) {
 	repo := &userRepoStub{nextID: 8}
 	service := newAuthService(repo, map[string]string{
@@ -276,6 +290,19 @@ func TestAuthService_SendVerifyCode_EmailSuffixNotAllowed(t *testing.T) {
 	require.Contains(t, appErr.Message, "@example.com")
 	require.Contains(t, appErr.Message, "@company.com")
 	require.Equal(t, "2", appErr.Metadata["allowed_suffix_count"])
+}
+
+func TestAuthService_SendVerifyCode_EmailSuffixBlocked(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:              "true",
+		SettingKeyRegistrationEmailSuffixBlacklist: `["@spam.com","@bot.net"]`,
+	}, nil)
+
+	err := service.SendVerifyCode(context.Background(), "user@spam.com")
+	require.ErrorIs(t, err, ErrEmailSuffixBlocked)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "@spam.com", appErr.Metadata["blocked_suffix"])
 }
 
 func TestAuthService_Register_CreateError(t *testing.T) {

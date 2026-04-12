@@ -1069,6 +1069,56 @@
               </p>
             </div>
 
+            <!-- Email Suffix Blacklist -->
+            <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+              <label class="font-medium text-gray-900 dark:text-white">{{
+                t('admin.settings.registration.emailSuffixBlacklist')
+              }}</label>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.registration.emailSuffixBlacklistHint') }}
+              </p>
+              <div
+                class="mt-3 rounded-lg border border-gray-300 bg-white p-2 dark:border-dark-500 dark:bg-dark-700"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    v-for="suffix in registrationEmailSuffixBlacklistTags"
+                    :key="suffix"
+                    class="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-1 text-xs font-mono text-gray-700 dark:bg-dark-600 dark:text-gray-200"
+                  >
+                    <span class="text-gray-400 dark:text-gray-500">@</span>
+                    <span>{{ suffix }}</span>
+                    <button
+                      type="button"
+                      class="rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-dark-500 dark:hover:text-white"
+                      @click="removeRegistrationEmailSuffixBlacklistTag(suffix)"
+                    >
+                      <Icon name="x" size="xs" class="h-3.5 w-3.5" :stroke-width="2" />
+                    </button>
+                  </span>
+
+                  <div
+                    class="flex min-w-[220px] flex-1 items-center gap-1 rounded border border-transparent px-2 py-1 focus-within:border-primary-300 dark:focus-within:border-primary-700"
+                  >
+                    <span class="font-mono text-sm text-gray-400 dark:text-gray-500">@</span>
+                    <input
+                      v-model="registrationEmailSuffixBlacklistDraft"
+                      type="text"
+                      class="w-full bg-transparent text-sm font-mono text-gray-900 outline-none placeholder:text-gray-400 dark:text-white dark:placeholder:text-gray-500"
+                      :placeholder="t('admin.settings.registration.emailSuffixBlacklistPlaceholder')"
+                      @input="handleRegistrationEmailSuffixBlacklistDraftInput"
+                      @keydown="handleRegistrationEmailSuffixBlacklistDraftKeydown"
+                      @blur="commitRegistrationEmailSuffixBlacklistDraft"
+                      @paste="handleRegistrationEmailSuffixBlacklistPaste"
+                    />
+                  </div>
+                </div>
+              </div>
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.registration.emailSuffixBlacklistInputHint') }}
+              </p>
+            </div>
+
             <!-- Promo Code -->
             <div
               class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
@@ -2434,6 +2484,7 @@ const form = reactive<SettingsForm>({
   registration_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
+  registration_email_suffix_blacklist: [],
   promo_code_enabled: true,
   invitation_code_enabled: false,
   password_reset_enabled: false,
@@ -2512,6 +2563,8 @@ const defaultSubscriptionGroupOptions = computed<DefaultSubscriptionGroupOption[
 )
 
 const registrationEmailSuffixWhitelistSeparatorKeys = new Set([' ', ',', '，', 'Enter', 'Tab'])
+const registrationEmailSuffixBlacklistTags = ref<string[]>([])
+const registrationEmailSuffixBlacklistDraft = ref('')
 
 function removeRegistrationEmailSuffixWhitelistTag(suffix: string) {
   registrationEmailSuffixWhitelistTags.value = registrationEmailSuffixWhitelistTags.value.filter(
@@ -2576,6 +2629,72 @@ function handleRegistrationEmailSuffixWhitelistPaste(event: ClipboardEvent) {
   const tokens = parseRegistrationEmailSuffixWhitelistInput(text)
   for (const token of tokens) {
     addRegistrationEmailSuffixWhitelistTag(token)
+  }
+}
+
+function removeRegistrationEmailSuffixBlacklistTag(suffix: string) {
+  registrationEmailSuffixBlacklistTags.value = registrationEmailSuffixBlacklistTags.value.filter(
+    (item) => item !== suffix
+  )
+}
+
+function addRegistrationEmailSuffixBlacklistTag(raw: string) {
+  const suffix = normalizeRegistrationEmailSuffixDomain(raw)
+  if (
+    !isRegistrationEmailSuffixDomainValid(suffix) ||
+    registrationEmailSuffixBlacklistTags.value.includes(suffix)
+  ) {
+    return
+  }
+  registrationEmailSuffixBlacklistTags.value = [
+    ...registrationEmailSuffixBlacklistTags.value,
+    suffix
+  ]
+}
+
+function commitRegistrationEmailSuffixBlacklistDraft() {
+  if (!registrationEmailSuffixBlacklistDraft.value) {
+    return
+  }
+  addRegistrationEmailSuffixBlacklistTag(registrationEmailSuffixBlacklistDraft.value)
+  registrationEmailSuffixBlacklistDraft.value = ''
+}
+
+function handleRegistrationEmailSuffixBlacklistDraftInput() {
+  registrationEmailSuffixBlacklistDraft.value = normalizeRegistrationEmailSuffixDomain(
+    registrationEmailSuffixBlacklistDraft.value
+  )
+}
+
+function handleRegistrationEmailSuffixBlacklistDraftKeydown(event: KeyboardEvent) {
+  if (event.isComposing) {
+    return
+  }
+
+  if (registrationEmailSuffixWhitelistSeparatorKeys.has(event.key)) {
+    event.preventDefault()
+    commitRegistrationEmailSuffixBlacklistDraft()
+    return
+  }
+
+  if (
+    event.key === 'Backspace' &&
+    !registrationEmailSuffixBlacklistDraft.value &&
+    registrationEmailSuffixBlacklistTags.value.length > 0
+  ) {
+    registrationEmailSuffixBlacklistTags.value.pop()
+  }
+}
+
+function handleRegistrationEmailSuffixBlacklistPaste(event: ClipboardEvent) {
+  const text = event.clipboardData?.getData('text') || ''
+  if (!text.trim()) {
+    return
+  }
+  event.preventDefault()
+  const tokens = parseRegistrationEmailSuffixWhitelistInput(text)
+  for (const token of tokens) {
+    addRegistrationEmailSuffixBlacklistTag(token)
   }
 }
 
@@ -2658,7 +2777,11 @@ async function loadSettings() {
     registrationEmailSuffixWhitelistTags.value = normalizeRegistrationEmailSuffixDomains(
       settings.registration_email_suffix_whitelist
     )
+    registrationEmailSuffixBlacklistTags.value = normalizeRegistrationEmailSuffixDomains(
+      settings.registration_email_suffix_blacklist
+    )
     registrationEmailSuffixWhitelistDraft.value = ''
+    registrationEmailSuffixBlacklistDraft.value = ''
     form.smtp_password = ''
     smtpPasswordManuallyEdited.value = false
     form.turnstile_secret_key = ''
@@ -2762,6 +2885,9 @@ async function saveSettings() {
       registration_email_suffix_whitelist: registrationEmailSuffixWhitelistTags.value.map(
         (suffix) => `@${suffix}`
       ),
+      registration_email_suffix_blacklist: registrationEmailSuffixBlacklistTags.value.map(
+        (suffix) => `@${suffix}`
+      ),
       promo_code_enabled: form.promo_code_enabled,
       invitation_code_enabled: form.invitation_code_enabled,
       password_reset_enabled: form.password_reset_enabled,
@@ -2819,7 +2945,11 @@ async function saveSettings() {
     registrationEmailSuffixWhitelistTags.value = normalizeRegistrationEmailSuffixDomains(
       updated.registration_email_suffix_whitelist
     )
+    registrationEmailSuffixBlacklistTags.value = normalizeRegistrationEmailSuffixDomains(
+      updated.registration_email_suffix_blacklist
+    )
     registrationEmailSuffixWhitelistDraft.value = ''
+    registrationEmailSuffixBlacklistDraft.value = ''
     form.smtp_password = ''
     smtpPasswordManuallyEdited.value = false
     form.turnstile_secret_key = ''

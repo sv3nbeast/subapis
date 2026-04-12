@@ -194,6 +194,41 @@ func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Invalid(
 	require.Equal(t, "INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", infraerrors.Reason(err))
 }
 
+func TestSettingService_UpdateSettings_RegistrationEmailSuffixBlacklist_Normalized(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		RegistrationEmailSuffixBlacklist: []string{"spam.com", "@SPAM.com", " @bot.net "},
+	})
+	require.NoError(t, err)
+	require.Equal(t, `["@spam.com","@bot.net"]`, repo.updates[SettingKeyRegistrationEmailSuffixBlacklist])
+}
+
+func TestSettingService_UpdateSettings_RegistrationEmailSuffixBlacklist_Invalid(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		RegistrationEmailSuffixBlacklist: []string{"@invalid_domain"},
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_REGISTRATION_EMAIL_SUFFIX_BLACKLIST", infraerrors.Reason(err))
+}
+
+func TestSettingService_UpdateSettings_RegistrationEmailSuffixPolicy_Conflict(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		RegistrationEmailSuffixWhitelist: []string{"sub.example.com"},
+		RegistrationEmailSuffixBlacklist: []string{"@example.com"},
+	})
+	require.Error(t, err)
+	require.Equal(t, "REGISTRATION_EMAIL_SUFFIX_POLICY_CONFLICT", infraerrors.Reason(err))
+	require.Equal(t, "@sub.example.com", infraerrors.FromError(err).Metadata["conflicting_suffix"])
+}
+
 func TestParseDefaultSubscriptions_NormalizesValues(t *testing.T) {
 	got := parseDefaultSubscriptions(`[{"group_id":11,"validity_days":30},{"group_id":11,"validity_days":60},{"group_id":0,"validity_days":10},{"group_id":12,"validity_days":99999}]`)
 	require.Equal(t, []DefaultSubscriptionSetting{

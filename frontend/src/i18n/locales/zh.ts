@@ -4354,6 +4354,11 @@ export default {
           "仅允许使用指定域名的邮箱注册账号（例如 {'@'}qq.com, {'@'}gmail.com）",
         emailSuffixWhitelistPlaceholder: 'example.com',
         emailSuffixWhitelistInputHint: '留空则不限制',
+        emailSuffixBlacklist: '邮箱域名黑名单',
+        emailSuffixBlacklistHint:
+          "禁止使用指定域名及其子域名的邮箱注册账号（例如 {'@'}accesswiki.net 会同时拦截 {'@'}cfg.accesswiki.net）",
+        emailSuffixBlacklistPlaceholder: 'example.com',
+        emailSuffixBlacklistInputHint: '命中黑名单的域名将直接拒绝注册',
         promoCode: '优惠码',
         promoCodeHint: '允许用户在注册时使用优惠码',
         invitationCode: '邀请码注册',
