@@ -21,13 +21,7 @@
 
 ## 在线体验
 
-体验地址：**[https://demo.sub2api.org/](https://demo.sub2api.org/)**
-
-演示账号（共享演示环境；自建部署不会自动创建该账号）：
-
-| 邮箱 | 密码 |
-|------|------|
-| admin@sub2api.org | admin123 |
+维护地址：**[https://subapis.com/](https://subapis.com)**
 
 ## 项目概述
 
