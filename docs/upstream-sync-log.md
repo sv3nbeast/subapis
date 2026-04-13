@@ -232,6 +232,10 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - `fix(sidebar): prevent version dropdown clipping`
   - 说明：补入了上游新增的侧边栏回归测试文件；功能修复点本地此前已经等价存在
 
+- 官方 `d8fa38d5` -> 本地 `70881959`
+  - `fix(account): 修复账号管理中的状态筛选`
+  - 说明：补齐“不可调度”状态筛选选项，并在后端过滤中增加 `unschedulable` 语义
+
 - 官方 `f480e573` 的安全子集 -> 本地 `a0a15694`
   - 说明：仅吸收“保留 sidebar 自定义 SVG 原始颜色”这一小段，不合入它同提交里的表格默认值相关改动
 
