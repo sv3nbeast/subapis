@@ -48,6 +48,8 @@ RETRY_INTERVAL="${RETRY_INTERVAL:-5}"
 BARK_GROUP="${BARK_GROUP:-sub2api}"
 BARK_SOUND_ALERT="${BARK_SOUND_ALERT:-alarm}"
 BARK_SOUND_RECOVER="${BARK_SOUND_RECOVER:-chord}"
+BARK_NOTIFY_ALERT="${BARK_NOTIFY_ALERT:-true}"
+BARK_NOTIFY_RECOVER="${BARK_NOTIFY_RECOVER:-true}"
 TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
 STATUS_API_PATH="${STATUS_API_PATH:-/api/v1/status/models}"
 SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
@@ -101,6 +103,37 @@ bark_send() {
     }" \
     "${BARK_URL}" \
     2>/dev/null || true
+}
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+send_alert_if_enabled() {
+  local title="$1"
+  local body="$2"
+  if is_truthy "$BARK_NOTIFY_ALERT"; then
+    bark_send "$title" "$body" "$BARK_SOUND_ALERT"
+    return 0
+  fi
+  return 1
+}
+
+send_recover_if_enabled() {
+  local title="$1"
+  local body="$2"
+  if is_truthy "$BARK_NOTIFY_RECOVER"; then
+    bark_send "$title" "$body" "$BARK_SOUND_RECOVER"
+    return 0
+  fi
+  return 1
 }
 
 extract_json_string_field() {
@@ -169,16 +202,22 @@ check_health() {
     # 成功
     health_ok=1
     if [ "$health_notified" = "1" ]; then
-      bark_send "Sub2API 已恢复" "Health 端点恢复正常 (HTTP 200)" "$BARK_SOUND_RECOVER"
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] Health 端点恢复正常"
+      if send_recover_if_enabled "Sub2API 已恢复" "Health 端点恢复正常 (HTTP 200)"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] Health 端点恢复正常"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] Health 端点恢复正常，但恢复通知已禁用"
+      fi
     fi
     health_notified=0
   else
     # 全部重试失败
     if [ "$health_notified" = "0" ]; then
-      bark_send "Sub2API 异常" "Health 端点不可用 (HTTP ${last_http_code}), 已重试 ${RETRY_COUNT} 次" "$BARK_SOUND_ALERT"
       health_notified=1
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
+      if send_alert_if_enabled "Sub2API 异常" "Health 端点不可用 (HTTP ${last_http_code}), 已重试 ${RETRY_COUNT} 次"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] Health 异常已记录，异常通知已禁用"
+      fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] Health 仍异常，已通知过，不重复推送"
     fi
@@ -207,8 +246,11 @@ check_api() {
 
     if [ "$current_status" = "operational" ]; then
       if [ "$api_notified" = "1" ]; then
-        bark_send "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常" "$BARK_SOUND_RECOVER"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 模型 ${TEST_MODEL} 恢复正常"
+        if send_recover_if_enabled "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常"; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 模型 ${TEST_MODEL} 恢复正常"
+        else
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] 模型 ${TEST_MODEL} 恢复正常，但恢复通知已禁用"
+        fi
       fi
       api_notified=0
       return
@@ -223,9 +265,12 @@ check_api() {
     error_msg="${error_msg:0:160}"
 
     if [ "$api_notified" = "0" ]; then
-      bark_send "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}" "$BARK_SOUND_ALERT"
       api_notified=1
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 当前状态 ${current_status}, 已发送 Bark 告警"
+      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 当前状态 ${current_status}, 已发送 Bark 告警"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 模型 ${TEST_MODEL} 当前状态 ${current_status}，异常通知已禁用"
+      fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 模型 ${TEST_MODEL} 仍为 ${current_status}，已通知过"
     fi
@@ -243,9 +288,12 @@ check_api() {
       fi
       error_msg="${error_msg:0:160}"
 
-      bark_send "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次" "$BARK_SOUND_ALERT"
       api_notified=1
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
+      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 服务状态读取异常已记录，异常通知已禁用"
+      fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 服务状态读取仍异常，已通知过，不重复推送"
     fi
@@ -305,16 +353,22 @@ check_scheduling() {
 
   if [ "$is_low" = "1" ]; then
     if [ "$scheduling_notified" = "0" ]; then
-      bark_send "账号可用率过低" "可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}" "$BARK_SOUND_ALERT"
       scheduling_notified=1
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 调度可用率 ${available_pct}% < ${SCHEDULING_THRESHOLD}%, 已发送 Bark 告警"
+      if send_alert_if_enabled "账号可用率过低" "可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 调度可用率 ${available_pct}% < ${SCHEDULING_THRESHOLD}%, 已发送 Bark 告警"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 调度可用率过低已记录，异常通知已禁用"
+      fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 调度可用率仍低，已通知过"
     fi
   else
     if [ "$scheduling_notified" = "1" ]; then
-      bark_send "账号可用率恢复" "可用 ${available}/${total} (${available_pct}%)" "$BARK_SOUND_RECOVER"
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 调度可用率恢复正常"
+      if send_recover_if_enabled "账号可用率恢复" "可用 ${available}/${total} (${available_pct}%)"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 调度可用率恢复正常"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] 调度可用率恢复正常，但恢复通知已禁用"
+      fi
     fi
     scheduling_notified=0
   fi
