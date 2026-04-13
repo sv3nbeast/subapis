@@ -65,22 +65,104 @@ init_state() {
   if [ ! -f "$STATE_FILE" ]; then
     cat > "$STATE_FILE" <<EOF
 health_notified=0
+health_down_since_epoch=0
 api_notified=0
+api_down_since_epoch=0
 scheduling_notified=0
+scheduling_low_since_epoch=0
 EOF
   fi
 }
 
 read_state() {
   source "$STATE_FILE"
+  : "${health_notified:=0}"
+  : "${health_down_since_epoch:=0}"
+  : "${api_notified:=0}"
+  : "${api_down_since_epoch:=0}"
+  : "${scheduling_notified:=0}"
+  : "${scheduling_low_since_epoch:=0}"
 }
 
 write_state() {
   cat > "$STATE_FILE" <<EOF
 health_notified=${health_notified}
+health_down_since_epoch=${health_down_since_epoch}
 api_notified=${api_notified}
+api_down_since_epoch=${api_down_since_epoch}
 scheduling_notified=${scheduling_notified}
+scheduling_low_since_epoch=${scheduling_low_since_epoch}
 EOF
+}
+
+now_epoch() {
+  date +%s
+}
+
+format_epoch() {
+  local epoch="${1:-0}"
+  if [ -z "$epoch" ] || [ "$epoch" = "0" ]; then
+    return 1
+  fi
+
+  if date -d "@${epoch}" "+%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
+    date -d "@${epoch}" "+%Y-%m-%d %H:%M:%S"
+    return 0
+  fi
+
+  if date -r "${epoch}" "+%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
+    date -r "${epoch}" "+%Y-%m-%d %H:%M:%S"
+    return 0
+  fi
+
+  return 1
+}
+
+format_duration() {
+  local seconds="${1:-0}"
+  if [ -z "$seconds" ] || [ "$seconds" -le 0 ] 2>/dev/null; then
+    echo "0s"
+    return
+  fi
+
+  local hours=$((seconds / 3600))
+  local minutes=$(((seconds % 3600) / 60))
+  local secs=$((seconds % 60))
+  local parts=()
+
+  if [ "$hours" -gt 0 ]; then
+    parts+=("${hours}h")
+  fi
+  if [ "$minutes" -gt 0 ]; then
+    parts+=("${minutes}m")
+  fi
+  if [ "$secs" -gt 0 ] || [ "${#parts[@]}" -eq 0 ]; then
+    parts+=("${secs}s")
+  fi
+
+  printf "%s" "${parts[0]}"
+  local i
+  for ((i = 1; i < ${#parts[@]}; i++)); do
+    printf " %s" "${parts[$i]}"
+  done
+}
+
+build_recovery_suffix() {
+  local start_epoch="${1:-0}"
+  local now_ts
+  now_ts=$(now_epoch)
+  local duration_text start_text
+
+  duration_text="未知"
+  if [ -n "$start_epoch" ] && [ "$start_epoch" != "0" ] 2>/dev/null && [ "$now_ts" -ge "$start_epoch" ] 2>/dev/null; then
+    duration_text=$(format_duration $((now_ts - start_epoch)))
+  fi
+
+  if start_text=$(format_epoch "$start_epoch"); then
+    printf "；异常开始于 %s，持续 %s" "$start_text" "$duration_text"
+  else
+    printf "；异常开始时间未知，持续 %s" "$duration_text"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -90,9 +172,10 @@ bark_send() {
   local title="$1"
   local body="$2"
   local sound="${3:-$BARK_SOUND_ALERT}"
+  local response http_code
 
   # 使用 POST JSON 方式推送，避免中文 URL 编码问题
-  curl -s -o /dev/null --max-time 10 \
+  response=$(curl -sS --max-time 10 \
     -X POST \
     -H "Content-Type: application/json" \
     -d "{
@@ -101,8 +184,15 @@ bark_send() {
       \"group\": \"${BARK_GROUP}\",
       \"sound\": \"${sound}\"
     }" \
+    -w "\n__HTTP_CODE__%{http_code}" \
     "${BARK_URL}" \
-    2>/dev/null || true
+    2>/dev/null || true)
+
+  http_code=$(echo "$response" | grep "__HTTP_CODE__" | sed 's/__HTTP_CODE__//')
+  if [ -n "$http_code" ] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+    return 0
+  fi
+  return 1
 }
 
 is_truthy() {
@@ -202,18 +292,22 @@ check_health() {
     # 成功
     health_ok=1
     if [ "$health_notified" = "1" ]; then
-      if send_recover_if_enabled "Sub2API 已恢复" "Health 端点恢复正常 (HTTP 200)"; then
+      local recovery_suffix=""
+      recovery_suffix=$(build_recovery_suffix "$health_down_since_epoch")
+      if send_recover_if_enabled "Sub2API 已恢复" "Health 端点恢复正常 (HTTP 200)${recovery_suffix}"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] Health 端点恢复正常"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] Health 端点恢复正常，但恢复通知已禁用"
       fi
     fi
     health_notified=0
+    health_down_since_epoch=0
   else
     # 全部重试失败
     if [ "$health_notified" = "0" ]; then
       health_notified=1
-      if send_alert_if_enabled "Sub2API 异常" "Health 端点不可用 (HTTP ${last_http_code}), 已重试 ${RETRY_COUNT} 次"; then
+      health_down_since_epoch=$(now_epoch)
+      if send_alert_if_enabled "Sub2API 异常" "Health 端点不可用 (HTTP ${last_http_code}), 已重试 ${RETRY_COUNT} 次，开始于 $(format_epoch "$health_down_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] Health 异常已记录，异常通知已禁用"
@@ -246,13 +340,16 @@ check_api() {
 
     if [ "$current_status" = "operational" ]; then
       if [ "$api_notified" = "1" ]; then
-        if send_recover_if_enabled "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常"; then
+        local recovery_suffix=""
+        recovery_suffix=$(build_recovery_suffix "$api_down_since_epoch")
+        if send_recover_if_enabled "API 调用已恢复" "模型 ${TEST_MODEL} 调用恢复正常${recovery_suffix}"; then
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 模型 ${TEST_MODEL} 恢复正常"
         else
           echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] 模型 ${TEST_MODEL} 恢复正常，但恢复通知已禁用"
         fi
       fi
       api_notified=0
+      api_down_since_epoch=0
       return
     fi
 
@@ -266,7 +363,8 @@ check_api() {
 
     if [ "$api_notified" = "0" ]; then
       api_notified=1
-      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}"; then
+      api_down_since_epoch=$(now_epoch)
+      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}，开始于 $(format_epoch "$api_down_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 当前状态 ${current_status}, 已发送 Bark 告警"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 模型 ${TEST_MODEL} 当前状态 ${current_status}，异常通知已禁用"
@@ -289,7 +387,8 @@ check_api() {
       error_msg="${error_msg:0:160}"
 
       api_notified=1
-      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次"; then
+      api_down_since_epoch=$(now_epoch)
+      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次，开始于 $(format_epoch "$api_down_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 服务状态读取异常已记录，异常通知已禁用"
@@ -354,7 +453,8 @@ check_scheduling() {
   if [ "$is_low" = "1" ]; then
     if [ "$scheduling_notified" = "0" ]; then
       scheduling_notified=1
-      if send_alert_if_enabled "账号可用率过低" "可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}"; then
+      scheduling_low_since_epoch=$(now_epoch)
+      if send_alert_if_enabled "账号可用率过低" "可用 ${available}/${total} (${available_pct}%), 限流 ${rate_limited}, 临时不可调度 ${temp_unsched}，开始于 $(format_epoch "$scheduling_low_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 调度可用率 ${available_pct}% < ${SCHEDULING_THRESHOLD}%, 已发送 Bark 告警"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 调度可用率过低已记录，异常通知已禁用"
@@ -364,13 +464,16 @@ check_scheduling() {
     fi
   else
     if [ "$scheduling_notified" = "1" ]; then
-      if send_recover_if_enabled "账号可用率恢复" "可用 ${available}/${total} (${available_pct}%)"; then
+      local recovery_suffix=""
+      recovery_suffix=$(build_recovery_suffix "$scheduling_low_since_epoch")
+      if send_recover_if_enabled "账号可用率恢复" "可用 ${available}/${total} (${available_pct}%)${recovery_suffix}"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 调度可用率恢复正常"
       else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-SILENT] 调度可用率恢复正常，但恢复通知已禁用"
       fi
     fi
     scheduling_notified=0
+    scheduling_low_since_epoch=0
   fi
 }
 
