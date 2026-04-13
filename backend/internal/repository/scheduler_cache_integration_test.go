@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,4 +86,33 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	require.NotNil(t, full)
 	require.Equal(t, "secret-access-token", full.GetCredential("access_token"))
 	require.Equal(t, strings.Repeat("x", 4096), full.GetCredential("huge_blob"))
+}
+
+func TestSchedulerCacheSnapshotMissingMetadataFallsBackAsCacheMiss(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	cache := NewSchedulerCache(rdb)
+
+	bucket := service.SchedulerBucket{GroupID: 9, Platform: service.PlatformAnthropic, Mode: service.SchedulerModeSingle}
+	account := service.Account{
+		ID:          202,
+		Name:        "claude-cache-miss",
+		Platform:    service.PlatformAnthropic,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+		Credentials: map[string]any{
+			"api_key": "anthropic-secret",
+		},
+	}
+
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{account}))
+	require.NoError(t, rdb.Del(ctx, schedulerAccountMetaKey(strconv.FormatInt(account.ID, 10))).Err())
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.False(t, hit, "missing metadata should invalidate the snapshot and force DB fallback")
+	require.Nil(t, snapshot)
 }
