@@ -176,8 +176,11 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			shouldDisable = true
 			break
 		}
-		// OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
-		// Antigravity 除外：其 401 由 applyErrorPolicy 的 temp_unschedulable_rules 自行控制。
+		// Antigravity OAuth 401：先临时不可调度 3 分钟，再由请求路径/后台刷新服务延迟强制刷新 token。
+		if account.Type == AccountTypeOAuth && account.Platform == PlatformAntigravity {
+			return s.handleAntigravityOAuth401(ctx, account, upstreamMsg)
+		}
+		// 其他 OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
 		if account.Type == AccountTypeOAuth && account.Platform != PlatformAntigravity {
 			// 1. 失效缓存
 			if s.tokenCacheInvalidator != nil {
@@ -269,6 +272,45 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func (s *RateLimitService) handleAntigravityOAuth401(ctx context.Context, account *Account, upstreamMsg string) bool {
+	if account == nil {
+		return true
+	}
+
+	if s.tokenCacheInvalidator != nil {
+		if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
+			slog.Warn("antigravity_oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	now := time.Now()
+	refreshAt := now.Add(antigravityOAuth401TempUnschedDuration)
+	credentials := scheduleAntigravityOAuth401RefreshCredentials(account, refreshAt)
+	if err := persistAccountCredentials(ctx, s.accountRepo, account, credentials); err != nil {
+		slog.Warn("antigravity_oauth_401_schedule_refresh_persist_failed", "account_id", account.ID, "error", err)
+	} else {
+		slog.Info("antigravity_oauth_401_refresh_scheduled",
+			"account_id", account.ID,
+			"refresh_at", refreshAt.Format(time.RFC3339),
+		)
+	}
+
+	msg := "Authentication failed (401): invalid or expired credentials"
+	if upstreamMsg != "" {
+		msg = "Authentication failed (401): " + upstreamMsg
+	}
+	reason := msg + " | delayed_token_refresh_at=" + refreshAt.UTC().Format(time.RFC3339)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, refreshAt, reason); err != nil {
+		slog.Warn("antigravity_oauth_401_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
+	} else {
+		slog.Info("antigravity_oauth_401_temp_unschedulable_set",
+			"account_id", account.ID,
+			"until", refreshAt.Format(time.RFC3339),
+		)
+	}
+	return true
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.

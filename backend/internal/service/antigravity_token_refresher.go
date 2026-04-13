@@ -41,6 +41,14 @@ func (r *AntigravityTokenRefresher) NeedsRefresh(account *Account, _ time.Durati
 	if !r.CanRefresh(account) {
 		return false
 	}
+	now := time.Now()
+	if antigravityOAuth401RefreshPending(account, now) {
+		return false
+	}
+	if antigravityOAuth401RefreshDue(account, now) {
+		log.Printf("[AntigravityTokenRefresher] Account %d needs delayed refresh after upstream 401", account.ID)
+		return true
+	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {
 		return false
@@ -64,6 +72,7 @@ func (r *AntigravityTokenRefresher) Refresh(ctx context.Context, account *Accoun
 	newCredentials := r.antigravityOAuthService.BuildAccountCredentials(tokenInfo)
 	// 合并旧的 credentials，保留新 credentials 中不存在的字段
 	newCredentials = MergeCredentials(account.Credentials, newCredentials)
+	ClearAntigravityOAuth401RefreshCredentials(newCredentials)
 
 	// 特殊处理 project_id：如果新值为空但旧值非空，保留旧值
 	// 这确保了即使 LoadCodeAssist 失败，project_id 也不会丢失

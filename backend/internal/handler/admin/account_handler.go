@@ -823,6 +823,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 				newCredentials[k] = v
 			}
 		}
+		service.ClearAntigravityOAuth401RefreshCredentials(newCredentials)
 
 		// 特殊处理 project_id：如果新值为空但旧值非空，保留旧值
 		// 这确保了即使 LoadCodeAssist 失败，project_id 也不会丢失
@@ -840,12 +841,20 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			if updateErr != nil {
 				return nil, "", fmt.Errorf("failed to update credentials: %w", updateErr)
 			}
+			if account.Status == service.StatusError && service.IsRecoverableAntigravityAuthErrorMessage(account.ErrorMessage) {
+				if cleared, clearErr := h.adminService.ClearAccountError(ctx, account.ID); clearErr == nil {
+					updatedAccount = cleared
+				} else {
+					return nil, "", fmt.Errorf("failed to clear recoverable auth error: %w", clearErr)
+				}
+			}
 			h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
 			return updatedAccount, "missing_project_id_temporary", nil
 		}
 
-		// 成功获取到 project_id，如果之前是 missing_project_id 错误则清除
-		if account.Status == service.StatusError && strings.Contains(account.ErrorMessage, "missing_project_id:") {
+		// 成功获取到 project_id，如果之前是可恢复错误则清除。
+		if account.Status == service.StatusError &&
+			(strings.Contains(account.ErrorMessage, "missing_project_id:") || service.IsRecoverableAntigravityAuthErrorMessage(account.ErrorMessage)) {
 			if _, clearErr := h.adminService.ClearAccountError(ctx, account.ID); clearErr != nil {
 				return nil, "", fmt.Errorf("failed to clear account error: %w", clearErr)
 			}

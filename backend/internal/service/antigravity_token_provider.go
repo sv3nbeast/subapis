@@ -86,9 +86,12 @@ func (p *AntigravityTokenProvider) GetAccessToken(ctx context.Context, account *
 	}
 
 	cacheKey := AntigravityTokenCacheKey(account)
+	now := time.Now()
+	delayedRefreshPending := antigravityOAuth401RefreshPending(account, now)
+	delayedRefreshDue := antigravityOAuth401RefreshDue(account, now)
 
 	// 1) Try cache first.
-	if p.tokenCache != nil {
+	if p.tokenCache != nil && !delayedRefreshDue {
 		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && strings.TrimSpace(token) != "" {
 			return token, nil
 		}
@@ -96,7 +99,10 @@ func (p *AntigravityTokenProvider) GetAccessToken(ctx context.Context, account *
 
 	// 2) Refresh if needed (pre-expiry skew).
 	expiresAt := account.GetCredentialAsTime("expires_at")
-	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= antigravityTokenRefreshSkew
+	needsRefresh := delayedRefreshDue
+	if !delayedRefreshPending && !delayedRefreshDue {
+		needsRefresh = expiresAt == nil || time.Until(*expiresAt) <= antigravityTokenRefreshSkew
+	}
 	if needsRefresh && p.refreshAPI != nil && p.executor != nil {
 		// 请求路径使用短超时，避免代理不通时阻塞过久（后台刷新服务会继续重试）
 		refreshCtx, cancel := context.WithTimeout(ctx, antigravityRequestRefreshTimeout)
