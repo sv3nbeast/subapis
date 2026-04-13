@@ -238,6 +238,9 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 - 官方 `265687b5` 的安全子集 -> 本地 `ece52804`
   - 说明：调度快照读取过程中若发现缺失条目或解码失败，视为缓存未命中，触发回源重建，避免半拉子快照
+  - 后续补充：
+    - 本地为该行为补了集成测试，覆盖 Redis 快照元数据缺失时的回源退化路径
+    - 本地将 `snapshot_mget_chunk_size` / `snapshot_write_chunk_size` 补进了 [deploy/config.example.yaml](/Users/sven.sun/Desktop/Api/sub2api/deploy/config.example.yaml)
 
 - 官方 `f480e573` 的安全子集 -> 本地 `a0a15694`
   - 说明：仅吸收“保留 sidebar 自定义 SVG 原始颜色”这一小段，不合入它同提交里的表格默认值相关改动
