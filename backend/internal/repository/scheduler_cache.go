@@ -95,16 +95,13 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	accounts := make([]*service.Account, 0, len(values))
 	for _, val := range values {
 		if val == nil {
-			continue
+			return nil, false, nil
 		}
 		account, err := decodeCachedAccount(val)
 		if err != nil {
-			continue
+			return nil, false, err
 		}
 		accounts = append(accounts, account)
-	}
-	if len(accounts) == 0 {
-		return nil, false, nil
 	}
 
 	return accounts, true, nil
