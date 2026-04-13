@@ -145,6 +145,64 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - 说明：为 `deploy/monitor.sh` 增加 `BARK_NOTIFY_ALERT` / `BARK_NOTIFY_RECOVER` 开关，当前生产配置为“异常静默、恢复通知”
   - 状态：已发布生产，已推送 fork
 
+### 2026-04-14
+
+- 本地 HEAD：`66e49494`
+- 官方 `origin/main`：`e534e9ba`
+- 本次关注范围：`ad64190b..e534e9ba`
+
+已同步：
+
+- 官方 `b7edc3ed` -> 本地 `d026fbb8`
+  - `fix(gateway): 兼容 Cursor /v1/chat/completions 的 Responses API body`
+  - 说明：补了 Cursor 把 Responses API 形状 body 打到 `/v1/chat/completions` 时的兼容逻辑
+
+- 官方 `422e25c9` -> 本地 `992d80de`
+  - `fix(gateway): 剥离 Cursor raw body 透传路径中 Codex 不支持的 Responses API 参数`
+  - 说明：补了 `prompt_cache_retention` 等字段过滤，避免 Codex upstream 报 unsupported parameter
+
+- 官方 `3a113481` -> 本地 `7a6d0d1b`
+  - `fix(frontend): avoid mounting hidden mobile table`
+  - 说明：移动端/桌面端表格改为按视口切换挂载，减少隐藏表格的额外渲染
+
+- 官方 `abe42675` -> 本地 `b61aba5a`
+  - `fix(frontend): lazy load mobile account usage cells`
+  - 说明：账号用量卡片在移动端改为进入视口后再加载，降低管理页初始压力
+
+- 官方 `a1e299a3` -> 本地 `66e49494`
+  - `fix: Anthropic 非流式路径在上游终态事件 output 为空时从 delta 事件重建响应内容`
+  - 说明：修复 `/v1/messages` 非流式路径在上游只给 delta、不在终态事件带 output 时返回空内容的问题
+
+- 官方 `f9f57e95` -> 本地 `a5c95d1c`
+  - `fix(migrations): add 097 to restore settings.updated_at default`
+  - 说明：补了 `backend/migrations/097_fix_settings_updated_at_default.sql`，避免历史实例在后续原生 SQL 插入 `settings` 时触发 `updated_at` 非空约束错误
+
+明确跳过：
+
+- 官方 `f498eb8f`
+  - 原因：属于官方 payment 系统补丁，本地继续使用独立 `sub2apipay`
+
+- 官方 `24f0eebc`
+  - 原因：只改官方 payment 二维码页面，本地当前仓库没有对应文件
+
+- 官方 `92f4a6bb`
+  - 原因：README 更新，非功能变更
+
+- 官方 `e534e9ba`
+  - 原因：仅同步版本号，不影响功能
+
+- 官方 `b9b52e74`
+  - 原因：核心修复点“去掉 `.sidebar-header` 的 `overflow-hidden`”本地已等价存在，只缺上游新增测试文件，当前不单独补
+
+备注：
+
+- 本次同步未碰 `gateway_service.go`、`antigravity_gateway_service.go`、`ratelimit_service.go` 这些本地高冲突核心文件
+- 后端验证已通过：
+  - `go test ./internal/service -run 'Test.*(Cursor|Codex|Anthropic|BufferedResponseAccumulator|ChatCompletions).*'`
+- 前端构建验证已通过：
+  - `corepack pnpm build`
+- 本次是“同步到本地项目”级别，是否推送 fork / 发布生产需单独执行
+
 ## 后续同步记录模板
 
 后面每次同步官方后，在文末追加一条：
