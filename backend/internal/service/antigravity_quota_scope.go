@@ -53,6 +53,9 @@ func (a *Account) IsSchedulableForModelWithContext(ctx context.Context, requeste
 		}
 		return false
 	}
+	if a.isModelCapacityCoolingDownWithContext(ctx, requestedModel) {
+		return false
+	}
 	return true
 }
 
@@ -68,5 +71,9 @@ func (a *Account) GetRateLimitRemainingTimeWithContext(ctx context.Context, requ
 	if a == nil {
 		return 0
 	}
-	return a.GetModelRateLimitRemainingTimeWithContext(ctx, requestedModel)
+	remaining := a.GetModelRateLimitRemainingTimeWithContext(ctx, requestedModel)
+	if capacityRemaining := a.GetModelCapacityCooldownRemainingTimeWithContext(ctx, requestedModel); capacityRemaining > remaining {
+		return capacityRemaining
+	}
+	return remaining
 }

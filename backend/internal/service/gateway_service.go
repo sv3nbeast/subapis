@@ -445,6 +445,10 @@ func prefetchedStickyAccountIDFromContext(ctx context.Context, groupID *int64) i
 // within temporary unschedulable period, or the requested model is rate-limited.
 // This ensures subsequent requests won't continue using unavailable accounts.
 func shouldClearStickySession(account *Account, requestedModel string) bool {
+	return shouldClearStickySessionWithContext(context.Background(), account, requestedModel)
+}
+
+func shouldClearStickySessionWithContext(ctx context.Context, account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
@@ -455,7 +459,7 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 		return true
 	}
 	// 检查模型限流和 scope 限流，有限流即清除粘性会话
-	if remaining := account.GetRateLimitRemainingTimeWithContext(context.Background(), requestedModel); remaining > 0 {
+	if remaining := account.GetRateLimitRemainingTimeWithContext(ctx, requestedModel); remaining > 0 {
 		return true
 	}
 	return false
@@ -536,40 +540,41 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 
 // GatewayService handles API gateway operations
 type GatewayService struct {
-	accountRepo           AccountRepository
-	groupRepo             GroupRepository
-	usageLogRepo          UsageLogRepository
-	usageBillingRepo      UsageBillingRepository
-	userRepo              UserRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 GatewayCache
-	digestStore           *DigestSessionStore
-	cfg                   *config.Config
-	schedulerSnapshot     *SchedulerSnapshotService
-	billingService        *BillingService
-	rateLimitService      *RateLimitService
-	billingCacheService   *BillingCacheService
-	identityService       *IdentityService
-	httpUpstream          HTTPUpstream
-	deferredService       *DeferredService
-	concurrencyService    *ConcurrencyService
-	claudeTokenProvider   *ClaudeTokenProvider
-	sessionLimitCache     SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
-	rpmCache              RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
-	userGroupRateResolver *userGroupRateResolver
-	userGroupRateCache    *gocache.Cache
-	userGroupRateSF       singleflight.Group
-	modelsListCache       *gocache.Cache
-	modelsListCacheTTL    time.Duration
-	settingService        *SettingService
-	responseHeaderFilter  *responseheaders.CompiledHeaderFilter
-	debugModelRouting     atomic.Bool
-	debugClaudeMimic      atomic.Bool
-	channelService        *ChannelService
-	resolver              *ModelPricingResolver
-	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
-	tlsFPProfileService   *TLSFingerprintProfileService
+	accountRepo                AccountRepository
+	groupRepo                  GroupRepository
+	usageLogRepo               UsageLogRepository
+	usageBillingRepo           UsageBillingRepository
+	userRepo                   UserRepository
+	userSubRepo                UserSubscriptionRepository
+	userGroupRateRepo          UserGroupRateRepository
+	cache                      GatewayCache
+	digestStore                *DigestSessionStore
+	cfg                        *config.Config
+	schedulerSnapshot          *SchedulerSnapshotService
+	billingService             *BillingService
+	rateLimitService           *RateLimitService
+	billingCacheService        *BillingCacheService
+	identityService            *IdentityService
+	httpUpstream               HTTPUpstream
+	deferredService            *DeferredService
+	concurrencyService         *ConcurrencyService
+	claudeTokenProvider        *ClaudeTokenProvider
+	sessionLimitCache          SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
+	rpmCache                   RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
+	modelCapacityCooldownCache ModelCapacityCooldownCache
+	userGroupRateResolver      *userGroupRateResolver
+	userGroupRateCache         *gocache.Cache
+	userGroupRateSF            singleflight.Group
+	modelsListCache            *gocache.Cache
+	modelsListCacheTTL         time.Duration
+	settingService             *SettingService
+	responseHeaderFilter       *responseheaders.CompiledHeaderFilter
+	debugModelRouting          atomic.Bool
+	debugClaudeMimic           atomic.Bool
+	channelService             *ChannelService
+	resolver                   *ModelPricingResolver
+	debugGatewayBodyFile       atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
+	tlsFPProfileService        *TLSFingerprintProfileService
 }
 
 // NewGatewayService creates a new GatewayService
@@ -594,6 +599,7 @@ func NewGatewayService(
 	claudeTokenProvider *ClaudeTokenProvider,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
+	modelCapacityCooldownCache ModelCapacityCooldownCache,
 	digestStore *DigestSessionStore,
 	settingService *SettingService,
 	tlsFPProfileService *TLSFingerprintProfileService,
@@ -604,35 +610,36 @@ func NewGatewayService(
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
 
 	svc := &GatewayService{
-		accountRepo:          accountRepo,
-		groupRepo:            groupRepo,
-		usageLogRepo:         usageLogRepo,
-		usageBillingRepo:     usageBillingRepo,
-		userRepo:             userRepo,
-		userSubRepo:          userSubRepo,
-		userGroupRateRepo:    userGroupRateRepo,
-		cache:                cache,
-		digestStore:          digestStore,
-		cfg:                  cfg,
-		schedulerSnapshot:    schedulerSnapshot,
-		concurrencyService:   concurrencyService,
-		billingService:       billingService,
-		rateLimitService:     rateLimitService,
-		billingCacheService:  billingCacheService,
-		identityService:      identityService,
-		httpUpstream:         httpUpstream,
-		deferredService:      deferredService,
-		claudeTokenProvider:  claudeTokenProvider,
-		sessionLimitCache:    sessionLimitCache,
-		rpmCache:             rpmCache,
-		userGroupRateCache:   gocache.New(userGroupRateTTL, time.Minute),
-		settingService:       settingService,
-		modelsListCache:      gocache.New(modelsListTTL, time.Minute),
-		modelsListCacheTTL:   modelsListTTL,
-		responseHeaderFilter: compileResponseHeaderFilter(cfg),
-		tlsFPProfileService:  tlsFPProfileService,
-		channelService:       channelService,
-		resolver:             resolver,
+		accountRepo:                accountRepo,
+		groupRepo:                  groupRepo,
+		usageLogRepo:               usageLogRepo,
+		usageBillingRepo:           usageBillingRepo,
+		userRepo:                   userRepo,
+		userSubRepo:                userSubRepo,
+		userGroupRateRepo:          userGroupRateRepo,
+		cache:                      cache,
+		digestStore:                digestStore,
+		cfg:                        cfg,
+		schedulerSnapshot:          schedulerSnapshot,
+		concurrencyService:         concurrencyService,
+		billingService:             billingService,
+		rateLimitService:           rateLimitService,
+		billingCacheService:        billingCacheService,
+		identityService:            identityService,
+		httpUpstream:               httpUpstream,
+		deferredService:            deferredService,
+		claudeTokenProvider:        claudeTokenProvider,
+		sessionLimitCache:          sessionLimitCache,
+		rpmCache:                   rpmCache,
+		modelCapacityCooldownCache: modelCapacityCooldownCache,
+		userGroupRateCache:         gocache.New(userGroupRateTTL, time.Minute),
+		settingService:             settingService,
+		modelsListCache:            gocache.New(modelsListTTL, time.Minute),
+		modelsListCacheTTL:         modelsListTTL,
+		responseHeaderFilter:       compileResponseHeaderFilter(cfg),
+		tlsFPProfileService:        tlsFPProfileService,
+		channelService:             channelService,
+		resolver:                   resolver,
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -1326,6 +1333,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if len(accounts) == 0 {
 		return nil, ErrNoAvailableAccounts
 	}
+	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
@@ -1600,7 +1608,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if ok {
 				// 检查账户是否需要清理粘性会话绑定
 				// Check if the account needs sticky session cleanup
-				clearSticky := shouldClearStickySession(account, requestedModel)
+				clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 				if clearSticky {
 					_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 				}
@@ -2401,6 +2409,50 @@ type rpmPrefetchContextKeyType struct{}
 
 var rpmPrefetchContextKey = rpmPrefetchContextKeyType{}
 
+// withModelCapacityCooldownPrefetch 批量预取同模型的账号级容量冷却状态。
+// 失败开放：Redis 不可用时不阻断调度。
+func (s *GatewayService) withModelCapacityCooldownPrefetch(ctx context.Context, accounts []Account, requestedModel string) context.Context {
+	if ctx == nil || s.modelCapacityCooldownCache == nil || strings.TrimSpace(requestedModel) == "" || len(accounts) == 0 {
+		return ctx
+	}
+
+	lookups := make([]ModelCapacityCooldownLookup, 0, len(accounts))
+	for i := range accounts {
+		account := &accounts[i]
+		if account == nil || account.ID <= 0 {
+			continue
+		}
+		modelKey := resolveRequestedModelKey(ctx, account, requestedModel)
+		if modelKey == "" {
+			continue
+		}
+		lookups = append(lookups, modelCapacityCooldownLookupKey(account.ID, modelKey))
+	}
+	if len(lookups) == 0 {
+		return ctx
+	}
+
+	remainingByLookup, err := s.modelCapacityCooldownCache.BatchGetModelCapacityCooldownRemaining(ctx, lookups)
+	if err != nil {
+		logger.LegacyPrintf("service.gateway", "model_capacity_cooldown batch cache read failed: %v", err)
+		return ctx
+	}
+	if len(remainingByLookup) == 0 {
+		return ctx
+	}
+
+	remainingByAccount := make(map[int64]time.Duration, len(remainingByLookup))
+	for lookup, remaining := range remainingByLookup {
+		if remaining > 0 {
+			remainingByAccount[lookup.AccountID] = remaining
+		}
+	}
+	if len(remainingByAccount) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, modelCapacityCooldownPrefetchContextKey, remainingByAccount)
+}
+
 func rpmFromPrefetchContext(ctx context.Context, accountID int64) (int, bool) {
 	if v, ok := ctx.Value(rpmPrefetchContextKey).(map[int64]int); ok {
 		count, found := v[accountID]
@@ -2909,7 +2961,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 					account, err := s.getSchedulableAccount(ctx, accountID)
 					// 检查账号分组归属和平台匹配（确保粘性会话不会跨分组或跨平台）
 					if err == nil {
-						clearSticky := shouldClearStickySession(account, requestedModel)
+						clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
@@ -2937,6 +2989,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		accountsLoaded = true
 
 		// 提前预取窗口费用+RPM 计数，确保 routing 段内的调度检查调用能命中缓存
+		ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
 
@@ -2971,7 +3024,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				account, err := s.getSchedulableAccount(ctx, accountID)
 				// 检查账号分组归属和平台匹配（确保粘性会话不会跨分组或跨平台）
 				if err == nil {
-					clearSticky := shouldClearStickySession(account, requestedModel)
+					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
@@ -2997,6 +3050,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	}
 
 	// 批量预取窗口费用+RPM 计数，避免逐个账号查询（N+1）
+	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
@@ -3052,7 +3106,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					account, err := s.getSchedulableAccount(ctx, accountID)
 					// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
 					if err == nil {
-						clearSticky := shouldClearStickySession(account, requestedModel)
+						clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
@@ -3078,6 +3132,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		accountsLoaded = true
 
 		// 提前预取窗口费用+RPM 计数，确保 routing 段内的调度检查调用能命中缓存
+		ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
 
@@ -3112,7 +3167,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				account, err := s.getSchedulableAccount(ctx, accountID)
 				// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
 				if err == nil {
-					clearSticky := shouldClearStickySession(account, requestedModel)
+					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
@@ -3136,6 +3191,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	}
 
 	// 批量预取窗口费用+RPM 计数，避免逐个账号查询（N+1）
+	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
@@ -3161,16 +3217,18 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 }
 
 type selectionFailureStats struct {
-	Total              int
-	Eligible           int
-	Excluded           int
-	Unschedulable      int
-	PlatformFiltered   int
-	ModelUnsupported   int
-	ModelRateLimited   int
-	SamplePlatformIDs  []int64
-	SampleMappingIDs   []int64
-	SampleRateLimitIDs []string
+	Total                     int
+	Eligible                  int
+	Excluded                  int
+	Unschedulable             int
+	PlatformFiltered          int
+	ModelUnsupported          int
+	ModelRateLimited          int
+	ModelCapacityCooling      int
+	SamplePlatformIDs         []int64
+	SampleMappingIDs          []int64
+	SampleRateLimitIDs        []string
+	SampleCapacityCooldownIDs []string
 }
 
 type selectionFailureDiagnosis struct {
@@ -3191,7 +3249,7 @@ func (s *GatewayService) logDetailedSelectionFailure(
 	stats := s.collectSelectionFailureStats(ctx, accounts, requestedModel, platform, excludedIDs, allowMixedScheduling)
 	logger.LegacyPrintf(
 		"service.gateway",
-		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v",
+		"[SelectAccountDetailed] group_id=%v model=%s platform=%s session=%s total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d model_capacity_cooling=%d sample_platform_filtered=%v sample_model_unsupported=%v sample_model_rate_limited=%v sample_model_capacity_cooling=%v",
 		derefGroupID(groupID),
 		requestedModel,
 		platform,
@@ -3203,9 +3261,11 @@ func (s *GatewayService) logDetailedSelectionFailure(
 		stats.PlatformFiltered,
 		stats.ModelUnsupported,
 		stats.ModelRateLimited,
+		stats.ModelCapacityCooling,
 		stats.SamplePlatformIDs,
 		stats.SampleMappingIDs,
 		stats.SampleRateLimitIDs,
+		stats.SampleCapacityCooldownIDs,
 	)
 	return stats
 }
@@ -3240,6 +3300,10 @@ func (s *GatewayService) collectSelectionFailureStats(
 			stats.ModelRateLimited++
 			remaining := acc.GetRateLimitRemainingTimeWithContext(ctx, requestedModel).Truncate(time.Second)
 			stats.SampleRateLimitIDs = appendSelectionFailureRateSample(stats.SampleRateLimitIDs, acc.ID, remaining)
+		case "model_capacity_cooling":
+			stats.ModelCapacityCooling++
+			remaining := acc.GetModelCapacityCooldownRemainingTimeWithContext(ctx, requestedModel).Truncate(time.Second)
+			stats.SampleCapacityCooldownIDs = appendSelectionFailureRateSample(stats.SampleCapacityCooldownIDs, acc.ID, remaining)
 		default:
 			stats.Eligible++
 		}
@@ -3275,6 +3339,20 @@ func (s *GatewayService) diagnoseSelectionFailure(
 		return selectionFailureDiagnosis{
 			Category: "model_unsupported",
 			Detail:   fmt.Sprintf("model=%s", requestedModel),
+		}
+	}
+	if acc.isModelRateLimitedWithContext(ctx, requestedModel) {
+		remaining := acc.GetModelRateLimitRemainingTimeWithContext(ctx, requestedModel).Truncate(time.Second)
+		return selectionFailureDiagnosis{
+			Category: "model_rate_limited",
+			Detail:   fmt.Sprintf("remaining=%s", remaining),
+		}
+	}
+	if acc.isModelCapacityCoolingDownWithContext(ctx, requestedModel) {
+		remaining := acc.GetModelCapacityCooldownRemainingTimeWithContext(ctx, requestedModel).Truncate(time.Second)
+		return selectionFailureDiagnosis{
+			Category: "model_capacity_cooling",
+			Detail:   fmt.Sprintf("remaining=%s", remaining),
 		}
 	}
 	if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
@@ -3321,7 +3399,7 @@ func appendSelectionFailureRateSample(samples []string, accountID int64, remaini
 
 func summarizeSelectionFailureStats(stats selectionFailureStats) string {
 	return fmt.Sprintf(
-		"total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d",
+		"total=%d eligible=%d excluded=%d unschedulable=%d platform_filtered=%d model_unsupported=%d model_rate_limited=%d model_capacity_cooling=%d",
 		stats.Total,
 		stats.Eligible,
 		stats.Excluded,
@@ -3329,6 +3407,7 @@ func summarizeSelectionFailureStats(stats selectionFailureStats) string {
 		stats.PlatformFiltered,
 		stats.ModelUnsupported,
 		stats.ModelRateLimited,
+		stats.ModelCapacityCooling,
 	)
 }
 

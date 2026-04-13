@@ -74,6 +74,8 @@ const (
 
 	// MODEL_CAPACITY_EXHAUSTED 全局去重：重试全部失败后的 cooldown 时间
 	antigravityModelCapacityCooldown = 10 * time.Second
+	// MODEL_CAPACITY_EXHAUSTED 账号级短冷却：跨请求短时间避开刚命中 503 的同账号同模型。
+	antigravityModelCapacityAccountCooldown = 60 * time.Second
 )
 
 // antigravityPassthroughErrorMessages 透传给客户端的错误消息白名单（小写）
@@ -311,6 +313,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				cooldownUntil, exists := modelCapacityExhaustedUntil[modelName]
 				modelCapacityExhaustedMu.RUnlock()
 				if exists && time.Now().Before(cooldownUntil) {
+					s.markAccountModelCapacityCooldown(p.ctx, p.prefix, p.account, modelName, p.bypassModelRateLimitPrecheck)
 					log.Printf("%s status=%d model_capacity_exhausted_dedup model=%s account=%d cooldown_until=%v (skip retry)",
 						p.prefix, resp.StatusCode, modelName, p.account.ID, cooldownUntil.Format("15:04:05"))
 					if !isSingleAccountRetry(p.ctx) {
@@ -378,6 +381,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 					modelCapacityExhaustedMu.Lock()
 					delete(modelCapacityExhaustedUntil, modelName)
 					modelCapacityExhaustedMu.Unlock()
+					s.clearAccountModelCapacityCooldownByModel(p.ctx, p.prefix, p.account, modelName)
 				}
 				return &smartRetryResult{action: smartRetryActionBreakWithResp, resp: retryResp}
 			}
@@ -424,6 +428,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 				modelCapacityExhaustedMu.Lock()
 				modelCapacityExhaustedUntil[modelName] = time.Now().Add(antigravityModelCapacityCooldown)
 				modelCapacityExhaustedMu.Unlock()
+				s.markAccountModelCapacityCooldown(p.ctx, p.prefix, p.account, modelName, p.bypassModelRateLimitPrecheck)
 			}
 			log.Printf("%s status=%d smart_retry_exhausted_model_capacity attempts=%d model=%s account=%d body=%s (switch account)",
 				p.prefix, resp.StatusCode, attemptsMade, modelName, p.account.ID, truncateForLog(retryBody, 200))
@@ -878,6 +883,7 @@ urlFallbackLoop:
 	// 成功响应时清零 INTERNAL 500 连续失败计数器（覆盖所有成功路径，含 smart retry）
 	if resp != nil && resp.StatusCode < 400 {
 		s.resetInternal500Counter(p.ctx, p.prefix, p.account.ID)
+		s.clearAccountModelCapacityCooldownByRequestedModel(p.ctx, p.prefix, p.account, p.requestedModel)
 	}
 
 	return &antigravityRetryLoopResult{resp: resp}, nil
@@ -947,15 +953,16 @@ func logPrefix(sessionID, accountName string) string {
 
 // AntigravityGatewayService 处理 Antigravity 平台的 API 转发
 type AntigravityGatewayService struct {
-	accountRepo         AccountRepository
-	tokenProvider       *AntigravityTokenProvider
-	rateLimitService    *RateLimitService
-	httpUpstream        HTTPUpstream
-	settingService      *SettingService
-	tlsFPProfileService *TLSFingerprintProfileService
-	cache               GatewayCache // 用于模型级限流时清除粘性会话绑定
-	schedulerSnapshot   *SchedulerSnapshotService
-	internal500Cache    Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	accountRepo                AccountRepository
+	tokenProvider              *AntigravityTokenProvider
+	rateLimitService           *RateLimitService
+	httpUpstream               HTTPUpstream
+	settingService             *SettingService
+	tlsFPProfileService        *TLSFingerprintProfileService
+	modelCapacityCooldownCache ModelCapacityCooldownCache
+	cache                      GatewayCache // 用于模型级限流时清除粘性会话绑定
+	schedulerSnapshot          *SchedulerSnapshotService
+	internal500Cache           Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
 }
 
 func NewAntigravityGatewayService(
@@ -967,18 +974,20 @@ func NewAntigravityGatewayService(
 	httpUpstream HTTPUpstream,
 	settingService *SettingService,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	modelCapacityCooldownCache ModelCapacityCooldownCache,
 	internal500Cache Internal500CounterCache,
 ) *AntigravityGatewayService {
 	return &AntigravityGatewayService{
-		accountRepo:         accountRepo,
-		tokenProvider:       tokenProvider,
-		rateLimitService:    rateLimitService,
-		httpUpstream:        httpUpstream,
-		settingService:      settingService,
-		tlsFPProfileService: tlsFPProfileService,
-		cache:               cache,
-		schedulerSnapshot:   schedulerSnapshot,
-		internal500Cache:    internal500Cache,
+		accountRepo:                accountRepo,
+		tokenProvider:              tokenProvider,
+		rateLimitService:           rateLimitService,
+		httpUpstream:               httpUpstream,
+		settingService:             settingService,
+		tlsFPProfileService:        tlsFPProfileService,
+		modelCapacityCooldownCache: modelCapacityCooldownCache,
+		cache:                      cache,
+		schedulerSnapshot:          schedulerSnapshot,
+		internal500Cache:           internal500Cache,
 	}
 }
 
@@ -3006,6 +3015,64 @@ func (s *AntigravityGatewayService) updateAccountModelRateLimitInCache(ctx conte
 	if err := s.schedulerSnapshot.UpdateAccountInCache(ctx, account); err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] cache_update_failed account=%d model=%s err=%v", account.ID, modelKey, err)
 	}
+}
+
+func (s *AntigravityGatewayService) markAccountModelCapacityCooldown(ctx context.Context, prefix string, account *Account, modelKey string, bypassPrecheck bool) {
+	if bypassPrecheck || account == nil || strings.TrimSpace(modelKey) == "" {
+		return
+	}
+
+	until := time.Now().Add(antigravityModelCapacityAccountCooldown)
+	if s.modelCapacityCooldownCache != nil {
+		if err := s.modelCapacityCooldownCache.SetModelCapacityCooldown(ctx, account.ID, modelKey, until); err != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s model_capacity_account_cooldown_cache_set_failed account=%d model=%s err=%v", prefix, account.ID, modelKey, err)
+		}
+	}
+	setInMemory := setAccountModelCapacityCooldown(account.ID, modelKey, until)
+	setInExtra := setAccountModelCapacityCooldownExtra(account, modelKey, until)
+	if setInExtra && s.schedulerSnapshot != nil {
+		if err := s.schedulerSnapshot.UpdateAccountInCache(ctx, account); err != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s model_capacity_account_cooldown_cache_update_failed account=%d model=%s err=%v", prefix, account.ID, modelKey, err)
+		}
+	}
+	if setInMemory || setInExtra {
+		logger.LegacyPrintf(
+			"service.antigravity_gateway",
+			"%s model_capacity_account_cooldown account=%d model=%s reset_in=%v",
+			prefix,
+			account.ID,
+			modelKey,
+			time.Until(until).Truncate(time.Second),
+		)
+	}
+}
+
+func (s *AntigravityGatewayService) clearAccountModelCapacityCooldownByModel(ctx context.Context, prefix string, account *Account, modelKey string) {
+	if account == nil || strings.TrimSpace(modelKey) == "" {
+		return
+	}
+	if s.modelCapacityCooldownCache != nil {
+		if err := s.modelCapacityCooldownCache.DeleteModelCapacityCooldown(ctx, account.ID, modelKey); err != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s model_capacity_account_cooldown_cache_delete_failed account=%d model=%s err=%v", prefix, account.ID, modelKey, err)
+		}
+	}
+	clearedInMemory := clearAccountModelCapacityCooldown(account.ID, modelKey)
+	clearedInExtra := clearAccountModelCapacityCooldownExtra(account, modelKey)
+	if clearedInExtra && s.schedulerSnapshot != nil {
+		if err := s.schedulerSnapshot.UpdateAccountInCache(ctx, account); err != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s model_capacity_account_cooldown_cache_update_failed account=%d model=%s err=%v", prefix, account.ID, modelKey, err)
+		}
+	}
+	if clearedInMemory || clearedInExtra {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s model_capacity_account_cooldown_cleared account=%d model=%s", prefix, account.ID, modelKey)
+	}
+}
+
+func (s *AntigravityGatewayService) clearAccountModelCapacityCooldownByRequestedModel(ctx context.Context, prefix string, account *Account, requestedModel string) {
+	if account == nil {
+		return
+	}
+	s.clearAccountModelCapacityCooldownByModel(ctx, prefix, account, resolveRequestedModelKey(ctx, account, requestedModel))
 }
 
 func (s *AntigravityGatewayService) getQuotaExhaustedModelIsolationDuration() time.Duration {

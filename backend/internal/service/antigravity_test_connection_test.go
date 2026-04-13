@@ -75,6 +75,54 @@ func TestAntigravityGatewayService_TestConnection_BypassesModelRateLimitPrecheck
 	require.Equal(t, 1, upstream.calls, "测试连接应绕过 model cooldown 预检查并实际发起探测")
 }
 
+func TestAntigravityGatewayService_TestConnection_BypassesModelCapacityCooldownPrecheck(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownUntil[modelCapacityCooldownMapKey(102, "claude-sonnet-4-5")] = time.Now().Add(5 * time.Minute)
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          102,
+		Name:        "ag-capacity-cooldown",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeUpstream,
+		Schedulable: true,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "token",
+		},
+	}
+
+	upstream := &recordingOKUpstream{}
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  upstream,
+	}
+
+	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-5")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, upstream.calls, "测试连接应绕过账号级短容量冷却预检查并实际发起探测")
+}
+
 func TestAccountTestService_RunTestBackground_AntigravityNotFilteredByModelRateLimit(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 

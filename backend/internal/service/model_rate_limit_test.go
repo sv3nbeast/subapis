@@ -322,6 +322,17 @@ func TestGetRateLimitRemainingTime(t *testing.T) {
 	now := time.Now()
 	future15m := now.Add(15 * time.Minute).Format(time.RFC3339)
 	future5m := now.Add(5 * time.Minute).Format(time.RFC3339)
+	capacityCooldownUntil := now.Add(90 * time.Second)
+
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownUntil[modelCapacityCooldownMapKey(99, "claude-sonnet-4-5")] = capacityCooldownUntil
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
 
 	tests := []struct {
 		name           string
@@ -368,6 +379,18 @@ func TestGetRateLimitRemainingTime(t *testing.T) {
 			requestedModel: "claude-sonnet-4-5",
 			minExpected:    4 * time.Minute,
 			maxExpected:    6 * time.Minute,
+		},
+		{
+			name: "only model capacity cooldown",
+			account: &Account{
+				ID:          99,
+				Platform:    PlatformAntigravity,
+				Status:      StatusActive,
+				Schedulable: true,
+			},
+			requestedModel: "claude-sonnet-4-5",
+			minExpected:    60 * time.Second,
+			maxExpected:    2 * time.Minute,
 		},
 		{
 			name: "neither rate limited",

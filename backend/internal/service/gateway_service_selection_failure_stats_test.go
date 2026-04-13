@@ -139,3 +139,31 @@ func TestDiagnoseSelectionFailure_ModelRateLimitedDetail(t *testing.T) {
 		t.Fatalf("detail=%s want contains remaining=", diagnosis.Detail)
 	}
 }
+
+func TestDiagnoseSelectionFailure_ModelCapacityCoolingDetail(t *testing.T) {
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownUntil[modelCapacityCooldownMapKey(9, "gpt-5.4")] = time.Now().Add(2 * time.Minute)
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
+
+	svc := &GatewayService{}
+	acc := &Account{
+		ID:          9,
+		Platform:    PlatformOpenAI,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	diagnosis := svc.diagnoseSelectionFailure(context.Background(), acc, "gpt-5.4", PlatformOpenAI, map[int64]struct{}{}, false)
+	if diagnosis.Category != "model_capacity_cooling" {
+		t.Fatalf("category=%s want=model_capacity_cooling", diagnosis.Category)
+	}
+	if !strings.Contains(diagnosis.Detail, "remaining=") {
+		t.Fatalf("detail=%s want contains remaining=", diagnosis.Detail)
+	}
+}

@@ -380,6 +380,30 @@ func TestAccountIsSchedulableForModel_ModelRateLimitedOveragesOnlyBypassNonClaud
 	require.True(t, account.IsSchedulableForModel("gemini-3-flash"), "非 Claude 模型仍可通过 credits 绕过模型限流")
 }
 
+func TestAccountIsSchedulableForModel_ModelCapacityCooldown(t *testing.T) {
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
+
+	account := &Account{
+		ID:          12,
+		Name:        "acc-capacity",
+		Platform:    PlatformAntigravity,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	require.True(t, account.IsSchedulableForModel("claude-sonnet-4-6"))
+	require.True(t, setAccountModelCapacityCooldown(account.ID, "claude-sonnet-4-6", time.Now().Add(time.Minute)))
+	require.False(t, account.IsSchedulableForModel("claude-sonnet-4-6"), "短期容量冷却生效时不应继续参与同模型调度")
+	require.True(t, account.IsSchedulableForModel("gemini-3-flash"), "容量冷却应仅影响对应模型")
+}
+
 func buildGeminiRateLimitBody(delay string) []byte {
 	return []byte(fmt.Sprintf(`{"error":{"message":"too many requests","details":[{"metadata":{"quotaResetDelay":%q}}]}}`, delay))
 }

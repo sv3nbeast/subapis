@@ -339,6 +339,16 @@ func TestHandleSmartRetry_ShortDelay_SmartRetryFailed_ReturnsSwitchError(t *test
 // TestHandleSmartRetry_503_ModelCapacityExhausted_RetrySuccess 测试 503 MODEL_CAPACITY_EXHAUSTED 重试成功
 // MODEL_CAPACITY_EXHAUSTED 使用固定 1s 间隔做少量重试，成功后直接返回结果。
 func TestHandleSmartRetry_503_ModelCapacityExhausted_RetrySuccess(t *testing.T) {
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownUntil[modelCapacityCooldownMapKey(3, "gemini-3-pro-high")] = time.Now().Add(time.Minute)
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
+
 	repo := &stubAntigravityAccountRepo{}
 	account := &Account{
 		ID:       3,
@@ -403,11 +413,21 @@ func TestHandleSmartRetry_503_ModelCapacityExhausted_RetrySuccess(t *testing.T) 
 	// 不应设置模型限流
 	require.Empty(t, repo.modelRateLimitCalls, "MODEL_CAPACITY_EXHAUSTED should not set model rate limit")
 	require.Len(t, upstream.calls, 1, "should have made one retry call before success")
+	require.Zero(t, account.GetModelCapacityCooldownRemainingTimeWithContext(context.Background(), "gemini-3-pro-high"), "重试成功后应清理账号级短冷却")
 }
 
 // TestHandleSmartRetry_503_ModelCapacityExhausted_RetryExhaustedBudget
 // 测试 MODEL_CAPACITY_EXHAUSTED 在多账号场景下耗尽后会尽快切号。
 func TestHandleSmartRetry_503_ModelCapacityExhausted_RetryExhaustedBudget(t *testing.T) {
+	accountModelCapacityCooldownMu.Lock()
+	accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+	accountModelCapacityCooldownMu.Unlock()
+	t.Cleanup(func() {
+		accountModelCapacityCooldownMu.Lock()
+		accountModelCapacityCooldownUntil = make(map[accountModelCapacityCooldownKey]time.Time)
+		accountModelCapacityCooldownMu.Unlock()
+	})
+
 	repo := &stubAntigravityAccountRepo{}
 	account := &Account{
 		ID:       33,
@@ -469,6 +489,7 @@ func TestHandleSmartRetry_503_ModelCapacityExhausted_RetryExhaustedBudget(t *tes
 	require.Equal(t, respBody, result.switchError.ResponseBody)
 	require.Empty(t, repo.modelRateLimitCalls, "MODEL_CAPACITY_EXHAUSTED should not set model rate limit")
 	require.Len(t, upstream.calls, antigravityModelCapacityRetryMaxAttempts, "retry budget should stay small to avoid 60s stalls")
+	require.Greater(t, account.GetModelCapacityCooldownRemainingTimeWithContext(context.Background(), "gemini-3-ultra-test"), time.Duration(0), "503 容量耗尽后应对同账号同模型设置跨请求短冷却")
 }
 
 func TestHandleSmartRetry_503_ModelCapacityExhausted_RequestBudgetSharedAcrossAccounts(t *testing.T) {
