@@ -424,6 +424,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		"model_rate_limits",
 		"mixed_scheduling",
 		"window_cost_limit",
 		"window_cost_sticky_reserve",
