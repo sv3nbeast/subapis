@@ -2050,6 +2050,7 @@ export default {
         limited: 'Limited',
         rateLimited: 'Rate Limited',
         overloaded: 'Overloaded',
+        unschedulable: 'Unschedulable',
         tempUnschedulable: 'Temp Unschedulable',
         rateLimitedUntil: 'Rate limited and removed from scheduling. Auto resumes at {time}',
         rateLimitedAutoResume: 'Auto resumes in {time}',
