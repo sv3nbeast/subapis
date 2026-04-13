@@ -112,25 +112,41 @@ func TestSortAccountsByPriorityAndLastUsed_MixedPriorityAndTime(t *testing.T) {
 	require.Equal(t, int64(4), accounts[3].ID, "优先级2 + 有时间")
 }
 
-func TestPrioritizeDifferentEmailDomainSuffixesWithinPriority(t *testing.T) {
+func TestPrioritizeAccountsByPreferredEmailDomainSuffixes_AcrossPriorities(t *testing.T) {
 	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
 	accounts := []*Account{
-		{ID: 1, Priority: 1, Credentials: map[string]any{"email": "a@same.com"}},
-		{ID: 2, Priority: 1, Credentials: map[string]any{"email": "b@other.com"}},
-		{ID: 3, Priority: 1, Credentials: map[string]any{"email": "c@same.com"}},
-		{ID: 4, Priority: 2, Credentials: map[string]any{"email": "d@other.com"}},
+		{ID: 1, Priority: 5, Credentials: map[string]any{"email": "a@same.com"}},
+		{ID: 2, Priority: 7, Credentials: map[string]any{"email": "b@other.com"}},
+		{ID: 3, Priority: 6, Credentials: map[string]any{"email": "c@same.com"}},
+		{ID: 4, Priority: 8, Credentials: map[string]any{"email": "d@fresh.com"}},
 	}
 
-	prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx, accounts)
+	prioritizeAccountsByPreferredEmailDomainSuffixes(ctx, accounts)
 
-	require.Equal(t, []int64{2, 1, 3, 4}, []int64{accounts[0].ID, accounts[1].ID, accounts[2].ID, accounts[3].ID})
+	require.Equal(t, []int64{2, 4, 1, 3}, []int64{accounts[0].ID, accounts[1].ID, accounts[2].ID, accounts[3].ID})
+}
+
+func TestPrioritizeAccountsByPreferredEmailDomainSuffixesWithLoad_AcrossPriorities(t *testing.T) {
+	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
+	candidates := []accountWithLoad{
+		makeAccWithLoad(1, 5, 10, nil, AccountTypeOAuth),
+		makeAccWithLoad(2, 7, 20, nil, AccountTypeOAuth),
+		makeAccWithLoad(3, 6, 15, nil, AccountTypeOAuth),
+	}
+	candidates[0].account.Credentials = map[string]any{"email": "a@same.com"}
+	candidates[1].account.Credentials = map[string]any{"email": "b@other.com"}
+	candidates[2].account.Credentials = map[string]any{"email": "c@same.com"}
+
+	prioritizeAccountsByPreferredEmailDomainSuffixesWithLoad(ctx, candidates)
+
+	require.Equal(t, []int64{2, 1, 3}, []int64{candidates[0].account.ID, candidates[1].account.ID, candidates[2].account.ID})
 }
 
 func TestFilterByPreferredEmailDomainSuffixes(t *testing.T) {
 	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
 	candidates := []accountWithLoad{
-		makeAccWithLoad(1, 1, 10, nil, AccountTypeOAuth),
-		makeAccWithLoad(2, 1, 20, nil, AccountTypeOAuth),
+		makeAccWithLoad(1, 5, 10, nil, AccountTypeOAuth),
+		makeAccWithLoad(2, 7, 20, nil, AccountTypeOAuth),
 	}
 	candidates[0].account.Credentials = map[string]any{"email": "a@same.com"}
 	candidates[1].account.Credentials = map[string]any{"email": "b@other.com"}
@@ -152,8 +168,8 @@ func TestFilterByPreferredEmailDomainSuffixes(t *testing.T) {
 func TestFilterAccountsByPreferredEmailDomainSuffixes(t *testing.T) {
 	ctx := WithAvoidEmailDomainSuffixes(context.Background(), []string{"same.com"}, false)
 	accounts := []*Account{
-		{ID: 1, Priority: 1, Credentials: map[string]any{"email": "a@same.com"}},
-		{ID: 2, Priority: 1, Credentials: map[string]any{"email": "b@other.com"}},
+		{ID: 1, Priority: 5, Credentials: map[string]any{"email": "a@same.com"}},
+		{ID: 2, Priority: 7, Credentials: map[string]any{"email": "b@other.com"}},
 	}
 
 	filtered := filterAccountsByPreferredEmailDomainSuffixes(ctx, accounts)

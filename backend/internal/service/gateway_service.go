@@ -1548,7 +1548,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 				})
 				shuffleWithinSortGroups(routingAvailable)
-				prioritizeDifferentEmailDomainSuffixesWithinPriorityWithLoad(ctx, routingAvailable)
+				prioritizeAccountsByPreferredEmailDomainSuffixesWithLoad(ctx, routingAvailable)
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
@@ -1718,15 +1718,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 		}
 
-		// 分层过滤选择：优先级 → 负载率 → LRU
+		// 分层过滤选择：后缀避让 tier → 优先级 → 负载率 → LRU
 		for len(available) > 0 {
-			// 1. 取优先级最小的集合
-			candidates := filterByMinPriority(available)
-			// 1.5 同优先级下，优先尝试不同邮箱域名后缀的账号
-			candidates = filterByPreferredEmailDomainSuffixes(ctx, candidates)
-			// 2. 取负载率最低的集合
+			// 1. 先在整个候选池中优先尝试未命中过的后缀；只有没有可选后才回退。
+			candidates := filterByPreferredEmailDomainSuffixes(ctx, available)
+			// 2. 在当前后缀 tier 内保持优先级语义。
+			candidates = filterByMinPriority(candidates)
+			// 3. 取负载率最低的集合
 			candidates = filterByMinLoadRate(candidates)
-			// 3. LRU 选择最久未用的账号
+			// 4. LRU 选择最久未用的账号
 			selected := selectByLRU(candidates, preferOAuth)
 			if selected == nil {
 				break
@@ -1759,7 +1759,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	// ============ Layer 3: 兜底排队 ============
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
-	candidates = filterAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
+	prioritizeAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -1778,7 +1778,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
 	ordered := append([]*Account(nil), candidates...)
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
-	ordered = filterAccountsByPreferredEmailDomainSuffixes(ctx, ordered)
+	prioritizeAccountsByPreferredEmailDomainSuffixes(ctx, ordered)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -1826,33 +1826,25 @@ func isAvoidedEmailDomainSuffix(account *Account, avoided map[string]struct{}) b
 	return ok
 }
 
-func prioritizeDifferentEmailDomainSuffixesWithinPriority(ctx context.Context, accounts []*Account) {
+func prioritizeAccountsByPreferredEmailDomainSuffixes(ctx context.Context, accounts []*Account) {
 	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
 	if len(avoided) == 0 || len(accounts) <= 1 {
 		return
 	}
-	start := 0
-	for start < len(accounts) {
-		end := start + 1
-		priority := accounts[start].Priority
-		for end < len(accounts) && accounts[end].Priority == priority {
-			end++
+	preferred := make([]*Account, 0, len(accounts))
+	deprioritized := make([]*Account, 0, len(accounts))
+	for _, account := range accounts {
+		if isAvoidedEmailDomainSuffix(account, avoided) {
+			deprioritized = append(deprioritized, account)
+		} else {
+			preferred = append(preferred, account)
 		}
-		preferred := make([]*Account, 0, end-start)
-		deprioritized := make([]*Account, 0, end-start)
-		for _, account := range accounts[start:end] {
-			if isAvoidedEmailDomainSuffix(account, avoided) {
-				deprioritized = append(deprioritized, account)
-			} else {
-				preferred = append(preferred, account)
-			}
-		}
-		if len(preferred) > 0 && len(deprioritized) > 0 {
-			copy(accounts[start:], preferred)
-			copy(accounts[start+len(preferred):], deprioritized)
-		}
-		start = end
 	}
+	if len(preferred) == 0 || len(deprioritized) == 0 {
+		return
+	}
+	copy(accounts, preferred)
+	copy(accounts[len(preferred):], deprioritized)
 }
 
 func filterAccountsByPreferredEmailDomainSuffixes(ctx context.Context, accounts []*Account) []*Account {
@@ -1872,33 +1864,25 @@ func filterAccountsByPreferredEmailDomainSuffixes(ctx context.Context, accounts 
 	return preferred
 }
 
-func prioritizeDifferentEmailDomainSuffixesWithinPriorityWithLoad(ctx context.Context, accounts []accountWithLoad) {
+func prioritizeAccountsByPreferredEmailDomainSuffixesWithLoad(ctx context.Context, accounts []accountWithLoad) {
 	avoided := avoidedEmailDomainSuffixSetFromContext(ctx)
 	if len(avoided) == 0 || len(accounts) <= 1 {
 		return
 	}
-	start := 0
-	for start < len(accounts) {
-		end := start + 1
-		priority := accounts[start].account.Priority
-		for end < len(accounts) && accounts[end].account.Priority == priority {
-			end++
+	preferred := make([]accountWithLoad, 0, len(accounts))
+	deprioritized := make([]accountWithLoad, 0, len(accounts))
+	for _, item := range accounts {
+		if isAvoidedEmailDomainSuffix(item.account, avoided) {
+			deprioritized = append(deprioritized, item)
+		} else {
+			preferred = append(preferred, item)
 		}
-		preferred := make([]accountWithLoad, 0, end-start)
-		deprioritized := make([]accountWithLoad, 0, end-start)
-		for _, item := range accounts[start:end] {
-			if isAvoidedEmailDomainSuffix(item.account, avoided) {
-				deprioritized = append(deprioritized, item)
-			} else {
-				preferred = append(preferred, item)
-			}
-		}
-		if len(preferred) > 0 && len(deprioritized) > 0 {
-			copy(accounts[start:], preferred)
-			copy(accounts[start+len(preferred):], deprioritized)
-		}
-		start = end
 	}
+	if len(preferred) == 0 || len(deprioritized) == 0 {
+		return
+	}
+	copy(accounts, preferred)
+	copy(accounts[len(preferred):], deprioritized)
 }
 
 func filterByPreferredEmailDomainSuffixes(ctx context.Context, accounts []accountWithLoad) []accountWithLoad {
