@@ -42,10 +42,6 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 ### 调度快照与缓存
 
-- 官方 `265687b5` `fix: 优化调度快照缓存以避免 Redis 大 MGET`
-  - 本地对应提交：`1f83cbeb`
-  - 备注：本地实现已落地，当前代码使用快照 ID + metadata + hydration 模式，不再是老式大 `MGET`
-
 - 官方 `118ff85f` `fix: 同步 LoadFactor 到调度快照缓存`
   - 本地对应提交：`3c81caef`
   - 备注：当前 [backend/internal/repository/scheduler_cache.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache.go) 已包含 `LoadFactor`
@@ -91,6 +87,7 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 ### 中低风险，建议后续逐步并入
 
+- 官方 `265687b5` `fix: 优化调度快照缓存以避免 Redis 大 MGET`
 - 官方 `02a66a01` `feat: support OIDC login.`
 - 官方 `8e1a7bdf` `fix: fixed an issue where OIDC login consistently used a synthetic email address`
 - 官方 `5f8e60a1` `feat(table): 表格排序与搜索改为后端处理`
@@ -103,6 +100,16 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 `67a05dfc` `fix: honor table defaults and preserve dispatch mappings`
 - 官方 `7dc7ff22` `fix: preserve messages dispatch config in repository hydration`
 - 官方 `f480e573` `fix: align table defaults and preserve sidebar svg colors`
+
+备注：
+
+- `265687b5` 当前不能再视为“已经和本地等价同步”
+- 本地已有更早一版调度快照 hydration 实现，但和官方这次重构仍有较大差异，主要集中在：
+  - [backend/internal/repository/scheduler_cache.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache.go)
+  - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go)
+  - [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go)
+  - [backend/internal/config/config.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/config/config.go)
+- 这条需要专项回归后再评估是否合入，不能直接当低风险补丁处理
 
 ### 高风险，当前明确不并
 
@@ -191,9 +198,6 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 `e534e9ba`
   - 原因：仅同步版本号，不影响功能
 
-- 官方 `b9b52e74`
-  - 原因：核心修复点“去掉 `.sidebar-header` 的 `overflow-hidden`”本地已等价存在，只缺上游新增测试文件，当前不单独补
-
 备注：
 
 - 本次同步未碰 `gateway_service.go`、`antigravity_gateway_service.go`、`ratelimit_service.go` 这些本地高冲突核心文件
@@ -202,6 +206,34 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 前端构建验证已通过：
   - `corepack pnpm build`
 - 本次是“同步到本地项目”级别，是否推送 fork / 发布生产需单独执行
+
+继续同步：
+
+- 官方 `7dc7ff22` -> 本地 `042017e7`
+  - `fix: preserve messages dispatch config in repository hydration`
+  - 说明：补齐 repository hydration 路径中的 `messages_dispatch_model_config` 保留逻辑
+
+- 官方 `fe211fc5` -> 本地 `c1f5fbef`
+  - `fix(ui): 修复在 macOS 系统下数据表格横向滚动条闪隐和消失的问题`
+  - 说明：补了全局表格横向滚动条样式修复
+
+- 官方 `07d2add6` -> 本地 `e0765b92`
+  - `fix(sidebar): smooth collapse transitions`
+  - 说明：补了侧边栏折叠动画与过渡细节
+
+- 官方 `9648c432` -> 本地 `dc057b5e`
+  - `fix(frontend): resolve TS2352 type assertion error in API client`
+  - 说明：补了 API client 的类型安全处理，同时在同次提交里手工回补了官方 `67a05dfc` 的后端安全部分：
+    - `APIKeyAuthSnapshot.Version`
+    - `MessagesDispatchModelConfig` 的缓存快照保留与恢复
+    - 旧快照版本失效保护
+
+- 官方 `b9b52e74` -> 本地 `26145582`
+  - `fix(sidebar): prevent version dropdown clipping`
+  - 说明：补入了上游新增的侧边栏回归测试文件；功能修复点本地此前已经等价存在
+
+- 官方 `f480e573` 的安全子集 -> 本地 `a0a15694`
+  - 说明：仅吸收“保留 sidebar 自定义 SVG 原始颜色”这一小段，不合入它同提交里的表格默认值相关改动
 
 ## 后续同步记录模板
 
