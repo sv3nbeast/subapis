@@ -121,6 +121,12 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 }
 
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
+	if s.shouldSkipAutoRecoverProbe(ctx, plan) {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d skip upstream probe: account=%d has no recoverable runtime state", plan.ID, plan.AccountID)
+		s.updatePlanAfterRun(ctx, plan)
+		return
+	}
+
 	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
@@ -145,6 +151,36 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
 	}
 
+	s.updatePlanAfterRun(ctx, plan)
+}
+
+func (s *ScheduledTestRunnerService) shouldSkipAutoRecoverProbe(ctx context.Context, plan *ScheduledTestPlan) bool {
+	if s == nil || plan == nil || !plan.AutoRecover || s.accountTestSvc == nil || s.accountTestSvc.accountRepo == nil {
+		return false
+	}
+
+	account, err := s.accountTestSvc.accountRepo.GetByID(ctx, plan.AccountID)
+	if err != nil || account == nil {
+		return false
+	}
+
+	return !shouldProbeAutoRecoverAccount(account)
+}
+
+func shouldProbeAutoRecoverAccount(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.Status == StatusError {
+		return true
+	}
+	return hasRecoverableRuntimeState(account)
+}
+
+func (s *ScheduledTestRunnerService) updatePlanAfterRun(ctx context.Context, plan *ScheduledTestPlan) {
+	if s == nil || plan == nil {
+		return
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d computeNextRun error: %v", plan.ID, err)
