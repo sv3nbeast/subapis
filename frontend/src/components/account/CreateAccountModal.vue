@@ -3048,7 +3048,18 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   const extra: Record<string, unknown> = {}
   if (mixedScheduling.value) extra.mixed_scheduling = true
   if (allowOverages.value) extra.allow_overages = true
+  applyTLSFingerprintExtra(extra)
   return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+const applyTLSFingerprintExtra = (extra: Record<string, unknown>) => {
+  if (!tlsFingerprintEnabled.value) {
+    return
+  }
+  extra.enable_tls_fingerprint = true
+  if (tlsFingerprintProfileId.value !== null) {
+    extra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+  }
 }
 
 const showMixedChannelWarning = ref(false)
@@ -4363,18 +4374,26 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
         }
 
         const credentials = antigravityOAuth.buildCredentials(tokenInfo)
-        
+        applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+        const antigravityModelMapping = buildModelMappingObject(
+          'mapping',
+          [],
+          antigravityModelMappings.value
+        )
+        if (antigravityModelMapping) {
+          credentials.model_mapping = antigravityModelMapping
+        }
+
         // Generate account name with index for batch
         const accountName = refreshTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
 
-        // Note: Antigravity doesn't have buildExtraInfo, so we pass empty extra or rely on credentials
         const createPayload = withAntigravityConfirmFlag({
           name: accountName,
           notes: form.notes,
           platform: 'antigravity',
           type: 'oauth',
           credentials,
-          extra: {},
+          extra: buildAntigravityExtra(),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,
@@ -4552,13 +4571,7 @@ const handleAnthropicExchange = async (authCode: string) => {
       extra.user_msg_queue_mode = userMsgQueueMode.value
     }
 
-    // Add TLS fingerprint settings
-    if (tlsFingerprintEnabled.value) {
-      extra.enable_tls_fingerprint = true
-      if (tlsFingerprintProfileId.value) {
-        extra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
-      }
-    }
+    applyTLSFingerprintExtra(extra)
 
     // Add session ID masking settings
     if (sessionIdMaskingEnabled.value) {
@@ -4675,13 +4688,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           extra.user_msg_queue_mode = userMsgQueueMode.value
         }
 
-        // Add TLS fingerprint settings
-        if (tlsFingerprintEnabled.value) {
-          extra.enable_tls_fingerprint = true
-          if (tlsFingerprintProfileId.value) {
-            extra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
-          }
-        }
+        applyTLSFingerprintExtra(extra)
 
         // Add session ID masking settings
         if (sessionIdMaskingEnabled.value) {
