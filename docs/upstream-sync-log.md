@@ -430,3 +430,22 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - `/health` 返回 `{"status":"ok"}`
   - `098_add_account_stats_pricing.sql` 与 `099_add_account_cost_to_dashboard_tables.sql` 已完成迁移
   - 发布后近几分钟未发现 `ERROR` / `FATAL` / `panic` 级别启动异常
+
+## 2026-04-16 继续跟踪
+
+- 同步前本地 HEAD：`f3ff456a`
+- 官方 `origin/main`：`be7551b9`
+- 结论：官方暂无比 `v0.1.113` 更新的提交，本轮继续处理历史未吸收的低风险补丁
+
+已同步：
+
+- 官方 `58c0f576` `fix(sidebar): prevent version dropdown clipping in expanded brand`
+  - 说明：移除展开状态下 `.sidebar-brand` 的 `overflow: hidden`，只在折叠状态保留裁剪，避免版本号下拉被品牌容器裁掉
+  - 兼容处理：仅影响侧边栏样式与对应前端测试，不涉及后端、数据库、调度、账号、支付和监控
+
+继续保留为后续专题：
+
+- OIDC 登录
+- Anthropic API Key WebSearch emulation
+- balance / quota notify
+- 官方内置 payment 线继续跳过，避免和本地 `sub2apipay` 冲突
