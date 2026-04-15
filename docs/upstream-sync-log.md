@@ -414,3 +414,19 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 备注：
 
 - 本轮同步前临时保存了未提交的 gateway session 诊断改动：`stash@{0}: pre-upstream-sync-session-diag-20260415`
+
+### 生产发布记录
+
+- 对应同步提交：
+  - 本地 / fork：`1d1be065 feat: 同步官方用量成本展示与限流修复`
+- 生产发布状态：
+  - 已发布到生产
+  - 当前生产镜像：`sub2api:prod-20260415-215206-1d1be065`
+  - 发布前备份目录：`/root/sub2api-deploy/backups/20260415-215116`
+  - 回滚 compose 备份：`/root/sub2api-deploy/docker-compose.override.yml.bak-20260415-215531.deploy`
+  - 发布过程未删除现有数据卷，未执行 `down -v`、`rm -rf`、重建数据库等破坏性操作
+- 生产校验：
+  - 应用容器健康检查通过
+  - `/health` 返回 `{"status":"ok"}`
+  - `098_add_account_stats_pricing.sql` 与 `099_add_account_cost_to_dashboard_tables.sql` 已完成迁移
+  - 发布后近几分钟未发现 `ERROR` / `FATAL` / `panic` 级别启动异常
