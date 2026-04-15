@@ -225,13 +225,23 @@ func (a *Account) GetModelCapacityCooldownRemainingTimeWithContext(ctx context.C
 		}
 	}
 	modelKey := resolveRequestedModelKey(ctx, a, requestedModel)
+	rawRequestedModel := strings.TrimSpace(requestedModel)
 	if modelKey == "" {
-		return 0
+		modelKey = rawRequestedModel
 	}
 	if remaining := getAccountModelCapacityCooldownRemainingFromExtra(a.Extra, modelKey); remaining > 0 {
 		return remaining
 	}
-	return getAccountModelCapacityCooldownRemaining(a.ID, modelKey)
+	if remaining := getAccountModelCapacityCooldownRemaining(a.ID, modelKey); remaining > 0 {
+		return remaining
+	}
+	if rawRequestedModel != "" && rawRequestedModel != modelKey {
+		if remaining := getAccountModelCapacityCooldownRemainingFromExtra(a.Extra, rawRequestedModel); remaining > 0 {
+			return remaining
+		}
+		return getAccountModelCapacityCooldownRemaining(a.ID, rawRequestedModel)
+	}
+	return 0
 }
 
 func formatCapacityCooldownSample(accountID int64, remaining time.Duration) string {

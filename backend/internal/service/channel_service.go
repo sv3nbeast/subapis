@@ -415,6 +415,15 @@ func (s *ChannelService) GetChannelForGroup(ctx context.Context, groupID int64) 
 	return ch.Clone(), nil
 }
 
+// GetGroupPlatform 获取分组的平台标识（从渠道缓存读取）。
+func (s *ChannelService) GetGroupPlatform(ctx context.Context, groupID int64) string {
+	cache, err := s.loadCache(ctx)
+	if err != nil {
+		return ""
+	}
+	return cache.groupPlatform[groupID]
+}
+
 // channelLookup 热路径公共查找结果
 type channelLookup struct {
 	cache    *channelCache
@@ -568,6 +577,18 @@ func validateChannelConfig(pricing []ChannelModelPricing, mapping map[string]map
 	return validatePricingBillingMode(pricing)
 }
 
+func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {
+	for _, rule := range rules {
+		if len(rule.GroupIDs) == 0 && len(rule.AccountIDs) == 0 {
+			return infraerrors.BadRequest("ACCOUNT_STATS_RULE_EMPTY_TARGET", "account stats pricing rule requires at least one group or account")
+		}
+		if err := validateChannelConfig(rule.Pricing, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validatePricingBillingMode 校验计费模式配置：按次/图片模式必须配价格或区间，所有价格字段不能为负，区间至少有一个价格字段。
 func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {
@@ -655,20 +676,25 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 	}
 
 	channel := &Channel{
-		Name:               input.Name,
-		Description:        input.Description,
-		Status:             StatusActive,
-		BillingModelSource: input.BillingModelSource,
-		RestrictModels:     input.RestrictModels,
-		GroupIDs:           input.GroupIDs,
-		ModelPricing:       input.ModelPricing,
-		ModelMapping:       input.ModelMapping,
+		Name:                       input.Name,
+		Description:                input.Description,
+		Status:                     StatusActive,
+		BillingModelSource:         input.BillingModelSource,
+		RestrictModels:             input.RestrictModels,
+		GroupIDs:                   input.GroupIDs,
+		ModelPricing:               input.ModelPricing,
+		ModelMapping:               input.ModelMapping,
+		ApplyPricingToAccountStats: input.ApplyPricingToAccountStats,
+		AccountStatsPricingRules:   input.AccountStatsPricingRules,
 	}
 	if channel.BillingModelSource == "" {
 		channel.BillingModelSource = BillingModelSourceChannelMapped
 	}
 
 	if err := validateChannelConfig(channel.ModelPricing, channel.ModelMapping); err != nil {
+		return nil, err
+	}
+	if err := validateAccountStatsPricingRules(channel.AccountStatsPricingRules); err != nil {
 		return nil, err
 	}
 
@@ -697,6 +723,9 @@ func (s *ChannelService) Update(ctx context.Context, id int64, input *UpdateChan
 	}
 
 	if err := validateChannelConfig(channel.ModelPricing, channel.ModelMapping); err != nil {
+		return nil, err
+	}
+	if err := validateAccountStatsPricingRules(channel.AccountStatsPricingRules); err != nil {
 		return nil, err
 	}
 
@@ -747,6 +776,12 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	}
 	if input.BillingModelSource != "" {
 		channel.BillingModelSource = input.BillingModelSource
+	}
+	if input.ApplyPricingToAccountStats != nil {
+		channel.ApplyPricingToAccountStats = *input.ApplyPricingToAccountStats
+	}
+	if input.AccountStatsPricingRules != nil {
+		channel.AccountStatsPricingRules = *input.AccountStatsPricingRules
 	}
 	return nil
 }
@@ -913,23 +948,27 @@ func detectConflicts(entries []modelEntry, platform, errCode, label string) erro
 
 // CreateChannelInput 创建渠道输入
 type CreateChannelInput struct {
-	Name               string
-	Description        string
-	GroupIDs           []int64
-	ModelPricing       []ChannelModelPricing
-	ModelMapping       map[string]map[string]string // platform → {src→dst}
-	BillingModelSource string
-	RestrictModels     bool
+	Name                       string
+	Description                string
+	GroupIDs                   []int64
+	ModelPricing               []ChannelModelPricing
+	ModelMapping               map[string]map[string]string // platform → {src→dst}
+	BillingModelSource         string
+	RestrictModels             bool
+	ApplyPricingToAccountStats bool
+	AccountStatsPricingRules   []AccountStatsPricingRule
 }
 
 // UpdateChannelInput 更新渠道输入
 type UpdateChannelInput struct {
-	Name               string
-	Description        *string
-	Status             string
-	GroupIDs           *[]int64
-	ModelPricing       *[]ChannelModelPricing
-	ModelMapping       map[string]map[string]string // platform → {src→dst}
-	BillingModelSource string
-	RestrictModels     *bool
+	Name                       string
+	Description                *string
+	Status                     string
+	GroupIDs                   *[]int64
+	ModelPricing               *[]ChannelModelPricing
+	ModelMapping               map[string]map[string]string // platform → {src→dst}
+	BillingModelSource         string
+	RestrictModels             *bool
+	ApplyPricingToAccountStats *bool
+	AccountStatsPricingRules   *[]AccountStatsPricingRule
 }

@@ -4568,6 +4568,27 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if subscription != nil {
 		usageLog.SubscriptionID = &subscription.ID
 	}
+	if apiKey.GroupID != nil {
+		upstreamModel := strings.TrimSpace(result.UpstreamModel)
+		if upstreamModel == "" {
+			upstreamModel = billingModel
+		}
+		totalCost := 0.0
+		if cost != nil {
+			totalCost = cost.TotalCost
+		}
+		usageLog.AccountStatsCost = resolveAccountStatsCost(
+			ctx,
+			s.channelService,
+			s.billingService,
+			account.ID,
+			*apiKey.GroupID,
+			upstreamModel,
+			tokens,
+			1,
+			totalCost,
+		)
+	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")

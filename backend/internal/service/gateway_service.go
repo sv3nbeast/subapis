@@ -7758,6 +7758,33 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	accountRateMultiplier := account.BillingRateMultiplier()
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
+	if apiKey.GroupID != nil {
+		upstreamModel := strings.TrimSpace(result.UpstreamModel)
+		if upstreamModel == "" {
+			upstreamModel = result.Model
+		}
+		totalCost := 0.0
+		if cost != nil {
+			totalCost = cost.TotalCost
+		}
+		usageLog.AccountStatsCost = resolveAccountStatsCost(
+			ctx,
+			s.channelService,
+			s.billingService,
+			account.ID,
+			*apiKey.GroupID,
+			upstreamModel,
+			UsageTokens{
+				InputTokens:         result.Usage.InputTokens,
+				OutputTokens:        result.Usage.OutputTokens,
+				CacheCreationTokens: result.Usage.CacheCreationInputTokens,
+				CacheReadTokens:     result.Usage.CacheReadInputTokens,
+				ImageOutputTokens:   result.Usage.ImageOutputTokens,
+			},
+			1,
+			totalCost,
+		)
+	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")

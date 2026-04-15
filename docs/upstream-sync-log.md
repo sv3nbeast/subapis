@@ -245,6 +245,99 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 `f480e573` 的安全子集 -> 本地 `a0a15694`
   - 说明：仅吸收“保留 sidebar 自定义 SVG 原始颜色”这一小段，不合入它同提交里的表格默认值相关改动
 
+### 2026-04-15
+
+- 本地 HEAD：`b0f0071a`
+- 官方 `origin/main`：`7c671b53`
+- 图谱差异：
+  - 相对官方：`behind 175 / ahead 83`
+
+本轮重新核对后，以下结论需要更新：
+
+- 官方 `8548a130`
+  - 结论：本地已等价覆盖，不需要再同步
+  - 依据：
+    - [backend/internal/handler/openai_gateway_handler.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/openai_gateway_handler.go) 已包含 `NormalizeOpenAICompatRequestedModel(reqModel)`、`resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)`、`effectiveMappedModel`
+    - [backend/internal/service/admin_service_apikey_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/admin_service_apikey_test.go) 已包含 subscription group 相关 3 条测试
+
+- 官方 `2dce4306` / `3d202722`
+  - 结论：本地已等价覆盖，不需要再同步
+  - 依据：
+    - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go) 已在调度阶段执行渠道限制检查
+    - [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go) 已有等价前置检查
+    - [backend/internal/repository/wire.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/wire.go) 与 [backend/cmd/server/wire_gen.go](/Users/sven.sun/Desktop/Api/sub2api/backend/cmd/server/wire_gen.go) 已按配置注入 `ProvideSchedulerCache`
+
+- 官方 `265687b5`
+  - 结论：应降级为“已基本吸收”，不再作为主要待同步专题
+  - 原因：
+    - [backend/internal/repository/scheduler_cache.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache.go) 已有 chunked `MGET`、快照 metadata 和缺失元数据回源退化
+    - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go) 与 [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go) 已具备 snapshot hydration 路径
+    - [backend/internal/service/scheduler_snapshot_hydration_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/scheduler_snapshot_hydration_test.go) 与 [backend/internal/repository/scheduler_cache_integration_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache_integration_test.go) 已覆盖核心行为
+    - [backend/internal/config/config.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/config/config.go) 与 [deploy/config.example.yaml](/Users/sven.sun/Desktop/Api/sub2api/deploy/config.example.yaml) 已暴露 `snapshot_mget_chunk_size` / `snapshot_write_chunk_size`
+  - 备注：
+    - `git cherry` 仍显示 `+`，但这是 patch-id 已不相等，不代表功能仍缺失
+
+- 官方 `7535e312` 及后续 account stats pricing 修补
+  - 结论：这是本轮评估时确认存在、且尚未同步的一条真实功能线，后续已在本节“继续同步”中完成兼容移植
+  - 移植前本地缺失：
+    - [backend/internal/service/channel.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/channel.go) 没有 `ApplyPricingToAccountStats` / `AccountStatsPricingRules`
+    - [backend/internal/service/channel_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/channel_service.go) 没有对应的 create/update 输入字段
+    - [backend/internal/handler/admin/channel_handler.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/admin/channel_handler.go) 没有对应 DTO / 序列化
+    - [backend/internal/repository/usage_log_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/usage_log_repo.go) 仍使用 `SUM(total_cost * COALESCE(account_rate_multiplier, 1))` 作为账号统计费用
+    - [frontend/src/views/admin/ChannelsView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/admin/ChannelsView.vue) 没有账号统计定价相关 UI
+  - 需要连带考虑的后续提交：
+    - `80fa4844`：仅前端布局重构，把规则从 basic tab 挪到 platform tab
+    - `11c46068`：改为使用最终 upstream model 匹配规则，并移除旧的 channel pricing fallback
+    - `98c9d517`：修正优先级，`ApplyPricingToAccountStats` 开启时优先直接使用本次请求 `totalCost`
+    - `1262654d`：其中 account stats pricing 子集继续修正这条线，但该提交本身混有 WebSearch / notify 其他改动，不能整体同步
+  - 风险判断：
+    - 这是“有明确产品价值，但不是低风险补丁”的中大型专题
+    - 需要新增数据库表和 `usage_logs.account_stats_cost` 列
+    - 本地 migration 当前只到 `097`，不能直接照搬上游 `101`
+    - 后台渠道页本地已经二开，前端需要人工移植，不能直接 cherry-pick
+  - 当前建议：
+    - 如果你近期没有“账号统计按独立价格口径核算”的明确需求，这条先不做
+    - 如果后面要做，应该按独立专题手工移植，最小安全批次至少要覆盖：
+      - `7535e312`
+      - `11c46068`
+      - `98c9d517`
+      - `1262654d` 中仅 account stats pricing 相关子块
+
+截至本轮，真正仍值得继续评估的主线，收敛为：
+
+- OIDC 登录
+- Anthropic API Key WebSearch emulation
+- balance / quota notify
+- custom account stats pricing rules
+
+继续同步：
+
+- 官方 `7535e312` / `11c46068` / `98c9d517` / `1262654d` 的 account stats pricing 子集 -> 本地兼容移植
+  - 说明：已接入“账号统计定价”能力，用于将管理员账号成本统计从用户实际计费中解耦
+  - 本地实现要点：
+    - 新增 [backend/migrations/098_add_account_stats_pricing.sql](/Users/sven.sun/Desktop/Api/sub2api/backend/migrations/098_add_account_stats_pricing.sql)，避免直接照搬官方 `101` migration 造成编号冲突
+    - 新增 `channels.apply_pricing_to_account_stats`
+    - 新增 `channel_account_stats_pricing_rules` / `channel_account_stats_model_pricing`
+    - 新增 `channel_account_stats_pricing_intervals`，兼容官方后续 `106_add_account_stats_pricing_intervals.sql`
+    - 新增 `usage_logs.account_stats_cost`
+    - [backend/internal/repository/usage_log_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/usage_log_repo.go) 的账号统计成本改为 `COALESCE(account_stats_cost, total_cost) * account_rate_multiplier`
+    - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go) 和 [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go) 在落 usage log 前计算 `AccountStatsCost`
+    - [backend/internal/service/account_stats_pricing.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/account_stats_pricing.go) 已支持自定义规则、`ApplyPricingToAccountStats`、模型定价文件 fallback 和 token 区间定价
+    - [frontend/src/views/admin/ChannelsView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/admin/ChannelsView.vue) 增加后台渠道页配置入口
+  - 兼容处理：
+    - 不改变用户实际扣费，不影响余额、订阅和 API Key 计费
+    - 官方 `1262654d` 中混杂的 WebSearch / notify 子块没有合入，只吸收 account stats pricing 相关语义
+    - 前端没有直接硬合官方渠道页大改，而是在本地已有 platform tab 结构中手工接入规则 UI
+  - 验证：
+    - `go test ./...`
+    - `corepack pnpm build`
+    - `go test -tags=unit ./internal/service -run 'TestHandleSmartRetry_503_ModelCapacityExhausted_RetryExhaustedBudget' -count=1`
+    - `go test -tags=unit ./internal/service -run 'TestAccountStatsPricing' -count=1`
+    - `go test ./internal/service ./internal/repository ./internal/handler/admin`
+  - 额外修复：
+    - 本轮验证时发现本地 Antigravity `MODEL_CAPACITY_EXHAUSTED` 账号级 capacity cooldown 存在读取兜底缺口：如果上游返回的模型名不在本地映射表中，cooldown 已写入但读取时可能因映射解析为空而不可见
+    - 已在 [backend/internal/service/model_capacity_cooldown.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/model_capacity_cooldown.go) 补充兜底：优先按最终映射模型查，查不到时再按原始请求模型名查
+
 ## 后续同步记录模板
 
 后面每次同步官方后，在文末追加一条：
