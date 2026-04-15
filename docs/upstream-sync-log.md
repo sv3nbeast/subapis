@@ -521,6 +521,16 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 继续同步：
 
+- 官方 `d67ecf89` / `6793503e` 的 Sora 残留清理子集
+  - 说明：官方移除已废弃的 `sora_client_enabled` 公开设置残留，以及 `wire.go` 中已不存在的 `SoraMediaCleanupService` 注入参数
+  - 兼容处理：只清理当前代码里确认无实际服务实现的残留引用，不改 README 中“Sora 暂不可用”的说明，也不引入官方 payment/Sora 大范围删改
+  - 验证：
+    - `rg -n "sora_client_enabled|SoraMediaCleanup" backend/cmd/server frontend/src backend/internal || true`
+    - `go test ./cmd/server ./internal/server ./internal/handler ./internal/service -run 'Test.*(Setting|Settings|Sora|Public|Config|Wire|OAuth).*' -count=1`
+    - `corepack pnpm build`
+
+继续同步：
+
 - 官方 `5f8e60a1` `feat(table): 表格排序与搜索改为后端处理`
   - 说明：后台与用户侧多处表格增加服务端排序参数，仓库层按白名单字段排序，避免前端只排序当前页导致全局排序不准确
   - 涉及范围：
