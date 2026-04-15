@@ -283,6 +283,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 	// 判断是否真的绑定了粘性会话：有 sessionKey 且已经绑定到某个账号
 	hasBoundSession := sessionKey != "" && sessionBoundAccountID > 0
+	sessionDiag := gatewaySessionDiagEnabled(subject.UserID, apiKey.ID)
+	if sessionDiag {
+		reqLog.Info("gateway.session_diag.initial",
+			gatewaySessionDiagInitialFields(parsedReq, sessionHash, sessionKey, sessionBoundAccountID, hasBoundSession)...,
+		)
+	}
 
 	if platform == service.PlatformGemini {
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
@@ -321,6 +327,17 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 			account := selection.Account
+			if sessionDiag {
+				reqLog.Info("gateway.session_diag.selected",
+					zap.String("diag_path", "gemini"),
+					zap.Int64("account_id", account.ID),
+					zap.String("account_platform", account.Platform),
+					zap.Bool("selection_acquired", selection.Acquired),
+					zap.Int("switch_count", fs.SwitchCount),
+					zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
+					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
+				)
+			}
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
@@ -418,7 +435,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					if service.ShouldPreferDifferentEmailDomainSuffixForFailover(account.Platform, failoverErr) {
 						fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 					}
+					forceCacheBillingBefore := fs.ForceCacheBilling
 					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					if sessionDiag {
+						reqLog.Warn("gateway.session_diag.failover",
+							zap.String("diag_path", "gemini"),
+							zap.Int64("account_id", account.ID),
+							zap.String("account_platform", account.Platform),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Bool("failover_force_cache_billing", failoverErr.ForceCacheBilling),
+							zap.Bool("retryable_on_same_account", failoverErr.RetryableOnSameAccount),
+							zap.Bool("force_cache_billing_before", forceCacheBillingBefore),
+							zap.Bool("force_cache_billing_after", fs.ForceCacheBilling),
+							zap.Int("switch_count", fs.SwitchCount),
+							zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
+						)
+					}
 					switch action {
 					case FailoverContinue:
 						continue
@@ -469,6 +501,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			if result.ReasoningEffort == nil {
 				result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+			}
+			if sessionDiag {
+				fields := []zap.Field{
+					zap.String("diag_path", "gemini"),
+					zap.Int64("account_id", account.ID),
+					zap.String("account_platform", account.Platform),
+					zap.Int("switch_count", fs.SwitchCount),
+					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
+					zap.Int("usage_input_tokens", result.Usage.InputTokens),
+					zap.Int("usage_cache_read_input_tokens", result.Usage.CacheReadInputTokens),
+					zap.Int("usage_cache_creation_input_tokens", result.Usage.CacheCreationInputTokens),
+				}
+				if result.FirstTokenMs != nil {
+					fields = append(fields, zap.Int("first_token_ms", *result.FirstTokenMs))
+				}
+				reqLog.Info("gateway.session_diag.success", fields...)
 			}
 
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
@@ -549,6 +597,17 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 			account := selection.Account
+			if sessionDiag {
+				reqLog.Info("gateway.session_diag.selected",
+					zap.String("diag_path", "messages"),
+					zap.Int64("account_id", account.ID),
+					zap.String("account_platform", account.Platform),
+					zap.Bool("selection_acquired", selection.Acquired),
+					zap.Int("switch_count", fs.SwitchCount),
+					zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
+					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
+				)
+			}
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
@@ -763,7 +822,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					if service.ShouldPreferDifferentEmailDomainSuffixForFailover(account.Platform, failoverErr) {
 						fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 					}
+					forceCacheBillingBefore := fs.ForceCacheBilling
 					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					if sessionDiag {
+						reqLog.Warn("gateway.session_diag.failover",
+							zap.String("diag_path", "messages"),
+							zap.Int64("account_id", account.ID),
+							zap.String("account_platform", account.Platform),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Bool("failover_force_cache_billing", failoverErr.ForceCacheBilling),
+							zap.Bool("retryable_on_same_account", failoverErr.RetryableOnSameAccount),
+							zap.Bool("force_cache_billing_before", forceCacheBillingBefore),
+							zap.Bool("force_cache_billing_after", fs.ForceCacheBilling),
+							zap.Int("switch_count", fs.SwitchCount),
+							zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
+						)
+					}
 					switch action {
 					case FailoverContinue:
 						continue
@@ -814,6 +888,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			if result.ReasoningEffort == nil {
 				result.ReasoningEffort = service.NormalizeClaudeOutputEffort(parsedReq.OutputEffort)
+			}
+			if sessionDiag {
+				fields := []zap.Field{
+					zap.String("diag_path", "messages"),
+					zap.Int64("account_id", account.ID),
+					zap.String("account_platform", account.Platform),
+					zap.Int("switch_count", fs.SwitchCount),
+					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
+					zap.Int("usage_input_tokens", result.Usage.InputTokens),
+					zap.Int("usage_cache_read_input_tokens", result.Usage.CacheReadInputTokens),
+					zap.Int("usage_cache_creation_input_tokens", result.Usage.CacheCreationInputTokens),
+				}
+				if result.FirstTokenMs != nil {
+					fields = append(fields, zap.Int("first_token_ms", *result.FirstTokenMs))
+				}
+				reqLog.Info("gateway.session_diag.success", fields...)
 			}
 
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
