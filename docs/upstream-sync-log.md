@@ -499,6 +499,26 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 WebSearch / Notify 专题
 - 官方 payment 线继续保持本地 `sub2apipay` 优先，逐项判断是否只吸收无冲突修复
 
+低风险补丁核验：
+
+- 已等价吸收，无需再次改代码：
+  - `ce833d91` 首页 `home_content` URL 纳入 CSP `frame-src`
+  - `fe211fc5` macOS 表格横向滚动条闪隐修复
+  - `6401dd7c` ops 错误日志 request body 上限提升到 256KB
+  - `b7edc3ed` / `422e25c9` Cursor `/v1/chat/completions` Responses-shaped body 兼容与 Codex 不支持字段剥离
+  - `cb016ad8` Anthropic credit balance exhausted 400 识别为账号错误
+  - `9648c432` 前端 API client TS2352 类型断言修复
+  - `3a113481` / `abe42675` 移动端表格延迟挂载与账号用量 cell 懒加载
+  - `a1e299a3` Anthropic 非流式终态空 output 时用 delta 重建响应
+  - `f9f57e95` `settings.updated_at` 默认值恢复迁移
+  - `118ff85f` `LoadFactor` 写入调度快照 metadata
+- 官方 `265687b5` 调度快照大 `MGET` 优化已由本地等价/增强实现覆盖：
+  - 本地已具备 `snapshot_mget_chunk_size` / `snapshot_write_chunk_size`
+  - 本地快照使用 `sched:meta:*` metadata 轻量读取，完整账号按需 hydration
+  - metadata 继续保留本地生产需要的 `LoadFactor`、`model_rate_limits`、`model_capacity_cooldowns` 等字段
+- 明确跳过：
+  - `24f0eebc` 只修改官方内置 payment 二维码组件，本地当前不使用官方内置 payment 页面，继续以 `sub2apipay` 链路为准
+
 继续同步：
 
 - 官方 `5f8e60a1` `feat(table): 表格排序与搜索改为后端处理`
