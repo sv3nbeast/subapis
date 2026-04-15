@@ -483,6 +483,24 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 继续同步：
 
+- 官方 `02a66a01` / `8e1a7bdf` 的通用 OIDC 登录
+  - 说明：新增 OIDC OAuth 登录配置、授权/回调路由、登录/注册页入口、后台设置项和配置文件示例；同时吸收官方后续修复，避免 OIDC 登录总是使用合成邮箱
+  - 兼容处理：
+    - 保留现有 LinuxDo OAuth 登录和邀请/注册校验逻辑，OIDC 作为独立入口接入
+    - 保留本地注册邮箱黑名单、品牌、监控、支付入口、表格设置等已有设置项
+    - 官方补丁里与本地当前服务层不匹配的 `sora_client_enabled` 公开 DTO 回填未引入，避免编译失败和误恢复已不由后端设置驱动的字段
+  - 验证：
+    - `go test ./internal/config ./internal/handler ./internal/handler/admin ./internal/service ./internal/server -run 'Test.*(OIDC|Oidc|OAuth|Setting|Settings|Config|Contract|Route|Auth).*' -count=1`
+    - `go test ./internal/config ./internal/handler ./internal/handler/admin ./internal/service ./internal/server -count=1`
+    - `corepack pnpm build`
+
+下一步：
+
+- 官方 WebSearch / Notify 专题
+- 官方 payment 线继续保持本地 `sub2apipay` 优先，逐项判断是否只吸收无冲突修复
+
+继续同步：
+
 - 官方 `5f8e60a1` `feat(table): 表格排序与搜索改为后端处理`
   - 说明：后台与用户侧多处表格增加服务端排序参数，仓库层按白名单字段排序，避免前端只排序当前页导致全局排序不准确
   - 涉及范围：
