@@ -4510,7 +4510,16 @@ export default {
         homeContentIframeWarning:
           '⚠️ iframe 模式提示：部分网站设置了 X-Frame-Options 或 CSP 安全策略，禁止被嵌入到 iframe 中。如果页面显示空白或报错，请确认目标网站允许被嵌入，或考虑使用 HTML 模式自行构建页面内容。',
         hideCcsImportButton: '隐藏 CCS 导入按钮',
-        hideCcsImportButtonHint: '启用后将在 API Keys 页面隐藏"导入 CCS"按钮'
+        hideCcsImportButtonHint: '启用后将在 API Keys 页面隐藏"导入 CCS"按钮',
+        tablePreferencesTitle: '通用表格设置',
+        tablePreferencesDescription: '统一控制后台和用户侧表格的默认分页偏好。',
+        tableDefaultPageSize: '默认每页条数',
+        tableDefaultPageSizeHint: '必须为 5-1000 之间的整数',
+        tablePageSizeOptions: '可选每页条数列表',
+        tablePageSizeOptionsPlaceholder: '10, 20, 50, 100',
+        tablePageSizeOptionsHint: '使用英文逗号分隔，取值范围 5-1000，保存时会自动去重并排序',
+        tableDefaultPageSizeRangeError: '默认每页条数必须在 {min}-{max} 之间',
+        tablePageSizeOptionsFormatError: '可选每页条数格式无效，请输入 {min}-{max} 之间的整数并用英文逗号分隔'
       },
       purchase: {
         title: '充值/订阅页面',

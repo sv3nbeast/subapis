@@ -449,3 +449,35 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - Anthropic API Key WebSearch emulation
 - balance / quota notify
 - 官方内置 payment 线继续跳过，避免和本地 `sub2apipay` 冲突
+
+## 2026-04-16 继续兼容同步
+
+- 同步前本地 HEAD：`eec0df59`
+- 官方 `origin/main`：`be7551b9`
+- 处理原则：先合入不触碰生产调度/支付/数据结构高风险区的官方补丁；遇到依赖后续大改的补丁，先按本地现有接口手工兼容，避免半同步导致编译失败
+
+已同步：
+
+- 官方 `ad80606a` / `13124059` 的全局表格分页设置
+  - 说明：后台设置页新增通用表格分页配置，公开设置接口返回 `table_default_page_size` / `table_page_size_options`
+  - 兼容处理：保留本地品牌 `SubAPIs`、邮箱注册黑名单、服务状态探针、监控等设置项；没有覆盖本地设置页结构
+
+- 官方 `67a05dfc` / `f480e573` 中的表格默认值修正子集
+  - 说明：采用官方最终策略，表格每页条数以系统配置为准，不再使用浏览器 localStorage 的旧分页偏好；默认可选值为 `10, 20, 50, 100`
+  - 兼容处理：只吸收表格默认值相关子集；`MessagesDispatchModelConfig` 与 sidebar SVG 相关子集本地此前已处理
+
+- 官方 `66e15a54` 的导出筛选一致性子集
+  - 说明：账号、代理、兑换码导出按当前筛选条件导出，而不是无视筛选导出全部
+  - 兼容处理：该官方提交原始版本依赖后续 `5f8e60a1` 的后端排序接口签名；本地当前尚未合入那条大改，因此本轮只同步筛选条件传递，不引入未完成的排序参数
+
+验证：
+
+- `go test ./internal/service -run 'Test.*Setting|Test.*Public|Test.*Table|Test.*Settings' -count=1`
+- `go test ./internal/handler/admin -run 'Test.*Export|Test.*Data' -count=1`
+- `corepack pnpm vitest run src/stores/__tests__/app.spec.ts src/utils/__tests__/tablePreferences.spec.ts src/composables/__tests__/usePersistedPageSize.spec.ts`
+
+下一步：
+
+- 官方 `5f8e60a1` 后端表格搜索/排序专题
+- 官方 OIDC 登录专题
+- 官方 WebSearch / Notify 专题

@@ -1725,6 +1725,48 @@
               </p>
             </div>
 
+            <!-- Global Table Preferences -->
+            <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+              <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('admin.settings.site.tablePreferencesTitle') }}
+              </h3>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.site.tablePreferencesDescription') }}
+              </p>
+              <div class="mt-4 grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('admin.settings.site.tableDefaultPageSize') }}
+                  </label>
+                  <input
+                    v-model.number="form.table_default_page_size"
+                    type="number"
+                    min="5"
+                    max="1000"
+                    step="1"
+                    class="input w-40"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.site.tableDefaultPageSizeHint') }}
+                  </p>
+                </div>
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('admin.settings.site.tablePageSizeOptions') }}
+                  </label>
+                  <input
+                    v-model="tablePageSizeOptionsInput"
+                    type="text"
+                    class="input font-mono text-sm"
+                    :placeholder="t('admin.settings.site.tablePageSizeOptionsPlaceholder')"
+                  />
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.site.tablePageSizeOptionsHint') }}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <!-- Custom Endpoints -->
             <div>
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2392,6 +2434,7 @@ const smtpPasswordManuallyEdited = ref(false)
 const testEmailAddress = ref('')
 const registrationEmailSuffixWhitelistTags = ref<string[]>([])
 const registrationEmailSuffixWhitelistDraft = ref('')
+const tablePageSizeOptionsInput = ref('10, 20, 50, 100')
 
 // Admin API Key 状态
 const adminApiKeyLoading = ref(true)
@@ -2464,6 +2507,10 @@ const statusProbeForm = reactive({
   }>
 })
 
+const tablePageSizeMin = 5
+const tablePageSizeMax = 1000
+const tablePageSizeDefault = 20
+
 interface DefaultSubscriptionGroupOption {
   value: number
   label: string
@@ -2504,6 +2551,8 @@ const form = reactive<SettingsForm>({
   hide_ccs_import_button: false,
   purchase_subscription_enabled: false,
   purchase_subscription_url: '',
+  table_default_page_size: tablePageSizeDefault,
+  table_page_size_options: [10, 20, 50, 100],
   custom_menu_items: [] as Array<{id: string; label: string; icon_svg: string; url: string; visibility: 'user' | 'admin'; sort_order: number}>,
   custom_endpoints: [] as Array<{name: string; endpoint: string; description: string}>,
   frontend_url: '',
@@ -2756,6 +2805,35 @@ function removeEndpoint(index: number) {
   form.custom_endpoints.splice(index, 1)
 }
 
+function formatTablePageSizeOptions(options: number[]): string {
+  return options.join(', ')
+}
+
+function parseTablePageSizeOptionsInput(raw: string): number[] | null {
+  const tokens = raw
+    .split(',')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0)
+
+  if (tokens.length === 0) {
+    return null
+  }
+
+  const parsed = tokens.map((token) => Number(token))
+  if (parsed.some((value) => !Number.isInteger(value))) {
+    return null
+  }
+
+  const deduped = Array.from(new Set(parsed)).sort((a, b) => a - b)
+  if (
+    deduped.some((value) => value < tablePageSizeMin || value > tablePageSizeMax)
+  ) {
+    return null
+  }
+
+  return deduped
+}
+
 async function loadSettings() {
   loading.value = true
   loadFailed.value = false
@@ -2779,6 +2857,9 @@ async function loadSettings() {
     )
     registrationEmailSuffixBlacklistTags.value = normalizeRegistrationEmailSuffixDomains(
       settings.registration_email_suffix_blacklist
+    )
+    tablePageSizeOptionsInput.value = formatTablePageSizeOptions(
+      Array.isArray(settings.table_page_size_options) ? settings.table_page_size_options : [10, 20, 50, 100]
     )
     registrationEmailSuffixWhitelistDraft.value = ''
     registrationEmailSuffixBlacklistDraft.value = ''
@@ -2826,6 +2907,37 @@ function removeDefaultSubscription(index: number) {
 async function saveSettings() {
   saving.value = true
   try {
+    const normalizedTableDefaultPageSize = Math.floor(Number(form.table_default_page_size))
+    if (
+      !Number.isInteger(normalizedTableDefaultPageSize) ||
+      normalizedTableDefaultPageSize < tablePageSizeMin ||
+      normalizedTableDefaultPageSize > tablePageSizeMax
+    ) {
+      appStore.showError(
+        t('admin.settings.site.tableDefaultPageSizeRangeError', {
+          min: tablePageSizeMin,
+          max: tablePageSizeMax
+        })
+      )
+      return
+    }
+
+    const normalizedTablePageSizeOptions = parseTablePageSizeOptionsInput(
+      tablePageSizeOptionsInput.value
+    )
+    if (!normalizedTablePageSizeOptions) {
+      appStore.showError(
+        t('admin.settings.site.tablePageSizeOptionsFormatError', {
+          min: tablePageSizeMin,
+          max: tablePageSizeMax
+        })
+      )
+      return
+    }
+
+    form.table_default_page_size = normalizedTableDefaultPageSize
+    form.table_page_size_options = normalizedTablePageSizeOptions
+
     const normalizedDefaultSubscriptions = form.default_subscriptions
       .filter((item) => item.group_id > 0 && item.validity_days > 0)
       .map((item: DefaultSubscriptionSetting) => ({
@@ -2906,6 +3018,8 @@ async function saveSettings() {
       hide_ccs_import_button: form.hide_ccs_import_button,
       purchase_subscription_enabled: form.purchase_subscription_enabled,
       purchase_subscription_url: form.purchase_subscription_url,
+      table_default_page_size: form.table_default_page_size,
+      table_page_size_options: form.table_page_size_options,
       custom_menu_items: form.custom_menu_items,
       custom_endpoints: form.custom_endpoints,
       frontend_url: form.frontend_url,
@@ -2947,6 +3061,9 @@ async function saveSettings() {
     )
     registrationEmailSuffixBlacklistTags.value = normalizeRegistrationEmailSuffixDomains(
       updated.registration_email_suffix_blacklist
+    )
+    tablePageSizeOptionsInput.value = formatTablePageSizeOptions(
+      Array.isArray(updated.table_page_size_options) ? updated.table_page_size_options : [10, 20, 50, 100]
     )
     registrationEmailSuffixWhitelistDraft.value = ''
     registrationEmailSuffixBlacklistDraft.value = ''

@@ -31,6 +31,28 @@ type stubAdminService struct {
 		platform  string
 		groupIDs  []int64
 	}
+	lastListAccounts struct {
+		calls       int
+		platform    string
+		accountType string
+		status      string
+		search      string
+		model       string
+		groupID     int64
+		privacyMode string
+	}
+	lastListProxies struct {
+		calls    int
+		protocol string
+		status   string
+		search   string
+	}
+	lastListRedeemCodes struct {
+		calls    int
+		codeType string
+		status   string
+		search   string
+	}
 	mu sync.Mutex
 }
 
@@ -188,6 +210,14 @@ func (s *stubAdminService) BatchSetGroupRateMultipliers(_ context.Context, _ int
 }
 
 func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search, model string, groupID int64, privacyMode string) ([]service.Account, int64, error) {
+	s.lastListAccounts.calls++
+	s.lastListAccounts.platform = platform
+	s.lastListAccounts.accountType = accountType
+	s.lastListAccounts.status = status
+	s.lastListAccounts.search = search
+	s.lastListAccounts.model = model
+	s.lastListAccounts.groupID = groupID
+	s.lastListAccounts.privacyMode = privacyMode
 	return s.accounts, int64(len(s.accounts)), nil
 }
 
@@ -262,6 +292,11 @@ func (s *stubAdminService) CheckMixedChannelRisk(ctx context.Context, currentAcc
 }
 
 func (s *stubAdminService) ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string) ([]service.Proxy, int64, error) {
+	s.lastListProxies.calls++
+	s.lastListProxies.protocol = protocol
+	s.lastListProxies.status = status
+	s.lastListProxies.search = strings.TrimSpace(search)
+
 	search = strings.TrimSpace(strings.ToLower(search))
 	filtered := make([]service.Proxy, 0, len(s.proxies))
 	for _, proxy := range s.proxies {
@@ -385,6 +420,10 @@ func (s *stubAdminService) CheckProxyQuality(ctx context.Context, id int64) (*se
 }
 
 func (s *stubAdminService) ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string) ([]service.RedeemCode, int64, error) {
+	s.lastListRedeemCodes.calls++
+	s.lastListRedeemCodes.codeType = codeType
+	s.lastListRedeemCodes.status = status
+	s.lastListRedeemCodes.search = search
 	return s.redeems, int64(len(s.redeems)), nil
 }
 

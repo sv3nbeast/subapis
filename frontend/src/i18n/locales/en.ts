@@ -4345,7 +4345,16 @@ export default {
         homeContentHint: 'Customize the home page content. Supports Markdown/HTML. If you enter a URL (starting with http:// or https://), it will be used as an iframe src to embed an external page. When set, the default status information will no longer be displayed.',
         homeContentIframeWarning: '⚠️ iframe mode note: Some websites have X-Frame-Options or CSP security policies that prevent embedding in iframes. If the page appears blank or shows an error, please verify the target website allows embedding, or consider using HTML mode to build your own content.',
         hideCcsImportButton: 'Hide CCS Import Button',
-        hideCcsImportButtonHint: 'When enabled, the "Import to CCS" button will be hidden on the API Keys page'
+        hideCcsImportButtonHint: 'When enabled, the "Import to CCS" button will be hidden on the API Keys page',
+        tablePreferencesTitle: 'Global Table Preferences',
+        tablePreferencesDescription: 'Control default pagination preferences for admin and user tables.',
+        tableDefaultPageSize: 'Default Rows Per Page',
+        tableDefaultPageSizeHint: 'Must be an integer between 5 and 1000',
+        tablePageSizeOptions: 'Rows Per Page Options',
+        tablePageSizeOptionsPlaceholder: '10, 20, 50, 100',
+        tablePageSizeOptionsHint: 'Use commas to separate integers between 5 and 1000; values are deduplicated and sorted on save',
+        tableDefaultPageSizeRangeError: 'Default rows per page must be between {min} and {max}',
+        tablePageSizeOptionsFormatError: 'Invalid options format. Enter comma-separated integers between {min} and {max}'
       },
       purchase: {
         title: 'Recharge / Subscription Page',
