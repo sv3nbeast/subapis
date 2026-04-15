@@ -375,3 +375,42 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - 应用容器健康检查通过
   - `098_add_account_stats_pricing.sql` 已完成迁移
   - 发布后核心 API 请求日志已出现正常 `200` 响应
+
+## 2026-04-15 继续同步
+
+- 同步前本地 HEAD：`aee23302`
+- 官方 `origin/main`：`be7551b9`
+- 官方新增标签：`v0.1.113`
+
+已同步：
+
+- 官方 `38c00872` `fix(ui): allow closing test dialog during active SSE stream`
+  - 说明：账号测试连接弹窗的 SSE 请求改为 `AbortController` 控制，测试中也可以关闭弹窗并中止请求
+
+- 官方 `6ade6d30` / `db27e8f0` / `a7dd535d` / `e180dd07` 的账号成本展示链路
+  - 说明：后台 dashboard、usage 统计卡片、模型/分组分布、usage 明细表展示 `account_cost`
+  - 本地兼容处理：
+    - 官方 `107_add_account_cost_to_dashboard_tables.sql` 改为本地连续迁移 [backend/migrations/099_add_account_cost_to_dashboard_tables.sql](/Users/sven.sun/Desktop/Api/sub2api/backend/migrations/099_add_account_cost_to_dashboard_tables.sql)
+    - 继续沿用本地已合入的 `account_stats_cost` 语义，账号成本按 `COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)` 计算
+    - `UsageTable` 与本地已有费用 tooltip 结构手工合并，没有直接覆盖本地二开表格
+
+- 官方 `7451b6f9` `修复 OpenAI 账号限流回流误判`
+  - 说明：OpenAI Codex 账号额度快照只写回 usage extra，不再因为 5h 窗口为 0 误把账号写入 429 限流状态
+  - 影响范围：OpenAI OAuth / Codex 额度展示与调度状态回写，不影响 Antigravity 调度逻辑
+
+明确跳过：
+
+- 官方 `60a4b931` / `98140f6c` / `e761d38f` / `d149dbc9` / `3053c56c` / `342dbd2e` / `c2108421`
+  - 原因：属于官方内置 payment / recharge fee rate 线，本地继续使用独立 `sub2apipay`，不能直接混合合入
+
+- 官方 `be7551b9`
+  - 原因：仅同步官方 `VERSION` 到 `0.1.113`，本地二开版本号不直接跟随官方覆写
+
+验证：
+
+- `go test ./...`
+- `corepack pnpm build`（在 `frontend` 目录执行）
+
+备注：
+
+- 本轮同步前临时保存了未提交的 gateway session 诊断改动：`stash@{0}: pre-upstream-sync-session-diag-20260415`

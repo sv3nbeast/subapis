@@ -146,8 +146,8 @@
                 </div>
               </div>
             </div>
-            <div v-if="row.account_rate_multiplier != null" class="mt-0.5 text-[11px] text-gray-400">
-              A ${{ (row.total_cost * row.account_rate_multiplier).toFixed(6) }}
+            <div v-if="row.account_rate_multiplier != null" class="mt-0.5 text-[11px] text-orange-500 dark:text-orange-400">
+              A ${{ accountBilled(row).toFixed(6) }}
             </div>
           </div>
         </template>
@@ -312,7 +312,11 @@
           <div class="flex items-center justify-between gap-6 border-t border-gray-700 pt-1.5">
             <span class="text-gray-400">{{ t('usage.accountBilled') }}</span>
             <span class="font-semibold text-green-400">
-              ${{ (((tooltipData?.total_cost || 0) * (tooltipData?.account_rate_multiplier ?? 1)) || 0).toFixed(6) }}
+              ${{ accountBilled({
+                total_cost: tooltipData?.total_cost,
+                account_stats_cost: tooltipData?.account_stats_cost,
+                account_rate_multiplier: tooltipData?.account_rate_multiplier,
+              }).toFixed(6) }}
             </span>
           </div>
         </div>
@@ -334,6 +338,16 @@ import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { AdminUsageLog } from '@/types'
+
+const accountBilled = (row: {
+  total_cost?: number | null
+  account_stats_cost?: number | null
+  account_rate_multiplier?: number | null
+}): number => {
+  const base = row.account_stats_cost != null ? row.account_stats_cost : (row.total_cost ?? 0)
+  const result = base * (row.account_rate_multiplier ?? 1)
+  return Number.isNaN(result) ? 0 : result
+}
 
 defineProps(['data', 'loading', 'columns'])
 defineEmits(['userClick'])
