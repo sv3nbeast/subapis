@@ -230,7 +230,7 @@ func (h *ProxyHandler) listProxiesFiltered(ctx context.Context, protocol, status
 	useAccountCountSort := strings.EqualFold(sortBy, "account_count")
 	for {
 		if useAccountCountSort {
-			items, total, err := h.adminService.ListProxiesWithAccountCount(ctx, page, pageSize, protocol, status, search)
+			items, total, err := h.adminService.ListProxiesWithAccountCount(ctx, page, pageSize, protocol, status, search, sortBy, sortOrder)
 			if err != nil {
 				return nil, err
 			}
@@ -241,7 +241,7 @@ func (h *ProxyHandler) listProxiesFiltered(ctx context.Context, protocol, status
 				break
 			}
 		} else {
-			items, total, err := h.adminService.ListProxies(ctx, page, pageSize, protocol, status, search)
+			items, total, err := h.adminService.ListProxies(ctx, page, pageSize, protocol, status, search, sortBy, sortOrder)
 			if err != nil {
 				return nil, err
 			}

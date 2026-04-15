@@ -478,6 +478,31 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 下一步：
 
-- 官方 `5f8e60a1` 后端表格搜索/排序专题
+- 官方 OIDC 登录专题
+- 官方 WebSearch / Notify 专题
+
+继续同步：
+
+- 官方 `5f8e60a1` `feat(table): 表格排序与搜索改为后端处理`
+  - 说明：后台与用户侧多处表格增加服务端排序参数，仓库层按白名单字段排序，避免前端只排序当前页导致全局排序不准确
+  - 涉及范围：
+    - 账号、用户、分组、渠道、代理、兑换码、公告、用量、API Key 等列表接口
+    - `PaginationParams` 增加 `sort_by` / `sort_order`
+    - 前端 `DataTable` 相关页面改为透传排序参数
+  - 兼容处理：
+    - `ListAccounts` 同时保留本地 `model` 模糊筛选参数和官方 `sort_by` / `sort_order`
+    - 账号状态筛选继续保留本地语义：正常账号排除账号级限流、临时不可调度、手动不可调度；模型筛选仍支持模型级 cooldown 和 Antigravity 模型别名
+    - 模型筛选分支同样应用官方后端排序，避免筛选模型后排序退回旧 ID 倒序
+    - 渠道列表排序保留本地 `apply_pricing_to_account_stats` 字段读取，避免覆盖账号统计定价功能
+    - 账号/代理/兑换码导出现在可继续传递排序参数，和本轮导出筛选修复保持一致
+  - 验证：
+    - `go test ./internal/service ./internal/handler/admin ./internal/repository -count=1`
+    - `go test ./internal/handler ./internal/handler/admin ./internal/service ./internal/repository -run 'Test.*(Sort|Search|List|Export|Data|RequestType|Table|Setting|Public|OpenAIWS).*' -count=1`
+    - `go test -tags integration ./internal/repository -run 'TestAccountRepoSuite/TestListWithFilters_(ModelFilterPreservesSort|SortByPriorityDesc)' -count=1`
+    - `corepack pnpm vitest run src/views/user/__tests__/UsageView.spec.ts src/components/admin/announcements/__tests__/AnnouncementReadStatusDialog.spec.ts`
+    - `corepack pnpm build`
+
+下一步：
+
 - 官方 OIDC 登录专题
 - 官方 WebSearch / Notify 专题

@@ -360,7 +360,7 @@ func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, e
 	pageSize := dataPageCap
 	var out []service.Proxy
 	for {
-		items, total, err := h.adminService.ListProxies(ctx, page, pageSize, "", "", "")
+		items, total, err := h.adminService.ListProxies(ctx, page, pageSize, "", "", "", "created_at", "desc")
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +378,7 @@ func (h *AccountHandler) listAccountsFiltered(ctx context.Context, platform, acc
 	pageSize := dataPageCap
 	var out []service.Account
 	for {
-		items, total, err := h.adminService.ListAccounts(ctx, page, pageSize, platform, accountType, status, search, "", groupID, privacyMode)
+		items, total, err := h.adminService.ListAccounts(ctx, page, pageSize, platform, accountType, status, search, "", groupID, privacyMode, sortBy, sortOrder)
 		if err != nil {
 			return nil, err
 		}

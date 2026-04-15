@@ -1368,6 +1368,8 @@ export interface UsageQueryParams {
   billing_type?: number | null
   start_date?: string
   end_date?: string
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
 }
 
 // ==================== Account Usage Statistics ====================
