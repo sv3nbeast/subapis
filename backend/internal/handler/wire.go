@@ -34,6 +34,7 @@ func ProvideAdminHandlers(
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	channelHandler *admin.ChannelHandler,
+	paymentHandler *admin.PaymentHandler,
 	statusProbeSettingsHandler *admin.StatusProbeSettingsHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
@@ -62,6 +63,7 @@ func ProvideAdminHandlers(
 		APIKey:                apiKeyHandler,
 		ScheduledTest:         scheduledTestHandler,
 		Channel:               channelHandler,
+		Payment:               paymentHandler,
 		StatusProbeSettings:   statusProbeSettingsHandler,
 	}
 }
@@ -90,24 +92,28 @@ func ProvideHandlers(
 	openaiGatewayHandler *OpenAIGatewayHandler,
 	settingHandler *SettingHandler,
 	totpHandler *TotpHandler,
+	paymentHandler *PaymentHandler,
+	paymentWebhookHandler *PaymentWebhookHandler,
 	statusHandler *StatusHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:          authHandler,
-		User:          userHandler,
-		APIKey:        apiKeyHandler,
-		Usage:         usageHandler,
-		Redeem:        redeemHandler,
-		Subscription:  subscriptionHandler,
-		Announcement:  announcementHandler,
-		Admin:         adminHandlers,
-		Gateway:       gatewayHandler,
-		OpenAIGateway: openaiGatewayHandler,
-		Setting:       settingHandler,
-		Totp:          totpHandler,
-		Status:        statusHandler,
+		Auth:           authHandler,
+		User:           userHandler,
+		APIKey:         apiKeyHandler,
+		Usage:          usageHandler,
+		Redeem:         redeemHandler,
+		Subscription:   subscriptionHandler,
+		Announcement:   announcementHandler,
+		Admin:          adminHandlers,
+		Gateway:        gatewayHandler,
+		OpenAIGateway:  openaiGatewayHandler,
+		Setting:        settingHandler,
+		Totp:           totpHandler,
+		Payment:        paymentHandler,
+		PaymentWebhook: paymentWebhookHandler,
+		Status:         statusHandler,
 	}
 }
 
@@ -124,6 +130,8 @@ var ProviderSet = wire.NewSet(
 	NewGatewayHandler,
 	NewOpenAIGatewayHandler,
 	NewTotpHandler,
+	NewPaymentHandler,
+	NewPaymentWebhookHandler,
 	NewStatusHandler,
 	ProvideSettingHandler,
 
@@ -153,6 +161,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewChannelHandler,
+	admin.NewPaymentHandler,
 	admin.NewStatusProbeSettingsHandler,
 
 	// AdminHandlers and Handlers constructors

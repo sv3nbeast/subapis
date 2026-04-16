@@ -487,14 +487,24 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    ...(appStore.cachedPublicSettings?.purchase_subscription_enabled
+    ...((appStore.cachedPublicSettings?.payment_enabled || appStore.cachedPublicSettings?.purchase_subscription_enabled)
       ? [
           {
             path: '/purchase',
             label: t('nav.buySubscription'),
             icon: RechargeSubscriptionIcon,
             hideInSimpleMode: true
-          }
+          },
+          ...(appStore.cachedPublicSettings?.payment_enabled
+            ? [
+                {
+                  path: '/orders',
+                  label: t('nav.myOrders'),
+                  icon: CreditCardIcon,
+                  hideInSimpleMode: true
+                }
+              ]
+            : [])
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
@@ -516,14 +526,24 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
-    ...(appStore.cachedPublicSettings?.purchase_subscription_enabled
+    ...((appStore.cachedPublicSettings?.payment_enabled || appStore.cachedPublicSettings?.purchase_subscription_enabled)
       ? [
           {
             path: '/purchase',
             label: t('nav.buySubscription'),
             icon: RechargeSubscriptionIcon,
             hideInSimpleMode: true
-          }
+          },
+          ...(appStore.cachedPublicSettings?.payment_enabled
+            ? [
+                {
+                  path: '/orders',
+                  label: t('nav.myOrders'),
+                  icon: CreditCardIcon,
+                  hideInSimpleMode: true
+                }
+              ]
+            : [])
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
@@ -569,7 +589,14 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
     { path: '/admin/redeem', label: t('nav.redeemCodes'), icon: TicketIcon, hideInSimpleMode: true },
     { path: '/admin/promo-codes', label: t('nav.promoCodes'), icon: GiftIcon, hideInSimpleMode: true },
-    { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon }
+    { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
+    ...(appStore.cachedPublicSettings?.payment_enabled
+      ? [
+          { path: '/admin/orders', label: t('nav.orderManagement'), icon: CreditCardIcon, hideInSimpleMode: true },
+          { path: '/admin/orders/dashboard', label: t('nav.paymentDashboard'), icon: ChartIcon, hideInSimpleMode: true },
+          { path: '/admin/orders/plans', label: t('nav.paymentPlans'), icon: CreditCardIcon, hideInSimpleMode: true }
+        ]
+      : [])
   ]
 
   // 简单模式下，在系统设置前插入 API密钥

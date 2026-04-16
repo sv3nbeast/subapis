@@ -352,6 +352,10 @@ export default {
     github: 'GitHub',
     mySubscriptions: 'My Subscriptions',
     buySubscription: 'Recharge / Subscription',
+    myOrders: 'My Orders',
+    orderManagement: 'Order Management',
+    paymentDashboard: 'Payment Dashboard',
+    paymentPlans: 'Payment Plans',
     docs: 'Docs',
     sora: 'Sora Studio',
     serviceStatus: 'Service Status'

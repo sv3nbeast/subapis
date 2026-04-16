@@ -179,6 +179,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyCustomEndpoints,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyBackendModeEnabled,
+		SettingPaymentEnabled,
 		SettingKeyOIDCConnectEnabled,
 		SettingKeyOIDCConnectProviderName,
 	}
@@ -245,9 +246,14 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
-		PaymentEnabled:                   settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
-		OIDCOAuthEnabled:                 oidcEnabled,
-		OIDCOAuthProviderName:            oidcProviderName,
+		PaymentEnabled: func() bool {
+			if raw, ok := settings[SettingPaymentEnabled]; ok {
+				return raw == "true"
+			}
+			return settings[SettingKeyPurchaseSubscriptionEnabled] == "true"
+		}(),
+		OIDCOAuthEnabled:      oidcEnabled,
+		OIDCOAuthProviderName: oidcProviderName,
 	}, nil
 }
 

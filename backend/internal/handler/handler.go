@@ -31,24 +31,27 @@ type AdminHandlers struct {
 	APIKey                *admin.AdminAPIKeyHandler
 	ScheduledTest         *admin.ScheduledTestHandler
 	Channel               *admin.ChannelHandler
+	Payment               *admin.PaymentHandler
 	StatusProbeSettings   *admin.StatusProbeSettingsHandler
 }
 
 // Handlers contains all HTTP handlers
 type Handlers struct {
-	Auth          *AuthHandler
-	User          *UserHandler
-	APIKey        *APIKeyHandler
-	Usage         *UsageHandler
-	Redeem        *RedeemHandler
-	Subscription  *SubscriptionHandler
-	Announcement  *AnnouncementHandler
-	Admin         *AdminHandlers
-	Gateway       *GatewayHandler
-	OpenAIGateway *OpenAIGatewayHandler
-	Setting       *SettingHandler
-	Totp          *TotpHandler
-	Status        *StatusHandler
+	Auth           *AuthHandler
+	User           *UserHandler
+	APIKey         *APIKeyHandler
+	Usage          *UsageHandler
+	Redeem         *RedeemHandler
+	Subscription   *SubscriptionHandler
+	Announcement   *AnnouncementHandler
+	Admin          *AdminHandlers
+	Gateway        *GatewayHandler
+	OpenAIGateway  *OpenAIGatewayHandler
+	Setting        *SettingHandler
+	Totp           *TotpHandler
+	Payment        *PaymentHandler
+	PaymentWebhook *PaymentWebhookHandler
+	Status         *StatusHandler
 }
 
 // BuildInfo contains build-time information

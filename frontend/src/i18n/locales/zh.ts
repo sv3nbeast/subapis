@@ -352,6 +352,10 @@ export default {
     github: 'GitHub',
     mySubscriptions: '我的订阅',
     buySubscription: '充值/订阅',
+    myOrders: '我的订单',
+    orderManagement: '订单管理',
+    paymentDashboard: '支付概览',
+    paymentPlans: '支付套餐',
     docs: '文档',
     sora: 'Sora 创作',
     serviceStatus: '服务状态'
