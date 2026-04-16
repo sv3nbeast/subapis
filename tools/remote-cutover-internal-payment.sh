@@ -51,6 +51,7 @@ NEW_DB="${NEW_DB:-sub2api-postgres}"
 NEW_DB_USER="${NEW_DB_USER:-sub2api}"
 NEW_DB_NAME="${NEW_DB_NAME:-sub2api}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
+NEW_PUBLIC_BASE_URL="${NEW_PUBLIC_BASE_URL:-}"
 
 require_cmd docker
 require_cmd sed
@@ -119,6 +120,18 @@ if [[ -z "${NEW_KEY_HEX}" ]]; then
   exit 1
 fi
 
+if [[ -z "${NEW_PUBLIC_BASE_URL}" ]]; then
+  NEW_PUBLIC_BASE_URL="$(run_newdb_query "select value from settings where key='frontend_url';" | head -n1)"
+fi
+if [[ -z "${NEW_PUBLIC_BASE_URL}" ]]; then
+  NEW_PUBLIC_BASE_URL="$(run_newdb_query "select value from settings where key='api_base_url';" | head -n1)"
+fi
+NEW_PUBLIC_BASE_URL="${NEW_PUBLIC_BASE_URL%/}"
+if [[ -z "${NEW_PUBLIC_BASE_URL}" ]]; then
+  echo "Failed to resolve NEW_PUBLIC_BASE_URL from sub2api settings; set NEW_PUBLIC_BASE_URL explicitly." >&2
+  exit 1
+fi
+
 required_tables=(
   payment_orders
   payment_audit_logs
@@ -135,11 +148,14 @@ for table in "${required_tables[@]}"; do
   fi
 done
 
-reencrypt_config() {
-  local ciphertext="$1"
+rewrite_and_reencrypt_config() {
+  local provider_key="$1"
+  local ciphertext="$2"
   printf '%s' "${ciphertext}" | docker exec -i \
     -e OLD_ADMIN_TOKEN="${OLD_ADMIN_TOKEN}" \
     -e NEW_KEY_HEX="${NEW_KEY_HEX}" \
+    -e PROVIDER_KEY="${provider_key}" \
+    -e NEW_PUBLIC_BASE_URL="${NEW_PUBLIC_BASE_URL}" \
     "${LEGACY_APP}" \
     node - <<'NODE'
 const fs = require('fs');
@@ -148,6 +164,8 @@ const { createHash, createDecipheriv, createCipheriv, randomBytes } = require('c
 const ciphertext = fs.readFileSync(0, 'utf8');
 const oldToken = process.env.OLD_ADMIN_TOKEN || '';
 const newKeyHex = process.env.NEW_KEY_HEX || '';
+const providerKey = process.env.PROVIDER_KEY || '';
+const baseUrl = (process.env.NEW_PUBLIC_BASE_URL || '').replace(/\/$/, '');
 
 function deriveOldKey(secret) {
   return createHash('sha256').update(secret).digest();
@@ -177,7 +195,21 @@ if (newKey.length !== 32) {
   throw new Error(`invalid NEW_KEY_HEX length: ${newKey.length}`);
 }
 const plaintext = decryptLegacy(ciphertext, oldKey);
-process.stdout.write(encryptNew(plaintext, newKey));
+const parsed = JSON.parse(plaintext);
+
+if (baseUrl) {
+  if (providerKey === 'easypay') {
+    parsed.notifyUrl = `${baseUrl}/api/v1/payment/webhook/easypay`;
+    parsed.returnUrl = `${baseUrl}/payment/result`;
+  } else if (providerKey === 'alipay') {
+    parsed.notifyUrl = `${baseUrl}/api/v1/payment/webhook/alipay`;
+    parsed.returnUrl = `${baseUrl}/payment/result`;
+  } else if (providerKey === 'wxpay') {
+    parsed.notifyUrl = `${baseUrl}/api/v1/payment/webhook/wxpay`;
+  }
+}
+
+process.stdout.write(encryptNew(JSON.stringify(parsed), newKey));
 NODE
 }
 
@@ -206,7 +238,7 @@ run_newdb_sql "TRUNCATE TABLE payment_provider_instances, subscription_plans RES
 echo "Migrating provider instances..."
 while IFS=$'\t' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
   [[ -z "${old_id}" ]] && continue
-  new_config="$(reencrypt_config "${config}")"
+  new_config="$(rewrite_and_reencrypt_config "${provider_key}" "${config}")"
   payment_mode=""
   clean_supported_types="${supported_types}"
   if [[ "${provider_key}" == "easypay" ]]; then
