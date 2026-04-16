@@ -742,6 +742,20 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方最新主线中的功能性更新已全部同步到本地项目
 - 剩余未同步内容仅是低优先级 chore，可长期忽略
 
+发布状态补充：
+
+- 已推送到 `sv3nbeast/main`
+  - 当前 fork / 本地 HEAD：`341cab46`
+
+- 已发布到生产
+  - 当前生产镜像：`sub2api:prod-20260416-181614-341cab46`
+  - 发布方式：
+    - 因原工作区存在其他未提交改动，使用干净临时 worktree 从提交态发布
+    - 避免把原工作区中的 README / 备份 / 部署文档等未提交变更一并同步到服务器
+  - 生产结果：
+    - 容器健康检查通过
+    - 最近日志已观测到真实 `/v1/messages` / `/responses` 成功请求
+
 ## 2026-04-16 WebSearch / Notify 专题收尾
 
 - 同步前本地 HEAD：`b188aaac`
