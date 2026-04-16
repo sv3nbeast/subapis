@@ -258,7 +258,74 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - 结论：本地已等价覆盖，不需要再同步
   - 依据：
     - [backend/internal/handler/openai_gateway_handler.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/openai_gateway_handler.go) 已包含 `NormalizeOpenAICompatRequestedModel(reqModel)`、`resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)`、`effectiveMappedModel`
-    - [backend/internal/service/admin_service_apikey_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/admin_service_apikey_test.go) 已包含 subscription group 相关 3 条测试
+
+### 2026-04-16
+
+- 本地 HEAD：`f8c12915`
+- 官方 `origin/main`：`be7551b9`
+- 图谱差异：
+  - 相对官方：`behind 197 / ahead 95`
+
+本轮核验结论：
+
+- 官方 `38c00872`
+  - 结论：本地已等价覆盖，不需要再同步
+  - 依据：
+    - [frontend/src/components/account/AccountTestModal.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/account/AccountTestModal.vue) 与 [frontend/src/components/admin/account/AccountTestModal.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/admin/account/AccountTestModal.vue)
+    - 当前实现已经是 `AbortController + fetch stream`，关闭弹窗会中止请求，关闭按钮未在连接中禁用
+
+- 官方 `6ade6d30` / `22680dc6` / `db27e8f0` / `a7dd535d` / `e180dd07`
+  - 结论：本地已基本吸收，仅补最后一个 UI 细节
+  - 依据：
+    - 后端已存在账号成本聚合与展示字段：
+      - [backend/internal/repository/usage_log_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/usage_log_repo.go)
+      - [backend/internal/repository/dashboard_aggregation_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/dashboard_aggregation_repo.go)
+      - [backend/migrations/099_add_account_cost_to_dashboard_tables.sql](/Users/sven.sun/Desktop/Api/sub2api/backend/migrations/099_add_account_cost_to_dashboard_tables.sql)
+    - 前端已存在 dashboard / usage / breakdown 的账号成本展示：
+      - [frontend/src/views/admin/DashboardView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/admin/DashboardView.vue)
+      - [frontend/src/components/charts/ModelDistributionChart.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/charts/ModelDistributionChart.vue)
+      - [frontend/src/components/charts/GroupDistributionChart.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/charts/GroupDistributionChart.vue)
+      - [frontend/src/components/charts/UserBreakdownSubTable.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/charts/UserBreakdownSubTable.vue)
+      - [frontend/src/components/admin/usage/UsageTable.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/admin/usage/UsageTable.vue)
+    - 本轮仅把 [frontend/src/components/admin/usage/UsageStatsCards.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/admin/usage/UsageStatsCards.vue) 的账号成本/标准成本文案顺序对齐到上游最终态
+
+- 官方 `7451b6f9`
+  - 结论：本地已等价覆盖，不需要再同步
+  - 依据：
+    - 当前代码已不再把 Codex 5h/7d extra 快照自动提升为运行时 `RateLimitResetAt`
+    - 已核对：
+      - [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go)
+      - [backend/internal/service/account_usage_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/account_usage_service.go)
+      - [backend/internal/service/account_test_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/account_test_service.go)
+      - [backend/internal/service/admin_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/admin_service.go)
+      - [backend/internal/service/openai_ws_ratelimit_signal_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_ws_ratelimit_signal_test.go)
+      - [backend/internal/service/account_usage_service_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/account_usage_service_test.go)
+
+- 官方 `3de77130`
+  - 结论：本地关键修复已存在，不需要再同步
+  - 依据：
+    - [frontend/src/views/admin/ChannelsView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/admin/ChannelsView.vue) 当前已使用 `splice(idx, 1, updated)` 更新 `model_pricing`
+    - 同提交附带的 `console.log` 仅是调试输出，不引入
+
+- 官方 `2dce4306` / `160903fc` / `e3748741`
+  - 结论：本地已等价覆盖，不需要再同步
+  - 依据：
+    - [frontend/src/views/admin/ChannelsView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/admin/ChannelsView.vue) 已有 `restrict_models`、`apply_pricing_to_account_stats`、`account_stats_pricing_rules`
+    - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go) 与 [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go) 已在调度阶段做渠道限制预检查与 upstream 逐账号限制检查
+    - `-tags unit` 已通过：
+      - `TestCheckChannelPricingRestriction_*`
+      - `TestOpenAISelectAccountForModelWithExclusions_*`
+      - `TestAccountStatsPricing_*`
+      - `TestResolveChannelMapping_*BillingModelSource`
+      - `TestCreate_DefaultBillingModelSource`
+    - `-tags unit` 已通过 [backend/internal/handler/admin/channel_handler_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/admin/channel_handler_test.go) 的渠道接口用例
+
+- 官方 `1c63ea14`
+  - 结论：对当前分叉结构不适用
+  - 原因：
+    - 该修复依赖上游后续把 payment channel 合并回通用 `Channel.features` 字段的结构调整
+    - 当前本地 [backend/internal/service/channel.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/channel.go) 不存在 `Features` 字段，[backend/internal/repository/channel_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/channel_repo.go) 也未采用该列扫描路径
+    - 你的分叉继续使用本地支付体系，不需要引入这条上游 payment 结构链
 
 - 官方 `2dce4306` / `3d202722`
   - 结论：本地已等价覆盖，不需要再同步
