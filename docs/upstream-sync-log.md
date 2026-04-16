@@ -612,6 +612,136 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 OIDC 登录专题
 - 官方 WebSearch / Notify 专题
 
+## 2026-04-16 状态校正与生产发布
+
+- 校正时间：`2026-04-16`
+- 本地 `HEAD`：`57e6e2cb`
+- 你的 fork `sv3nbeast/main`：`57e6e2cb`
+- 官方 `origin/main`：`e6e73b4f`
+- 图谱差异：
+  - 相对 fork：`behind 0 / ahead 0`
+  - 相对官方：不再继续使用单纯 `ahead/behind` 判断真实同步进度，仍以 `git cherry` + 当前代码核验为准
+
+本节用于覆盖上面 `2026-04-16 WebSearch / Notify 专题收尾` 中已过期的状态描述。
+
+实际已完成：
+
+- 已推送到 `sv3nbeast/main`
+  - 提交：
+    - `b91fcc84` `feat(notify): add balance low & account quota notification system`
+    - `29e41250` `docs: 记录 WebSearch 与通知专题同步`
+    - `57e6e2cb` `fix(channel): stop querying legacy features column`
+
+- 已发布到生产
+  - 首次发布镜像：`sub2api:prod-20260416-154457-29e41250`
+  - 热修后当前生产镜像：`sub2api:prod-20260416-155311-57e6e2cb`
+  - 当前生产容器状态：`healthy`
+
+- 本轮额外热修：
+  - 问题：
+    - 发布后生产日志出现 `failed to build channel cache`
+    - 真实原因不是数据库缺列，而是 [backend/internal/repository/channel_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/channel_repo.go) 仍在查询旧列 `channels.features`
+    - 生产数据库实际只使用 `features_config`
+  - 处理：
+    - 停止在 repository 层读写旧 `features` 列
+    - 继续保留 `features_config` 作为实际存储
+    - 不触碰 PostgreSQL / Redis 数据卷，不做破坏性迁移
+
+生产验证：
+
+- 发布脚本：
+  - 使用 [scripts/deploy-prod.sh](/Users/sven.sun/Desktop/Api/sub2api/scripts/deploy-prod.sh)
+  - 只同步源码目录并重建 `sub2api` 服务
+  - 自动排除：
+    - `deploy/data`
+    - `deploy/postgres_data`
+    - `deploy/redis_data`
+    - `deploy/.env`
+- 回滚点：
+  - 最近 override 备份：`/root/sub2api-deploy/docker-compose.override.yml.bak-20260416-155320`
+- 健康检查：
+  - `/health` 返回 `200`
+  - 容器健康状态为 `healthy`
+- 日志核验：
+  - 热修后最近日志中已不再出现：
+    - `failed to build channel cache`
+    - `failed to load channel cache`
+- 真实请求核验：
+  - 发布后已观测到真实 `/v1/messages`、`/responses` 请求持续返回 `200`
+
+截至当前，官方最新但尚未同步到本地项目的仅剩：
+
+- `3944b3d2` `fix: preserve openai ws flags in scheduler cache`
+  - 建议优先级：高
+  - 原因：涉及 OpenAI WS 调度快照 flags 保留，属于真实功能修复
+
+- `836092a6` `fix: restore ctx pool ws mode option in account ui`
+  - 建议优先级：中
+  - 原因：恢复账号前端里的 OpenAI WS `ctx_pool` 选项
+
+- `a55ead5e` `chore: remove empty dir Antigravity-Manager`
+  - 建议优先级：低
+  - 原因：仓库清理，无生产价值
+
+- `7ea8e7e6` `chore: update sponsors`
+  - 建议优先级：低
+  - 原因：README / 资源更新，无功能影响
+
+当前结论：
+
+- `websearch / notify` 专题已完成本地、fork、生产三端闭环
+- 当前真正值得继续同步的官方新增，优先只剩 OpenAI WS 相关的 `3944b3d2` / `836092a6`
+
+## 2026-04-16 OpenAI WS 收尾
+
+- 同步前本地 HEAD：`57e6e2cb`
+- 官方 `origin/main`：`e6e73b4f`
+- 处理原则：只吸收官方最新主线里仍未同步、且对现有功能有实际价值的 OpenAI WS 修复；跳过 sponsor / README 类无功能价值变更
+
+已同步：
+
+- 官方 `3944b3d2` `fix: preserve openai ws flags in scheduler cache`
+  - 说明：调度快照 metadata 现在会继续保留 OpenAI WS 相关 extra 字段，避免从 scheduler snapshot 选账号时丢失 WS 路由语义
+  - 已落地：
+    - [backend/internal/repository/scheduler_cache.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache.go)
+    - [backend/internal/repository/scheduler_cache_unit_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/scheduler_cache_unit_test.go)
+    - [backend/internal/service/openai_account_scheduler_ws_snapshot_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_account_scheduler_ws_snapshot_test.go)
+
+- 官方 `836092a6` `fix: restore ctx pool ws mode option in account ui`
+  - 说明：恢复账号创建/编辑/批量编辑界面中的 OpenAI WS `ctx_pool` 模式选项
+  - 已落地：
+    - [frontend/src/components/account/CreateAccountModal.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/account/CreateAccountModal.vue)
+    - [frontend/src/components/account/EditAccountModal.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/account/EditAccountModal.vue)
+    - [frontend/src/components/account/BulkEditAccountModal.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/account/BulkEditAccountModal.vue)
+
+兼容处理：
+
+- 验证过程中补了本地旧测试桩：
+  - [backend/internal/service/gateway_record_usage_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_record_usage_test.go)
+  - 原因：`NewGatewayService` 签名已演进，旧单测缺一个 `nil` 参数，和本轮功能无直接业务耦合
+
+验证：
+
+- `go test -tags unit ./internal/repository -run 'TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags' -count=1`
+- `go test -tags unit ./internal/service -run 'TestOpenAIGatewayService_SelectAccountWithScheduler_UsesWSPassthroughSnapshotFlags' -count=1`
+- `go test ./cmd/server -count=1`
+- `corepack pnpm vitest run src/components/account/__tests__/BulkEditAccountModal.spec.ts`
+- `corepack pnpm build`
+
+当前剩余未同步项：
+
+- `7ea8e7e6` `chore: update sponsors`
+  - 低优先级，README / 资源更新，无功能影响
+
+- `a55ead5e` `chore: remove empty dir Antigravity-Manager`
+  - 对当前本地仓库基本无实际意义
+  - 当前工作区本身已不存在 `Antigravity-Manager` 路径
+
+当前结论：
+
+- 官方最新主线中的功能性更新已全部同步到本地项目
+- 剩余未同步内容仅是低优先级 chore，可长期忽略
+
 ## 2026-04-16 WebSearch / Notify 专题收尾
 
 - 同步前本地 HEAD：`b188aaac`
