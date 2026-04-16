@@ -69,6 +69,21 @@ sql_quote() {
   printf "'%s'" "${value}"
 }
 
+bool_sql() {
+  local value="${1:-}"
+  case "${value}" in
+    t|true|TRUE|1|yes|YES|on|ON)
+      printf "TRUE"
+      ;;
+    f|false|FALSE|0|no|NO|off|OFF|'')
+      printf "FALSE"
+      ;;
+    *)
+      printf "FALSE"
+      ;;
+  esac
+}
+
 read_container_env() {
   local container="$1"
   local key="$2"
@@ -87,17 +102,22 @@ read_env_file() {
 
 run_newdb_sql() {
   local sql="$1"
-  docker exec -i "${NEW_DB}" psql -v ON_ERROR_STOP=1 -U "${NEW_DB_USER}" -d "${NEW_DB_NAME}" -c "${sql}" >/dev/null
+  docker exec "${NEW_DB}" psql -v ON_ERROR_STOP=1 -U "${NEW_DB_USER}" -d "${NEW_DB_NAME}" -c "${sql}" >/dev/null
 }
 
 run_newdb_query() {
   local sql="$1"
-  docker exec -i "${NEW_DB}" psql -v ON_ERROR_STOP=1 -U "${NEW_DB_USER}" -d "${NEW_DB_NAME}" -At -F $'\t' -c "${sql}"
+  docker exec "${NEW_DB}" psql -v ON_ERROR_STOP=1 -U "${NEW_DB_USER}" -d "${NEW_DB_NAME}" -At -F $'\t' -c "${sql}"
 }
 
 run_legacy_query() {
   local sql="$1"
-  docker exec -i "${LEGACY_DB}" psql -v ON_ERROR_STOP=1 -U "${LEGACY_DB_USER}" -d "${LEGACY_DB_NAME}" -At -F $'\t' -c "${sql}"
+  docker exec "${LEGACY_DB}" psql -v ON_ERROR_STOP=1 -U "${LEGACY_DB_USER}" -d "${LEGACY_DB_NAME}" -At -F $'\t' -c "${sql}"
+}
+
+run_legacy_query_pipe() {
+  local sql="$1"
+  docker exec "${LEGACY_DB}" psql -v ON_ERROR_STOP=1 -U "${LEGACY_DB_USER}" -d "${LEGACY_DB_NAME}" -At -F '|' -c "${sql}"
 }
 
 if [[ "${SKIP_BACKUP}" != "1" ]]; then
@@ -151,17 +171,19 @@ done
 rewrite_and_reencrypt_config() {
   local provider_key="$1"
   local ciphertext="$2"
-  printf '%s' "${ciphertext}" | docker exec -i \
+  local ciphertext_b64
+  ciphertext_b64="$(printf '%s' "${ciphertext}" | base64 | tr -d '\n')"
+  docker exec -i \
     -e OLD_ADMIN_TOKEN="${OLD_ADMIN_TOKEN}" \
     -e NEW_KEY_HEX="${NEW_KEY_HEX}" \
     -e PROVIDER_KEY="${provider_key}" \
     -e NEW_PUBLIC_BASE_URL="${NEW_PUBLIC_BASE_URL}" \
+    -e LEGACY_CONFIG_B64="${ciphertext_b64}" \
     "${LEGACY_APP}" \
     node - <<'NODE'
-const fs = require('fs');
 const { createHash, createDecipheriv, createCipheriv, randomBytes } = require('crypto');
 
-const ciphertext = fs.readFileSync(0, 'utf8');
+const ciphertext = Buffer.from(process.env.LEGACY_CONFIG_B64 || '', 'base64').toString('utf8');
 const oldToken = process.env.OLD_ADMIN_TOKEN || '';
 const newKeyHex = process.env.NEW_KEY_HEX || '';
 const providerKey = process.env.PROVIDER_KEY || '';
@@ -215,9 +237,10 @@ NODE
 
 json_array_to_lines() {
   local raw="$1"
-  printf '%s' "${raw}" | docker exec -i "${LEGACY_APP}" node - <<'NODE'
-const fs = require('fs');
-const raw = fs.readFileSync(0, 'utf8');
+  local raw_b64
+  raw_b64="$(printf '%s' "${raw}" | base64 | tr -d '\n')"
+  docker exec -i -e RAW_JSON_B64="${raw_b64}" "${LEGACY_APP}" node - <<'NODE'
+const raw = Buffer.from(process.env.RAW_JSON_B64 || '', 'base64').toString('utf8');
 if (!raw) process.exit(0);
 try {
   const parsed = JSON.parse(raw);
@@ -236,7 +259,7 @@ echo "Resetting target payment config tables (plans/providers only)..."
 run_newdb_sql "TRUNCATE TABLE payment_provider_instances, subscription_plans RESTART IDENTITY CASCADE;"
 
 echo "Migrating provider instances..."
-while IFS=$'\t' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
+while IFS='|' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
   [[ -z "${old_id}" ]] && continue
   new_config="$(rewrite_and_reencrypt_config "${provider_key}" "${config}")"
   payment_mode=""
@@ -258,18 +281,31 @@ while IFS=$'\t' read -r old_id provider_key name config supported_types enabled 
       $(sql_quote "${name}"),
       $(sql_quote "${new_config}"),
       $(sql_quote "${clean_supported_types}"),
-      $(sql_quote "${enabled}"),
+      $(bool_sql "${enabled}"),
       $(sql_quote "${payment_mode}"),
       ${sort_order:-0},
       $(sql_quote "${limits}"),
-      $(sql_quote "${refund_enabled}"),
+      $(bool_sql "${refund_enabled}"),
       false
     );"
-done < <(run_legacy_query "select id,provider_key,name,config,coalesce(supported_types,''),enabled,sort_order,coalesce(limits,''),refund_enabled from payment_provider_instances order by sort_order,id;")
+done < <(run_legacy_query_pipe "select id,provider_key,name,config,coalesce(supported_types,''),enabled,sort_order,coalesce(limits,''),refund_enabled from payment_provider_instances order by sort_order,id;")
 
 echo "Migrating subscription plans..."
-while IFS=$'\t' read -r old_id group_id name price original_price validity_days validity_unit features_json product_name for_sale sort_order; do
+legacy_channel_group_id_by_name() {
+  local plan_name="$1"
+  run_legacy_query "select coalesce(group_id::text,'') from channels where name = $(sql_quote "${plan_name}") order by sort_order, id limit 1;"
+}
+
+while IFS='|' read -r old_id group_id name price original_price validity_days validity_unit features_json product_name for_sale sort_order; do
   [[ -z "${old_id}" ]] && continue
+  resolved_group_id="${group_id}"
+  if [[ -z "${resolved_group_id}" ]]; then
+    resolved_group_id="$(legacy_channel_group_id_by_name "${name}")"
+  fi
+  if [[ -z "${resolved_group_id}" ]]; then
+    echo "Failed to resolve group_id for legacy plan: ${name}" >&2
+    exit 1
+  fi
   features_text="$(json_array_to_lines "${features_json}")"
   original_price_sql="NULL"
   if [[ -n "${original_price}" ]]; then
@@ -280,7 +316,7 @@ while IFS=$'\t' read -r old_id group_id name price original_price validity_days 
       group_id, name, description, price, original_price, validity_days,
       validity_unit, features, product_name, for_sale, sort_order
     ) VALUES (
-      ${group_id},
+      ${resolved_group_id},
       $(sql_quote "${name}"),
       '',
       ${price},
@@ -289,10 +325,10 @@ while IFS=$'\t' read -r old_id group_id name price original_price validity_days 
       $(sql_quote "${validity_unit}"),
       $(sql_quote "${features_text}"),
       $(sql_quote "${product_name}"),
-      $(sql_quote "${for_sale}"),
+      $(bool_sql "${for_sale}"),
       ${sort_order:-0}
     );"
-done < <(run_legacy_query "select id,group_id,name,price::text,coalesce(original_price::text,''),validity_days,validity_unit,coalesce(features,''),coalesce(product_name,''),for_sale,sort_order from subscription_plans order by sort_order,id;")
+done < <(run_legacy_query_pipe "select id,coalesce(group_id::text,''),name,price::text,coalesce(original_price::text,''),validity_days,validity_unit,coalesce(features,''),coalesce(product_name,''),for_sale,sort_order from subscription_plans order by sort_order,id;")
 
 echo "Migrating payment settings..."
 legacy_env="$(docker inspect "${LEGACY_APP}" --format '{{range .Config.Env}}{{println .}}{{end}}')"
@@ -332,8 +368,8 @@ declare -A settings_map=(
 for key in "${!settings_map[@]}"; do
   value="${settings_map[$key]}"
   run_newdb_sql "
-    INSERT INTO settings (key, value, created_at, updated_at)
-    VALUES ($(sql_quote "${key}"), $(sql_quote "${value}"), NOW(), NOW())
+    INSERT INTO settings (key, value, updated_at)
+    VALUES ($(sql_quote "${key}"), $(sql_quote "${value}"), NOW())
     ON CONFLICT (key)
     DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();"
 done
