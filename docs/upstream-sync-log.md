@@ -612,6 +612,46 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 OIDC 登录专题
 - 官方 WebSearch / Notify 专题
 
+## 2026-04-16 WebSearch / Notify 专题收尾
+
+- 同步前本地 HEAD：`b188aaac`
+- 官方 `origin/main`：`be7551b9`
+- 处理原则：保留本地生产已上线的调度、TLS 指纹、品牌、`sub2apipay`、服务状态探针和监控逻辑，只吸收官方 WebSearch / Notify 中不与本地实现冲突、或明显更完整的部分
+
+已同步：
+
+- 官方 Notify 专题主链及后续修补子集：
+  - 参考提交：`48b6c481` `6e9146e7` `f571d8ff` `c1eb79e4` `216bda58` `a43da622` `ca673f98` `ed8a9d97` `9d319cfa` `74f8a30f` `a9880ee7` `0a4ece5f`
+  - 落地内容：
+    - 用户余额不足邮件提醒
+    - 用户自定义余额提醒阈值与额外通知邮箱验证链路
+    - 管理员侧账号日/周/总配额告警邮箱通知
+    - 账号编辑弹窗里的配额告警阈值配置
+    - 网关/OpenAI 网关扣费后触发提醒检查
+  - 兼容处理：
+    - 保留本地 `purchase_subscription_enabled` / `purchase_subscription_url` 作为充值入口，不回退到官方内置 payment 设置页
+    - 修补本地分叉里缺失的 `web_search_emulation_config` 设置常量、`SettingService.webSearchRedis` 字段和公开设置里的 `payment_enabled` 兼容回退
+    - 保留本地已有的 TLS 指纹、账号编辑扩展字段、调度和模型隔离逻辑，不覆盖生产行为
+
+- 官方 WebSearch 后续补丁：
+  - `7c729293` WebSearch 配额增强与设置页提示子集已兼容
+  - `9e0d12d3` 已保留已保存 provider 的 API Key 显隐/复制支持
+  - `5df73099` 管理员 WebSearch 测试增加 `15s` 超时已确认在本地代码生效
+
+验证：
+
+- `go test ./internal/service ./internal/handler ./internal/handler/admin ./internal/server -run 'Test.*(Notify|Quota|Balance|Setting|Settings|Profile|WebSearch|OAuth|OIDC).*' -count=1`
+- `go test ./internal/service ./internal/handler/admin ./cmd/server -count=1`
+- `corepack pnpm build`
+- `corepack pnpm vitest run src/stores/__tests__/app.spec.ts src/utils/__tests__/tablePreferences.spec.ts src/composables/__tests__/usePersistedPageSize.spec.ts`
+
+当前状态：
+
+- 本地工作区干净
+- WebSearch / Notify 这轮历史专题已收尾
+- 尚未推送到 `sv3nbeast/main`
+- 尚未发布到生产
+
 继续同步：
 
 - 官方 `02a66a01` / `8e1a7bdf` 的通用 OIDC 登录
