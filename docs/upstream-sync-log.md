@@ -734,13 +734,13 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
   - 低优先级，README / 资源更新，无功能影响
 
 - `a55ead5e` `chore: remove empty dir Antigravity-Manager`
-  - 对当前本地仓库基本无实际意义
-  - 当前工作区本身已不存在 `Antigravity-Manager` 路径
+  - 已判定为 no-op
+  - 当前本地仓库中 `Antigravity-Manager` 路径本身就不存在，也未被 git 跟踪，无需额外同步
 
 当前结论：
 
 - 官方最新主线中的功能性更新已全部同步到本地项目
-- 剩余未同步内容仅是低优先级 chore，可长期忽略
+- 真正仍未同步的仅剩 sponsor 文案 / 图片更新，可长期忽略
 
 发布状态补充：
 
