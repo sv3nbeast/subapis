@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,10 @@ type WebSearchProviderConfig struct {
 	QuotaUsed            int64  `json:"quota_used,omitempty"`   // read-only: current period usage
 	ProxyID              *int64 `json:"proxy_id"`               // optional proxy association
 	ExpiresAt            *int64 `json:"expires_at,omitempty"`   // optional expiration timestamp
+}
+
+type webSearchProxyReader interface {
+	GetByID(ctx context.Context, id int64) (*Proxy, error)
 }
 
 // --- Validation ---
@@ -222,19 +227,34 @@ func (s *SettingService) RebuildWebSearchManager(ctx context.Context) {
 		SetWebSearchManager(nil)
 		return
 	}
+	providerConfigs := s.buildWebSearchProviderConfigs(ctx, cfg)
+	SetWebSearchManager(websearch.NewManager(providerConfigs, s.webSearchRedis))
+	slog.Info("websearch: manager rebuilt", "provider_count", len(providerConfigs))
+}
+
+func (s *SettingService) buildWebSearchProviderConfigs(ctx context.Context, cfg *WebSearchEmulationConfig) []websearch.ProviderConfig {
 	providerConfigs := make([]websearch.ProviderConfig, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
-		providerConfigs = append(providerConfigs, websearch.ProviderConfig{
+		pc := websearch.ProviderConfig{
 			Type:                 p.Type,
 			APIKey:               p.APIKey,
 			Priority:             p.Priority,
 			QuotaLimit:           p.QuotaLimit,
 			QuotaRefreshInterval: p.QuotaRefreshInterval,
 			ExpiresAt:            p.ExpiresAt,
-		})
+		}
+		if p.ProxyID != nil && s.webSearchProxyReader != nil {
+			proxy, err := s.webSearchProxyReader.GetByID(ctx, *p.ProxyID)
+			if err != nil {
+				slog.Warn("websearch: failed to resolve provider proxy", "provider", p.Type, "proxy_id", *p.ProxyID, "error", err)
+			} else if proxy != nil && proxy.IsActive() {
+				pc.ProxyID = proxy.ID
+				pc.ProxyURL = proxy.URL()
+			}
+		}
+		providerConfigs = append(providerConfigs, pc)
 	}
-	SetWebSearchManager(websearch.NewManager(providerConfigs, s.webSearchRedis))
-	slog.Info("websearch: manager rebuilt", "provider_count", len(providerConfigs))
+	return providerConfigs
 }
 
 // WebSearchTestResult holds the result of a search test.
@@ -251,7 +271,10 @@ const testSearchTimeout = 15 * time.Second
 func TestWebSearch(ctx context.Context, query string) (*WebSearchTestResult, error) {
 	mgr := getWebSearchManager()
 	if mgr == nil {
-		return nil, fmt.Errorf("web search: manager not initialized, save config first")
+		return nil, infraerrors.BadRequest(
+			"WEB_SEARCH_EMULATION_DISABLED",
+			"web search emulation is disabled or not configured",
+		)
 	}
 	testCtx, cancel := context.WithTimeout(ctx, testSearchTimeout)
 	defer cancel()
@@ -260,7 +283,16 @@ func TestWebSearch(ctx context.Context, query string) (*WebSearchTestResult, err
 		MaxResults: webSearchDefaultMaxResults,
 	})
 	if err != nil {
-		return nil, err
+		if strings.Contains(err.Error(), "no available provider") {
+			return nil, infraerrors.BadRequest(
+				"WEB_SEARCH_NO_PROVIDER",
+				"no available web search provider",
+			).WithCause(err)
+		}
+		return nil, infraerrors.ServiceUnavailable(
+			"WEB_SEARCH_TEST_FAILED",
+			"web search test failed",
+		).WithCause(err)
 	}
 	return &WebSearchTestResult{
 		Provider: providerName,

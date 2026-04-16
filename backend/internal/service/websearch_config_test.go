@@ -1,10 +1,26 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
 	"github.com/stretchr/testify/require"
 )
+
+type webSearchProxyReaderStub struct {
+	proxy *Proxy
+	err   error
+}
+
+func (s *webSearchProxyReaderStub) GetByID(_ context.Context, _ int64) (*Proxy, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.proxy, nil
+}
 
 // --- validateWebSearchConfig ---
 
@@ -137,6 +153,67 @@ func TestSanitizeWebSearchConfig_PreservesOtherFields(t *testing.T) {
 	require.True(t, out.Enabled)
 	require.Equal(t, 10, out.Providers[0].Priority)
 	require.Equal(t, int64(1000), out.Providers[0].QuotaLimit)
+}
+
+func TestTestWebSearch_ManagerNotInitialized(t *testing.T) {
+	SetWebSearchManager(nil)
+	_, err := TestWebSearch(context.Background(), "OpenAI")
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "WEB_SEARCH_EMULATION_DISABLED", infraerrors.Reason(err))
+}
+
+func TestTestWebSearch_NoAvailableProvider(t *testing.T) {
+	SetWebSearchManager(websearch.NewManager([]websearch.ProviderConfig{
+		{Type: "brave", APIKey: ""},
+	}, nil))
+	_, err := TestWebSearch(context.Background(), "OpenAI")
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "WEB_SEARCH_NO_PROVIDER", infraerrors.Reason(err))
+}
+
+func TestBuildWebSearchProviderConfigs_ResolvesProxy(t *testing.T) {
+	proxyID := int64(42)
+	svc := NewSettingService(nil, nil)
+	svc.SetWebSearchProxyReader(&webSearchProxyReaderStub{
+		proxy: &Proxy{
+			ID:       proxyID,
+			Protocol: "http",
+			Host:     "127.0.0.1",
+			Port:     8080,
+			Status:   StatusActive,
+		},
+	})
+
+	cfg := &WebSearchEmulationConfig{
+		Enabled: true,
+		Providers: []WebSearchProviderConfig{{
+			Type: "brave", APIKey: "secret", ProxyID: &proxyID,
+		}},
+	}
+
+	providers := svc.buildWebSearchProviderConfigs(context.Background(), cfg)
+	require.Len(t, providers, 1)
+	require.Equal(t, proxyID, providers[0].ProxyID)
+	require.Equal(t, "http://127.0.0.1:8080", providers[0].ProxyURL)
+}
+
+func TestBuildWebSearchProviderConfigs_IgnoresProxyLookupFailure(t *testing.T) {
+	proxyID := int64(42)
+	svc := NewSettingService(nil, nil)
+	svc.SetWebSearchProxyReader(&webSearchProxyReaderStub{err: errors.New("boom")})
+
+	cfg := &WebSearchEmulationConfig{
+		Providers: []WebSearchProviderConfig{{
+			Type: "brave", APIKey: "secret", ProxyID: &proxyID,
+		}},
+	}
+
+	providers := svc.buildWebSearchProviderConfigs(context.Background(), cfg)
+	require.Len(t, providers, 1)
+	require.Zero(t, providers[0].ProxyID)
+	require.Empty(t, providers[0].ProxyURL)
 }
 
 func TestSanitizeWebSearchConfig_DoesNotMutateOriginal(t *testing.T) {

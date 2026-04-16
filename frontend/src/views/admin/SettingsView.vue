@@ -3294,7 +3294,8 @@ async function loadWebSearchConfig() {
         if (error?.response?.status === 404) {
           return null
         }
-        throw error
+        console.warn('Failed to load web search emulation config:', error)
+        return null
       }),
       adminAPI.proxies.list(1, 1000).catch(() => ({ items: [] as Proxy[] }))
     ])
@@ -3302,7 +3303,10 @@ async function loadWebSearchConfig() {
     webSearchConfig.providers = config?.providers || []
     webSearchProxies.value = proxyResponse.items || []
   } catch (error: any) {
-    appStore.showError(error.message || t('common.unknownError'))
+    console.warn('Failed to initialize web search emulation settings:', error)
+    webSearchConfig.enabled = false
+    webSearchConfig.providers = []
+    webSearchProxies.value = []
   }
 }
 

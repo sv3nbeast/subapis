@@ -108,6 +108,7 @@ type DefaultSubscriptionGroupReader interface {
 type SettingService struct {
 	settingRepo           SettingRepository
 	defaultSubGroupReader DefaultSubscriptionGroupReader
+	webSearchProxyReader  webSearchProxyReader
 	cfg                   *config.Config
 	webSearchRedis        *redis.Client
 	onUpdate              func() // Callback when settings are updated (for cache invalidation)
@@ -120,6 +121,10 @@ func NewSettingService(settingRepo SettingRepository, cfg *config.Config) *Setti
 		settingRepo: settingRepo,
 		cfg:         cfg,
 	}
+}
+
+func (s *SettingService) SetWebSearchProxyReader(reader webSearchProxyReader) {
+	s.webSearchProxyReader = reader
 }
 
 // SetDefaultSubscriptionGroupReader injects an optional group reader for default subscription validation.

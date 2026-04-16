@@ -372,9 +372,11 @@ func ProvideBackupService(
 }
 
 // ProvideSettingService wires SettingService with group reader for default subscription validation.
-func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, cfg *config.Config) *SettingService {
+func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, redisClient *redis.Client, cfg *config.Config) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
+	svc.SetWebSearchProxyReader(proxyRepo)
+	svc.SetWebSearchRedisClient(context.Background(), redisClient)
 	return svc
 }
 
