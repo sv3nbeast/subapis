@@ -1738,7 +1738,7 @@ func (h *SettingHandler) GetWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.SanitizeWebSearchConfig(cfg))
+	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), service.SanitizeWebSearchConfig(cfg)))
 }
 
 // UpdateWebSearchEmulationConfig 更新 Web Search 模拟配置
@@ -1761,5 +1761,48 @@ func (h *SettingHandler) UpdateWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.SanitizeWebSearchConfig(updated))
+	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), service.SanitizeWebSearchConfig(updated)))
+}
+
+// ResetWebSearchUsage 重置指定 provider 的配额用量
+// POST /api/v1/admin/settings/web-search-emulation/reset-usage
+func (h *SettingHandler) ResetWebSearchUsage(c *gin.Context) {
+	var req struct {
+		ProviderType string `json:"provider_type"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.ProviderType == "" {
+		response.BadRequest(c, "provider_type is required")
+		return
+	}
+	if err := service.ResetWebSearchUsage(c.Request.Context(), req.ProviderType); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, nil)
+}
+
+// TestWebSearchEmulation 测试 Web Search 搜索
+// POST /api/v1/admin/settings/web-search-emulation/test
+func (h *SettingHandler) TestWebSearchEmulation(c *gin.Context) {
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.Query == "" {
+		response.BadRequest(c, "query is required")
+		return
+	}
+	result, err := service.TestWebSearch(c.Request.Context(), req.Query)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }

@@ -456,8 +456,9 @@ export interface WebSearchProviderConfig {
   type: 'brave' | 'tavily'
   api_key: string
   api_key_configured: boolean
-  quota_limit: number | null
-  subscribed_at: number | null
+  priority: number
+  quota_limit: number
+  quota_refresh_interval: '' | 'daily' | 'weekly' | 'monthly'
   quota_used?: number
   proxy_id: number | null
   expires_at: number | null

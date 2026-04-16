@@ -237,6 +237,67 @@ func (s *SettingService) RebuildWebSearchManager(ctx context.Context) {
 	slog.Info("websearch: manager rebuilt", "provider_count", len(providerConfigs))
 }
 
+// WebSearchTestResult holds the result of a search test.
+type WebSearchTestResult struct {
+	Provider string                   `json:"provider"`
+	Results  []websearch.SearchResult `json:"results"`
+	Query    string                   `json:"query"`
+}
+
+// TestWebSearch executes a test search using the currently configured Manager.
+// Uses Manager.TestSearch which bypasses quota tracking.
+const testSearchTimeout = 15 * time.Second
+
+func TestWebSearch(ctx context.Context, query string) (*WebSearchTestResult, error) {
+	mgr := getWebSearchManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("web search: manager not initialized, save config first")
+	}
+	testCtx, cancel := context.WithTimeout(ctx, testSearchTimeout)
+	defer cancel()
+	resp, providerName, err := mgr.TestSearch(testCtx, websearch.SearchRequest{
+		Query:      query,
+		MaxResults: webSearchDefaultMaxResults,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &WebSearchTestResult{
+		Provider: providerName,
+		Results:  resp.Results,
+		Query:    resp.Query,
+	}, nil
+}
+
+// PopulateWebSearchUsage returns a copy with quota usage populated from the current manager.
+func PopulateWebSearchUsage(ctx context.Context, cfg *WebSearchEmulationConfig) *WebSearchEmulationConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := *cfg
+	out.Providers = make([]WebSearchProviderConfig, len(cfg.Providers))
+
+	mgr := getWebSearchManager()
+	for i, p := range cfg.Providers {
+		out.Providers[i] = p
+		out.Providers[i].APIKeyConfigured = p.APIKey != ""
+		if mgr != nil {
+			used, _ := mgr.GetUsage(ctx, p.Type, p.QuotaRefreshInterval)
+			out.Providers[i].QuotaUsed = used
+		}
+	}
+	return &out
+}
+
+// ResetWebSearchUsage deletes the usage counter for the given provider type.
+func ResetWebSearchUsage(ctx context.Context, providerType string) error {
+	mgr := getWebSearchManager()
+	if mgr == nil {
+		return fmt.Errorf("web search manager not initialized")
+	}
+	return mgr.ResetUsage(ctx, providerType)
+}
+
 // SanitizeWebSearchConfig returns a copy with api_key fields masked for API responses.
 func SanitizeWebSearchConfig(cfg *WebSearchEmulationConfig) *WebSearchEmulationConfig {
 	if cfg == nil {

@@ -2094,24 +2094,31 @@
 
                   <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
+                      <label class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.priority') }}</label>
+                      <input v-model.number="provider.priority" type="number" min="1" class="input text-sm" />
+                      <p class="mt-0.5 text-xs text-gray-400">{{ t('admin.settings.webSearchEmulation.priorityHint') }}</p>
+                    </div>
+                    <div>
                       <label class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.quotaLimit') }}</label>
                       <input v-model.number="provider.quota_limit" type="number" min="0" class="input text-sm" />
                       <p class="mt-0.5 text-xs text-gray-400">{{ t('admin.settings.webSearchEmulation.quotaLimitHint') }}</p>
                     </div>
                     <div>
-                      <label class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.subscribedAt') }}</label>
-                      <input
-                        :value="formatSubscribedAt(provider.subscribed_at)"
-                        type="date"
-                        class="input text-sm"
-                        @input="provider.subscribed_at = parseSubscribedAt(($event.target as HTMLInputElement).value)"
+                      <label class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.quotaRefreshInterval') }}</label>
+                      <Select
+                        v-model="provider.quota_refresh_interval"
+                        :options="[
+                          { value: 'daily', label: t('admin.settings.webSearchEmulation.daily') },
+                          { value: 'weekly', label: t('admin.settings.webSearchEmulation.weekly') },
+                          { value: 'monthly', label: t('admin.settings.webSearchEmulation.monthly') }
+                        ]"
+                        class="w-full"
                       />
-                      <p class="mt-0.5 text-xs text-gray-400">{{ t('admin.settings.webSearchEmulation.subscribedAtHint') }}</p>
                     </div>
                   </div>
 
                   <div v-if="(provider.quota_limit ?? 0) > 0" class="flex items-center gap-2">
-                    <span class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.quotaUsage') }}:</span>
+                    <span class="text-xs text-gray-500">{{ t('admin.settings.webSearchEmulation.quotaUsed') }}:</span>
                     <div class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
                       <div
                         class="h-full rounded-full transition-all"
@@ -3184,30 +3191,13 @@ function addWebSearchProvider() {
     type: 'brave',
     api_key: '',
     api_key_configured: false,
+    priority: idx + 1,
     quota_limit: DEFAULT_WEB_SEARCH_QUOTA_LIMIT,
-    subscribed_at: null,
+    quota_refresh_interval: 'monthly',
     proxy_id: null,
     expires_at: null
   } as WebSearchProviderConfig)
   expandedProviders[idx] = true
-}
-
-function formatSubscribedAt(ts: number | null): string {
-  if (!ts) {
-    return ''
-  }
-  const date = new Date(ts * 1000)
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function parseSubscribedAt(dateStr: string): number | null {
-  if (!dateStr) {
-    return null
-  }
-  return Math.floor(new Date(`${dateStr}T00:00:00Z`).getTime() / 1000)
 }
 
 function quotaPercentage(provider: WebSearchProviderConfig): number {

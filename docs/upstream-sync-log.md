@@ -270,6 +270,38 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 官方 `fda61b06` / `60b0fa81` 这组 websearch manager 强化
 - 官方 `5df73099` / `49281bbe` / `889b5b4f` / `9e0d12d3` 这组 websearch UI 与测试细化
 - 后续再进入 `notify` 大链，避免本次把两类功能混在一个提交里
+
+- 后续补充：
+  - 本地新增 `739089c0`
+    - `feat(websearch): merge upstream emulation base`
+    - 状态：仅本地提交，尚未推 fork / 未发布生产
+
+- 本次继续吸收：
+  - 官方 `fda61b06`
+    - `feat(websearch): proxy failover, timeout, quota-weighted load balancing`
+    - 已合入：
+      - `backend/internal/pkg/websearch/manager.go`
+      - `backend/internal/service/gateway_websearch_emulation.go`
+  - 官方 `60b0fa81`
+    - `fix(websearch): improve isProxyError detection and add manager tests`
+    - 已合入：
+      - `backend/internal/pkg/websearch/manager_test.go`
+      - `isProxyError` 相关修正
+  - 官方 `5df73099`
+    - `fix(websearch): add 15s timeout for admin test search`
+    - 已等价吸收：
+      - 后台 websearch 管理测试增加 15s 超时
+      - 回补 `/admin/settings/web-search-emulation/test`
+      - 回补 `/admin/settings/web-search-emulation/reset-usage`
+      - 回补 `PopulateWebSearchUsage / ResetWebSearchUsage / TestWebSearch`
+
+验证结果：
+
+- 后端：
+  - `go test ./internal/service -run 'Test(Account_IsWebSearchEmulationEnabled|Channel_IsWebSearchEmulationEnabled|GetWebSearchEmulationConfig|SaveWebSearchEmulationConfig|PopulateWebSearchUsage|ResetWebSearchUsage|TestWebSearch)' -count=1`
+  - `go test ./internal/handler/admin -run 'Test.*WebSearch.*' -count=1`
+- 前端：
+  - `corepack pnpm build`
   - 后续补充：
     - 本地为该行为补了集成测试，覆盖 Redis 快照元数据缺失时的回源退化路径
     - 本地将 `snapshot_mget_chunk_size` / `snapshot_write_chunk_size` 补进了 [deploy/config.example.yaml](/Users/sven.sun/Desktop/Api/sub2api/deploy/config.example.yaml)
