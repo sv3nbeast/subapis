@@ -133,6 +133,8 @@ func ParseGatewayRequest(body []byte, protocol string) (*ParsedRequest, error) {
 		return nil, fmt.Errorf("invalid json")
 	}
 
+	body = StripAnthropicBillingHeaderBlocks(body)
+
 	// 性能：
 	// - gjson.GetBytes 会把匹配的 Raw/Str 安全复制成 string（对于巨大 messages 会产生额外拷贝）。
 	// - 这里将 body 通过 unsafe 零拷贝视为 string，仅在本函数内使用，且 body 不会被修改。

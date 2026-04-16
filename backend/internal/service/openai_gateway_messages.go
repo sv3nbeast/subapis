@@ -33,6 +33,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+	body = StripAnthropicBillingHeaderBlocks(body)
 
 	// 1. Parse Anthropic request
 	var anthropicReq apicompat.AnthropicRequest

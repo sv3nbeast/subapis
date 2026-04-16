@@ -95,6 +95,31 @@ func TestGenerateSessionHash_DifferentSystemsSameMessages(t *testing.T) {
 	require.NotEqual(t, h1, h2, "different system prompts with same messages should produce different hashes")
 }
 
+func TestGenerateSessionHash_IgnoresAnthropicBillingHeaderBlocks(t *testing.T) {
+	svc := &GatewayService{}
+
+	withHeader, err := ParseGatewayRequest([]byte(`{
+		"model":"claude-3-7-sonnet",
+		"system":[
+			{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli; cch=00000;"},
+			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}
+		],
+		"messages":[{"role":"user","content":"hello"}]
+	}`), "anthropic")
+	require.NoError(t, err)
+
+	withoutHeader, err := ParseGatewayRequest([]byte(`{
+		"model":"claude-3-7-sonnet",
+		"system":[
+			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}
+		],
+		"messages":[{"role":"user","content":"hello"}]
+	}`), "anthropic")
+	require.NoError(t, err)
+
+	require.Equal(t, svc.GenerateSessionHash(withHeader), svc.GenerateSessionHash(withoutHeader))
+}
+
 func TestGenerateSessionHash_SameSystemSameMessages(t *testing.T) {
 	svc := &GatewayService{}
 

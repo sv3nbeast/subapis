@@ -1131,6 +1131,10 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 		return ""
 	}
 
+	if len(body) > 0 {
+		body = StripAnthropicBillingHeaderBlocks(body)
+	}
+
 	sessionID := strings.TrimSpace(c.GetHeader("session_id"))
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))

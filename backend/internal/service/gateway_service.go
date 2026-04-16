@@ -1054,8 +1054,8 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 		return body, modelID
 	}
 
-	out := body
-	modified := false
+	out := StripAnthropicBillingHeaderBlocks(body)
+	modified := !bytes.Equal(out, body)
 
 	if next, changed := normalizeClaudeOAuthSystemBody(out, opts); changed {
 		out = next

@@ -64,6 +64,28 @@ func TestParseGatewayRequest_SystemNull(t *testing.T) {
 	require.Nil(t, parsed.System)
 }
 
+func TestParseGatewayRequest_StripsAnthropicBillingHeaderBlocks(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-3-7-sonnet",
+		"system":[
+			{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli; cch=00000;"},
+			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}
+		],
+		"messages":[{"content":"hi"}]
+	}`)
+
+	parsed, err := ParseGatewayRequest(body, domain.PlatformAnthropic)
+	require.NoError(t, err)
+	require.NotContains(t, string(parsed.Body), "x-anthropic-billing-header:")
+
+	system, ok := parsed.System.([]any)
+	require.True(t, ok)
+	require.Len(t, system, 1)
+	block, ok := system[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "You are Claude Code, Anthropic's official CLI for Claude.", block["text"])
+}
+
 func TestParseGatewayRequest_InvalidModelType(t *testing.T) {
 	body := []byte(`{"model":123}`)
 	_, err := ParseGatewayRequest(body, "")
