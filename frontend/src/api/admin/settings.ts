@@ -118,6 +118,11 @@ export interface SystemSettings {
   enable_metadata_passthrough: boolean
   enable_cch_signing: boolean
   web_search_emulation_enabled?: boolean
+
+  // Balance & quota notification
+  balance_low_notify_enabled: boolean
+  balance_low_notify_threshold: number
+  account_quota_notify_emails: string[]
 }
 
 export interface UpdateSettingsRequest {
@@ -201,6 +206,10 @@ export interface UpdateSettingsRequest {
   enable_fingerprint_unification?: boolean
   enable_metadata_passthrough?: boolean
   enable_cch_signing?: boolean
+  // Balance & quota notification
+  balance_low_notify_enabled?: boolean
+  balance_low_notify_threshold?: number
+  account_quota_notify_emails?: string[]
 }
 
 /**

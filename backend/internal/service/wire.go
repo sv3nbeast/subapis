@@ -467,5 +467,11 @@ var ProviderSet = wire.NewSet(
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,
+	ProvideBalanceNotifyService,
 	ProvideStatusProbeService,
 )
+
+// ProvideBalanceNotifyService creates BalanceNotifyService
+func ProvideBalanceNotifyService(emailService *EmailService, settingRepo SettingRepository) *BalanceNotifyService {
+	return NewBalanceNotifyService(emailService, settingRepo)
+}

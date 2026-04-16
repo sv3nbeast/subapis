@@ -127,6 +127,11 @@ type SystemSettings struct {
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool `json:"web_search_emulation_enabled"`
+
+	// Balance low notification
+	BalanceLowNotifyEnabled   bool     `json:"balance_low_notify_enabled"`
+	BalanceLowNotifyThreshold float64  `json:"balance_low_notify_threshold"`
+	AccountQuotaNotifyEmails  []string `json:"account_quota_notify_emails"`
 }
 
 type DefaultSubscriptionSetting struct {

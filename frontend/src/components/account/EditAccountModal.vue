@@ -1204,7 +1204,7 @@
       <!-- API Key / Bedrock 账号配额限制 -->
       <div v-if="account?.type === 'apikey' || account?.type === 'bedrock'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3">
-          <h3 class="input-label mb-0 text-base font-semibold">{{ t('admin.accounts.quotaLimit') }}</h3>
+          <h3 class="input-label mb-0 text-base font-semibold">{{ t('admin.accounts.quotaControl.title') }}</h3>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.quotaLimitHint') }}
           </p>
@@ -1219,6 +1219,12 @@
           :weeklyResetDay="editWeeklyResetDay"
           :weeklyResetHour="editWeeklyResetHour"
           :resetTimezone="editResetTimezone"
+          :quotaNotifyDailyEnabled="editQuotaNotifyDailyEnabled"
+          :quotaNotifyDailyThreshold="editQuotaNotifyDailyThreshold"
+          :quotaNotifyWeeklyEnabled="editQuotaNotifyWeeklyEnabled"
+          :quotaNotifyWeeklyThreshold="editQuotaNotifyWeeklyThreshold"
+          :quotaNotifyTotalEnabled="editQuotaNotifyTotalEnabled"
+          :quotaNotifyTotalThreshold="editQuotaNotifyTotalThreshold"
           @update:totalLimit="editQuotaLimit = $event"
           @update:dailyLimit="editQuotaDailyLimit = $event"
           @update:weeklyLimit="editQuotaWeeklyLimit = $event"
@@ -1228,6 +1234,12 @@
           @update:weeklyResetDay="editWeeklyResetDay = $event"
           @update:weeklyResetHour="editWeeklyResetHour = $event"
           @update:resetTimezone="editResetTimezone = $event"
+          @update:quotaNotifyDailyEnabled="editQuotaNotifyDailyEnabled = $event"
+          @update:quotaNotifyDailyThreshold="editQuotaNotifyDailyThreshold = $event"
+          @update:quotaNotifyWeeklyEnabled="editQuotaNotifyWeeklyEnabled = $event"
+          @update:quotaNotifyWeeklyThreshold="editQuotaNotifyWeeklyThreshold = $event"
+          @update:quotaNotifyTotalEnabled="editQuotaNotifyTotalEnabled = $event"
+          @update:quotaNotifyTotalThreshold="editQuotaNotifyTotalThreshold = $event"
         />
       </div>
 
@@ -1960,6 +1972,12 @@ const editWeeklyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editWeeklyResetDay = ref<number | null>(null)
 const editWeeklyResetHour = ref<number | null>(null)
 const editResetTimezone = ref<string | null>(null)
+const editQuotaNotifyDailyEnabled = ref<boolean | null>(null)
+const editQuotaNotifyDailyThreshold = ref<number | null>(null)
+const editQuotaNotifyWeeklyEnabled = ref<boolean | null>(null)
+const editQuotaNotifyWeeklyThreshold = ref<number | null>(null)
+const editQuotaNotifyTotalEnabled = ref<boolean | null>(null)
+const editQuotaNotifyTotalThreshold = ref<number | null>(null)
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   // TODO: ctx_pool 选项暂时隐藏，待测试完成后恢复
@@ -2159,6 +2177,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     editWeeklyResetDay.value = (extra?.quota_weekly_reset_day as number) ?? null
     editWeeklyResetHour.value = (extra?.quota_weekly_reset_hour as number) ?? null
     editResetTimezone.value = (extra?.quota_reset_timezone as string) || null
+    // Load quota notify config
+    editQuotaNotifyDailyEnabled.value = (extra?.quota_notify_daily_enabled as boolean) ?? null
+    editQuotaNotifyDailyThreshold.value = (extra?.quota_notify_daily_threshold as number) ?? null
+    editQuotaNotifyWeeklyEnabled.value = (extra?.quota_notify_weekly_enabled as boolean) ?? null
+    editQuotaNotifyWeeklyThreshold.value = (extra?.quota_notify_weekly_threshold as number) ?? null
+    editQuotaNotifyTotalEnabled.value = (extra?.quota_notify_total_enabled as boolean) ?? null
+    editQuotaNotifyTotalThreshold.value = (extra?.quota_notify_total_threshold as number) ?? null
   } else {
     editQuotaLimit.value = null
     editQuotaDailyLimit.value = null
@@ -2169,6 +2194,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     editWeeklyResetDay.value = null
     editWeeklyResetHour.value = null
     editResetTimezone.value = null
+    editQuotaNotifyDailyEnabled.value = null
+    editQuotaNotifyDailyThreshold.value = null
+    editQuotaNotifyWeeklyEnabled.value = null
+    editQuotaNotifyWeeklyThreshold.value = null
+    editQuotaNotifyTotalEnabled.value = null
+    editQuotaNotifyTotalThreshold.value = null
   }
 
   // Load antigravity model mapping (Antigravity 只支持映射模式)
@@ -2283,6 +2314,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     editQuotaLimit.value = typeof bedrockExtra.quota_limit === 'number' ? bedrockExtra.quota_limit : null
     editQuotaDailyLimit.value = typeof bedrockExtra.quota_daily_limit === 'number' ? bedrockExtra.quota_daily_limit : null
     editQuotaWeeklyLimit.value = typeof bedrockExtra.quota_weekly_limit === 'number' ? bedrockExtra.quota_weekly_limit : null
+    // Load quota notify for bedrock
+    editQuotaNotifyDailyEnabled.value = (bedrockExtra.quota_notify_daily_enabled as boolean) ?? null
+    editQuotaNotifyDailyThreshold.value = (bedrockExtra.quota_notify_daily_threshold as number) ?? null
+    editQuotaNotifyWeeklyEnabled.value = (bedrockExtra.quota_notify_weekly_enabled as boolean) ?? null
+    editQuotaNotifyWeeklyThreshold.value = (bedrockExtra.quota_notify_weekly_threshold as number) ?? null
+    editQuotaNotifyTotalEnabled.value = (bedrockExtra.quota_notify_total_enabled as boolean) ?? null
+    editQuotaNotifyTotalThreshold.value = (bedrockExtra.quota_notify_total_threshold as number) ?? null
 
     // Load model mappings for bedrock
     const existingMappings = bedrockCreds.model_mapping as Record<string, string> | undefined
@@ -3221,6 +3259,40 @@ const handleSubmit = async () => {
         newExtra.quota_reset_timezone = editResetTimezone.value || 'UTC'
       } else {
         delete newExtra.quota_reset_timezone
+      }
+      // Quota notify config
+      if (editQuotaNotifyDailyEnabled.value) {
+        newExtra.quota_notify_daily_enabled = true
+        if (editQuotaNotifyDailyThreshold.value != null) {
+          newExtra.quota_notify_daily_threshold = editQuotaNotifyDailyThreshold.value
+        } else {
+          delete newExtra.quota_notify_daily_threshold
+        }
+      } else {
+        delete newExtra.quota_notify_daily_enabled
+        delete newExtra.quota_notify_daily_threshold
+      }
+      if (editQuotaNotifyWeeklyEnabled.value) {
+        newExtra.quota_notify_weekly_enabled = true
+        if (editQuotaNotifyWeeklyThreshold.value != null) {
+          newExtra.quota_notify_weekly_threshold = editQuotaNotifyWeeklyThreshold.value
+        } else {
+          delete newExtra.quota_notify_weekly_threshold
+        }
+      } else {
+        delete newExtra.quota_notify_weekly_enabled
+        delete newExtra.quota_notify_weekly_threshold
+      }
+      if (editQuotaNotifyTotalEnabled.value) {
+        newExtra.quota_notify_total_enabled = true
+        if (editQuotaNotifyTotalThreshold.value != null) {
+          newExtra.quota_notify_total_threshold = editQuotaNotifyTotalThreshold.value
+        } else {
+          delete newExtra.quota_notify_total_threshold
+        }
+      } else {
+        delete newExtra.quota_notify_total_enabled
+        delete newExtra.quota_notify_total_threshold
       }
       updatePayload.extra = newExtra
     }
