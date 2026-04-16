@@ -2362,6 +2362,22 @@
         </div>
       </div>
 
+      <!-- Anthropic API Key: Web Search Emulation -->
+      <div
+        v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.webSearchEmulation') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.webSearchEmulationDesc') }}
+            </p>
+          </div>
+          <Toggle v-model="webSearchEmulationEnabled" />
+        </div>
+      </div>
+
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -2867,6 +2883,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
@@ -3017,6 +3034,7 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const anthropicPassthroughEnabled = ref(false)
+const webSearchEmulationEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
@@ -3357,6 +3375,7 @@ watch(
     }
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
+      webSearchEmulationEnabled.value = false
     }
     // Reset OAuth states
     oauth.resetState()
@@ -3376,6 +3395,7 @@ watch(
     }
     if (platform !== 'anthropic' || category !== 'apikey') {
       anthropicPassthroughEnabled.value = false
+      webSearchEmulationEnabled.value = false
     }
   }
 )
@@ -3740,6 +3760,7 @@ const resetForm = () => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   anthropicPassthroughEnabled.value = false
+  webSearchEmulationEnabled.value = false
   // Reset quota control state
   windowCostEnabled.value = false
   windowCostLimit.value = null
@@ -3826,6 +3847,11 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
     extra.anthropic_passthrough = true
   } else {
     delete extra.anthropic_passthrough
+  }
+  if (webSearchEmulationEnabled.value) {
+    extra.web_search_emulation = true
+  } else {
+    delete extra.web_search_emulation
   }
 
   return Object.keys(extra).length > 0 ? extra : undefined

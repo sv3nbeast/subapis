@@ -323,6 +323,26 @@
               </div>
             </div>
 
+            <div
+              v-if="section.platform === 'anthropic'"
+              class="rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-900/40 dark:bg-orange-900/10"
+            >
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="text-xs font-medium text-orange-600 dark:text-orange-400">
+                    {{ t('admin.channels.form.webSearchEmulation') }}
+                  </label>
+                  <p v-if="webSearchGlobalEnabled" class="mt-0.5 text-[11px] text-amber-500 dark:text-amber-400">
+                    {{ t('admin.channels.form.webSearchEmulationHint') }}
+                  </p>
+                  <p v-else class="mt-0.5 text-[11px] text-gray-400">
+                    {{ t('admin.channels.form.webSearchEmulationGlobalDisabled') }}
+                  </p>
+                </div>
+                <Toggle v-model="section.web_search_emulation" :disabled="!webSearchGlobalEnabled" />
+              </div>
+            </div>
+
             <!-- Model Mapping -->
             <div>
               <div class="mb-1 flex items-center justify-between">
@@ -578,6 +598,17 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const webSearchGlobalEnabled = ref(false)
+
+async function loadWebSearchGlobalState() {
+  try {
+    const cfg = await adminAPI.settings.getWebSearchEmulationConfig()
+    webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
+  } catch (error) {
+    console.warn('Failed to load web search global state:', error)
+    webSearchGlobalEnabled.value = false
+  }
+}
 
 // ── Platform Section type ──
 interface PlatformSection {
@@ -587,6 +618,7 @@ interface PlatformSection {
   group_ids: number[]
   model_mapping: Record<string, string>
   model_pricing: PricingFormEntry[]
+  web_search_emulation: boolean
   account_stats_pricing_rules: AccountStatsRuleFormEntry[]
 }
 
@@ -708,6 +740,7 @@ function addPlatformSection(platform: GroupPlatform) {
     group_ids: [],
     model_mapping: {},
     model_pricing: [],
+    web_search_emulation: false,
     account_stats_pricing_rules: []
   })
 }
@@ -916,11 +949,15 @@ function formToAPI(): {
   group_ids: number[]
   model_pricing: ChannelModelPricing[]
   model_mapping: Record<string, Record<string, string>>
+  features_config: Record<string, unknown>
   account_stats_pricing_rules: AccountStatsPricingRule[]
 } {
   const group_ids: number[] = []
   const model_pricing: ChannelModelPricing[] = []
   const model_mapping: Record<string, Record<string, string>> = {}
+  const features_config: Record<string, unknown> = editingChannel.value?.features_config
+    ? { ...editingChannel.value.features_config }
+    : {}
   const account_stats_pricing_rules: AccountStatsPricingRule[] = []
 
   for (const section of form.platforms) {
@@ -952,7 +989,22 @@ function formToAPI(): {
     }
   }
 
-  return { group_ids, model_pricing, model_mapping, account_stats_pricing_rules }
+  const webSearchEmulation: Record<string, boolean> = {}
+  for (const section of form.platforms) {
+    if (!section.enabled || section.platform !== 'anthropic') {
+      continue
+    }
+    if (section.web_search_emulation) {
+      webSearchEmulation[section.platform] = true
+    }
+  }
+  if (Object.keys(webSearchEmulation).length > 0) {
+    features_config.web_search_emulation = webSearchEmulation
+  } else {
+    delete features_config.web_search_emulation
+  }
+
+  return { group_ids, model_pricing, model_mapping, features_config, account_stats_pricing_rules }
 }
 
 function apiToForm(channel: Channel): PlatformSection[] {
@@ -988,6 +1040,8 @@ function apiToForm(channel: Channel): PlatformSection[] {
 
   // Build sections in platform order
   const sections: PlatformSection[] = []
+  const featuresConfig = channel.features_config || {}
+  const webSearchEmulationConfig = featuresConfig.web_search_emulation as Record<string, boolean> | undefined
   for (const platform of platformOrder) {
     if (!activePlatforms.has(platform)) continue
 
@@ -1018,6 +1072,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
       group_ids: groupIds,
       model_mapping: { ...mapping },
       model_pricing: pricing,
+      web_search_emulation: webSearchEmulationConfig?.[platform] === true,
       account_stats_pricing_rules: accountStatsRules
     })
   }
@@ -1118,7 +1173,7 @@ function resetForm() {
 async function openCreateDialog() {
   editingChannel.value = null
   resetForm()
-  await Promise.all([loadGroups(), loadAllChannelsForConflict()])
+  await Promise.all([loadGroups(), loadAllChannelsForConflict(), loadWebSearchGlobalState()])
   showDialog.value = true
 }
 
@@ -1131,7 +1186,7 @@ async function openEditDialog(channel: Channel) {
   form.apply_pricing_to_account_stats = channel.apply_pricing_to_account_stats || false
   form.billing_model_source = channel.billing_model_source || 'channel_mapped'
   // Must load groups first so apiToForm can map groupID → platform
-  await Promise.all([loadGroups(), loadAllChannelsForConflict()])
+  await Promise.all([loadGroups(), loadAllChannelsForConflict(), loadWebSearchGlobalState()])
   form.platforms = apiToForm(channel)
   showDialog.value = true
 }
@@ -1284,7 +1339,7 @@ async function handleSubmit() {
     }
   }
 
-  const { group_ids, model_pricing, model_mapping, account_stats_pricing_rules } = formToAPI()
+  const { group_ids, model_pricing, model_mapping, features_config, account_stats_pricing_rules } = formToAPI()
 
   submitting.value = true
   try {
@@ -1299,6 +1354,7 @@ async function handleSubmit() {
         billing_model_source: form.billing_model_source,
         restrict_models: form.restrict_models,
         apply_pricing_to_account_stats: form.apply_pricing_to_account_stats,
+        features_config,
         account_stats_pricing_rules
       }
       await adminAPI.channels.update(editingChannel.value.id, req)
@@ -1313,6 +1369,7 @@ async function handleSubmit() {
         billing_model_source: form.billing_model_source,
         restrict_models: form.restrict_models,
         apply_pricing_to_account_stats: form.apply_pricing_to_account_stats,
+        features_config,
         account_stats_pricing_rules
       }
       await adminAPI.channels.create(req)
@@ -1373,6 +1430,7 @@ async function confirmDelete() {
 onMounted(() => {
   loadChannels()
   loadGroups()
+  loadWebSearchGlobalState()
 })
 
 onUnmounted(() => {

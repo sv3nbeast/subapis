@@ -117,6 +117,7 @@ export interface SystemSettings {
   enable_fingerprint_unification: boolean
   enable_metadata_passthrough: boolean
   enable_cch_signing: boolean
+  web_search_emulation_enabled?: boolean
 }
 
 export interface UpdateSettingsRequest {
@@ -449,11 +450,63 @@ export async function updateBetaPolicySettings(
   return data
 }
 
+// ==================== Web Search Emulation Settings ====================
+
+export interface WebSearchProviderConfig {
+  type: 'brave' | 'tavily'
+  api_key: string
+  api_key_configured: boolean
+  quota_limit: number | null
+  subscribed_at: number | null
+  quota_used?: number
+  proxy_id: number | null
+  expires_at: number | null
+}
+
+export interface WebSearchEmulationConfig {
+  enabled: boolean
+  providers: WebSearchProviderConfig[]
+}
+
+export interface WebSearchTestResult {
+  provider: string
+  results: { url: string; title: string; snippet: string; page_age?: string }[]
+  query: string
+}
+
+export async function getWebSearchEmulationConfig(): Promise<WebSearchEmulationConfig> {
+  const { data } = await apiClient.get<WebSearchEmulationConfig>(
+    '/admin/settings/web-search-emulation'
+  )
+  return data
+}
+
+export async function updateWebSearchEmulationConfig(
+  config: WebSearchEmulationConfig
+): Promise<WebSearchEmulationConfig> {
+  const { data } = await apiClient.put<WebSearchEmulationConfig>(
+    '/admin/settings/web-search-emulation',
+    config
+  )
+  return data
+}
+
+export async function testWebSearchEmulation(query: string): Promise<WebSearchTestResult> {
+  const { data } = await apiClient.post<WebSearchTestResult>(
+    '/admin/settings/web-search-emulation/test',
+    { query }
+  )
+  return data
+}
+
+export async function resetWebSearchUsage(payload: {
+  provider_type: string
+}): Promise<void> {
+  await apiClient.post('/admin/settings/web-search-emulation/reset-usage', payload)
+}
+
 // ==================== Status Probe Settings ====================
 
-/**
- * Status probe model configuration
- */
 export interface StatusProbeModel {
   model: string
   display_name: string
@@ -463,9 +516,6 @@ export interface StatusProbeModel {
   base_url: string
 }
 
-/**
- * Status probe settings interface
- */
 export interface StatusProbeSettings {
   enabled: boolean
   public_visible: boolean
@@ -474,20 +524,11 @@ export interface StatusProbeSettings {
   models: StatusProbeModel[]
 }
 
-/**
- * Get status probe settings
- * @returns Status probe settings
- */
 export async function getStatusProbeSettings(): Promise<StatusProbeSettings> {
   const { data } = await apiClient.get<StatusProbeSettings>('/admin/settings/status-probe')
   return data
 }
 
-/**
- * Update status probe settings
- * @param settings - Status probe settings to update
- * @returns Updated settings
- */
 export async function updateStatusProbeSettings(
   settings: StatusProbeSettings
 ): Promise<StatusProbeSettings> {
@@ -514,6 +555,10 @@ export const settingsAPI = {
   updateRectifierSettings,
   getBetaPolicySettings,
   updateBetaPolicySettings,
+  getWebSearchEmulationConfig,
+  updateWebSearchEmulationConfig,
+  testWebSearchEmulation,
+  resetWebSearchUsage,
   getStatusProbeSettings,
   updateStatusProbeSettings
 }

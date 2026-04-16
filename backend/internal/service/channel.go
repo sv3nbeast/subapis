@@ -39,6 +39,7 @@ type Channel struct {
 	Status             string
 	BillingModelSource string // "requested", "upstream", or "channel_mapped"
 	RestrictModels     bool   // 是否限制模型（仅允许定价列表中的模型）
+	Features           string // 渠道特性描述（JSON 数组），用于前端展示
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 
@@ -48,6 +49,8 @@ type Channel struct {
 	ModelPricing []ChannelModelPricing
 	// 渠道级模型映射（按平台分组：platform → {src→dst}）
 	ModelMapping map[string]map[string]string
+	// 渠道特性配置（如 {"web_search_emulation": {"anthropic": true}}）
+	FeaturesConfig map[string]any
 
 	// 账号统计定价。
 	// 只影响管理员查看账号成本统计，不参与用户实际扣费。
@@ -67,6 +70,19 @@ type AccountStatsPricingRule struct {
 	Pricing    []ChannelModelPricing
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+// IsWebSearchEmulationEnabled 返回该渠道是否为指定平台启用了 web search 模拟。
+func (c *Channel) IsWebSearchEmulationEnabled(platform string) bool {
+	if c == nil || c.FeaturesConfig == nil {
+		return false
+	}
+	wse, ok := c.FeaturesConfig[featureKeyWebSearchEmulation].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := wse[platform].(bool)
+	return ok && enabled
 }
 
 // ChannelModelPricing 渠道模型定价条目
@@ -195,6 +211,9 @@ func (c *Channel) Clone() *Channel {
 			cp.ModelMapping[platform] = inner
 		}
 	}
+	if c.FeaturesConfig != nil {
+		cp.FeaturesConfig = deepCopyFeaturesConfig(c.FeaturesConfig)
+	}
 	if c.AccountStatsPricingRules != nil {
 		cp.AccountStatsPricingRules = make([]AccountStatsPricingRule, len(c.AccountStatsPricingRules))
 		for i, rule := range c.AccountStatsPricingRules {
@@ -216,6 +235,18 @@ func (c *Channel) Clone() *Channel {
 		}
 	}
 	return &cp
+}
+
+func deepCopyFeaturesConfig(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		if inner, ok := v.(map[string]any); ok {
+			dst[k] = deepCopyFeaturesConfig(inner)
+		} else {
+			dst[k] = v
+		}
+	}
+	return dst
 }
 
 // ValidateIntervals 校验区间列表的合法性。

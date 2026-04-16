@@ -238,6 +238,38 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 - 官方 `265687b5` 的安全子集 -> 本地 `ece52804`
   - 说明：调度快照读取过程中若发现缺失条目或解码失败，视为缓存未命中，触发回源重建，避免半拉子快照
+
+### 2026-04-16
+
+- 本次同步范围先进入 `websearch / notify` 大链中的 `websearch` 基线层，暂不触碰 payment。
+
+已同步到本地工作区：
+
+- 官方 `1b53ffca`
+  - `feat(gateway): add web search emulation for Anthropic API Key accounts`
+  - 合入内容：
+    - 新增 `backend/internal/pkg/websearch/*`
+    - 新增网关侧 `gateway_websearch_emulation.go`
+    - 新增全局 web search emulation 配置读写与管理接口
+    - 渠道 `features_config` 新增 `web_search_emulation` 承载能力
+    - 账号创建/编辑、渠道编辑、后台设置页补齐对应前端入口
+  - 本地化处理：
+    - 保留本地已有 `account_stats_pricing_rules` / `apply_pricing_to_account_stats`
+    - 保留本地 `SettingsView`、`ChannelsView`、`EditAccountModal` 结构，不引入官方 payment UI
+    - `EditAccountModal`、`ChannelsView`、`SettingsView` 的 websearch UI 为手工兼容合入，不是整文件覆盖
+
+验证结果：
+
+- 后端：
+  - `go test ./internal/service -run 'Test(Account_IsWebSearchEmulationEnabled|Channel_IsWebSearchEmulationEnabled|GetWebSearchEmulationConfig|SaveWebSearchEmulationConfig|PopulateWebSearchUsage|ResetWebSearchUsage|TestWebSearch)' -count=1`
+- 前端：
+  - `corepack pnpm build`
+
+待继续：
+
+- 官方 `fda61b06` / `60b0fa81` 这组 websearch manager 强化
+- 官方 `5df73099` / `49281bbe` / `889b5b4f` / `9e0d12d3` 这组 websearch UI 与测试细化
+- 后续再进入 `notify` 大链，避免本次把两类功能混在一个提交里
   - 后续补充：
     - 本地为该行为补了集成测试，覆盖 Redis 快照元数据缺失时的回源退化路径
     - 本地将 `snapshot_mget_chunk_size` / `snapshot_write_chunk_size` 补进了 [deploy/config.example.yaml](/Users/sven.sun/Desktop/Api/sub2api/deploy/config.example.yaml)

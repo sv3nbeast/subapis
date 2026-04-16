@@ -1186,6 +1186,21 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.webSearchEmulation') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.webSearchEmulationDesc') }}
+            </p>
+          </div>
+          <Toggle v-model="webSearchEmulationEnabled" />
+        </div>
+      </div>
+
       <!-- API Key / Bedrock 账号配额限制 -->
       <div v-if="account?.type === 'apikey' || account?.type === 'bedrock'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3">
@@ -1935,6 +1950,7 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const anthropicPassthroughEnabled = ref(false)
+const webSearchEmulationEnabled = ref(false)
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
@@ -2104,6 +2120,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   anthropicPassthroughEnabled.value = false
+  webSearchEmulationEnabled.value = false
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openaiOAuthResponsesWebSocketV2Mode.value = resolveOpenAIWSModeFromExtra(extra, {
@@ -2124,6 +2141,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
+    webSearchEmulationEnabled.value = extra?.web_search_emulation === true
   }
 
   // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
@@ -3110,7 +3128,7 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    // For Anthropic API Key accounts, handle passthrough mode in extra
+    // For Anthropic API Key accounts, handle passthrough mode and web search emulation in extra
     if (props.account.platform === 'anthropic' && props.account.type === 'apikey') {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
@@ -3118,6 +3136,11 @@ const handleSubmit = async () => {
         newExtra.anthropic_passthrough = true
       } else {
         delete newExtra.anthropic_passthrough
+      }
+      if (webSearchEmulationEnabled.value) {
+        newExtra.web_search_emulation = true
+      } else {
+        delete newExtra.web_search_emulation
       }
       updatePayload.extra = newExtra
     }

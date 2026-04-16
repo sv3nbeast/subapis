@@ -588,7 +588,6 @@ func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {
 	}
 	return nil
 }
-
 // validatePricingBillingMode 校验计费模式配置：按次/图片模式必须配价格或区间，所有价格字段不能为负，区间至少有一个价格字段。
 func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {
@@ -681,9 +680,11 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		Status:                     StatusActive,
 		BillingModelSource:         input.BillingModelSource,
 		RestrictModels:             input.RestrictModels,
+		Features:                   input.Features,
 		GroupIDs:                   input.GroupIDs,
 		ModelPricing:               input.ModelPricing,
 		ModelMapping:               input.ModelMapping,
+		FeaturesConfig:             input.FeaturesConfig,
 		ApplyPricingToAccountStats: input.ApplyPricingToAccountStats,
 		AccountStatsPricingRules:   input.AccountStatsPricingRules,
 	}
@@ -762,6 +763,9 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	if input.RestrictModels != nil {
 		channel.RestrictModels = *input.RestrictModels
 	}
+	if input.Features != nil {
+		channel.Features = *input.Features
+	}
 	if input.GroupIDs != nil {
 		if err := s.checkGroupConflicts(ctx, channel.ID, *input.GroupIDs); err != nil {
 			return err
@@ -782,6 +786,9 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	}
 	if input.AccountStatsPricingRules != nil {
 		channel.AccountStatsPricingRules = *input.AccountStatsPricingRules
+	}
+	if input.FeaturesConfig != nil {
+		channel.FeaturesConfig = input.FeaturesConfig
 	}
 	return nil
 }
@@ -955,6 +962,8 @@ type CreateChannelInput struct {
 	ModelMapping               map[string]map[string]string // platform → {src→dst}
 	BillingModelSource         string
 	RestrictModels             bool
+	Features                   string
+	FeaturesConfig             map[string]any
 	ApplyPricingToAccountStats bool
 	AccountStatsPricingRules   []AccountStatsPricingRule
 }
@@ -969,6 +978,8 @@ type UpdateChannelInput struct {
 	ModelMapping               map[string]map[string]string // platform → {src→dst}
 	BillingModelSource         string
 	RestrictModels             *bool
+	Features                   *string
+	FeaturesConfig             map[string]any
 	ApplyPricingToAccountStats *bool
 	AccountStatsPricingRules   *[]AccountStatsPricingRule
 }
