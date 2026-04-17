@@ -73,8 +73,8 @@ var DefaultAntigravityModelMapping = map[string]string{
 	// Claude 白名单
 	"claude-opus-4-6-thinking":   "claude-opus-4-6-thinking", // 官方模型
 	"claude-opus-4-6":            "claude-opus-4-6-thinking", // 简称映射
-	"claude-opus-4-7":            "claude-opus-4-7",          // 官方模型
-	"claude-opus-4-7-thinking":   "claude-opus-4-7",          // 本地兼容别名，收口到官方 4.7
+	"claude-opus-4-7":            "claude-opus-4-6-thinking", // 兼容 4.7 到当前可用池
+	"claude-opus-4-7-thinking":   "claude-opus-4-6-thinking", // 兼容 4.7 thinking 到当前可用池
 	"claude-opus-4-5-thinking":   "claude-opus-4-6-thinking", // 迁移旧模型
 	"claude-sonnet-4-6":          "claude-sonnet-4-6",
 	"claude-sonnet-4-5":          "claude-sonnet-4-5",

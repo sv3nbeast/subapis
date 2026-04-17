@@ -6,8 +6,8 @@ func TestDefaultAntigravityModelMapping_ImageCompatibilityAliases(t *testing.T) 
 	t.Parallel()
 
 	cases := map[string]string{
-		"claude-opus-4-7":               "claude-opus-4-7",
-		"claude-opus-4-7-thinking":      "claude-opus-4-7",
+		"claude-opus-4-7":                "claude-opus-4-6-thinking",
+		"claude-opus-4-7-thinking":       "claude-opus-4-6-thinking",
 		"claude-haiku-4-6":               "claude-sonnet-4-6",
 		"gemini-2.5-flash-image":         "gemini-2.5-flash-image",
 		"gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
