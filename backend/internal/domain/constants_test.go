@@ -7,6 +7,8 @@ func TestDefaultAntigravityModelMapping_ImageCompatibilityAliases(t *testing.T) 
 
 	cases := map[string]string{
 		"claude-haiku-4-6":               "claude-sonnet-4-6",
+		"claude-opus-4-7":                "claude-opus-4-6-thinking",
+		"claude-opus-4-7-thinking":       "claude-opus-4-6-thinking",
 		"gemini-2.5-flash-image":         "gemini-2.5-flash-image",
 		"gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
 		"gemini-3.1-flash-image":         "gemini-3.1-flash-image",

@@ -67,6 +67,8 @@ const antigravityModels = [
   // Claude 4.5+ 系列
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
+  'claude-opus-4-7',
+  'claude-opus-4-7-thinking',
   'claude-opus-4-5-thinking',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5',
