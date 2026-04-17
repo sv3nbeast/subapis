@@ -656,65 +656,88 @@ func (s *PricingService) extractBaseName(model string) string {
 
 // matchByModelFamily 基于模型系列匹配
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
-	// Claude模型系列匹配规则
-	familyPatterns := map[string][]string{
-		"opus-4.6":   {"claude-opus-4.6", "claude-opus-4-6"},
-		"opus-4.5":   {"claude-opus-4.5", "claude-opus-4-5"},
-		"opus-4":     {"claude-opus-4", "claude-3-opus"},
-		"sonnet-4.5": {"claude-sonnet-4.5", "claude-sonnet-4-5"},
-		"sonnet-4":   {"claude-sonnet-4", "claude-3-5-sonnet"},
-		"sonnet-3.5": {"claude-3-5-sonnet", "claude-3.5-sonnet"},
-		"sonnet-3":   {"claude-3-sonnet"},
-		"haiku-3.5":  {"claude-3-5-haiku", "claude-3.5-haiku"},
-		"haiku-3":    {"claude-3-haiku"},
+	type modelFamily struct {
+		name    string
+		match   []string
+		pricing []string
 	}
 
-	// 确定模型属于哪个系列
-	var matchedFamily string
-	for family, patterns := range familyPatterns {
-		for _, pattern := range patterns {
+	families := []modelFamily{
+		{name: "opus-4.7", match: []string{"claude-opus-4-7", "claude-opus-4.7"}, pricing: []string{"claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6"}},
+		{name: "opus-4.6", match: []string{"claude-opus-4-6", "claude-opus-4.6"}},
+		{name: "opus-4.5", match: []string{"claude-opus-4-5", "claude-opus-4.5"}},
+		{name: "opus-4", match: []string{"claude-opus-4", "claude-3-opus"}},
+		{name: "sonnet-4.5", match: []string{"claude-sonnet-4-5", "claude-sonnet-4.5"}},
+		{name: "sonnet-4", match: []string{"claude-sonnet-4", "claude-3-5-sonnet"}},
+		{name: "sonnet-3.5", match: []string{"claude-3-5-sonnet", "claude-3.5-sonnet"}},
+		{name: "sonnet-3", match: []string{"claude-3-sonnet"}},
+		{name: "haiku-3.5", match: []string{"claude-3-5-haiku", "claude-3.5-haiku"}},
+		{name: "haiku-3", match: []string{"claude-3-haiku"}},
+	}
+
+	var matched *modelFamily
+	for i := range families {
+		for _, pattern := range families[i].match {
 			if strings.Contains(model, pattern) || strings.Contains(model, strings.ReplaceAll(pattern, "-", "")) {
-				matchedFamily = family
+				matched = &families[i]
 				break
 			}
 		}
-		if matchedFamily != "" {
+		if matched != nil {
 			break
 		}
 	}
 
-	if matchedFamily == "" {
-		// 简单的系列匹配
-		if strings.Contains(model, "opus") {
-			if strings.Contains(model, "4.5") || strings.Contains(model, "4-5") {
-				matchedFamily = "opus-4.5"
-			} else {
-				matchedFamily = "opus-4"
+	if matched == nil {
+		var fallbackName string
+		switch {
+		case strings.Contains(model, "opus"):
+			switch {
+			case strings.Contains(model, "4.7") || strings.Contains(model, "4-7"):
+				fallbackName = "opus-4.7"
+			case strings.Contains(model, "4.6") || strings.Contains(model, "4-6"):
+				fallbackName = "opus-4.6"
+			case strings.Contains(model, "4.5") || strings.Contains(model, "4-5"):
+				fallbackName = "opus-4.5"
+			default:
+				fallbackName = "opus-4"
 			}
-		} else if strings.Contains(model, "sonnet") {
-			if strings.Contains(model, "4.5") || strings.Contains(model, "4-5") {
-				matchedFamily = "sonnet-4.5"
-			} else if strings.Contains(model, "3-5") || strings.Contains(model, "3.5") {
-				matchedFamily = "sonnet-3.5"
-			} else {
-				matchedFamily = "sonnet-4"
+		case strings.Contains(model, "sonnet"):
+			switch {
+			case strings.Contains(model, "4.5") || strings.Contains(model, "4-5"):
+				fallbackName = "sonnet-4.5"
+			case strings.Contains(model, "3-5") || strings.Contains(model, "3.5"):
+				fallbackName = "sonnet-3.5"
+			default:
+				fallbackName = "sonnet-4"
 			}
-		} else if strings.Contains(model, "haiku") {
-			if strings.Contains(model, "3-5") || strings.Contains(model, "3.5") {
-				matchedFamily = "haiku-3.5"
-			} else {
-				matchedFamily = "haiku-3"
+		case strings.Contains(model, "haiku"):
+			switch {
+			case strings.Contains(model, "3-5") || strings.Contains(model, "3.5"):
+				fallbackName = "haiku-3.5"
+			default:
+				fallbackName = "haiku-3"
+			}
+		}
+		if fallbackName != "" {
+			for i := range families {
+				if families[i].name == fallbackName {
+					matched = &families[i]
+					break
+				}
 			}
 		}
 	}
 
-	if matchedFamily == "" {
+	if matched == nil {
 		return nil
 	}
 
-	// 在价格数据中查找该系列的模型
-	patterns := familyPatterns[matchedFamily]
-	for _, pattern := range patterns {
+	lookups := matched.pricing
+	if lookups == nil {
+		lookups = matched.match
+	}
+	for _, pattern := range lookups {
 		for key, pricing := range s.pricingData {
 			keyLower := strings.ToLower(key)
 			if strings.Contains(keyLower, pattern) {

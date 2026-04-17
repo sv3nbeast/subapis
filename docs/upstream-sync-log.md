@@ -140,6 +140,64 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 ## 最近本地新增记录
 
+### 2026-04-17
+
+- 当前同步基线：
+  - 本地 `HEAD`：`e9159650`
+  - 官方 `origin/main`：`6cfdf4ec`
+  - Git 图谱差异：`ahead 121 / behind 212`
+
+- 待继续同步的主线按优先级排序：
+  1. `Antigravity`
+     - `5d586a9f` `fix: 上游返回 KYC 身份验证要求时停止账号调度`
+     - `a789c8c4` `feat: 支持opus-4.7`
+  2. `OpenAI messages / responses`
+     - `10699eeb`
+     - `6c89d8d3`
+  3. `Notify` 完整链
+     - `915b7a4a`
+     - `79d154ed`
+     - `42f8ef33`
+     - `c1eb79e4`
+     - `48e8efe3`
+  4. `WebSearch` 后续审计链
+  5. `Payment` 尾巴与低优先级 chore
+
+- 有意保留、不追求和官方 100% 一致的本地分叉：
+  - `SubAPIs` 品牌默认值
+  - 内置 payment 切换脚本与历史订单迁移
+  - 桌面端支付页页内二维码行为
+  - 本地 Antigravity 调度、TLS、诊断增强
+  - 旧 `purchase_subscription` 兼容层
+
+继续同步：
+
+- 官方 `5d586a9f`
+  - `fix: 上游返回 KYC 身份验证要求时停止账号调度`
+  - 本地处理：
+    - 在 [backend/internal/service/ratelimit_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/ratelimit_service.go) 补入 `identity verification is required` 的 400 错误识别
+    - 命中后按账号认证失败处理，停止调度
+
+- 官方 `a789c8c4`
+  - `feat: 支持opus-4.7`
+  - 本地处理：
+    - [backend/internal/domain/constants.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/domain/constants.go) 改为原生支持 `claude-opus-4-7`
+    - 保留本地兼容别名：`claude-opus-4-7-thinking -> claude-opus-4-7`
+    - [backend/internal/pkg/antigravity/claude_types.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/pkg/antigravity/claude_types.go) 新增 `claude-opus-4-7`
+    - [backend/internal/pkg/antigravity/request_transformer.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/pkg/antigravity/request_transformer.go) 把高阶 Opus adaptive thinking 预算规则扩展到 `4.7`
+    - [backend/internal/pkg/claude/constants.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/pkg/claude/constants.go) 新增 `claude-opus-4-7`
+    - [backend/internal/service/billing_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/billing_service.go) 增加 `4.7` fallback pricing
+    - [backend/internal/service/pricing_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/pricing_service.go) 改为有序模型族匹配，避免 `4.7` 误落到 `opus-4`
+    - [frontend/src/composables/useModelWhitelist.ts](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/composables/useModelWhitelist.ts) 补齐 `4.7` 白名单与预设映射
+  - 兼容说明：
+    - 没有完全照搬官方的“去掉 4.7-thinking 别名”做法，而是保留本地兼容，避免影响已经在用的模型名
+
+验证：
+
+- `go test ./internal/domain ./internal/service ./internal/pkg/antigravity ./internal/pkg/claude -run 'Test(DefaultAntigravityModelMapping_ImageCompatibilityAliases|AntigravityGatewayService_GetMappedModel|.*Pricing.*|.*RateLimit.*|.*Transformer.*)' -count=1`
+- `go build ./cmd/server`
+- `corepack pnpm build`
+
 ### 2026-04-13
 
 - 本地新增提交：`cc1a48dc`
