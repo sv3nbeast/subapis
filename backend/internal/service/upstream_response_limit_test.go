@@ -3,9 +3,12 @@ package service
 import (
 	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,4 +37,25 @@ func TestReadUpstreamResponseBodyLimited(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, ErrUpstreamResponseBodyTooLarge))
 	})
+}
+
+func TestReadUpstreamResponseBody_TooLargeWritesResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	cfg := &config.Config{}
+	cfg.Gateway.UpstreamResponseReadMaxBytes = 3
+
+	called := false
+	body, err := ReadUpstreamResponseBody(bytes.NewReader([]byte("toolong")), cfg, c, func(c *gin.Context) {
+		called = true
+		c.JSON(http.StatusBadGateway, gin.H{"error": "too large"})
+	})
+
+	require.Nil(t, body)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrUpstreamResponseBodyTooLarge))
+	require.True(t, called)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), "too large")
 }

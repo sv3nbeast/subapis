@@ -939,14 +939,20 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 - 官方 `10699eeb`
   - `refactor: extract ReadUpstreamResponseBody to deduplicate upstream response read + too-large error handling`
-  - 判定：暂不并
-  - 原因：
-    - 这条主要是重构，不是独立行为修复
-    - 会直接撞到本地已深度改动的：
+  - 判定：已按本地安全版吸收
+  - 说明：
+    - 在 [backend/internal/service/upstream_response_limit.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/upstream_response_limit.go) 新增：
+      - `ReadUpstreamResponseBody`
+      - `anthropicTooLargeError`
+      - `openAITooLargeError`
+    - 调用点已替换：
       - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go)
       - [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go)
       - [backend/internal/service/gemini_messages_compat_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gemini_messages_compat_service.go)
-    - 当前本地已具备 `upstream_response_limit.go` 和超限处理能力，收益不足以覆盖冲突成本
+    - 保留本地既有对外错误格式，不做行为改写，只去重读取与超限处理逻辑
+  - 验证：
+    - `go test ./internal/service -run 'Test(ReadUpstreamResponseBodyLimited|ReadUpstreamResponseBody_TooLargeWritesResponse)' -count=1`
+    - `go build ./cmd/server`
 
 - 官方 `3d202722` / `e44baa10` / `697c41a3`
   - 主题：scheduler outbox watermark / batch rebuild dedup
