@@ -149,7 +149,7 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 						slog.Error("panic in quota notification", "recover", r)
 					}
 				}()
-				s.sendQuotaAlertEmails(adminEmails, account.Name, dimCopy.name, newUsed, dimCopy.limit, dimCopy.threshold, siteName)
+				s.sendQuotaAlertEmails(adminEmails, account.ID, account.Name, account.Platform, dimCopy.name, newUsed, dimCopy.limit, dimCopy.threshold, siteName)
 			}()
 		}
 	}
@@ -234,14 +234,14 @@ func (s *BalanceNotifyService) sendBalanceLowEmails(recipients []string, userNam
 }
 
 // sendQuotaAlertEmails sends quota alert notification to admin emails.
-func (s *BalanceNotifyService) sendQuotaAlertEmails(adminEmails []string, accountName, dimension string, used, limit, threshold float64, siteName string) {
+func (s *BalanceNotifyService) sendQuotaAlertEmails(adminEmails []string, accountID int64, accountName, platform, dimension string, used, limit, threshold float64, siteName string) {
 	dimLabel := quotaDimLabels[dimension]
 	if dimLabel == "" {
 		dimLabel = dimension
 	}
 
 	subject := fmt.Sprintf("[%s] 账号限额告警 / Account Quota Alert - %s", siteName, accountName)
-	body := s.buildQuotaAlertEmailBody(accountName, dimLabel, used, limit, threshold, siteName)
+	body := s.buildQuotaAlertEmailBody(accountID, accountName, platform, dimLabel, used, limit, threshold, siteName)
 	s.sendEmails(adminEmails, subject, body, "account", accountName, "dimension", dimension)
 }
 
@@ -288,7 +288,7 @@ func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance
 }
 
 // buildQuotaAlertEmailBody builds HTML email for account quota alert.
-func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountName, dimLabel string, used, limit, threshold float64, siteName string) string {
+func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountID int64, accountName, platform, dimLabel string, used, limit, threshold float64, siteName string) string {
 	limitStr := fmt.Sprintf("$%.2f", limit)
 	if limit <= 0 {
 		limitStr = "无限制 / Unlimited"
@@ -315,7 +315,9 @@ func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountName, dimLabel st
         <div class="header"><h1>%s</h1></div>
         <div class="content">
             <p style="font-size: 18px; color: #333; text-align: center;">账号限额告警 / Account Quota Alert</p>
+            <div class="metric"><span class="metric-label">账号 ID / Account ID</span><span class="metric-value">#%d</span></div>
             <div class="metric"><span class="metric-label">账号 / Account</span><span class="metric-value">%s</span></div>
+            <div class="metric"><span class="metric-label">平台 / Platform</span><span class="metric-value">%s</span></div>
             <div class="metric"><span class="metric-label">维度 / Dimension</span><span class="metric-value">%s</span></div>
             <div class="metric"><span class="metric-label">已使用 / Used</span><span class="metric-value">$%.2f</span></div>
             <div class="metric"><span class="metric-label">限额 / Limit</span><span class="metric-value">%s</span></div>
@@ -328,7 +330,7 @@ func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountName, dimLabel st
         <div class="footer"><p>此邮件由系统自动发送，请勿回复。</p></div>
     </div>
 </body>
-</html>`, siteName, accountName, dimLabel, used, limitStr, threshold)
+</html>`, siteName, accountID, accountName, platform, dimLabel, used, limitStr, threshold)
 }
 
 // parseJSONStringArray parses a JSON string array, returns nil on error.

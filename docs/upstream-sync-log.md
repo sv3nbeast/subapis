@@ -927,3 +927,45 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 - 官方 OIDC 登录专题
 - 官方 WebSearch / Notify 专题
+
+继续同步：
+
+- 官方 `6c89d8d3`
+  - `add prompt_cache_key injection for messages→responses`
+  - 判定：本地已等价吸收，无需重复改代码
+  - 说明：
+    - 当前 [backend/internal/service/openai_gateway_messages.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_messages.go) 已在 `Responses` 请求体构造阶段注入 `prompt_cache_key`
+    - 本地实现同时兼容 OAuth Codex transform 场景，比上游单点补丁覆盖范围更大
+
+- 官方 `10699eeb`
+  - `refactor: extract ReadUpstreamResponseBody to deduplicate upstream response read + too-large error handling`
+  - 判定：暂不并
+  - 原因：
+    - 这条主要是重构，不是独立行为修复
+    - 会直接撞到本地已深度改动的：
+      - [backend/internal/service/gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gateway_service.go)
+      - [backend/internal/service/openai_gateway_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/openai_gateway_service.go)
+      - [backend/internal/service/gemini_messages_compat_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/gemini_messages_compat_service.go)
+    - 当前本地已具备 `upstream_response_limit.go` 和超限处理能力，收益不足以覆盖冲突成本
+
+- 官方 `3d202722` / `e44baa10` / `697c41a3`
+  - 主题：scheduler outbox watermark / batch rebuild dedup
+  - 判定：本地已等价吸收
+  - 说明：
+    - 当前 [backend/internal/service/scheduler_snapshot_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/scheduler_snapshot_service.go) 已包含：
+      - `ProvideSchedulerCache(redisClient, configConfig)` 注入路径
+      - `pollOutbox()` 独立 watermark 写入重试上下文
+      - `batchSeenKey` 级别的 `(groupID, platform)` 批内去重
+
+继续同步：
+
+- 官方 `c1eb79e4`
+  - `feat(notify): add platform/ID to quota alert email, add recharge URL to balance alert`
+  - 本轮实际补入的剩余子集：
+    - 配额告警邮件增加账号 ID 与平台字段
+    - 余额提醒充值按钮此前已在本地完成
+  - 改动文件：
+    - [backend/internal/service/balance_notify_service.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/balance_notify_service.go)
+    - [backend/internal/service/balance_notify_service_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/balance_notify_service_test.go)
+  - 验证：
+    - `go test ./internal/service -run 'TestBuildQuotaAlertEmailBody_IncludesAccountIDAndPlatform' -count=1`
