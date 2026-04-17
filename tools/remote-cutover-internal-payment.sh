@@ -50,6 +50,7 @@ NEW_DB="${NEW_DB:-sub2api-postgres}"
 NEW_DB_USER="${NEW_DB_USER:-sub2api}"
 NEW_DB_NAME="${NEW_DB_NAME:-sub2api}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
+SKIP_CONFIG_SYNC="${SKIP_CONFIG_SYNC:-0}"
 NEW_PUBLIC_BASE_URL="${NEW_PUBLIC_BASE_URL:-}"
 
 require_cmd docker
@@ -333,8 +334,6 @@ resolve_new_provider_id() {
   fi
 }
 
-echo "Resetting target payment config tables (plans/providers only)..."
-run_newdb_sql "TRUNCATE TABLE payment_provider_instances, subscription_plans RESTART IDENTITY CASCADE;"
 run_newdb_sql "
   CREATE TABLE IF NOT EXISTS payment_legacy_plan_map (
     legacy_plan_id VARCHAR(64) PRIMARY KEY,
@@ -347,157 +346,162 @@ run_newdb_sql "
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 "
-run_newdb_sql "TRUNCATE TABLE payment_legacy_plan_map, payment_legacy_provider_map;"
-
-echo "Migrating provider instances..."
-while IFS='|' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
-  [[ -z "${old_id}" ]] && continue
-  new_config="$(rewrite_and_reencrypt_config "${provider_key}" "${config}")"
-  payment_mode=""
-  clean_supported_types="${supported_types}"
-  if [[ "${provider_key}" == "easypay" ]]; then
-    if [[ ",${supported_types}," == *",easypay,"* ]]; then
-      payment_mode="redirect"
-      clean_supported_types="$(printf '%s' "${supported_types}" | sed 's/\(^\|,\)easypay\(,\|$\)/\1/g; s/,,*/,/g; s/^,//; s/,$//')"
-    else
-      payment_mode="api"
-    fi
-  fi
-  run_newdb_sql "
-    INSERT INTO payment_provider_instances (
-      provider_key, name, config, supported_types, enabled, payment_mode,
-      sort_order, limits, refund_enabled, allow_user_refund
-    ) VALUES (
-      $(sql_quote "${provider_key}"),
-      $(sql_quote "${name}"),
-      $(sql_quote "${new_config}"),
-      $(sql_quote "${clean_supported_types}"),
-      $(bool_sql "${enabled}"),
-      $(sql_quote "${payment_mode}"),
-      ${sort_order:-0},
-      $(sql_quote "${limits}"),
-      $(bool_sql "${refund_enabled}"),
-      false
-    );"
-  new_provider_id="$(run_newdb_query "
-    select id::text
-      from payment_provider_instances
-     where provider_key = $(sql_quote "${provider_key}")
-       and name = $(sql_quote "${name}")
-       and sort_order = ${sort_order:-0}
-     order by id desc
-     limit 1;")"
-  if [[ -n "${new_provider_id}" ]]; then
-    run_newdb_sql "
-      insert into payment_legacy_provider_map (legacy_provider_id, payment_provider_id, created_at)
-      values ($(sql_quote "${old_id}"), ${new_provider_id}, now())
-      on conflict (legacy_provider_id)
-      do update set payment_provider_id = excluded.payment_provider_id;"
-  fi
-done < <(run_legacy_query_pipe "select id,provider_key,name,config,coalesce(supported_types,''),enabled,sort_order,coalesce(limits,''),refund_enabled from payment_provider_instances order by sort_order,id;")
-
-echo "Migrating subscription plans..."
 legacy_channel_group_id_by_name() {
   local plan_name="$1"
   run_legacy_query "select coalesce(group_id::text,'') from channels where name = $(sql_quote "${plan_name}") order by sort_order, id limit 1;"
 }
+if [[ "${SKIP_CONFIG_SYNC}" != "1" ]]; then
+  echo "Resetting target payment config tables (plans/providers only)..."
+  run_newdb_sql "TRUNCATE TABLE payment_provider_instances, subscription_plans RESTART IDENTITY CASCADE;"
+  run_newdb_sql "TRUNCATE TABLE payment_legacy_plan_map, payment_legacy_provider_map;"
 
-while IFS='|' read -r old_id group_id name price original_price validity_days validity_unit features_json product_name for_sale sort_order; do
-  [[ -z "${old_id}" ]] && continue
-  resolved_group_id="${group_id}"
-  if [[ -z "${resolved_group_id}" ]]; then
-    resolved_group_id="$(legacy_channel_group_id_by_name "${name}")"
-  fi
-  if [[ -z "${resolved_group_id}" ]]; then
-    echo "Failed to resolve group_id for legacy plan: ${name}" >&2
-    exit 1
-  fi
-  features_text="$(json_array_to_lines "${features_json}")"
-  original_price_sql="NULL"
-  if [[ -n "${original_price}" ]]; then
-    original_price_sql="${original_price}"
-  fi
-  run_newdb_sql "
-    INSERT INTO subscription_plans (
-      group_id, name, description, price, original_price, validity_days,
-      validity_unit, features, product_name, for_sale, sort_order
-    ) VALUES (
-      ${resolved_group_id},
-      $(sql_quote "${name}"),
-      '',
-      ${price},
-      ${original_price_sql},
-      ${validity_days},
-      $(sql_quote "${validity_unit}"),
-      $(sql_quote "${features_text}"),
-      $(sql_quote "${product_name}"),
-      $(bool_sql "${for_sale}"),
-      ${sort_order:-0}
-    );"
-  new_plan_id="$(run_newdb_query "
-    select id::text
-      from subscription_plans
-     where group_id = ${resolved_group_id}
-       and name = $(sql_quote "${name}")
-       and price = ${price}
-       and validity_days = ${validity_days}
-       and validity_unit = $(sql_quote "${validity_unit}")
-     order by sort_order desc, id desc
-     limit 1;")"
-  if [[ -n "${new_plan_id}" ]]; then
+  echo "Migrating provider instances..."
+  while IFS='|' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
+    [[ -z "${old_id}" ]] && continue
+    new_config="$(rewrite_and_reencrypt_config "${provider_key}" "${config}")"
+    payment_mode=""
+    clean_supported_types="${supported_types}"
+    if [[ "${provider_key}" == "easypay" ]]; then
+      if [[ ",${supported_types}," == *",easypay,"* ]]; then
+        payment_mode="redirect"
+        clean_supported_types="$(printf '%s' "${supported_types}" | sed 's/\(^\|,\)easypay\(,\|$\)/\1/g; s/,,*/,/g; s/^,//; s/,$//')"
+      else
+        payment_mode="api"
+      fi
+    fi
     run_newdb_sql "
-      insert into payment_legacy_plan_map (legacy_plan_id, payment_plan_id, created_at)
-      values ($(sql_quote "${old_id}"), ${new_plan_id}, now())
-      on conflict (legacy_plan_id)
-      do update set payment_plan_id = excluded.payment_plan_id;"
-  fi
-done < <(run_legacy_query_pipe "select id,coalesce(group_id::text,''),name,price::text,coalesce(original_price::text,''),validity_days,validity_unit,coalesce(features,''),coalesce(product_name,''),for_sale,sort_order from subscription_plans order by sort_order,id;")
+      INSERT INTO payment_provider_instances (
+        provider_key, name, config, supported_types, enabled, payment_mode,
+        sort_order, limits, refund_enabled, allow_user_refund
+      ) VALUES (
+        $(sql_quote "${provider_key}"),
+        $(sql_quote "${name}"),
+        $(sql_quote "${new_config}"),
+        $(sql_quote "${clean_supported_types}"),
+        $(bool_sql "${enabled}"),
+        $(sql_quote "${payment_mode}"),
+        ${sort_order:-0},
+        $(sql_quote "${limits}"),
+        $(bool_sql "${refund_enabled}"),
+        false
+      );"
+    new_provider_id="$(run_newdb_query "
+      select id::text
+        from payment_provider_instances
+       where provider_key = $(sql_quote "${provider_key}")
+         and name = $(sql_quote "${name}")
+         and sort_order = ${sort_order:-0}
+       order by id desc
+       limit 1;")"
+    if [[ -n "${new_provider_id}" ]]; then
+      run_newdb_sql "
+        insert into payment_legacy_provider_map (legacy_provider_id, payment_provider_id, created_at)
+        values ($(sql_quote "${old_id}"), ${new_provider_id}, now())
+        on conflict (legacy_provider_id)
+        do update set payment_provider_id = excluded.payment_provider_id;"
+    fi
+  done < <(run_legacy_query_pipe "select id,provider_key,name,config,coalesce(supported_types,''),enabled,sort_order,coalesce(limits,''),refund_enabled from payment_provider_instances order by sort_order,id;")
 
-echo "Migrating payment settings..."
-legacy_env="$(docker inspect "${LEGACY_APP}" --format '{{range .Config.Env}}{{println .}}{{end}}')"
-legacy_value() {
-  local key="$1"
-  printf '%s\n' "${legacy_env}" | awk -F= -v want="${key}" '$1 == want { sub($1"=", ""); print; exit }'
-}
+  echo "Migrating subscription plans..."
+  while IFS='|' read -r old_id group_id name price original_price validity_days validity_unit features_json product_name for_sale sort_order; do
+    [[ -z "${old_id}" ]] && continue
+    resolved_group_id="${group_id}"
+    if [[ -z "${resolved_group_id}" ]]; then
+      resolved_group_id="$(legacy_channel_group_id_by_name "${name}")"
+    fi
+    if [[ -z "${resolved_group_id}" ]]; then
+      echo "Failed to resolve group_id for legacy plan: ${name}" >&2
+      exit 1
+    fi
+    features_text="$(json_array_to_lines "${features_json}")"
+    original_price_sql="NULL"
+    if [[ -n "${original_price}" ]]; then
+      original_price_sql="${original_price}"
+    fi
+    run_newdb_sql "
+      INSERT INTO subscription_plans (
+        group_id, name, description, price, original_price, validity_days,
+        validity_unit, features, product_name, for_sale, sort_order
+      ) VALUES (
+        ${resolved_group_id},
+        $(sql_quote "${name}"),
+        '',
+        ${price},
+        ${original_price_sql},
+        ${validity_days},
+        $(sql_quote "${validity_unit}"),
+        $(sql_quote "${features_text}"),
+        $(sql_quote "${product_name}"),
+        $(bool_sql "${for_sale}"),
+        ${sort_order:-0}
+      );"
+    new_plan_id="$(run_newdb_query "
+      select id::text
+        from subscription_plans
+       where group_id = ${resolved_group_id}
+         and name = $(sql_quote "${name}")
+         and price = ${price}
+         and validity_days = ${validity_days}
+         and validity_unit = $(sql_quote "${validity_unit}")
+       order by sort_order desc, id desc
+       limit 1;")"
+    if [[ -n "${new_plan_id}" ]]; then
+      run_newdb_sql "
+        insert into payment_legacy_plan_map (legacy_plan_id, payment_plan_id, created_at)
+        values ($(sql_quote "${old_id}"), ${new_plan_id}, now())
+        on conflict (legacy_plan_id)
+        do update set payment_plan_id = excluded.payment_plan_id;"
+    fi
+  done < <(run_legacy_query_pipe "select id,coalesce(group_id::text,''),name,price::text,coalesce(original_price::text,''),validity_days,validity_unit,coalesce(features,''),coalesce(product_name,''),for_sale,sort_order from subscription_plans order by sort_order,id;")
 
-enabled_payment_types="$(run_legacy_query "select string_agg(distinct trim(x), ',' order by trim(x)) from (select unnest(string_to_array(coalesce(supported_types,''), ',')) as x from payment_provider_instances where enabled = true) t where trim(x) <> '';")"
-[[ -z "${enabled_payment_types}" ]] && enabled_payment_types="alipay,wxpay"
+  echo "Migrating payment settings..."
+  legacy_env="$(docker inspect "${LEGACY_APP}" --format '{{range .Config.Env}}{{println .}}{{end}}')"
+  legacy_value() {
+    local key="$1"
+    printf '%s\n' "${legacy_env}" | awk -F= -v want="${key}" '$1 == want { sub($1"=", ""); print; exit }'
+  }
 
-declare -A settings_map=(
-  [payment_enabled]="true"
-  [purchase_subscription_enabled]="false"
-  [purchase_subscription_url]=""
-  [MIN_RECHARGE_AMOUNT]="$(legacy_value MIN_RECHARGE_AMOUNT)"
-  [MAX_RECHARGE_AMOUNT]="$(legacy_value MAX_RECHARGE_AMOUNT)"
-  [DAILY_RECHARGE_LIMIT]="$(legacy_value MAX_DAILY_RECHARGE_AMOUNT)"
-  [ORDER_TIMEOUT_MINUTES]="$(legacy_value ORDER_TIMEOUT_MINUTES)"
-  [MAX_PENDING_ORDERS]="3"
-  [ENABLED_PAYMENT_TYPES]="${enabled_payment_types}"
-  [BALANCE_PAYMENT_DISABLED]="false"
-  [BALANCE_RECHARGE_MULTIPLIER]="1"
-  [RECHARGE_FEE_RATE]="0"
-  [LOAD_BALANCE_STRATEGY]="round-robin"
-  [PRODUCT_NAME_PREFIX]="$(legacy_value PRODUCT_NAME)"
-  [PRODUCT_NAME_SUFFIX]=""
-  [PAYMENT_HELP_IMAGE_URL]=""
-  [PAYMENT_HELP_TEXT]=""
-  [CANCEL_RATE_LIMIT_ENABLED]="false"
-  [CANCEL_RATE_LIMIT_MAX]="10"
-  [CANCEL_RATE_LIMIT_WINDOW]="1"
-  [CANCEL_RATE_LIMIT_UNIT]="day"
-  [CANCEL_RATE_LIMIT_WINDOW_MODE]="rolling"
-)
+  enabled_payment_types="$(run_legacy_query "select string_agg(distinct trim(x), ',' order by trim(x)) from (select unnest(string_to_array(coalesce(supported_types,''), ',')) as x from payment_provider_instances where enabled = true) t where trim(x) <> '';")"
+  [[ -z "${enabled_payment_types}" ]] && enabled_payment_types="alipay,wxpay"
 
-for key in "${!settings_map[@]}"; do
-  value="${settings_map[$key]}"
-  run_newdb_sql "
-    INSERT INTO settings (key, value, updated_at)
-    VALUES ($(sql_quote "${key}"), $(sql_quote "${value}"), NOW())
-    ON CONFLICT (key)
-    DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();"
-done
+  declare -A settings_map=(
+    [payment_enabled]="true"
+    [purchase_subscription_enabled]="false"
+    [purchase_subscription_url]=""
+    [MIN_RECHARGE_AMOUNT]="$(legacy_value MIN_RECHARGE_AMOUNT)"
+    [MAX_RECHARGE_AMOUNT]="$(legacy_value MAX_RECHARGE_AMOUNT)"
+    [DAILY_RECHARGE_LIMIT]="$(legacy_value MAX_DAILY_RECHARGE_AMOUNT)"
+    [ORDER_TIMEOUT_MINUTES]="$(legacy_value ORDER_TIMEOUT_MINUTES)"
+    [MAX_PENDING_ORDERS]="3"
+    [ENABLED_PAYMENT_TYPES]="${enabled_payment_types}"
+    [BALANCE_PAYMENT_DISABLED]="false"
+    [BALANCE_RECHARGE_MULTIPLIER]="1"
+    [RECHARGE_FEE_RATE]="0"
+    [LOAD_BALANCE_STRATEGY]="round-robin"
+    [PRODUCT_NAME_PREFIX]="$(legacy_value PRODUCT_NAME)"
+    [PRODUCT_NAME_SUFFIX]=""
+    [PAYMENT_HELP_IMAGE_URL]=""
+    [PAYMENT_HELP_TEXT]=""
+    [CANCEL_RATE_LIMIT_ENABLED]="false"
+    [CANCEL_RATE_LIMIT_MAX]="10"
+    [CANCEL_RATE_LIMIT_WINDOW]="1"
+    [CANCEL_RATE_LIMIT_UNIT]="day"
+    [CANCEL_RATE_LIMIT_WINDOW_MODE]="rolling"
+  )
 
-echo "Payment config migration completed."
+  for key in "${!settings_map[@]}"; do
+    value="${settings_map[$key]}"
+    run_newdb_sql "
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ($(sql_quote "${key}"), $(sql_quote "${value}"), NOW())
+      ON CONFLICT (key)
+      DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();"
+  done
+
+  echo "Payment config migration completed."
+else
+  echo "Skipping provider/plan/settings sync; importing legacy history only."
+fi
 
 echo "Importing legacy orders..."
 legacy_order_sql="
