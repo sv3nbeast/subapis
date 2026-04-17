@@ -1312,13 +1312,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Account quota notification emails
 	if raw := strings.TrimSpace(settings[SettingKeyAccountQuotaNotifyEmails]); raw != "" {
-		var emails []string
-		if err := json.Unmarshal([]byte(raw), &emails); err == nil {
-			result.AccountQuotaNotifyEmails = emails
-		}
+		result.AccountQuotaNotifyEmails = ParseNotifyEmails(raw)
 	}
 	if result.AccountQuotaNotifyEmails == nil {
-		result.AccountQuotaNotifyEmails = []string{}
+		result.AccountQuotaNotifyEmails = []NotifyEmailEntry{}
 	}
 
 	return result

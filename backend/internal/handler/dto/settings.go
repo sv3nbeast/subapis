@@ -155,7 +155,7 @@ type SystemSettings struct {
 	BalanceLowNotifyThreshold   float64  `json:"balance_low_notify_threshold"`
 	BalanceLowNotifyRechargeURL string   `json:"balance_low_notify_recharge_url"`
 	AccountQuotaNotifyEnabled   bool     `json:"account_quota_notify_enabled"`
-	AccountQuotaNotifyEmails    []string `json:"account_quota_notify_emails"`
+	AccountQuotaNotifyEmails    []NotifyEmailEntry `json:"account_quota_notify_emails"`
 }
 
 type DefaultSubscriptionSetting struct {

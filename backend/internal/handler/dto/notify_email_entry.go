@@ -22,3 +22,18 @@ func NotifyEmailEntriesFromService(entries []service.NotifyEmailEntry) []NotifyE
 	}
 	return out
 }
+
+func NotifyEmailEntriesToService(entries []NotifyEmailEntry) []service.NotifyEmailEntry {
+	if entries == nil {
+		return nil
+	}
+	out := make([]service.NotifyEmailEntry, len(entries))
+	for i, entry := range entries {
+		out[i] = service.NotifyEmailEntry{
+			Email:    entry.Email,
+			Disabled: entry.Disabled,
+			Verified: entry.Verified,
+		}
+	}
+	return out
+}

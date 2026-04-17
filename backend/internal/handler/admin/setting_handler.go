@@ -197,7 +197,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		BalanceLowNotifyThreshold:            settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:          settings.BalanceLowNotifyRechargeURL,
 		AccountQuotaNotifyEnabled:            settings.AccountQuotaNotifyEnabled,
-		AccountQuotaNotifyEmails:             settings.AccountQuotaNotifyEmails,
+		AccountQuotaNotifyEmails:             dto.NotifyEmailEntriesFromService(settings.AccountQuotaNotifyEmails),
 	})
 }
 
@@ -315,7 +315,7 @@ type UpdateSettingsRequest struct {
 	BalanceLowNotifyThreshold   *float64  `json:"balance_low_notify_threshold"`
 	BalanceLowNotifyRechargeURL *string   `json:"balance_low_notify_recharge_url"`
 	AccountQuotaNotifyEnabled   *bool     `json:"account_quota_notify_enabled"`
-	AccountQuotaNotifyEmails    *[]string `json:"account_quota_notify_emails"`
+	AccountQuotaNotifyEmails    *[]dto.NotifyEmailEntry `json:"account_quota_notify_emails"`
 
 	// Payment configuration
 	PaymentEnabled                   *bool    `json:"payment_enabled"`
@@ -919,9 +919,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AccountQuotaNotifyEnabled
 		}(),
-		AccountQuotaNotifyEmails: func() []string {
+		AccountQuotaNotifyEmails: func() []service.NotifyEmailEntry {
 			if req.AccountQuotaNotifyEmails != nil {
-				return *req.AccountQuotaNotifyEmails
+				return dto.NotifyEmailEntriesToService(*req.AccountQuotaNotifyEmails)
 			}
 			return previousSettings.AccountQuotaNotifyEmails
 		}(),
@@ -1091,7 +1091,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		BalanceLowNotifyThreshold:            updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:          updatedSettings.BalanceLowNotifyRechargeURL,
 		AccountQuotaNotifyEnabled:            updatedSettings.AccountQuotaNotifyEnabled,
-		AccountQuotaNotifyEmails:             updatedSettings.AccountQuotaNotifyEmails,
+		AccountQuotaNotifyEmails:             dto.NotifyEmailEntriesFromService(updatedSettings.AccountQuotaNotifyEmails),
 	})
 }
 
@@ -1349,7 +1349,7 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.AccountQuotaNotifyEnabled != after.AccountQuotaNotifyEnabled {
 		changed = append(changed, "account_quota_notify_enabled")
 	}
-	if !equalStringSlice(before.AccountQuotaNotifyEmails, after.AccountQuotaNotifyEmails) {
+	if !equalNotifyEmailEntries(before.AccountQuotaNotifyEmails, after.AccountQuotaNotifyEmails) {
 		changed = append(changed, "account_quota_notify_emails")
 	}
 	if before.TableDefaultPageSize != after.TableDefaultPageSize {
@@ -1396,6 +1396,18 @@ func equalStringSlice(a, b []string) bool {
 	}
 	for i := range a {
 		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalNotifyEmailEntries(a, b []service.NotifyEmailEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Email != b[i].Email || a[i].Disabled != b[i].Disabled || a[i].Verified != b[i].Verified {
 			return false
 		}
 	}
