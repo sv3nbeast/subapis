@@ -969,3 +969,39 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
     - [backend/internal/service/balance_notify_service_test.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/balance_notify_service_test.go)
   - 验证：
     - `go test ./internal/service -run 'TestBuildQuotaAlertEmailBody_IncludesAccountIDAndPlatform' -count=1`
+
+继续同步：
+
+- 官方 `915b7a4a`
+  - `feat(notify): convert email lists to NotifyEmailEntry struct with toggle support`
+  - 本轮已吸收的用户侧子集：
+    - 新增 [backend/internal/service/notify_email_entry.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/notify_email_entry.go)
+      - 兼容解析旧 `[]string` 与新 `[]NotifyEmailEntry`
+      - 新写回统一落为结构化对象
+    - 新增 [backend/internal/handler/dto/notify_email_entry.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/dto/notify_email_entry.go)
+    - 用户 `balance_notify_extra_emails` 改为结构化条目
+      - [backend/internal/service/user.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/user.go)
+      - [backend/internal/handler/dto/types.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/dto/types.go)
+      - [frontend/src/types/index.ts](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/types/index.ts)
+    - 仓库层兼容旧库 JSON 数组
+      - [backend/internal/repository/user_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/user_repo.go)
+      - [backend/internal/repository/api_key_repo.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/repository/api_key_repo.go)
+    - API Key 认证缓存快照补入余额通知字段，避免缓存路径漏发提醒
+      - [backend/internal/service/api_key_auth_cache.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/api_key_auth_cache.go)
+      - [backend/internal/service/api_key_auth_cache_impl.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/service/api_key_auth_cache_impl.go)
+    - 新增用户侧通知邮箱开关接口
+      - `PUT /api/v1/user/notify-email/toggle`
+      - [backend/internal/handler/user_handler.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/handler/user_handler.go)
+      - [backend/internal/server/routes/user.go](/Users/sven.sun/Desktop/Api/sub2api/backend/internal/server/routes/user.go)
+      - [frontend/src/api/user.ts](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/api/user.ts)
+    - 用户资料页通知邮箱卡片支持逐邮箱开关与未验证标识
+      - [frontend/src/components/user/profile/ProfileBalanceNotifyCard.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/components/user/profile/ProfileBalanceNotifyCard.vue)
+      - [frontend/src/views/user/ProfileView.vue](/Users/sven.sun/Desktop/Api/sub2api/frontend/src/views/user/ProfileView.vue)
+  - 当前仍未吸收的部分：
+    - 管理员 `account_quota_notify_emails` 从 `[]string` 升级到结构化 `NotifyEmailEntry`
+    - 对应的管理员设置页 toggle / verified 语义
+    - 上游那条原始迁移文件需要本地重新编号后再决定是否落库
+  - 验证：
+    - `go test ./internal/service ./internal/repository ./internal/handler ./internal/server/routes -run 'Test.*(Notify|Profile|User|APIKeyAuth|BalanceNotify).*' -count=1`
+    - `go build ./cmd/server`
+    - `corepack pnpm build`

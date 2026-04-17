@@ -35,10 +35,16 @@ export interface User {
   allowed_groups: number[] | null // Allowed group IDs (null = all non-exclusive groups)
   balance_notify_enabled: boolean
   balance_notify_threshold: number | null
-  balance_notify_extra_emails: string[]
+  balance_notify_extra_emails: NotifyEmailEntry[]
   subscriptions?: UserSubscription[] // User's active subscriptions
   created_at: string
   updated_at: string
+}
+
+export interface NotifyEmailEntry {
+  email: string
+  disabled: boolean
+  verified: boolean
 }
 
 export interface AdminUser extends User {

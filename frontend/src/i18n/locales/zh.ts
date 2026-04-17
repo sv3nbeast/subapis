@@ -931,6 +931,7 @@ export default {
       verifySuccess: '邮箱添加成功',
       removeEmail: '移除',
       removeSuccess: '邮箱已移除',
+      unverified: '未验证',
     }
   },
 

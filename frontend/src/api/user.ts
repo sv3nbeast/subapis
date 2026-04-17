@@ -24,7 +24,6 @@ export async function updateProfile(profile: {
   username?: string
   balance_notify_enabled?: boolean
   balance_notify_threshold?: number | null
-  balance_notify_extra_emails?: string[]
 }): Promise<User> {
   const { data } = await apiClient.put<User>('/user', profile)
   return data
@@ -73,13 +72,19 @@ export async function removeNotifyEmail(email: string): Promise<void> {
   await apiClient.delete('/user/notify-email', { data: { email } })
 }
 
+export async function toggleNotifyEmail(email: string, disabled: boolean): Promise<User> {
+  const { data } = await apiClient.put<User>('/user/notify-email/toggle', { email, disabled })
+  return data
+}
+
 export const userAPI = {
   getProfile,
   updateProfile,
   changePassword,
   sendNotifyEmailCode,
   verifyNotifyEmail,
-  removeNotifyEmail
+  removeNotifyEmail,
+  toggleNotifyEmail
 }
 
 export default userAPI

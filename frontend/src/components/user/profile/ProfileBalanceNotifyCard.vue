@@ -42,13 +42,22 @@
         <label class="input-label">{{ t('profile.balanceNotify.extraEmails') }}</label>
 
         <!-- Existing emails list -->
-        <div v-if="extraEmails.length > 0" class="space-y-2 mb-4">
-          <div v-for="email in extraEmails" :key="email"
+        <div v-if="emailEntries.length > 0" class="space-y-2 mb-4">
+          <div v-for="entry in emailEntries" :key="entry.email"
             class="flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-dark-700 rounded-lg">
-            <span class="text-sm text-gray-700 dark:text-gray-300">{{ email }}</span>
-            <button @click="handleRemoveEmail(email)" class="text-red-500 hover:text-red-700 text-sm">
-              {{ t('profile.balanceNotify.removeEmail') }}
-            </button>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                <input type="checkbox" :checked="!entry.disabled" @change="handleEmailToggle(entry)" class="sr-only peer" />
+                <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:after:border-gray-500 peer-checked:bg-primary-600"></div>
+              </label>
+              <span class="text-sm text-gray-700 dark:text-gray-300 truncate">{{ entry.email }}</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span v-if="!entry.verified" class="text-xs text-yellow-500">{{ t('profile.balanceNotify.unverified') }}</span>
+              <button @click="handleRemoveEmail(entry.email)" class="text-red-500 hover:text-red-700 text-sm">
+                {{ t('profile.balanceNotify.removeEmail') }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -98,11 +107,13 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { userAPI } from '@/api'
+import type { NotifyEmailEntry } from '@/types'
 
 const props = defineProps<{
   enabled: boolean
   threshold: number | null
-  extraEmails: string[]
+  extraEmails: NotifyEmailEntry[]
+  userEmail: string
 }>()
 
 const { t } = useI18n()
@@ -111,7 +122,7 @@ const appStore = useAppStore()
 
 const notifyEnabled = ref(props.enabled)
 const customThreshold = ref<number | null>(props.threshold)
-const extraEmails = ref<string[]>([...props.extraEmails])
+const emailEntries = ref<NotifyEmailEntry[]>([...props.extraEmails])
 const newEmail = ref('')
 const verifyCode = ref('')
 const codeSent = ref(false)
@@ -137,7 +148,7 @@ function extractApiErrorMessage(error: unknown, fallback: string): string {
 
 watch(() => props.enabled, (val) => { notifyEnabled.value = val })
 watch(() => props.threshold, (val) => { customThreshold.value = val })
-watch(() => props.extraEmails, (val) => { extraEmails.value = [...val] })
+watch(() => props.extraEmails, (val) => { emailEntries.value = [...val] })
 
 const handleToggle = async () => {
   try {
@@ -153,6 +164,15 @@ const handleThresholdUpdate = async () => {
   try {
     const threshold = customThreshold.value && customThreshold.value > 0 ? customThreshold.value : 0
     const updated = await userAPI.updateProfile({ balance_notify_threshold: threshold })
+    authStore.user = updated
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  }
+}
+
+const handleEmailToggle = async (entry: NotifyEmailEntry) => {
+  try {
+    const updated = await userAPI.toggleNotifyEmail(entry.email, !entry.disabled)
     authStore.user = updated
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('common.error')))
@@ -186,7 +206,6 @@ const handleVerify = async () => {
   verifying.value = true
   try {
     await userAPI.verifyNotifyEmail(newEmail.value, verifyCode.value)
-    extraEmails.value.push(newEmail.value)
     newEmail.value = ''
     verifyCode.value = ''
     codeSent.value = false
@@ -206,7 +225,6 @@ const handleVerify = async () => {
 const handleRemoveEmail = async (email: string) => {
   try {
     await userAPI.removeNotifyEmail(email)
-    extraEmails.value = extraEmails.value.filter(e => e !== email)
     appStore.showSuccess(t('profile.balanceNotify.removeSuccess'))
     const updated = await userAPI.getProfile()
     authStore.user = updated

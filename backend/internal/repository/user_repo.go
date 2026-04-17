@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -558,16 +557,9 @@ func applyUserEntityToService(dst *service.User, src *dbent.User) {
 	dst.UpdatedAt = src.UpdatedAt
 }
 
-// marshalExtraEmails serializes a string slice to JSON for storage.
-func marshalExtraEmails(emails []string) string {
-	if len(emails) == 0 {
-		return "[]"
-	}
-	data, err := json.Marshal(emails)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
+// marshalExtraEmails serializes notification email entries for storage.
+func marshalExtraEmails(entries []service.NotifyEmailEntry) string {
+	return service.MarshalNotifyEmails(entries)
 }
 
 // UpdateTotpSecret 更新用户的 TOTP 加密密钥

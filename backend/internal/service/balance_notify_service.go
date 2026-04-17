@@ -202,7 +202,10 @@ func (s *BalanceNotifyService) getSiteName(ctx context.Context) string {
 func (s *BalanceNotifyService) collectBalanceNotifyRecipients(user *User) []string {
 	recipients := []string{user.Email}
 	for _, extra := range user.BalanceNotifyExtraEmails {
-		email := strings.TrimSpace(extra)
+		if extra.Disabled || !extra.Verified {
+			continue
+		}
+		email := strings.TrimSpace(extra.Email)
 		if email != "" && email != user.Email {
 			recipients = append(recipients, email)
 		}

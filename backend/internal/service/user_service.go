@@ -338,7 +338,7 @@ func (s *UserService) VerifyAndAddNotifyEmail(ctx context.Context, userID int64,
 
 	// Check if already exists
 	for _, e := range user.BalanceNotifyExtraEmails {
-		if strings.EqualFold(e, email) {
+		if strings.EqualFold(e.Email, email) {
 			return nil // Already added
 		}
 	}
@@ -348,7 +348,11 @@ func (s *UserService) VerifyAndAddNotifyEmail(ctx context.Context, userID int64,
 		return infraerrors.BadRequest("TOO_MANY_NOTIFY_EMAILS", fmt.Sprintf("maximum %d extra notification emails allowed", maxNotifyExtraEmails))
 	}
 
-	user.BalanceNotifyExtraEmails = append(user.BalanceNotifyExtraEmails, email)
+	user.BalanceNotifyExtraEmails = append(user.BalanceNotifyExtraEmails, NotifyEmailEntry{
+		Email:    email,
+		Disabled: false,
+		Verified: true,
+	})
 	return s.userRepo.Update(ctx, user)
 }
 
@@ -359,13 +363,34 @@ func (s *UserService) RemoveNotifyEmail(ctx context.Context, userID int64, email
 		return err
 	}
 
-	filtered := make([]string, 0, len(user.BalanceNotifyExtraEmails))
+	filtered := make([]NotifyEmailEntry, 0, len(user.BalanceNotifyExtraEmails))
 	for _, e := range user.BalanceNotifyExtraEmails {
-		if !strings.EqualFold(e, email) {
+		if !strings.EqualFold(e.Email, email) {
 			filtered = append(filtered, e)
 		}
 	}
 	user.BalanceNotifyExtraEmails = filtered
+	return s.userRepo.Update(ctx, user)
+}
+
+// ToggleNotifyEmail toggles the disabled state of a notification email.
+func (s *UserService) ToggleNotifyEmail(ctx context.Context, userID int64, email string, disabled bool) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, entry := range user.BalanceNotifyExtraEmails {
+		if strings.EqualFold(entry.Email, email) {
+			user.BalanceNotifyExtraEmails[i].Disabled = disabled
+			found = true
+			break
+		}
+	}
+	if !found {
+		return infraerrors.BadRequest("EMAIL_NOT_FOUND", "notification email not found")
+	}
 	return s.userRepo.Update(ctx, user)
 }
 

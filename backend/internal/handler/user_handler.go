@@ -207,3 +207,36 @@ func (h *UserHandler) RemoveNotifyEmail(c *gin.Context) {
 
 	response.Success(c, gin.H{"message": "Email removed successfully"})
 }
+
+type ToggleNotifyEmailRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Disabled bool   `json:"disabled"`
+}
+
+// ToggleNotifyEmail toggles one notification email entry.
+// PUT /api/v1/user/notify-email/toggle
+func (h *UserHandler) ToggleNotifyEmail(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	var req ToggleNotifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	if err := h.userService.ToggleNotifyEmail(c.Request.Context(), subject.UserID, req.Email, req.Disabled); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	updatedUser, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.UserFromService(updatedUser))
+}

@@ -33,7 +33,7 @@ type User struct {
 	// 余额不足通知
 	BalanceNotifyEnabled     bool
 	BalanceNotifyThreshold   *float64
-	BalanceNotifyExtraEmails []string
+	BalanceNotifyExtraEmails []NotifyEmailEntry
 
 	APIKeys       []APIKey
 	Subscriptions []UserSubscription

@@ -34,6 +34,12 @@ type APIKeyAuthUserSnapshot struct {
 	Role        string  `json:"role"`
 	Balance     float64 `json:"balance"`
 	Concurrency int     `json:"concurrency"`
+	Email       string  `json:"email"`
+	Username    string  `json:"username"`
+
+	BalanceNotifyEnabled     bool               `json:"balance_notify_enabled"`
+	BalanceNotifyThreshold   *float64           `json:"balance_notify_threshold,omitempty"`
+	BalanceNotifyExtraEmails []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
 }
 
 // APIKeyAuthGroupSnapshot 分组快照

@@ -927,6 +927,7 @@ export default {
       verifySuccess: 'Email added successfully',
       removeEmail: 'Remove',
       removeSuccess: 'Email removed',
+      unverified: 'Unverified',
     }
   },
 
