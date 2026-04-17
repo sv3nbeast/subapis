@@ -277,7 +277,7 @@ import type { SubscriptionPlan, CheckoutInfoResponse, OrderType } from '@/types/
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
-import { METHOD_ORDER, POPUP_WINDOW_FEATURES } from '@/components/payment/providerConfig'
+import { METHOD_ORDER } from '@/components/payment/providerConfig'
 import { platformAccentBarClass, platformBadgeLightClass, platformBadgeClass, platformTextClass, platformLabel } from '@/utils/platformColors'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
@@ -552,12 +552,6 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       order_type: orderType,
       plan_id: planId,
     })
-    const openWindow = (url: string) => {
-      const win = window.open(url, 'paymentPopup', POPUP_WINDOW_FEATURES)
-      if (!win || win.closed) {
-        window.location.href = url
-      }
-    }
     if (result.client_secret) {
       // Stripe: show Payment Element inline (user picks method → confirms → redirect if needed)
       paymentState.value = {
@@ -588,8 +582,8 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       }
       paymentPhase.value = 'paying'
     } else if (result.pay_url) {
-      // Redirect/popup mode: open payment URL, show waiting state inline
-      openWindow(result.pay_url)
+      // Desktop fallback: when upstream only returns a payment URL, render it as an inline QR
+      // instead of forcing a popup/new tab.
       paymentState.value = {
         orderId: result.order_id, amount: result.amount, qrCode: '', expiresAt: result.expires_at || '',
         paymentType: selectedMethod.value, payUrl: result.pay_url,

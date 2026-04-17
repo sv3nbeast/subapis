@@ -255,8 +255,9 @@ function cleanup() {
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
 }
 
-// Initialize on mount
-qrUrl.value = props.qrCode
+// Initialize on mount. Some providers only return a payment URL, which we render
+// as a QR code directly on desktop instead of forcing a popup flow.
+qrUrl.value = props.qrCode || props.payUrl || ''
 let seconds = 30 * 60
 if (props.expiresAt) {
   seconds = Math.floor((new Date(props.expiresAt).getTime() - Date.now()) / 1000)
