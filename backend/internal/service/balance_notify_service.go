@@ -54,7 +54,7 @@ func (s *BalanceNotifyService) CheckBalanceAfterDeduction(ctx context.Context, u
 	}
 
 	// Check global switch
-	globalEnabled, threshold := s.getBalanceNotifyConfig(ctx)
+	globalEnabled, threshold, rechargeURL := s.getBalanceNotifyConfig(ctx)
 	if !globalEnabled {
 		return
 	}
@@ -80,7 +80,7 @@ func (s *BalanceNotifyService) CheckBalanceAfterDeduction(ctx context.Context, u
 					slog.Error("panic in balance notification", "recover", r)
 				}
 			}()
-			s.sendBalanceLowEmails(recipients, user.Username, user.Email, newBalance, threshold, siteName)
+			s.sendBalanceLowEmails(recipients, user.Username, user.Email, newBalance, threshold, siteName, rechargeURL)
 		}()
 	}
 }
@@ -92,6 +92,9 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 		return
 	}
 
+	if !s.isAccountQuotaNotifyEnabled(ctx) {
+		return
+	}
 	adminEmails := s.getAccountQuotaNotifyEmails(ctx)
 	if len(adminEmails) == 0 {
 		return
@@ -153,11 +156,11 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 }
 
 // getBalanceNotifyConfig reads global balance notification settings.
-func (s *BalanceNotifyService) getBalanceNotifyConfig(ctx context.Context) (enabled bool, threshold float64) {
-	keys := []string{SettingKeyBalanceLowNotifyEnabled, SettingKeyBalanceLowNotifyThreshold}
+func (s *BalanceNotifyService) getBalanceNotifyConfig(ctx context.Context) (enabled bool, threshold float64, rechargeURL string) {
+	keys := []string{SettingKeyBalanceLowNotifyEnabled, SettingKeyBalanceLowNotifyThreshold, SettingKeyBalanceLowNotifyRechargeURL}
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
 	if err != nil {
-		return false, 0
+		return false, 0, ""
 	}
 	enabled = settings[SettingKeyBalanceLowNotifyEnabled] == "true"
 	if v := settings[SettingKeyBalanceLowNotifyThreshold]; v != "" {
@@ -165,7 +168,16 @@ func (s *BalanceNotifyService) getBalanceNotifyConfig(ctx context.Context) (enab
 			threshold = f
 		}
 	}
+	rechargeURL = settings[SettingKeyBalanceLowNotifyRechargeURL]
 	return
+}
+
+func (s *BalanceNotifyService) isAccountQuotaNotifyEnabled(ctx context.Context) bool {
+	val, err := s.settingRepo.GetValue(ctx, SettingKeyAccountQuotaNotifyEnabled)
+	if err != nil {
+		return false
+	}
+	return val == "true"
 }
 
 // getAccountQuotaNotifyEmails reads admin notification emails from settings.
@@ -211,13 +223,13 @@ func (s *BalanceNotifyService) sendEmails(recipients []string, subject, body str
 }
 
 // sendBalanceLowEmails sends balance low notification to all recipients.
-func (s *BalanceNotifyService) sendBalanceLowEmails(recipients []string, userName, userEmail string, balance, threshold float64, siteName string) {
+func (s *BalanceNotifyService) sendBalanceLowEmails(recipients []string, userName, userEmail string, balance, threshold float64, siteName, rechargeURL string) {
 	displayName := userName
 	if displayName == "" {
 		displayName = userEmail
 	}
 	subject := fmt.Sprintf("[%s] 余额不足提醒 / Balance Low Alert", siteName)
-	body := s.buildBalanceLowEmailBody(displayName, balance, threshold, siteName)
+	body := s.buildBalanceLowEmailBody(displayName, balance, threshold, siteName, rechargeURL)
 	s.sendEmails(recipients, subject, body, "user_email", userEmail, "balance", balance)
 }
 
@@ -234,7 +246,11 @@ func (s *BalanceNotifyService) sendQuotaAlertEmails(adminEmails []string, accoun
 }
 
 // buildBalanceLowEmailBody builds HTML email for balance low notification.
-func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance, threshold float64, siteName string) string {
+func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance, threshold float64, siteName, rechargeURL string) string {
+	rechargeBlock := ""
+	if rechargeURL != "" {
+		rechargeBlock = fmt.Sprintf(`<div style="margin: 24px 0;"><a href="%s" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">立即充值 / Top Up Now</a></div>`, rechargeURL)
+	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
@@ -257,6 +273,7 @@ func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance
             <p style="font-size: 18px; color: #333;">%s，您的余额不足</p>
             <p style="color: #666;">Dear %s, your balance is running low</p>
             <div class="balance">$%.2f</div>
+            %s
             <div class="info">
                 <p>您的账户余额已低于提醒阈值 <strong>$%.2f</strong>。</p>
                 <p>Your account balance has fallen below the alert threshold of <strong>$%.2f</strong>.</p>
@@ -267,7 +284,7 @@ func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance
         <div class="footer"><p>此邮件由系统自动发送，请勿回复。</p></div>
     </div>
 </body>
-</html>`, siteName, userName, userName, balance, threshold, threshold)
+</html>`, siteName, userName, userName, balance, rechargeBlock, threshold, threshold)
 }
 
 // buildQuotaAlertEmailBody builds HTML email for account quota alert.

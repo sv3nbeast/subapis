@@ -29,7 +29,7 @@
         <!-- Tab: Security — Admin API Key -->
         <div v-show="activeTab === 'security'" class="space-y-6">
         <!-- Admin API Key Settings -->
-        <div v-if="!form.payment_enabled" class="card">
+        <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.adminApiKey.title') }}
@@ -2453,7 +2453,7 @@
         </div>
 
         <!-- Purchase Subscription Page -->
-        <div class="card">
+        <div v-if="!form.payment_enabled" class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.purchase.title') }}
@@ -2639,6 +2639,123 @@
         </div>
 
         </div><!-- /Tab: General -->
+
+        <!-- Tab: Payment -->
+        <div v-show="activeTab === 'payment'" class="space-y-6">
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.payment.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.payment.description') }}
+            </p>
+          </div>
+          <div class="space-y-4 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.payment.enabled') }}</label>
+                <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.enabledHint') }}</p>
+              </div>
+              <Toggle v-model="form.payment_enabled" />
+            </div>
+
+            <template v-if="form.payment_enabled">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.productNamePrefix') }}</label>
+                  <input v-model="form.payment_product_name_prefix" type="text" class="input" placeholder="SubAPIs" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.productNameSuffix') }}</label>
+                  <input v-model="form.payment_product_name_suffix" type="text" class="input" placeholder="CNY" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.preview') }}</label>
+                  <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300">
+                    {{ (form.payment_product_name_prefix || 'SubAPIs') + ' 100 ' + (form.payment_product_name_suffix || 'CNY') }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.minAmount') }}</label>
+                  <input :value="form.payment_min_amount || ''" @input="form.payment_min_amount = parseFloat(($event.target as HTMLInputElement).value) || 0" type="number" step="0.01" min="0" class="input" :placeholder="t('admin.settings.payment.noLimit')" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.maxAmount') }}</label>
+                  <input :value="form.payment_max_amount || ''" @input="form.payment_max_amount = parseFloat(($event.target as HTMLInputElement).value) || 0" type="number" step="0.01" min="0" class="input" :placeholder="t('admin.settings.payment.noLimit')" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.dailyLimit') }}</label>
+                  <input :value="form.payment_daily_limit || ''" @input="form.payment_daily_limit = parseFloat(($event.target as HTMLInputElement).value) || 0" type="number" step="0.01" min="0" class="input" :placeholder="t('admin.settings.payment.noLimit')" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.balanceRechargeMultiplier') }}</label>
+                  <input :value="form.payment_balance_recharge_multiplier || ''" @input="form.payment_balance_recharge_multiplier = parseFloat(($event.target as HTMLInputElement).value) || 1" type="number" step="0.01" min="0.01" class="input" />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.balanceRechargeMultiplierHint') }}</p>
+                  <p class="mt-1 text-xs font-medium text-primary-600 dark:text-primary-400">{{ t('admin.settings.payment.balanceRechargePreview', { usd: (Number(form.payment_balance_recharge_multiplier) || 1).toFixed(2) }) }}</p>
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.rechargeFeeRate') }}</label>
+                  <div class="relative">
+                    <input :value="form.payment_recharge_fee_rate ?? ''" @input="form.payment_recharge_fee_rate = Math.min(100, Math.max(0, Math.round(parseFloat(($event.target as HTMLInputElement).value || '0') * 100) / 100))" type="number" step="0.01" min="0" max="100" class="input pr-8" />
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400">%</span>
+                  </div>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.rechargeFeeRateHint') }}</p>
+                  <p v-if="(Number(form.payment_recharge_fee_rate) || 0) > 0" class="mt-1 text-xs font-medium text-primary-600 dark:text-primary-400">{{ t('admin.settings.payment.rechargeFeePreview', { fee: (Number(form.payment_recharge_fee_rate) || 0).toFixed(2) }) }}</p>
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.orderTimeout') }}</label>
+                  <input v-model.number="form.payment_order_timeout_minutes" type="number" min="1" class="input" />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.payment.orderTimeoutHint') }}</p>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-end gap-4">
+                <div class="w-28">
+                  <label class="input-label">{{ t('admin.settings.payment.maxPendingOrders') }}</label>
+                  <input v-model.number="form.payment_max_pending_orders" type="number" min="1" class="input" />
+                </div>
+                <div class="min-w-[12rem]">
+                  <label class="input-label">{{ t('admin.settings.payment.loadBalanceStrategy') }}</label>
+                  <Select v-model="form.payment_load_balance_strategy" :options="loadBalanceOptions" class="w-full" />
+                </div>
+              </div>
+
+              <div>
+                <label class="input-label">{{ t('admin.settings.payment.enabledPaymentTypes') }}</label>
+                <div class="mt-1.5 flex flex-wrap gap-2">
+                  <button
+                    v-for="pt in allPaymentTypes"
+                    :key="pt.value"
+                    type="button"
+                    @click="togglePaymentType(pt.value)"
+                    :class="[
+                      'rounded-lg border px-3 py-1.5 text-sm font-medium transition-all',
+                      isPaymentTypeEnabled(pt.value)
+                        ? 'border-primary-500 bg-primary-500 text-white shadow-sm'
+                        : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400 hover:bg-gray-50 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-dark-500',
+                    ]"
+                  >{{ pt.label }}</button>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.helpImage') }}</label>
+                  <ImageUpload v-model="form.payment_help_image_url" :placeholder="t('admin.settings.payment.helpImagePlaceholder')" />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('admin.settings.payment.helpText') }}</label>
+                  <textarea v-model="form.payment_help_text" rows="3" class="input" :placeholder="t('admin.settings.payment.helpTextPlaceholder')"></textarea>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+        </div><!-- /Tab: Payment -->
 
         <!-- Tab: Email -->
         <div v-show="activeTab === 'email'" class="space-y-6">
@@ -2887,6 +3004,11 @@
               </div>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.balanceNotify.thresholdHint') }}</p>
             </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.balanceNotify.rechargeUrl') }}</label>
+              <input v-model="form.balance_low_notify_recharge_url" type="url" class="input" :placeholder="currentOrigin" />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.balanceNotify.rechargeUrlHint') }}</p>
+            </div>
           </div>
         </div>
 
@@ -2901,7 +3023,11 @@
             </p>
           </div>
           <div class="px-6 py-6 space-y-4">
-            <div>
+            <div class="flex items-center justify-between">
+              <label class="mb-0 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.quotaNotify.enabled') }}</label>
+              <Toggle v-model="form.account_quota_notify_enabled" />
+            </div>
+            <div v-if="form.account_quota_notify_enabled">
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.quotaNotify.emails') }}</label>
               <div class="space-y-2">
                 <div v-for="(_, index) in (form.account_quota_notify_emails || [])" :key="index" class="flex items-center gap-2">
@@ -2997,13 +3123,14 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const adminSettingsStore = useAdminSettingsStore()
 
-type SettingsTab = 'general' | 'security' | 'users' | 'gateway' | 'email' | 'backup'
+type SettingsTab = 'general' | 'security' | 'users' | 'gateway' | 'payment' | 'email' | 'backup'
 const activeTab = ref<SettingsTab>('general')
 const settingsTabs = [
   { key: 'general'  as SettingsTab, icon: 'home'   as const },
   { key: 'security' as SettingsTab, icon: 'shield' as const },
   { key: 'users'    as SettingsTab, icon: 'user'   as const },
   { key: 'gateway'  as SettingsTab, icon: 'server' as const },
+  { key: 'payment'  as SettingsTab, icon: 'creditCard' as const },
   { key: 'email'    as SettingsTab, icon: 'mail'   as const },
   { key: 'backup'   as SettingsTab, icon: 'database' as const },
 ]
@@ -3227,6 +3354,8 @@ const form = reactive<SettingsForm>({
   payment_max_pending_orders: 3,
   payment_enabled_types: [] as string[],
   payment_balance_disabled: false,
+  payment_balance_recharge_multiplier: 1,
+  payment_recharge_fee_rate: 0,
   payment_load_balance_strategy: 'round-robin',
   payment_product_name_prefix: '',
   payment_product_name_suffix: '',
@@ -3240,6 +3369,8 @@ const form = reactive<SettingsForm>({
   // Balance & quota notification
   balance_low_notify_enabled: false,
   balance_low_notify_threshold: 0,
+  balance_low_notify_recharge_url: '',
+  account_quota_notify_enabled: false,
   account_quota_notify_emails: [] as string[]
 })
 
@@ -3496,6 +3627,37 @@ const addQuotaNotifyEmail = () => {
   form.account_quota_notify_emails.push('')
 }
 
+const currentOrigin = computed(() => {
+  if (typeof window === 'undefined') return ''
+  return window.location.origin || `${window.location.protocol}//${window.location.host}`
+})
+
+const allPaymentTypes = computed(() => [
+  { value: 'easypay', label: t('payment.methods.easypay') },
+  { value: 'alipay', label: t('payment.methods.alipay') },
+  { value: 'wxpay', label: t('payment.methods.wxpay') },
+  { value: 'alipay_direct', label: t('payment.methods.alipay_direct') },
+  { value: 'wxpay_direct', label: t('payment.methods.wxpay_direct') },
+  { value: 'stripe', label: t('payment.methods.stripe') },
+])
+
+const loadBalanceOptions = computed(() => [
+  { value: 'round-robin', label: t('admin.settings.payment.strategyRoundRobin') },
+  { value: 'least-amount', label: t('admin.settings.payment.strategyLeastAmount') },
+])
+
+function isPaymentTypeEnabled(type: string): boolean {
+  return form.payment_enabled_types.includes(type)
+}
+
+function togglePaymentType(type: string) {
+  if (form.payment_enabled_types.includes(type)) {
+    form.payment_enabled_types = form.payment_enabled_types.filter(t => t !== type)
+    return
+  }
+  form.payment_enabled_types = [...form.payment_enabled_types, type]
+}
+
 // LinuxDo OAuth redirect URL suggestion
 const linuxdoRedirectUrlSuggestion = computed(() => {
   if (typeof window === 'undefined') return ''
@@ -3603,6 +3765,7 @@ async function loadSettings() {
   loadFailed.value = false
   try {
     const settings = await adminAPI.settings.getSettings()
+    settings.payment_load_balance_strategy = settings.payment_load_balance_strategy || 'round-robin'
     Object.assign(form, {
       ...settings,
       site_name: normalizeSiteName(settings.site_name)
@@ -3741,6 +3904,7 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = ''
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = ''
+    if (!isValidHttpUrl(form.balance_low_notify_recharge_url)) form.balance_low_notify_recharge_url = ''
     // Legacy iframe purchase page is disabled when built-in payment is enabled.
     if (form.payment_enabled) {
       form.purchase_subscription_enabled = false
@@ -3841,9 +4005,32 @@ async function saveSettings() {
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
       enable_cch_signing: form.enable_cch_signing,
+      // Payment configuration
+      payment_enabled: form.payment_enabled,
+      payment_min_amount: Number(form.payment_min_amount) || 0,
+      payment_max_amount: Number(form.payment_max_amount) || 0,
+      payment_daily_limit: Number(form.payment_daily_limit) || 0,
+      payment_order_timeout_minutes: Number(form.payment_order_timeout_minutes) || 0,
+      payment_max_pending_orders: Number(form.payment_max_pending_orders) || 0,
+      payment_enabled_types: form.payment_enabled_types,
+      payment_balance_disabled: form.payment_balance_disabled,
+      payment_balance_recharge_multiplier: Number(form.payment_balance_recharge_multiplier) || 1,
+      payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_load_balance_strategy: form.payment_load_balance_strategy,
+      payment_product_name_prefix: form.payment_product_name_prefix,
+      payment_product_name_suffix: form.payment_product_name_suffix,
+      payment_help_image_url: form.payment_help_image_url,
+      payment_help_text: form.payment_help_text,
+      payment_cancel_rate_limit_enabled: form.payment_cancel_rate_limit_enabled,
+      payment_cancel_rate_limit_max: Number(form.payment_cancel_rate_limit_max) || 10,
+      payment_cancel_rate_limit_window: Number(form.payment_cancel_rate_limit_window) || 1,
+      payment_cancel_rate_limit_unit: form.payment_cancel_rate_limit_unit,
+      payment_cancel_rate_limit_window_mode: form.payment_cancel_rate_limit_window_mode,
       // Balance & quota notification
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold: Number(form.balance_low_notify_threshold) || 0,
+      balance_low_notify_recharge_url: form.balance_low_notify_recharge_url || currentOrigin.value,
+      account_quota_notify_enabled: form.account_quota_notify_enabled,
       account_quota_notify_emails: (form.account_quota_notify_emails || []).filter((e: string) => e.trim() !== ''),
     }
     const updated = await adminAPI.settings.updateSettings(payload)

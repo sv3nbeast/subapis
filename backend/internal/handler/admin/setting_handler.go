@@ -46,19 +46,21 @@ func scopesContainOpenID(scopes string) bool {
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
-	settingService   *service.SettingService
-	emailService     *service.EmailService
-	turnstileService *service.TurnstileService
-	opsService       *service.OpsService
+	settingService       *service.SettingService
+	emailService         *service.EmailService
+	turnstileService     *service.TurnstileService
+	opsService           *service.OpsService
+	paymentConfigService *service.PaymentConfigService
 }
 
 // NewSettingHandler 创建系统设置处理器
-func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService) *SettingHandler {
+func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService) *SettingHandler {
 	return &SettingHandler{
-		settingService:   settingService,
-		emailService:     emailService,
-		turnstileService: turnstileService,
-		opsService:       opsService,
+		settingService:       settingService,
+		emailService:         emailService,
+		turnstileService:     turnstileService,
+		opsService:           opsService,
+		paymentConfigService: paymentConfigService,
 	}
 }
 
@@ -79,6 +81,13 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 			GroupID:      sub.GroupID,
 			ValidityDays: sub.ValidityDays,
 		})
+	}
+	var paymentCfg *service.PaymentConfig
+	if h.paymentConfigService != nil {
+		paymentCfg, _ = h.paymentConfigService.GetPaymentConfig(c.Request.Context())
+	}
+	if paymentCfg == nil {
+		paymentCfg = &service.PaymentConfig{}
 	}
 
 	response.Success(c, dto.SystemSettings{
@@ -164,8 +173,30 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableMetadataPassthrough:            settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                     settings.EnableCCHSigning,
 		WebSearchEmulationEnabled:            settings.WebSearchEmulationEnabled,
+		PaymentEnabled:                       paymentCfg.Enabled,
+		PaymentMinAmount:                     paymentCfg.MinAmount,
+		PaymentMaxAmount:                     paymentCfg.MaxAmount,
+		PaymentDailyLimit:                    paymentCfg.DailyLimit,
+		PaymentOrderTimeoutMin:               paymentCfg.OrderTimeoutMin,
+		PaymentMaxPendingOrders:              paymentCfg.MaxPendingOrders,
+		PaymentEnabledTypes:                  paymentCfg.EnabledTypes,
+		PaymentBalanceDisabled:               paymentCfg.BalanceDisabled,
+		PaymentBalanceRechargeMultiplier:     paymentCfg.BalanceRechargeMultiplier,
+		PaymentRechargeFeeRate:               paymentCfg.RechargeFeeRate,
+		PaymentLoadBalanceStrat:              paymentCfg.LoadBalanceStrategy,
+		PaymentProductNamePrefix:             paymentCfg.ProductNamePrefix,
+		PaymentProductNameSuffix:             paymentCfg.ProductNameSuffix,
+		PaymentHelpImageURL:                  paymentCfg.HelpImageURL,
+		PaymentHelpText:                      paymentCfg.HelpText,
+		PaymentCancelRateLimitEnabled:        paymentCfg.CancelRateLimitEnabled,
+		PaymentCancelRateLimitMax:            paymentCfg.CancelRateLimitMax,
+		PaymentCancelRateLimitWindow:         paymentCfg.CancelRateLimitWindow,
+		PaymentCancelRateLimitUnit:           paymentCfg.CancelRateLimitUnit,
+		PaymentCancelRateLimitMode:           paymentCfg.CancelRateLimitMode,
 		BalanceLowNotifyEnabled:              settings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:            settings.BalanceLowNotifyThreshold,
+		BalanceLowNotifyRechargeURL:          settings.BalanceLowNotifyRechargeURL,
+		AccountQuotaNotifyEnabled:            settings.AccountQuotaNotifyEnabled,
 		AccountQuotaNotifyEmails:             settings.AccountQuotaNotifyEmails,
 	})
 }
@@ -280,9 +311,33 @@ type UpdateSettingsRequest struct {
 	EnableCCHSigning             *bool `json:"enable_cch_signing"`
 
 	// Balance low notification
-	BalanceLowNotifyEnabled   *bool     `json:"balance_low_notify_enabled"`
-	BalanceLowNotifyThreshold *float64  `json:"balance_low_notify_threshold"`
-	AccountQuotaNotifyEmails  *[]string `json:"account_quota_notify_emails"`
+	BalanceLowNotifyEnabled     *bool     `json:"balance_low_notify_enabled"`
+	BalanceLowNotifyThreshold   *float64  `json:"balance_low_notify_threshold"`
+	BalanceLowNotifyRechargeURL *string   `json:"balance_low_notify_recharge_url"`
+	AccountQuotaNotifyEnabled   *bool     `json:"account_quota_notify_enabled"`
+	AccountQuotaNotifyEmails    *[]string `json:"account_quota_notify_emails"`
+
+	// Payment configuration
+	PaymentEnabled                   *bool    `json:"payment_enabled"`
+	PaymentMinAmount                 *float64 `json:"payment_min_amount"`
+	PaymentMaxAmount                 *float64 `json:"payment_max_amount"`
+	PaymentDailyLimit                *float64 `json:"payment_daily_limit"`
+	PaymentOrderTimeoutMin           *int     `json:"payment_order_timeout_minutes"`
+	PaymentMaxPendingOrders          *int     `json:"payment_max_pending_orders"`
+	PaymentEnabledTypes              []string `json:"payment_enabled_types"`
+	PaymentBalanceDisabled           *bool    `json:"payment_balance_disabled"`
+	PaymentBalanceRechargeMultiplier *float64 `json:"payment_balance_recharge_multiplier"`
+	PaymentRechargeFeeRate           *float64 `json:"payment_recharge_fee_rate"`
+	PaymentLoadBalanceStrat          *string  `json:"payment_load_balance_strategy"`
+	PaymentProductNamePrefix         *string  `json:"payment_product_name_prefix"`
+	PaymentProductNameSuffix         *string  `json:"payment_product_name_suffix"`
+	PaymentHelpImageURL              *string  `json:"payment_help_image_url"`
+	PaymentHelpText                  *string  `json:"payment_help_text"`
+	PaymentCancelRateLimitEnabled    *bool    `json:"payment_cancel_rate_limit_enabled"`
+	PaymentCancelRateLimitMax        *int     `json:"payment_cancel_rate_limit_max"`
+	PaymentCancelRateLimitWindow     *int     `json:"payment_cancel_rate_limit_window"`
+	PaymentCancelRateLimitUnit       *string  `json:"payment_cancel_rate_limit_unit"`
+	PaymentCancelRateLimitMode       *string  `json:"payment_cancel_rate_limit_window_mode"`
 }
 
 // UpdateSettings 更新系统设置
@@ -852,6 +907,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.BalanceLowNotifyThreshold
 		}(),
+		BalanceLowNotifyRechargeURL: func() string {
+			if req.BalanceLowNotifyRechargeURL != nil {
+				return *req.BalanceLowNotifyRechargeURL
+			}
+			return previousSettings.BalanceLowNotifyRechargeURL
+		}(),
+		AccountQuotaNotifyEnabled: func() bool {
+			if req.AccountQuotaNotifyEnabled != nil {
+				return *req.AccountQuotaNotifyEnabled
+			}
+			return previousSettings.AccountQuotaNotifyEnabled
+		}(),
 		AccountQuotaNotifyEmails: func() []string {
 			if req.AccountQuotaNotifyEmails != nil {
 				return *req.AccountQuotaNotifyEmails
@@ -863,6 +930,35 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if err := h.settingService.UpdateSettings(c.Request.Context(), settings); err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+
+	if h.paymentConfigService != nil && hasPaymentFields(req) {
+		paymentReq := service.UpdatePaymentConfigRequest{
+			Enabled:                   req.PaymentEnabled,
+			MinAmount:                 req.PaymentMinAmount,
+			MaxAmount:                 req.PaymentMaxAmount,
+			DailyLimit:                req.PaymentDailyLimit,
+			OrderTimeoutMin:           req.PaymentOrderTimeoutMin,
+			MaxPendingOrders:          req.PaymentMaxPendingOrders,
+			EnabledTypes:              req.PaymentEnabledTypes,
+			BalanceDisabled:           req.PaymentBalanceDisabled,
+			BalanceRechargeMultiplier: req.PaymentBalanceRechargeMultiplier,
+			RechargeFeeRate:           req.PaymentRechargeFeeRate,
+			LoadBalanceStrategy:       req.PaymentLoadBalanceStrat,
+			ProductNamePrefix:         req.PaymentProductNamePrefix,
+			ProductNameSuffix:         req.PaymentProductNameSuffix,
+			HelpImageURL:              req.PaymentHelpImageURL,
+			HelpText:                  req.PaymentHelpText,
+			CancelRateLimitEnabled:    req.PaymentCancelRateLimitEnabled,
+			CancelRateLimitMax:        req.PaymentCancelRateLimitMax,
+			CancelRateLimitWindow:     req.PaymentCancelRateLimitWindow,
+			CancelRateLimitUnit:       req.PaymentCancelRateLimitUnit,
+			CancelRateLimitMode:       req.PaymentCancelRateLimitMode,
+		}
+		if err := h.paymentConfigService.UpdatePaymentConfig(c.Request.Context(), paymentReq); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	h.auditSettingsUpdate(c, previousSettings, settings, req)
@@ -879,6 +975,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			GroupID:      sub.GroupID,
 			ValidityDays: sub.ValidityDays,
 		})
+	}
+	var updatedPaymentCfg *service.PaymentConfig
+	if h.paymentConfigService != nil {
+		updatedPaymentCfg, _ = h.paymentConfigService.GetPaymentConfig(c.Request.Context())
+	}
+	if updatedPaymentCfg == nil {
+		updatedPaymentCfg = &service.PaymentConfig{}
 	}
 
 	response.Success(c, dto.SystemSettings{
@@ -964,10 +1067,45 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableMetadataPassthrough:            updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                     updatedSettings.EnableCCHSigning,
 		WebSearchEmulationEnabled:            updatedSettings.WebSearchEmulationEnabled,
+		PaymentEnabled:                       updatedPaymentCfg.Enabled,
+		PaymentMinAmount:                     updatedPaymentCfg.MinAmount,
+		PaymentMaxAmount:                     updatedPaymentCfg.MaxAmount,
+		PaymentDailyLimit:                    updatedPaymentCfg.DailyLimit,
+		PaymentOrderTimeoutMin:               updatedPaymentCfg.OrderTimeoutMin,
+		PaymentMaxPendingOrders:              updatedPaymentCfg.MaxPendingOrders,
+		PaymentEnabledTypes:                  updatedPaymentCfg.EnabledTypes,
+		PaymentBalanceDisabled:               updatedPaymentCfg.BalanceDisabled,
+		PaymentBalanceRechargeMultiplier:     updatedPaymentCfg.BalanceRechargeMultiplier,
+		PaymentRechargeFeeRate:               updatedPaymentCfg.RechargeFeeRate,
+		PaymentLoadBalanceStrat:              updatedPaymentCfg.LoadBalanceStrategy,
+		PaymentProductNamePrefix:             updatedPaymentCfg.ProductNamePrefix,
+		PaymentProductNameSuffix:             updatedPaymentCfg.ProductNameSuffix,
+		PaymentHelpImageURL:                  updatedPaymentCfg.HelpImageURL,
+		PaymentHelpText:                      updatedPaymentCfg.HelpText,
+		PaymentCancelRateLimitEnabled:        updatedPaymentCfg.CancelRateLimitEnabled,
+		PaymentCancelRateLimitMax:            updatedPaymentCfg.CancelRateLimitMax,
+		PaymentCancelRateLimitWindow:         updatedPaymentCfg.CancelRateLimitWindow,
+		PaymentCancelRateLimitUnit:           updatedPaymentCfg.CancelRateLimitUnit,
+		PaymentCancelRateLimitMode:           updatedPaymentCfg.CancelRateLimitMode,
 		BalanceLowNotifyEnabled:              updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:            updatedSettings.BalanceLowNotifyThreshold,
+		BalanceLowNotifyRechargeURL:          updatedSettings.BalanceLowNotifyRechargeURL,
+		AccountQuotaNotifyEnabled:            updatedSettings.AccountQuotaNotifyEnabled,
 		AccountQuotaNotifyEmails:             updatedSettings.AccountQuotaNotifyEmails,
 	})
+}
+
+func hasPaymentFields(req UpdateSettingsRequest) bool {
+	return req.PaymentEnabled != nil || req.PaymentMinAmount != nil ||
+		req.PaymentMaxAmount != nil || req.PaymentDailyLimit != nil ||
+		req.PaymentOrderTimeoutMin != nil || req.PaymentMaxPendingOrders != nil ||
+		req.PaymentEnabledTypes != nil || req.PaymentBalanceDisabled != nil ||
+		req.PaymentBalanceRechargeMultiplier != nil || req.PaymentRechargeFeeRate != nil ||
+		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
+		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
+		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||
+		req.PaymentCancelRateLimitMax != nil || req.PaymentCancelRateLimitWindow != nil ||
+		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil
 }
 
 func (h *SettingHandler) auditSettingsUpdate(c *gin.Context, before *service.SystemSettings, after *service.SystemSettings, req UpdateSettingsRequest) {
@@ -1204,6 +1342,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.PurchaseSubscriptionURL != after.PurchaseSubscriptionURL {
 		changed = append(changed, "purchase_subscription_url")
+	}
+	if before.BalanceLowNotifyRechargeURL != after.BalanceLowNotifyRechargeURL {
+		changed = append(changed, "balance_low_notify_recharge_url")
+	}
+	if before.AccountQuotaNotifyEnabled != after.AccountQuotaNotifyEnabled {
+		changed = append(changed, "account_quota_notify_enabled")
+	}
+	if !equalStringSlice(before.AccountQuotaNotifyEmails, after.AccountQuotaNotifyEmails) {
+		changed = append(changed, "account_quota_notify_emails")
 	}
 	if before.TableDefaultPageSize != after.TableDefaultPageSize {
 		changed = append(changed, "table_default_page_size")
