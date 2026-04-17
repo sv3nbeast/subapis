@@ -114,6 +114,27 @@
     @apply dark:shadow-amber-500/20;
   }
 
+  .btn-alipay {
+    @apply bg-gradient-to-r from-sky-500 to-sky-600;
+    @apply text-white shadow-md shadow-sky-500/25;
+    @apply hover:from-sky-600 hover:to-sky-700 hover:shadow-lg hover:shadow-sky-500/30;
+    @apply dark:shadow-sky-500/20;
+  }
+
+  .btn-wxpay {
+    @apply bg-gradient-to-r from-emerald-500 to-green-600;
+    @apply text-white shadow-md shadow-emerald-500/25;
+    @apply hover:from-emerald-600 hover:to-green-700 hover:shadow-lg hover:shadow-emerald-500/30;
+    @apply dark:shadow-emerald-500/20;
+  }
+
+  .btn-stripe {
+    @apply bg-gradient-to-r from-indigo-500 to-violet-600;
+    @apply text-white shadow-md shadow-indigo-500/25;
+    @apply hover:from-indigo-600 hover:to-violet-700 hover:shadow-lg hover:shadow-indigo-500/30;
+    @apply dark:shadow-indigo-500/20;
+  }
+
   .btn-sm {
     @apply rounded-lg px-3 py-1.5 text-xs;
   }

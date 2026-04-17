@@ -11,6 +11,7 @@ Description:
   Upload and run the remote payment cutover helper that:
   - backs up sub2api / sub2apipay databases
   - migrates provider instances, subscription plans, and payment settings
+  - imports legacy orders and audit logs into built-in payment
   - preserves all legacy sub2apipay data
 
 Notes:

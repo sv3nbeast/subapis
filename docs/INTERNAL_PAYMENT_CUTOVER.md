@@ -8,28 +8,21 @@
 
 ## 当前策略
 
-首期切换只迁移：
+当前切换迁移：
 
 - 支付 provider 实例
 - 订阅套餐
 - 支付运行配置
+- 历史 `orders`
+- 历史 `audit_logs`
 
-首期不迁移：
+迁移策略：
 
-- `sub2apipay.orders`
-- `sub2apipay.audit_logs`
-
-原因：
-
-- 旧 `sub2apipay` 使用字符串主键（`cuid`）
-- 官方内置 payment 使用 `BIGSERIAL / int64`
-- 如果首期强迁历史订单，需要额外做：
-  - 订单 ID 重映射
-  - 审计日志 `order_id` 重绑
-  - 套餐 ID 重映射
-  - 历史退款 / 履约状态一致性校验
-
-这会显著提高切换风险，不适合和“启用新支付系统”放在同一刀执行。
+- 保留旧 `sub2apipay` 数据库与容器，作为回滚与审计备份
+- 新内置 payment 中为历史订单重新分配数值型 `payment_orders.id`
+- 将旧系统字符串订单 ID 写入新表 `out_trade_no`
+- 审计日志按旧订单 ID 映射到新数值订单 ID
+- 套餐 / provider 通过兼容映射表完成旧 ID 到新 ID 的绑定
 
 ## 迁移文件
 
@@ -58,6 +51,8 @@
 2. 从旧 `sub2apipay` 读取：
    - `payment_provider_instances`
    - `subscription_plans`
+   - `orders`
+   - `audit_logs`
    - 关键支付环境变量
 3. 将旧 provider 配置：
    - 用旧 `sub2apipay` 的 `ADMIN_TOKEN` 解密
@@ -67,6 +62,8 @@
    - `purchase_subscription_enabled=false`
    - `purchase_subscription_url=''`
 
+6. 历史订单迁移完成后，旧 `sub2apipay` 容器可以停止；用户历史订单与审计日志继续从内置 payment 读取
+
 ## 当前状态
 
 这份替换工作目前仍在隔离 worktree 分支中实施：
@@ -74,6 +71,4 @@
 - worktree: `/tmp/subapi-payment-yizJZ3`
 - branch: `payment-replace`
 
-尚未合并回主工作区
-尚未推送
-尚未发布生产
+当前文档需以实际分支与生产状态为准。

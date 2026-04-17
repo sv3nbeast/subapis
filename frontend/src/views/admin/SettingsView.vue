@@ -29,7 +29,7 @@
         <!-- Tab: Security — Admin API Key -->
         <div v-show="activeTab === 'security'" class="space-y-6">
         <!-- Admin API Key Settings -->
-        <div class="card">
+        <div v-if="!form.payment_enabled" class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.adminApiKey.title') }}
@@ -3218,6 +3218,25 @@ const form = reactive<SettingsForm>({
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
+  // Payment configuration
+  payment_enabled: false,
+  payment_min_amount: 1,
+  payment_max_amount: 10000,
+  payment_daily_limit: 50000,
+  payment_order_timeout_minutes: 30,
+  payment_max_pending_orders: 3,
+  payment_enabled_types: [] as string[],
+  payment_balance_disabled: false,
+  payment_load_balance_strategy: 'round-robin',
+  payment_product_name_prefix: '',
+  payment_product_name_suffix: '',
+  payment_help_image_url: '',
+  payment_help_text: '',
+  payment_cancel_rate_limit_enabled: false,
+  payment_cancel_rate_limit_max: 10,
+  payment_cancel_rate_limit_window: 1,
+  payment_cancel_rate_limit_unit: 'day',
+  payment_cancel_rate_limit_window_mode: 'rolling',
   // Balance & quota notification
   balance_low_notify_enabled: false,
   balance_low_notify_threshold: 0,
@@ -3722,8 +3741,11 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = ''
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = ''
-    // Purchase URL: required when enabled; auto-clear when disabled to avoid backend rejection
-    if (form.purchase_subscription_enabled) {
+    // Legacy iframe purchase page is disabled when built-in payment is enabled.
+    if (form.payment_enabled) {
+      form.purchase_subscription_enabled = false
+      form.purchase_subscription_url = ''
+    } else if (form.purchase_subscription_enabled) {
       if (!form.purchase_subscription_url) {
         appStore.showError(t('admin.settings.purchase.url') + ': URL is required when purchase is enabled')
         saving.value = false

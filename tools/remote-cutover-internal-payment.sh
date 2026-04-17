@@ -9,8 +9,8 @@ Usage:
 
 Description:
   Run on the production host. Back up both databases, then migrate
-  sub2apipay provider instances, subscription plans, and payment settings
-  into sub2api's built-in payment tables/settings.
+  sub2apipay provider instances, subscription plans, payment settings,
+  legacy orders, and audit logs into sub2api's built-in payment tables/settings.
 
 Environment variables:
   DEPLOY_DIR         sub2api deploy dir. Default: /root/sub2api-deploy
@@ -24,9 +24,8 @@ Environment variables:
   SKIP_BACKUP        set to 1 to skip pg_dump backups
 
 Notes:
-  - This script does NOT migrate legacy orders/audit logs.
   - Existing legacy sub2apipay data is preserved.
-  - This script only upserts payment config, plans, and provider instances.
+  - This script can be re-run safely; legacy orders/audit logs are deduplicated by legacy order ID and audit fingerprint.
 EOF
 }
 
@@ -255,8 +254,100 @@ try {
 NODE
 }
 
+resolve_new_plan_id() {
+  local legacy_plan_id="$1"
+  [[ -z "${legacy_plan_id}" ]] && return 0
+
+  local cached
+  cached="$(run_newdb_query "select payment_plan_id::text from payment_legacy_plan_map where legacy_plan_id = $(sql_quote "${legacy_plan_id}") limit 1;")"
+  if [[ -n "${cached}" ]]; then
+    printf '%s' "${cached}"
+    return 0
+  fi
+
+  local legacy_meta
+  legacy_meta="$(run_legacy_query_pipe "select coalesce(group_id::text,''),name,price::text,validity_days,validity_unit,sort_order from subscription_plans where id = $(sql_quote "${legacy_plan_id}") limit 1;")"
+  [[ -z "${legacy_meta}" ]] && return 0
+
+  local group_id name price validity_days validity_unit sort_order
+  IFS='|' read -r group_id name price validity_days validity_unit sort_order <<<"${legacy_meta}"
+  if [[ -z "${group_id}" ]]; then
+    group_id="$(legacy_channel_group_id_by_name "${name}")"
+  fi
+  [[ -z "${group_id}" ]] && return 0
+
+  local new_plan_id
+  new_plan_id="$(run_newdb_query "
+    select id::text
+      from subscription_plans
+     where group_id = ${group_id}
+       and name = $(sql_quote "${name}")
+       and price = ${price}
+       and validity_days = ${validity_days}
+       and validity_unit = $(sql_quote "${validity_unit}")
+     order by sort_order, id
+     limit 1;")"
+  if [[ -n "${new_plan_id}" ]]; then
+    run_newdb_sql "
+      insert into payment_legacy_plan_map (legacy_plan_id, payment_plan_id, created_at)
+      values ($(sql_quote "${legacy_plan_id}"), ${new_plan_id}, now())
+      on conflict (legacy_plan_id)
+      do update set payment_plan_id = excluded.payment_plan_id;"
+    printf '%s' "${new_plan_id}"
+  fi
+}
+
+resolve_new_provider_id() {
+  local legacy_provider_id="$1"
+  [[ -z "${legacy_provider_id}" ]] && return 0
+
+  local cached
+  cached="$(run_newdb_query "select payment_provider_id::text from payment_legacy_provider_map where legacy_provider_id = $(sql_quote "${legacy_provider_id}") limit 1;")"
+  if [[ -n "${cached}" ]]; then
+    printf '%s' "${cached}"
+    return 0
+  fi
+
+  local legacy_meta
+  legacy_meta="$(run_legacy_query_pipe "select provider_key,name,sort_order from payment_provider_instances where id = $(sql_quote "${legacy_provider_id}") limit 1;")"
+  [[ -z "${legacy_meta}" ]] && return 0
+
+  local provider_key name sort_order
+  IFS='|' read -r provider_key name sort_order <<<"${legacy_meta}"
+  local new_provider_id
+  new_provider_id="$(run_newdb_query "
+    select id::text
+      from payment_provider_instances
+     where provider_key = $(sql_quote "${provider_key}")
+       and name = $(sql_quote "${name}")
+       and sort_order = ${sort_order:-0}
+     order by id
+     limit 1;")"
+  if [[ -n "${new_provider_id}" ]]; then
+    run_newdb_sql "
+      insert into payment_legacy_provider_map (legacy_provider_id, payment_provider_id, created_at)
+      values ($(sql_quote "${legacy_provider_id}"), ${new_provider_id}, now())
+      on conflict (legacy_provider_id)
+      do update set payment_provider_id = excluded.payment_provider_id;"
+    printf '%s' "${new_provider_id}"
+  fi
+}
+
 echo "Resetting target payment config tables (plans/providers only)..."
 run_newdb_sql "TRUNCATE TABLE payment_provider_instances, subscription_plans RESTART IDENTITY CASCADE;"
+run_newdb_sql "
+  CREATE TABLE IF NOT EXISTS payment_legacy_plan_map (
+    legacy_plan_id VARCHAR(64) PRIMARY KEY,
+    payment_plan_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS payment_legacy_provider_map (
+    legacy_provider_id VARCHAR(64) PRIMARY KEY,
+    payment_provider_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+"
+run_newdb_sql "TRUNCATE TABLE payment_legacy_plan_map, payment_legacy_provider_map;"
 
 echo "Migrating provider instances..."
 while IFS='|' read -r old_id provider_key name config supported_types enabled sort_order limits refund_enabled; do
@@ -288,6 +379,21 @@ while IFS='|' read -r old_id provider_key name config supported_types enabled so
       $(bool_sql "${refund_enabled}"),
       false
     );"
+  new_provider_id="$(run_newdb_query "
+    select id::text
+      from payment_provider_instances
+     where provider_key = $(sql_quote "${provider_key}")
+       and name = $(sql_quote "${name}")
+       and sort_order = ${sort_order:-0}
+     order by id desc
+     limit 1;")"
+  if [[ -n "${new_provider_id}" ]]; then
+    run_newdb_sql "
+      insert into payment_legacy_provider_map (legacy_provider_id, payment_provider_id, created_at)
+      values ($(sql_quote "${old_id}"), ${new_provider_id}, now())
+      on conflict (legacy_provider_id)
+      do update set payment_provider_id = excluded.payment_provider_id;"
+  fi
 done < <(run_legacy_query_pipe "select id,provider_key,name,config,coalesce(supported_types,''),enabled,sort_order,coalesce(limits,''),refund_enabled from payment_provider_instances order by sort_order,id;")
 
 echo "Migrating subscription plans..."
@@ -328,6 +434,23 @@ while IFS='|' read -r old_id group_id name price original_price validity_days va
       $(bool_sql "${for_sale}"),
       ${sort_order:-0}
     );"
+  new_plan_id="$(run_newdb_query "
+    select id::text
+      from subscription_plans
+     where group_id = ${resolved_group_id}
+       and name = $(sql_quote "${name}")
+       and price = ${price}
+       and validity_days = ${validity_days}
+       and validity_unit = $(sql_quote "${validity_unit}")
+     order by sort_order desc, id desc
+     limit 1;")"
+  if [[ -n "${new_plan_id}" ]]; then
+    run_newdb_sql "
+      insert into payment_legacy_plan_map (legacy_plan_id, payment_plan_id, created_at)
+      values ($(sql_quote "${old_id}"), ${new_plan_id}, now())
+      on conflict (legacy_plan_id)
+      do update set payment_plan_id = excluded.payment_plan_id;"
+  fi
 done < <(run_legacy_query_pipe "select id,coalesce(group_id::text,''),name,price::text,coalesce(original_price::text,''),validity_days,validity_unit,coalesce(features,''),coalesce(product_name,''),for_sale,sort_order from subscription_plans order by sort_order,id;")
 
 echo "Migrating payment settings..."
@@ -375,4 +498,185 @@ for key in "${!settings_map[@]}"; do
 done
 
 echo "Payment config migration completed."
-echo "Legacy orders/audit logs were intentionally NOT imported."
+
+echo "Importing legacy orders..."
+legacy_order_sql="
+  select
+    id,
+    user_id::text,
+    coalesce(user_email,''),
+    coalesce(user_name,''),
+    coalesce(user_notes,''),
+    amount::text,
+    coalesce(pay_amount::text, amount::text),
+    coalesce(fee_rate::text,'0'),
+    coalesce(recharge_code,''),
+    status,
+    payment_type,
+    coalesce(payment_trade_no,''),
+    coalesce(pay_url,''),
+    coalesce(qr_code,''),
+    coalesce(qr_code_img,''),
+    coalesce(order_type,'balance'),
+    coalesce(plan_id,''),
+    coalesce(subscription_group_id::text,''),
+    coalesce(subscription_days::text,''),
+    coalesce(provider_instance_id,''),
+    coalesce(refund_amount::text,'0'),
+    coalesce(refund_reason,''),
+    coalesce(refund_at::text,''),
+    force_refund,
+    coalesce(refund_requested_at::text,''),
+    coalesce(refund_request_reason,''),
+    coalesce(refund_requested_by::text,''),
+    expires_at::text,
+    coalesce(paid_at::text,''),
+    coalesce(completed_at::text,''),
+    coalesce(failed_at::text,''),
+    coalesce(failed_reason,''),
+    coalesce(client_ip,''),
+    coalesce(src_host,''),
+    coalesce(src_url,''),
+    created_at::text,
+    updated_at::text
+  from orders
+  order by created_at, id;
+"
+
+imported_orders=0
+skipped_orders=0
+while IFS='|' read -r legacy_id user_id user_email user_name user_notes amount pay_amount fee_rate recharge_code status payment_type payment_trade_no pay_url qr_code qr_code_img order_type legacy_plan_id subscription_group_id subscription_days legacy_provider_id refund_amount refund_reason refund_at force_refund refund_requested_at refund_request_reason refund_requested_by expires_at paid_at completed_at failed_at failed_reason client_ip src_host src_url created_at updated_at; do
+  [[ -z "${legacy_id}" ]] && continue
+
+  existing_order_id="$(run_newdb_query "select id::text from payment_orders where out_trade_no = $(sql_quote "${legacy_id}") limit 1;")"
+  if [[ -n "${existing_order_id}" ]]; then
+    skipped_orders=$((skipped_orders + 1))
+    continue
+  fi
+
+  plan_id_sql="NULL"
+  new_plan_id="$(resolve_new_plan_id "${legacy_plan_id}")"
+  if [[ -n "${new_plan_id}" ]]; then
+    plan_id_sql="${new_plan_id}"
+  fi
+
+  provider_id_sql="NULL"
+  new_provider_id="$(resolve_new_provider_id "${legacy_provider_id}")"
+  if [[ -n "${new_provider_id}" ]]; then
+    provider_id_sql="$(sql_quote "${new_provider_id}")"
+  fi
+
+  subscription_group_id_sql="NULL"
+  [[ -n "${subscription_group_id}" ]] && subscription_group_id_sql="${subscription_group_id}"
+  subscription_days_sql="NULL"
+  [[ -n "${subscription_days}" ]] && subscription_days_sql="${subscription_days}"
+  refund_at_sql="NULL"
+  [[ -n "${refund_at}" ]] && refund_at_sql="$(sql_quote "${refund_at}")::timestamptz"
+  refund_requested_at_sql="NULL"
+  [[ -n "${refund_requested_at}" ]] && refund_requested_at_sql="$(sql_quote "${refund_requested_at}")::timestamptz"
+  paid_at_sql="NULL"
+  [[ -n "${paid_at}" ]] && paid_at_sql="$(sql_quote "${paid_at}")::timestamptz"
+  completed_at_sql="NULL"
+  [[ -n "${completed_at}" ]] && completed_at_sql="$(sql_quote "${completed_at}")::timestamptz"
+  failed_at_sql="NULL"
+  [[ -n "${failed_at}" ]] && failed_at_sql="$(sql_quote "${failed_at}")::timestamptz"
+
+  run_newdb_sql "
+    insert into payment_orders (
+      user_id, user_email, user_name, user_notes, amount, pay_amount, fee_rate,
+      recharge_code, out_trade_no, payment_type, payment_trade_no, pay_url, qr_code, qr_code_img,
+      order_type, plan_id, subscription_group_id, subscription_days, provider_instance_id, status,
+      refund_amount, refund_reason, refund_at, force_refund, refund_requested_at, refund_request_reason, refund_requested_by,
+      expires_at, paid_at, completed_at, failed_at, failed_reason,
+      client_ip, src_host, src_url, created_at, updated_at
+    ) values (
+      ${user_id},
+      $(sql_quote "${user_email}"),
+      $(sql_quote "${user_name}"),
+      $(sql_quote "${user_notes}"),
+      ${amount},
+      ${pay_amount},
+      ${fee_rate},
+      $(sql_quote "${recharge_code}"),
+      $(sql_quote "${legacy_id}"),
+      $(sql_quote "${payment_type}"),
+      $(sql_quote "${payment_trade_no}"),
+      $(sql_quote "${pay_url}"),
+      $(sql_quote "${qr_code}"),
+      $(sql_quote "${qr_code_img}"),
+      $(sql_quote "${order_type}"),
+      ${plan_id_sql},
+      ${subscription_group_id_sql},
+      ${subscription_days_sql},
+      ${provider_id_sql},
+      $(sql_quote "${status}"),
+      ${refund_amount},
+      $(sql_quote "${refund_reason}"),
+      ${refund_at_sql},
+      $(bool_sql "${force_refund}"),
+      ${refund_requested_at_sql},
+      $(sql_quote "${refund_request_reason}"),
+      $(sql_quote "${refund_requested_by}"),
+      $(sql_quote "${expires_at}")::timestamptz,
+      ${paid_at_sql},
+      ${completed_at_sql},
+      ${failed_at_sql},
+      $(sql_quote "${failed_reason}"),
+      $(sql_quote "${client_ip}"),
+      $(sql_quote "${src_host}"),
+      $(sql_quote "${src_url}"),
+      $(sql_quote "${created_at}")::timestamptz,
+      $(sql_quote "${updated_at}")::timestamptz
+    );"
+  imported_orders=$((imported_orders + 1))
+done < <(run_legacy_query_pipe "${legacy_order_sql}")
+
+echo "Importing legacy audit logs..."
+legacy_audit_sql="
+  select
+    order_id,
+    action,
+    coalesce(detail,''),
+    coalesce(operator,'system'),
+    created_at::text
+  from audit_logs
+  order by created_at, id;
+"
+
+imported_audits=0
+skipped_audits=0
+while IFS='|' read -r legacy_order_id action detail operator created_at; do
+  [[ -z "${legacy_order_id}" ]] && continue
+
+  new_order_id="$(run_newdb_query "select id::text from payment_orders where out_trade_no = $(sql_quote "${legacy_order_id}") limit 1;")"
+  [[ -z "${new_order_id}" ]] && continue
+
+  existing_audit_id="$(run_newdb_query "
+    select id::text
+      from payment_audit_logs
+     where order_id = $(sql_quote "${new_order_id}")
+       and action = $(sql_quote "${action}")
+       and detail = $(sql_quote "${detail}")
+       and operator = $(sql_quote "${operator}")
+       and created_at = $(sql_quote "${created_at}")::timestamptz
+     limit 1;")"
+  if [[ -n "${existing_audit_id}" ]]; then
+    skipped_audits=$((skipped_audits + 1))
+    continue
+  fi
+
+  run_newdb_sql "
+    insert into payment_audit_logs (order_id, action, detail, operator, created_at)
+    values (
+      $(sql_quote "${new_order_id}"),
+      $(sql_quote "${action}"),
+      $(sql_quote "${detail}"),
+      $(sql_quote "${operator}"),
+      $(sql_quote "${created_at}")::timestamptz
+    );"
+  imported_audits=$((imported_audits + 1))
+done < <(run_legacy_query_pipe "${legacy_audit_sql}")
+
+echo "Legacy history migration completed."
+echo "Imported orders: ${imported_orders}, skipped existing orders: ${skipped_orders}"
+echo "Imported audit logs: ${imported_audits}, skipped existing audit logs: ${skipped_audits}"
