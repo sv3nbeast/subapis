@@ -205,7 +205,13 @@ func (h *UserHandler) RemoveNotifyEmail(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"message": "Email removed successfully"})
+	updatedUser, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dto.UserFromService(updatedUser))
 }
 
 type ToggleNotifyEmailRequest struct {

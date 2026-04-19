@@ -140,6 +140,77 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 
 ## 最近本地新增记录
 
+### 2026-04-18
+
+- 当前发布链：
+  - 本地发布工作树 `HEAD`：`1ae18387`
+  - 你的 fork `sv3nbeast/main`：`1ae18387`
+  - 生产：`1ae18387`
+
+- 重新核对后的结论：
+  - 之前文档里把一部分“已经等价吸收”或“有意保留分叉”的内容仍写成待同步，这是不准确的
+  - 不能再把 `git cherry` 的 `+` 直接等同于“功能未同步”
+
+- 已确认不应再视为“未同步”的主线：
+  - `02a66a01` / `8e1a7bdf`
+    - `OIDC` 登录和 synthetic email 修复已在当前发布链
+    - 本地对应能力来源于更早的兼容提交，如 `392c8b5d`
+  - `5f8e60a1` / `66e15a54` / `ad80606a` / `13124059` / `67a05dfc` / `f480e573`
+    - 表格后端排序、导出与当前筛选一致、全局分页配置、公开设置分页字段、table defaults 等能力已在本地等价实现
+    - 本地对应提交主要是 `90c6ed0c`、`e8f7bcb5`
+  - `265687b5`
+    - 调度快照避免 Redis 大 `MGET` 已在本地通过 `1f83cbeb` 等价吸收
+    - 当前代码里已有：
+      - `gateway.scheduling.snapshot_mget_chunk_size`
+      - `scheduler_cache.go` 的 `mgetChunked`
+      - `repository/wire.go` 注入分块配置
+  - `6c89d8d3`
+    - `prompt_cache_key` 注入已等价吸收
+  - `10699eeb`
+    - 已通过本地安全版 helper 吸收，对应发布提交 `1ae18387`
+  - `5d586a9f`
+    - KYC / identity verification 停调度已同步
+  - `3944b3d2` / `836092a6`
+    - OpenAI WS flags 与 `ctx_pool` UI 已同步，对应本地提交 `341cab46`
+  - `fda61b06` / `d0674e0f` / `5df73099` / `9e0d12d3`
+    - WebSearch manager failover、设置页、15s admin test、已保存 provider API key 显示/复制等已同步
+  - `63d1860d` / `75155903` / `60a4b931` / `98140f6c` / `e761d38f` / `d149dbc9` / `3053c56c` / `342dbd2e` / `c2108421`
+    - 内置 payment 主线、移动端/H5、充值倍率、手续费率、金额展示等已同步到当前分叉的兼容版
+
+- 当时真正剩下的功能尾差只剩两处：
+  - `30b926ad`
+    - `sendEmails` 需要按收件人分别创建 timeout
+    - `RemoveNotifyEmail` 需要返回更新后的 user
+  - `915b7a4a` 尾差
+    - 管理员 `account_quota_notify_emails` 虽然已升级为 `NotifyEmailEntry`
+    - 但告警发送链路仍需真正按 `disabled/verified` 过滤
+
+- 本地现已补平这两处尾差：
+  - `balance_notify_service.go`
+    - `sendEmails` 改为 per-recipient timeout
+    - `getAccountQuotaNotifyEmails` 改为解析 `NotifyEmailEntry`，并过滤 `disabled/verified`
+  - `user_handler.go`
+    - `RemoveNotifyEmail` 改为返回更新后的 user DTO
+  - 回归测试：
+    - `balance_notify_service_test.go`
+    - `user_handler_notify_test.go`
+
+- 当前真正未同步的功能项：
+  - 无
+
+- 当前仍与官方不完全一致，但属于有意保留的本地分叉：
+  - `a789c8c4`
+    - 官方 `opus-4.7` 支持没有 100% 照搬
+    - 发布链保留了你的 `5a41112d`，继续让 `claude-opus-4-7` / `claude-opus-4-7-thinking` 回退到当前可用池
+  - `SubAPIs` 品牌默认值
+  - 内置 payment 切换脚本与历史订单迁移能力
+  - 旧 `purchase_subscription_*` 兼容层
+
+- 当前剩余的仅是低优先级非功能项：
+  - sponsors
+  - `VERSION`
+  - docs / chore / lint / test 整理类提交
+
 ### 2026-04-17
 
 - 当前同步基线：

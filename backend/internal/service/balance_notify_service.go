@@ -181,12 +181,34 @@ func (s *BalanceNotifyService) isAccountQuotaNotifyEnabled(ctx context.Context) 
 }
 
 // getAccountQuotaNotifyEmails reads admin notification emails from settings.
+// It supports both legacy []string JSON and structured NotifyEmailEntry JSON.
 func (s *BalanceNotifyService) getAccountQuotaNotifyEmails(ctx context.Context) []string {
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyAccountQuotaNotifyEmails)
 	if err != nil || strings.TrimSpace(raw) == "" || raw == "[]" {
 		return nil
 	}
-	return parseJSONStringArray(raw)
+	entries := ParseNotifyEmails(raw)
+	if len(entries) == 0 {
+		return nil
+	}
+	emails := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.Disabled || !entry.Verified {
+			continue
+		}
+		email := strings.TrimSpace(entry.Email)
+		if email == "" {
+			continue
+		}
+		key := strings.ToLower(email)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		emails = append(emails, email)
+	}
+	return emails
 }
 
 // getSiteName reads site name from settings with fallback.
@@ -213,15 +235,15 @@ func (s *BalanceNotifyService) collectBalanceNotifyRecipients(user *User) []stri
 	return recipients
 }
 
-// sendEmails sends an email to all recipients with shared timeout and error logging.
+// sendEmails sends an email to all recipients with per-recipient timeout and error logging.
 func (s *BalanceNotifyService) sendEmails(recipients []string, subject, body string, logAttrs ...any) {
-	ctx, cancel := context.WithTimeout(context.Background(), emailSendTimeout)
-	defer cancel()
 	for _, to := range recipients {
+		ctx, cancel := context.WithTimeout(context.Background(), emailSendTimeout)
 		if err := s.emailService.SendEmail(ctx, to, subject, body); err != nil {
 			attrs := append([]any{"to", to, "error", err}, logAttrs...)
 			slog.Error("failed to send notification", attrs...)
 		}
+		cancel()
 	}
 }
 
