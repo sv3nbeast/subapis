@@ -1012,6 +1012,7 @@ func buildErrorWhere(filter *service.OpsDashboardFilter, start, end time.Time, s
 	idx++
 
 	clauses = append(clauses, "is_count_tokens = FALSE")
+	clauses = append(clauses, opsExcludeUnauthenticatedResponsesProbeClause(""))
 
 	if groupID != nil && *groupID > 0 {
 		args = append(args, *groupID)

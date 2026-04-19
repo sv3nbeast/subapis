@@ -203,6 +203,7 @@ error_totals AS (
   WHERE created_at >= $1 AND created_at < $2
     AND COALESCE(status_code, 0) >= 400
     AND is_count_tokens = FALSE  -- 排除 count_tokens 请求的错误
+    AND ` + opsExcludeUnauthenticatedResponsesProbeClause("") + `
   GROUP BY 1
 ),
 combined AS (
@@ -277,6 +278,7 @@ error_totals AS (
     AND group_id IS NOT NULL
     AND COALESCE(status_code, 0) >= 400
     AND is_count_tokens = FALSE  -- 排除 count_tokens 请求的错误
+    AND ` + opsExcludeUnauthenticatedResponsesProbeClause("") + `
   GROUP BY 1
 ),
 combined AS (
