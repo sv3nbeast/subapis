@@ -5312,6 +5312,8 @@ export default {
 
   payment: {
     title: 'Recharge / Subscription',
+    secureCheckout: 'SECURE PAY',
+    subtitle: 'Complete balance top-up, plan subscription, and order payment in one place.',
     amountLabel: 'Amount',
     paymentAmount: 'Payment Amount',
     creditedBalance: 'Credited Balance',

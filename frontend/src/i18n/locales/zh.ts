@@ -5500,6 +5500,8 @@ export default {
 
   payment: {
     title: '充值/订阅',
+    secureCheckout: '安全支付',
+    subtitle: '在一个页面里完成余额充值、套餐订阅和订单支付。',
     amountLabel: '充值金额',
     paymentAmount: '支付金额',
     creditedBalance: '到账余额',
