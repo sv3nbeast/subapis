@@ -60,6 +60,26 @@ func classifySelectionError(err error) selectionErrorClassification {
 		}
 	}
 
+	if strings.Contains(lower, "supporting model:") && isPureRateLimitedSelectionSummary(lower) {
+		return selectionErrorClassification{
+			Handled:        true,
+			StatusCode:     429,
+			ErrorType:      "rate_limit_error",
+			Message:        "Requested model is temporarily rate limited upstream, please retry later",
+			SkipMonitoring: false,
+		}
+	}
+
+	if strings.Contains(lower, "supporting model:") && isPureModelCapacityCoolingSelectionSummary(lower) {
+		return selectionErrorClassification{
+			Handled:        true,
+			StatusCode:     503,
+			ErrorType:      "upstream_error",
+			Message:        "Requested model is temporarily unavailable upstream, please retry later",
+			SkipMonitoring: false,
+		}
+	}
+
 	return selectionErrorClassification{}
 }
 
@@ -71,9 +91,52 @@ func applySelectionErrorMonitoringClassification(c *gin.Context, cls selectionEr
 }
 
 func isPureUnsupportedSelectionSummary(msg string) bool {
+	stats, ok := parseSelectionFailureSummary(msg)
+	if !ok {
+		return false
+	}
+
+	return stats.eligible == 0 &&
+		stats.modelUnsupported > 0 &&
+		stats.modelRateLimited == 0 &&
+		stats.modelCapacityCooling == 0
+}
+
+func isPureRateLimitedSelectionSummary(msg string) bool {
+	stats, ok := parseSelectionFailureSummary(msg)
+	if !ok {
+		return false
+	}
+
+	return stats.eligible == 0 &&
+		stats.modelUnsupported == 0 &&
+		stats.modelRateLimited > 0 &&
+		stats.modelCapacityCooling == 0
+}
+
+func isPureModelCapacityCoolingSelectionSummary(msg string) bool {
+	stats, ok := parseSelectionFailureSummary(msg)
+	if !ok {
+		return false
+	}
+
+	return stats.eligible == 0 &&
+		stats.modelUnsupported == 0 &&
+		stats.modelRateLimited == 0 &&
+		stats.modelCapacityCooling > 0
+}
+
+type selectionFailureSummaryStats struct {
+	eligible             int
+	modelUnsupported     int
+	modelRateLimited     int
+	modelCapacityCooling int
+}
+
+func parseSelectionFailureSummary(msg string) (selectionFailureSummaryStats, bool) {
 	matches := selectionFailureSummaryPattern.FindStringSubmatch(msg)
 	if len(matches) != 9 {
-		return false
+		return selectionFailureSummaryStats{}, false
 	}
 
 	parse := func(idx int) int {
@@ -81,13 +144,10 @@ func isPureUnsupportedSelectionSummary(msg string) bool {
 		return v
 	}
 
-	eligible := parse(2)
-	modelUnsupported := parse(6)
-	modelRateLimited := parse(7)
-	modelCapacityCooling := parse(8)
-
-	return eligible == 0 &&
-		modelUnsupported > 0 &&
-		modelRateLimited == 0 &&
-		modelCapacityCooling == 0
+	return selectionFailureSummaryStats{
+		eligible:             parse(2),
+		modelUnsupported:     parse(6),
+		modelRateLimited:     parse(7),
+		modelCapacityCooling: parse(8),
+	}, true
 }

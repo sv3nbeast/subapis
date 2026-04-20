@@ -27,11 +27,28 @@ func TestClassifySelectionError_PureUnsupportedModelSummary(t *testing.T) {
 	}
 }
 
-func TestClassifySelectionError_RateLimitedSummaryNotTreatedAsUnsupported(t *testing.T) {
+func TestClassifySelectionError_PureRateLimitedSummary(t *testing.T) {
 	err := errorString("no available accounts supporting model: claude-sonnet-4-6 (total=197 eligible=0 excluded=0 unschedulable=0 platform_filtered=0 model_unsupported=0 model_rate_limited=197 model_capacity_cooling=0)")
 	got := classifySelectionError(err)
-	if got.Handled {
-		t.Fatalf("expected rate-limited summary to remain unhandled, got %#v", got)
+	if !got.Handled {
+		t.Fatalf("expected handled classification")
+	}
+	if got.StatusCode != 429 || got.ErrorType != "rate_limit_error" {
+		t.Fatalf("unexpected classification: %#v", got)
+	}
+	if got.SkipMonitoring {
+		t.Fatalf("did not expect skip monitoring")
+	}
+}
+
+func TestClassifySelectionError_PureModelCapacityCoolingSummary(t *testing.T) {
+	err := errorString("no available accounts supporting model: claude-opus-4-6-thinking (total=197 eligible=0 excluded=0 unschedulable=0 platform_filtered=0 model_unsupported=0 model_rate_limited=0 model_capacity_cooling=197)")
+	got := classifySelectionError(err)
+	if !got.Handled {
+		t.Fatalf("expected handled classification")
+	}
+	if got.StatusCode != 503 || got.ErrorType != "upstream_error" {
+		t.Fatalf("unexpected classification: %#v", got)
 	}
 }
 

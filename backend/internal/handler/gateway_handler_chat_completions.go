@@ -299,9 +299,6 @@ func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *serv
 	if streamStarted {
 		return
 	}
-	statusCode := http.StatusBadGateway
-	if lastErr != nil && lastErr.StatusCode > 0 {
-		statusCode = lastErr.StatusCode
-	}
-	h.chatCompletionsErrorResponse(c, statusCode, "server_error", "All available accounts exhausted")
+	status, errType, errMsg := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)
+	h.chatCompletionsErrorResponse(c, status, errType, errMsg)
 }

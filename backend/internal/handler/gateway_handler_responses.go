@@ -305,9 +305,6 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 	if streamStarted {
 		return // Can't write error after stream started
 	}
-	statusCode := http.StatusBadGateway
-	if lastErr != nil && lastErr.StatusCode > 0 {
-		statusCode = lastErr.StatusCode
-	}
-	h.responsesErrorResponse(c, statusCode, "server_error", "All available accounts exhausted")
+	status, code, message := h.resolveFailoverExhaustedError(c, lastErr, service.PlatformAnthropic)
+	h.responsesErrorResponse(c, status, code, message)
 }

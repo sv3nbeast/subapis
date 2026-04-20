@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -829,8 +830,45 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
-	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
+	status, errType, errMsg := h.resolveAnthropicFailoverExhaustedError(c, failoverErr)
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
+}
+
+func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Context, failoverErr *service.UpstreamFailoverError) (int, string, string) {
+	if failoverErr == nil {
+		return http.StatusBadGateway, "api_error", "Upstream request failed"
+	}
+
+	statusCode := failoverErr.StatusCode
+	responseBody := failoverErr.ResponseBody
+	platform := service.PlatformAnthropic
+	if c != nil && c.Request != nil {
+		if v, ok := c.Request.Context().Value(ctxkey.Platform).(string); ok && strings.TrimSpace(v) != "" {
+			platform = strings.TrimSpace(v)
+		}
+	}
+
+	if h.errorPassthroughService != nil && len(responseBody) > 0 {
+		if rule := h.errorPassthroughService.MatchRule(platform, statusCode, responseBody); rule != nil {
+			respCode := statusCode
+			if !rule.PassthroughCode && rule.ResponseCode != nil {
+				respCode = *rule.ResponseCode
+			}
+
+			msg := service.ExtractUpstreamErrorMessage(responseBody)
+			if !rule.PassthroughBody && rule.CustomMessage != nil {
+				msg = *rule.CustomMessage
+			}
+			if rule.SkipMonitoring {
+				c.Set(service.OpsSkipPassthroughKey, true)
+			}
+			return respCode, "upstream_error", msg
+		}
+	}
+
+	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
+	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+	return h.mapUpstreamError(statusCode)
 }
 
 // ensureAnthropicErrorResponse writes a fallback Anthropic error if no response was written.
