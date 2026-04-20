@@ -255,6 +255,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if cls := classifySelectionError(err); cls.Handled {
+					applySelectionErrorMonitoringClassification(c, cls)
+					h.handleStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
+					return
+				}
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
 				return
 			}
@@ -650,6 +655,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
+					if cls := classifySelectionError(err); cls.Handled {
+						applySelectionErrorMonitoringClassification(c, cls)
+						h.anthropicStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
+						return
+					}
 					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
 				}
 				return
