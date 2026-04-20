@@ -2646,6 +2646,15 @@
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.payment.title') }}
+              <a
+                :href="locale === 'zh' ? 'https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md' : 'https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT.md'"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="ml-2 inline-flex items-center text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+              >
+                <span class="text-sm font-medium">{{ t('admin.settings.payment.configGuide') }}</span>
+                <svg class="mb-0.5 ml-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+              </a>
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {{ t('admin.settings.payment.description') }}
@@ -2740,6 +2749,18 @@
                     ]"
                   >{{ pt.label }}</button>
                 </div>
+                <p class="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                  {{ t('admin.settings.payment.enabledPaymentTypesHint') }}
+                  <a
+                    :href="locale === 'zh' ? 'https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md#%E6%94%AF%E6%8C%81%E7%9A%84%E6%94%AF%E4%BB%98%E6%96%B9%E5%BC%8F' : 'https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT.md#supported-payment-methods'"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="ml-1 text-primary-500 hover:text-primary-600 dark:text-primary-400 dark:hover:text-primary-300"
+                  >
+                    {{ t('admin.settings.payment.findProvider') }}
+                    <svg class="mb-0.5 ml-0.5 inline h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                  </a>
+                </p>
               </div>
 
               <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -3168,7 +3189,7 @@ const probePlatformLabels: Record<string, string> = {
   gemini: 'Gemini'
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 const adminSettingsStore = useAdminSettingsStore()
 
