@@ -2755,6 +2755,23 @@
             </template>
           </div>
         </div>
+
+        <PaymentProviderList
+          v-if="form.payment_enabled"
+          :providers="providers"
+          :loading="providersLoading"
+          :can-create="hasAnyPaymentTypeEnabled"
+          :enabled-payment-types="form.payment_enabled_types"
+          :all-payment-types="allPaymentTypes"
+          :redirect-label="t('admin.settings.payment.easypayRedirect')"
+          @refresh="loadProviders"
+          @create="openCreateProvider"
+          @edit="openEditProvider"
+          @delete="confirmDeleteProvider"
+          @toggle-field="handleToggleField"
+          @toggle-type="handleToggleType"
+          @reorder="handleReorderProviders"
+        />
         </div><!-- /Tab: Payment -->
 
         <!-- Tab: Email -->
@@ -3078,6 +3095,28 @@
           </button>
         </div>
       </form>
+
+      <PaymentProviderDialog
+        ref="providerDialogRef"
+        :show="showProviderDialog"
+        :saving="providerSaving"
+        :editing="editingProvider"
+        :all-key-options="providerKeyOptions"
+        :enabled-key-options="enabledProviderKeyOptions"
+        :all-payment-types="allPaymentTypes"
+        :redirect-label="t('admin.settings.payment.easypayRedirect')"
+        @close="showProviderDialog = false"
+        @save="handleSaveProvider"
+      />
+      <ConfirmDialog
+        :show="showDeleteProviderDialog"
+        :title="t('admin.settings.payment.deleteProvider')"
+        :message="t('admin.settings.payment.deleteProviderConfirm')"
+        :confirm-text="t('common.delete')"
+        danger
+        @confirm="handleDeleteProvider"
+        @cancel="showDeleteProviderDialog = false"
+      />
     </div>
   </AppLayout>
 </template>
@@ -3095,9 +3134,13 @@ import type {
   WebSearchTestResult
 } from '@/api/admin/settings'
 import type { AdminGroup, Proxy, NotifyEmailEntry } from '@/types'
+import type { ProviderInstance } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Select from '@/components/common/Select.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import PaymentProviderList from '@/components/payment/PaymentProviderList.vue'
+import PaymentProviderDialog from '@/components/payment/PaymentProviderDialog.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -3105,6 +3148,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import ImageUpload from '@/components/common/ImageUpload.vue'
 import BackupSettings from '@/views/admin/BackupView.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useAppStore } from '@/stores'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import {
@@ -3655,12 +3699,166 @@ function isPaymentTypeEnabled(type: string): boolean {
   return form.payment_enabled_types.includes(type)
 }
 
+const hasAnyPaymentTypeEnabled = computed(() => form.payment_enabled_types.length > 0)
+
 function togglePaymentType(type: string) {
   if (form.payment_enabled_types.includes(type)) {
     form.payment_enabled_types = form.payment_enabled_types.filter(t => t !== type)
+    disableProvidersByType(type)
     return
   }
   form.payment_enabled_types = [...form.payment_enabled_types, type]
+}
+
+async function disableProvidersByType(type: string) {
+  const matching = providers.value.filter(provider => provider.provider_key === type && provider.enabled)
+  for (const provider of matching) {
+    try {
+      await adminAPI.payment.updateProvider(provider.id, { enabled: false })
+      provider.enabled = false
+    } catch (err: unknown) {
+      slog('disable provider failed', provider.id, err)
+    }
+  }
+}
+
+function slog(...args: unknown[]) {
+  console.warn('[payment]', ...args)
+}
+
+const providersLoading = ref(false)
+const providerSaving = ref(false)
+const providers = ref<ProviderInstance[]>([])
+const showProviderDialog = ref(false)
+const showDeleteProviderDialog = ref(false)
+const editingProvider = ref<ProviderInstance | null>(null)
+const deletingProviderId = ref<number | null>(null)
+const providerDialogRef = ref<InstanceType<typeof PaymentProviderDialog> | null>(null)
+
+const providerKeyOptions = computed(() => [
+  { value: 'easypay', label: t('admin.settings.payment.providerEasypay') },
+  { value: 'alipay', label: t('admin.settings.payment.providerAlipay') },
+  { value: 'wxpay', label: t('admin.settings.payment.providerWxpay') },
+  { value: 'stripe', label: t('admin.settings.payment.providerStripe') },
+])
+
+const enabledProviderKeyOptions = computed(() => {
+  const enabled = form.payment_enabled_types
+  return providerKeyOptions.value.filter(option => enabled.includes(option.value))
+})
+
+const paymentErrorMap = computed(() => ({
+  PENDING_ORDERS: t('payment.errors.PENDING_ORDERS'),
+}))
+
+async function loadProviders() {
+  providersLoading.value = true
+  try {
+    const res = await adminAPI.payment.getProviders()
+    providers.value = res.data || []
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    providersLoading.value = false
+  }
+}
+
+function openCreateProvider() {
+  editingProvider.value = null
+  providerDialogRef.value?.reset(enabledProviderKeyOptions.value[0]?.value || 'easypay')
+  showProviderDialog.value = true
+}
+
+function openEditProvider(provider: ProviderInstance) {
+  editingProvider.value = provider
+  providerDialogRef.value?.loadProvider(provider)
+  showProviderDialog.value = true
+}
+
+async function handleSaveProvider(payload: Partial<ProviderInstance>) {
+  providerSaving.value = true
+  try {
+    if (editingProvider.value) {
+      await adminAPI.payment.updateProvider(editingProvider.value.id, payload)
+    } else {
+      await adminAPI.payment.createProvider(payload)
+    }
+    showProviderDialog.value = false
+    await loadProviders()
+    await saveSettings()
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error'), paymentErrorMap.value))
+  } finally {
+    providerSaving.value = false
+  }
+}
+
+async function handleToggleField(provider: ProviderInstance, field: 'enabled' | 'refund_enabled' | 'allow_user_refund') {
+  let newValue = false
+  if (field === 'enabled') newValue = !provider.enabled
+  else if (field === 'refund_enabled') newValue = !provider.refund_enabled
+  else newValue = !provider.allow_user_refund
+
+  const payload: Record<string, boolean> = { [field]: newValue }
+  if (field === 'refund_enabled' && !newValue) {
+    payload.allow_user_refund = false
+  }
+  try {
+    await adminAPI.payment.updateProvider(provider.id, payload)
+    if (field === 'enabled') provider.enabled = newValue
+    else if (field === 'refund_enabled') {
+      provider.refund_enabled = newValue
+      if (!newValue) provider.allow_user_refund = false
+    } else {
+      provider.allow_user_refund = newValue
+    }
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error'), paymentErrorMap.value))
+  }
+}
+
+async function handleToggleType(provider: ProviderInstance, type: string) {
+  const updated = provider.supported_types.includes(type)
+    ? provider.supported_types.filter(t => t !== type)
+    : [...provider.supported_types, type]
+  try {
+    await adminAPI.payment.updateProvider(provider.id, { supported_types: updated } as Partial<ProviderInstance>)
+    provider.supported_types = updated
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error'), paymentErrorMap.value))
+  }
+}
+
+function confirmDeleteProvider(provider: ProviderInstance) {
+  deletingProviderId.value = provider.id
+  showDeleteProviderDialog.value = true
+}
+
+async function handleReorderProviders(updates: { id: number; sort_order: number }[]) {
+  try {
+    await Promise.all(
+      updates.map(update => adminAPI.payment.updateProvider(update.id, { sort_order: update.sort_order } as Partial<ProviderInstance>))
+    )
+    for (const update of updates) {
+      const provider = providers.value.find(p => p.id === update.id)
+      if (provider) provider.sort_order = update.sort_order
+    }
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+    loadProviders()
+  }
+}
+
+async function handleDeleteProvider() {
+  if (!deletingProviderId.value) return
+  try {
+    await adminAPI.payment.deleteProvider(deletingProviderId.value)
+    appStore.showSuccess(t('common.deleted'))
+    showDeleteProviderDialog.value = false
+    loadProviders()
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error'), paymentErrorMap.value))
+  }
 }
 
 // LinuxDo OAuth redirect URL suggestion
@@ -4494,6 +4692,7 @@ onMounted(() => {
   loadRectifierSettings()
   loadBetaPolicySettings()
   loadStatusProbeSettings()
+  loadProviders()
 })
 </script>
 
