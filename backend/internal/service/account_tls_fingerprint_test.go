@@ -71,4 +71,7 @@ func TestResolveTLSProfile_AntigravityUsesAccountScopedBuiltinVariant(t *testing
 	if profileA.Name == profileB.Name {
 		t.Fatalf("expected different antigravity accounts to get different built-in variants")
 	}
+	if len(profileA.ALPNProtocols) != 2 || profileA.ALPNProtocols[0] != "h2" {
+		t.Fatalf("expected antigravity profile to prefer h2 ALPN, got %v", profileA.ALPNProtocols)
+	}
 }

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"golang.org/x/net/http2"
 )
 
 // HTTPUpstreamSuite HTTP 上游服务测试套件
@@ -217,6 +219,19 @@ func (s *HTTPUpstreamSuite) TestAccountConcurrencyOverridesPoolSettings() {
 	require.Equal(s.T(), 12, transport.MaxConnsPerHost, "MaxConnsPerHost mismatch")
 	require.Equal(s.T(), 12, transport.MaxIdleConns, "MaxIdleConns mismatch")
 	require.Equal(s.T(), 12, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost mismatch")
+}
+
+func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_ForceAttemptHTTP2Enabled() {
+	svc := s.newService()
+	entry, err := svc.getClientEntryWithTLS("", 1, 3, &tlsfingerprint.Profile{
+		Name:          "test-antigravity",
+		ALPNProtocols: []string{"h2", "http/1.1"},
+	}, false, false)
+	require.NoError(s.T(), err)
+	require.NotNil(s.T(), entry)
+	transport, ok := entry.client.Transport.(*http2.Transport)
+	require.True(s.T(), ok, "expected *http2.Transport")
+	require.NotNil(s.T(), transport.DialTLSContext)
 }
 
 // TestAccountConcurrencyFallbackToDefault 测试账户并发数为 0 时回退到默认配置

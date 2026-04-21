@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -264,6 +265,128 @@ func TestAntigravityGatewayService_Forward_PromptTooLong(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, events, 1)
 	require.Equal(t, "prompt_too_long", events[0].Kind)
+}
+
+func TestAntigravityGatewayService_ApplyAntigravityUpstreamRequestHeaders(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent", nil)
+	require.NoError(t, err)
+
+	account := &Account{
+		ID: 1,
+		Credentials: map[string]any{
+			"project_id": "project-123",
+		},
+	}
+
+	svc := &AntigravityGatewayService{}
+	svc.applyAntigravityUpstreamRequestHeaders(req, account)
+
+	require.Equal(t, "gzip", req.Header.Get("Accept-Encoding"))
+	require.Empty(t, req.Header.Get("x-goog-user-project"))
+
+	account.Credentials["quota_project_id"] = "quota-project-456"
+	req2, err := http.NewRequest(http.MethodPost, "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent", nil)
+	require.NoError(t, err)
+	svc.applyAntigravityUpstreamRequestHeaders(req2, account)
+	require.Equal(t, "quota-project-456", req2.Header.Get("x-goog-user-project"))
+}
+
+func TestAntigravityGatewayService_Forward_SignatureRecoveryUsesFreshSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-opus-4-6",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+		"max_tokens": 16,
+		"stream":     false,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request = req
+
+	signatureErrBody := []byte(`{"error":{"message":"Corrupted thought signature."}}`)
+	successSSEBody := "data: " + `{"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}}` + "\n\n"
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"X-Request-Id": []string{"req-bad"}},
+				Body:       io.NopCloser(bytes.NewReader(signatureErrBody)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"X-Request-Id": []string{"req-ok"}},
+				Body:       io.NopCloser(strings.NewReader(successSSEBody)),
+			},
+		},
+	}
+
+	svc := &AntigravityGatewayService{
+		settingService:      NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:       &AntigravityTokenProvider{},
+		httpUpstream:        upstream,
+		workerManager:       newAntigravityWorkerManager(),
+		bootstrapProbeCache: newAntigravityBootstrapCache(),
+		newAntigravityClient: func(proxyURL string) (antigravityBootstrapClient, error) {
+			return &antigravityBootstrapClientStub{
+				loadResp: &antigravity.LoadCodeAssistResponse{
+					CloudAICompanionProject: "project-1",
+				},
+				modelsResp:   &antigravity.FetchAvailableModelsResponse{Models: map[string]antigravity.ModelInfo{}},
+				userInfoResp: &antigravity.FetchUserInfoResponse{},
+			}, nil
+		},
+	}
+
+	account := &Account{
+		ID:          1,
+		Name:        "acc-1",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project-1",
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "req-ok", result.RequestID)
+	require.Len(t, upstream.requestBodies, 2)
+
+	var firstReq antigravity.V1InternalRequest
+	var secondReq antigravity.V1InternalRequest
+	require.NoError(t, json.Unmarshal(upstream.requestBodies[0], &firstReq))
+	require.NoError(t, json.Unmarshal(upstream.requestBodies[1], &secondReq))
+	require.NotEqual(t, firstReq.Request.SessionID, secondReq.Request.SessionID)
+	require.NotEqual(t, firstReq.RequestID, secondReq.RequestID)
+}
+
+func TestNormalizeAntigravityCompressedResponse_Gzip(t *testing.T) {
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	_, err := gz.Write([]byte(`{"ok":true}`))
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+
+	resp := &http.Response{
+		Header: http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:   io.NopCloser(bytes.NewReader(compressed.Bytes())),
+	}
+
+	normalizeAntigravityCompressedResponse(resp)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, `{"ok":true}`, string(body))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
 }
 
 // TestAntigravityGatewayService_Forward_ModelRateLimitTriggersFailover
@@ -926,7 +1049,7 @@ func TestHandleClaudeStreamingResponse_NormalComplete(t *testing.T) {
 		fmt.Fprintln(pw, "")
 	}()
 
-	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5", 1, "conv-test", nil)
 	_ = pr.Close()
 
 	require.NoError(t, err)
@@ -1003,7 +1126,7 @@ func TestHandleClaudeStreamingResponse_ThoughtsTokenCount(t *testing.T) {
 		fmt.Fprintln(pw, "")
 	}()
 
-	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "gemini-2.5-pro")
+	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "gemini-2.5-pro", 1, "conv-test", nil)
 	_ = pr.Close()
 
 	require.NoError(t, err)
@@ -1206,7 +1329,7 @@ func TestHandleClaudeStreamingResponse_ClientDisconnect(t *testing.T) {
 		fmt.Fprintln(pw, "")
 	}()
 
-	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5", 1, "conv-test", nil)
 	_ = pr.Close()
 
 	require.NoError(t, err)
@@ -1238,7 +1361,7 @@ func TestHandleClaudeStreamingResponse_EmptyStream(t *testing.T) {
 		fmt.Fprintln(pw, "")
 	}()
 
-	_, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+	_, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5", 1, "conv-test", nil)
 	_ = pr.Close()
 
 	// 应当返回 UpstreamFailoverError 而非 nil，以便上层触发 failover
@@ -1270,7 +1393,7 @@ func TestHandleClaudeStreamingResponse_ContextCanceled(t *testing.T) {
 
 	resp := &http.Response{StatusCode: http.StatusOK, Body: cancelReadCloser{}, Header: http.Header{}}
 
-	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5")
+	result, err := svc.handleClaudeStreamingResponse(c, resp, time.Now(), "claude-sonnet-4-5", 1, "conv-test", nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
