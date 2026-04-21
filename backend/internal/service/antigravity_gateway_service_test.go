@@ -1377,6 +1377,44 @@ func TestHandleClaudeStreamingResponse_EmptyStream(t *testing.T) {
 	require.NotContains(t, body, "event: message_delta")
 }
 
+func TestHandleClaudeStreamToNonStreaming_FirstPayloadTimeoutTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1, MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Body: pr, Header: http.Header{}}
+
+	// 不写任何可解析 payload，模拟上游长时间空转
+	go func() {
+		defer func() { _ = pw.Close() }()
+		time.Sleep(1500 * time.Millisecond)
+	}()
+
+	_, err := svc.handleClaudeStreamToNonStreaming(
+		c,
+		resp,
+		time.Now().Add(-antigravityNonStreamFirstPayloadTimeout-time.Second),
+		"claude-sonnet-4-6",
+		1,
+		"conv-test",
+		nil,
+	)
+	_ = pr.Close()
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, http.StatusGatewayTimeout, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "upstream first payload timeout")
+}
+
 // TestHandleClaudeStreamingResponse_ContextCanceled
 // 验证：context 取消时不注入错误事件
 func TestHandleClaudeStreamingResponse_ContextCanceled(t *testing.T) {

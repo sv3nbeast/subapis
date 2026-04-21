@@ -79,6 +79,10 @@ const (
 	antigravityModelCapacityCooldown = 10 * time.Second
 	// MODEL_CAPACITY_EXHAUSTED 账号级短冷却：跨请求短时间避开刚命中 503 的同账号同模型。
 	antigravityModelCapacityAccountCooldown = 60 * time.Second
+	// 非流式 Claude 聚合路径：首个有效 payload 最长等待时间。
+	// 如果在该时间窗内仍未收到任何可解析的上游 data payload，
+	// 说明当前账号/上游节点大概率处于空转卡住状态，应优先切号而不是继续空等到 idle timeout。
+	antigravityNonStreamFirstPayloadTimeout = 45 * time.Second
 )
 
 // antigravityPassthroughErrorMessages 透传给客户端的错误消息白名单（小写）
@@ -4203,6 +4207,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 	var last map[string]any
 	var lastWithParts map[string]any
 	var collectedParts []map[string]any // 收集所有 parts（包括 text、thinking、functionCall、inlineData 等）
+	var sawParsedPayload bool
 
 	type scanEvent struct {
 		line string
@@ -4289,6 +4294,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			if err := json.Unmarshal(inner, &parsed); err != nil {
 				continue
 			}
+			sawParsedPayload = true
 
 			// 记录首 token 时间
 			if firstTokenMs == nil {
@@ -4307,6 +4313,14 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			}
 
 		case <-intervalCh:
+			if !sawParsedPayload && time.Since(startTime) >= antigravityNonStreamFirstPayloadTimeout {
+				logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
+				return nil, &UpstreamFailoverError{
+					StatusCode:             http.StatusGatewayTimeout,
+					ResponseBody:           []byte(`{"error":"upstream first payload timeout"}`),
+					RetryableOnSameAccount: false,
+				}
+			}
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {
 				continue
