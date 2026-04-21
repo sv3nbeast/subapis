@@ -1203,7 +1203,7 @@ func TestStreamUpstreamResponse_ContextCanceled(t *testing.T) {
 func TestStreamUpstreamResponse_Timeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := newAntigravityTestService(&config.Config{
-		Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1, MaxLineSize: defaultMaxLineSize},
+		Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 0, MaxLineSize: defaultMaxLineSize},
 	})
 
 	rec := httptest.NewRecorder()

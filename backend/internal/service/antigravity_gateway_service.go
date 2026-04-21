@@ -4258,6 +4258,24 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 		intervalCh = intervalTicker.C
 	}
 
+	firstPayloadDeadline := startTime.Add(antigravityNonStreamFirstPayloadTimeout)
+	if time.Now().After(firstPayloadDeadline) {
+		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
+		return nil, &UpstreamFailoverError{
+			StatusCode:             http.StatusGatewayTimeout,
+			ResponseBody:           []byte(`{"error":"upstream first payload timeout"}`),
+			RetryableOnSameAccount: false,
+		}
+	}
+	firstPayloadWait := time.Until(firstPayloadDeadline)
+	var firstPayloadTimer *time.Timer
+	var firstPayloadCh <-chan time.Time
+	if firstPayloadWait > 0 {
+		firstPayloadTimer = time.NewTimer(firstPayloadWait)
+		firstPayloadCh = firstPayloadTimer.C
+		defer firstPayloadTimer.Stop()
+	}
+
 	for {
 		select {
 		case ev, ok := <-events:
