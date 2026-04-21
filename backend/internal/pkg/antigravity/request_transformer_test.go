@@ -20,24 +20,22 @@ func TestBuildParts_ThinkingBlockWithoutSignature(t *testing.T) {
 		{
 			name: "Claude model - downgrade thinking to text without signature",
 			content: `[
-				{"type": "text", "text": "Hello"},
 				{"type": "thinking", "thinking": "Let me think...", "signature": ""},
 				{"type": "text", "text": "World"}
 			]`,
 			allowDummyThought: false,
-			expectedParts:     3, // thinking 内容降级为普通 text part
+			expectedParts:     2, // thinking 内容降级为普通 text part
 			description:       "Claude模型缺少signature时应将thinking降级为text，并在上层禁用thinking mode",
 		},
 		{
-			name: "Claude model - preserve thinking block with signature",
+			name: "Claude model - preserve thinking text and carry signature forward",
 			content: `[
-				{"type": "text", "text": "Hello"},
 				{"type": "thinking", "thinking": "Let me think...", "signature": "sig_real_123"},
 				{"type": "text", "text": "World"}
 			]`,
 			allowDummyThought: false,
-			expectedParts:     3,
-			description:       "Claude模型应透传带 signature 的 thinking block（用于 Vertex 签名链路）",
+			expectedParts:     2,
+			description:       "Claude模型应保留 thinking 文本，但将 signature 挂到后续兼容 part，而不是直接挂在 thought part 上",
 		},
 		{
 			name: "Gemini model - use dummy signature",
@@ -66,24 +64,27 @@ func TestBuildParts_ThinkingBlockWithoutSignature(t *testing.T) {
 			}
 
 			switch tt.name {
-			case "Claude model - preserve thinking block with signature":
-				if len(parts) != 3 {
-					t.Fatalf("expected 3 parts, got %d", len(parts))
+			case "Claude model - preserve thinking text and carry signature forward":
+				if len(parts) != 2 {
+					t.Fatalf("expected 2 parts, got %d", len(parts))
 				}
-				if !parts[1].Thought || parts[1].ThoughtSignature != "sig_real_123" {
-					t.Fatalf("expected thought part with signature sig_real_123, got thought=%v signature=%q",
-						parts[1].Thought, parts[1].ThoughtSignature)
+				if !parts[0].Thought || parts[0].ThoughtSignature != "" {
+					t.Fatalf("expected thought part without direct signature, got thought=%v signature=%q",
+						parts[0].Thought, parts[0].ThoughtSignature)
+				}
+				if parts[1].ThoughtSignature != "sig_real_123" {
+					t.Fatalf("expected trailing text part to carry signature %q, got %q", "sig_real_123", parts[1].ThoughtSignature)
 				}
 			case "Claude model - downgrade thinking to text without signature":
-				if len(parts) != 3 {
-					t.Fatalf("expected 3 parts, got %d", len(parts))
+				if len(parts) != 2 {
+					t.Fatalf("expected 2 parts, got %d", len(parts))
 				}
-				if parts[1].Thought {
+				if parts[0].Thought {
 					t.Fatalf("expected downgraded text part, got thought=%v signature=%q",
-						parts[1].Thought, parts[1].ThoughtSignature)
+						parts[0].Thought, parts[0].ThoughtSignature)
 				}
-				if parts[1].Text != "Let me think..." {
-					t.Fatalf("expected downgraded text %q, got %q", "Let me think...", parts[1].Text)
+				if parts[0].Text != "Let me think..." {
+					t.Fatalf("expected downgraded text %q, got %q", "Let me think...", parts[0].Text)
 				}
 			case "Gemini model - use dummy signature":
 				if len(parts) != 3 {
@@ -148,6 +149,53 @@ func TestBuildParts_ToolUseSignatureHandling(t *testing.T) {
 			t.Fatalf("expected preserved tool signature %q, got %q", "sig_tool_abc", parts[0].ThoughtSignature)
 		}
 	})
+}
+
+func TestBuildParts_ClaudeThinkingSignatureCarrierAttachesToNextFunctionCall(t *testing.T) {
+	content := `[
+		{"type": "thinking", "thinking": "Need to inspect files", "signature": "sig_thinking_123"},
+		{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
+	]`
+
+	toolIDToName := make(map[string]string)
+	parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false, nil, nil)
+	if err != nil {
+		t.Fatalf("buildParts() error = %v", err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	if !parts[0].Thought || parts[0].ThoughtSignature != "" {
+		t.Fatalf("expected first part to be thought without signature, got thought=%v signature=%q", parts[0].Thought, parts[0].ThoughtSignature)
+	}
+	if parts[1].FunctionCall == nil {
+		t.Fatalf("expected second part to be functionCall, got %+v", parts[1])
+	}
+	if parts[1].ThoughtSignature != "sig_thinking_123" {
+		t.Fatalf("expected functionCall to receive pending signature, got %q", parts[1].ThoughtSignature)
+	}
+}
+
+func TestBuildParts_ClaudeEmptyThinkingSignatureCarrierAttachesToNextText(t *testing.T) {
+	content := `[
+		{"type": "thinking", "thinking": "", "signature": "sig_pending_456"},
+		{"type": "text", "text": "Hello world"}
+	]`
+
+	toolIDToName := make(map[string]string)
+	parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false, nil, nil)
+	if err != nil {
+		t.Fatalf("buildParts() error = %v", err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+	if parts[0].Text != "Hello world" {
+		t.Fatalf("expected text part, got %+v", parts[0])
+	}
+	if parts[0].ThoughtSignature != "sig_pending_456" {
+		t.Fatalf("expected text part to receive pending signature, got %q", parts[0].ThoughtSignature)
+	}
 }
 
 // TestBuildTools_CustomTypeTools 测试custom类型工具转换
