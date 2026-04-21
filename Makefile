@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend build-datamanagementd test test-backend test-frontend test-datamanagementd secret-scan
+.PHONY: build build-backend build-frontend build-datamanagementd test test-backend test-frontend test-datamanagementd secret-scan guard-prod-deploy
 
 # 一键编译前后端
 build: build-backend build-frontend
@@ -30,3 +30,6 @@ test-datamanagementd:
 
 secret-scan:
 	@python3 tools/secret_scan.py
+
+guard-prod-deploy:
+	@bash deploy/check_prod_descendant.sh

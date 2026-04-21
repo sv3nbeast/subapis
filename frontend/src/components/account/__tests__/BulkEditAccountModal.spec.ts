@@ -217,4 +217,18 @@ describe('BulkEditAccountModal', () => {
     })
     expect(wrapper.text()).toContain('admin.accounts.openai.modelRestrictionDisabledByPassthrough')
   })
+
+  it('混合平台批量编辑时禁用模型限制更新', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai', 'antigravity'],
+      selectedTypes: ['oauth', 'apikey']
+    })
+
+    await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('admin.accounts.bulkEdit.mixedPlatformModelRestrictionDisabled')
+  })
 })
