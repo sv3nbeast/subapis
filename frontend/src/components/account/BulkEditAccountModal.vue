@@ -136,12 +136,21 @@
 
         <div
           id="bulk-edit-model-restriction-body"
-          :class="!enableModelRestriction && 'pointer-events-none opacity-50'"
+          :class="(!enableModelRestriction || isMixedPlatformModelRestrictionDisabled) && 'pointer-events-none opacity-50'"
           role="group"
           aria-labelledby="bulk-edit-model-restriction-label"
         >
           <div
-            v-if="isOpenAIModelRestrictionDisabled"
+            v-if="isMixedPlatformModelRestrictionDisabled"
+            class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
+          >
+            <p class="text-xs text-amber-700 dark:text-amber-400">
+              {{ t('admin.accounts.bulkEdit.mixedPlatformModelRestrictionDisabled') }}
+            </p>
+          </div>
+
+          <div
+            v-else-if="isOpenAIModelRestrictionDisabled"
             class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
           >
             <p class="text-xs text-amber-700 dark:text-amber-400">
@@ -1067,6 +1076,7 @@ const isOpenAIModelRestrictionDisabled = computed(
     enableOpenAIPassthrough.value &&
     openaiPassthroughEnabled.value
 )
+const isMixedPlatformModelRestrictionDisabled = computed(() => isMixedPlatform.value)
 
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
@@ -1212,7 +1222,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
-  if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
+  if (
+    enableModelRestriction.value &&
+    !isOpenAIModelRestrictionDisabled.value &&
+    !isMixedPlatformModelRestrictionDisabled.value
+  ) {
     // 统一使用 model_mapping 字段
     if (modelRestrictionMode.value === 'whitelist') {
       // 白名单模式：将模型转换为 model_mapping 格式（key=value）

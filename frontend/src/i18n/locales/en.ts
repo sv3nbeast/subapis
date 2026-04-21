@@ -2290,7 +2290,8 @@ export default {
         failed: 'Bulk update failed',
         noSelection: 'Please select accounts to edit',
         noFieldsSelected: 'Select at least one field to update',
-        mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.'
+        mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
+        mixedPlatformModelRestrictionDisabled: 'Model whitelist/mapping changes are disabled for mixed-platform bulk edits. Edit each platform separately.'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',
       bulkDeleteConfirm: 'Delete the selected {count} account(s)? This action cannot be undone.',

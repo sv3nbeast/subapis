@@ -1732,6 +1732,25 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
+	if hasNestedJSONKey(input.Credentials, "model_mapping") {
+		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		platforms := make(map[string]struct{})
+		for _, account := range accounts {
+			if account == nil {
+				continue
+			}
+			platforms[account.Platform] = struct{}{}
+		}
+		if len(platforms) > 1 {
+			return nil, infraerrors.BadRequest(
+				"MIXED_PLATFORM_MODEL_MAPPING",
+				"bulk editing model mapping across multiple platforms is not allowed",
+			)
+		}
+	}
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
@@ -1836,6 +1855,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	return result, nil
+}
+
+func hasNestedJSONKey(payload map[string]any, key string) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	_, ok := payload[key]
+	return ok
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {

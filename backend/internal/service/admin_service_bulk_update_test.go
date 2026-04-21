@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,4 +170,30 @@ func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingCon
 	require.Contains(t, err.Error(), "mixed channel")
 	// No BindGroups should have been called since the check runs before any write.
 	require.Empty(t, repo.bindGroupsCalls)
+}
+
+func TestAdminService_BulkUpdateAccounts_RejectsMixedPlatformModelMapping(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{ID: 1, Platform: PlatformOpenAI},
+			{ID: 2, Platform: PlatformAntigravity},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	input := &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1, 2},
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.3-codex": "gpt-5.3-codex-spark",
+			},
+		},
+	}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), input)
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Equal(t, "MIXED_PLATFORM_MODEL_MAPPING", infraerrors.Reason(err))
+	require.Empty(t, repo.bulkUpdateIDs)
 }
