@@ -4353,8 +4353,12 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
-			logger.LegacyPrintf("service.antigravity_gateway", "Stream data interval timeout (antigravity claude non-stream)")
-			return nil, fmt.Errorf("stream data interval timeout")
+			logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] stream data interval timeout (claude non-stream), triggering failover")
+			return nil, &UpstreamFailoverError{
+				StatusCode:             http.StatusBadGateway,
+				ResponseBody:           []byte(`{"error":"stream data interval timeout"}`),
+				RetryableOnSameAccount: true,
+			}
 		}
 	}
 

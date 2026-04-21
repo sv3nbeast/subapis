@@ -1415,6 +1415,43 @@ func TestHandleClaudeStreamToNonStreaming_FirstPayloadTimeoutTriggersFailover(t 
 	require.Contains(t, string(failoverErr.ResponseBody), "upstream first payload timeout")
 }
 
+func TestHandleClaudeStreamToNonStreaming_StreamIntervalTimeoutTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{StreamDataIntervalTimeout: 1, MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Body: pr, Header: http.Header{}}
+
+	go func() {
+		defer func() { _ = pw.Close() }()
+		time.Sleep(1500 * time.Millisecond)
+	}()
+
+	_, err := svc.handleClaudeStreamToNonStreaming(
+		c,
+		resp,
+		time.Now(),
+		"claude-sonnet-4-6",
+		1,
+		"conv-test",
+		nil,
+	)
+	_ = pr.Close()
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "stream data interval timeout")
+}
+
 // TestHandleClaudeStreamingResponse_ContextCanceled
 // 验证：context 取消时不注入错误事件
 func TestHandleClaudeStreamingResponse_ContextCanceled(t *testing.T) {
