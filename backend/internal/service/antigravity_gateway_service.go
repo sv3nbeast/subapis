@@ -4295,6 +4295,16 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 				continue
 			}
 			sawParsedPayload = true
+			if firstPayloadTimer != nil {
+				if !firstPayloadTimer.Stop() {
+					select {
+					case <-firstPayloadTimer.C:
+					default:
+					}
+				}
+				firstPayloadTimer = nil
+				firstPayloadCh = nil
+			}
 
 			// 记录首 token 时间
 			if firstTokenMs == nil {
@@ -4312,8 +4322,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 				collectedParts = append(collectedParts, parts...)
 			}
 
-		case <-intervalCh:
-			if !sawParsedPayload && time.Since(startTime) >= antigravityNonStreamFirstPayloadTimeout {
+		case <-firstPayloadCh:
+			if !sawParsedPayload {
 				logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
 				return nil, &UpstreamFailoverError{
 					StatusCode:             http.StatusGatewayTimeout,
@@ -4321,6 +4331,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 					RetryableOnSameAccount: false,
 				}
 			}
+		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {
 				continue
