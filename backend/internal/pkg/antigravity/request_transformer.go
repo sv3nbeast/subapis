@@ -45,6 +45,16 @@ type TransformOptions struct {
 	// 为空时使用默认模板（包含 [IDENTITY_PATCH] 及 SYSTEM_PROMPT_BEGIN 标记）。
 	IdentityPatch string
 	EnableMCPXML  bool
+	// SessionID / RequestID / UserAgent 用于对齐 Cloud Code 原生会话身份与请求谱系。
+	// 为空时回退到旧行为。
+	SessionID string
+	RequestID string
+	UserAgent string
+	// ToolUseSignatures 可选：按 tool_use.id 回填历史上游返回的真实 signature，
+	// 用于在客户端未保留 signature 时恢复 Cloud Code 的函数调用签名链。
+	ToolUseSignatures map[string]string
+	// ToolNameClientToOfficial 可选：将客户端工具名归一化为官方 Antigravity 工具名。
+	ToolNameClientToOfficial map[string]string
 }
 
 func DefaultTransformOptions() TransformOptions {
@@ -87,6 +97,10 @@ func TransformClaudeToGemini(claudeReq *ClaudeRequest, projectID, mappedModel st
 func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, mappedModel string, opts TransformOptions) ([]byte, error) {
 	// 用于存储 tool_use id -> name 映射
 	toolIDToName := make(map[string]string)
+	clientToOfficial, _ := buildOfficialAntigravityToolNameMaps(claudeReq.Tools)
+	if len(opts.ToolNameClientToOfficial) > 0 {
+		clientToOfficial = opts.ToolNameClientToOfficial
+	}
 
 	// 检测是否有 web_search 工具
 	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools)
@@ -107,7 +121,7 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	allowDummyThought := strings.HasPrefix(targetModel, "gemini-")
 
 	// 1. 构建 contents
-	contents, strippedThinking, err := buildContents(claudeReq.Messages, toolIDToName, isThinkingEnabled, allowDummyThought)
+	contents, strippedThinking, err := buildContents(claudeReq.Messages, toolIDToName, isThinkingEnabled, allowDummyThought, opts.ToolUseSignatures, clientToOfficial)
 	if err != nil {
 		return nil, fmt.Errorf("build contents: %w", err)
 	}
@@ -158,15 +172,26 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	}
 
 	// 如果提供了 metadata.user_id，优先使用
-	if claudeReq.Metadata != nil && claudeReq.Metadata.UserID != "" {
+	if strings.TrimSpace(opts.SessionID) != "" {
+		innerRequest.SessionID = strings.TrimSpace(opts.SessionID)
+	} else if claudeReq.Metadata != nil && claudeReq.Metadata.UserID != "" {
 		innerRequest.SessionID = claudeReq.Metadata.UserID
+	}
+
+	requestID := strings.TrimSpace(opts.RequestID)
+	if requestID == "" {
+		requestID = "agent-" + uuid.New().String()
+	}
+	userAgent := strings.TrimSpace(opts.UserAgent)
+	if userAgent == "" {
+		userAgent = "antigravity"
 	}
 
 	// 6. 包装为 v1internal 请求
 	v1Req := V1InternalRequest{
 		Project:     projectID,
-		RequestID:   "agent-" + uuid.New().String(),
-		UserAgent:   "antigravity", // 固定值，与官方客户端一致
+		RequestID:   requestID,
+		UserAgent:   userAgent,
 		RequestType: requestType,
 		Model:       targetModel,
 		Request:     innerRequest,
@@ -354,7 +379,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 }
 
 // buildContents 构建 contents
-func buildContents(messages []ClaudeMessage, toolIDToName map[string]string, isThinkingEnabled, allowDummyThought bool) ([]GeminiContent, bool, error) {
+func buildContents(messages []ClaudeMessage, toolIDToName map[string]string, isThinkingEnabled, allowDummyThought bool, toolUseSignatures map[string]string, clientToOfficial map[string]string) ([]GeminiContent, bool, error) {
 	var contents []GeminiContent
 	strippedThinking := false
 
@@ -364,7 +389,7 @@ func buildContents(messages []ClaudeMessage, toolIDToName map[string]string, isT
 			role = "model"
 		}
 
-		parts, strippedThisMsg, err := buildParts(msg.Content, toolIDToName, allowDummyThought)
+		parts, strippedThisMsg, err := buildParts(msg.Content, toolIDToName, allowDummyThought, toolUseSignatures, clientToOfficial)
 		if err != nil {
 			return nil, false, fmt.Errorf("build parts for message %d: %w", i, err)
 		}
@@ -413,7 +438,7 @@ const DummyThoughtSignature = "skip_thought_signature_validator"
 
 // buildParts 构建消息的 parts
 // allowDummyThought: 只有 Gemini 模型支持 dummy thought signature
-func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDummyThought bool) ([]GeminiPart, bool, error) {
+func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDummyThought bool, toolUseSignatures map[string]string, clientToOfficial map[string]string) ([]GeminiPart, bool, error) {
 	var parts []GeminiPart
 	strippedThinking := false
 	pendingThoughtSignature := ""
@@ -513,23 +538,31 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 			}
 
 		case "tool_use":
+			officialName, officialInput, _ := canonicalizeOfficialAntigravityToolInvocation(block.Name, block.Input)
+			if mappedName := strings.TrimSpace(clientToOfficial[strings.TrimSpace(block.Name)]); mappedName != "" {
+				officialName = mappedName
+			}
 			// 存储 id -> name 映射
-			if block.ID != "" && block.Name != "" {
-				toolIDToName[block.ID] = block.Name
+			if block.ID != "" && officialName != "" {
+				toolIDToName[block.ID] = officialName
 			}
 
 			part := GeminiPart{
 				FunctionCall: &GeminiFunctionCall{
-					Name: block.Name,
-					Args: block.Input,
+					Name: officialName,
+					Args: officialInput,
 					ID:   block.ID,
 				},
 			}
 			// tool_use 的 signature 处理：
 			// - Claude 模型（allowDummyThought=false）：必须是上游返回的真实 signature（dummy 视为缺失）
 			// - Gemini 模型（allowDummyThought=true）：优先透传真实 signature，缺失时使用 dummy signature
-			if block.Signature != "" && (allowDummyThought || block.Signature != DummyThoughtSignature) {
-				part.ThoughtSignature = block.Signature
+			signature := strings.TrimSpace(block.Signature)
+			if signature == "" && block.ID != "" {
+				signature = strings.TrimSpace(toolUseSignatures[block.ID])
+			}
+			if signature != "" && (allowDummyThought || signature != DummyThoughtSignature) {
+				part.ThoughtSignature = signature
 			} else if allowDummyThought {
 				part.ThoughtSignature = DummyThoughtSignature
 			}
@@ -538,12 +571,15 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 
 		case "tool_result":
 			// 获取函数名
-			funcName := block.Name
+			funcName := strings.TrimSpace(block.Name)
+			if funcName != "" {
+				funcName = toOfficialAntigravityToolName(funcName)
+			}
 			if funcName == "" {
 				if name, ok := toolIDToName[block.ToolUseID]; ok {
 					funcName = name
 				} else {
-					funcName = block.ToolUseID
+					funcName = toOfficialAntigravityToolName(block.ToolUseID)
 				}
 			}
 
@@ -787,9 +823,16 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 			}
 		}
 
+		name := strings.TrimSpace(tool.Name)
+		officialName := toOfficialAntigravityToolName(name)
+		descriptionToUse := description
+		if spec, ok := officialAntigravityToolSpecForName(officialName); ok {
+			descriptionToUse = spec.Description
+		}
+
 		funcDecls = append(funcDecls, GeminiFunctionDecl{
-			Name:        tool.Name,
-			Description: description,
+			Name:        officialName,
+			Description: descriptionToUse,
 			Parameters:  params,
 		})
 	}

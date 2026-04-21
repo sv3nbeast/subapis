@@ -53,7 +53,7 @@ func TestBuildParts_ThinkingBlockWithoutSignature(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			toolIDToName := make(map[string]string)
-			parts, _, err := buildParts(json.RawMessage(tt.content), toolIDToName, tt.allowDummyThought)
+			parts, _, err := buildParts(json.RawMessage(tt.content), toolIDToName, tt.allowDummyThought, nil, nil)
 
 			if err != nil {
 				t.Fatalf("buildParts() error = %v", err)
@@ -106,7 +106,7 @@ func TestBuildParts_ToolUseSignatureHandling(t *testing.T) {
 
 	t.Run("Gemini preserves provided tool_use signature", func(t *testing.T) {
 		toolIDToName := make(map[string]string)
-		parts, _, err := buildParts(json.RawMessage(content), toolIDToName, true)
+		parts, _, err := buildParts(json.RawMessage(content), toolIDToName, true, nil, nil)
 		if err != nil {
 			t.Fatalf("buildParts() error = %v", err)
 		}
@@ -123,7 +123,7 @@ func TestBuildParts_ToolUseSignatureHandling(t *testing.T) {
 			{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
 		]`
 		toolIDToName := make(map[string]string)
-		parts, _, err := buildParts(json.RawMessage(contentNoSig), toolIDToName, true)
+		parts, _, err := buildParts(json.RawMessage(contentNoSig), toolIDToName, true, nil, nil)
 		if err != nil {
 			t.Fatalf("buildParts() error = %v", err)
 		}
@@ -137,7 +137,7 @@ func TestBuildParts_ToolUseSignatureHandling(t *testing.T) {
 
 	t.Run("Claude model - preserve valid signature for tool_use", func(t *testing.T) {
 		toolIDToName := make(map[string]string)
-		parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false)
+		parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false, nil, nil)
 		if err != nil {
 			t.Fatalf("buildParts() error = %v", err)
 		}
@@ -147,6 +147,25 @@ func TestBuildParts_ToolUseSignatureHandling(t *testing.T) {
 		// Claude 模型应透传有效的 signature（Vertex/Google 需要完整签名链路）
 		if parts[0].ThoughtSignature != "sig_tool_abc" {
 			t.Fatalf("expected preserved tool signature %q, got %q", "sig_tool_abc", parts[0].ThoughtSignature)
+		}
+	})
+
+	t.Run("Claude model - backfills cached signature for tool_use", func(t *testing.T) {
+		contentNoSig := `[
+			{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
+		]`
+		toolIDToName := make(map[string]string)
+		parts, _, err := buildParts(json.RawMessage(contentNoSig), toolIDToName, false, map[string]string{
+			"t1": "sig_cached_123",
+		}, nil)
+		if err != nil {
+			t.Fatalf("buildParts() error = %v", err)
+		}
+		if len(parts) != 1 || parts[0].FunctionCall == nil {
+			t.Fatalf("expected 1 functionCall part, got %+v", parts)
+		}
+		if parts[0].ThoughtSignature != "sig_cached_123" {
+			t.Fatalf("expected cached tool signature %q, got %q", "sig_cached_123", parts[0].ThoughtSignature)
 		}
 	})
 }
@@ -334,6 +353,68 @@ func TestBuildTools_PreservesWebSearchAlongsideFunctions(t *testing.T) {
 	require.Equal(t, 5, result[1].GoogleSearch.EnhancedContent.ImageSearch.MaxResultCount)
 }
 
+func TestBuildTools_UsesOfficialDescriptionForCanonicalAntigravityTool(t *testing.T) {
+	tools := []ClaudeTool{
+		{
+			Name:        "view_file",
+			Description: "custom description should be overridden",
+			InputSchema: map[string]any{"type": "object"},
+		},
+	}
+
+	result := buildTools(tools)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].FunctionDeclarations, 1)
+	require.Equal(t, "view_file", result[0].FunctionDeclarations[0].Name)
+	require.Contains(t, result[0].FunctionDeclarations[0].Description, "View the contents of a file")
+}
+
+func TestBuildTools_RenamesAliasToOfficialToolSurface(t *testing.T) {
+	tools := []ClaudeTool{
+		{
+			Name:        "read_file",
+			Description: "alias tool description",
+			InputSchema: map[string]any{"type": "object"},
+		},
+	}
+
+	result := buildTools(tools)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].FunctionDeclarations, 1)
+	require.Equal(t, "view_file", result[0].FunctionDeclarations[0].Name)
+	require.Contains(t, result[0].FunctionDeclarations[0].Description, "View the contents of a file")
+}
+
+func TestBuildParts_CanonicalizesOfficialToolAliasInvocation(t *testing.T) {
+	content := `[
+		{"type":"tool_use","id":"t1","name":"read_file","input":{"path":"/tmp/demo.txt","start_line":2,"end_line":5}}
+	]`
+	toolIDToName := make(map[string]string)
+	parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.NotNil(t, parts[0].FunctionCall)
+	require.Equal(t, "view_file", parts[0].FunctionCall.Name)
+	args, ok := parts[0].FunctionCall.Args.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/demo.txt", args["AbsolutePath"])
+	require.Equal(t, 2, args["StartLine"])
+	require.Equal(t, 5, args["EndLine"])
+	require.Equal(t, "view_file", toolIDToName["t1"])
+}
+
+func TestBuildParts_CanonicalizesToolResultAliasName(t *testing.T) {
+	content := `[
+		{"type":"tool_result","tool_use_id":"t1","name":"read_file","content":"ok"}
+	]`
+	toolIDToName := map[string]string{"t1": "view_file"}
+	parts, _, err := buildParts(json.RawMessage(content), toolIDToName, false, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	require.NotNil(t, parts[0].FunctionResponse)
+	require.Equal(t, "view_file", parts[0].FunctionResponse.Name)
+}
+
 func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -503,4 +584,33 @@ func TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions
 	require.Len(t, req.Request.Tools[0].FunctionDeclarations, 1)
 	require.Equal(t, "get_weather", req.Request.Tools[0].FunctionDeclarations[0].Name)
 	require.NotNil(t, req.Request.Tools[1].GoogleSearch)
+}
+
+func TestTransformClaudeToGeminiWithOptions_UsesProvidedRequestIdentity(t *testing.T) {
+	claudeReq := &ClaudeRequest{
+		Model: "claude-opus-4-6",
+		Metadata: &ClaudeMetadata{
+			UserID: "metadata-session",
+		},
+		Messages: []ClaudeMessage{
+			{
+				Role:    "user",
+				Content: json.RawMessage(`"hello"`),
+			},
+		},
+	}
+
+	opts := DefaultTransformOptions()
+	opts.SessionID = "cloud-code-session-1"
+	opts.RequestID = "agent/1234567890/conv-uuid/7"
+	opts.UserAgent = "antigravity"
+
+	body, err := TransformClaudeToGeminiWithOptions(claudeReq, "project-1", "claude-opus-4-6-thinking", opts)
+	require.NoError(t, err)
+
+	var req V1InternalRequest
+	require.NoError(t, json.Unmarshal(body, &req))
+	require.Equal(t, "agent/1234567890/conv-uuid/7", req.RequestID)
+	require.Equal(t, "antigravity", req.UserAgent)
+	require.Equal(t, "cloud-code-session-1", req.Request.SessionID)
 }

@@ -193,7 +193,7 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 		}
 	}
 	if account.Platform == PlatformAntigravity {
-		return tlsfingerprint.NewAccountScopedBuiltinProfile(accountTLSFingerprintSeed(account))
+		return tlsfingerprint.NewAntigravityAccountScopedProfile(accountTLSFingerprintSeed(account))
 	}
 	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
 	return tlsfingerprint.BuiltInDefaultProfile()

@@ -3,6 +3,8 @@ package antigravity
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,8 +17,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
+	"golang.org/x/net/http2"
 )
 
 // ForbiddenError 表示上游返回 403 Forbidden
@@ -47,6 +52,7 @@ func NewAPIRequestWithURL(ctx context.Context, baseURL, action, accessToken stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", GetUserAgent())
+	req.Header.Set("Accept-Encoding", "gzip")
 
 	return req, nil
 }
@@ -247,6 +253,13 @@ type Client struct {
 	httpClient *http.Client
 }
 
+func applyBootstrapRequestHeaders(req *http.Request, projectID string) {
+	if req == nil {
+		return
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+}
+
 const (
 	// proxyDialTimeout 代理 TCP 连接超时（含代理握手），代理不通时快速失败
 	proxyDialTimeout = 5 * time.Second
@@ -265,22 +278,75 @@ func NewClient(proxyURL string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: proxyDialTimeout,
+		}).DialContext,
+		TLSHandshakeTimeout: proxyTLSHandshakeTimeout,
+		ForceAttemptHTTP2:   true,
+	}
 	if parsed != nil {
-		transport := &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: proxyDialTimeout,
-			}).DialContext,
-			TLSHandshakeTimeout: proxyTLSHandshakeTimeout,
-		}
 		if err := proxyutil.ConfigureTransportProxy(transport, parsed); err != nil {
 			return nil, fmt.Errorf("configure proxy: %w", err)
 		}
-		client.Transport = transport
 	}
+	if err := http2.ConfigureTransport(transport); err != nil {
+		return nil, fmt.Errorf("configure http2 transport: %w", err)
+	}
+	client.Transport = transport
 
 	return &Client{
 		httpClient: client,
 	}, nil
+}
+
+func decompressResponseBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+
+	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	if encoding == "" {
+		return
+	}
+
+	var reader io.Reader
+	switch encoding {
+	case "gzip":
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return
+		}
+		reader = gr
+	case "br":
+		reader = brotli.NewReader(resp.Body)
+	case "deflate":
+		reader = flate.NewReader(resp.Body)
+	default:
+		return
+	}
+
+	originalBody := resp.Body
+	resp.Body = &decompressedBody{reader: reader, closer: originalBody}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+}
+
+type decompressedBody struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (d *decompressedBody) Read(p []byte) (int, error) {
+	return d.reader.Read(p)
+}
+
+func (d *decompressedBody) Close() error {
+	if rc, ok := d.reader.(io.Closer); ok {
+		_ = rc.Close()
+	}
+	return d.closer.Close()
 }
 
 // IsConnectionError 判断是否为连接错误（网络超时、DNS 失败、连接拒绝）
@@ -462,6 +528,7 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", GetUserAgent())
+		applyBootstrapRequestHeaders(req, "")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -472,6 +539,7 @@ func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadC
 			}
 			return nil, nil, lastErr
 		}
+		decompressResponseBody(resp)
 
 		respBodyBytes, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close() // 立即关闭，避免循环内 defer 导致的资源泄漏
@@ -541,6 +609,7 @@ func (c *Client) OnboardUser(ctx context.Context, accessToken, tierID string) (s
 			req.Header.Set("Authorization", "Bearer "+accessToken)
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("User-Agent", GetUserAgent())
+			applyBootstrapRequestHeaders(req, "")
 
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
@@ -551,6 +620,7 @@ func (c *Client) OnboardUser(ctx context.Context, accessToken, tierID string) (s
 				}
 				return "", lastErr
 			}
+			decompressResponseBody(resp)
 
 			respBodyBytes, err := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
@@ -675,6 +745,7 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", GetUserAgent())
+		applyBootstrapRequestHeaders(req, projectID)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -685,6 +756,7 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 			}
 			return nil, nil, lastErr
 		}
+		decompressResponseBody(resp)
 
 		respBodyBytes, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close() // 立即关闭，避免循环内 defer 导致的资源泄漏
@@ -728,8 +800,9 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 
 // ── Privacy API ──────────────────────────────────────────────────────
 
-// privacyBaseURL 隐私设置 API 仅使用 daily 端点（与 Antigravity 客户端行为一致）
-const privacyBaseURL = antigravityDailyBaseURL
+// privacyBaseURL 隐私设置 API 默认使用 daily 端点（与 Antigravity 客户端行为一致）。
+// 保持为变量以便测试覆盖本地 mock server。
+var privacyBaseURL = antigravityDailyBaseURL
 
 // SetUserSettingsRequest setUserSettings 请求体
 type SetUserSettingsRequest struct {
@@ -795,12 +868,14 @@ func (c *Client) SetUserSettings(ctx context.Context, accessToken string) (*SetU
 	req.Header.Set("User-Agent", GetUserAgent())
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	req.Host = "daily-cloudcode-pa.googleapis.com"
+	applyBootstrapRequestHeaders(req, "")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("setUserSettings 请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	decompressResponseBody(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -838,12 +913,14 @@ func (c *Client) FetchUserInfo(ctx context.Context, accessToken, projectID strin
 	req.Header.Set("User-Agent", GetUserAgent())
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
 	req.Host = "daily-cloudcode-pa.googleapis.com"
+	applyBootstrapRequestHeaders(req, projectID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetchUserInfo 请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	decompressResponseBody(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

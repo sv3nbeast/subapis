@@ -3,6 +3,8 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -371,10 +374,12 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 					},
 				}
 			}
+			s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
 			attemptsMade++
-			retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
+			retryResp, retryErr := s.doAntigravityUpstreamRequest(retryReq, p.proxyURL, p.account, p.tlsProfile)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
+				normalizeAntigravityCompressedResponse(retryResp)
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
 				// 重试成功，清除 MODEL_CAPACITY_EXHAUSTED cooldown
 				if isModelCapacityExhausted && modelName != "" {
@@ -567,9 +572,11 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 			logger.LegacyPrintf("service.antigravity_gateway", "%s single_account_503_retry: request_build_failed error=%v", p.prefix, err)
 			break
 		}
+		s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
-		retryResp, retryErr := p.httpUpstream.DoWithTLS(retryReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
+		retryResp, retryErr := s.doAntigravityUpstreamRequest(retryReq, p.proxyURL, p.account, p.tlsProfile)
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
+			normalizeAntigravityCompressedResponse(retryResp)
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d single_account_503_retry_success attempt=%d/%d total_waited=%v",
 				p.prefix, retryResp.StatusCode, attempt, antigravitySingleAccountSmartRetryMaxAttempts, totalWaited)
 			// 关闭之前的响应
@@ -709,15 +716,19 @@ urlFallbackLoop:
 			if err != nil {
 				return nil, err
 			}
+			s.applyAntigravityUpstreamRequestHeaders(upstreamReq, p.account)
 
 			// Capture upstream request body for ops retry of this attempt.
 			if p.c != nil && len(p.body) > 0 {
 				p.c.Set(OpsUpstreamRequestBodyKey, string(p.body))
 			}
 
-			resp, err = p.httpUpstream.DoWithTLS(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency, p.tlsProfile)
+			resp, err = s.doAntigravityUpstreamRequest(upstreamReq, p.proxyURL, p.account, p.tlsProfile)
 			if err == nil && resp == nil {
 				err = errors.New("upstream returned nil response")
+			}
+			if err == nil && resp != nil {
+				normalizeAntigravityCompressedResponse(resp)
 			}
 			if err != nil {
 				safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -953,16 +964,23 @@ func logPrefix(sessionID, accountName string) string {
 
 // AntigravityGatewayService 处理 Antigravity 平台的 API 转发
 type AntigravityGatewayService struct {
-	accountRepo                AccountRepository
-	tokenProvider              *AntigravityTokenProvider
-	rateLimitService           *RateLimitService
-	httpUpstream               HTTPUpstream
-	settingService             *SettingService
-	tlsFPProfileService        *TLSFingerprintProfileService
-	modelCapacityCooldownCache ModelCapacityCooldownCache
-	cache                      GatewayCache // 用于模型级限流时清除粘性会话绑定
-	schedulerSnapshot          *SchedulerSnapshotService
-	internal500Cache           Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	accountRepo                   AccountRepository
+	tokenProvider                 *AntigravityTokenProvider
+	rateLimitService              *RateLimitService
+	httpUpstream                  HTTPUpstream
+	settingService                *SettingService
+	tlsFPProfileService           *TLSFingerprintProfileService
+	modelCapacityCooldownCache    ModelCapacityCooldownCache
+	cache                         GatewayCache // 用于模型级限流时清除粘性会话绑定
+	schedulerSnapshot             *SchedulerSnapshotService
+	internal500Cache              Internal500CounterCache // INTERNAL 500 渐进惩罚计数器
+	requestLineage                *antigravityRequestLineageStore
+	toolSignatureCache            *antigravityToolSignatureCache
+	bootstrapProbeCache           *antigravityBootstrapCache
+	newAntigravityClient          antigravityBootstrapClientFactory
+	workerManager                 *antigravityWorkerManager
+	useAntigravityWorkerTransport bool
+	requestIdentityMu             sync.Mutex
 }
 
 func NewAntigravityGatewayService(
@@ -978,16 +996,22 @@ func NewAntigravityGatewayService(
 	internal500Cache Internal500CounterCache,
 ) *AntigravityGatewayService {
 	return &AntigravityGatewayService{
-		accountRepo:                accountRepo,
-		tokenProvider:              tokenProvider,
-		rateLimitService:           rateLimitService,
-		httpUpstream:               httpUpstream,
-		settingService:             settingService,
-		tlsFPProfileService:        tlsFPProfileService,
-		modelCapacityCooldownCache: modelCapacityCooldownCache,
-		cache:                      cache,
-		schedulerSnapshot:          schedulerSnapshot,
-		internal500Cache:           internal500Cache,
+		accountRepo:                   accountRepo,
+		tokenProvider:                 tokenProvider,
+		rateLimitService:              rateLimitService,
+		httpUpstream:                  httpUpstream,
+		settingService:                settingService,
+		tlsFPProfileService:           tlsFPProfileService,
+		modelCapacityCooldownCache:    modelCapacityCooldownCache,
+		cache:                         cache,
+		schedulerSnapshot:             schedulerSnapshot,
+		internal500Cache:              internal500Cache,
+		requestLineage:                newAntigravityRequestLineageStore(),
+		toolSignatureCache:            newAntigravityToolSignatureCache(),
+		bootstrapProbeCache:           newAntigravityBootstrapCache(),
+		newAntigravityClient:          defaultAntigravityBootstrapClientFactory,
+		workerManager:                 newAntigravityWorkerManager(),
+		useAntigravityWorkerTransport: true,
 	}
 }
 
@@ -1001,6 +1025,70 @@ func (s *AntigravityGatewayService) resolveTLSProfile(account *Account) *tlsfing
 		return nil
 	}
 	return s.tlsFPProfileService.ResolveTLSProfile(account)
+}
+
+func (s *AntigravityGatewayService) applyAntigravityUpstreamRequestHeaders(req *http.Request, account *Account) {
+	if req == nil || account == nil {
+		return
+	}
+
+	if strings.TrimSpace(req.Header.Get("Accept-Encoding")) == "" {
+		req.Header.Set("Accept-Encoding", "gzip")
+	}
+
+	quotaProjectID := strings.TrimSpace(account.GetCredential("quota_project_id"))
+	if quotaProjectID != "" {
+		req.Header.Set("x-goog-user-project", quotaProjectID)
+	}
+}
+
+func normalizeAntigravityCompressedResponse(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+
+	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	if encoding == "" {
+		return
+	}
+
+	var reader io.Reader
+	switch encoding {
+	case "gzip":
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return
+		}
+		reader = gr
+	case "br":
+		reader = brotli.NewReader(resp.Body)
+	case "deflate":
+		reader = flate.NewReader(resp.Body)
+	default:
+		return
+	}
+
+	originalBody := resp.Body
+	resp.Body = &antigravityDecompressedBody{reader: reader, closer: originalBody}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+}
+
+type antigravityDecompressedBody struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (d *antigravityDecompressedBody) Read(p []byte) (int, error) {
+	return d.reader.Read(p)
+}
+
+func (d *antigravityDecompressedBody) Close() error {
+	if rc, ok := d.reader.(io.Closer); ok {
+		_ = rc.Close()
+	}
+	return d.closer.Close()
 }
 
 // getLogConfig 获取上游错误日志配置
@@ -1425,17 +1513,39 @@ func injectIdentityPatchToGeminiRequest(body []byte) ([]byte, error) {
 	return json.Marshal(request)
 }
 
-// wrapV1InternalRequest 包装请求为 v1internal 格式
+// wrapV1InternalRequest 包装请求为 v1internal 格式。
+// 向后兼容：不注入 Cloud Code session identity / request lineage。
 func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model string, originalBody []byte) ([]byte, error) {
+	return s.wrapV1InternalRequestWithIdentity(projectID, model, originalBody, antigravityRequestIdentity{})
+}
+
+// wrapV1InternalRequestWithIdentity 包装请求为 v1internal 格式，并注入 Cloud Code 身份字段。
+func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID, model string, originalBody []byte, identity antigravityRequestIdentity) ([]byte, error) {
 	var request any
 	if err := json.Unmarshal(originalBody, &request); err != nil {
 		return nil, fmt.Errorf("解析请求体失败: %w", err)
 	}
 
+	if requestMap, ok := request.(map[string]any); ok {
+		if sessionID := strings.TrimSpace(identity.SessionID); sessionID != "" {
+			requestMap["sessionId"] = sessionID
+		}
+		request = requestMap
+	}
+
+	requestID := strings.TrimSpace(identity.RequestID)
+	if requestID == "" {
+		requestID = "agent-" + uuid.New().String()
+	}
+	userAgent := strings.TrimSpace(identity.UserAgent)
+	if userAgent == "" {
+		userAgent = "antigravity"
+	}
+
 	wrapped := map[string]any{
 		"project":     projectID,
-		"requestId":   "agent-" + uuid.New().String(),
-		"userAgent":   "antigravity", // 固定值，与官方客户端一致
+		"requestId":   requestID,
+		"userAgent":   userAgent,
 		"requestType": "agent",
 		"model":       model,
 		"request":     request,
@@ -1510,6 +1620,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	thinkingEnabled := claudeReq.Thinking != nil && (claudeReq.Thinking.Type == "enabled" || claudeReq.Thinking.Type == "adaptive")
 	mappedModel = applyThinkingModelSuffix(mappedModel, thinkingEnabled)
 	billingModel := mappedModel
+	_, officialToClientToolNames := antigravity.BuildOfficialAntigravityToolNameMaps(claudeReq.Tools)
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -1523,19 +1634,31 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		}
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
-
 	// 代理 URL
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
+	// 低风险 bootstrap/probe：
+	// - 缺少 project_id 时同步短超时补齐
+	// - 其余场景异步预热 loadCodeAssist/fetchAvailableModels/fetchUserInfo
+	projectID := strings.TrimSpace(s.ensureAntigravityBootstrapProbe(ctx, account, accessToken, proxyURL))
+
+	requestIdentity := s.buildCloudCodeRequestIdentity(ctx, account, c, body, &claudeReq)
+	if _, err := normalizeClaudeToolProtocolForAntigravity(&claudeReq); err != nil {
+		return nil, s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", "Invalid tool history")
+	}
+	toolUseSignatures := s.getClaudeToolUseSignatures(account.ID, requestIdentity.ConversationKey)
+
 	// 获取转换选项
 	// Antigravity 上游要求必须包含身份提示词，否则会返回 429
 	transformOpts := s.getClaudeTransformOptions(ctx)
 	transformOpts.EnableIdentityPatch = true // 强制启用，Antigravity 上游必需
+	transformOpts.SessionID = requestIdentity.SessionID
+	transformOpts.RequestID = requestIdentity.RequestID
+	transformOpts.UserAgent = requestIdentity.UserAgent
+	transformOpts.ToolUseSignatures = toolUseSignatures
 
 	// 转换 Claude 请求为 Gemini 格式
 	geminiBody, err := antigravity.TransformClaudeToGeminiWithOptions(&claudeReq, projectID, mappedModel, transformOpts)
@@ -1634,7 +1757,13 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 
 				logger.LegacyPrintf("service.antigravity_gateway", "Antigravity account %d: detected signature-related 400, retrying once (%s)", account.ID, stage.name)
 
-				retryGeminiBody, txErr := antigravity.TransformClaudeToGeminiWithOptions(&retryClaudeReq, projectID, mappedModel, s.getClaudeTransformOptions(ctx))
+				retryTransformOpts := s.getClaudeTransformOptions(ctx)
+				retryTransformOpts.EnableIdentityPatch = true
+				retryTransformOpts.SessionID = requestIdentity.SessionID
+				retryTransformOpts.RequestID = requestIdentity.RequestID
+				retryTransformOpts.UserAgent = requestIdentity.UserAgent
+				retryTransformOpts.ToolUseSignatures = toolUseSignatures
+				retryGeminiBody, txErr := antigravity.TransformClaudeToGeminiWithOptions(&retryClaudeReq, projectID, mappedModel, retryTransformOpts)
 				if txErr != nil {
 					continue
 				}
@@ -1724,6 +1853,85 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					StatusCode: retryResp.StatusCode,
 					Header:     retryResp.Header.Clone(),
 					Body:       io.NopCloser(bytes.NewReader(retryBody)),
+				}
+			}
+
+			if resp.StatusCode == http.StatusBadRequest && respBody != nil && isSignatureRelatedError(respBody) {
+				recoveryIdentity := s.resetAntigravityWorkerSession(account, requestIdentity.ConversationKey)
+
+				recoveryTransformOpts := s.getClaudeTransformOptions(ctx)
+				recoveryTransformOpts.EnableIdentityPatch = true
+				recoveryTransformOpts.SessionID = recoveryIdentity.SessionID
+				recoveryTransformOpts.RequestID = recoveryIdentity.RequestID
+				recoveryTransformOpts.UserAgent = recoveryIdentity.UserAgent
+
+				recoveryGeminiBody, txErr := antigravity.TransformClaudeToGeminiWithOptions(&claudeReq, projectID, mappedModel, recoveryTransformOpts)
+				if txErr == nil {
+					logger.LegacyPrintf("service.antigravity_gateway", "Antigravity account %d: detected signature-related 400, retrying once with fresh session", account.ID)
+					recoveryResult, recoveryErr := s.antigravityRetryLoop(antigravityRetryLoopParams{
+						ctx:             ctx,
+						prefix:          prefix,
+						account:         account,
+						proxyURL:        proxyURL,
+						accessToken:     accessToken,
+						action:          action,
+						body:            recoveryGeminiBody,
+						c:               c,
+						httpUpstream:    s.httpUpstream,
+						settingService:  s.settingService,
+						accountRepo:     s.accountRepo,
+						handleError:     s.handleUpstreamError,
+						requestedModel:  originalModel,
+						isStickySession: isStickySession,
+						groupID:         0,
+						sessionHash:     "",
+						tlsProfile:      s.resolveTLSProfile(account),
+					})
+					if recoveryErr != nil {
+						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+							Platform:           account.Platform,
+							AccountID:          account.ID,
+							AccountName:        account.Name,
+							UpstreamStatusCode: 0,
+							Kind:               "signature_recovery_new_session_request_error",
+							Message:            sanitizeUpstreamErrorMessage(recoveryErr.Error()),
+						})
+					} else if recoveryResult != nil && recoveryResult.resp != nil {
+						recoveryResp := recoveryResult.resp
+						if recoveryResp.StatusCode < 400 {
+							_ = resp.Body.Close()
+							resp = recoveryResp
+							respBody = nil
+							appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+								Platform:           account.Platform,
+								AccountID:          account.ID,
+								AccountName:        account.Name,
+								UpstreamStatusCode: recoveryResp.StatusCode,
+								UpstreamRequestID:  recoveryResp.Header.Get("x-request-id"),
+								Kind:               "signature_recovery_new_session_success",
+								Message:            "fresh session recovery succeeded",
+							})
+						} else {
+							recoveryBody, _ := io.ReadAll(io.LimitReader(recoveryResp.Body, 8<<10))
+							_ = recoveryResp.Body.Close()
+							respBody = recoveryBody
+							resp = &http.Response{
+								StatusCode: recoveryResp.StatusCode,
+								Header:     recoveryResp.Header.Clone(),
+								Body:       io.NopCloser(bytes.NewReader(recoveryBody)),
+							}
+							appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+								Platform:           account.Platform,
+								AccountID:          account.ID,
+								AccountName:        account.Name,
+								UpstreamStatusCode: recoveryResp.StatusCode,
+								UpstreamRequestID:  recoveryResp.Header.Get("x-request-id"),
+								Kind:               "signature_recovery_new_session",
+								Message:            sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(recoveryBody))),
+								Detail:             s.getUpstreamErrorDetail(recoveryBody),
+							})
+						}
+					}
 				}
 			}
 		}
@@ -1884,7 +2092,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	var clientDisconnect bool
 	if claudeReq.Stream {
 		// 客户端要求流式，直接透传转换
-		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel)
+		streamRes, err := s.handleClaudeStreamingResponse(c, resp, startTime, originalModel, account.ID, requestIdentity.ConversationKey, officialToClientToolNames)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_error error=%v", prefix, err)
 			return nil, err
@@ -1894,7 +2102,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		clientDisconnect = streamRes.clientDisconnect
 	} else {
 		// 客户端要求非流式，收集流式响应后转换返回
-		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel)
+		streamRes, err := s.handleClaudeStreamToNonStreaming(c, resp, startTime, originalModel, account.ID, requestIdentity.ConversationKey, officialToClientToolNames)
 		if err != nil {
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=stream_collect_error error=%v", prefix, err)
 			return nil, err
@@ -2275,14 +2483,15 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		}
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
-
 	// 代理 URL
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+
+	projectID := strings.TrimSpace(s.ensureAntigravityBootstrapProbe(ctx, account, accessToken, proxyURL))
+
+	requestIdentity := s.buildCloudCodeRequestIdentity(ctx, account, c, body, nil)
 
 	// Antigravity 上游要求必须包含身份提示词，注入到请求中
 	injectedBody, err := injectIdentityPatchToGeminiRequest(body)
@@ -2299,7 +2508,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	}
 
 	// 包装请求
-	wrappedBody, err := s.wrapV1InternalRequest(projectID, mappedModel, injectedBody)
+	wrappedBody, err := s.wrapV1InternalRequestWithIdentity(projectID, mappedModel, injectedBody, requestIdentity)
 	if err != nil {
 		return nil, s.writeGoogleError(c, http.StatusInternalServerError, "Failed to build upstream request")
 	}
@@ -2369,12 +2578,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			if fallbackModel != "" && fallbackModel != mappedModel {
 				logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Model not found (%s), retrying with fallback model %s (account: %s)", mappedModel, fallbackModel, account.Name)
 
-				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackModel, injectedBody)
+				fallbackWrapped, err := s.wrapV1InternalRequestWithIdentity(projectID, fallbackModel, injectedBody, requestIdentity)
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
-						fallbackResp, err := s.httpUpstream.DoWithTLS(fallbackReq, proxyURL, account.ID, account.Concurrency, s.resolveTLSProfile(account))
+						s.applyAntigravityUpstreamRequestHeaders(fallbackReq, account)
+						fallbackResp, err := s.doAntigravityUpstreamRequest(fallbackReq, proxyURL, account, s.resolveTLSProfile(account))
 						if err == nil && fallbackResp.StatusCode < 400 {
+							normalizeAntigravityCompressedResponse(fallbackResp)
 							_ = resp.Body.Close()
 							resp = fallbackResp
 						} else if fallbackResp != nil {
@@ -2412,7 +2623,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			logger.LegacyPrintf("service.antigravity_gateway", "Antigravity Gemini account %d: detected signature-related 400, retrying with cleaned thought signatures", account.ID)
 
 			cleanedInjectedBody := CleanGeminiNativeThoughtSignatures(injectedBody)
-			retryWrappedBody, wrapErr := s.wrapV1InternalRequest(projectID, mappedModel, cleanedInjectedBody)
+			retryWrappedBody, wrapErr := s.wrapV1InternalRequestWithIdentity(projectID, mappedModel, cleanedInjectedBody, requestIdentity)
 			if wrapErr == nil {
 				retryResult, retryErr := s.antigravityRetryLoop(antigravityRetryLoopParams{
 					ctx:             ctx,
@@ -3979,7 +4190,7 @@ func (s *AntigravityGatewayService) writeGoogleError(c *gin.Context, status int,
 
 // handleClaudeStreamToNonStreaming 收集上游流式响应，转换为 Claude 非流式格式返回
 // 用于处理客户端非流式请求但上游只支持流式的情况
-func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*antigravityStreamResult, error) {
+func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string, accountID int64, conversationKey string, officialToClientToolNames map[string]string) (*antigravityStreamResult, error) {
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
@@ -4131,11 +4342,12 @@ returnResponse:
 	}
 
 	// 转换 Gemini 响应为 Claude 格式
-	claudeResp, agUsage, err := antigravity.TransformGeminiToClaude(geminiBody, originalModel)
+	claudeResp, agUsage, err := antigravity.TransformGeminiToClaude(geminiBody, originalModel, officialToClientToolNames)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] transform_error error=%v body=%s", err, string(geminiBody))
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
+	s.rememberClaudeToolUseSignaturesFromBody(accountID, conversationKey, claudeResp)
 
 	c.Data(http.StatusOK, "application/json", claudeResp)
 
@@ -4151,7 +4363,7 @@ returnResponse:
 }
 
 // handleClaudeStreamingResponse 处理 Claude 流式响应（Gemini SSE → Claude SSE 转换）
-func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*antigravityStreamResult, error) {
+func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string, accountID int64, conversationKey string, officialToClientToolNames map[string]string) (*antigravityStreamResult, error) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -4163,7 +4375,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 		return nil, errors.New("streaming not supported")
 	}
 
-	processor := antigravity.NewStreamingProcessor(originalModel)
+	processor := antigravity.NewStreamingProcessor(originalModel, officialToClientToolNames)
 	var firstTokenMs *int
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
 	scanner := bufio.NewScanner(resp.Body)
@@ -4274,6 +4486,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 			if !ok {
 				// 上游完成，发送结束事件
 				finalEvents, agUsage := processor.Finish()
+				s.rememberClaudeToolUseSignatures(accountID, conversationKey, processor.ToolUseSignatures())
 				if len(finalEvents) > 0 {
 					cw.Write(finalEvents)
 				} else if !processor.MessageStartSent() && !cw.Disconnected() {
@@ -4289,6 +4502,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 				return &antigravityStreamResult{usage: convertUsage(agUsage), firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}, nil
 			}
 			if ev.err != nil {
+				s.rememberClaudeToolUseSignatures(accountID, conversationKey, processor.ToolUseSignatures())
 				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity claude"); handled {
 					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: disconnect}, nil
 				}
@@ -4318,6 +4532,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 			if time.Since(lastRead) < streamInterval {
 				continue
 			}
+			s.rememberClaudeToolUseSignatures(accountID, conversationKey, processor.ToolUseSignatures())
 			if cw.Disconnected() {
 				logger.LegacyPrintf("service.antigravity_gateway", "Upstream timeout after client disconnect (antigravity claude), returning collected usage")
 				return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
@@ -4536,11 +4751,12 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveTLSProfile(account))
+	resp, err := s.doAntigravityUpstreamRequest(req, proxyURL, account, s.resolveTLSProfile(account))
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
+	normalizeAntigravityCompressedResponse(resp)
 	defer func() { _ = resp.Body.Close() }()
 
 	// 处理错误响应

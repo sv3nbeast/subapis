@@ -3,9 +3,12 @@
 package antigravity
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,6 +56,9 @@ func TestNewAPIRequestWithURL_普通请求(t *testing.T) {
 	}
 	if ua := req.Header.Get("User-Agent"); ua != GetUserAgent() {
 		t.Errorf("User-Agent 不匹配: got %s, want %s", ua, GetUserAgent())
+	}
+	if ae := req.Header.Get("Accept-Encoding"); ae != "gzip" {
+		t.Errorf("Accept-Encoding 不匹配: got %s, want gzip", ae)
 	}
 }
 
@@ -298,9 +306,12 @@ func TestNewClient_无代理(t *testing.T) {
 	if client.httpClient.Timeout != clientTimeout {
 		t.Errorf("Timeout 不匹配: got %v, want %v", client.httpClient.Timeout, clientTimeout)
 	}
-	// 无代理时 Transport 应为 nil（使用默认）
-	if client.httpClient.Transport != nil {
-		t.Error("无代理时 Transport 应为 nil")
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatal("无代理时 Transport 应为 *http.Transport")
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Error("无代理时 ForceAttemptHTTP2 应为 true")
 	}
 }
 
@@ -325,9 +336,9 @@ func TestNewClient_空格代理(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewClient 返回 nil")
 	}
-	// 空格代理应等同于无代理
-	if client.httpClient.Transport != nil {
-		t.Error("空格代理 Transport 应为 nil")
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatal("空格代理时 Transport 应为 *http.Transport")
 	}
 }
 
@@ -1289,6 +1300,9 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 		if ua := r.Header.Get("User-Agent"); ua != GetUserAgent() {
 			t.Errorf("User-Agent 不匹配: got %s", ua)
 		}
+		if ae := r.Header.Get("Accept-Encoding"); ae != "gzip" {
+			t.Errorf("Accept-Encoding 不匹配: got %s", ae)
+		}
 
 		// 验证请求体
 		var reqBody LoadCodeAssistRequest
@@ -1483,6 +1497,12 @@ func TestClient_FetchAvailableModels_Success_RealCall(t *testing.T) {
 		}
 		if ua := r.Header.Get("User-Agent"); ua != GetUserAgent() {
 			t.Errorf("User-Agent 不匹配: got %s", ua)
+		}
+		if ae := r.Header.Get("Accept-Encoding"); ae != "gzip" {
+			t.Errorf("Accept-Encoding 不匹配: got %s", ae)
+		}
+		if quotaProject := r.Header.Get("x-goog-user-project"); quotaProject != "" {
+			t.Errorf("x-goog-user-project 不应被自动设置: got %s", quotaProject)
 		}
 
 		// 验证请求体
@@ -1755,6 +1775,63 @@ func TestClient_FetchAvailableModels_404Fallback_RealCall(t *testing.T) {
 	if _, ok := resp.Models["m1"]; !ok {
 		t.Error("应返回 fallback server 的模型 m1")
 	}
+}
+
+func TestClient_FetchUserInfo_SetsCloudCodeHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1internal:fetchUserInfo") {
+			t.Errorf("URL 路径不匹配: got %s", r.URL.Path)
+		}
+		if ae := r.Header.Get("Accept-Encoding"); ae != "gzip" {
+			t.Errorf("Accept-Encoding 不匹配: got %s", ae)
+		}
+		if quotaProject := r.Header.Get("x-goog-user-project"); quotaProject != "" {
+			t.Errorf("x-goog-user-project 不应被自动设置: got %s", quotaProject)
+		}
+		if host := r.Host; host != "daily-cloudcode-pa.googleapis.com" {
+			t.Errorf("Host 不匹配: got %s", host)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"userSettings":{},"regionCode":"US"}`))
+	}))
+	defer server.Close()
+
+	origPrivacyBaseURL := privacyBaseURL
+	privacyBaseURL = server.URL
+	t.Cleanup(func() {
+		privacyBaseURL = origPrivacyBaseURL
+	})
+
+	client := mustNewClient(t, "")
+	resp, err := client.FetchUserInfo(context.Background(), "token", "project-xyz")
+	if err != nil {
+		t.Fatalf("FetchUserInfo 失败: %v", err)
+	}
+	if resp.RegionCode != "US" {
+		t.Fatalf("RegionCode 不匹配: got %s", resp.RegionCode)
+	}
+}
+
+func TestDecompressResponseBody_Gzip(t *testing.T) {
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	_, err := gz.Write([]byte(`{"ok":true}`))
+	if err != nil {
+		t.Fatalf("gzip write failed: %v", err)
+	}
+	require.NoError(t, gz.Close())
+
+	resp := &http.Response{
+		Header: http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:   io.NopCloser(bytes.NewReader(compressed.Bytes())),
+	}
+
+	decompressResponseBody(resp)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, `{"ok":true}`, string(body))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
 }
 
 func TestExtractProjectIDFromOnboardResponse(t *testing.T) {

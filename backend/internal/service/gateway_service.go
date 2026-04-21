@@ -8157,9 +8157,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
-	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
+	// 这里直接返回本地估算结果，避免 Claude/Claude Code 探测链持续收到 404。
 	if account.Platform == PlatformAntigravity {
-		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
+		c.JSON(http.StatusOK, gin.H{
+			"input_tokens": estimateAnthropicCountTokens(parsed),
+		})
 		return nil
 	}
 

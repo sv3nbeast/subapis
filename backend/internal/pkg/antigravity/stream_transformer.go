@@ -30,6 +30,8 @@ type StreamingProcessor struct {
 	originalModel     string
 	webSearchQueries  []string
 	groundingChunks   []GeminiGroundingChunk
+	toolUseSignatures map[string]string
+	toolNameMap       map[string]string
 
 	// 累计 usage
 	inputTokens       int
@@ -39,10 +41,12 @@ type StreamingProcessor struct {
 }
 
 // NewStreamingProcessor 创建流式响应处理器
-func NewStreamingProcessor(originalModel string) *StreamingProcessor {
+func NewStreamingProcessor(originalModel string, officialToClientToolNames map[string]string) *StreamingProcessor {
 	return &StreamingProcessor{
-		blockType:     BlockTypeNone,
-		originalModel: originalModel,
+		blockType:         BlockTypeNone,
+		originalModel:     originalModel,
+		toolUseSignatures: make(map[string]string),
+		toolNameMap:       officialToClientToolNames,
 	}
 }
 
@@ -147,6 +151,18 @@ func (p *StreamingProcessor) Finish() ([]byte, *ClaudeUsage) {
 // MessageStartSent 报告流中是否已发出过 message_start 事件（即是否收到过有效的上游数据）
 func (p *StreamingProcessor) MessageStartSent() bool {
 	return p.messageStartSent
+}
+
+// ToolUseSignatures 返回当前流中已观察到的 tool_use.id -> signature 映射副本。
+func (p *StreamingProcessor) ToolUseSignatures() map[string]string {
+	if p == nil || len(p.toolUseSignatures) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(p.toolUseSignatures))
+	for toolID, signature := range p.toolUseSignatures {
+		cloned[toolID] = signature
+	}
+	return cloned
 }
 
 // emitMessageStart 发送 message_start 事件
@@ -335,22 +351,27 @@ func (p *StreamingProcessor) processFunctionCall(fc *GeminiFunctionCall, signatu
 		toolID = fmt.Sprintf("%s-%s", fc.Name, generateRandomID())
 	}
 
+	clientToolName := strings.TrimSpace(p.toolNameMap[fc.Name])
+	if clientToolName == "" {
+		clientToolName = defaultClientAntigravityToolName(fc.Name)
+	}
 	toolUse := map[string]any{
 		"type":  "tool_use",
 		"id":    toolID,
-		"name":  fc.Name,
+		"name":  clientToolName,
 		"input": map[string]any{},
 	}
 
 	if signature != "" {
 		toolUse["signature"] = signature
+		p.toolUseSignatures[toolID] = signature
 	}
 
 	_, _ = result.Write(p.startBlock(BlockTypeFunction, toolUse))
 
 	// 发送 input_json_delta
 	if fc.Args != nil {
-		argsJSON, _ := json.Marshal(fc.Args)
+		argsJSON, _ := json.Marshal(adaptOfficialAntigravityToolInput(fc.Name, fc.Args))
 		_, _ = result.Write(p.emitDelta("input_json_delta", map[string]any{
 			"partial_json": string(argsJSON),
 		}))

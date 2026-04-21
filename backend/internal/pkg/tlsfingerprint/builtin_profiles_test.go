@@ -39,6 +39,16 @@ func TestNewAccountScopedBuiltinProfile_DifferentSeedsDiffer(t *testing.T) {
 	}
 }
 
+func TestNewAntigravityAccountScopedProfile_PrefersHTTP2ALPN(t *testing.T) {
+	profile := NewAntigravityAccountScopedProfile(12345)
+	if profile == nil {
+		t.Fatalf("expected profile")
+	}
+	if len(profile.ALPNProtocols) != 2 || profile.ALPNProtocols[0] != "h2" || profile.ALPNProtocols[1] != "http/1.1" {
+		t.Fatalf("expected ALPN [h2 http/1.1], got %v", profile.ALPNProtocols)
+	}
+}
+
 func slicesEqual(a, b []uint16) bool {
 	if len(a) != len(b) {
 		return false

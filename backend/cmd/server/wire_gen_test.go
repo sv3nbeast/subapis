@@ -71,12 +71,14 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		oauthSvc,
 		openAIOAuthSvc,
 		geminiOAuthSvc,
-		antigravityOAuthSvc,
-		nil, // openAIGateway
-		nil, // scheduledTestRunner
-		nil, // backupSvc
-		nil, // statusProbeService
-	)
+			antigravityOAuthSvc,
+			nil, // antigravityGateway
+			nil, // openAIGateway
+			nil, // scheduledTestRunner
+			nil, // backupSvc
+			nil, // paymentOrderExpiry
+			nil, // statusProbeService
+		)
 
 	require.NotPanics(t, func() {
 		cleanup()

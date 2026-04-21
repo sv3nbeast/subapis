@@ -46,6 +46,19 @@ func NewAccountScopedBuiltinProfile(seed uint64) *Profile {
 	}
 }
 
+// NewAntigravityAccountScopedProfile returns an account-scoped profile tuned for
+// Antigravity / Cloud Code upstreams, preferring HTTP/2 ALPN while preserving
+// the built-in deterministic per-account fingerprint variation.
+func NewAntigravityAccountScopedProfile(seed uint64) *Profile {
+	profile := NewAccountScopedBuiltinProfile(seed)
+	if profile == nil {
+		profile = BuiltInDefaultProfile()
+	}
+	profile.Name = fmt.Sprintf("Antigravity Account Scoped (%016x)", seed)
+	profile.ALPNProtocols = []string{"h2", "http/1.1"}
+	return profile
+}
+
 func rotateUint16Range(values []uint16, start, end, shift int) {
 	if end-start <= 1 {
 		return
