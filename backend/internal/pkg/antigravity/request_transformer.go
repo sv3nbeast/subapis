@@ -441,6 +441,8 @@ const DummyThoughtSignature = "skip_thought_signature_validator"
 func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDummyThought bool, toolUseSignatures map[string]string, clientToOfficial map[string]string) ([]GeminiPart, bool, error) {
 	var parts []GeminiPart
 	strippedThinking := false
+	pendingThoughtSignature := ""
+	sawNonThinkingContent := false
 
 	// 尝试解析为字符串
 	var textContent string
@@ -461,26 +463,64 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 		switch block.Type {
 		case "text":
 			if block.Text != "(no content)" && strings.TrimSpace(block.Text) != "" {
-				parts = append(parts, GeminiPart{Text: block.Text})
+				part := GeminiPart{Text: block.Text}
+				if pendingThoughtSignature != "" {
+					part.ThoughtSignature = pendingThoughtSignature
+					pendingThoughtSignature = ""
+				}
+				parts = append(parts, part)
+				sawNonThinkingContent = true
 			}
 
 		case "thinking":
+			thinkingText := block.Thinking
+			signature := strings.TrimSpace(block.Signature)
+
+			// Claude / Cloud Code 路径与 agent-vibes 保持一致：
+			// - 不把 signature 直接挂在 thought part 上
+			// - 空 thinking + signature 作为 pending carrier
+			// - 非空 thinking 只保留 thought text，signature 交给后续 text/functionCall
+			if !allowDummyThought {
+				if strings.TrimSpace(thinkingText) == "" {
+					if signature != "" && signature != DummyThoughtSignature {
+						pendingThoughtSignature = signature
+					}
+					continue
+				}
+
+				if signature == "" || signature == DummyThoughtSignature {
+					parts = append(parts, GeminiPart{Text: thinkingText})
+					strippedThinking = true
+					sawNonThinkingContent = true
+					continue
+				}
+
+				// thinking blocks 必须位于 assistant message 的前部；后置 thinking 直接丢弃，
+				// 避免把不稳定的思维块继续带给上游。
+				if sawNonThinkingContent {
+					strippedThinking = true
+					continue
+				}
+
+				if signature != "" && signature != DummyThoughtSignature {
+					pendingThoughtSignature = signature
+				}
+				parts = append(parts, GeminiPart{
+					Text:    thinkingText,
+					Thought: true,
+				})
+				continue
+			}
+
 			part := GeminiPart{
-				Text:    block.Thinking,
+				Text:    thinkingText,
 				Thought: true,
 			}
 			// signature 处理：
 			// - Claude 模型（allowDummyThought=false）：必须是上游返回的真实 signature（dummy 视为缺失）
 			// - Gemini 模型（allowDummyThought=true）：优先透传真实 signature，缺失时使用 dummy signature
-			if block.Signature != "" && (allowDummyThought || block.Signature != DummyThoughtSignature) {
-				part.ThoughtSignature = block.Signature
-			} else if !allowDummyThought {
-				// Claude 模型需要有效 signature；在缺失时降级为普通文本，并在上层禁用 thinking mode。
-				if strings.TrimSpace(block.Thinking) != "" {
-					parts = append(parts, GeminiPart{Text: block.Thinking})
-				}
-				strippedThinking = true
-				continue
+			if signature != "" && (allowDummyThought || signature != DummyThoughtSignature) {
+				part.ThoughtSignature = signature
 			} else {
 				// Gemini 模型使用 dummy signature
 				part.ThoughtSignature = DummyThoughtSignature
@@ -527,6 +567,7 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 				part.ThoughtSignature = DummyThoughtSignature
 			}
 			parts = append(parts, part)
+			sawNonThinkingContent = true
 
 		case "tool_result":
 			// 获取函数名
@@ -554,6 +595,25 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 					ID: block.ToolUseID,
 				},
 			})
+			sawNonThinkingContent = true
+		}
+	}
+
+	if pendingThoughtSignature != "" {
+		for i := len(parts) - 1; i >= 0; i-- {
+			if parts[i].ThoughtSignature != "" {
+				continue
+			}
+			if parts[i].FunctionCall != nil {
+				parts[i].ThoughtSignature = pendingThoughtSignature
+				pendingThoughtSignature = ""
+				break
+			}
+			if parts[i].FunctionResponse == nil && !parts[i].Thought && strings.TrimSpace(parts[i].Text) != "" {
+				parts[i].ThoughtSignature = pendingThoughtSignature
+				pendingThoughtSignature = ""
+				break
+			}
 		}
 	}
 
