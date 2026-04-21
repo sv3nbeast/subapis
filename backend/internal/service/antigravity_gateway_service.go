@@ -4207,7 +4207,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 	var last map[string]any
 	var lastWithParts map[string]any
 	var collectedParts []map[string]any // 收集所有 parts（包括 text、thinking、functionCall、inlineData 等）
-	var sawParsedPayload bool
+	var sawUsefulPayload bool
 
 	type scanEvent struct {
 		line string
@@ -4312,39 +4312,38 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			if err := json.Unmarshal(inner, &parsed); err != nil {
 				continue
 			}
-			sawParsedPayload = true
-			if firstPayloadTimer != nil {
-				if !firstPayloadTimer.Stop() {
-					select {
-					case <-firstPayloadTimer.C:
-					default:
-					}
+				// 记录首 token 时间
+				if firstTokenMs == nil {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
 				}
-				firstPayloadTimer = nil
-				firstPayloadCh = nil
-			}
-
-			// 记录首 token 时间
-			if firstTokenMs == nil {
-				ms := int(time.Since(startTime).Milliseconds())
-				firstTokenMs = &ms
-			}
 
 			last = parsed
 
-			// 保留最后一个有 parts 的响应，并收集所有 parts
-			if parts := extractGeminiParts(parsed); len(parts) > 0 {
-				lastWithParts = parsed
+				// 保留最后一个有 parts 的响应，并收集所有 parts
+				if parts := extractGeminiParts(parsed); len(parts) > 0 {
+					sawUsefulPayload = true
+					if firstPayloadTimer != nil {
+						if !firstPayloadTimer.Stop() {
+							select {
+							case <-firstPayloadTimer.C:
+							default:
+							}
+						}
+						firstPayloadTimer = nil
+						firstPayloadCh = nil
+					}
+					lastWithParts = parsed
 
-				// 收集所有 parts（text、thinking、functionCall、inlineData 等）
-				collectedParts = append(collectedParts, parts...)
-			}
+					// 收集所有 parts（text、thinking、functionCall、inlineData 等）
+					collectedParts = append(collectedParts, parts...)
+				}
 
-		case <-firstPayloadCh:
-			if !sawParsedPayload {
-				logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
-				return nil, &UpstreamFailoverError{
-					StatusCode:             http.StatusGatewayTimeout,
+			case <-firstPayloadCh:
+				if !sawUsefulPayload {
+					logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
+					return nil, &UpstreamFailoverError{
+						StatusCode:             http.StatusGatewayTimeout,
 					ResponseBody:           []byte(`{"error":"upstream first payload timeout"}`),
 					RetryableOnSameAccount: false,
 				}
