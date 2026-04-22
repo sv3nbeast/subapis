@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -14,26 +16,30 @@ const (
 	notifyVerifyKeyPrefix        = "notify_verify:"
 	passwordResetKeyPrefix       = "password_reset:"
 	passwordResetSentAtKeyPrefix = "password_reset_sent:"
+	notifyCodeUserRateKeyPrefix  = "notify_code_user_rate:"
 )
 
 // verifyCodeKey generates the Redis key for email verification code.
+// Email is lowercased for case-insensitive consistency.
 func verifyCodeKey(email string) string {
-	return verifyCodeKeyPrefix + email
+	return verifyCodeKeyPrefix + strings.ToLower(email)
 }
 
 // notifyVerifyKey generates the Redis key for notify email verification code.
+// Email is lowercased to prevent case-sensitive key mismatch (the business layer
+// uses strings.EqualFold for comparison).
 func notifyVerifyKey(email string) string {
-	return notifyVerifyKeyPrefix + email
+	return notifyVerifyKeyPrefix + strings.ToLower(email)
 }
 
 // passwordResetKey generates the Redis key for password reset token.
 func passwordResetKey(email string) string {
-	return passwordResetKeyPrefix + email
+	return passwordResetKeyPrefix + strings.ToLower(email)
 }
 
 // passwordResetSentAtKey generates the Redis key for password reset email sent timestamp.
 func passwordResetSentAtKey(email string) string {
-	return passwordResetSentAtKeyPrefix + email
+	return passwordResetSentAtKeyPrefix + strings.ToLower(email)
 }
 
 type emailCache struct {
@@ -140,4 +146,32 @@ func (c *emailCache) SetNotifyVerifyCode(ctx context.Context, email string, data
 func (c *emailCache) DeleteNotifyVerifyCode(ctx context.Context, email string) error {
 	key := notifyVerifyKey(email)
 	return c.rdb.Del(ctx, key).Err()
+}
+
+// User-level rate limiting for notify email verification codes
+
+func notifyCodeUserRateKey(userID int64) string {
+	return notifyCodeUserRateKeyPrefix + fmt.Sprintf("%d", userID)
+}
+
+func (c *emailCache) IncrNotifyCodeUserRate(ctx context.Context, userID int64, window time.Duration) (int64, error) {
+	key := notifyCodeUserRateKey(userID)
+	count, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	// Always set TTL (idempotent) to avoid orphan keys if process crashes between INCR and EXPIRE.
+	if err := c.rdb.Expire(ctx, key, window).Err(); err != nil {
+		return count, fmt.Errorf("expire notify code rate key: %w", err)
+	}
+	return count, nil
+}
+
+func (c *emailCache) GetNotifyCodeUserRate(ctx context.Context, userID int64) (int64, error) {
+	key := notifyCodeUserRateKey(userID)
+	count, err := c.rdb.Get(ctx, key).Int64()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func ptrString[T ~string](v T) *string {
+	s := string(v)
+	return &s
+}
+
 // groupRepoStubForAdmin 用于测试 AdminService 的 GroupRepository Stub
 type groupRepoStubForAdmin struct {
 	created *Group // 记录 Create 调用的参数
@@ -616,6 +621,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatfo
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformOpenAI,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -636,6 +642,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsSubscription(t *t
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeSubscription,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -690,6 +697,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsFallbackGroup(t *
 			_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 				Name:                            "g1",
 				Platform:                        PlatformAnthropic,
+				RateMultiplier:                  1.0,
 				SubscriptionType:                SubscriptionTypeStandard,
 				FallbackGroupIDOnInvalidRequest: &fallbackID,
 			})
@@ -708,6 +716,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackNotFound(t *testing.T) {
 	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -728,6 +737,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackAllowsAntigravity(t *tes
 	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAntigravity,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
@@ -745,6 +755,7 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackClearsOnZero(t *testing.
 	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeStandard,
 		FallbackGroupIDOnInvalidRequest: &zero,
 	})

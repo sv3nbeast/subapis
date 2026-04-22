@@ -12,6 +12,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
@@ -388,6 +389,50 @@ func (r *userRepository) filterUsersByAttributes(ctx context.Context, attrs map[
 	return result, nil
 }
 
+func (r *userRepository) GetLatestUsedAtByUserIDs(ctx context.Context, userIDs []int64) (map[int64]*time.Time, error) {
+	result := make(map[int64]*time.Time, len(userIDs))
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+	if r.sql == nil {
+		return nil, fmt.Errorf("sql executor is not configured")
+	}
+
+	query := `
+		SELECT user_id, MAX(created_at) AS last_used_at
+		FROM usage_logs
+		WHERE user_id = ANY($1)
+		GROUP BY user_id
+	`
+	rows, err := r.sql.QueryContext(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var userID int64
+		var lastUsedAt time.Time
+		if scanErr := rows.Scan(&userID, &lastUsedAt); scanErr != nil {
+			return nil, scanErr
+		}
+		t := lastUsedAt
+		result[userID] = &t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *userRepository) GetLatestUsedAtByUserID(ctx context.Context, userID int64) (*time.Time, error) {
+	latestByUserID, err := r.GetLatestUsedAtByUserIDs(ctx, []int64{userID})
+	if err != nil {
+		return nil, err
+	}
+	return latestByUserID[userID], nil
+}
+
 func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount float64) error {
 	client := clientFromContext(ctx, r.client)
 	n, err := client.User.Update().Where(dbuser.IDEQ(id)).AddBalance(amount).Save(ctx)
@@ -431,7 +476,26 @@ func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount
 }
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
-	return r.client.User.Query().Where(dbuser.EmailEQ(email)).Exist(ctx)
+	return r.client.User.Query().Where(userEmailLookupPredicate(email)).Exist(ctx)
+}
+
+func userEmailLookupPredicate(email string) predicate.User {
+	normalized := normalizeEmailLookupValue(email)
+	if normalized == "" {
+		return dbuser.EmailEQ(email)
+	}
+	return predicate.User(func(s *entsql.Selector) {
+		s.Where(entsql.P(func(b *entsql.Builder) {
+			b.WriteString("LOWER(TRIM(").
+				Ident(s.C(dbuser.FieldEmail)).
+				WriteString(")) = ").
+				Arg(normalized)
+		}))
+	})
+}
+
+func normalizeEmailLookupValue(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func (r *userRepository) AddGroupToAllowedGroups(ctx context.Context, userID int64, groupID int64) error {

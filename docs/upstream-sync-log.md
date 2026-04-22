@@ -1088,3 +1088,64 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
     - `go test ./internal/service ./internal/repository ./internal/handler ./internal/server/routes -run 'Test.*(Notify|Profile|User|APIKeyAuth|BalanceNotify).*' -count=1`
     - `go build ./cmd/server`
     - `corepack pnpm build`
+
+## 2026-04-23 03:25:47 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `f1b26a9efac406443f472c27d7dc14f3edb9df87`
+- 官方提交: `6449da6c8daf2a443854cf25de96f3a972e3297c`
+- 合并基线: `0d69c0cd643bab82bd011682407030955f2389a7`
+- 官方领先数量: `417`
+- 本地领先数量: `146`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+6449da6c 杂项：将VERSION同步到 0.1.115 [skip ci]
+755c7d50 杂项：将README files回退到 78f691d2 版本
+1da4bd72 合并拉取请求 #1802（来源：IanShaw027/fix/profile-auth-bindings-i18n）
+55513493 修复：清理profile 认证 绑定 说明
+c6d25f69 杂项：恢复PAYMENT系列文件
+45065c23 修复（持续集成）：在backfill integration test中先执行 108a 迁移，再执行 109
+ddf80f5e 合并拉取请求 #1799（来源：IanShaw027/rebuild/auth-identity-foundation）
+c048ca80 合并分支 `main` 到 `rebuild/auth-identity-foundation`
+22385be5 合并远程跟踪分支 `upstream/main` 到 `rebuild/auth-identity-foundation`
+4d0483f5 新增：补充gpt生图模型测试功能
+6b194903 修复（持续集成）：对齐openai account tests并移除dead 微信支付 常量
+1e0d4660 新增：补充gpt生图模型测试功能
+9de7a72c 修复（升级）：补齐payment 与 OIDC compatibility缺口
+66b3acc2 修复（静态检查）：移除embedded response selectors 中的 OpenAI 图片
+0bc3a521 合并分支 `Wei-Shaw:main` 到 `rebuild/auth-identity-foundation`
+3419cb01 修复（管理后台）：保留legacy OIDC security write 默认值
+a94d89ef 修复（unit）：恢复secure OIDC 默认值 与 微信别名复用
+66680a30 修复（test）：更新wechat bind start path assertion
+ad460096 修复（持续集成）：清理lint 与 dead code
+82259d13 修复（认证）：保留resolved token 版本 时 OAuth 登录
+
+### 本地领先
+
+f1b26a9e 修复：对齐antigravity fidelity 与 boringcrypto rollout
+5e845d11 修复：对stalled antigravity non-stream collections执行故障切换
+8df661aa 修复：要求content parts before non-stream timeout reset
+5d0487ff 修复：对claude non-stream first-payload stalls执行故障切换
+a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
+3abd773e merge: align 生产热修 与 主线保护逻辑
+ea93711c 修复：阻止mixed-platform bulk model mapping edits
+36197418 杂项：增加production release ancestry guard
+ca2144d3 修复：对stalled antigravity non-stream requests执行故障切换
+ce4a1f86 修复：恢复payment baseline 与 antigravity fidelity
+5a361524 修复：对齐antigravity thinking signature attachment
+29df7878 构建：将antigravity worker纳入runtime image
+c96c0b60 修复（网关）：refine 故障切换与选择错误语义
+5c2850df 修复（网关）：将unsupported model selection归类为client error
+c4a3226e 新增（支付）：增加payment 设置 helper links
+5ea2ae73 新增（支付）：恢复provider management 中的 设置
+aab73982 新增（支付）：恢复richer 购买页布局
+2f78431e 修复：排除未鉴权 responses 探测对 SLA 的污染
+952ef812 修复（sync）：finish 通知能力对齐清理
+1ae18387 重构（sync）：增加safe upstream response body helper
