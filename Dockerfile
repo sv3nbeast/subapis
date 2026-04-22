@@ -47,7 +47,7 @@ ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN apk add --no-cache git ca-certificates tzdata build-base
 
 WORKDIR /app/backend
 
@@ -76,6 +76,11 @@ RUN VERSION_VALUE="${VERSION}" && \
     -ldflags="-s -w" \
     -trimpath \
     -o /app/antigravityworker \
+    ./cmd/antigravityworker && \
+    CGO_ENABLED=1 GOOS=linux GOEXPERIMENT=boringcrypto go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o /app/antigravityworker-boringcrypto \
     ./cmd/antigravityworker
 
 # -----------------------------------------------------------------------------
@@ -122,6 +127,7 @@ WORKDIR /app
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/antigravityworker /app/antigravityworker
+COPY --from=backend-builder --chown=sub2api:sub2api /app/antigravityworker-boringcrypto /app/antigravityworker-boringcrypto
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
 
 # Create data directory

@@ -17,7 +17,7 @@ Options:
   --deploy-dir DIR               Remote deploy directory. Default: /root/sub2api-deploy
   --tag TAG                      Docker image tag suffix. Default: prod-YYYYmmdd-HHMMSS-<gitsha>
   --image-repo NAME              Docker image repo name. Default: sub2api
-  --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.21.9
+  --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.22.2
   --skip-sync                    Skip rsync and only trigger remote rebuild/redeploy
   --no-delete                    Disable rsync --delete
   -n, --dry-run                  Show rsync changes only; skip remote rebuild
@@ -44,7 +44,7 @@ REMOTE_HOST="${REMOTE_HOST:-}"
 REMOTE_SRC_DIR="${REMOTE_SRC_DIR:-/root/sub2api-src}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
-ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.21.9}"
+ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.22.2}"
 IMAGE_TAG=""
 SKIP_SYNC=0
 DRY_RUN=0

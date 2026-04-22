@@ -169,14 +169,18 @@ type antigravityRetryLoopResult struct {
 }
 
 // resolveAntigravityForwardBaseURL 解析转发用 base URL。
-// 默认使用 daily（ForwardBaseURLs 的首个地址）；当环境变量为 prod 时使用第二个地址。
+// 默认使用 BaseURLs 的主地址（与官方客户端一致）；可通过环境变量显式切到 daily 或传入完整 URL。
 func resolveAntigravityForwardBaseURL() string {
 	baseURLs := antigravity.ForwardBaseURLs()
 	if len(baseURLs) == 0 {
 		return ""
 	}
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv(antigravityForwardBaseURLEnv)))
-	if mode == "prod" && len(baseURLs) > 1 {
+	raw := strings.TrimSpace(os.Getenv(antigravityForwardBaseURLEnv))
+	mode := strings.ToLower(raw)
+	if strings.HasPrefix(mode, "http://") || strings.HasPrefix(mode, "https://") {
+		return raw
+	}
+	if mode == "daily" && len(baseURLs) > 1 {
 		return baseURLs[1]
 	}
 	return baseURLs[0]
@@ -1547,12 +1551,13 @@ func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID,
 	}
 
 	wrapped := map[string]any{
-		"project":     projectID,
-		"requestId":   requestID,
-		"userAgent":   userAgent,
-		"requestType": "agent",
-		"model":       model,
-		"request":     request,
+		"project":            projectID,
+		"requestId":          requestID,
+		"userAgent":          userAgent,
+		"requestType":        "agent",
+		"model":              model,
+		"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
+		"request":            request,
 	}
 
 	return json.Marshal(wrapped)

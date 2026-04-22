@@ -12,7 +12,9 @@ Environment variables:
   IMAGE_TAG                        Docker image tag suffix. Required
   DEPLOY_DIR                       Production deploy directory. Default: /root/sub2api-deploy
   ANTIGRAVITY_USER_AGENT_VERSION   Optional env override written into compose override.
-                                   Default: 1.21.9
+                                   Default: 1.22.2
+  ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
+                                   Default: true
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -35,7 +37,8 @@ DEPLOY_DIR="${DEPLOY_DIR:-/root/sub2api-deploy}"
 SERVICE_NAME="${SERVICE_NAME:-sub2api}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
-ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.21.9}"
+ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.22.2}"
+PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -81,6 +84,7 @@ services:
     image: ${IMAGE_REF}
     environment:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
+      - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
@@ -119,5 +123,12 @@ echo "--- compose ps ---"
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps
 echo "--- antigravity env ---"
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_USER_AGENT_VERSION
+docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
+echo "--- antigravity worker files ---"
+docker exec "${CONTAINER_ID}" sh -lc 'ls -l /app/antigravityworker*'
+if ! docker exec "${CONTAINER_ID}" test -x /app/antigravityworker-boringcrypto; then
+  echo "boringcrypto worker missing in running container" >&2
+  exit 1
+fi
 echo "--- container health endpoint ---"
 docker exec "${CONTAINER_ID}" wget -q -T 5 -S -O /dev/null http://localhost:8080/health

@@ -581,6 +581,7 @@ func TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions
 	var req V1InternalRequest
 	require.NoError(t, json.Unmarshal(body, &req))
 	require.Len(t, req.Request.Tools, 2)
+	require.Equal(t, []string{"GOOGLE_ONE_AI"}, req.EnabledCreditTypes)
 	require.Len(t, req.Request.Tools[0].FunctionDeclarations, 1)
 	require.Equal(t, "get_weather", req.Request.Tools[0].FunctionDeclarations[0].Name)
 	require.NotNil(t, req.Request.Tools[1].GoogleSearch)
@@ -612,5 +613,6 @@ func TestTransformClaudeToGeminiWithOptions_UsesProvidedRequestIdentity(t *testi
 	require.NoError(t, json.Unmarshal(body, &req))
 	require.Equal(t, "agent/1234567890/conv-uuid/7", req.RequestID)
 	require.Equal(t, "antigravity", req.UserAgent)
+	require.Equal(t, []string{"GOOGLE_ONE_AI"}, req.EnabledCreditTypes)
 	require.Equal(t, "cloud-code-session-1", req.Request.SessionID)
 }

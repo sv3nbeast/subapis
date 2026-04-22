@@ -800,9 +800,9 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 
 // ── Privacy API ──────────────────────────────────────────────────────
 
-// privacyBaseURL 隐私设置 API 默认使用 daily 端点（与 Antigravity 客户端行为一致）。
+// privacyBaseURL 隐私设置 API 默认使用 prod 端点，与主 Cloud Code 请求保持一致。
 // 保持为变量以便测试覆盖本地 mock server。
-var privacyBaseURL = antigravityDailyBaseURL
+var privacyBaseURL = antigravityProdBaseURL
 
 // SetUserSettingsRequest setUserSettings 请求体
 type SetUserSettingsRequest struct {
@@ -867,7 +867,6 @@ func (c *Client) SetUserSettings(ctx context.Context, accessToken string) (*SetU
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", GetUserAgent())
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
-	req.Host = "daily-cloudcode-pa.googleapis.com"
 	applyBootstrapRequestHeaders(req, "")
 
 	resp, err := c.httpClient.Do(req)
@@ -912,7 +911,6 @@ func (c *Client) FetchUserInfo(ctx context.Context, accessToken, projectID strin
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", GetUserAgent())
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.21.1")
-	req.Host = "daily-cloudcode-pa.googleapis.com"
 	applyBootstrapRequestHeaders(req, projectID)
 
 	resp, err := c.httpClient.Do(req)

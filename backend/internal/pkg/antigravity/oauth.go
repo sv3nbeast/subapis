@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -46,12 +47,12 @@ const (
 
 	// Antigravity API 端点
 	antigravityProdBaseURL  = "https://cloudcode-pa.googleapis.com"
-	antigravityDailyBaseURL = "https://daily-cloudcode-pa.sandbox.googleapis.com"
+	antigravityDailyBaseURL = "https://daily-cloudcode-pa.googleapis.com"
 )
 
 // defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置。
 // 同时用于 User-Agent 和 loadCodeAssist.metadata.ideVersion，避免两处版本不一致。
-var defaultUserAgentVersion = "1.21.9"
+var defaultUserAgentVersion = "1.22.2"
 
 // defaultClientSecret 可通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置
 var defaultClientSecret = "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"
@@ -72,12 +73,12 @@ func GetClientVersion() string {
 	if version := strings.TrimSpace(defaultUserAgentVersion); version != "" {
 		return version
 	}
-	return "1.21.9"
+	return "1.22.2"
 }
 
 // GetUserAgent 返回当前配置的 User-Agent
 func GetUserAgent() string {
-	return fmt.Sprintf("antigravity/%s windows/amd64", GetClientVersion())
+	return fmt.Sprintf("antigravity/%s %s/%s", GetClientVersion(), runtime.GOOS, runtime.GOARCH)
 }
 
 func getClientSecret() (string, error) {
@@ -96,31 +97,12 @@ var BaseURLs = []string{
 // BaseURL 默认 URL（保持向后兼容）
 var BaseURL = BaseURLs[0]
 
-// ForwardBaseURLs 返回 API 转发用的 URL 顺序（daily 优先）
+// ForwardBaseURLs 返回 API 转发用的 URL 顺序（保持 BaseURLs 原始优先级）。
 func ForwardBaseURLs() []string {
 	if len(BaseURLs) == 0 {
 		return nil
 	}
-	urls := append([]string(nil), BaseURLs...)
-	dailyIndex := -1
-	for i, url := range urls {
-		if url == antigravityDailyBaseURL {
-			dailyIndex = i
-			break
-		}
-	}
-	if dailyIndex <= 0 {
-		return urls
-	}
-	reordered := make([]string, 0, len(urls))
-	reordered = append(reordered, urls[dailyIndex])
-	for i, url := range urls {
-		if i == dailyIndex {
-			continue
-		}
-		reordered = append(reordered, url)
-	}
-	return reordered
+	return append([]string(nil), BaseURLs...)
 }
 
 // URLAvailability 管理 URL 可用性状态（带 TTL 自动恢复和动态优先级）

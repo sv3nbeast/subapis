@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -87,20 +88,21 @@ func TestGetClientSecret_环境变量有前后空格(t *testing.T) {
 
 func TestGetClientVersion_去除空格(t *testing.T) {
 	old := defaultUserAgentVersion
-	defaultUserAgentVersion = "  1.21.9  "
+	defaultUserAgentVersion = "  1.22.2  "
 	t.Cleanup(func() { defaultUserAgentVersion = old })
 
-	if got := GetClientVersion(); got != "1.21.9" {
-		t.Fatalf("GetClientVersion 不匹配: got %q, want %q", got, "1.21.9")
+	if got := GetClientVersion(); got != "1.22.2" {
+		t.Fatalf("GetClientVersion 不匹配: got %q, want %q", got, "1.22.2")
 	}
 }
 
 func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
 	old := defaultUserAgentVersion
-	defaultUserAgentVersion = "1.21.9"
+	defaultUserAgentVersion = "1.22.2"
 	t.Cleanup(func() { defaultUserAgentVersion = old })
 
-	if got := GetUserAgent(); got != "antigravity/1.21.9 windows/amd64" {
+	want := "antigravity/1.22.2 " + runtime.GOOS + "/" + runtime.GOARCH
+	if got := GetUserAgent(); got != want {
 		t.Fatalf("GetUserAgent 不匹配: got %q", got)
 	}
 }
@@ -109,15 +111,15 @@ func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
 // ForwardBaseURLs
 // ---------------------------------------------------------------------------
 
-func TestForwardBaseURLs_Daily优先(t *testing.T) {
+func TestForwardBaseURLs_保持主地址优先(t *testing.T) {
 	urls := ForwardBaseURLs()
 	if len(urls) == 0 {
 		t.Fatal("ForwardBaseURLs 返回空列表")
 	}
 
-	// daily URL 应排在第一位
-	if urls[0] != antigravityDailyBaseURL {
-		t.Errorf("第一个 URL 应为 daily: got %s, want %s", urls[0], antigravityDailyBaseURL)
+	// prod URL 应排在第一位
+	if urls[0] != antigravityProdBaseURL {
+		t.Errorf("第一个 URL 应为 prod: got %s, want %s", urls[0], antigravityProdBaseURL)
 	}
 
 	// 应包含所有 URL
@@ -125,16 +127,16 @@ func TestForwardBaseURLs_Daily优先(t *testing.T) {
 		t.Errorf("URL 数量不匹配: got %d, want %d", len(urls), len(BaseURLs))
 	}
 
-	// 验证 prod URL 也在列表中
+	// 验证 daily URL 也在列表中
 	found := false
 	for _, u := range urls {
-		if u == antigravityProdBaseURL {
+		if u == antigravityDailyBaseURL {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("ForwardBaseURLs 中缺少 prod URL")
+		t.Error("ForwardBaseURLs 中缺少 daily URL")
 	}
 }
 

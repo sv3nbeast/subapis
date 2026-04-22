@@ -1051,7 +1051,7 @@ func TestIsAntigravityAccountSwitchError(t *testing.T) {
 	}
 }
 
-func TestResolveAntigravityForwardBaseURL_DefaultDaily(t *testing.T) {
+func TestResolveAntigravityForwardBaseURL_DefaultPrimary(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 
 	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
@@ -1061,10 +1061,10 @@ func TestResolveAntigravityForwardBaseURL_DefaultDaily(t *testing.T) {
 
 	prodURL := "https://prod.test"
 	dailyURL := "https://daily.test"
-	antigravity.BaseURLs = []string{dailyURL, prodURL}
+	antigravity.BaseURLs = []string{prodURL, dailyURL}
 
 	resolved := resolveAntigravityForwardBaseURL()
-	require.Equal(t, dailyURL, resolved)
+	require.Equal(t, prodURL, resolved)
 }
 
 func TestAntigravityAccountSwitchError_Error(t *testing.T) {

@@ -1788,8 +1788,8 @@ func TestClient_FetchUserInfo_SetsCloudCodeHeaders(t *testing.T) {
 		if quotaProject := r.Header.Get("x-goog-user-project"); quotaProject != "" {
 			t.Errorf("x-goog-user-project 不应被自动设置: got %s", quotaProject)
 		}
-		if host := r.Host; host != "daily-cloudcode-pa.googleapis.com" {
-			t.Errorf("Host 不匹配: got %s", host)
+		if host := r.Host; host == "daily-cloudcode-pa.googleapis.com" {
+			t.Errorf("不应继续强制 daily Host: got %s", host)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
