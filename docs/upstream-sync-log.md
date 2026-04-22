@@ -1149,3 +1149,45 @@ aab73982 新增（支付）：恢复richer 购买页布局
 2f78431e 修复：排除未鉴权 responses 探测对 SLA 的污染
 952ef812 修复（sync）：finish 通知能力对齐清理
 1ae18387 重构（sync）：增加safe upstream response body helper
+
+## 2026-04-23 04:09:05 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `d670a03c7321c026f9850886a71d9b4f50a598af`
+- 官方提交: `6449da6c8daf2a443854cf25de96f3a972e3297c`
+- 合并基线: `6449da6c8daf2a443854cf25de96f3a972e3297c`
+- 官方领先数量: `0`
+- 本地领先数量: `147`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+d670a03c merge: reconcile origin/main 与 local production baseline
+f1b26a9e 修复：对齐antigravity fidelity 与 boringcrypto rollout
+5e845d11 修复：对stalled antigravity non-stream collections执行故障切换
+8df661aa 修复：要求content parts before non-stream timeout reset
+5d0487ff 修复：对claude non-stream first-payload stalls执行故障切换
+a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
+3abd773e merge: align 生产热修 与 主线保护逻辑
+ea93711c 修复：阻止mixed-platform bulk model mapping edits
+36197418 杂项：增加production release ancestry guard
+ca2144d3 修复：对stalled antigravity non-stream requests执行故障切换
+ce4a1f86 修复：恢复payment baseline 与 antigravity fidelity
+5a361524 修复：对齐antigravity thinking signature attachment
+29df7878 构建：将antigravity worker纳入runtime image
+c96c0b60 修复（网关）：refine 故障切换与选择错误语义
+5c2850df 修复（网关）：将unsupported model selection归类为client error
+c4a3226e 新增（支付）：增加payment 设置 helper links
+5ea2ae73 新增（支付）：恢复provider management 中的 设置
+aab73982 新增（支付）：恢复richer 购买页布局
+2f78431e 修复：排除未鉴权 responses 探测对 SLA 的污染
+952ef812 修复（sync）：finish 通知能力对齐清理
