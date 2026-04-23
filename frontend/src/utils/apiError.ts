@@ -69,3 +69,30 @@ export function extractApiErrorMessage(
   const str = String(err)
   return str === '[object Object]' ? fallback : str
 }
+
+export function extractI18nErrorMessage(
+  err: unknown,
+  fallbackOrTranslator: string | ((key: string) => string) = 'Unknown error',
+  namespaceOrI18nMap?: string | Record<string, string>,
+  fallbackMaybe?: string,
+): string {
+  if (typeof fallbackOrTranslator === 'function') {
+    const t = fallbackOrTranslator
+    const namespace = typeof namespaceOrI18nMap === 'string' ? namespaceOrI18nMap : ''
+    const fallback = fallbackMaybe ?? 'Unknown error'
+    const code = extractApiErrorCode(err)
+    if (code && namespace) {
+      const translated = t(`${namespace}.${code}`)
+      if (translated && translated !== `${namespace}.${code}`) {
+        return translated
+      }
+    }
+    return extractApiErrorMessage(err, fallback)
+  }
+
+  return extractApiErrorMessage(
+    err,
+    fallbackOrTranslator,
+    typeof namespaceOrI18nMap === 'object' ? namespaceOrI18nMap : undefined,
+  )
+}
