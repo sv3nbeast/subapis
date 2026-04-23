@@ -439,10 +439,11 @@ func TestTokenRefreshService_RefreshWithRetry_ClearsTempUnschedulable(t *testing
 	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg, tempCache)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
-		ID:                     15,
-		Platform:               PlatformGemini,
-		Type:                   AccountTypeOAuth,
-		TempUnschedulableUntil: &until,
+		ID:                      15,
+		Platform:                PlatformGemini,
+		Type:                    AccountTypeOAuth,
+		TempUnschedulableUntil:  &until,
+		TempUnschedulableReason: "token refresh retry exhausted: context deadline exceeded",
 	}
 	refresher := &tokenRefresherStub{
 		credentials: map[string]any{
@@ -455,6 +456,69 @@ func TestTokenRefreshService_RefreshWithRetry_ClearsTempUnschedulable(t *testing
 	require.Equal(t, 1, repo.updateCalls)
 	require.Equal(t, 1, repo.clearTempCalls)   // DB 清除
 	require.Equal(t, 1, tempCache.deleteCalls) // Redis 缓存也应清除
+}
+
+func TestTokenRefreshService_RefreshWithRetry_PreservesQuotaTempUnschedulable(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	tempCache := &tempUnschedCacheStub{}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			MaxRetries:          1,
+			RetryBackoffSeconds: 0,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, tempCache)
+	until := time.Now().Add(10 * time.Minute)
+	account := &Account{
+		ID:                     16,
+		Platform:               PlatformAntigravity,
+		Type:                   AccountTypeOAuth,
+		TempUnschedulableUntil: &until,
+		TempUnschedulableReason: `{"until_unix":1776936414,"triggered_at_unix":1776932814,"status_code":429,` +
+			`"matched_keyword":"check quota","rule_index":-1,"error_message":"Resource has been exhausted"}`,
+	}
+	refresher := &tokenRefresherStub{
+		credentials: map[string]any{
+			"access_token": "new-token",
+		},
+	}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, 0, repo.clearTempCalls)
+	require.Equal(t, 0, tempCache.deleteCalls)
+}
+
+func TestTokenRefreshService_RefreshWithRetry_PreservesManualTempUnschedulable(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	tempCache := &tempUnschedCacheStub{}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			MaxRetries:          1,
+			RetryBackoffSeconds: 0,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, tempCache)
+	until := time.Now().Add(10 * time.Minute)
+	account := &Account{
+		ID:                      17,
+		Platform:                PlatformAntigravity,
+		Type:                    AccountTypeOAuth,
+		TempUnschedulableUntil:  &until,
+		TempUnschedulableReason: "manual quarantine: repeated quota exhausted",
+	}
+	refresher := &tokenRefresherStub{
+		credentials: map[string]any{
+			"access_token": "new-token",
+		},
+	}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, 0, repo.clearTempCalls)
+	require.Equal(t, 0, tempCache.deleteCalls)
 }
 
 // TestTokenRefreshService_RefreshWithRetry_NonRetryableErrorAllPlatforms 测试所有平台不可重试错误都 SetError

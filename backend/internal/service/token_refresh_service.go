@@ -357,24 +357,32 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 			slog.Info("token_refresh.cleared_missing_project_id_error", "account_id", account.ID)
 		}
 	}
-	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
+	// 刷新成功后只清除 token refresh 自己设置的临时不可调度状态。
+	// 账号级 quota/manual 隔离不能被一次 token refresh 成功提前放出。
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
-		if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
-			slog.Warn("token_refresh.clear_temp_unschedulable_failed",
-				"account_id", account.ID,
-				"error", clearErr,
-			)
-		} else {
-			slog.Info("token_refresh.cleared_temp_unschedulable", "account_id", account.ID)
-		}
-		// 同步清除 Redis 缓存，避免调度器读到过期的临时不可调度状态
-		if s.tempUnschedCache != nil {
-			if clearErr := s.tempUnschedCache.DeleteTempUnsched(ctx, account.ID); clearErr != nil {
-				slog.Warn("token_refresh.clear_temp_unsched_cache_failed",
+		if shouldTokenRefreshClearTempUnschedulable(account.TempUnschedulableReason) {
+			if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
+				slog.Warn("token_refresh.clear_temp_unschedulable_failed",
 					"account_id", account.ID,
 					"error", clearErr,
 				)
+			} else {
+				slog.Info("token_refresh.cleared_temp_unschedulable", "account_id", account.ID)
 			}
+			// 同步清除 Redis 缓存，避免调度器读到过期的临时不可调度状态
+			if s.tempUnschedCache != nil {
+				if clearErr := s.tempUnschedCache.DeleteTempUnsched(ctx, account.ID); clearErr != nil {
+					slog.Warn("token_refresh.clear_temp_unsched_cache_failed",
+						"account_id", account.ID,
+						"error", clearErr,
+					)
+				}
+			}
+		} else {
+			slog.Debug("token_refresh.preserved_temp_unschedulable",
+				"account_id", account.ID,
+				"reason", account.TempUnschedulableReason,
+			)
 		}
 	}
 	// 对所有 OAuth 账号调用缓存失效（InvalidateToken 内部根据平台判断是否需要处理）
@@ -403,6 +411,15 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	s.ensureOpenAIPrivacy(ctx, account)
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
 	s.ensureAntigravityPrivacy(ctx, account)
+}
+
+func shouldTokenRefreshClearTempUnschedulable(reason string) bool {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	if reason == "" {
+		return false
+	}
+	return strings.HasPrefix(reason, "token refresh retry exhausted:") ||
+		strings.HasPrefix(reason, "token refresh failed on request path:")
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
