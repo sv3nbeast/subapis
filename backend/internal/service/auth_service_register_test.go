@@ -304,6 +304,26 @@ func TestAuthService_Register_ReservedEmail(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmailReserved)
 }
 
+func TestAuthService_Register_ReservedSyntheticEmails(t *testing.T) {
+	tests := []string{
+		"linuxdo-123@linuxdo-connect.invalid",
+		"oidc-123@oidc-connect.invalid",
+		"wechat-123@wechat-connect.invalid",
+	}
+
+	for _, email := range tests {
+		t.Run(email, func(t *testing.T) {
+			repo := &userRepoStub{}
+			service := newAuthService(repo, map[string]string{
+				SettingKeyRegistrationEnabled: "true",
+			}, nil)
+
+			_, _, err := service.Register(context.Background(), email, "password")
+			require.ErrorIs(t, err, ErrEmailReserved)
+		})
+	}
+}
+
 func TestAuthService_Register_EmailSuffixNotAllowed(t *testing.T) {
 	repo := &userRepoStub{}
 	service := newAuthService(repo, map[string]string{
@@ -542,6 +562,46 @@ func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
 	require.NotNil(t, claims.ExpiresAt)
 
 	require.WithinDuration(t, claims.IssuedAt.Time.Add(90*time.Minute), claims.ExpiresAt.Time, 2*time.Second)
+}
+
+func TestAuthService_GenerateToken_UsesResolvedTokenVersion(t *testing.T) {
+	service := newAuthService(&userRepoStub{}, nil, nil)
+	user := &User{
+		ID:           3,
+		Email:        "resolved@test.com",
+		PasswordHash: "hashed-password",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	claims, err := service.ValidateToken(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	require.Equal(t, resolvedTokenVersion(user), claims.TokenVersion)
+}
+
+func TestAuthService_RefreshToken_UsesResolvedTokenVersionComparison(t *testing.T) {
+	user := &User{
+		ID:           4,
+		Email:        "refresh@test.com",
+		PasswordHash: "hashed-password",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		TokenVersion: 1,
+	}
+	repo := &userRepoStub{user: user}
+	service := newAuthService(repo, nil, nil)
+
+	token, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	newToken, err := service.RefreshToken(context.Background(), token)
+	require.NoError(t, err)
+	require.NotEmpty(t, newToken)
 }
 
 func TestAuthService_Register_AssignsDefaultSubscriptions(t *testing.T) {
