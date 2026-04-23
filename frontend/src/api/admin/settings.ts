@@ -626,13 +626,40 @@ export interface UpdateSettingsRequest {
   account_quota_notify_emails?: NotifyEmailEntry[];
 }
 
+function normalizeSettingsArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeSystemSettings(settings: SystemSettings): SystemSettings {
+  return {
+    ...settings,
+    registration_email_suffix_whitelist: normalizeSettingsArray(
+      settings.registration_email_suffix_whitelist,
+    ),
+    registration_email_suffix_blacklist: normalizeSettingsArray(
+      settings.registration_email_suffix_blacklist,
+    ),
+    table_page_size_options:
+      normalizeSettingsArray(settings.table_page_size_options).length > 0
+        ? normalizeSettingsArray(settings.table_page_size_options)
+        : [10, 20, 50, 100],
+    custom_menu_items: normalizeSettingsArray(settings.custom_menu_items),
+    custom_endpoints: normalizeSettingsArray(settings.custom_endpoints),
+    default_subscriptions: normalizeSettingsArray(settings.default_subscriptions),
+    payment_enabled_types: normalizeSettingsArray(settings.payment_enabled_types),
+    account_quota_notify_emails: normalizeSettingsArray(
+      settings.account_quota_notify_emails,
+    ),
+  };
+}
+
 /**
  * Get all system settings
  * @returns System settings
  */
 export async function getSettings(): Promise<SystemSettings> {
   const { data } = await apiClient.get<SystemSettings>("/admin/settings");
-  return data;
+  return normalizeSystemSettings(data);
 }
 
 /**
@@ -647,7 +674,7 @@ export async function updateSettings(
     "/admin/settings",
     settings,
   );
-  return data;
+  return normalizeSystemSettings(data);
 }
 
 /**

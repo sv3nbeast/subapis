@@ -16,18 +16,69 @@ function isLocaleCode(value: string): value is LocaleCode {
   return value === 'en' || value === 'zh'
 }
 
+function safeStorageGet(key: string): string {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return ''
+    }
+    return window.localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function safeStorageSet(key: string, value: string): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return
+    }
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Ignore storage failures in restricted/private contexts.
+  }
+}
+
+function getBrowserLanguage(): string {
+  try {
+    if (typeof navigator === 'undefined') {
+      return ''
+    }
+    return String(navigator.language || '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function isChineseSiteHost(): boolean {
+  try {
+    if (typeof window === 'undefined') {
+      return false
+    }
+    const host = String(window.location?.hostname || '').toLowerCase()
+    return host === 'subapis.com' || host.endsWith('.subapis.com')
+  } catch {
+    return false
+  }
+}
+
+function getPreferredLocale(): LocaleCode {
+  const browserLang = getBrowserLanguage()
+  if (browserLang.startsWith('zh') || isChineseSiteHost()) {
+    return 'zh'
+  }
+  return DEFAULT_LOCALE
+}
+
 function getDefaultLocale(): LocaleCode {
-  const saved = localStorage.getItem(LOCALE_KEY)
+  const saved = safeStorageGet(LOCALE_KEY)
   if (saved && isLocaleCode(saved)) {
+    if (saved === 'en' && getBrowserLanguage().startsWith('zh')) {
+      return 'zh'
+    }
     return saved
   }
 
-  const browserLang = navigator.language.toLowerCase()
-  if (browserLang.startsWith('zh')) {
-    return 'zh'
-  }
-
-  return DEFAULT_LOCALE
+  return getPreferredLocale()
 }
 
 export const i18n = createI18n({
@@ -66,7 +117,7 @@ export async function setLocale(locale: string): Promise<void> {
 
   await loadLocaleMessages(locale)
   i18n.global.locale.value = locale
-  localStorage.setItem(LOCALE_KEY, locale)
+  safeStorageSet(LOCALE_KEY, locale)
   document.documentElement.setAttribute('lang', locale)
 
   // 同步更新浏览器页签标题，使其跟随语言切换
