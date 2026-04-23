@@ -143,6 +143,16 @@ const routes: RouteRecordRaw[] = [
       title: 'Key Usage',
     }
   },
+  {
+    path: '/status',
+    name: 'ServiceStatus',
+    component: () => import('@/views/user/StatusView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Service Status',
+      titleKey: 'nav.serviceStatus'
+    }
+  },
 
   // ==================== User Routes ====================
   {
