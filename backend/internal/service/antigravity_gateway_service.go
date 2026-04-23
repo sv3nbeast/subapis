@@ -45,7 +45,7 @@ const (
 	antigravitySmartRetryMinWait        = 1 * time.Second  // 智能重试最小等待时间
 	antigravitySmartRetryMaxAttempts    = 1                // 智能重试最大次数（仅重试 1 次，防止重复限流/长期等待）
 	antigravityDefaultRateLimitDuration = 30 * time.Second // 默认限流时间（无 retryDelay 时使用）
-	antigravityDefaultQuotaTempUnsched  = 60 * time.Minute // 配额耗尽时默认模型隔离时长
+	antigravityDefaultQuotaTempUnsched  = 60 * time.Minute // 配额耗尽时默认账号级临时不可调度时长
 
 	// MODEL_CAPACITY_EXHAUSTED 专用重试参数
 	// 模型容量不足时保留有限的原地重试窗口，兼顾短暂恢复机会和请求时延。
@@ -236,7 +236,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		if modelKey, resetAt, ok := s.tryModelRateLimitQuotaExhausted(p.ctx, p.prefix, p.account, p.requestedModel, p.groupID, p.sessionHash, respBody); ok {
+		if modelKey, _, ok := s.tryTempUnschedQuotaExhausted(p.ctx, p.prefix, p.account, p.requestedModel, p.groupID, p.sessionHash, respBody); ok {
 			displayModel := strings.TrimSpace(p.requestedModel)
 			if displayModel == "" {
 				displayModel = modelKey
@@ -248,7 +248,6 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 					StatusCode:        resp.StatusCode,
 					RateLimitedModel:  displayModel,
 					IsStickySession:   p.isStickySession,
-					RateLimitResetAt:  &resetAt,
 					ResponseBody:      append([]byte(nil), respBody...),
 				},
 			}
@@ -3295,7 +3294,7 @@ func (s *AntigravityGatewayService) clearAccountModelCapacityCooldownByRequested
 	s.clearAccountModelCapacityCooldownByModel(ctx, prefix, account, resolveRequestedModelKey(ctx, account, requestedModel))
 }
 
-func (s *AntigravityGatewayService) getQuotaExhaustedModelIsolationDuration() time.Duration {
+func (s *AntigravityGatewayService) getQuotaExhaustedTempUnschedDuration() time.Duration {
 	duration := antigravityDefaultQuotaTempUnsched
 	if s.settingService != nil && s.settingService.cfg != nil {
 		if minutes := s.settingService.cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes; minutes >= 0 {
@@ -3305,7 +3304,7 @@ func (s *AntigravityGatewayService) getQuotaExhaustedModelIsolationDuration() ti
 	return duration
 }
 
-func (s *AntigravityGatewayService) tryModelRateLimitQuotaExhausted(
+func (s *AntigravityGatewayService) tryTempUnschedQuotaExhausted(
 	ctx context.Context,
 	prefix string,
 	account *Account,
@@ -3321,7 +3320,7 @@ func (s *AntigravityGatewayService) tryModelRateLimitQuotaExhausted(
 	if matchedKeyword == "" {
 		return "", time.Time{}, false
 	}
-	duration := s.getQuotaExhaustedModelIsolationDuration()
+	duration := s.getQuotaExhaustedTempUnschedDuration()
 	if duration <= 0 {
 		return "", time.Time{}, false
 	}
@@ -3329,19 +3328,40 @@ func (s *AntigravityGatewayService) tryModelRateLimitQuotaExhausted(
 	if strings.TrimSpace(modelKey) == "" {
 		return "", time.Time{}, false
 	}
-	resetAt := time.Now().Add(duration)
-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt); err != nil {
-		logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_model_rate_limit_failed account=%d model=%s error=%v",
-			prefix, account.ID, modelKey, err)
-		return "", time.Time{}, false
+	until := time.Now().Add(duration)
+	var reason string
+	if s.rateLimitService != nil {
+		var ok bool
+		until, reason, ok = s.rateLimitService.TriggerSystemTempUnschedulable(
+			ctx,
+			account,
+			http.StatusTooManyRequests,
+			duration,
+			matchedKeyword,
+			body,
+		)
+		if !ok {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched_failed account=%d model=%s",
+				prefix, account.ID, modelKey)
+			return "", time.Time{}, false
+		}
+	} else {
+		state := buildTempUnschedState(time.Now(), until, http.StatusTooManyRequests, matchedKeyword, -1, body)
+		reason = marshalTempUnschedReason(state)
+		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched_failed account=%d model=%s error=%v",
+				prefix, account.ID, modelKey, err)
+			return "", time.Time{}, false
+		}
 	}
-	s.updateAccountModelRateLimitInCache(ctx, account, modelKey, resetAt)
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
 	if s.cache != nil && sessionHash != "" {
 		_ = s.cache.DeleteSessionAccountID(ctx, groupID, sessionHash)
 	}
-	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_model_rate_limited account=%d model=%s reset_in=%v keyword=%q",
-		prefix, account.ID, modelKey, time.Until(resetAt).Truncate(time.Second), matchedKeyword)
-	return modelKey, resetAt, true
+	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched account=%d model=%s until=%v keyword=%q",
+		prefix, account.ID, modelKey, until.Format("15:04:05"), matchedKeyword)
+	return modelKey, until, true
 }
 
 func (s *AntigravityGatewayService) handleUpstreamError(
@@ -3381,7 +3401,7 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 		if logBody, maxBytes := s.getLogConfig(); logBody {
 			logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity-Debug] 429 response body: %s", truncateString(string(body), maxBytes))
 		}
-		if modelKey, resetAt, ok := s.tryModelRateLimitQuotaExhausted(ctx, prefix, account, requestedModel, groupID, sessionHash, body); ok {
+		if modelKey, _, ok := s.tryTempUnschedQuotaExhausted(ctx, prefix, account, requestedModel, groupID, sessionHash, body); ok {
 			displayModel := strings.TrimSpace(requestedModel)
 			if displayModel == "" {
 				displayModel = modelKey
@@ -3393,7 +3413,6 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 					StatusCode:        429,
 					RateLimitedModel:  displayModel,
 					IsStickySession:   isStickySession,
-					RateLimitResetAt:  &resetAt,
 					ResponseBody:      append([]byte(nil), body...),
 				},
 			}
