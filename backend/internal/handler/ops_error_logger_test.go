@@ -255,6 +255,12 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 		{"null string", "null", "", "api_error"},
 		{"random string", "something_weird", "", "api_error"},
 
+		// Generic api_error should still allow business-limit codes to refine classification.
+		{"api_error with balance code", "api_error", "INSUFFICIENT_BALANCE", "billing_error"},
+		{"api_error with subscription code", "api_error", "SUBSCRIPTION_NOT_FOUND", "subscription_error"},
+		{"api_error with api key quota code", "api_error", "API_KEY_QUOTA_EXHAUSTED", "subscription_error"},
+		{"api_error with api key rate window code", "api_error", "API_KEY_RATE_1D_EXCEEDED", "subscription_error"},
+
 		// Unknown type but known code still maps correctly.
 		{"nil with INSUFFICIENT_BALANCE code", "<nil>", "INSUFFICIENT_BALANCE", "billing_error"},
 		{"nil with USAGE_LIMIT_EXCEEDED code", "<nil>", "USAGE_LIMIT_EXCEEDED", "subscription_error"},
@@ -271,6 +277,41 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeOpsErrorType(tt.errType, tt.code)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestClassifyOpsPhase_APIKeyBusinessLimitCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{"quota exhausted", "API_KEY_QUOTA_EXHAUSTED"},
+		{"generic api key rate limit", "API_KEY_RATE_LIMITED"},
+		{"5h rate limit", "API_KEY_RATE_5H_EXCEEDED"},
+		{"1d rate limit", "API_KEY_RATE_1D_EXCEEDED"},
+		{"7d rate limit", "API_KEY_RATE_7D_EXCEEDED"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, "request", classifyOpsPhase("api_error", "API key 额度已用完", tt.code))
+		})
+	}
+}
+
+func TestClassifyOpsIsBusinessLimited_APIKeyBusinessLimitCodes(t *testing.T) {
+	tests := []string{
+		"API_KEY_QUOTA_EXHAUSTED",
+		"API_KEY_RATE_LIMITED",
+		"API_KEY_RATE_5H_EXCEEDED",
+		"API_KEY_RATE_1D_EXCEEDED",
+		"API_KEY_RATE_7D_EXCEEDED",
+	}
+
+	for _, code := range tests {
+		t.Run(code, func(t *testing.T) {
+			require.True(t, classifyOpsIsBusinessLimited("subscription_error", "request", code, http.StatusTooManyRequests, "API key 额度已用完"))
 		})
 	}
 }

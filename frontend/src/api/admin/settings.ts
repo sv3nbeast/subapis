@@ -310,6 +310,7 @@ export interface SystemSettings {
   // Default settings
   default_balance: number;
   default_concurrency: number;
+  default_user_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
@@ -472,6 +473,13 @@ export interface SystemSettings {
   balance_low_notify_recharge_url: string;
   account_quota_notify_enabled: boolean;
   account_quota_notify_emails: NotifyEmailEntry[];
+
+  // Channel Monitor feature switch
+  channel_monitor_enabled: boolean;
+  channel_monitor_default_interval_seconds: number;
+
+  // Available Channels feature switch
+  available_channels_enabled: boolean;
 }
 
 export interface UpdateSettingsRequest {
@@ -486,6 +494,7 @@ export interface UpdateSettingsRequest {
   totp_enabled?: boolean; // TOTP 双因素认证
   default_balance?: number;
   default_concurrency?: number;
+  default_user_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
@@ -624,6 +633,13 @@ export interface UpdateSettingsRequest {
   balance_low_notify_recharge_url?: string;
   account_quota_notify_enabled?: boolean;
   account_quota_notify_emails?: NotifyEmailEntry[];
+
+  // Channel Monitor feature switch
+  channel_monitor_enabled?: boolean;
+  channel_monitor_default_interval_seconds?: number;
+
+  // Available Channels feature switch
+  available_channels_enabled?: boolean;
 }
 
 function normalizeSettingsArray<T>(value: T[] | null | undefined): T[] {

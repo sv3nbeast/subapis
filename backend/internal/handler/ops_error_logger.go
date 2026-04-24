@@ -45,6 +45,11 @@ const (
 	opsCodeSubscriptionNotFound = "SUBSCRIPTION_NOT_FOUND"
 	opsCodeSubscriptionInvalid  = "SUBSCRIPTION_INVALID"
 	opsCodeUserInactive         = "USER_INACTIVE"
+	opsCodeAPIKeyQuotaExhausted = "API_KEY_QUOTA_EXHAUSTED"
+	opsCodeAPIKeyRateLimited    = "API_KEY_RATE_LIMITED"
+	opsCodeAPIKeyRate5HExceeded = "API_KEY_RATE_5H_EXCEEDED"
+	opsCodeAPIKeyRate1DExceeded = "API_KEY_RATE_1D_EXCEEDED"
+	opsCodeAPIKeyRate7DExceeded = "API_KEY_RATE_7D_EXCEEDED"
 )
 
 const (
@@ -1096,26 +1101,47 @@ func isKnownOpsErrorType(t string) bool {
 	return false
 }
 
+func mapOpsErrorCodeToType(code string) (string, bool) {
+	switch strings.TrimSpace(code) {
+	case opsCodeInsufficientBalance:
+		return "billing_error", true
+	case opsCodeUsageLimitExceeded,
+		opsCodeSubscriptionNotFound,
+		opsCodeSubscriptionInvalid,
+		opsCodeAPIKeyQuotaExhausted,
+		opsCodeAPIKeyRateLimited,
+		opsCodeAPIKeyRate5HExceeded,
+		opsCodeAPIKeyRate1DExceeded,
+		opsCodeAPIKeyRate7DExceeded:
+		return "subscription_error", true
+	default:
+		return "", false
+	}
+}
+
+func isOpsBusinessLimitedCode(code string) bool {
+	_, ok := mapOpsErrorCodeToType(code)
+	if ok {
+		return true
+	}
+	return strings.TrimSpace(code) == opsCodeUserInactive
+}
+
 func normalizeOpsErrorType(errType string, code string) string {
+	if mapped, ok := mapOpsErrorCodeToType(code); ok && (errType == "" || !isKnownOpsErrorType(errType) || errType == "api_error") {
+		return mapped
+	}
 	if errType != "" && isKnownOpsErrorType(errType) {
 		return errType
 	}
-	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance:
-		return "billing_error"
-	case opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid:
-		return "subscription_error"
-	default:
-		return "api_error"
-	}
+	return "api_error"
 }
 
 func classifyOpsPhase(errType, message, code string) string {
 	msg := strings.ToLower(message)
 	// Standardized phases: request|auth|routing|upstream|network|internal
 	// Map billing/concurrency/response => request; scheduling => routing.
-	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance, opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid:
+	if isOpsBusinessLimitedCode(code) {
 		return "request"
 	}
 
@@ -1179,8 +1205,7 @@ func classifyOpsIsRetryable(errType string, statusCode int) bool {
 }
 
 func classifyOpsIsBusinessLimited(errType, phase, code string, status int, message string) bool {
-	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance, opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid, opsCodeUserInactive:
+	if isOpsBusinessLimitedCode(code) {
 		return true
 	}
 	if phase == "billing" || phase == "concurrency" {

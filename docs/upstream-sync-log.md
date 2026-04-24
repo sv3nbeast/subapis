@@ -1191,3 +1191,64 @@ c4a3226e 新增（支付）：增加payment 设置 helper links
 aab73982 新增（支付）：恢复richer 购买页布局
 2f78431e 修复：排除未鉴权 responses 探测对 SLA 的污染
 952ef812 修复（sync）：finish 通知能力对齐清理
+
+## 2026-04-24 10:18:48 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `e1e9058b2446f7ba9a93be24cebf04d36f0af8e1`
+- 官方提交: `d162604f326043e8b9933f68bf214696c78ecf52`
+- 合并基线: `6449da6c8daf2a443854cf25de96f3a972e3297c`
+- 官方领先数量: `70`
+- 本地领先数量: `158`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+d162604f 杂项：将VERSION同步到 0.1.117 [skip ci]
+a4e329c1 修复：openai默认模型新增gpt5.5
+ca204ddd 修复（openai）：保留image outputs when text content serialization fails
+ff08f9d7 合并拉取请求 #1853（来源：gaoren002/fix/codex-image-generation-bridge）
+ac114738 合并拉取请求 #1850（来源：touwaeriol/feat/channel-insights）
+09fd83ab 修复（monitor）：清理unused updatedAt/updatedLabel after label removal
+6699d337 修复（monitor）：移除redundant "updated at" label from MonitorHero
+f7c8377a 修复（monitor）：移除UNAVAILABLE status, keep only OPERATIONAL/DEGRADED
+0dcc0e05 新增（monitor）：proportion-based overall status + reusable auto-refresh
+5f418997 修复：bridge codex image generation over responses
+5e060b22 合并远程跟踪分支 `upstream/main` 到 `feat/channel-insights`
+6f04c25e 测试（api）：增加channel monitor fields 到 admin 设置 contract test
+375cce29 杂项：移除accidentally committed fork utility script
+67518a59 回退：移除fork-only changes from release sync
+a3ea8eca 修复（wire）：增加ChannelMonitorRunner.Stop() 到 cleanup steps 中的 wire_gen.go
+49787269 杂项：移除test files deleted 中的 release
+748a84d8 sync: bring over remaining release/custom-0.1.115 changes
+d5dac84e 测试（支付）：cover ErrOrderNotFound sentinel contract
+75e1b40f 修复（支付）：ack unknown-order webhooks 与 2xx 到 stop provider retries
+5eedf782 修复（前端）：增加available_channels_enabled 到 PublicSettings type 与 默认值
+
+### 本地领先
+
+e1e9058b 修复：移除gemini antigravity compat experiment
+e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaustion
+76599dbc 修复：complete 前端 兼容性 与 test coverage
+0ff61085 修复：增加status aliases 与 route integrity checks
+63b506ac 修复：恢复public status page route
+4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
+070b4b56 merge: fully reconcile upstream v0.1.115 与 production baseline
+61953f5c 修复：补齐auth hidden token 与 reserved email缺口
+ff91720b 修复：对齐auth token 版本 signing 与 validation
+e39e196f 修复：avoid duplicate 支付 route registration
+e1cba156 文档：更新upstream sync ledger
+d670a03c merge: reconcile origin/main 与 local production baseline
+f1b26a9e 修复：对齐antigravity fidelity 与 boringcrypto rollout
+5e845d11 修复：对stalled antigravity non-stream collections执行故障切换
+8df661aa 修复：要求content parts before non-stream timeout reset
+5d0487ff 修复：对claude non-stream first-payload stalls执行故障切换
+a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
+3abd773e merge: align 生产热修 与 主线保护逻辑
+ea93711c 修复：阻止mixed-platform bulk model mapping edits
+36197418 杂项：增加production release ancestry guard
