@@ -1252,3 +1252,45 @@ a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
 3abd773e merge: align 生产热修 与 主线保护逻辑
 ea93711c 修复：阻止mixed-platform bulk model mapping edits
 36197418 杂项：增加production release ancestry guard
+
+## 2026-04-24 10:55:38 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `a071bc9ed153e0fd6de7626ec829e3572bf1d717`
+- 官方提交: `d162604f326043e8b9933f68bf214696c78ecf52`
+- 合并基线: `d162604f326043e8b9933f68bf214696c78ecf52`
+- 官方领先数量: `0`
+- 本地领先数量: `159`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+a071bc9e merge: sync official sub2api 0.1.117
+e1e9058b 修复：移除gemini antigravity compat experiment
+e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaustion
+76599dbc 修复：complete 前端 兼容性 与 test coverage
+0ff61085 修复：增加status aliases 与 route integrity checks
+63b506ac 修复：恢复public status page route
+4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
+070b4b56 merge: fully reconcile upstream v0.1.115 与 production baseline
+61953f5c 修复：补齐auth hidden token 与 reserved email缺口
+ff91720b 修复：对齐auth token 版本 signing 与 validation
+e39e196f 修复：avoid duplicate 支付 route registration
+e1cba156 文档：更新upstream sync ledger
+d670a03c merge: reconcile origin/main 与 local production baseline
+f1b26a9e 修复：对齐antigravity fidelity 与 boringcrypto rollout
+5e845d11 修复：对stalled antigravity non-stream collections执行故障切换
+8df661aa 修复：要求content parts before non-stream timeout reset
+5d0487ff 修复：对claude non-stream first-payload stalls执行故障切换
+a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
+3abd773e merge: align 生产热修 与 主线保护逻辑
+ea93711c 修复：阻止mixed-platform bulk model mapping edits
