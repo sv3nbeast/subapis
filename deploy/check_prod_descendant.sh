@@ -112,6 +112,10 @@ if [[ -z "${prod_ref}" ]]; then
   )"
 fi
 
+if [[ -n "${prod_ref}" && ! "${prod_ref}" =~ ^[0-9a-f]{7,40}$ ]]; then
+  prod_ref="$(extract_commit_from_string "${prod_ref}" || true)"
+fi
+
 if [[ -z "${prod_ref}" ]]; then
   echo "Unable to determine current production commit from ${REMOTE_HOST}" >&2
   exit 1
