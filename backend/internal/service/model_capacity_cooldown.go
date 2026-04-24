@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -242,8 +241,4 @@ func (a *Account) GetModelCapacityCooldownRemainingTimeWithContext(ctx context.C
 		return getAccountModelCapacityCooldownRemaining(a.ID, rawRequestedModel)
 	}
 	return 0
-}
-
-func formatCapacityCooldownSample(accountID int64, remaining time.Duration) string {
-	return fmt.Sprintf("%d(%s)", accountID, remaining)
 }

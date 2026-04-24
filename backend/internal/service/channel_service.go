@@ -597,6 +597,7 @@ func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {
 	}
 	return nil
 }
+
 // validatePricingBillingMode 校验计费模式配置：按次/图片模式必须配价格或区间，所有价格字段不能为负，区间至少有一个价格字段。
 func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {

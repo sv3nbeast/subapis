@@ -106,15 +106,14 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo             SettingRepository
-	defaultSubGroupReader   DefaultSubscriptionGroupReader
-	webSearchProxyReader    webSearchProxyReader
-	proxyRepo               ProxyRepository // for resolving websearch provider proxy URLs
-	cfg                     *config.Config
-	webSearchRedis          *websearch.RedisClient
-	onUpdate                func() // Callback when settings are updated (for cache invalidation)
-	version                 string // Application version
-	webSearchManagerBuilder WebSearchManagerBuilder
+	settingRepo           SettingRepository
+	defaultSubGroupReader DefaultSubscriptionGroupReader
+	webSearchProxyReader  webSearchProxyReader
+	proxyRepo             ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                   *config.Config
+	webSearchRedis        *websearch.RedisClient
+	onUpdate              func() // Callback when settings are updated (for cache invalidation)
+	version               string // Application version
 }
 
 type ProviderDefaultGrantSettings struct {

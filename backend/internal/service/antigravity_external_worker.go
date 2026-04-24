@@ -233,7 +233,9 @@ func (e *antigravityExternalWorkerExecutor) ensureStarted() error {
 		return fmt.Errorf("start external worker: %w", err)
 	}
 
-	go io.Copy(io.Discard, stderr)
+	go func() {
+		_, _ = io.Copy(io.Discard, stderr)
+	}()
 
 	announcementCh := make(chan antigravityWorkerAnnouncement, 1)
 	errCh := make(chan error, 1)
@@ -250,7 +252,9 @@ func (e *antigravityExternalWorkerExecutor) ensureStarted() error {
 			return
 		}
 		announcementCh <- announcement
-		go io.Copy(io.Discard, reader)
+		go func() {
+			_, _ = io.Copy(io.Discard, reader)
+		}()
 	}()
 
 	select {

@@ -371,7 +371,7 @@ func classifyStatusProbeAttempt(resp *http.Response, err error) (errMsg string, 
 	if resp == nil {
 		return "request failed: empty response", true
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -554,7 +554,7 @@ func (s *StatusProbeService) GetStatus(ctx context.Context) (*ServiceStatusRespo
 	if err != nil {
 		return nil, fmt.Errorf("query probe results: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Group results by model.
 	resultsByModel := make(map[string][]probeRawResult)

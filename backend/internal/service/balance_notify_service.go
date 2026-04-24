@@ -372,16 +372,3 @@ func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountID int64, account
 </body>
 </html>`, siteName, accountID, accountName, platform, dimLabel, used, limitStr, threshold)
 }
-
-// parseJSONStringArray parses a JSON string array, returns nil on error.
-func parseJSONStringArray(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "[]" {
-		return nil
-	}
-	var result []string
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil
-	}
-	return result
-}

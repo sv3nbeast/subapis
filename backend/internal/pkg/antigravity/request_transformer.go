@@ -607,12 +607,10 @@ func buildParts(content json.RawMessage, toolIDToName map[string]string, allowDu
 			}
 			if parts[i].FunctionCall != nil {
 				parts[i].ThoughtSignature = pendingThoughtSignature
-				pendingThoughtSignature = ""
 				break
 			}
 			if parts[i].FunctionResponse == nil && !parts[i].Thought && strings.TrimSpace(parts[i].Text) != "" {
 				parts[i].ThoughtSignature = pendingThoughtSignature
-				pendingThoughtSignature = ""
 				break
 			}
 		}

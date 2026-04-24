@@ -15,7 +15,9 @@ type authRegressionUserRepo struct {
 	user *User
 }
 
-func (r *authRegressionUserRepo) Create(context.Context, *User) error { panic("unexpected Create call") }
+func (r *authRegressionUserRepo) Create(context.Context, *User) error {
+	panic("unexpected Create call")
+}
 func (r *authRegressionUserRepo) GetByID(_ context.Context, id int64) (*User, error) {
 	if r.user == nil || r.user.ID != id {
 		return nil, ErrUserNotFound
@@ -31,8 +33,12 @@ func (r *authRegressionUserRepo) GetByEmail(_ context.Context, email string) (*U
 func (r *authRegressionUserRepo) GetFirstAdmin(context.Context) (*User, error) {
 	panic("unexpected GetFirstAdmin call")
 }
-func (r *authRegressionUserRepo) Update(context.Context, *User) error { panic("unexpected Update call") }
-func (r *authRegressionUserRepo) Delete(context.Context, int64) error { panic("unexpected Delete call") }
+func (r *authRegressionUserRepo) Update(context.Context, *User) error {
+	panic("unexpected Update call")
+}
+func (r *authRegressionUserRepo) Delete(context.Context, int64) error {
+	panic("unexpected Delete call")
+}
 func (r *authRegressionUserRepo) GetUserAvatar(context.Context, int64) (*UserAvatar, error) {
 	panic("unexpected GetUserAvatar call")
 }

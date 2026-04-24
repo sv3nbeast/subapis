@@ -204,7 +204,7 @@ func accountTLSFingerprintSeed(account *Account) uint64 {
 		return 0
 	}
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(fmt.Sprintf("%s|%d|%s", account.Platform, account.ID, account.Name)))
+	_, _ = fmt.Fprintf(h, "%s|%d|%s", account.Platform, account.ID, account.Name)
 	seed := h.Sum64()
 	if seed == 0 {
 		return 1
