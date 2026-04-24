@@ -134,7 +134,7 @@ func TestHandleSmartRetry_QuotaExhausted_UsesCreditsAndStoresIndependentState(t 
 		},
 	}
 
-	svc := &AntigravityGatewayService{}
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
 	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-1.test", 0, []string{"https://ag-1.test"})
 
 	require.NotNil(t, result)
@@ -195,7 +195,7 @@ func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
 		},
 	}
 
-	svc := &AntigravityGatewayService{}
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
 	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-1.test", 0, []string{"https://ag-1.test"})
 
 	require.NotNil(t, result)
@@ -247,7 +247,7 @@ func TestAntigravityRetryLoop_ModelRateLimitedNonClaude_InjectsCredits(t *testin
 		},
 	}
 
-	svc := &AntigravityGatewayService{}
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
 	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:            context.Background(),
 		prefix:         "[test]",
@@ -405,7 +405,7 @@ func TestAntigravityRetryLoop_CreditErrorMarksExhausted(t *testing.T) {
 		},
 	}
 
-	svc := &AntigravityGatewayService{accountRepo: repo}
+	svc := &AntigravityGatewayService{accountRepo: repo, httpUpstream: upstream}
 	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:            context.Background(),
 		prefix:         "[test]",

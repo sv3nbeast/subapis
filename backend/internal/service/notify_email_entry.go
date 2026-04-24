@@ -36,7 +36,7 @@ func ParseNotifyEmails(raw string) []NotifyEmailEntry {
 			out = append(out, NotifyEmailEntry{
 				Email:    email,
 				Disabled: false,
-				Verified: true,
+				Verified: false,
 			})
 		}
 		return out

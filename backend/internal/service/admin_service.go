@@ -2302,10 +2302,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
+	hasModelMappingUpdate := accountBulkCredentialsHasModelMapping(input.Credentials)
 
-	// 预加载账号平台信息（混合渠道检查需要）。
+	// 预加载账号平台信息（混合渠道检查和平台敏感配置更新需要）。
 	platformByID := map[int64]string{}
-	if needMixedChannelCheck {
+	if needMixedChannelCheck || hasModelMappingUpdate {
 		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -2313,6 +2314,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		for _, account := range accounts {
 			if account != nil {
 				platformByID[account.ID] = account.Platform
+			}
+		}
+		if hasModelMappingUpdate {
+			if err := validateBulkModelMappingSinglePlatform(platformByID); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -2399,6 +2405,29 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	return result, nil
+}
+
+func accountBulkCredentialsHasModelMapping(credentials map[string]any) bool {
+	if len(credentials) == 0 {
+		return false
+	}
+	_, ok := credentials["model_mapping"]
+	return ok
+}
+
+func validateBulkModelMappingSinglePlatform(platformByID map[int64]string) error {
+	seen := map[string]struct{}{}
+	for _, platform := range platformByID {
+		normalized := strings.ToLower(strings.TrimSpace(platform))
+		if normalized == "" {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		if len(seen) > 1 {
+			return infraerrors.BadRequest("MIXED_PLATFORM_MODEL_MAPPING", "model_mapping bulk update requires accounts from the same platform")
+		}
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {

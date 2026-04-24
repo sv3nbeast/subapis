@@ -201,6 +201,10 @@ func (s *AntigravityGatewayService) antigravityWorkerResponseHeaderTimeout() tim
 }
 
 func (s *AntigravityGatewayService) doAntigravityUpstreamRequest(req *http.Request, proxyURL string, account *Account, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return s.doAntigravityUpstreamRequestWith(req, proxyURL, account, profile, nil)
+}
+
+func (s *AntigravityGatewayService) doAntigravityUpstreamRequestWith(req *http.Request, proxyURL string, account *Account, profile *tlsfingerprint.Profile, upstream HTTPUpstream) (*http.Response, error) {
 	if s == nil {
 		return nil, fmt.Errorf("nil antigravity gateway service")
 	}
@@ -216,10 +220,13 @@ func (s *AntigravityGatewayService) doAntigravityUpstreamRequest(req *http.Reque
 			}
 		}
 	}
-	if s.httpUpstream == nil {
+	if upstream == nil {
+		upstream = s.httpUpstream
+	}
+	if upstream == nil {
 		return nil, fmt.Errorf("http upstream not configured")
 	}
-	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
+	return upstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, profile)
 }
 
 func (w *antigravityWorkerState) resetTransport() {

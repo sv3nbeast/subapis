@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,10 @@ func (s *userRepoStubForListUsers) ListWithFilters(_ context.Context, params pag
 		Page:     params.Page,
 		PageSize: params.PageSize,
 	}, nil
+}
+
+func (s *userRepoStubForListUsers) GetLatestUsedAtByUserIDs(_ context.Context, _ []int64) (map[int64]*time.Time, error) {
+	return map[int64]*time.Time{}, nil
 }
 
 type userGroupRateRepoStubForListUsers struct {

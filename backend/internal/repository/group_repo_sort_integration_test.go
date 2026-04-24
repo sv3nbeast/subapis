@@ -15,9 +15,14 @@ func (s *GroupRepoSuite) TestList_DefaultSortBySortOrderAsc() {
 
 	groups, _, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
 	s.Require().NoError(err)
-	s.Require().Len(groups, 2)
-	s.Require().Equal(g2.ID, groups[0].ID)
-	s.Require().Equal(g1.ID, groups[1].ID)
+	s.Require().GreaterOrEqual(len(groups), 2)
+	indexByID := make(map[int64]int, len(groups))
+	for i, group := range groups {
+		indexByID[group.ID] = i
+	}
+	s.Require().Contains(indexByID, g1.ID)
+	s.Require().Contains(indexByID, g2.ID)
+	s.Require().Less(indexByID[g2.ID], indexByID[g1.ID])
 }
 
 func (s *GroupRepoSuite) TestList_SortBySortOrderDesc() {

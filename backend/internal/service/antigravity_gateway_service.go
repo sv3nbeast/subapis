@@ -384,7 +384,7 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 			s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
 			attemptsMade++
-			retryResp, retryErr := s.doAntigravityUpstreamRequest(retryReq, p.proxyURL, p.account, p.tlsProfile)
+			retryResp, retryErr := s.doAntigravityUpstreamRequestWith(retryReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)
 			if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 				normalizeAntigravityCompressedResponse(retryResp)
 				log.Printf("%s status=%d smart_retry_success attempt=%d/%d", p.prefix, retryResp.StatusCode, attempt, maxAttempts)
@@ -581,7 +581,7 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 		}
 		s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
-		retryResp, retryErr := s.doAntigravityUpstreamRequest(retryReq, p.proxyURL, p.account, p.tlsProfile)
+		retryResp, retryErr := s.doAntigravityUpstreamRequestWith(retryReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)
 		if retryErr == nil && retryResp != nil && retryResp.StatusCode != http.StatusTooManyRequests && retryResp.StatusCode != http.StatusServiceUnavailable {
 			normalizeAntigravityCompressedResponse(retryResp)
 			logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d single_account_503_retry_success attempt=%d/%d total_waited=%v",
@@ -730,7 +730,7 @@ urlFallbackLoop:
 				p.c.Set(OpsUpstreamRequestBodyKey, string(p.body))
 			}
 
-			resp, err = s.doAntigravityUpstreamRequest(upstreamReq, p.proxyURL, p.account, p.tlsProfile)
+			resp, err = s.doAntigravityUpstreamRequestWith(upstreamReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)
 			if err == nil && resp == nil {
 				err = errors.New("upstream returned nil response")
 			}
@@ -1235,7 +1235,7 @@ func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *Anti
 		if reason := strings.TrimSpace(account.TempUnschedulableReason); reason != "" && json.Unmarshal([]byte(reason), &state) == nil {
 			if state.StatusCode == http.StatusTooManyRequests && state.MatchedKeyword != "" && state.UntilUnix > 0 {
 				until := time.Unix(state.UntilUnix, 0).Local().Format("15:04:05")
-				return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已临时不可调度至 %s", switchErr.RateLimitedModel, until)
+				return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已按模型隔离至 %s", switchErr.RateLimitedModel, until)
 			}
 		}
 	}
@@ -4336,38 +4336,38 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 			if err := json.Unmarshal(inner, &parsed); err != nil {
 				continue
 			}
-				// 记录首 token 时间
-				if firstTokenMs == nil {
-					ms := int(time.Since(startTime).Milliseconds())
-					firstTokenMs = &ms
-				}
+			// 记录首 token 时间
+			if firstTokenMs == nil {
+				ms := int(time.Since(startTime).Milliseconds())
+				firstTokenMs = &ms
+			}
 
 			last = parsed
 
-				// 保留最后一个有 parts 的响应，并收集所有 parts
-				if parts := extractGeminiParts(parsed); len(parts) > 0 {
-					sawUsefulPayload = true
-					if firstPayloadTimer != nil {
-						if !firstPayloadTimer.Stop() {
-							select {
-							case <-firstPayloadTimer.C:
-							default:
-							}
+			// 保留最后一个有 parts 的响应，并收集所有 parts
+			if parts := extractGeminiParts(parsed); len(parts) > 0 {
+				sawUsefulPayload = true
+				if firstPayloadTimer != nil {
+					if !firstPayloadTimer.Stop() {
+						select {
+						case <-firstPayloadTimer.C:
+						default:
 						}
-						firstPayloadTimer = nil
-						firstPayloadCh = nil
 					}
-					lastWithParts = parsed
-
-					// 收集所有 parts（text、thinking、functionCall、inlineData 等）
-					collectedParts = append(collectedParts, parts...)
+					firstPayloadTimer = nil
+					firstPayloadCh = nil
 				}
+				lastWithParts = parsed
 
-			case <-firstPayloadCh:
-				if !sawUsefulPayload {
-					logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
-					return nil, &UpstreamFailoverError{
-						StatusCode:             http.StatusGatewayTimeout,
+				// 收集所有 parts（text、thinking、functionCall、inlineData 等）
+				collectedParts = append(collectedParts, parts...)
+			}
+
+		case <-firstPayloadCh:
+			if !sawUsefulPayload {
+				logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] no initial payload within %s (claude non-stream), triggering failover", antigravityNonStreamFirstPayloadTimeout)
+				return nil, &UpstreamFailoverError{
+					StatusCode:             http.StatusGatewayTimeout,
 					ResponseBody:           []byte(`{"error":"upstream first payload timeout"}`),
 					RetryableOnSameAccount: false,
 				}

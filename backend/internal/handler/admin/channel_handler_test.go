@@ -289,13 +289,13 @@ func TestPricingRequestToService_Defaults(t *testing.T) {
 			wantValue: string(service.BillingModeToken),
 		},
 		{
-			name: "empty platform stays empty",
+			name: "empty platform defaults to anthropic",
 			req: channelModelPricingRequest{
 				Models:   []string{"m1"},
 				Platform: "",
 			},
 			wantField: "Platform",
-			wantValue: "",
+			wantValue: service.PlatformAnthropic,
 		},
 	}
 

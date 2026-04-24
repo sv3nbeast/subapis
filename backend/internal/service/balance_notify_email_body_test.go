@@ -71,8 +71,7 @@ func TestBuildQuotaAlertEmailBody_AllFieldsPresent(t *testing.T) {
 		"日限额 / Daily", // dimLabel
 		750.50,        // used
 		1000.0,        // limit
-		249.50,        // remaining
-		"$249.50",     // thresholdDisplay
+		249.50,        // threshold
 		"MySite",      // siteName
 	)
 
@@ -96,34 +95,31 @@ func TestBuildQuotaAlertEmailBody_UnlimitedDisplay(t *testing.T) {
 	body := s.buildQuotaAlertEmailBody(
 		1, "n", "p", "dim",
 		100.0, 0.0, // limit=0 triggers unlimited branch
-		0.0, "30%", "Site",
+		30.0, "Site",
 	)
 	require.Contains(t, body, "无限制")
 	require.Contains(t, body, "Unlimited")
 }
 
-func TestBuildQuotaAlertEmailBody_PercentageThresholdDisplay(t *testing.T) {
+func TestBuildQuotaAlertEmailBody_ThresholdDisplay(t *testing.T) {
 	s := &BalanceNotifyService{}
 	body := s.buildQuotaAlertEmailBody(
 		1, "n", "p", "dim",
 		700.0, 1000.0, 300.0,
-		"30%", // percentage-formatted threshold
 		"Site",
 	)
-	require.Contains(t, body, "30%")
+	require.Contains(t, body, "$300.00")
 	require.NotContains(t, body, "%!")
 }
 
-func TestBuildQuotaAlertEmailBody_RemainingClampedAtZero(t *testing.T) {
-	// Even though caller is responsible for clamping, this test documents the
-	// display behavior with remaining=0.
+func TestBuildQuotaAlertEmailBody_OverQuotaStillShowsThreshold(t *testing.T) {
 	s := &BalanceNotifyService{}
 	body := s.buildQuotaAlertEmailBody(
 		1, "n", "p", "dim",
-		1500.0, 1000.0, 0.0, // used > limit (over-quota)
-		"$100.00", "Site",
+		1500.0, 1000.0, 100.0, // used > limit (over-quota)
+		"Site",
 	)
-	require.Contains(t, body, "$0.00")
+	require.Contains(t, body, "$100.00")
 }
 
 // ---------- sanity checks on the CSS `%%` escape ----------
@@ -140,7 +136,7 @@ func TestBuildBalanceLowEmailBody_NoCSSFormatError(t *testing.T) {
 
 func TestBuildQuotaAlertEmailBody_NoCSSFormatError(t *testing.T) {
 	s := &BalanceNotifyService{}
-	body := s.buildQuotaAlertEmailBody(1, "n", "p", "d", 0, 0, 0, "$0.00", "Site")
+	body := s.buildQuotaAlertEmailBody(1, "n", "p", "d", 0, 0, 0, "Site")
 	require.True(t,
 		strings.Contains(body, "0%") && strings.Contains(body, "100%"),
 		"CSS gradient percentages not rendered; got: %s", body)

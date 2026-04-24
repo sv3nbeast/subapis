@@ -1022,6 +1022,22 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		normalizedWhitelist = []string{}
 	}
 	settings.RegistrationEmailSuffixWhitelist = normalizedWhitelist
+	normalizedBlacklist, err := NormalizeRegistrationEmailSuffixBlacklist(settings.RegistrationEmailSuffixBlacklist)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_REGISTRATION_EMAIL_SUFFIX_BLACKLIST", err.Error())
+	}
+	if normalizedBlacklist == nil {
+		normalizedBlacklist = []string{}
+	}
+	settings.RegistrationEmailSuffixBlacklist = normalizedBlacklist
+	if conflictingSuffix := firstRegistrationEmailSuffixPolicyConflict(normalizedWhitelist, normalizedBlacklist); conflictingSuffix != "" {
+		return nil, infraerrors.BadRequest(
+			"REGISTRATION_EMAIL_SUFFIX_POLICY_CONFLICT",
+			"registration email suffix whitelist conflicts with blacklist",
+		).WithMetadata(map[string]string{
+			"conflicting_suffix": conflictingSuffix,
+		})
+	}
 	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
 	if err != nil {
 		return nil, err
@@ -1063,6 +1079,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, fmt.Errorf("marshal registration email suffix whitelist: %w", err)
 	}
 	updates[SettingKeyRegistrationEmailSuffixWhitelist] = string(registrationEmailSuffixWhitelistJSON)
+	registrationEmailSuffixBlacklistJSON, err := json.Marshal(settings.RegistrationEmailSuffixBlacklist)
+	if err != nil {
+		return nil, fmt.Errorf("marshal registration email suffix blacklist: %w", err)
+	}
+	updates[SettingKeyRegistrationEmailSuffixBlacklist] = string(registrationEmailSuffixBlacklistJSON)
 	updates[SettingKeyPromoCodeEnabled] = strconv.FormatBool(settings.PromoCodeEnabled)
 	updates[SettingKeyPasswordResetEnabled] = strconv.FormatBool(settings.PasswordResetEnabled)
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
@@ -1466,6 +1487,15 @@ func (s *SettingService) GetRegistrationEmailSuffixWhitelist(ctx context.Context
 	return ParseRegistrationEmailSuffixWhitelist(value)
 }
 
+// GetRegistrationEmailSuffixBlacklist returns normalized registration email suffix blacklist.
+func (s *SettingService) GetRegistrationEmailSuffixBlacklist(ctx context.Context) []string {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEmailSuffixBlacklist)
+	if err != nil {
+		return []string{}
+	}
+	return ParseRegistrationEmailSuffixBlacklist(value)
+}
+
 // IsPromoCodeEnabled 检查是否启用优惠码功能
 func (s *SettingService) IsPromoCodeEnabled(ctx context.Context) bool {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyPromoCodeEnabled)
@@ -1677,6 +1707,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyRegistrationEnabled:                      "true",
 		SettingKeyEmailVerifyEnabled:                       "false",
 		SettingKeyRegistrationEmailSuffixWhitelist:         "[]",
+		SettingKeyRegistrationEmailSuffixBlacklist:         "[]",
 		SettingKeyPromoCodeEnabled:                         "true", // 默认启用优惠码功能
 		SettingKeySiteName:                                 "Sub2API",
 		SettingKeySiteLogo:                                 "",
@@ -1797,6 +1828,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist: ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		RegistrationEmailSuffixBlacklist: ParseRegistrationEmailSuffixBlacklist(settings[SettingKeyRegistrationEmailSuffixBlacklist]),
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:             emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
 		FrontendURL:                      settings[SettingKeyFrontendURL],

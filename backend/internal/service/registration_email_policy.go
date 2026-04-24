@@ -175,3 +175,14 @@ func registrationEmailSuffixMatchesOrSubdomain(suffix string, rule string) bool 
 
 	return strings.HasSuffix(suffixDomain, "."+ruleDomain)
 }
+
+func firstRegistrationEmailSuffixPolicyConflict(whitelist, blacklist []string) string {
+	for _, allowed := range whitelist {
+		for _, blocked := range blacklist {
+			if registrationEmailSuffixMatchesOrSubdomain(allowed, blocked) {
+				return allowed
+			}
+		}
+	}
+	return ""
+}

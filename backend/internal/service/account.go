@@ -120,6 +120,9 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
+	if (a.Type == AccountTypeAPIKey || a.Type == AccountTypeBedrock) && a.IsQuotaExceeded() {
+		return false
+	}
 	return true
 }
 

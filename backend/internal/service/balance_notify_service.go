@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -187,26 +188,38 @@ func (s *BalanceNotifyService) getAccountQuotaNotifyEmails(ctx context.Context) 
 	if err != nil || strings.TrimSpace(raw) == "" || raw == "[]" {
 		return nil
 	}
+	emails := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendEmail := func(email string) {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			return
+		}
+		key := strings.ToLower(email)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		emails = append(emails, email)
+	}
+	if isLegacyNotifyEmailArray(raw) {
+		var legacy []string
+		if json.Unmarshal([]byte(raw), &legacy) == nil {
+			for _, email := range legacy {
+				appendEmail(email)
+			}
+			return emails
+		}
+	}
 	entries := ParseNotifyEmails(raw)
 	if len(entries) == 0 {
 		return nil
 	}
-	emails := make([]string, 0, len(entries))
-	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		if entry.Disabled || !entry.Verified {
 			continue
 		}
-		email := strings.TrimSpace(entry.Email)
-		if email == "" {
-			continue
-		}
-		key := strings.ToLower(email)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		emails = append(emails, email)
+		appendEmail(entry.Email)
 	}
 	return emails
 }
@@ -274,8 +287,10 @@ func (s *BalanceNotifyService) sendQuotaAlertEmails(adminEmails []string, accoun
 func (s *BalanceNotifyService) buildBalanceLowEmailBody(userName string, balance, threshold float64, siteName, rechargeURL string) string {
 	rechargeBlock := ""
 	if rechargeURL != "" {
-		rechargeBlock = fmt.Sprintf(`<div style="margin: 24px 0;"><a href="%s" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">立即充值 / Top Up Now</a></div>`, rechargeURL)
+		rechargeBlock = fmt.Sprintf(`<div style="margin: 24px 0;"><a href="%s" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600;">立即充值 / Top Up Now</a></div>`, html.EscapeString(rechargeURL))
 	}
+	siteName = html.EscapeString(siteName)
+	userName = html.EscapeString(userName)
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
