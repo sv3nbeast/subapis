@@ -38,10 +38,13 @@ type ProviderConfig struct {
 	ExpiresAt            *int64 `json:"expires_at,omitempty"`   // optional expiration (unix seconds)
 }
 
+// RedisClient keeps Redis as a pkg/websearch dependency instead of leaking it into service.
+type RedisClient = redis.Client
+
 // Manager selects providers by priority and tracks quota via Redis.
 type Manager struct {
 	configs []ProviderConfig
-	redis   *redis.Client
+	redis   *RedisClient
 
 	clientMu    sync.Mutex
 	clientCache map[string]*http.Client
@@ -54,11 +57,11 @@ const (
 	searchDataTimeout    = 60 * time.Second // response data transfer timeout
 	searchRequestTimeout = searchDataTimeout + proxyDialTimeout
 
-	quotaKeyPrefix       = "websearch:quota:"
-	proxyUnavailableKey  = "websearch:proxy_unavailable:%d"
-	proxyUnavailableTTL  = 5 * time.Minute
-	quotaTTLBuffer       = 24 * time.Hour
-	maxCachedClients     = 100
+	quotaKeyPrefix      = "websearch:quota:"
+	proxyUnavailableKey = "websearch:proxy_unavailable:%d"
+	proxyUnavailableTTL = 5 * time.Minute
+	quotaTTLBuffer      = 24 * time.Hour
+	maxCachedClients    = 100
 )
 
 // ErrProxyUnavailable indicates the search failed due to a proxy connectivity issue.
@@ -80,7 +83,7 @@ return val
 `)
 
 // NewManager creates a Manager with the given provider configs and Redis client.
-func NewManager(configs []ProviderConfig, redisClient *redis.Client) *Manager {
+func NewManager(configs []ProviderConfig, redisClient *RedisClient) *Manager {
 	sorted := make([]ProviderConfig, len(configs))
 	copy(sorted, configs)
 	sort.Slice(sorted, func(i, j int) bool {

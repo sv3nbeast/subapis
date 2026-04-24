@@ -11,7 +11,6 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -214,7 +213,7 @@ func (s *SettingService) IsWebSearchEmulationEnabled(ctx context.Context) bool {
 
 // SetWebSearchRedisClient injects the Redis client used for quota tracking.
 // Call after construction, before first use. Triggers initial Manager build.
-func (s *SettingService) SetWebSearchRedisClient(ctx context.Context, redisClient *redis.Client) {
+func (s *SettingService) SetWebSearchRedisClient(ctx context.Context, redisClient *websearch.RedisClient) {
 	s.webSearchRedis = redisClient
 	s.RebuildWebSearchManager(ctx)
 }

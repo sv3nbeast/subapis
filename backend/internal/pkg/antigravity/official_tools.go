@@ -69,12 +69,12 @@ func normalizeOfficialAntigravityToolToken(name string) string {
 	for _, r := range name {
 		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 		if isAlphaNum {
-			b.WriteRune(r)
+			_, _ = b.WriteRune(r)
 			lastUnderscore = false
 			continue
 		}
 		if !lastUnderscore {
-			b.WriteByte('_')
+			_ = b.WriteByte('_')
 			lastUnderscore = true
 		}
 	}

@@ -17,8 +17,8 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
 	"github.com/imroc/req/v3"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -111,7 +111,7 @@ type SettingService struct {
 	webSearchProxyReader    webSearchProxyReader
 	proxyRepo               ProxyRepository // for resolving websearch provider proxy URLs
 	cfg                     *config.Config
-	webSearchRedis          *redis.Client
+	webSearchRedis          *websearch.RedisClient
 	onUpdate                func() // Callback when settings are updated (for cache invalidation)
 	version                 string // Application version
 	webSearchManagerBuilder WebSearchManagerBuilder
