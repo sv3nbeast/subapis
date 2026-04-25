@@ -793,6 +793,10 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL) (*http.Tra
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (http.RoundTripper, error) {
+	if proxyURL != nil {
+		return buildUpstreamHTTP1TransportWithTLSFingerprint(settings, proxyURL, profile), nil
+	}
+
 	dialTLSContext := antigravityTLSFingerprintDialTLSContext(profile, proxyURL)
 	transport := &http2.Transport{
 		DialTLSContext:             dialTLSContext,
@@ -802,6 +806,42 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		PingTimeout:                15 * time.Second,
 	}
 	return transport, nil
+}
+
+func buildUpstreamHTTP1TransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) *http.Transport {
+	proxyProfile := cloneTLSFingerprintProfileWithALPN(profile, []string{"http/1.1"})
+	dialTLSContext := antigravityTLSFingerprintDialTLSContext(proxyProfile, proxyURL)
+	return &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialTLSContext(ctx, network, addr, nil)
+		},
+		DisableCompression:    true,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          settings.maxIdleConns,
+		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
+		MaxConnsPerHost:       settings.maxConnsPerHost,
+		IdleConnTimeout:       settings.idleConnTimeout,
+		ResponseHeaderTimeout: settings.responseHeaderTimeout,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}
+}
+
+func cloneTLSFingerprintProfileWithALPN(profile *tlsfingerprint.Profile, alpn []string) *tlsfingerprint.Profile {
+	if profile == nil {
+		return &tlsfingerprint.Profile{ALPNProtocols: append([]string(nil), alpn...)}
+	}
+
+	cloned := *profile
+	cloned.CipherSuites = append([]uint16(nil), profile.CipherSuites...)
+	cloned.Curves = append([]uint16(nil), profile.Curves...)
+	cloned.PointFormats = append([]uint16(nil), profile.PointFormats...)
+	cloned.SignatureAlgorithms = append([]uint16(nil), profile.SignatureAlgorithms...)
+	cloned.ALPNProtocols = append([]string(nil), alpn...)
+	cloned.SupportedVersions = append([]uint16(nil), profile.SupportedVersions...)
+	cloned.KeyShareGroups = append([]uint16(nil), profile.KeyShareGroups...)
+	cloned.PSKModes = append([]uint16(nil), profile.PSKModes...)
+	cloned.Extensions = append([]uint16(nil), profile.Extensions...)
+	return &cloned
 }
 
 func antigravityTLSFingerprintDialTLSContext(profile *tlsfingerprint.Profile, proxyURL *url.URL) func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {

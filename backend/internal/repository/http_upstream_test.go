@@ -234,6 +234,25 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_ForceAttemptHTTP2Enabled
 	require.NotNil(s.T(), transport.DialTLSContext)
 }
 
+func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyUsesHTTP1() {
+	svc := s.newService()
+	profile := &tlsfingerprint.Profile{
+		Name:          "test-proxy",
+		ALPNProtocols: []string{"h2", "http/1.1"},
+	}
+
+	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, false, false)
+	require.NoError(s.T(), err)
+	require.NotNil(s.T(), entry)
+
+	transport, ok := entry.client.Transport.(*http.Transport)
+	require.True(s.T(), ok, "expected *http.Transport")
+	require.NotNil(s.T(), transport.DialTLSContext)
+	require.False(s.T(), transport.ForceAttemptHTTP2)
+	require.NotNil(s.T(), transport.TLSNextProto)
+	require.Equal(s.T(), []string{"h2", "http/1.1"}, profile.ALPNProtocols, "source profile must not be mutated")
+}
+
 // TestAccountConcurrencyFallbackToDefault 测试账户并发数为 0 时回退到默认配置
 // 验证未指定并发数时使用全局配置值
 func (s *HTTPUpstreamSuite) TestAccountConcurrencyFallbackToDefault() {
