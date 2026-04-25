@@ -86,7 +86,7 @@
                   <div class="grid gap-4 sm:grid-cols-2">
                     <div class="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-dark-700/70 dark:bg-dark-800/70">
                       <p class="text-xs font-medium text-gray-400 dark:text-gray-500">{{ t('payment.rechargeAccount') }}</p>
-                      <p class="mt-1 truncate text-lg font-bold text-gray-950 dark:text-white">{{ user?.username || '' }}</p>
+                      <p class="mt-1 truncate text-lg font-bold text-gray-950 dark:text-white">{{ accountDisplayName }}</p>
                     </div>
                     <div class="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-5 shadow-sm dark:border-emerald-900/40 dark:bg-emerald-950/20">
                       <p class="text-xs font-medium text-emerald-600 dark:text-emerald-300">{{ t('payment.currentBalance') }}</p>
@@ -381,6 +381,13 @@ const appStore = useAppStore()
 
 const user = computed(() => authStore.user)
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
+const accountDisplayName = computed(() => {
+  const username = user.value?.username?.trim()
+  if (username) return username
+  const email = user.value?.email?.trim()
+  if (email) return email
+  return user.value?.id ? `#${user.value.id}` : '-'
+})
 
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()

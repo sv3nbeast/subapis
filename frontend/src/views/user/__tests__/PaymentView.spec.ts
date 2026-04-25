@@ -19,6 +19,12 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
+const authUser = vi.hoisted(() => ({
+  id: 1,
+  username: 'demo-user',
+  email: 'demo@example.com',
+  balance: 0,
+}))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -45,10 +51,7 @@ vi.mock('vue-i18n', async () => {
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
-    user: {
-      username: 'demo-user',
-      balance: 0,
-    },
+    user: authUser,
     refreshUser,
   }),
 }))
@@ -198,6 +201,10 @@ describe('PaymentView WeChat JSAPI flow', () => {
     showWarning.mockReset()
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
     bridgeInvoke.mockReset()
+    authUser.id = 1
+    authUser.username = 'demo-user'
+    authUser.email = 'demo@example.com'
+    authUser.balance = 0
     window.localStorage.clear()
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = {
       invoke: bridgeInvoke,
@@ -252,6 +259,25 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(showError).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.backendUnavailableTitle')
     expect(wrapper.text()).toContain('payment.backendUnavailableDesc')
+  })
+
+  it('falls back to email when the recharge account username is empty', async () => {
+    routeState.query = {}
+    authUser.username = ''
+    authUser.email = 'fallback@example.com'
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('fallback@example.com')
   })
 
   it('resets payment state when JSAPI reports cancellation', async () => {

@@ -6,17 +6,22 @@ import "encoding/json"
 
 // ClaudeRequest Claude Messages API 请求
 type ClaudeRequest struct {
-	Model       string          `json:"model"`
-	Messages    []ClaudeMessage `json:"messages"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	System      json.RawMessage `json:"system,omitempty"` // string 或 []SystemBlock
-	Stream      bool            `json:"stream,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	TopK        *int            `json:"top_k,omitempty"`
-	Tools       []ClaudeTool    `json:"tools,omitempty"`
-	Thinking    *ThinkingConfig `json:"thinking,omitempty"`
-	Metadata    *ClaudeMetadata `json:"metadata,omitempty"`
+	Model         string              `json:"model"`
+	Messages      []ClaudeMessage     `json:"messages"`
+	MaxTokens     int                 `json:"max_tokens,omitempty"`
+	System        json.RawMessage     `json:"system,omitempty"` // string 或 []SystemBlock
+	Stream        bool                `json:"stream,omitempty"`
+	Temperature   *float64            `json:"temperature,omitempty"`
+	TopP          *float64            `json:"top_p,omitempty"`
+	TopK          *int                `json:"top_k,omitempty"`
+	Tools         []ClaudeTool        `json:"tools,omitempty"`
+	ToolChoice    any                 `json:"tool_choice,omitempty"`
+	Thinking      *ThinkingConfig     `json:"thinking,omitempty"`
+	OutputConfig  *ClaudeOutputConfig `json:"output_config,omitempty"`
+	StopSequences []string            `json:"stop_sequences,omitempty"`
+	Metadata      *ClaudeMetadata     `json:"metadata,omitempty"`
+
+	DisableDefaultThinking bool `json:"-"`
 }
 
 // ClaudeMessage Claude 消息
@@ -27,8 +32,13 @@ type ClaudeMessage struct {
 
 // ThinkingConfig Thinking 配置
 type ThinkingConfig struct {
-	Type         string `json:"type"`                    // "enabled" / "adaptive" / "disabled"
+	Type         string `json:"type"`                    // "enabled" / "adaptive" / "auto" / "disabled"
 	BudgetTokens int    `json:"budget_tokens,omitempty"` // thinking budget
+}
+
+// ClaudeOutputConfig 承载 agent-vibes 兼容的 thinking effort。
+type ClaudeOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 // ClaudeMetadata 请求元数据

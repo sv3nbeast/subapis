@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
@@ -36,6 +37,13 @@ type executeRequest struct {
 	ResponseHeaderTimeoutSeconds int                     `json:"response_header_timeout_seconds,omitempty"`
 	TLSProfile                   *tlsfingerprint.Profile `json:"tls_profile,omitempty"`
 }
+
+type workerRuntime struct {
+	mu      sync.Mutex
+	clients map[string]*http.Client
+}
+
+var defaultWorkerRuntime = &workerRuntime{clients: make(map[string]*http.Client)}
 
 func main() {
 	listenAddr := flag.String("listen", "127.0.0.1:0", "listen address")
@@ -103,7 +111,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	client, err := buildWorkerHTTPClient(payload.ProxyURL, payload.AccountConcurrency, payload.TLSProfile, time.Duration(payload.ResponseHeaderTimeoutSeconds)*time.Second)
+	client, err := defaultWorkerRuntime.clientFor(payload)
 	if err != nil {
 		w.Header().Set("X-Antigravity-Worker-Error", "1")
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -121,6 +129,53 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func (rt *workerRuntime) clientFor(payload executeRequest) (*http.Client, error) {
+	if rt == nil {
+		return buildWorkerHTTPClient(payload.ProxyURL, payload.AccountConcurrency, payload.TLSProfile, time.Duration(payload.ResponseHeaderTimeoutSeconds)*time.Second)
+	}
+
+	timeout := time.Duration(payload.ResponseHeaderTimeoutSeconds) * time.Second
+	key := workerClientCacheKey(payload.ProxyURL, payload.AccountConcurrency, payload.TLSProfile, timeout)
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.clients == nil {
+		rt.clients = make(map[string]*http.Client)
+	}
+	if client := rt.clients[key]; client != nil {
+		return client, nil
+	}
+	client, err := buildWorkerHTTPClient(payload.ProxyURL, payload.AccountConcurrency, payload.TLSProfile, timeout)
+	if err != nil {
+		return nil, err
+	}
+	rt.clients[key] = client
+	return client, nil
+}
+
+func workerClientCacheKey(proxy string, concurrency int, profile *tlsfingerprint.Profile, responseHeaderTimeout time.Duration) string {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if responseHeaderTimeout <= 0 {
+		responseHeaderTimeout = 300 * time.Second
+	}
+	profileKey := "no_tls"
+	if profile != nil {
+		if body, err := json.Marshal(profile); err == nil {
+			profileKey = string(body)
+		} else {
+			profileKey = profile.Name
+		}
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(proxy),
+		fmt.Sprintf("%d", concurrency),
+		responseHeaderTimeout.String(),
+		profileKey,
+	}, "\x00")
 }
 
 func buildWorkerHTTPClient(proxy string, concurrency int, profile *tlsfingerprint.Profile, responseHeaderTimeout time.Duration) (*http.Client, error) {

@@ -424,10 +424,10 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 		wantPresent bool
 	}{
 		{
-			name:        "enabled without budget defaults to dynamic (-1)",
+			name:        "enabled without budget defaults on thinking model",
 			model:       "claude-opus-4-6-thinking",
 			thinking:    &ThinkingConfig{Type: "enabled"},
-			wantBudget:  -1,
+			wantBudget:  1024,
 			wantPresent: true,
 		},
 		{
@@ -438,24 +438,24 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 			wantPresent: true,
 		},
 		{
-			name:        "enabled with -1 budget uses dynamic (-1)",
+			name:        "enabled with -1 budget defaults on thinking model",
 			model:       "claude-opus-4-6-thinking",
 			thinking:    &ThinkingConfig{Type: "enabled", BudgetTokens: -1},
-			wantBudget:  -1,
+			wantBudget:  1024,
 			wantPresent: true,
 		},
 		{
-			name:        "adaptive on opus4.6 maps to high budget (24576)",
+			name:        "adaptive on opus4.6 uses agent-vibes default budget",
 			model:       "claude-opus-4-6-thinking",
 			thinking:    &ThinkingConfig{Type: "adaptive", BudgetTokens: 20000},
-			wantBudget:  ClaudeAdaptiveHighThinkingBudgetTokens,
+			wantBudget:  1024,
 			wantPresent: true,
 		},
 		{
-			name:        "adaptive on non-opus model keeps default dynamic (-1)",
+			name:        "adaptive on non-opus model uses fallback budget",
 			model:       "claude-sonnet-4-5-thinking",
 			thinking:    &ThinkingConfig{Type: "adaptive"},
-			wantBudget:  -1,
+			wantBudget:  1024,
 			wantPresent: true,
 		},
 		{
@@ -466,8 +466,8 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 			wantPresent: false,
 		},
 		{
-			name:        "nil thinking does not emit thinkingConfig",
-			model:       "claude-opus-4-6-thinking",
+			name:        "nil thinking on non-thinking model does not emit thinkingConfig",
+			model:       "claude-opus-4-6",
 			thinking:    nil,
 			wantBudget:  0,
 			wantPresent: false,
@@ -615,4 +615,114 @@ func TestTransformClaudeToGeminiWithOptions_UsesProvidedRequestIdentity(t *testi
 	require.Equal(t, "antigravity", req.UserAgent)
 	require.Equal(t, []string{"GOOGLE_ONE_AI"}, req.EnabledCreditTypes)
 	require.Equal(t, "cloud-code-session-1", req.Request.SessionID)
+}
+
+func TestBuildGenerationConfig_AgentVibesDefaultsAndStopSequences(t *testing.T) {
+	req := &ClaudeRequest{
+		Model:         "claude-opus-4-6-thinking",
+		MaxTokens:     128,
+		StopSequences: []string{"CUSTOM_STOP", "<|user|>"},
+	}
+
+	cfg := buildGenerationConfig(req)
+	require.NotNil(t, cfg)
+	require.Equal(t, 9216, cfg.MaxOutputTokens)
+	require.NotNil(t, cfg.Temperature)
+	require.Equal(t, 0.4, *cfg.Temperature)
+	require.NotNil(t, cfg.TopP)
+	require.Equal(t, 1.0, *cfg.TopP)
+	require.NotNil(t, cfg.TopK)
+	require.Equal(t, 50, *cfg.TopK)
+	require.Equal(t, 1, cfg.CandidateCount)
+	require.Equal(t, []string{
+		"<|user|>",
+		"<|bot|>",
+		"<|context_request|>",
+		"<|endoftext|>",
+		"<|end_of_turn|>",
+		"CUSTOM_STOP",
+	}, cfg.StopSequences)
+	require.NotNil(t, cfg.ThinkingConfig)
+	require.Equal(t, 1024, cfg.ThinkingConfig.ThinkingBudget)
+}
+
+func TestBuildGenerationConfig_OutputConfigEffortAndToolChoiceDisableThinking(t *testing.T) {
+	cfg := buildGenerationConfig(&ClaudeRequest{
+		Model:        "claude-opus-4-6-thinking",
+		Thinking:     &ThinkingConfig{Type: "adaptive"},
+		OutputConfig: &ClaudeOutputConfig{Effort: "high"},
+	})
+	require.NotNil(t, cfg.ThinkingConfig)
+	require.Equal(t, 8192, cfg.ThinkingConfig.ThinkingBudget)
+
+	cfg = buildGenerationConfig(&ClaudeRequest{
+		Model:      "claude-opus-4-6-thinking",
+		Thinking:   &ThinkingConfig{Type: "adaptive"},
+		ToolChoice: map[string]any{"type": "tool", "name": "read_file"},
+	})
+	require.Nil(t, cfg.ThinkingConfig)
+}
+
+func TestTransformClaudeToGeminiWithOptions_ToolConfigOnlyWhenToolsExist(t *testing.T) {
+	claudeReq := &ClaudeRequest{
+		Model: "claude-opus-4-6-thinking",
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+	}
+
+	body, err := TransformClaudeToGeminiWithOptions(claudeReq, "project-1", "claude-opus-4-6-thinking", DefaultTransformOptions())
+	require.NoError(t, err)
+	var req V1InternalRequest
+	require.NoError(t, json.Unmarshal(body, &req))
+	require.Nil(t, req.Request.ToolConfig)
+
+	claudeReq.Tools = []ClaudeTool{{
+		Name:        "read_file",
+		Description: "Read file",
+		InputSchema: map[string]any{"type": "object"},
+	}}
+	claudeReq.ToolChoice = map[string]any{"type": "tool", "name": "read_file"}
+
+	body, err = TransformClaudeToGeminiWithOptions(claudeReq, "project-1", "claude-opus-4-6-thinking", DefaultTransformOptions())
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, &req))
+	require.NotNil(t, req.Request.ToolConfig)
+	require.NotNil(t, req.Request.ToolConfig.FunctionCallingConfig)
+	require.Equal(t, "VALIDATED", req.Request.ToolConfig.FunctionCallingConfig.Mode)
+	require.Equal(t, []string{"view_file"}, req.Request.ToolConfig.FunctionCallingConfig.AllowedFunctionNames)
+}
+
+func TestTransformClaudeToGeminiWithOptions_StrippedThinkingSuppressesDefaultThinking(t *testing.T) {
+	claudeReq := &ClaudeRequest{
+		Model:    "claude-opus-4-6-thinking",
+		Thinking: &ThinkingConfig{Type: "enabled"},
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+			{Role: "assistant", Content: json.RawMessage(`[
+				{"type":"thinking","thinking":"unsigned private thought"},
+				{"type":"text","text":"public answer"}
+			]`)},
+		},
+	}
+
+	body, err := TransformClaudeToGeminiWithOptions(claudeReq, "project-1", "claude-opus-4-6-thinking", DefaultTransformOptions())
+	require.NoError(t, err)
+
+	var req V1InternalRequest
+	require.NoError(t, json.Unmarshal(body, &req))
+	require.NotNil(t, req.Request.GenerationConfig)
+	require.Nil(t, req.Request.GenerationConfig.ThinkingConfig)
+}
+
+func TestBuildSystemInstruction_UserSystemBeforeOfficialPrompt(t *testing.T) {
+	system := json.RawMessage(`"user bridge system"`)
+	instruction := buildSystemInstruction(system, "claude-opus-4-6-thinking", DefaultTransformOptions(), nil, false)
+	require.NotNil(t, instruction)
+	require.GreaterOrEqual(t, len(instruction.Parts), 2)
+	require.Equal(t, "user bridge system", instruction.Parts[0].Text)
+	require.Contains(t, instruction.Parts[1].Text, "You are Antigravity")
+	require.Contains(t, instruction.Parts[1].Text, "<cursor_adaptation>")
+	require.NotContains(t, instruction.Parts[1].Text, "<persistent_context>")
+	require.NotContains(t, instruction.Parts[1].Text, "<artifacts>")
 }

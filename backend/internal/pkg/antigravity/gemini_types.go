@@ -66,6 +66,7 @@ type GeminiGenerationConfig struct {
 	Temperature     *float64              `json:"temperature,omitempty"`
 	TopP            *float64              `json:"topP,omitempty"`
 	TopK            *int                  `json:"topK,omitempty"`
+	CandidateCount  int                   `json:"candidateCount,omitempty"`
 	ThinkingConfig  *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
 	StopSequences   []string              `json:"stopSequences,omitempty"`
 	ImageConfig     *GeminiImageConfig    `json:"imageConfig,omitempty"`
@@ -118,7 +119,8 @@ type GeminiToolConfig struct {
 
 // GeminiFunctionCallingConfig 函数调用配置
 type GeminiFunctionCallingConfig struct {
-	Mode string `json:"mode,omitempty"` // VALIDATED, AUTO, NONE
+	Mode                 string   `json:"mode,omitempty"` // VALIDATED, AUTO, NONE
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 // GeminiSafetySetting Gemini 安全设置
@@ -206,7 +208,8 @@ var DefaultSafetySettings = []GeminiSafetySetting{
 // DefaultStopSequences 默认停止序列
 var DefaultStopSequences = []string{
 	"<|user|>",
+	"<|bot|>",
+	"<|context_request|>",
 	"<|endoftext|>",
 	"<|end_of_turn|>",
-	"\n\nHuman:",
 }
