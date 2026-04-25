@@ -234,11 +234,28 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_ForceAttemptHTTP2Enabled
 	require.NotNil(s.T(), transport.DialTLSContext)
 }
 
-func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyUsesHTTP1() {
+func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyUsesHTTP2ByDefault() {
 	svc := s.newService()
 	profile := &tlsfingerprint.Profile{
 		Name:          "test-proxy",
 		ALPNProtocols: []string{"h2", "http/1.1"},
+	}
+
+	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, false, false)
+	require.NoError(s.T(), err)
+	require.NotNil(s.T(), entry)
+
+	transport, ok := entry.client.Transport.(*http2.Transport)
+	require.True(s.T(), ok, "expected *http2.Transport")
+	require.NotNil(s.T(), transport.DialTLSContext)
+}
+
+func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyForceHTTP1UsesHTTP1() {
+	svc := s.newService()
+	profile := &tlsfingerprint.Profile{
+		Name:                "test-proxy",
+		ALPNProtocols:       []string{"h2", "http/1.1"},
+		ForceHTTP1WithProxy: true,
 	}
 
 	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, false, false)

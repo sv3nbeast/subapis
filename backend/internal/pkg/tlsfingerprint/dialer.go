@@ -30,6 +30,7 @@ type Profile struct {
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	ForceHTTP1WithProxy bool     // Force HTTP/1.1 transport when this profile is used through a proxy.
 }
 
 // Dialer creates TLS connections with custom fingerprints.

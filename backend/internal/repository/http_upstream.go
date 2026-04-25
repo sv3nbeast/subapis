@@ -793,7 +793,7 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL) (*http.Tra
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (http.RoundTripper, error) {
-	if proxyURL != nil {
+	if proxyURL != nil && profile != nil && profile.ForceHTTP1WithProxy {
 		return buildUpstreamHTTP1TransportWithTLSFingerprint(settings, proxyURL, profile), nil
 	}
 

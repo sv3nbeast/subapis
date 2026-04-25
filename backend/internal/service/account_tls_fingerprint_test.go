@@ -74,4 +74,29 @@ func TestResolveTLSProfile_AntigravityUsesAccountScopedBuiltinVariant(t *testing
 	if len(profileA.ALPNProtocols) != 2 || profileA.ALPNProtocols[0] != "h2" {
 		t.Fatalf("expected antigravity profile to prefer h2 ALPN, got %v", profileA.ALPNProtocols)
 	}
+	if profileA.ForceHTTP1WithProxy {
+		t.Fatalf("expected antigravity proxy transport to keep HTTP/2 enabled")
+	}
+}
+
+func TestResolveTLSProfile_AnthropicOAuthForcesHTTP1WithProxy(t *testing.T) {
+	service := &TLSFingerprintProfileService{}
+	account := &Account{
+		ID:       201,
+		Name:     "anthropic-201",
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"enable_tls_fingerprint": true,
+		},
+	}
+
+	profile := service.ResolveTLSProfile(account)
+
+	if profile == nil {
+		t.Fatalf("expected resolved profile")
+	}
+	if !profile.ForceHTTP1WithProxy {
+		t.Fatalf("expected anthropic oauth profile to force HTTP/1.1 when proxied")
+	}
 }

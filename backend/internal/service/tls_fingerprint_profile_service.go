@@ -183,20 +183,20 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 	id := account.GetTLSFingerprintProfileID()
 	if id > 0 {
 		if p := s.GetProfileByID(id); p != nil {
-			return p
+			return forceHTTP1WithProxyForAnthropic(account, p)
 		}
 	}
 	if id == -1 {
 		// 随机选择一个 profile
 		if p := s.getRandomProfile(); p != nil {
-			return p
+			return forceHTTP1WithProxyForAnthropic(account, p)
 		}
 	}
 	if account.Platform == PlatformAntigravity {
 		return tlsfingerprint.NewAntigravityAccountScopedProfile(accountTLSFingerprintSeed(account))
 	}
 	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
-	return tlsfingerprint.BuiltInDefaultProfile()
+	return forceHTTP1WithProxyForAnthropic(account, tlsfingerprint.BuiltInDefaultProfile())
 }
 
 func accountTLSFingerprintSeed(account *Account) uint64 {
@@ -210,6 +210,32 @@ func accountTLSFingerprintSeed(account *Account) uint64 {
 		return 1
 	}
 	return seed
+}
+
+func forceHTTP1WithProxyForAnthropic(account *Account, profile *tlsfingerprint.Profile) *tlsfingerprint.Profile {
+	if account == nil || profile == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return profile
+	}
+	cloned := cloneTLSFingerprintProfile(profile)
+	cloned.ForceHTTP1WithProxy = true
+	return cloned
+}
+
+func cloneTLSFingerprintProfile(profile *tlsfingerprint.Profile) *tlsfingerprint.Profile {
+	if profile == nil {
+		return nil
+	}
+	cloned := *profile
+	cloned.CipherSuites = append([]uint16(nil), profile.CipherSuites...)
+	cloned.Curves = append([]uint16(nil), profile.Curves...)
+	cloned.PointFormats = append([]uint16(nil), profile.PointFormats...)
+	cloned.SignatureAlgorithms = append([]uint16(nil), profile.SignatureAlgorithms...)
+	cloned.ALPNProtocols = append([]string(nil), profile.ALPNProtocols...)
+	cloned.SupportedVersions = append([]uint16(nil), profile.SupportedVersions...)
+	cloned.KeyShareGroups = append([]uint16(nil), profile.KeyShareGroups...)
+	cloned.PSKModes = append([]uint16(nil), profile.PSKModes...)
+	cloned.Extensions = append([]uint16(nil), profile.Extensions...)
+	return &cloned
 }
 
 // --- 缓存管理 ---
