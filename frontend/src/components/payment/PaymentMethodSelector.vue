@@ -3,19 +3,19 @@
     <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
       {{ t('payment.paymentMethod') }}
     </label>
-    <div class="grid grid-cols-2 gap-3 sm:flex">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <button
         v-for="method in sortedMethods"
         :key="method.type"
         type="button"
         :disabled="!method.available"
         :class="[
-          'relative flex h-[60px] flex-col items-center justify-center rounded-lg border px-3 transition-all sm:flex-1',
+          'relative flex min-h-[68px] items-center justify-center rounded-2xl border px-4 transition-all',
           !method.available
             ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-50 dark:border-dark-700 dark:bg-dark-800/50'
             : selected === method.type
               ? methodSelectedClass(method.type)
-              : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:border-dark-500',
+              : 'border-gray-200 bg-white text-gray-700 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-sm dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:border-dark-500',
         ]"
         @click="method.available && emit('select', method.type)"
       >
@@ -83,9 +83,9 @@ function methodIcon(type: string): string {
 }
 
 function methodSelectedClass(type: string): string {
-  if (type.includes('alipay')) return 'border-[#02A9F1] bg-blue-50 text-gray-900 shadow-sm dark:bg-blue-950 dark:text-gray-100'
-  if (type.includes('wxpay')) return 'border-[#09BB07] bg-green-50 text-gray-900 shadow-sm dark:bg-green-950 dark:text-gray-100'
-  if (type === 'stripe') return 'border-[#676BE5] bg-indigo-50 text-gray-900 shadow-sm dark:bg-indigo-950 dark:text-gray-100'
-  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-sm dark:bg-primary-950 dark:text-gray-100'
+  if (type.includes('alipay')) return 'border-[#02A9F1] bg-blue-50 text-gray-900 shadow-sm ring-2 ring-sky-500/10 dark:bg-blue-950 dark:text-gray-100'
+  if (type.includes('wxpay')) return 'border-[#09BB07] bg-green-50 text-gray-900 shadow-sm ring-2 ring-emerald-500/10 dark:bg-green-950 dark:text-gray-100'
+  if (type === 'stripe') return 'border-[#676BE5] bg-indigo-50 text-gray-900 shadow-sm ring-2 ring-indigo-500/10 dark:bg-indigo-950 dark:text-gray-100'
+  return 'border-primary-500 bg-primary-50 text-gray-900 shadow-sm ring-2 ring-primary-500/10 dark:bg-primary-950 dark:text-gray-100'
 }
 </script>

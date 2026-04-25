@@ -3,6 +3,12 @@ import { ref } from 'vue'
 import { adminAPI } from '@/api'
 import type { CustomMenuItem } from '@/types'
 
+function isHttpStatus(err: unknown, status: number): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { status?: unknown; response?: { status?: unknown } }
+  return e.status === status || e.response?.status === status
+}
+
 export const useAdminSettingsStore = defineStore('adminSettings', () => {
   const loaded = ref(false)
   const loading = ref(false)
@@ -57,10 +63,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
 
     loading.value = true
     try {
-      const [settings, paymentConfigResp] = await Promise.all([
-        adminAPI.settings.getSettings(),
-        adminAPI.payment.getConfig()
-      ])
+      const settings = await adminAPI.settings.getSettings()
       opsMonitoringEnabled.value = settings.ops_monitoring_enabled ?? true
       writeCachedBool('ops_monitoring_enabled_cached', opsMonitoringEnabled.value)
 
@@ -72,7 +75,19 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
 
       customMenuItems.value = Array.isArray(settings.custom_menu_items) ? settings.custom_menu_items : []
 
-      paymentEnabled.value = paymentConfigResp.data?.enabled ?? false
+      let nextPaymentEnabled =
+        typeof settings.payment_enabled === 'boolean'
+          ? settings.payment_enabled
+          : paymentEnabled.value
+      try {
+        const paymentConfigResp = await adminAPI.payment.getConfig()
+        nextPaymentEnabled = paymentConfigResp.data?.enabled ?? nextPaymentEnabled
+      } catch (err) {
+        if (!isHttpStatus(err, 404)) {
+          console.error('[adminSettings] Failed to fetch payment config:', err)
+        }
+      }
+      paymentEnabled.value = nextPaymentEnabled
       writeCachedBool('payment_enabled_cached', paymentEnabled.value)
 
       loaded.value = true

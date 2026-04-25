@@ -55,13 +55,18 @@ interface MockAuthState {
   hasPendingAuthSession: boolean
 }
 
+interface MockPublicSettingsState {
+  paymentEnabled?: boolean
+}
+
 /**
  * 将 router/index.ts 中 beforeEach 守卫的核心逻辑提取为可测试的函数
  */
 function simulateGuard(
   toPath: string,
   toMeta: Record<string, any>,
-  authState: MockAuthState
+  authState: MockAuthState,
+  publicSettings: MockPublicSettingsState = {}
 ): string | null {
   const requiresAuth = toMeta.requiresAuth !== false
   const requiresAdmin = toMeta.requiresAdmin === true
@@ -106,6 +111,11 @@ function simulateGuard(
   // 需要管理员但不是管理员
   if (requiresAdmin && !authState.isAdmin) {
     return '/dashboard'
+  }
+
+  // 支付路由采用 opt-out 语义：缺字段/未加载时允许访问，只有明确 false 才关闭。
+  if (toMeta.requiresPayment && publicSettings.paymentEnabled === false) {
+    return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
   }
 
   // 简易模式限制
@@ -220,6 +230,16 @@ describe('路由守卫逻辑', () => {
       const redirect = simulateGuard('/admin/users', { requiresAdmin: true }, authState)
       expect(redirect).toBe('/dashboard')
     })
+
+    it('支付开关缺失时允许访问 /purchase', () => {
+      const redirect = simulateGuard('/purchase', { requiresPayment: true }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('支付开关显式关闭时 /purchase 重定向到 /dashboard', () => {
+      const redirect = simulateGuard('/purchase', { requiresPayment: true }, authState, { paymentEnabled: false })
+      expect(redirect).toBe('/dashboard')
+    })
   })
 
   // --- 已认证管理员 ---
@@ -246,6 +266,11 @@ describe('路由守卫逻辑', () => {
     it('访问用户页面允许通过', () => {
       const redirect = simulateGuard('/dashboard', {}, authState)
       expect(redirect).toBeNull()
+    })
+
+    it('管理员支付开关显式关闭时 /purchase 重定向到 /admin/dashboard', () => {
+      const redirect = simulateGuard('/purchase', { requiresPayment: true }, authState, { paymentEnabled: false })
+      expect(redirect).toBe('/admin/dashboard')
     })
   })
 

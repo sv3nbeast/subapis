@@ -213,6 +213,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     shallowMount(PaymentView, {
       global: {
         stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
           Teleport: true,
           Transition: false,
         },
@@ -231,6 +232,26 @@ describe('PaymentView WeChat JSAPI flow', () => {
       },
     })
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+  })
+
+  it('shows inline backend unavailable state without a toast when payment API is missing', async () => {
+    routeState.query = {}
+    getCheckoutInfo.mockRejectedValueOnce({ status: 404, message: 'Request failed with status code 404' })
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(showError).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('payment.backendUnavailableTitle')
+    expect(wrapper.text()).toContain('payment.backendUnavailableDesc')
   })
 
   it('resets payment state when JSAPI reports cancellation', async () => {

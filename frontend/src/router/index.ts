@@ -699,7 +699,9 @@ router.beforeEach((to, _from, next) => {
   // Check payment requirement (internal payment system only)
   if (to.meta.requiresPayment) {
     const paymentEnabled = appStore.cachedPublicSettings?.payment_enabled
-    if (!paymentEnabled) {
+    // Payment is an opt-out feature flag: old backends may omit the field, so
+    // only an explicit false should hide payment routes.
+    if (paymentEnabled === false) {
       next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
       return
     }

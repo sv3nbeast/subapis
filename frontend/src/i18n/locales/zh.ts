@@ -6021,6 +6021,8 @@ export default {
     tabSubscribe: '订阅',
     noPlans: '暂无可用订阅套餐',
     notAvailable: '充值功能暂未开放',
+    backendUnavailableTitle: '支付后端接口暂不可用',
+    backendUnavailableDesc: '当前后端尚未提供支付接口。请升级或重启后端后刷新本页。',
     confirmSubscription: '确认订阅',
     confirmCancel: '确定要取消此订单吗？',
     amountTooLow: '最低金额为 {min}',

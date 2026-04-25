@@ -5,16 +5,16 @@
       <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
         {{ t('payment.quickAmounts') }}
       </label>
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <button
           v-for="amt in filteredAmounts"
           :key="amt"
           type="button"
           :class="[
-            'rounded-lg border-2 px-4 py-3 text-center font-medium transition-colors',
+            'rounded-2xl border px-4 py-3 text-center font-semibold transition-all',
             modelValue === amt
-              ? 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/40 dark:text-primary-300'
-              : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:border-dark-500',
+              ? 'border-primary-400 bg-primary-50 text-primary-700 shadow-sm ring-2 ring-primary-500/10 dark:border-primary-500 dark:bg-primary-950/50 dark:text-primary-200'
+              : 'border-gray-200 bg-white text-gray-700 hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-sm dark:border-dark-600 dark:bg-dark-800 dark:text-gray-200 dark:hover:border-dark-500',
           ]"
           @click="selectAmount(amt)"
         >
@@ -29,7 +29,7 @@
         {{ t('payment.customAmount') }}
       </label>
       <div class="relative">
-        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-dark-500">
+        <span class="absolute left-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg bg-gray-100 text-sm font-semibold text-gray-500 dark:bg-dark-700 dark:text-dark-300">
           $
         </span>
         <input
@@ -37,7 +37,7 @@
           inputmode="decimal"
           :value="customText"
           :placeholder="placeholderText"
-          class="input w-full py-3 pl-8 pr-4"
+          class="input w-full py-3 pl-12 pr-4 text-base font-semibold"
           @input="handleInput"
         />
       </div>

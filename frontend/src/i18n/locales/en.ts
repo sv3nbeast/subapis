@@ -5835,6 +5835,8 @@ export default {
     tabSubscribe: 'Subscribe',
     noPlans: 'No subscription plans available',
     notAvailable: 'Top-up is currently unavailable',
+    backendUnavailableTitle: 'Payment backend is not available',
+    backendUnavailableDesc: 'The current backend does not expose payment APIs yet. Upgrade or restart the backend, then refresh this page.',
     confirmSubscription: 'Confirm Subscription',
     confirmCancel: 'Are you sure you want to cancel this order?',
     amountTooLow: 'Minimum amount is {min}',
