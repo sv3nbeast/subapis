@@ -107,7 +107,7 @@ func newAuthServiceForRegressionTests(repo UserRepository) *AuthService {
 			ExpireHour: 1,
 		},
 	}
-	return NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil)
+	return NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func TestGenerateTokenUsesResolvedTokenVersion(t *testing.T) {
