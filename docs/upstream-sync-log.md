@@ -1294,3 +1294,125 @@ f1b26a9e 修复：对齐antigravity fidelity 与 boringcrypto rollout
 a1a2f197 修复：对stalled antigravity non-stream requests执行故障切换
 3abd773e merge: align 生产热修 与 主线保护逻辑
 ea93711c 修复：阻止mixed-platform bulk model mapping edits
+
+## 2026-04-27 02:43:39 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `f6727399e6aad4f3892308d84a4c53a07241c4ac`
+- 官方提交: `c056db740d56ce008292a7b414c804cc6f308208`
+- 合并基线: `d162604f326043e8b9933f68bf214696c78ecf52`
+- 官方领先数量: `51`
+- 本地领先数量: `170`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+c056db74 杂项：将VERSION同步到 0.1.119 [skip ci]
+a0b5e5bf 合并拉取请求 #1973（来源：Nobody-Zhang/main）
+41d06573 合并拉取请求 #1970（来源：deqiying/fix-1754-claude-openai-cache-usage）
+1a0cabbf Fix Zpay refund endpoint handling
+9b6dcc57 新增（affiliate）：完善邀请返利系统
+b17704d6 修复（anthropic）：修正缓存 token 的 Anthropic 用量语义
+496469ac 修复（网关）：skip body mimicry 针对 real Claude Code clients 到 restore prompt caching
+c1b52615 修复（支付）：allow Stripe 支付 pages 到 bypass router 认证 guard
+3af9940b 样式：fix gofmt 与 ineffassign 静态检查 errors
+22b12775 合并拉取请求 #1948（来源：hungryboy1025/fix/openai-account-test-responses-stream）
+aff98d5a 合并拉取请求 #1960（来源：gaoren002/fix/openai-stream-keepalive-downstream-idle）
+4e1bb2b4 新增（affiliate）：增加feature toggle 与 per-user custom invite 设置
+dac6e520 修复（openai）：keep responses stream alive during pre-output failover
+8987e0ba 修复（openai）：tighten responses stream account 测试
+9d1751ec 杂项：将VERSION同步到 0.1.118 [skip ci]
+5d1c12e6 合并拉取请求 #1943（来源：AyeSt0/fix/openai-responses-preoutput-failover）
+5b63a9b0 修复（openai）：对before responses stream output执行故障切换
+641e6107 合并拉取请求 #1940（来源：4fuu/fix/bump-codex-cli-version-to-0.125.0）
+095f457c 新增（openai）：port /responses/compact account 支持 flow (PR #1555)
+1e57e88e 修复（openai）：bump codex CLI 版本 from 0.104.0 到 0.125.0
+
+### 本地领先
+
+f6727399 修复：extract anthropic channel monitor text blocks
+ba5de2fd 修复：handle OpenAI client cancels 与 group description updates
+c0347010 对齐Antigravity request fidelity
+caf551b3 修复：加固 支付 purchase flow
+ccc2c41a 修复：scope proxied tls fingerprint http1 fallback
+0d7f3bb6 修复：use http1 针对 proxied tls fingerprint transport
+13c2b68e 修复：satisfy backend 静态检查 after upstream sync
+4f84fa5a 修复：satisfy ci 静态检查 after sync
+88eecbd2 修复：恢复local production safeguards after sync
+8fa5ae08 修复：normalize production guard release refs
+c5beff9d 文档：record official 0.1.117 promotion
+a071bc9e merge: sync official sub2api 0.1.117
+e1e9058b 修复：移除gemini antigravity compat experiment
+e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaustion
+76599dbc 修复：complete 前端 兼容性 与 test coverage
+0ff61085 修复：增加status aliases 与 route integrity checks
+63b506ac 修复：恢复public status page route
+4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
+070b4b56 merge: fully reconcile upstream v0.1.115 与 production baseline
+61953f5c 修复：补齐auth hidden token 与 reserved email缺口
+
+## 2026-04-27 02:45:33 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `f6727399e6aad4f3892308d84a4c53a07241c4ac`
+- 官方提交: `c056db740d56ce008292a7b414c804cc6f308208`
+- 合并基线: `d162604f326043e8b9933f68bf214696c78ecf52`
+- 官方领先数量: `51`
+- 本地领先数量: `170`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+c056db74 杂项：将VERSION同步到 0.1.119 [skip ci]
+a0b5e5bf 合并拉取请求 #1973（来源：Nobody-Zhang/main）
+41d06573 合并拉取请求 #1970（来源：deqiying/fix-1754-claude-openai-cache-usage）
+1a0cabbf Fix Zpay refund endpoint handling
+9b6dcc57 新增（affiliate）：完善邀请返利系统
+b17704d6 修复（anthropic）：修正缓存 token 的 Anthropic 用量语义
+496469ac 修复（网关）：skip body mimicry 针对 real Claude Code clients 到 restore prompt caching
+c1b52615 修复（支付）：allow Stripe 支付 pages 到 bypass router 认证 guard
+3af9940b 样式：fix gofmt 与 ineffassign 静态检查 errors
+22b12775 合并拉取请求 #1948（来源：hungryboy1025/fix/openai-account-test-responses-stream）
+aff98d5a 合并拉取请求 #1960（来源：gaoren002/fix/openai-stream-keepalive-downstream-idle）
+4e1bb2b4 新增（affiliate）：增加feature toggle 与 per-user custom invite 设置
+dac6e520 修复（openai）：keep responses stream alive during pre-output failover
+8987e0ba 修复（openai）：tighten responses stream account 测试
+9d1751ec 杂项：将VERSION同步到 0.1.118 [skip ci]
+5d1c12e6 合并拉取请求 #1943（来源：AyeSt0/fix/openai-responses-preoutput-failover）
+5b63a9b0 修复（openai）：对before responses stream output执行故障切换
+641e6107 合并拉取请求 #1940（来源：4fuu/fix/bump-codex-cli-version-to-0.125.0）
+095f457c 新增（openai）：port /responses/compact account 支持 flow (PR #1555)
+1e57e88e 修复（openai）：bump codex CLI 版本 from 0.104.0 到 0.125.0
+
+### 本地领先
+
+f6727399 修复：extract anthropic channel monitor text blocks
+ba5de2fd 修复：handle OpenAI client cancels 与 group description updates
+c0347010 对齐Antigravity request fidelity
+caf551b3 修复：加固 支付 purchase flow
+ccc2c41a 修复：scope proxied tls fingerprint http1 fallback
+0d7f3bb6 修复：use http1 针对 proxied tls fingerprint transport
+13c2b68e 修复：satisfy backend 静态检查 after upstream sync
+4f84fa5a 修复：satisfy ci 静态检查 after sync
+88eecbd2 修复：恢复local production safeguards after sync
+8fa5ae08 修复：normalize production guard release refs
+c5beff9d 文档：record official 0.1.117 promotion
+a071bc9e merge: sync official sub2api 0.1.117
+e1e9058b 修复：移除gemini antigravity compat experiment
+e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaustion
+76599dbc 修复：complete 前端 兼容性 与 test coverage
+0ff61085 修复：增加status aliases 与 route integrity checks
+63b506ac 修复：恢复public status page route
+4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
+070b4b56 merge: fully reconcile upstream v0.1.115 与 production baseline
+61953f5c 修复：补齐auth hidden token 与 reserved email缺口
