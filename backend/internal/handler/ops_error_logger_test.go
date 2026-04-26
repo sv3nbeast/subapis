@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -106,6 +107,21 @@ func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {
 	require.Equal(t, int64(1), OpsErrorLogEnqueuedTotal())
 	require.Equal(t, int64(1), OpsErrorLogDroppedTotal())
 	require.Equal(t, int64(1), OpsErrorLogQueueLength())
+}
+
+func TestShouldSkipOpsErrorLog_UsesUpstreamContextText(t *testing.T) {
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	skip := shouldSkipOpsErrorLog(
+		context.Background(),
+		ops,
+		"Upstream request failed",
+		`{"error":{"message":"Upstream request failed"}}`,
+		"/v1/chat/completions",
+		`Post "https://chatgpt.com/backend-api/codex/responses": context canceled`,
+	)
+
+	require.True(t, skip)
 }
 
 func TestAttachOpsRequestBodyToEntry_EarlyReturnBranches(t *testing.T) {

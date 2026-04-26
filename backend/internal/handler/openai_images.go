@@ -197,6 +197,14 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
 		if err != nil {
+			if isOpenAIForwardClientCanceled(c, err) {
+				markOpenAIClientClosedRequest(c)
+				reqLog.Info("openai.images.client_canceled",
+					zap.Int64("account_id", account.ID),
+					zap.Error(err),
+				)
+				return
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)

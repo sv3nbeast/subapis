@@ -723,11 +723,16 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			entry.RequestHeadersJSON = extractOpsRetryRequestHeaders(c)
 			attachOpsRequestBodyToEntry(c, entry)
 
-			// Skip logging if a passthrough rule with skip_monitoring=true matched.
-			if v, ok := c.Get(service.OpsSkipPassthroughKey); ok {
-				if skip, _ := v.(bool); skip {
-					return
-				}
+			// Skip logging if the request was explicitly marked non-actionable.
+			if shouldSkipOpsErrorLogByContext(c) {
+				return
+			}
+			requestPath := ""
+			if c.Request != nil && c.Request.URL != nil {
+				requestPath = c.Request.URL.Path
+			}
+			if shouldSkipOpsErrorLog(c.Request.Context(), ops, recoveredMsg, "", requestPath, collectOpsUpstreamContextText(c)) {
+				return
 			}
 
 			enqueueOpsErrorLog(ops, entry)
@@ -737,15 +742,13 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		body := w.buf.Bytes()
 		parsed := parseOpsErrorResponse(body)
 
-		// Skip logging if a passthrough rule with skip_monitoring=true matched.
-		if v, ok := c.Get(service.OpsSkipPassthroughKey); ok {
-			if skip, _ := v.(bool); skip {
-				return
-			}
+		// Skip logging if the request was explicitly marked non-actionable.
+		if shouldSkipOpsErrorLogByContext(c) {
+			return
 		}
 
 		// Skip logging if the error should be filtered based on settings
-		if shouldSkipOpsErrorLog(c.Request.Context(), ops, parsed.Message, string(body), c.Request.URL.Path) {
+		if shouldSkipOpsErrorLog(c.Request.Context(), ops, parsed.Message, string(body), c.Request.URL.Path, collectOpsUpstreamContextText(c)) {
 			return
 		}
 
@@ -1277,7 +1280,60 @@ func strconvItoa(v int) string {
 
 // shouldSkipOpsErrorLog determines if an error should be skipped from logging based on settings.
 // Returns true for errors that should be filtered according to OpsAdvancedSettings.
-func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message, body, requestPath string) bool {
+func shouldSkipOpsErrorLogByContext(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	for _, key := range []string{service.OpsSkipErrorLogKey, service.OpsSkipPassthroughKey} {
+		if v, ok := c.Get(key); ok {
+			if skip, _ := v.(bool); skip {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func collectOpsUpstreamContextText(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	var b strings.Builder
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(s)
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorMessageKey); ok {
+		if s, ok := v.(string); ok {
+			add(s)
+		}
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorDetailKey); ok {
+		if s, ok := v.(string); ok {
+			add(s)
+		}
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorsKey); ok {
+		if events, ok := v.([]*service.OpsUpstreamErrorEvent); ok {
+			for _, ev := range events {
+				if ev == nil {
+					continue
+				}
+				add(ev.Message)
+				add(ev.Detail)
+			}
+		}
+	}
+	return b.String()
+}
+
+func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message, body, requestPath string, extraTexts ...string) bool {
 	if ops == nil {
 		return false
 	}
@@ -1291,6 +1347,10 @@ func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message
 
 	msgLower := strings.ToLower(message)
 	bodyLower := strings.ToLower(body)
+	extraLower := ""
+	if len(extraTexts) > 0 {
+		extraLower = strings.ToLower(strings.Join(extraTexts, "\n"))
+	}
 
 	// Check if count_tokens errors should be ignored
 	if settings.IgnoreCountTokensErrors && strings.Contains(requestPath, "/count_tokens") {
@@ -1299,7 +1359,7 @@ func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message
 
 	// Check if context canceled errors should be ignored (client disconnects)
 	if settings.IgnoreContextCanceled {
-		if strings.Contains(msgLower, opsErrContextCanceled) || strings.Contains(bodyLower, opsErrContextCanceled) {
+		if strings.Contains(msgLower, opsErrContextCanceled) || strings.Contains(bodyLower, opsErrContextCanceled) || strings.Contains(extraLower, opsErrContextCanceled) {
 			return true
 		}
 	}

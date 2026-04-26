@@ -170,6 +170,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
+			return nil, newOpenAIClientCanceledError(err)
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

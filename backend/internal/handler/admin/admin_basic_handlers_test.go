@@ -145,6 +145,14 @@ func TestGroupHandlerEndpoints(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
+	body, _ = json.Marshal(map[string]any{"name": "update", "description": ""})
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/admin/groups/2", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"description":""`)
+
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/groups/2", nil)
 	router.ServeHTTP(rec, req)

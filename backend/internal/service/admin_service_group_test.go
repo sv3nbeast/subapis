@@ -233,6 +233,28 @@ func TestAdminService_UpdateGroup_WithImagePricing(t *testing.T) {
 	require.InDelta(t, 0.36, *repo.updated.ImagePrice4K, 0.0001)
 }
 
+func TestAdminService_UpdateGroup_AllowsClearingDescription(t *testing.T) {
+	existingGroup := &Group{
+		ID:          1,
+		Name:        "existing-group",
+		Description: "old description",
+		Platform:    PlatformAnthropic,
+		Status:      StatusActive,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	empty := ""
+	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		Description: &empty,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Empty(t, repo.updated.Description)
+}
+
 // TestAdminService_UpdateGroup_PartialImagePricing 测试仅更新部分 ImagePrice 字段
 func TestAdminService_UpdateGroup_PartialImagePricing(t *testing.T) {
 	oldPrice2K := 0.15

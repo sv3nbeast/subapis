@@ -264,7 +264,11 @@ func (s *stubAdminService) CreateGroup(ctx context.Context, input *service.Creat
 }
 
 func (s *stubAdminService) UpdateGroup(ctx context.Context, id int64, input *service.UpdateGroupInput) (*service.Group, error) {
-	group := service.Group{ID: id, Name: input.Name, Status: service.StatusActive}
+	description := ""
+	if input.Description != nil {
+		description = *input.Description
+	}
+	group := service.Group{ID: id, Name: input.Name, Description: description, Status: service.StatusActive}
 	return &group, nil
 }
 
