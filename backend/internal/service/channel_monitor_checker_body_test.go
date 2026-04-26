@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +24,11 @@ func swapMonitorHTTPClient(t *testing.T) {
 
 // captureHandler 把每次收到的请求 body 和 headers 存起来，测试断言用。
 type captureHandler struct {
-	lastBody    map[string]any
-	lastHeaders http.Header
-	respondText string // 写到 Anthropic content[0].text 里（校验用）
-	status      int
+	lastBody        map[string]any
+	lastHeaders     http.Header
+	respondText     string // 写到 Anthropic content[0].text 里（校验用）
+	responseContent []map[string]any
+	status          int
 }
 
 func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,11 +43,15 @@ func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(h.status)
+	content := h.responseContent
+	if len(content) == 0 {
+		content = []map[string]any{
+			{"type": "text", "text": h.respondText},
+		}
+	}
 	// 构造 Anthropic 格式的响应：content[0].text = h.respondText
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"content": []map[string]any{
-			{"type": "text", "text": h.respondText},
-		},
+		"content": content,
 	})
 }
 
@@ -170,4 +176,40 @@ func TestRunCheckForModel_ReplaceMode_EmptyResponseIsFailed(t *testing.T) {
 	if !strings.Contains(res.Message, "replace-mode") {
 		t.Errorf("failure message should hint replace-mode, got %q", res.Message)
 	}
+}
+
+func TestRunCheckForModel_AnthropicSkipsThinkingBlocksWhenExtractingText(t *testing.T) {
+	h := &captureHandler{
+		responseContent: []map[string]any{
+			{"type": "thinking", "thinking": "private chain of thought"},
+			{"type": "text", "text": allChallengeAnswers()},
+		},
+	}
+	endpoint := setupFakeAnthropic(t, h)
+
+	res := runCheckForModel(context.Background(), MonitorProviderAnthropic, endpoint, "sk-fake", "claude-x", nil)
+
+	if res.Status != MonitorStatusOperational {
+		t.Fatalf("thinking block before text should still extract text and pass challenge, got status=%s message=%q",
+			res.Status, res.Message)
+	}
+}
+
+func TestExtractAnthropicMonitorText_PrefersTextBlock(t *testing.T) {
+	body := []byte(`{"content":[{"type":"thinking","thinking":"42"},{"type":"text","text":"answer 7"}]}`)
+
+	if got := extractAnthropicMonitorText(body); got != "answer 7" {
+		t.Fatalf("expected text block, got %q", got)
+	}
+}
+
+func allChallengeAnswers() string {
+	var b strings.Builder
+	for i := 0; i <= monitorChallengeMax*2; i++ {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(strconv.Itoa(i))
+	}
+	return b.String()
 }
