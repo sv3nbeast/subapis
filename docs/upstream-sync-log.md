@@ -1416,3 +1416,45 @@ e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaus
 4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
 070b4b56 merge: fully reconcile upstream v0.1.115 与 production baseline
 61953f5c 修复：补齐auth hidden token 与 reserved email缺口
+
+## 2026-04-27 02:57:11 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `8b21eb32e2b9a8b62f83d939c66981eda16c237a`
+- 官方提交: `c056db740d56ce008292a7b414c804cc6f308208`
+- 合并基线: `c056db740d56ce008292a7b414c804cc6f308208`
+- 官方领先数量: `0`
+- 本地领先数量: `172`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+8b21eb32 merge: sync official sub2api 0.1.119
+86079873 文档：record official 0.1.119 sync analysis
+f6727399 修复：extract anthropic channel monitor text blocks
+ba5de2fd 修复：handle OpenAI client cancels 与 group description updates
+c0347010 对齐Antigravity request fidelity
+caf551b3 修复：加固 支付 purchase flow
+ccc2c41a 修复：scope proxied tls fingerprint http1 fallback
+0d7f3bb6 修复：use http1 针对 proxied tls fingerprint transport
+13c2b68e 修复：satisfy backend 静态检查 after upstream sync
+4f84fa5a 修复：satisfy ci 静态检查 after sync
+88eecbd2 修复：恢复local production safeguards after sync
+8fa5ae08 修复：normalize production guard release refs
+c5beff9d 文档：record official 0.1.117 promotion
+a071bc9e merge: sync official sub2api 0.1.117
+e1e9058b 修复：移除gemini antigravity compat experiment
+e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaustion
+76599dbc 修复：complete 前端 兼容性 与 test coverage
+0ff61085 修复：增加status aliases 与 route integrity checks
+63b506ac 修复：恢复public status page route
+4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
