@@ -12,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
+	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -958,19 +960,205 @@ func (s *adminServiceImpl) GetUserUsageStats(ctx context.Context, userID int64, 
 	}, nil
 }
 
-// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
+// GetUserBalanceHistory returns paginated balance/concurrency/subscription change records for a user.
 func (s *adminServiceImpl) GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, error) {
+	codeType = strings.TrimSpace(codeType)
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize}
-	codes, result, err := s.redeemCodeRepo.ListByUserPaginated(ctx, userID, params, codeType)
+	limit := params.Limit()
+	if params.Page < 1 {
+		params.Page = 1
+	}
+	params.PageSize = limit
+
+	includeSubscriptionOrders := s.entClient != nil && (codeType == "" || codeType == RedeemTypeSubscription)
+	if !includeSubscriptionOrders {
+		codes, result, err := s.redeemCodeRepo.ListByUserPaginated(ctx, userID, params, codeType)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		totalRecharged, err := s.redeemCodeRepo.SumPositiveBalanceByUser(ctx, userID)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		return codes, result.Total, totalRecharged, nil
+	}
+
+	// The admin history endpoint historically read only redeem_codes. Balance
+	// payments create redeem codes, but subscription payments are fulfilled via
+	// payment_orders + user_subscriptions, so merge them here without mutating
+	// historical data.
+	fetchLimit := params.Offset() + limit
+	if fetchLimit < limit {
+		fetchLimit = limit
+	}
+	fetchParams := pagination.PaginationParams{Page: 1, PageSize: fetchLimit}
+	codes, result, err := s.redeemCodeRepo.ListByUserPaginated(ctx, userID, fetchParams, codeType)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	subscriptionOrders, subscriptionOrderTotal, err := s.listUserSubscriptionPaymentHistory(ctx, userID, fetchLimit)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	codes = append(codes, subscriptionOrders...)
+	sort.SliceStable(codes, func(i, j int) bool {
+		ti := balanceHistoryRecordTime(codes[i])
+		tj := balanceHistoryRecordTime(codes[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return codes[i].ID > codes[j].ID
+	})
+	total := result.Total + subscriptionOrderTotal
+	codes = sliceBalanceHistoryPage(codes, params.Offset(), limit)
+
 	// Aggregate total recharged amount (only once, regardless of type filter)
 	totalRecharged, err := s.redeemCodeRepo.SumPositiveBalanceByUser(ctx, userID)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	return codes, result.Total, totalRecharged, nil
+	return codes, total, totalRecharged, nil
+}
+
+func (s *adminServiceImpl) listUserSubscriptionPaymentHistory(ctx context.Context, userID int64, limit int) ([]RedeemCode, int64, error) {
+	if s.entClient == nil || limit <= 0 {
+		return nil, 0, nil
+	}
+	q := s.entClient.PaymentOrder.Query().
+		Where(
+			paymentorder.UserIDEQ(userID),
+			paymentorder.OrderTypeEQ(RedeemTypeSubscription),
+			paymentorder.StatusIn(subscriptionPaymentHistoryStatuses()...),
+		)
+	total, err := q.Clone().Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count subscription payment history: %w", err)
+	}
+	orders, err := q.
+		Order(
+			entsql.OrderByField(paymentorder.FieldCompletedAt, entsql.OrderDesc(), entsql.OrderNullsLast()).ToFunc(),
+			entsql.OrderByField(paymentorder.FieldPaidAt, entsql.OrderDesc(), entsql.OrderNullsLast()).ToFunc(),
+			entsql.OrderByField(paymentorder.FieldCreatedAt, entsql.OrderDesc()).ToFunc(),
+		).
+		Limit(limit).
+		All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query subscription payment history: %w", err)
+	}
+	groups := s.loadGroupsForSubscriptionOrders(ctx, orders)
+	out := make([]RedeemCode, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, subscriptionPaymentOrderToHistoryRecord(order, groups))
+	}
+	return out, int64(total), nil
+}
+
+func subscriptionPaymentHistoryStatuses() []string {
+	return []string{
+		OrderStatusCompleted,
+		OrderStatusRefundRequested,
+		OrderStatusRefunding,
+		OrderStatusPartiallyRefunded,
+		OrderStatusRefunded,
+		OrderStatusRefundFailed,
+	}
+}
+
+func (s *adminServiceImpl) loadGroupsForSubscriptionOrders(ctx context.Context, orders []*dbent.PaymentOrder) map[int64]*Group {
+	if s.groupRepo == nil || len(orders) == 0 {
+		return nil
+	}
+	ids := make(map[int64]struct{})
+	for _, order := range orders {
+		if order == nil || order.SubscriptionGroupID == nil {
+			continue
+		}
+		ids[*order.SubscriptionGroupID] = struct{}{}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	groups := make(map[int64]*Group, len(ids))
+	for id := range ids {
+		group, err := s.groupRepo.GetByIDLite(ctx, id)
+		if err != nil || group == nil {
+			continue
+		}
+		groups[id] = group
+	}
+	return groups
+}
+
+func subscriptionPaymentOrderToHistoryRecord(order *dbent.PaymentOrder, groups map[int64]*Group) RedeemCode {
+	userID := order.UserID
+	eventAt := subscriptionPaymentOrderHistoryTime(order)
+	code := strings.TrimSpace(order.RechargeCode)
+	if code == "" {
+		code = strings.TrimSpace(order.OutTradeNo)
+	}
+	if code == "" {
+		code = fmt.Sprintf("payment-order-%d", order.ID)
+	}
+	validityDays := 0
+	if order.SubscriptionDays != nil {
+		validityDays = *order.SubscriptionDays
+	}
+	notes := fmt.Sprintf("payment order %d", order.ID)
+	if outTradeNo := strings.TrimSpace(order.OutTradeNo); outTradeNo != "" {
+		notes += " / " + outTradeNo
+	}
+	if order.Status != OrderStatusCompleted {
+		notes += " / " + order.Status
+	}
+	var group *Group
+	if order.SubscriptionGroupID != nil && groups != nil {
+		group = groups[*order.SubscriptionGroupID]
+	}
+	return RedeemCode{
+		ID:           -order.ID,
+		Code:         code,
+		Type:         RedeemTypeSubscription,
+		Value:        float64(validityDays),
+		Status:       StatusUsed,
+		UsedBy:       &userID,
+		UsedAt:       &eventAt,
+		Notes:        notes,
+		CreatedAt:    order.CreatedAt,
+		GroupID:      order.SubscriptionGroupID,
+		ValidityDays: validityDays,
+		Group:        group,
+	}
+}
+
+func subscriptionPaymentOrderHistoryTime(order *dbent.PaymentOrder) time.Time {
+	if order.CompletedAt != nil {
+		return *order.CompletedAt
+	}
+	if order.PaidAt != nil {
+		return *order.PaidAt
+	}
+	return order.CreatedAt
+}
+
+func balanceHistoryRecordTime(record RedeemCode) time.Time {
+	if record.UsedAt != nil {
+		return *record.UsedAt
+	}
+	return record.CreatedAt
+}
+
+func sliceBalanceHistoryPage(records []RedeemCode, offset, limit int) []RedeemCode {
+	if limit <= 0 || offset >= len(records) {
+		return []RedeemCode{}
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	end := offset + limit
+	if end > len(records) {
+		end = len(records)
+	}
+	return records[offset:end]
 }
 
 func (s *adminServiceImpl) BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error) {
