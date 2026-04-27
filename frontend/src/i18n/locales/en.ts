@@ -4,6 +4,8 @@ export default {
     viewOnGithub: 'View on GitHub',
     viewDocs: 'View Documentation',
     docs: 'Docs',
+    defaultSubtitle: 'AI API Gateway Platform',
+    terminal: 'Terminal',
     switchToLight: 'Switch to Light Mode',
     switchToDark: 'Switch to Dark Mode',
     dashboard: 'Dashboard',
@@ -264,6 +266,7 @@ export default {
     name: 'Name',
     email: 'Email',
     password: 'Password',
+    logoAlt: 'Site logo',
     submit: 'Submit',
     back: 'Back',
     next: 'Next',
@@ -291,6 +294,7 @@ export default {
     available: 'Available',
     copiedToClipboard: 'Copied to clipboard',
     copied: 'Copied',
+    copy: 'Copy',
     copyFailed: 'Failed to copy',
     verifying: 'Verifying...',
     processing: 'Processing...',
@@ -1200,6 +1204,8 @@ export default {
   errors: {
     somethingWentWrong: 'Something went wrong',
     pageNotFound: 'Page not found',
+    pageNotFoundDescription: "The page you are looking for doesn't exist or has been moved.",
+    needHelp: 'Need help?',
     unauthorized: 'Unauthorized',
     forbidden: 'Forbidden',
     serverError: 'Server error',
@@ -2140,6 +2146,9 @@ export default {
         perRequestPriceRequired: 'Per-request price or billing tiers required for per-request/image billing mode',
         tierLabel: 'Tier',
         resolution: 'Resolution',
+        minTokens: 'Min',
+        maxTokens: 'Max',
+        included: 'included',
         modelMapping: 'Model Mapping',
         modelMappingHint: 'Map request model names to actual model names. Runs before account-level mapping.',
         noMappingRules: 'No mapping rules. Click "Add" to create one.',
@@ -2166,7 +2175,18 @@ export default {
         noPlatforms: 'Click "Add Platform" to start configuring the channel',
         mappingCount: 'mappings',
         pricingEntry: 'Pricing Entry',
-        noModels: 'No models added'
+        noModels: 'No models added',
+        applyPricingToAccountStats: 'Apply request pricing to account stats',
+        applyPricingToAccountStatsHint: 'Only changes admin account cost statistics. User billing and balance deduction stay unchanged.',
+        accountStatsPricing: 'Account Stats Pricing',
+        accountStatsPricingHint: 'Custom rules only affect admin account cost statistics, not user billing.',
+        noAccountStatsPricingRules: 'No account stats pricing rules.',
+        ruleName: 'Rule name',
+        ruleNamePlaceholder: 'Optional rule name',
+        matchGroups: 'Matched groups',
+        matchAccountIds: 'Matched account IDs',
+        matchAccountIdsPlaceholder: 'Comma or newline separated account IDs',
+        pricing: 'Pricing'
       }
     },
 
@@ -2586,7 +2606,9 @@ export default {
         },
         quota: {
           exceeded: 'Quota exceeded, account paused',
-          normal: 'Quota normal'
+          normal: 'Quota normal',
+          dailyShort: 'D',
+          weeklyShort: 'W'
         },
       },
       tempUnschedulable: {
@@ -3050,6 +3072,7 @@ export default {
         batchSuccess: 'Successfully created {count} account(s)',
         batchPartialSuccess: 'Partial success: {success} succeeded, {failed} failed',
         batchFailed: 'Batch creation failed',
+        refreshTokenInputLabel: 'Refresh Token',
         // OpenAI specific
         openai: {
           title: 'OpenAI Account Authorization',
@@ -3078,6 +3101,9 @@ export default {
           },
           // Refresh Token auth
           refreshTokenAuth: 'Manual RT Input',
+          mobileRefreshTokenAuth: 'Manual Mobile RT Input',
+          accessTokenAuth: 'Manual AT Input',
+          refreshTokenInputLabel: 'Refresh Token',
           refreshTokenDesc: 'Enter your existing OpenAI Refresh Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.',
           refreshTokenPlaceholder: 'Paste your OpenAI Refresh Token...\nSupports multiple, one per line',
           sessionTokenAuth: 'Manual ST Input',
@@ -3088,6 +3114,7 @@ export default {
           sessionTokenRawHint: 'You can paste full JSON. The system will auto-parse ST and AT.',
           openSessionUrl: 'Open Fetch URL',
           copySessionUrl: 'Copy URL',
+          copyAuthUrl: 'Copy authorization URL',
           sessionUrlHint: 'This URL usually returns AT. If sessionToken is absent, copy __Secure-next-auth.session-token from browser cookies as ST.',
           parsedSessionTokensLabel: 'Parsed ST',
           parsedSessionTokensEmpty: 'No ST parsed. Please check your input.',
@@ -3168,6 +3195,7 @@ export default {
                     failedToExchangeCode: 'Failed to exchange Antigravity auth code',
                     // Refresh Token auth
                     refreshTokenAuth: 'Manual RT',
+                    refreshTokenInputLabel: 'Refresh Token',
                     refreshTokenDesc: 'Enter your existing Antigravity Refresh Token. Supports batch input (one per line). The system will automatically validate and create accounts.',
                     refreshTokenPlaceholder: 'Paste your Antigravity Refresh Token...\nSupports multiple tokens, one per line',
                     validating: 'Validating...',
@@ -3731,6 +3759,8 @@ export default {
         targetingCustom: 'Custom rules',
         addOrGroup: 'Add OR group',
         addAndCondition: 'Add AND condition',
+        orGroupLabel: 'OR groups',
+        andConditionLabel: 'AND conditions',
         conditionType: 'Condition type',
         conditionSubscription: 'Subscription',
         conditionBalance: 'Balance',
@@ -5909,6 +5939,7 @@ export default {
       scanToPay: 'Scan to Pay',
       scanAlipay: 'Alipay QR Payment',
       scanWxpay: 'WeChat QR Payment',
+      wechatPayQrAlt: 'WeChat Pay QR code',
       scanAlipayHint: 'Open Alipay on your phone and scan the QR code to pay',
       scanWxpayHint: 'Open WeChat on your phone and scan the QR code to pay',
       payInNewWindow: 'Complete Payment in New Window',

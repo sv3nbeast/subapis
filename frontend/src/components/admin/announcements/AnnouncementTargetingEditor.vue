@@ -39,7 +39,7 @@
     <div v-if="mode === 'custom'" class="mt-4 space-y-4">
       <div class="flex items-center justify-between">
         <div class="text-sm font-medium text-gray-900 dark:text-white">
-          OR
+          {{ t('admin.announcements.form.orGroupLabel') }}
           <span class="ml-1 text-xs font-normal text-gray-500 dark:text-dark-400">
             ({{ anyOf.length }}/50)
           </span>
@@ -68,7 +68,9 @@
           <div class="min-w-0">
             <div class="text-sm font-medium text-gray-900 dark:text-white">
               {{ t('admin.announcements.form.targetingCustom') }} #{{ groupIndex + 1 }}
-              <span class="ml-2 text-xs font-normal text-gray-500 dark:text-dark-400">AND ({{ (group.all_of?.length || 0) }}/50)</span>
+              <span class="ml-2 text-xs font-normal text-gray-500 dark:text-dark-400">
+                {{ t('admin.announcements.form.andConditionLabel') }} ({{ (group.all_of?.length || 0) }}/50)
+              </span>
             </div>
             <div class="mt-1 text-xs text-gray-500 dark:text-dark-400">
               {{ t('admin.announcements.form.addAndCondition') }}
