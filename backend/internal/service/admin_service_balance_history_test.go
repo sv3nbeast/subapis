@@ -146,6 +146,29 @@ func TestAdminServiceGetUserBalanceHistoryIncludesSubscriptionPayments(t *testin
 		Save(ctx)
 	require.NoError(t, err)
 
+	legacyCompletedAt := now.Add(30 * time.Minute)
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(30).
+		SetPayAmount(30).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-SUB-LEGACY").
+		SetOutTradeNo("sub2_subscription_legacy").
+		SetPaymentType("alipay").
+		SetPaymentTradeNo("trade-sub-legacy").
+		SetOrderType(RedeemTypeSubscription).
+		SetStatus(OrderStatusCompleted).
+		SetExpiresAt(now.Add(time.Hour)).
+		SetPaidAt(legacyCompletedAt).
+		SetCompletedAt(legacyCompletedAt).
+		SetSubscriptionDays(30).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
 	_, err = client.PaymentOrder.Create().
 		SetUserID(user.ID).
 		SetUserEmail(user.Email).
@@ -168,6 +191,18 @@ func TestAdminServiceGetUserBalanceHistoryIncludesSubscriptionPayments(t *testin
 
 	usedBy := user.ID
 	redeemUsedAt := now.Add(time.Hour)
+	legacyRedeemUsedAt := now.Add(30 * time.Minute)
+	_, err = client.RedeemCode.Create().
+		SetCode("PAY-SUB-LEGACY").
+		SetType(RedeemTypeSubscription).
+		SetValue(30).
+		SetStatus(StatusUsed).
+		SetUsedBy(user.ID).
+		SetUsedAt(legacyRedeemUsedAt).
+		SetValidityDays(30).
+		Save(ctx)
+	require.NoError(t, err)
+
 	redeemRepo := &balanceHistoryRedeemRepo{
 		totalRecharged: 10,
 		records: []RedeemCode{{
@@ -179,6 +214,16 @@ func TestAdminServiceGetUserBalanceHistoryIncludesSubscriptionPayments(t *testin
 			UsedBy:    &usedBy,
 			UsedAt:    &redeemUsedAt,
 			CreatedAt: now,
+		}, {
+			ID:           11,
+			Code:         "PAY-SUB-LEGACY",
+			Type:         RedeemTypeSubscription,
+			Value:        30,
+			Status:       StatusUsed,
+			UsedBy:       &usedBy,
+			UsedAt:       &legacyRedeemUsedAt,
+			CreatedAt:    now,
+			ValidityDays: 30,
 		}},
 	}
 	svc := &adminServiceImpl{
@@ -188,19 +233,22 @@ func TestAdminServiceGetUserBalanceHistoryIncludesSubscriptionPayments(t *testin
 
 	records, total, totalRecharged, err := svc.GetUserBalanceHistory(ctx, user.ID, 1, 10, "")
 	require.NoError(t, err)
-	require.Equal(t, int64(2), total)
+	require.Equal(t, int64(3), total)
 	require.Equal(t, 10.0, totalRecharged)
-	require.Len(t, records, 2)
+	require.Len(t, records, 3)
 	require.Equal(t, RedeemTypeSubscription, records[0].Type)
 	require.Equal(t, "PAY-SUB-1", records[0].Code)
 	require.Equal(t, 30, records[0].ValidityDays)
 	require.Equal(t, RedeemTypeBalance, records[1].Type)
+	require.Equal(t, RedeemTypeSubscription, records[2].Type)
+	require.Equal(t, "PAY-SUB-LEGACY", records[2].Code)
 
 	subscriptionRecords, subscriptionTotal, _, err := svc.GetUserBalanceHistory(ctx, user.ID, 1, 10, RedeemTypeSubscription)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), subscriptionTotal)
-	require.Len(t, subscriptionRecords, 1)
+	require.Equal(t, int64(2), subscriptionTotal)
+	require.Len(t, subscriptionRecords, 2)
 	require.Equal(t, "PAY-SUB-1", subscriptionRecords[0].Code)
+	require.Equal(t, "PAY-SUB-LEGACY", subscriptionRecords[1].Code)
 
 	balanceRecords, balanceTotal, _, err := svc.GetUserBalanceHistory(ctx, user.ID, 1, 10, RedeemTypeBalance)
 	require.NoError(t, err)

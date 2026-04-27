@@ -1029,6 +1029,7 @@ func (s *adminServiceImpl) listUserSubscriptionPaymentHistory(ctx context.Contex
 			paymentorder.UserIDEQ(userID),
 			paymentorder.OrderTypeEQ(RedeemTypeSubscription),
 			paymentorder.StatusIn(subscriptionPaymentHistoryStatuses()...),
+			withoutMatchingSubscriptionRedeemCode(userID),
 		)
 	total, err := q.Clone().Count(ctx)
 	if err != nil {
@@ -1051,6 +1052,24 @@ func (s *adminServiceImpl) listUserSubscriptionPaymentHistory(ctx context.Contex
 		out = append(out, subscriptionPaymentOrderToHistoryRecord(order, groups))
 	}
 	return out, int64(total), nil
+}
+
+func withoutMatchingSubscriptionRedeemCode(userID int64) func(*entsql.Selector) {
+	return func(selector *entsql.Selector) {
+		rc := entsql.Table("redeem_codes").As("rc")
+		selector.Where(entsql.NotExists(
+			entsql.Select().
+				From(rc).
+				Where(entsql.And(
+					entsql.EQ(rc.C("used_by"), userID),
+					entsql.EQ(rc.C("type"), RedeemTypeSubscription),
+					entsql.Or(
+						entsql.ColumnsEQ(rc.C("code"), selector.C(paymentorder.FieldRechargeCode)),
+						entsql.ColumnsEQ(rc.C("code"), selector.C(paymentorder.FieldOutTradeNo)),
+					),
+				)),
+		))
+	}
 }
 
 func subscriptionPaymentHistoryStatuses() []string {
