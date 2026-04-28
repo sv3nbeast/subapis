@@ -183,6 +183,70 @@ func (p *AntigravityTokenProvider) GetAccessToken(ctx context.Context, account *
 	return accessToken, nil
 }
 
+type forceOAuthRefreshExecutor struct {
+	OAuthRefreshExecutor
+}
+
+func (e forceOAuthRefreshExecutor) NeedsRefresh(account *Account, refreshWindow time.Duration) bool {
+	return e.OAuthRefreshExecutor != nil && e.OAuthRefreshExecutor.CanRefresh(account)
+}
+
+// ForceRefreshAccessToken refreshes an Antigravity OAuth token even if the stored
+// expiry has not been reached. This is used by explicit account probes after a
+// Google validation flow, where the old access token can keep returning
+// VALIDATION_REQUIRED until it is replaced.
+func (p *AntigravityTokenProvider) ForceRefreshAccessToken(ctx context.Context, account *Account) (string, error) {
+	if p == nil {
+		return "", errors.New("antigravity token provider not configured")
+	}
+	if account == nil {
+		return "", errors.New("account is nil")
+	}
+	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
+		return "", errors.New("not an antigravity oauth account")
+	}
+	if p.refreshAPI == nil || p.executor == nil {
+		return "", errors.New("antigravity token refresh API not configured")
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, antigravityRequestRefreshTimeout)
+	defer cancel()
+
+	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, forceOAuthRefreshExecutor{OAuthRefreshExecutor: p.executor}, 0)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", errors.New("token refresh returned empty result")
+	}
+	if result.LockHeld {
+		return "", errors.New("token refresh already in progress")
+	}
+	if result.NewCredentials != nil {
+		account.Credentials = cloneCredentials(result.NewCredentials)
+	} else if result.Account != nil {
+		account.Credentials = cloneCredentials(result.Account.Credentials)
+	}
+
+	accessToken := account.GetCredential("access_token")
+	if strings.TrimSpace(accessToken) == "" {
+		return "", errors.New("access_token not found after force refresh")
+	}
+
+	if p.tokenCache != nil {
+		cacheKey := AntigravityTokenCacheKey(account)
+		ttl := 30 * time.Minute
+		if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
+			if until := time.Until(*expiresAt); until > 0 {
+				ttl = until
+			}
+		}
+		_ = p.tokenCache.SetAccessToken(ctx, cacheKey, accessToken, ttl)
+	}
+
+	return accessToken, nil
+}
+
 // shouldAttemptBackfill checks backfill cooldown.
 func (p *AntigravityTokenProvider) shouldAttemptBackfill(accountID int64) bool {
 	if v, ok := p.backfillCooldown.Load(accountID); ok {

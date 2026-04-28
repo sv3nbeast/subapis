@@ -1259,13 +1259,24 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 	// 测试连接是指定账号探测，不参与多账号调度/切号语义。
 	ctx = WithSingleAccountRetry(ctx, true, false)
 
-	// 获取 token
+	// 获取 token。账号完成 Google validation 后，旧 access_token 可能继续返回
+	// VALIDATION_REQUIRED；显式测试连接先强制刷新一次，避免误用旧 token。
 	if s.tokenProvider == nil {
 		return nil, errors.New("antigravity token provider not configured")
 	}
-	accessToken, err := s.tokenProvider.GetAccessToken(ctx, account)
-	if err != nil {
-		return nil, fmt.Errorf("获取 access_token 失败: %w", err)
+	var accessToken string
+	var err error
+	if shouldForceRefreshAntigravityTestToken(account) {
+		accessToken, err = s.tokenProvider.ForceRefreshAccessToken(ctx, account)
+		if err != nil {
+			return nil, fmt.Errorf("验证后刷新 access_token 失败: %w", err)
+		}
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		accessToken, err = s.tokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return nil, fmt.Errorf("获取 access_token 失败: %w", err)
+		}
 	}
 
 	// 代理 URL
@@ -1350,6 +1361,25 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 
 	text := extractTextFromSSEResponse(respBody)
 	return &TestConnectionResult{Text: text, MappedModel: mappedModel}, nil
+}
+
+func shouldForceRefreshAntigravityTestToken(account *Account) bool {
+	if account == nil || account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
+		return false
+	}
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "Abnormal") {
+		return true
+	}
+	if account.Status != StatusError {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(account.ErrorMessage))
+	return strings.Contains(msg, "validation required") ||
+		strings.Contains(msg, "validation_required") ||
+		strings.Contains(msg, "verify your account")
 }
 
 // testConnectionHandleError 是 TestConnection 使用的轻量 handleError 回调。

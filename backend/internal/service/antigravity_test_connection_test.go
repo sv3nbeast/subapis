@@ -87,11 +87,13 @@ type recordingBodyUpstream struct {
 	calls              int
 	body               []byte
 	singleAccountRetry bool
+	authorization      string
 }
 
 func (r *recordingBodyUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	r.calls++
 	r.singleAccountRetry = isSingleAccountRetry(req.Context())
+	r.authorization = req.Header.Get("Authorization")
 	if req.Body != nil {
 		r.body, _ = io.ReadAll(req.Body)
 	}
@@ -165,6 +167,81 @@ func TestAntigravityGatewayService_TestConnection_OAuthBootstrapsMissingProjectI
 	var sent map[string]any
 	require.NoError(t, json.Unmarshal(upstream.body, &sent))
 	require.Equal(t, "project-from-bootstrap", sent["project"])
+}
+
+type antigravityForceRefreshExecutorStub struct {
+	token        string
+	refreshCalls int
+}
+
+func (e *antigravityForceRefreshExecutorStub) CacheKey(account *Account) string {
+	return AntigravityTokenCacheKey(account)
+}
+
+func (e *antigravityForceRefreshExecutorStub) CanRefresh(account *Account) bool {
+	return account != nil && account.Platform == PlatformAntigravity && account.Type == AccountTypeOAuth
+}
+
+func (e *antigravityForceRefreshExecutorStub) NeedsRefresh(_ *Account, _ time.Duration) bool {
+	return false
+}
+
+func (e *antigravityForceRefreshExecutorStub) Refresh(_ context.Context, account *Account) (map[string]any, error) {
+	e.refreshCalls++
+	creds := MergeCredentials(account.Credentials, map[string]any{
+		"access_token": e.token,
+		"expires_at":   time.Now().Add(time.Hour).Unix(),
+	})
+	return creds, nil
+}
+
+func TestAntigravityGatewayService_TestConnection_ForceRefreshesValidationErrorToken(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:           607,
+		Name:         "ag-validation-refresh",
+		Platform:     PlatformAntigravity,
+		Type:         AccountTypeOAuth,
+		Status:       StatusError,
+		ErrorMessage: "Validation required (403): Verify your account to continue.",
+		Schedulable:  true,
+		Concurrency:  1,
+		Credentials: map[string]any{
+			"access_token":  "old-token",
+			"refresh_token": "refresh-token",
+			"project_id":    "project-from-creds",
+		},
+	}
+	repo := &accountTestRepoStub{account: account}
+	executor := &antigravityForceRefreshExecutorStub{token: "new-token"}
+	upstream := &recordingBodyUpstream{}
+	svc := &AntigravityGatewayService{
+		accountRepo: repo,
+		tokenProvider: &AntigravityTokenProvider{
+			accountRepo: repo,
+			refreshAPI:  NewOAuthRefreshAPI(repo, nil),
+			executor:    executor,
+		},
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, executor.refreshCalls)
+	require.Equal(t, "new-token", account.GetCredential("access_token"))
+	require.Equal(t, "Bearer new-token", upstream.authorization)
 }
 
 func TestAntigravityGatewayService_GetAvailableModelsForAccount_UsesLiveModelsAndPriority(t *testing.T) {
