@@ -250,6 +250,46 @@ func TestAntigravityGatewayService_TestConnection_ForceRefreshesValidationErrorT
 	require.Equal(t, "Bearer new-token", upstream.authorization)
 }
 
+func TestAntigravityGatewayService_TestConnection_AbnormalOAuthUsesLegacyStreamUserAgent(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          609,
+		Name:        "ag-abnormal-legacy-ua",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project-from-creds",
+			"plan_type":    "Abnormal",
+		},
+	}
+	upstream := &recordingBodyUpstream{}
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  upstream,
+	}
+
+	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "antigravity", upstream.userAgent)
+	require.Contains(t, upstream.url, "streamGenerateContent")
+}
+
 type validationThenLegacyOKUpstream struct {
 	calls      int
 	bodies     [][]byte
