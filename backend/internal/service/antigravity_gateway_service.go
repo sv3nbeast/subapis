@@ -1253,6 +1253,12 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 }
 
 func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Context, account *Account, modelID string, opts AntigravityTestConnectionOptions) (*TestConnectionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 测试连接是指定账号探测，不参与多账号调度/切号语义。
+	ctx = WithSingleAccountRetry(ctx, true, false)
+
 	// 获取 token
 	if s.tokenProvider == nil {
 		return nil, errors.New("antigravity token provider not configured")
@@ -1262,8 +1268,20 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 		return nil, fmt.Errorf("获取 access_token 失败: %w", err)
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
+	// 代理 URL
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	// 获取 project_id。测试连接使用指定账号直连，不走真实账号调度；
+	// 但 OAuth 账号缺少 project_id 时需先执行与真实转发一致的 bootstrap，避免空 project_id 误报。
 	projectID := strings.TrimSpace(account.GetCredential("project_id"))
+	if account.Type == AccountTypeOAuth && projectID == "" {
+		if bootstrappedProjectID := strings.TrimSpace(s.ensureAntigravityBootstrapProbe(ctx, account, accessToken, proxyURL)); bootstrappedProjectID != "" {
+			projectID = bootstrappedProjectID
+		}
+	}
 
 	// 模型映射
 	mappedModel := s.getMappedModel(account, modelID)
@@ -1280,12 +1298,6 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 	}
 	if err != nil {
 		return nil, fmt.Errorf("构建请求失败: %w", err)
-	}
-
-	// 代理 URL
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
 	}
 
 	// 复用 antigravityRetryLoop：完整的重试 / credits overages / 智能重试

@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -27,6 +28,13 @@ func (r *accountTestRepoStub) GetByID(_ context.Context, id int64) (*Account, er
 		return r.account, nil
 	}
 	return nil, errors.New("account not found")
+}
+
+func (r *accountTestRepoStub) Update(_ context.Context, account *Account) error {
+	if r.account != nil && account != nil && r.account.ID == account.ID {
+		r.account.Credentials = account.Credentials
+	}
+	return nil
 }
 
 func TestAntigravityGatewayService_TestConnection_BypassesModelRateLimitPrecheck(t *testing.T) {
@@ -73,6 +81,181 @@ func TestAntigravityGatewayService_TestConnection_BypassesModelRateLimitPrecheck
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 1, upstream.calls, "测试连接应绕过 model cooldown 预检查并实际发起探测")
+}
+
+type recordingBodyUpstream struct {
+	calls              int
+	body               []byte
+	singleAccountRetry bool
+}
+
+func (r *recordingBodyUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	r.calls++
+	r.singleAccountRetry = isSingleAccountRetry(req.Context())
+	if req.Body != nil {
+		r.body, _ = io.ReadAll(req.Body)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("ok")),
+	}, nil
+}
+
+func (r *recordingBodyUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return r.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func TestAntigravityGatewayService_TestConnection_OAuthBootstrapsMissingProjectID(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	bootstrap := &antigravityBootstrapClientStub{
+		loadResp: &antigravity.LoadCodeAssistResponse{
+			CloudAICompanionProject: "project-from-bootstrap",
+			CurrentTier:             &antigravity.TierInfo{ID: "free-tier"},
+		},
+		modelsResp: &antigravity.FetchAvailableModelsResponse{
+			Models: map[string]antigravity.ModelInfo{
+				"claude-sonnet-4-6": {},
+			},
+		},
+		userInfoResp: &antigravity.FetchUserInfoResponse{RegionCode: "US"},
+	}
+	account := &Account{
+		ID:          505,
+		Name:        "ag-oauth-missing-project",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Schedulable: true,
+		Status:      StatusError,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+		},
+	}
+
+	upstream := &recordingBodyUpstream{}
+	repo := &accountTestRepoStub{account: account}
+	svc := &AntigravityGatewayService{
+		accountRepo:          repo,
+		bootstrapProbeCache:  newAntigravityBootstrapCache(),
+		tokenProvider:        &AntigravityTokenProvider{},
+		httpUpstream:         upstream,
+		newAntigravityClient: func(proxyURL string) (antigravityBootstrapClient, error) { return bootstrap, nil },
+	}
+
+	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "project-from-bootstrap", account.GetCredential("project_id"))
+	require.Equal(t, 1, bootstrap.loadCalls)
+	require.Equal(t, 1, upstream.calls)
+	require.True(t, upstream.singleAccountRetry, "测试连接应按指定账号单账号探测，不能进入多账号切换语义")
+
+	var sent map[string]any
+	require.NoError(t, json.Unmarshal(upstream.body, &sent))
+	require.Equal(t, "project-from-bootstrap", sent["project"])
+}
+
+func TestAntigravityGatewayService_GetAvailableModelsForAccount_UsesLiveModelsAndPriority(t *testing.T) {
+	bootstrap := &antigravityBootstrapClientStub{
+		modelsResp: &antigravity.FetchAvailableModelsResponse{
+			Models: map[string]antigravity.ModelInfo{
+				"gemini-3.1-pro-high": {
+					DisplayName: "Gemini 3.1 Pro High",
+				},
+				"claude-opus-4-6-thinking": {
+					DisplayName: "Claude Opus 4.6 Thinking",
+				},
+				"claude-sonnet-4-6": {
+					DisplayName: "Claude Sonnet 4.6",
+				},
+			},
+		},
+	}
+	account := &Account{
+		ID:          606,
+		Name:        "ag-live-models",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusError,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "existing-project",
+		},
+	}
+	svc := &AntigravityGatewayService{
+		bootstrapProbeCache: newAntigravityBootstrapCache(),
+		tokenProvider:       &AntigravityTokenProvider{},
+		newAntigravityClient: func(proxyURL string) (antigravityBootstrapClient, error) {
+			return bootstrap, nil
+		},
+	}
+
+	models, err := svc.GetAvailableModelsForAccount(context.Background(), account)
+	require.NoError(t, err)
+	require.Len(t, models, 3)
+	require.Equal(t, "claude-sonnet-4-6", models[0].ID)
+	require.Equal(t, "claude-opus-4-6-thinking", models[1].ID)
+	require.Equal(t, "gemini-3.1-pro-high", models[2].ID)
+	require.Equal(t, 1, bootstrap.modelsCalls)
+	require.Equal(t, 0, bootstrap.loadCalls, "已有 project_id 时模型列表不应强制同步 loadCodeAssist")
+}
+
+func TestAccountTestService_RunTestBackground_AntigravityDefaultModelPrefersCurrentSonnet(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          707,
+		Name:        "ag-default-model",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeUpstream,
+		Schedulable: true,
+		Status:      StatusError,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "token",
+		},
+	}
+	upstream := &recordingBodyUpstream{}
+	agSvc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  upstream,
+	}
+	testSvc := &AccountTestService{
+		accountRepo:               &accountTestRepoStub{account: account},
+		antigravityGatewayService: agSvc,
+	}
+
+	result, err := testSvc.RunTestBackground(context.Background(), account.ID, "")
+	require.NoError(t, err)
+	require.Equal(t, "success", result.Status)
+
+	var sent map[string]any
+	require.NoError(t, json.Unmarshal(upstream.body, &sent))
+	require.Equal(t, "claude-sonnet-4-6", sent["model"])
 }
 
 func TestAntigravityGatewayService_TestConnection_BypassesModelCapacityCooldownPrecheck(t *testing.T) {

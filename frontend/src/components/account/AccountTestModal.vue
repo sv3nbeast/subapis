@@ -292,6 +292,7 @@ const openAITestModeOptions = computed(() => [
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
 const previewImageUrl = ref('')
+const prioritizedAntigravityModels = ['claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gemini-3.1-pro-high']
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
@@ -309,7 +310,10 @@ const supportsOpenAIImageTest = computed(() => {
 const supportsImageTest = computed(() => supportsGeminiImageTest.value || supportsOpenAIImageTest.value)
 
 const sortTestModels = (models: ClaudeModel[]) => {
-  const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
+  const priorities = props.account?.platform === 'antigravity'
+    ? [...prioritizedAntigravityModels, ...prioritizedGeminiModels]
+    : prioritizedGeminiModels
+  const priorityMap = new Map(priorities.map((id, index) => [id, index]))
 
   return [...models].sort((a, b) => {
     const aPriority = priorityMap.get(a.id) ?? Number.MAX_SAFE_INTEGER
@@ -354,6 +358,11 @@ const loadAvailableModels = async () => {
     if (availableModels.value.length > 0) {
       if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
+      } else if (props.account.platform === 'antigravity') {
+        const preferredModel = prioritizedAntigravityModels
+          .map((id) => availableModels.value.find((m) => m.id === id))
+          .find(Boolean)
+        selectedModelId.value = preferredModel?.id || availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
         const sonnetModel = availableModels.value.find((m) => m.id.includes('sonnet'))

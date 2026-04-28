@@ -1883,8 +1883,18 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle Antigravity accounts: return Claude + Gemini models
 	if account.Platform == service.PlatformAntigravity {
-		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
-		response.Success(c, antigravity.DefaultModels())
+		if h.accountTestService != nil {
+			if models, err := h.accountTestService.GetAntigravityAvailableModels(c.Request.Context(), account); err == nil && len(models) > 0 {
+				response.Success(c, models)
+				return
+			} else if err != nil {
+				slog.Warn("antigravity_available_models_fallback",
+					"account_id", account.ID,
+					"error", err,
+				)
+			}
+		}
+		response.Success(c, service.PrioritizeAntigravityModels(antigravity.DefaultModels()))
 		return
 	}
 
