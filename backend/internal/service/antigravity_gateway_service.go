@@ -102,6 +102,14 @@ const (
 	antigravityFallbackSecondsEnv = "GATEWAY_ANTIGRAVITY_FALLBACK_COOLDOWN_SECONDS"
 )
 
+var antigravityLegacyWakeupBaseURLs = []string{
+	"https://daily-cloudcode-pa.googleapis.com",
+	"https://cloudcode-pa.googleapis.com",
+	"https://daily-cloudcode-pa.sandbox.googleapis.com",
+}
+
+const antigravityLegacyWakeupSystemPrompt = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+
 // AntigravityAccountSwitchError 账号切换信号
 // 当账号限流时间超过阈值时，通知上层切换账号
 type AntigravityAccountSwitchError struct {
@@ -1356,6 +1364,15 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 	}
 
 	if result.resp.StatusCode >= 400 {
+		if isAntigravityValidationRequiredResponse(result.resp.StatusCode, respBody) {
+			if legacyResult, legacyErr := s.tryAntigravityLegacyWakeupTest(ctx, account, accessToken, proxyURL, projectID, modelID, mappedModel, opts); legacyErr == nil {
+				return legacyResult, nil
+			} else {
+				logger.LegacyPrintf("service.antigravity_gateway",
+					"%s legacy_wakeup_fallback_failed model=%s account=%d error=%v",
+					prefix, modelID, account.ID, legacyErr)
+			}
+		}
 		return nil, fmt.Errorf("API 返回 %d: %s", result.resp.StatusCode, string(respBody))
 	}
 
@@ -1380,6 +1397,162 @@ func shouldForceRefreshAntigravityTestToken(account *Account) bool {
 	return strings.Contains(msg, "validation required") ||
 		strings.Contains(msg, "validation_required") ||
 		strings.Contains(msg, "verify your account")
+}
+
+func isAntigravityValidationRequiredResponse(statusCode int, body []byte) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "validation_required") ||
+		strings.Contains(lower, "verify your account") ||
+		strings.Contains(lower, "validation_url")
+}
+
+func (s *AntigravityGatewayService) tryAntigravityLegacyWakeupTest(
+	ctx context.Context,
+	account *Account,
+	accessToken string,
+	proxyURL string,
+	projectID string,
+	requestedModel string,
+	mappedModel string,
+	opts AntigravityTestConnectionOptions,
+) (*TestConnectionResult, error) {
+	if account == nil || account.Type != AccountTypeOAuth {
+		return nil, errors.New("legacy wakeup probe only supports antigravity oauth accounts")
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return nil, errors.New("legacy wakeup probe requires project_id")
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, errors.New("legacy wakeup probe requires access_token")
+	}
+
+	models := antigravityLegacyWakeupCandidateModels(requestedModel, mappedModel)
+	if len(models) == 0 {
+		return nil, errors.New("legacy wakeup probe has no candidate model")
+	}
+
+	prefix := strings.TrimSpace(opts.Prefix)
+	if prefix == "" {
+		prefix = fmt.Sprintf("[antigravity-Test] account=%d(%s)", account.ID, account.Name)
+	}
+
+	var lastErr error
+	for _, model := range models {
+		body, err := buildAntigravityLegacyWakeupTestRequest(projectID, model)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, baseURL := range antigravityLegacyWakeupBaseURLs {
+			req, err := antigravity.NewAPIRequestWithURL(ctx, baseURL, "streamGenerateContent", accessToken, body)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			// AutoGetCode 的验证探针使用旧版 Antigravity wakeup 形态。
+			req.Header.Set("User-Agent", "antigravity")
+			req.Header.Set("Accept-Encoding", "gzip")
+			s.applyAntigravityUpstreamRequestHeaders(req, account)
+
+			resp, err := s.doAntigravityUpstreamRequestWith(req, proxyURL, account, s.resolveTLSProfile(account), s.httpUpstream)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			normalizeAntigravityCompressedResponse(resp)
+			respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				lastErr = readErr
+				continue
+			}
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				logger.LegacyPrintf("service.antigravity_gateway",
+					"%s legacy_wakeup_fallback_success model=%s account=%d base_url=%s",
+					prefix, model, account.ID, baseURL)
+				return &TestConnectionResult{
+					Text:        extractTextFromSSEResponse(respBody),
+					MappedModel: model,
+				}, nil
+			}
+
+			lastErr = fmt.Errorf("legacy wakeup probe returned %d: %s", resp.StatusCode, truncateString(string(respBody), 400))
+			if resp.StatusCode == http.StatusNotFound ||
+				resp.StatusCode == http.StatusTooManyRequests ||
+				resp.StatusCode == http.StatusServiceUnavailable ||
+				isAntigravityValidationRequiredResponse(resp.StatusCode, respBody) {
+				continue
+			}
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("legacy wakeup probe failed")
+}
+
+func antigravityLegacyWakeupCandidateModels(requestedModel string, mappedModel string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, 5)
+	add := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			return
+		}
+		if _, ok := seen[model]; ok {
+			return
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+
+	add(mappedModel)
+	add(requestedModel)
+	if normalized := strings.ReplaceAll(strings.TrimSpace(requestedModel), ".", "-"); normalized != requestedModel {
+		add(normalized)
+	}
+	for _, model := range preferredAntigravityTestModelIDs {
+		add(model)
+	}
+	return out
+}
+
+func buildAntigravityLegacyWakeupTestRequest(projectID string, model string) ([]byte, error) {
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	if len(suffix) > 6 {
+		suffix = suffix[:6]
+	}
+	nowMS := time.Now().UnixMilli()
+	payload := map[string]any{
+		"project":     projectID,
+		"requestId":   fmt.Sprintf("req_%d_%s", nowMS, suffix),
+		"model":       model,
+		"userAgent":   "antigravity",
+		"requestType": "agent",
+		"request": map[string]any{
+			"contents": []map[string]any{
+				{
+					"role": "user",
+					"parts": []map[string]any{
+						{"text": "hi"},
+					},
+				},
+			},
+			"session_id": fmt.Sprintf("sess_%d_%s", nowMS, suffix),
+			"systemInstruction": map[string]any{
+				"parts": []map[string]any{
+					{"text": antigravityLegacyWakeupSystemPrompt},
+				},
+			},
+			"generationConfig": map[string]any{
+				"temperature": 0,
+			},
+		},
+	}
+	return json.Marshal(payload)
 }
 
 // testConnectionHandleError 是 TestConnection 使用的轻量 handleError 回调。

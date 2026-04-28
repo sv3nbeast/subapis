@@ -86,12 +86,18 @@ func TestAntigravityGatewayService_TestConnection_BypassesModelRateLimitPrecheck
 type recordingBodyUpstream struct {
 	calls              int
 	body               []byte
+	url                string
+	userAgent          string
 	singleAccountRetry bool
 	authorization      string
 }
 
 func (r *recordingBodyUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	r.calls++
+	if req.URL != nil {
+		r.url = req.URL.String()
+	}
+	r.userAgent = req.Header.Get("User-Agent")
 	r.singleAccountRetry = isSingleAccountRetry(req.Context())
 	r.authorization = req.Header.Get("Authorization")
 	if req.Body != nil {
@@ -242,6 +248,97 @@ func TestAntigravityGatewayService_TestConnection_ForceRefreshesValidationErrorT
 	require.Equal(t, 1, executor.refreshCalls)
 	require.Equal(t, "new-token", account.GetCredential("access_token"))
 	require.Equal(t, "Bearer new-token", upstream.authorization)
+}
+
+type validationThenLegacyOKUpstream struct {
+	calls      int
+	bodies     [][]byte
+	urls       []string
+	userAgents []string
+}
+
+func (u *validationThenLegacyOKUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	u.calls++
+	if req.URL != nil {
+		u.urls = append(u.urls, req.URL.String())
+	}
+	u.userAgents = append(u.userAgents, req.Header.Get("User-Agent"))
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		u.bodies = append(u.bodies, body)
+	}
+	if u.calls == 1 {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":403,"message":"Verify your account to continue.","status":"PERMISSION_DENIED","details":[{"reason":"VALIDATION_REQUIRED","metadata":{"validation_url":"https://accounts.google.com/signin/continue"}}]}}`)),
+		}, nil
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`data: {"response":{"candidates":[{"content":{"parts":[{"text":"legacy ok"}]}}]}}` + "\n\n")),
+	}, nil
+}
+
+func (u *validationThenLegacyOKUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func TestAntigravityGatewayService_TestConnection_LegacyWakeupFallbackOnValidationRequired(t *testing.T) {
+	t.Setenv(antigravityForwardBaseURLEnv, "")
+
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-test.example"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          608,
+		Name:        "ag-validation-legacy",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusError,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "project-from-creds",
+		},
+	}
+	upstream := &validationThenLegacyOKUpstream{}
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  upstream,
+	}
+
+	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "legacy ok", result.Text)
+	require.Equal(t, "claude-sonnet-4-6", result.MappedModel)
+	require.Equal(t, 2, upstream.calls)
+	require.Len(t, upstream.bodies, 2)
+	require.Contains(t, upstream.urls[1], "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse")
+	require.Equal(t, "antigravity", upstream.userAgents[1])
+
+	var legacy map[string]any
+	require.NoError(t, json.Unmarshal(upstream.bodies[1], &legacy))
+	require.Equal(t, "project-from-creds", legacy["project"])
+	require.Equal(t, "claude-sonnet-4-6", legacy["model"])
+	require.Equal(t, "antigravity", legacy["userAgent"])
+	require.Equal(t, "agent", legacy["requestType"])
+	require.Contains(t, legacy["requestId"], "req_")
+	request := legacy["request"].(map[string]any)
+	require.Contains(t, request["session_id"], "sess_")
+	require.Equal(t, float64(0), request["generationConfig"].(map[string]any)["temperature"])
+	systemText := request["systemInstruction"].(map[string]any)["parts"].([]any)[0].(map[string]any)["text"].(string)
+	require.Contains(t, systemText, "Absolute paths only")
 }
 
 func TestAntigravityGatewayService_GetAvailableModelsForAccount_UsesLiveModelsAndPriority(t *testing.T) {
