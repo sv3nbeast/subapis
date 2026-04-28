@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +53,13 @@ const (
 // 同时用于 User-Agent 和 loadCodeAssist.metadata.ideVersion，避免两处版本不一致。
 var defaultUserAgentVersion = "1.22.2"
 
+// defaultUserAgentOS/defaultUserAgentArch 默认模拟 macOS Antigravity 客户端。
+// 生产运行在 Linux 容器中，不能直接使用 runtime.GOOS/runtime.GOARCH，否则出站 UA 会变成 linux/amd64。
+var (
+	defaultUserAgentOS   = "darwin"
+	defaultUserAgentArch = "arm64"
+)
+
 // defaultClientSecret 可通过环境变量 ANTIGRAVITY_OAUTH_CLIENT_SECRET 配置
 var defaultClientSecret = "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"
 
@@ -61,6 +67,12 @@ func init() {
 	// 从环境变量读取版本号，未设置则使用默认值
 	if version := os.Getenv("ANTIGRAVITY_USER_AGENT_VERSION"); version != "" {
 		defaultUserAgentVersion = version
+	}
+	if osName := os.Getenv("ANTIGRAVITY_USER_AGENT_OS"); osName != "" {
+		defaultUserAgentOS = osName
+	}
+	if arch := os.Getenv("ANTIGRAVITY_USER_AGENT_ARCH"); arch != "" {
+		defaultUserAgentArch = arch
 	}
 	// 从环境变量读取 client_secret，未设置则使用默认值
 	if secret := os.Getenv(AntigravityOAuthClientSecretEnv); secret != "" {
@@ -76,9 +88,22 @@ func GetClientVersion() string {
 	return "1.22.2"
 }
 
+// GetUserAgentPlatform 返回 Antigravity User-Agent 中的 os/arch 片段。
+func GetUserAgentPlatform() string {
+	osName := strings.TrimSpace(defaultUserAgentOS)
+	if osName == "" {
+		osName = "darwin"
+	}
+	arch := strings.TrimSpace(defaultUserAgentArch)
+	if arch == "" {
+		arch = "arm64"
+	}
+	return osName + "/" + arch
+}
+
 // GetUserAgent 返回当前配置的 User-Agent
 func GetUserAgent() string {
-	return fmt.Sprintf("antigravity/%s %s/%s", GetClientVersion(), runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("antigravity/%s %s", GetClientVersion(), GetUserAgentPlatform())
 }
 
 func getClientSecret() (string, error) {

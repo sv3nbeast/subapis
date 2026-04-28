@@ -250,7 +250,7 @@ func TestAntigravityGatewayService_TestConnection_ForceRefreshesValidationErrorT
 	require.Equal(t, "Bearer new-token", upstream.authorization)
 }
 
-func TestAntigravityGatewayService_TestConnection_AbnormalOAuthUsesLegacyStreamUserAgent(t *testing.T) {
+func TestAntigravityGatewayService_TestConnection_AbnormalOAuthKeepsDefaultUserAgent(t *testing.T) {
 	t.Setenv(antigravityForwardBaseURLEnv, "")
 
 	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
@@ -286,7 +286,7 @@ func TestAntigravityGatewayService_TestConnection_AbnormalOAuthUsesLegacyStreamU
 	result, err := svc.TestConnection(context.Background(), account, "claude-sonnet-4-6")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, "antigravity", upstream.userAgent)
+	require.Equal(t, antigravity.GetUserAgent(), upstream.userAgent)
 	require.Contains(t, upstream.url, "streamGenerateContent")
 }
 

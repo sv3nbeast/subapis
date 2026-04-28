@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -97,13 +96,36 @@ func TestGetClientVersion_去除空格(t *testing.T) {
 }
 
 func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
-	old := defaultUserAgentVersion
+	oldVersion := defaultUserAgentVersion
+	oldOS := defaultUserAgentOS
+	oldArch := defaultUserAgentArch
 	defaultUserAgentVersion = "1.22.2"
-	t.Cleanup(func() { defaultUserAgentVersion = old })
+	defaultUserAgentOS = "darwin"
+	defaultUserAgentArch = "arm64"
+	t.Cleanup(func() {
+		defaultUserAgentVersion = oldVersion
+		defaultUserAgentOS = oldOS
+		defaultUserAgentArch = oldArch
+	})
 
-	want := "antigravity/1.22.2 " + runtime.GOOS + "/" + runtime.GOARCH
+	want := "antigravity/1.22.2 darwin/arm64"
 	if got := GetUserAgent(); got != want {
 		t.Fatalf("GetUserAgent 不匹配: got %q", got)
+	}
+}
+
+func TestGetUserAgentPlatform_允许覆盖平台(t *testing.T) {
+	oldOS := defaultUserAgentOS
+	oldArch := defaultUserAgentArch
+	defaultUserAgentOS = "darwin"
+	defaultUserAgentArch = "amd64"
+	t.Cleanup(func() {
+		defaultUserAgentOS = oldOS
+		defaultUserAgentArch = oldArch
+	})
+
+	if got := GetUserAgentPlatform(); got != "darwin/amd64" {
+		t.Fatalf("GetUserAgentPlatform 不匹配: got %q", got)
 	}
 }
 
@@ -712,7 +734,7 @@ func TestConstants_值正确(t *testing.T) {
 	if RedirectURI != "http://localhost:8085/callback" {
 		t.Errorf("RedirectURI 不匹配: got %s", RedirectURI)
 	}
-	if GetUserAgent() != "antigravity/1.22.2 "+runtime.GOOS+"/"+runtime.GOARCH {
+	if GetUserAgent() != "antigravity/1.22.2 darwin/arm64" {
 		t.Errorf("UserAgent 不匹配: got %s", GetUserAgent())
 	}
 	if SessionTTL != 30*time.Minute {

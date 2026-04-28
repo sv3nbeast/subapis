@@ -1047,10 +1047,6 @@ func (s *AntigravityGatewayService) applyAntigravityUpstreamRequestHeaders(req *
 		return
 	}
 
-	if shouldUseLegacyAntigravityStreamUserAgent(req, account) {
-		req.Header.Set("User-Agent", "antigravity")
-	}
-
 	if strings.TrimSpace(req.Header.Get("Accept-Encoding")) == "" {
 		req.Header.Set("Accept-Encoding", "gzip")
 	}
@@ -1059,22 +1055,6 @@ func (s *AntigravityGatewayService) applyAntigravityUpstreamRequestHeaders(req *
 	if quotaProjectID != "" {
 		req.Header.Set("x-goog-user-project", quotaProjectID)
 	}
-}
-
-func shouldUseLegacyAntigravityStreamUserAgent(req *http.Request, account *Account) bool {
-	if req == nil || account == nil {
-		return false
-	}
-	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "Abnormal") {
-		return false
-	}
-	if req.URL == nil {
-		return false
-	}
-	return strings.Contains(req.URL.Path, "streamGenerateContent")
 }
 
 func normalizeAntigravityCompressedResponse(resp *http.Response) {
