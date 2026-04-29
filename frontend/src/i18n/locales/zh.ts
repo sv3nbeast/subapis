@@ -254,9 +254,12 @@ export default {
     delete: '删除',
     edit: '编辑',
     create: '创建',
+    creating: '创建中...',
     update: '更新',
     confirm: '确认',
     reset: '重置',
+    clear: '清除',
+    apply: '应用',
     search: '搜索',
     filter: '筛选',
     export: '导出',
@@ -280,6 +283,7 @@ export default {
     collapse: '收起',
     success: '成功',
     error: '错误',
+    deleted: '已删除',
     critical: '严重',
     warning: '警告',
     info: '提示',
@@ -298,6 +302,12 @@ export default {
     copyFailed: '复制失败',
     verifying: '验证中...',
     processing: '处理中...',
+    sending: '发送中...',
+    saved: '已保存',
+    required: '必填',
+    today: '今天',
+    tomorrow: '明天',
+    tryAgain: '请重试',
     contactSupport: '联系客服',
     add: '添加',
     invalidEmail: '请输入有效的邮箱地址',
@@ -423,6 +433,7 @@ export default {
     verificationCodeHint: '请输入发送到您邮箱的6位验证码',
     sendingCode: '发送中...',
     clickToResend: '点击重新发送验证码',
+    sendCode: '发送验证码',
     resendCode: '重新发送验证码',
     sendCodeDesc: '我们将发送验证码到',
     codeSentSuccess: '验证码已发送！请查收您的邮箱。',
@@ -483,8 +494,46 @@ export default {
     oauth: {
       code: '授权码',
       state: '状态',
-      fullUrl: '完整URL'
+      fullUrl: '完整URL',
+      callbackTitle: '正在完成授权',
+      callbackHint: '正在处理授权回调，请稍候...'
     },
+    oauthFlow: {
+      profileDetailsTitle: '{providerName} 资料',
+      profileDetailsDescription: '确认本次登录返回的账号资料。',
+      useDisplayName: '使用显示名称',
+      avatarAlt: '{providerName} 头像',
+      useAvatar: '使用头像',
+      reviewProfileBeforeContinue: '继续前请确认 {providerName} 资料',
+      chooseHowToContinue: '选择继续方式',
+      suggestedEmail: '建议使用 {email}',
+      chooseAccountActionHint: '请选择绑定已有账号或创建新账号',
+      bindExistingAccount: '绑定已有账号',
+      createNewAccount: '创建新账号',
+      createAccountHint: '将使用当前授权资料创建新账号',
+      bindLoginHint: '登录已有账号并绑定 {providerName}',
+      logInAndBind: '登录并绑定',
+      useDifferentEmail: '使用其他邮箱',
+      totpHint: '请输入 {account} 的双因素验证码',
+      yourAccount: '您的账号',
+      verifyAndContinue: '验证并继续',
+      bindCurrentAccount: '绑定当前账号',
+      bindCurrentAccountTitle: '绑定当前账号',
+      bindCurrentAccountDescription: '将 {providerName} 绑定到当前登录账号',
+      bindSignInToExistingAccount: '登录已有账号并绑定 {providerName}',
+      signInThenBindDescription: '请先登录已有账号，再绑定 {providerName}',
+      wechatAvailabilityUnknown: '暂无法确认微信环境，请稍后重试',
+      wechatBrowserOnly: '请在微信内打开以继续',
+      wechatSystemBrowserOnly: '请在系统浏览器或微信内打开',
+      wechatNotConfigured: '微信登录暂未配置'
+    },
+    wechatPayment: {
+      callbackTitle: '正在完成微信支付',
+      callbackProcessing: '正在确认支付结果，请稍候...',
+      callbackMissingResumeToken: '支付回调信息缺失，请返回支付页重试。',
+      backToPayment: '返回支付页面'
+    },
+    wechatProviderName: '微信',
     // 忘记密码
     forgotPassword: '忘记密码？',
     forgotPasswordTitle: '重置密码',
@@ -759,6 +808,8 @@ export default {
     avgDuration: '平均耗时',
     inSelectedRange: '所选范围内',
     perRequest: '每次请求',
+    unitPrice: '单价',
+    imageUnitPrice: '图片单价',
     apiKeyFilter: 'API 密钥',
     allApiKeys: '全部密钥',
     timeRange: '时间范围',
@@ -1097,6 +1148,10 @@ export default {
         linuxdo: 'LinuxDo',
         oidc: '{providerName}',
         wechat: '微信',
+      },
+      source: {
+        avatar: '头像来自 {providerName}',
+        username: '用户名来自 {providerName}',
       },
       notes: {
         emailManagedFromProfile: '主账号邮箱在资料表单中管理',
@@ -1640,6 +1695,7 @@ export default {
       leaveEmptyToKeep: '留空则保持原密码不变',
       generatePassword: '生成随机密码',
       copyPassword: '复制密码',
+      passwordCopied: '密码已复制',
       creating: '创建中...',
       updating: '更新中...',
       columns: {
@@ -1654,6 +1710,8 @@ export default {
         usage: '用量',
         concurrency: '并发数',
         status: '状态',
+        lastActive: '最后活跃',
+        lastUsed: '最近使用',
         created: '创建时间',
         actions: '操作'
       },
@@ -2189,6 +2247,10 @@ export default {
       duplicateModels: '模型「{0}」在多个定价条目中重复',
       modelConflict: "模型模式 '{model1}' 和 '{model2}' 冲突：匹配范围重叠",
       mappingConflict: "模型映射源 '{model1}' 和 '{model2}' 冲突：匹配范围重叠",
+      noGroupsSelected: '{platform} 平台未选择分组，请至少选择一个分组或禁用该平台',
+      emptyModelsInPricing: '{platform} 平台下有定价条目未添加模型，请添加模型或删除该条目',
+      accountStatsRuleMissingTarget: '{platform} 平台的账号统计规则需要至少选择一个分组或填写账号 ID',
+      accountStatsRuleMissingPricing: '{platform} 平台的账号统计规则需要配置模型价格',
       deleteConfirm: '确定要删除渠道「{name}」吗？此操作不可撤销。',
       columns: {
         name: '名称',
@@ -2272,6 +2334,7 @@ export default {
         accountStatsPricing: '账号统计定价',
         accountStatsPricingHint: '自定义规则仅影响后台账号成本统计，不影响用户计费。',
         noAccountStatsPricingRules: '暂无账号统计定价规则',
+        accountStatsRuleDefaultName: '统计规则 {index}',
         ruleName: '规则名称',
         ruleNamePlaceholder: '可选规则名称',
         matchGroups: '匹配分组',
@@ -2703,6 +2766,14 @@ export default {
         thresholdPlaceholder: '输入告警金额',
       },
       testConnection: '测试连接',
+      imageTestMode: '图片测试模式',
+      imageTestHint: '发送图片生成探测请求，验证账号图片能力。',
+      imagePromptLabel: '图片提示词',
+      imagePromptPlaceholder: '请输入图片生成提示词',
+      imagePromptDefault: '生成一张简洁的蓝色科技风图标',
+      sendingImageRequest: '正在发送图片请求...',
+      imageReceived: '已收到 {count} 张图片',
+      imagePreview: '图片预览',
       reAuthorize: '重新授权',
       refreshToken: '刷新令牌',
       noAccountsYet: '暂无账号',
@@ -2752,7 +2823,8 @@ export default {
         creditsExhausted: '积分已用尽',
         creditsExhaustedUntil: 'AI Credits 已用尽，预计 {time} 恢复',
         overloadedUntil: '负载过重，重置时间：{time}',
-        viewTempUnschedDetails: '查看临时不可调度详情'
+        viewTempUnschedDetails: '查看临时不可调度详情',
+        quotaExceeded: '配额超限'
       },
       tempUnschedulable: {
         title: '临时不可调度',
@@ -2993,6 +3065,8 @@ export default {
       supportsAllModels: '（支持所有模型）',
       requestModel: '请求模型',
       actualModel: '实际模型',
+      fromModel: '请求模型',
+      toModel: '上游模型',
       addMapping: '添加映射',
       mappingExists: '模型 {model} 的映射已存在',
       wildcardOnlyAtEnd: '通配符 * 只能放在末尾',
@@ -4688,6 +4762,16 @@ export default {
         showAdvancedDeveloperSettings: '显示高级开发者设置 (Distributed Lock)',
         advancedSettingsSummary: '高级设置 (分布式锁)',
         evalIntervalHint: '检测任务的执行频率，建议保持默认。',
+        metricThresholds: 'SLA 指标阈值',
+        metricThresholdsHint: '用于运维仪表盘健康判断和告警展示。',
+        slaMinPercent: 'SLA 最低值 (%)',
+        slaMinPercentHint: '低于该值时视为风险。',
+        ttftP99MaxMs: 'P99 首 Token 延迟上限 (ms)',
+        ttftP99MaxMsHint: '超过该值时提示首 Token 延迟异常。',
+        requestErrorRateMaxPercent: '请求错误率上限 (%)',
+        requestErrorRateMaxPercentHint: '超过该值时提示客户端或网关请求错误偏高。',
+        upstreamErrorRateMaxPercent: '上游错误率上限 (%)',
+        upstreamErrorRateMaxPercentHint: '超过该值时提示上游错误偏高。',
         validation: {
           title: '请先修正以下问题',
           invalid: '设置不合法',
@@ -5088,6 +5172,18 @@ export default {
         userinfoUsernamePath: 'UserInfo 用户名字段路径',
         userinfoUsernamePathPlaceholder: '例如 data.username'
       },
+      wechatConnect: {
+        title: '微信登录',
+        description: '配置微信 OAuth 登录与绑定',
+        enabledLabel: '启用微信登录',
+        enabledHint: '在登录/注册页面显示微信登录入口',
+        redirectUrlPlaceholder: 'https://your-domain.com/api/v1/auth/oauth/wechat/callback',
+        frontendRedirectUrlLabel: '前端回调路径',
+        frontendRedirectUrlPlaceholder: '/auth/wechat/callback',
+        frontendRedirectUrlHint: '后端回调完成后重定向到此前端路径',
+        generateAndCopy: '使用当前站点生成并复制',
+        redirectUrlSetAndCopied: '已使用当前站点生成回调地址并复制到剪贴板'
+      },
       defaults: {
         title: '用户默认设置',
         description: '新用户的默认值',
@@ -5107,6 +5203,36 @@ export default {
         subscriptionGroup: '订阅分组',
         subscriptionValidityDays: '有效期（天）'
       },
+      authSourceDefaults: {
+        title: '登录来源默认权益',
+        description: '为不同登录来源设置新用户默认余额、并发和订阅。',
+        requireEmailLabel: '要求邮箱',
+        requireEmailHint: '开启后该登录来源必须提供邮箱才能创建或绑定账号。',
+        enabledHint: '启用后，首次通过该来源创建账号时发放默认权益。',
+        grantOnFirstBindLabel: '首次绑定时发放',
+        grantOnFirstBindHint: '已有账号首次绑定该来源时也发放对应权益。',
+        defaultSubscriptionsLabel: '默认订阅',
+        defaultSubscriptionsHint: '该来源自动发放的订阅套餐。',
+        noSourceSubscriptions: '未配置该来源的默认订阅',
+        sources: {
+          email: {
+            title: '邮箱注册',
+            description: '通过邮箱密码注册或登录的用户'
+          },
+          linuxdo: {
+            title: 'Linux.do 登录',
+            description: '通过 Linux.do OAuth 登录的用户'
+          },
+          oidc: {
+            title: 'OIDC 登录',
+            description: '通过 OIDC Provider 登录的用户'
+          },
+          wechat: {
+            title: '微信登录',
+            description: '通过微信授权登录的用户'
+          }
+        }
+      },
       claudeCode: {
         title: 'Claude Code 设置',
         description: '控制 Claude Code 客户端访问要求',
@@ -5122,6 +5248,10 @@ export default {
         description: '控制 API Key 的调度行为',
         allowUngroupedKey: '允许未分组 Key 调度',
         allowUngroupedKeyHint: '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。'
+      },
+      openaiExperimentalScheduler: {
+        title: 'OpenAI 实验调度器',
+        description: '启用 OpenAI/ChatGPT 账号实验调度逻辑。'
       },
       gatewayForwarding: {
         title: '请求转发行为',
@@ -5151,14 +5281,22 @@ export default {
         priority: '优先级',
         priorityHint: '数值越小优先级越高',
         quotaLimit: '配额上限',
+        quotaLimitMustBePositive: '配额上限必须为正数',
         quotaLimitHint: '0 表示无限制',
         quotaRefreshInterval: '刷新周期',
         quotaUsed: '已使用',
+        quotaUsage: '配额用量',
+        resetUsage: '重置用量',
+        resetUsageConfirm: '确定要重置该搜索服务商的用量统计吗？',
+        resetUsageSuccess: '用量已重置',
+        subscribedAt: '订阅时间',
+        subscribedAtHint: '用于按周期计算配额重置时间',
         proxy: '代理',
         expiresAt: '过期时间',
         test: '测试搜索',
         testing: '测试中',
         testDefaultQuery: 'OpenAI 最新新闻',
+        testResultTitle: '测试结果',
         testResultProvider: '命中服务商',
         testNoResults: '未返回结果',
         removeProvider: '删除',
@@ -5245,6 +5383,7 @@ export default {
         configGuide: '支付配置指南',
         enabled: '启用支付',
         enabledHint: '启用或禁用支付系统',
+        enableConflict: '{method} 已由服务商「{provider}」启用，请先停用该服务商。',
         enabledPaymentTypes: '启用的服务商',
         enabledPaymentTypesHint: '禁用服务商将同时禁用对应的实例。',
         findProvider: '正在寻找合适的易支付服务商？',
@@ -6173,6 +6312,8 @@ export default {
       requestRefund: '申请退款',
     },
     result: {
+      processing: '支付处理中',
+      processingHint: '正在确认支付结果，请稍候。',
       success: '支付成功',
       subscriptionSuccess: '订阅成功',
       failed: '支付失败',
@@ -6181,6 +6322,7 @@ export default {
     },
     currentBalance: '当前余额',
     rechargeAccount: '充值账户',
+    groupFallback: '分组 #{id}',
     activeSubscription: '当前订阅',
     noActiveSubscription: '暂无有效订阅',
     tabTopUp: '充值',

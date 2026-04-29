@@ -254,9 +254,12 @@ export default {
     delete: 'Delete',
     edit: 'Edit',
     create: 'Create',
+    creating: 'Creating...',
     update: 'Update',
     confirm: 'Confirm',
     reset: 'Reset',
+    clear: 'Clear',
+    apply: 'Apply',
     search: 'Search',
     filter: 'Filter',
     export: 'Export',
@@ -280,6 +283,7 @@ export default {
     collapse: 'Collapse',
     success: 'Success',
     error: 'Error',
+    deleted: 'Deleted',
     critical: 'Critical',
     warning: 'Warning',
     info: 'Info',
@@ -298,6 +302,12 @@ export default {
     copyFailed: 'Failed to copy',
     verifying: 'Verifying...',
     processing: 'Processing...',
+    sending: 'Sending...',
+    saved: 'Saved',
+    required: 'required',
+    today: 'Today',
+    tomorrow: 'Tomorrow',
+    tryAgain: 'Please try again',
     contactSupport: 'Contact Support',
     add: 'Add',
     invalidEmail: 'Please enter a valid email address',
@@ -424,6 +434,7 @@ export default {
     verificationCodeHint: 'Enter the 6-digit code sent to your email',
     sendingCode: 'Sending...',
     clickToResend: 'Click to resend code',
+    sendCode: 'Send code',
     resendCode: 'Resend verification code',
     sendCodeDesc: "We'll send a verification code to",
     codeSentSuccess: 'Verification code sent! Please check your inbox.',
@@ -485,8 +496,46 @@ export default {
     oauth: {
       code: 'Code',
       state: 'State',
-      fullUrl: 'Full URL'
+      fullUrl: 'Full URL',
+      callbackTitle: 'Completing authorization',
+      callbackHint: 'Processing authorization callback, please wait...'
     },
+    oauthFlow: {
+      profileDetailsTitle: '{providerName} Profile',
+      profileDetailsDescription: 'Confirm the profile returned by this login.',
+      useDisplayName: 'Use display name',
+      avatarAlt: '{providerName} avatar',
+      useAvatar: 'Use avatar',
+      reviewProfileBeforeContinue: 'Review your {providerName} profile before continuing',
+      chooseHowToContinue: 'Choose how to continue',
+      suggestedEmail: 'Suggested email: {email}',
+      chooseAccountActionHint: 'Bind an existing account or create a new one',
+      bindExistingAccount: 'Bind existing account',
+      createNewAccount: 'Create new account',
+      createAccountHint: 'Create a new account with the current authorization profile',
+      bindLoginHint: 'Sign in to an existing account and bind {providerName}',
+      logInAndBind: 'Log in and bind',
+      useDifferentEmail: 'Use a different email',
+      totpHint: 'Enter the two-factor code for {account}',
+      yourAccount: 'your account',
+      verifyAndContinue: 'Verify and continue',
+      bindCurrentAccount: 'Bind current account',
+      bindCurrentAccountTitle: 'Bind current account',
+      bindCurrentAccountDescription: 'Bind {providerName} to the currently signed-in account',
+      bindSignInToExistingAccount: 'Sign in to an existing account and bind {providerName}',
+      signInThenBindDescription: 'Sign in to an existing account before binding {providerName}',
+      wechatAvailabilityUnknown: 'Unable to confirm WeChat availability, please try again later',
+      wechatBrowserOnly: 'Please open this page in WeChat to continue',
+      wechatSystemBrowserOnly: 'Please open this page in a system browser or WeChat',
+      wechatNotConfigured: 'WeChat login is not configured'
+    },
+    wechatPayment: {
+      callbackTitle: 'Completing WeChat payment',
+      callbackProcessing: 'Confirming payment result, please wait...',
+      callbackMissingResumeToken: 'Missing payment callback information. Please return to the payment page and try again.',
+      backToPayment: 'Back to payment'
+    },
+    wechatProviderName: 'WeChat',
     // Forgot password
     forgotPassword: 'Forgot password?',
     forgotPasswordTitle: 'Reset Your Password',
@@ -755,6 +804,8 @@ export default {
     avgDuration: 'Avg Duration',
     inSelectedRange: 'in selected range',
     perRequest: 'per request',
+    unitPrice: 'Unit price',
+    imageUnitPrice: 'Image unit price',
     apiKeyFilter: 'API Key',
     allApiKeys: 'All API Keys',
     timeRange: 'Time Range',
@@ -1093,6 +1144,10 @@ export default {
         linuxdo: 'LinuxDo',
         oidc: '{providerName}',
         wechat: 'WeChat',
+      },
+      source: {
+        avatar: 'Avatar from {providerName}',
+        username: 'Username from {providerName}',
       },
       notes: {
         emailManagedFromProfile: 'Primary account email is managed from the profile form',
@@ -1608,6 +1663,7 @@ export default {
       leaveEmptyToKeep: 'Leave empty to keep current password',
       generatePassword: 'Generate random password',
       copyPassword: 'Copy password',
+      passwordCopied: 'Password copied',
       creating: 'Creating...',
       updating: 'Updating...',
       form: {
@@ -1627,6 +1683,8 @@ export default {
         usage: 'Usage',
         concurrency: 'Concurrency',
         status: 'Status',
+        lastActive: 'Last Active',
+        lastUsed: 'Last Used',
         created: 'Created',
         actions: 'Actions'
       },
@@ -1884,6 +1942,7 @@ export default {
       groupUpdated: 'Group updated successfully',
       groupDeleted: 'Group deleted successfully',
       failedToLoad: 'Failed to load groups',
+      failedToSave: 'Failed to save group settings',
       failedToCreate: 'Failed to create group',
       failedToUpdate: 'Failed to update group',
       failedToDelete: 'Failed to delete group',
@@ -2098,6 +2157,10 @@ export default {
       duplicateModels: 'Model "{0}" appears in multiple pricing entries',
       modelConflict: "Model patterns '{model1}' and '{model2}' conflict: overlapping match range",
       mappingConflict: "Mapping source patterns '{model1}' and '{model2}' conflict: overlapping match range",
+      noGroupsSelected: '{platform} platform has no groups selected. Select at least one group or disable this platform.',
+      emptyModelsInPricing: '{platform} platform has pricing entries without models. Add models or remove those entries.',
+      accountStatsRuleMissingTarget: '{platform} platform account stats rules require at least one group or account ID.',
+      accountStatsRuleMissingPricing: '{platform} platform account stats rules require model pricing.',
       deleteConfirm: 'Are you sure you want to delete channel "{name}"? This cannot be undone.',
       columns: {
         name: 'Name',
@@ -2181,6 +2244,7 @@ export default {
         accountStatsPricing: 'Account Stats Pricing',
         accountStatsPricingHint: 'Custom rules only affect admin account cost statistics, not user billing.',
         noAccountStatsPricingRules: 'No account stats pricing rules.',
+        accountStatsRuleDefaultName: 'Stats Rule {index}',
         ruleName: 'Rule name',
         ruleNamePlaceholder: 'Optional rule name',
         matchGroups: 'Matched groups',
@@ -2548,7 +2612,8 @@ export default {
         creditsExhausted: 'Credits Exhausted',
         creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}',
         overloadedUntil: 'Overloaded until {time}',
-        viewTempUnschedDetails: 'View temp unschedulable details'
+        viewTempUnschedDetails: 'View temp unschedulable details',
+        quotaExceeded: 'Quota Exceeded'
       },
       columns: {
         name: 'Name',
@@ -2693,6 +2758,14 @@ export default {
         thresholdPlaceholder: 'Enter alert amount',
       },
       testConnection: 'Test Connection',
+      imageTestMode: 'Image test mode',
+      imageTestHint: 'Send an image generation probe request to verify image capability.',
+      imagePromptLabel: 'Image prompt',
+      imagePromptPlaceholder: 'Enter image generation prompt',
+      imagePromptDefault: 'Generate a simple blue technology style icon',
+      sendingImageRequest: 'Sending image request...',
+      imageReceived: 'Received {count} image(s)',
+      imagePreview: 'Image preview',
       reAuthorize: 'Re-Authorize',
       refreshToken: 'Refresh Token',
       noAccountsYet: 'No accounts yet',
@@ -2835,6 +2908,8 @@ export default {
       supportsAllModels: '(supports all models)',
       requestModel: 'Request model',
       actualModel: 'Actual model',
+      fromModel: 'Request model',
+      toModel: 'Upstream model',
       addMapping: 'Add Mapping',
       mappingExists: 'Mapping for {model} already exists',
       wildcardOnlyAtEnd: 'Wildcard * can only be at the end',
@@ -3951,6 +4026,7 @@ export default {
       lastRun: 'last_run:',
       lastSuccess: 'last_success:',
       lastError: 'last_error:',
+      result: 'Result',
       noData: 'No data.',
       loadingText: 'loading',
       ready: 'ready',
@@ -4025,7 +4101,12 @@ export default {
         '6h': 'Last 6 hours',
         '24h': 'Last 24 hours',
         '7d': 'Last 7 days',
-        '30d': 'Last 30 days'
+        '30d': 'Last 30 days',
+        custom: 'Custom'
+      },
+      customTimeRange: {
+        startTime: 'Start time',
+        endTime: 'End time'
       },
       openaiTokenStats: {
         title: 'OpenAI Token Request Stats',
@@ -4512,6 +4593,16 @@ export default {
         showAdvancedDeveloperSettings: 'Show advanced developer settings (Distributed Lock)',
         advancedSettingsSummary: 'Advanced settings (Distributed Lock)',
         evalIntervalHint: 'How often the evaluator runs. Keeping the default is recommended.',
+        metricThresholds: 'SLA Metric Thresholds',
+        metricThresholdsHint: 'Used for ops dashboard health evaluation and alert display.',
+        slaMinPercent: 'Minimum SLA (%)',
+        slaMinPercentHint: 'Values below this threshold are treated as risky.',
+        ttftP99MaxMs: 'P99 TTFT Limit (ms)',
+        ttftP99MaxMsHint: 'Warn when first-token latency exceeds this value.',
+        requestErrorRateMaxPercent: 'Request Error Rate Limit (%)',
+        requestErrorRateMaxPercentHint: 'Warn when client or gateway request errors exceed this value.',
+        upstreamErrorRateMaxPercent: 'Upstream Error Rate Limit (%)',
+        upstreamErrorRateMaxPercentHint: 'Warn when upstream errors exceed this value.',
         validation: {
           title: 'Please fix the following issues',
           invalid: 'Invalid settings',
@@ -4911,6 +5002,18 @@ export default {
         userinfoUsernamePath: 'UserInfo Username Path',
         userinfoUsernamePathPlaceholder: 'for example data.username'
       },
+      wechatConnect: {
+        title: 'WeChat Login',
+        description: 'Configure WeChat OAuth login and binding',
+        enabledLabel: 'Enable WeChat Login',
+        enabledHint: 'Show WeChat login on the login/register pages',
+        redirectUrlPlaceholder: 'https://your-domain.com/api/v1/auth/oauth/wechat/callback',
+        frontendRedirectUrlLabel: 'Frontend Callback Path',
+        frontendRedirectUrlPlaceholder: '/auth/wechat/callback',
+        frontendRedirectUrlHint: 'Frontend route used after backend callback',
+        generateAndCopy: 'Generate & Copy (current site)',
+        redirectUrlSetAndCopied: 'Redirect URL generated and copied to clipboard'
+      },
       defaults: {
         title: 'Default User Settings',
         description: 'Default values for new users',
@@ -4932,6 +5035,36 @@ export default {
         subscriptionGroup: 'Subscription Group',
         subscriptionValidityDays: 'Validity (days)'
       },
+      authSourceDefaults: {
+        title: 'Auth Source Default Grants',
+        description: 'Configure default balance, concurrency, and subscriptions for each login source.',
+        requireEmailLabel: 'Require email',
+        requireEmailHint: 'Require this login source to provide an email before account creation or binding.',
+        enabledHint: 'Grant these defaults when a user first creates an account with this source.',
+        grantOnFirstBindLabel: 'Grant on first bind',
+        grantOnFirstBindHint: 'Also grant these benefits when an existing account binds this source for the first time.',
+        defaultSubscriptionsLabel: 'Default subscriptions',
+        defaultSubscriptionsHint: 'Subscriptions automatically granted for this source.',
+        noSourceSubscriptions: 'No default subscriptions configured for this source',
+        sources: {
+          email: {
+            title: 'Email registration',
+            description: 'Users who register or sign in with email and password'
+          },
+          linuxdo: {
+            title: 'Linux.do Login',
+            description: 'Users who sign in with Linux.do OAuth'
+          },
+          oidc: {
+            title: 'OIDC Login',
+            description: 'Users who sign in with an OIDC provider'
+          },
+          wechat: {
+            title: 'WeChat Login',
+            description: 'Users who sign in with WeChat authorization'
+          }
+        }
+      },
       claudeCode: {
         title: 'Claude Code Settings',
         description: 'Control Claude Code client access requirements',
@@ -4949,6 +5082,10 @@ export default {
         description: 'Control API Key scheduling behavior',
         allowUngroupedKey: 'Allow Ungrouped Key Scheduling',
         allowUngroupedKeyHint: 'When disabled, API Keys not assigned to any group cannot make requests (403 Forbidden). Keep disabled to ensure all Keys belong to a specific group.'
+      },
+      openaiExperimentalScheduler: {
+        title: 'OpenAI Experimental Scheduler',
+        description: 'Enable experimental scheduling behavior for OpenAI/ChatGPT accounts.'
       },
       gatewayForwarding: {
         title: 'Request Forwarding',
@@ -4978,14 +5115,22 @@ export default {
         priority: 'Priority',
         priorityHint: 'Lower number = higher priority',
         quotaLimit: 'Quota Limit',
+        quotaLimitMustBePositive: 'Quota limit must be positive',
         quotaLimitHint: '0 = unlimited',
         quotaRefreshInterval: 'Refresh Interval',
         quotaUsed: 'Used',
+        quotaUsage: 'Quota Usage',
+        resetUsage: 'Reset Usage',
+        resetUsageConfirm: 'Are you sure you want to reset usage stats for this search provider?',
+        resetUsageSuccess: 'Usage reset',
+        subscribedAt: 'Subscribed At',
+        subscribedAtHint: 'Used to calculate periodic quota reset time',
         proxy: 'Proxy',
         expiresAt: 'Expires At',
         test: 'Test Search',
         testing: 'Testing',
         testDefaultQuery: 'Latest OpenAI news',
+        testResultTitle: 'Test Result',
         testResultProvider: 'Provider',
         testNoResults: 'No results returned',
         removeProvider: 'Remove',
@@ -5070,6 +5215,7 @@ export default {
         configGuide: 'Configuration Guide',
         enabled: 'Enable Payment',
         enabledHint: 'Enable or disable the payment system',
+        enableConflict: '{method} is already enabled by provider "{provider}". Disable that provider first.',
         enabledPaymentTypes: 'Enabled Providers',
         enabledPaymentTypesHint: 'Disabling a provider will also disable its instances.',
         findProvider: 'Looking for a suitable EasyPay provider?',
@@ -5974,6 +6120,8 @@ export default {
       requestRefund: 'Request Refund',
     },
     result: {
+      processing: 'Payment Processing',
+      processingHint: 'Confirming payment result, please wait.',
       success: 'Payment Successful',
       subscriptionSuccess: 'Subscription Successful',
       failed: 'Payment Failed',
@@ -5982,6 +6130,7 @@ export default {
     },
     currentBalance: 'Current Balance',
     rechargeAccount: 'Recharge Account',
+    groupFallback: 'Group #{id}',
     activeSubscription: 'Active Subscription',
     noActiveSubscription: 'No active subscription',
     tabTopUp: 'Top Up',
