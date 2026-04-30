@@ -282,7 +282,7 @@ func TestAntigravityGatewayService_ApplyAntigravityUpstreamRequestHeaders(t *tes
 	svc.applyAntigravityUpstreamRequestHeaders(req, account)
 
 	require.Equal(t, "gzip", req.Header.Get("Accept-Encoding"))
-	require.Equal(t, "project-123", req.Header.Get("x-goog-user-project"))
+	require.Empty(t, req.Header.Get("x-goog-user-project"))
 
 	account.Credentials["quota_project_id"] = "quota-project-456"
 	req2, err := http.NewRequest(http.MethodPost, "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent", nil)

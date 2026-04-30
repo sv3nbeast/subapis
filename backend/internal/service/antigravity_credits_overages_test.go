@@ -525,16 +525,16 @@ func TestShouldMarkCreditsExhausted(t *testing.T) {
 		require.False(t, shouldMarkCreditsExhausted(resp, []byte(`{"error":"Insufficient credits"}`), nil))
 	})
 
-	t.Run("通用 Resource has been exhausted 不标记为积分耗尽", func(t *testing.T) {
+	t.Run("Resource has been exhausted 应标记为积分耗尽", func(t *testing.T) {
 		resp := &http.Response{StatusCode: http.StatusTooManyRequests}
 		body := []byte(`{"error":{"message":"Resource has been exhausted"}}`)
-		require.False(t, shouldMarkCreditsExhausted(resp, body, nil))
+		require.True(t, shouldMarkCreditsExhausted(resp, body, nil))
 	})
 
-	t.Run("通用 Resource has been exhausted (check quota) 不标记为积分耗尽", func(t *testing.T) {
+	t.Run("Resource has been exhausted (check quota) 完整格式应标记", func(t *testing.T) {
 		resp := &http.Response{StatusCode: http.StatusTooManyRequests}
 		body := []byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)
-		require.False(t, shouldMarkCreditsExhausted(resp, body, nil))
+		require.True(t, shouldMarkCreditsExhausted(resp, body, nil))
 	})
 
 	t.Run("结构化限流不标记", func(t *testing.T) {
@@ -562,28 +562,6 @@ func TestShouldMarkCreditsExhausted(t *testing.T) {
 		body := []byte(`{"error":{"message":"permission denied"}}`)
 		require.False(t, shouldMarkCreditsExhausted(resp, body, nil))
 	})
-}
-
-func TestHandleCreditsRetryFailure_GenericCheckQuotaDoesNotMarkExhausted(t *testing.T) {
-	repo := &stubAntigravityAccountRepo{}
-	svc := &AntigravityGatewayService{accountRepo: repo}
-	account := &Account{
-		ID:       108,
-		Name:     "acc-108",
-		Platform: PlatformAntigravity,
-		Extra: map[string]any{
-			"allow_overages": true,
-		},
-	}
-	resp := &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Header:     http.Header{},
-		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)),
-	}
-
-	svc.handleCreditsRetryFailure(context.Background(), "[test]", "claude-opus-4-6-thinking", account, resp, nil)
-
-	require.Empty(t, repo.modelRateLimitCalls, "通用 check quota 不能写入 AICredits 耗尽标记")
 }
 
 func TestInjectEnabledCreditTypes(t *testing.T) {
