@@ -273,3 +273,129 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
 }
+
+func TestImportDataAutoAssignsProxyByPlatformCapacity(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	proxyOneID := int64(1)
+	proxyTwoID := int64(2)
+	adminSvc.proxies = []service.Proxy{
+		{ID: proxyOneID, Name: "p1", Protocol: "socks5", Host: "1.1.1.1", Port: 1080, Status: service.StatusActive},
+		{ID: proxyTwoID, Name: "p2", Protocol: "socks5", Host: "2.2.2.2", Port: 1080, Status: service.StatusActive},
+	}
+	for i := 0; i < 5; i++ {
+		adminSvc.accounts = append(adminSvc.accounts, service.Account{
+			ID:       int64(i + 10),
+			Name:     "openai-existing",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			ProxyID:  &proxyOneID,
+			Status:   service.StatusActive,
+		})
+	}
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{
+					"name":        "openai-new",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "openai"},
+					"concurrency": 1,
+					"priority":    1,
+				},
+				{
+					"name":        "antigravity-new",
+					"platform":    service.PlatformAntigravity,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "ag"},
+					"concurrency": 1,
+					"priority":    1,
+				},
+			},
+		},
+		"skip_default_group_bind": true,
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Code int              `json:"code"`
+		Data DataImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 2, resp.Data.AccountCreated)
+	require.Equal(t, 2, resp.Data.AutoProxyAssigned)
+	require.Len(t, adminSvc.createdAccounts, 2)
+	require.NotNil(t, adminSvc.createdAccounts[0].ProxyID)
+	require.Equal(t, proxyTwoID, *adminSvc.createdAccounts[0].ProxyID)
+	require.NotNil(t, adminSvc.createdAccounts[1].ProxyID)
+	require.Equal(t, proxyOneID, *adminSvc.createdAccounts[1].ProxyID)
+}
+
+func TestImportDataAutoProxyFailsWhenPlatformCapacityFull(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	proxyID := int64(1)
+	adminSvc.proxies = []service.Proxy{
+		{ID: proxyID, Name: "p1", Protocol: "socks5", Host: "1.1.1.1", Port: 1080, Status: service.StatusActive},
+	}
+	for i := 0; i < 5; i++ {
+		adminSvc.accounts = append(adminSvc.accounts, service.Account{
+			ID:       int64(i + 10),
+			Name:     "openai-existing",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			ProxyID:  &proxyID,
+			Status:   service.StatusActive,
+		})
+	}
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{},
+			"accounts": []map[string]any{
+				{
+					"name":        "openai-new",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "openai"},
+					"concurrency": 1,
+					"priority":    1,
+				},
+			},
+		},
+		"skip_default_group_bind": true,
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Code int              `json:"code"`
+		Data DataImportResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, 0, resp.Data.AccountCreated)
+	require.Equal(t, 1, resp.Data.AccountFailed)
+	require.Len(t, resp.Data.Errors, 1)
+	require.Contains(t, resp.Data.Errors[0].Message, "no available proxy capacity")
+	require.Len(t, adminSvc.createdAccounts, 0)
+}

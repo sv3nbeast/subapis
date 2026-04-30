@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,10 +19,11 @@ import (
 )
 
 const (
-	dataType       = "sub2api-data"
-	legacyDataType = "sub2api-bundle"
-	dataVersion    = 1
-	dataPageCap    = 1000
+	dataType                              = "sub2api-data"
+	legacyDataType                        = "sub2api-bundle"
+	dataVersion                           = 1
+	dataPageCap                           = 1000
+	importAutoProxyMaxAccountsPerPlatform = 5
 )
 
 type DataPayload struct {
@@ -64,12 +66,13 @@ type DataImportRequest struct {
 }
 
 type DataImportResult struct {
-	ProxyCreated   int               `json:"proxy_created"`
-	ProxyReused    int               `json:"proxy_reused"`
-	ProxyFailed    int               `json:"proxy_failed"`
-	AccountCreated int               `json:"account_created"`
-	AccountFailed  int               `json:"account_failed"`
-	Errors         []DataImportError `json:"errors,omitempty"`
+	ProxyCreated      int               `json:"proxy_created"`
+	ProxyReused       int               `json:"proxy_reused"`
+	ProxyFailed       int               `json:"proxy_failed"`
+	AccountCreated    int               `json:"account_created"`
+	AccountFailed     int               `json:"account_failed"`
+	AutoProxyAssigned int               `json:"auto_proxy_assigned"`
+	Errors            []DataImportError `json:"errors,omitempty"`
 }
 
 type DataImportError struct {
@@ -204,10 +207,12 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	proxyKeyToID := make(map[string]int64, len(existingProxies))
+	proxyByID := make(map[int64]service.Proxy, len(existingProxies))
 	for i := range existingProxies {
 		p := existingProxies[i]
 		key := buildProxyKey(p.Protocol, p.Host, p.Port, p.Username, p.Password)
 		proxyKeyToID[key] = p.ID
+		proxyByID[p.ID] = p
 	}
 
 	for i := range dataPayload.Proxies {
@@ -235,6 +240,8 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 					_, _ = h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
 						Status: normalizedStatus,
 					})
+					proxy.Status = normalizedStatus
+					proxyByID[existingID] = *proxy
 				}
 			}
 			continue
@@ -259,13 +266,21 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		proxyKeyToID[key] = created.ID
+		proxyByID[created.ID] = *created
 		result.ProxyCreated++
 
 		if normalizedStatus != "" && normalizedStatus != created.Status {
 			_, _ = h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status: normalizedStatus,
 			})
+			created.Status = normalizedStatus
+			proxyByID[created.ID] = *created
 		}
+	}
+
+	autoProxy, err := h.newImportAutoProxyAssigner(ctx, dataPayload, proxyByID)
+	if err != nil {
+		return result, err
 	}
 
 	// 收集需要异步设置隐私的 Antigravity OAuth 账号
@@ -285,7 +300,9 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 		var proxyID *int64
 		if item.ProxyKey != nil && *item.ProxyKey != "" {
+			var explicitProxyID int64
 			if id, ok := proxyKeyToID[*item.ProxyKey]; ok {
+				explicitProxyID = id
 				proxyID = &id
 			} else {
 				result.AccountFailed++
@@ -297,6 +314,18 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 				})
 				continue
 			}
+			autoProxy.observeExplicitAssignment(item.Platform, explicitProxyID)
+		} else if id, ok := autoProxy.pick(item.Platform); ok {
+			proxyID = &id
+			result.AutoProxyAssigned++
+		} else if autoProxy.hasActiveProxies() {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: fmt.Sprintf("no available proxy capacity for platform %s", item.Platform),
+			})
+			continue
 		}
 
 		enrichCredentialsFromIDToken(&item)
@@ -353,6 +382,118 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 	}
 
 	return result, nil
+}
+
+type importAutoProxyAssigner struct {
+	activeProxyIDs []int64
+	counts         map[string]map[int64]int
+}
+
+func (h *AccountHandler) newImportAutoProxyAssigner(ctx context.Context, payload DataPayload, proxies map[int64]service.Proxy) (*importAutoProxyAssigner, error) {
+	assigner := &importAutoProxyAssigner{
+		activeProxyIDs: make([]int64, 0, len(proxies)),
+		counts:         make(map[string]map[int64]int),
+	}
+	for _, proxy := range proxies {
+		if proxy.Status == service.StatusActive {
+			assigner.activeProxyIDs = append(assigner.activeProxyIDs, proxy.ID)
+		}
+	}
+	sort.Slice(assigner.activeProxyIDs, func(i, j int) bool {
+		return assigner.activeProxyIDs[i] < assigner.activeProxyIDs[j]
+	})
+	if len(assigner.activeProxyIDs) == 0 {
+		return assigner, nil
+	}
+
+	platforms := make(map[string]struct{})
+	for i := range payload.Accounts {
+		platform := strings.TrimSpace(payload.Accounts[i].Platform)
+		if platform != "" {
+			platforms[platform] = struct{}{}
+		}
+	}
+	for platform := range platforms {
+		accounts, err := h.listAccountsFiltered(ctx, platform, "", "", "", 0, "", "id", "asc")
+		if err != nil {
+			return nil, err
+		}
+		for i := range accounts {
+			account := accounts[i]
+			if account.Platform != "" && account.Platform != platform {
+				continue
+			}
+			if account.ProxyID == nil {
+				continue
+			}
+			if _, ok := proxies[*account.ProxyID]; !ok {
+				continue
+			}
+			assigner.increment(platform, *account.ProxyID)
+		}
+	}
+
+	return assigner, nil
+}
+
+func (a *importAutoProxyAssigner) pick(platform string) (int64, bool) {
+	if a == nil || len(a.activeProxyIDs) == 0 {
+		return 0, false
+	}
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		return 0, false
+	}
+
+	var selectedID int64
+	selectedCount := importAutoProxyMaxAccountsPerPlatform
+	for _, proxyID := range a.activeProxyIDs {
+		count := a.count(platform, proxyID)
+		if count >= importAutoProxyMaxAccountsPerPlatform {
+			continue
+		}
+		if selectedID == 0 || count < selectedCount {
+			selectedID = proxyID
+			selectedCount = count
+		}
+	}
+	if selectedID == 0 {
+		return 0, false
+	}
+	a.increment(platform, selectedID)
+	return selectedID, true
+}
+
+func (a *importAutoProxyAssigner) hasActiveProxies() bool {
+	return a != nil && len(a.activeProxyIDs) > 0
+}
+
+func (a *importAutoProxyAssigner) observeExplicitAssignment(platform string, proxyID int64) {
+	if a == nil || proxyID <= 0 {
+		return
+	}
+	a.increment(platform, proxyID)
+}
+
+func (a *importAutoProxyAssigner) count(platform string, proxyID int64) int {
+	if a == nil {
+		return 0
+	}
+	return a.counts[platform][proxyID]
+}
+
+func (a *importAutoProxyAssigner) increment(platform string, proxyID int64) {
+	if a == nil || proxyID <= 0 {
+		return
+	}
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		return
+	}
+	if a.counts[platform] == nil {
+		a.counts[platform] = make(map[int64]int)
+	}
+	a.counts[platform][proxyID]++
 }
 
 func (h *AccountHandler) listAllProxies(ctx context.Context) ([]service.Proxy, error) {
