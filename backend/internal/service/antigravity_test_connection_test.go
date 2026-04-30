@@ -365,13 +365,13 @@ func TestAntigravityGatewayService_TestConnection_LegacyWakeupFallbackOnValidati
 	require.Equal(t, 2, upstream.calls)
 	require.Len(t, upstream.bodies, 2)
 	require.Contains(t, upstream.urls[1], "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse")
-	require.Equal(t, "antigravity", upstream.userAgents[1])
+	require.Equal(t, antigravity.GetUserAgent(), upstream.userAgents[1])
 
 	var legacy map[string]any
 	require.NoError(t, json.Unmarshal(upstream.bodies[1], &legacy))
 	require.Equal(t, "project-from-creds", legacy["project"])
 	require.Equal(t, "claude-sonnet-4-6", legacy["model"])
-	require.Equal(t, "antigravity", legacy["userAgent"])
+	require.Equal(t, antigravity.GetUserAgent(), legacy["userAgent"])
 	require.Equal(t, "agent", legacy["requestType"])
 	require.Contains(t, legacy["requestId"], "req_")
 	request := legacy["request"].(map[string]any)

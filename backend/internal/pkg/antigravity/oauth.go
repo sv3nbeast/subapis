@@ -51,7 +51,7 @@ const (
 
 // defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置。
 // 同时用于 User-Agent 和 loadCodeAssist.metadata.ideVersion，避免两处版本不一致。
-var defaultUserAgentVersion = "1.22.2"
+var defaultUserAgentVersion = "1.23.2"
 
 // defaultUserAgentOS/defaultUserAgentArch 默认模拟 macOS Antigravity 客户端。
 // 生产运行在 Linux 容器中，不能直接使用 runtime.GOOS/runtime.GOARCH，否则出站 UA 会变成 linux/amd64。
@@ -85,7 +85,7 @@ func GetClientVersion() string {
 	if version := strings.TrimSpace(defaultUserAgentVersion); version != "" {
 		return version
 	}
-	return "1.22.2"
+	return "1.23.2"
 }
 
 // GetUserAgentPlatform 返回 Antigravity User-Agent 中的 os/arch 片段。

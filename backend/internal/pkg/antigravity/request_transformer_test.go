@@ -612,7 +612,7 @@ func TestTransformClaudeToGeminiWithOptions_UsesProvidedRequestIdentity(t *testi
 	var req V1InternalRequest
 	require.NoError(t, json.Unmarshal(body, &req))
 	require.Equal(t, "agent/1234567890/conv-uuid/7", req.RequestID)
-	require.Equal(t, "antigravity", req.UserAgent)
+	require.Equal(t, GetUserAgent(), req.UserAgent)
 	require.Equal(t, []string{"GOOGLE_ONE_AI"}, req.EnabledCreditTypes)
 	require.Equal(t, "cloud-code-session-1", req.Request.SessionID)
 }

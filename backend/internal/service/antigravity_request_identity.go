@@ -281,7 +281,7 @@ func (s *AntigravityGatewayService) buildCloudCodeRequestIdentity(
 	return antigravityRequestIdentity{
 		SessionID:       sessionID,
 		RequestID:       requestID,
-		UserAgent:       "antigravity",
+		UserAgent:       antigravity.GetUserAgent(),
 		ConversationKey: conversationKey,
 	}
 }
@@ -295,7 +295,7 @@ func (s *AntigravityGatewayService) buildFreshSessionRecoveryIdentity(account *A
 	return antigravityRequestIdentity{
 		SessionID:       generateAntigravityCloudCodeSessionID(),
 		RequestID:       fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), generateAntigravityConversationUUID(), 1),
-		UserAgent:       "antigravity",
+		UserAgent:       antigravity.GetUserAgent(),
 		ConversationKey: strings.TrimSpace(conversationKey),
 	}
 }

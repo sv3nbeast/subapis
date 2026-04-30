@@ -1453,7 +1453,7 @@ func (s *AntigravityGatewayService) tryAntigravityLegacyWakeupTest(
 				continue
 			}
 			// AutoGetCode 的验证探针使用旧版 Antigravity wakeup 形态。
-			req.Header.Set("User-Agent", "antigravity")
+			req.Header.Set("User-Agent", antigravity.GetUserAgent())
 			req.Header.Set("Accept-Encoding", "gzip")
 			s.applyAntigravityUpstreamRequestHeaders(req, account)
 
@@ -1530,7 +1530,7 @@ func buildAntigravityLegacyWakeupTestRequest(projectID string, model string) ([]
 		"project":     projectID,
 		"requestId":   fmt.Sprintf("req_%d_%s", nowMS, suffix),
 		"model":       model,
-		"userAgent":   "antigravity",
+		"userAgent":   antigravity.GetUserAgent(),
 		"requestType": "agent",
 		"request": map[string]any{
 			"contents": []map[string]any{
@@ -1760,8 +1760,8 @@ func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID,
 		requestID = "agent-" + uuid.New().String()
 	}
 	userAgent := strings.TrimSpace(identity.UserAgent)
-	if userAgent == "" {
-		userAgent = "antigravity"
+	if userAgent == "" || userAgent == "antigravity" {
+		userAgent = antigravity.GetUserAgent()
 	}
 
 	wrapped := map[string]any{

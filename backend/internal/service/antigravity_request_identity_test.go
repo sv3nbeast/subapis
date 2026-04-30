@@ -44,7 +44,7 @@ func TestWrapV1InternalRequestWithIdentity_InjectsCloudCodeIdentity(t *testing.T
 	body, err := svc.wrapV1InternalRequestWithIdentity("project-1", "claude-opus-4-6-thinking", innerBody, antigravityRequestIdentity{
 		SessionID: "session-42",
 		RequestID: "agent/123/conv-uuid/9",
-		UserAgent: "antigravity",
+		UserAgent: antigravity.GetUserAgent(),
 	})
 	require.NoError(t, err)
 
@@ -52,7 +52,7 @@ func TestWrapV1InternalRequestWithIdentity_InjectsCloudCodeIdentity(t *testing.T
 	require.NoError(t, json.Unmarshal(body, &wrapped))
 	require.Equal(t, "project-1", wrapped.Project)
 	require.Equal(t, "agent/123/conv-uuid/9", wrapped.RequestID)
-	require.Equal(t, "antigravity", wrapped.UserAgent)
+	require.Equal(t, antigravity.GetUserAgent(), wrapped.UserAgent)
 	require.Equal(t, []string{"GOOGLE_ONE_AI"}, wrapped.EnabledCreditTypes)
 	require.Equal(t, "session-42", wrapped.Request.SessionID)
 }

@@ -87,11 +87,11 @@ func TestGetClientSecret_环境变量有前后空格(t *testing.T) {
 
 func TestGetClientVersion_去除空格(t *testing.T) {
 	old := defaultUserAgentVersion
-	defaultUserAgentVersion = "  1.22.2  "
+	defaultUserAgentVersion = "  1.23.2  "
 	t.Cleanup(func() { defaultUserAgentVersion = old })
 
-	if got := GetClientVersion(); got != "1.22.2" {
-		t.Fatalf("GetClientVersion 不匹配: got %q, want %q", got, "1.22.2")
+	if got := GetClientVersion(); got != "1.23.2" {
+		t.Fatalf("GetClientVersion 不匹配: got %q, want %q", got, "1.23.2")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
 	oldVersion := defaultUserAgentVersion
 	oldOS := defaultUserAgentOS
 	oldArch := defaultUserAgentArch
-	defaultUserAgentVersion = "1.22.2"
+	defaultUserAgentVersion = "1.23.2"
 	defaultUserAgentOS = "darwin"
 	defaultUserAgentArch = "arm64"
 	t.Cleanup(func() {
@@ -108,7 +108,7 @@ func TestGetUserAgent_使用统一客户端版本(t *testing.T) {
 		defaultUserAgentArch = oldArch
 	})
 
-	want := "antigravity/1.22.2 darwin/arm64"
+	want := "antigravity/1.23.2 darwin/arm64"
 	if got := GetUserAgent(); got != want {
 		t.Fatalf("GetUserAgent 不匹配: got %q", got)
 	}
@@ -734,7 +734,7 @@ func TestConstants_值正确(t *testing.T) {
 	if RedirectURI != "http://localhost:8085/callback" {
 		t.Errorf("RedirectURI 不匹配: got %s", RedirectURI)
 	}
-	if GetUserAgent() != "antigravity/1.22.2 darwin/arm64" {
+	if GetUserAgent() != "antigravity/1.23.2 darwin/arm64" {
 		t.Errorf("UserAgent 不匹配: got %s", GetUserAgent())
 	}
 	if SessionTTL != 30*time.Minute {

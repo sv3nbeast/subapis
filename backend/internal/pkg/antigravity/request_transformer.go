@@ -186,8 +186,8 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		requestID = "agent-" + uuid.New().String()
 	}
 	userAgent := strings.TrimSpace(opts.UserAgent)
-	if userAgent == "" {
-		userAgent = "antigravity"
+	if userAgent == "" || userAgent == "antigravity" {
+		userAgent = GetUserAgent()
 	}
 
 	// 6. 包装为 v1internal 请求

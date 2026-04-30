@@ -12,7 +12,7 @@ Environment variables:
   IMAGE_TAG                        Docker image tag suffix. Required
   DEPLOY_DIR                       Production deploy directory. Default: /root/sub2api-deploy
   ANTIGRAVITY_USER_AGENT_VERSION   Optional env override written into compose override.
-                                   Default: 1.22.2
+                                   Default: 1.23.2
   ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
                                    Default: true
   SERVICE_NAME                     Compose service name. Default: sub2api
@@ -37,7 +37,7 @@ DEPLOY_DIR="${DEPLOY_DIR:-/root/sub2api-deploy}"
 SERVICE_NAME="${SERVICE_NAME:-sub2api}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
-ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.22.2}"
+ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
