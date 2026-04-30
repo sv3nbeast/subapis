@@ -1765,13 +1765,12 @@ func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID,
 	}
 
 	wrapped := map[string]any{
-		"project":            projectID,
-		"requestId":          requestID,
-		"userAgent":          userAgent,
-		"requestType":        "agent",
-		"model":              model,
-		"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
-		"request":            request,
+		"project":     projectID,
+		"requestId":   requestID,
+		"userAgent":   userAgent,
+		"requestType": "agent",
+		"model":       model,
+		"request":     request,
 	}
 
 	return json.Marshal(wrapped)

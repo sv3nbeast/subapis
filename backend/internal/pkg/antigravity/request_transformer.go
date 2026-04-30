@@ -192,13 +192,12 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 
 	// 6. 包装为 v1internal 请求
 	v1Req := V1InternalRequest{
-		Project:            projectID,
-		RequestID:          requestID,
-		UserAgent:          userAgent,
-		RequestType:        requestType,
-		Model:              targetModel,
-		EnabledCreditTypes: []string{"GOOGLE_ONE_AI"},
-		Request:            innerRequest,
+		Project:     projectID,
+		RequestID:   requestID,
+		UserAgent:   userAgent,
+		RequestType: requestType,
+		Model:       targetModel,
+		Request:     innerRequest,
 	}
 
 	return json.Marshal(v1Req)
