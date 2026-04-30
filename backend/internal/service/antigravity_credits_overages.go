@@ -169,6 +169,43 @@ func resolveCreditsOveragesModelKey(ctx context.Context, account *Account, upstr
 	return resolveAntigravityModelKey(requestedModel)
 }
 
+// resolveCreditsOveragesBaseURL 选择积分重试使用的 Cloud Code 端点。
+// antigravity2api-nodejs 的实际 Antigravity upstream 优先使用 daily-cloudcode-pa；
+// 这里仅对启用 enabledCreditTypes 的积分重试切到 daily，普通请求仍保持现有生产路径。
+func resolveCreditsOveragesBaseURL(currentBaseURL string) string {
+	currentBaseURL = strings.TrimRight(strings.TrimSpace(currentBaseURL), "/")
+	if currentBaseURL == "" {
+		return currentBaseURL
+	}
+
+	baseURLs := antigravity.ForwardBaseURLs()
+	if len(baseURLs) == 0 {
+		return currentBaseURL
+	}
+
+	currentIsConfigured := false
+	preferred := ""
+	for idx, baseURL := range baseURLs {
+		normalized := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		if normalized == "" {
+			continue
+		}
+		if normalized == currentBaseURL {
+			currentIsConfigured = true
+		}
+		if strings.Contains(normalized, "daily-cloudcode-pa.googleapis.com") {
+			preferred = normalized
+		} else if preferred == "" && idx == 1 {
+			// 测试或自定义构建中没有 daily 字符串时，保持“第二候选用于 credits”的语义。
+			preferred = normalized
+		}
+	}
+	if !currentIsConfigured || preferred == "" {
+		return currentBaseURL
+	}
+	return preferred
+}
+
 // shouldMarkCreditsExhausted 判断一次 credits 请求失败是否应标记为 credits 耗尽。
 func shouldMarkCreditsExhausted(resp *http.Response, respBody []byte, reqErr error) bool {
 	if reqErr != nil || resp == nil {
@@ -211,10 +248,11 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 		return &creditsOveragesRetryResult{handled: false}
 	}
 	modelKey := resolveCreditsOveragesModelKey(p.ctx, p.account, modelName, p.requestedModel)
-	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 credit_overages_retry model=%s account=%d (injecting enabledCreditTypes)",
-		p.prefix, modelKey, p.account.ID)
+	creditsBaseURL := resolveCreditsOveragesBaseURL(baseURL)
+	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 credit_overages_retry model=%s account=%d base_url=%s (injecting enabledCreditTypes)",
+		p.prefix, modelKey, p.account.ID, creditsBaseURL)
 
-	creditsReq, err := antigravity.NewAPIRequestWithURL(p.ctx, baseURL, p.action, p.accessToken, creditsBody)
+	creditsReq, err := antigravity.NewAPIRequestWithURL(p.ctx, creditsBaseURL, p.action, p.accessToken, creditsBody)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s credit_overages_failed model=%s account=%d build_request_err=%v",
 			p.prefix, modelKey, p.account.ID, err)

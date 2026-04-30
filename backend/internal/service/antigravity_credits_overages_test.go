@@ -140,7 +140,7 @@ func TestHandleSmartRetry_QuotaExhausted_UsesCreditsAndStoresIndependentState(t 
 	}
 
 	svc := &AntigravityGatewayService{httpUpstream: upstream}
-	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-1.test", 0, []string{"https://ag-1.test"})
+	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-prod.test", 0, []string{"https://ag-prod.test"})
 
 	require.NotNil(t, result)
 	require.Equal(t, smartRetryActionBreakWithResp, result.action)
@@ -152,6 +152,10 @@ func TestHandleSmartRetry_QuotaExhausted_UsesCreditsAndStoresIndependentState(t 
 }
 
 func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) {
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	defer func() { antigravity.BaseURLs = oldBaseURLs }()
+	antigravity.BaseURLs = []string{"https://ag-prod.test", "https://daily-cloudcode-pa.googleapis.com"}
+
 	successResp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{},
@@ -194,7 +198,7 @@ func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) 
 	}
 
 	svc := &AntigravityGatewayService{httpUpstream: upstream}
-	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-1.test", 0, []string{"https://ag-1.test"})
+	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-prod.test", 0, []string{"https://ag-prod.test"})
 
 	require.NotNil(t, result)
 	require.Equal(t, smartRetryActionBreakWithResp, result.action)
@@ -202,7 +206,30 @@ func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) 
 	require.Nil(t, result.switchError)
 	require.Len(t, upstream.requestBodies, 1)
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Len(t, upstream.calls, 1)
+	require.Contains(t, upstream.calls[0], "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent")
 	require.Empty(t, repo.tempUnschedCalls, "credits 成功前不应临时禁用账号")
+}
+
+func TestResolveCreditsOveragesBaseURL(t *testing.T) {
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	defer func() { antigravity.BaseURLs = oldBaseURLs }()
+
+	t.Run("configured prod switches to daily for credits", func(t *testing.T) {
+		antigravity.BaseURLs = []string{"https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"}
+		require.Equal(t,
+			"https://daily-cloudcode-pa.googleapis.com",
+			resolveCreditsOveragesBaseURL("https://cloudcode-pa.googleapis.com"),
+		)
+	})
+
+	t.Run("custom current URL is preserved", func(t *testing.T) {
+		antigravity.BaseURLs = []string{"https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"}
+		require.Equal(t,
+			"https://custom-cloudcode.example",
+			resolveCreditsOveragesBaseURL("https://custom-cloudcode.example"),
+		)
+	})
 }
 
 func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
