@@ -31,6 +31,8 @@ var (
 	antigravityQuotaExhaustedKeywords = []string{
 		"quota_exhausted",
 		"quota exhausted",
+		"check quota",
+		"resource has been exhausted",
 	}
 
 	antigravityQuotaTempUnschedKeywords = []string{
@@ -113,14 +115,14 @@ func classifyAntigravity429(body []byte) antigravity429Category {
 	if len(body) == 0 {
 		return antigravity429Unknown
 	}
+	if info := parseAntigravitySmartRetryInfo(body); info != nil && !info.IsModelCapacityExhausted {
+		return antigravity429RateLimited
+	}
 	lowerBody := strings.ToLower(string(body))
 	for _, keyword := range antigravityQuotaExhaustedKeywords {
 		if strings.Contains(lowerBody, keyword) {
 			return antigravity429QuotaExhausted
 		}
-	}
-	if info := parseAntigravitySmartRetryInfo(body); info != nil && !info.IsModelCapacityExhausted {
-		return antigravity429RateLimited
 	}
 	return antigravity429Unknown
 }
@@ -219,8 +221,12 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 			p.prefix, modelKey, p.account.ID, err)
 		return &creditsOveragesRetryResult{handled: true}
 	}
+	s.applyAntigravityUpstreamRequestHeaders(creditsReq, p.account)
 
-	creditsResp, err := p.httpUpstream.Do(creditsReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+	creditsResp, err := s.doAntigravityUpstreamRequestWith(creditsReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)
+	if err == nil && creditsResp != nil {
+		normalizeAntigravityCompressedResponse(creditsResp)
+	}
 	if err == nil && creditsResp != nil && creditsResp.StatusCode < 400 {
 		s.clearCreditsExhausted(p.ctx, p.account)
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d credit_overages_success model=%s account=%d",

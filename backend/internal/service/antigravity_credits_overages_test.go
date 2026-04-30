@@ -34,6 +34,11 @@ func TestClassifyAntigravity429(t *testing.T) {
 		require.Equal(t, antigravity429RateLimited, classifyAntigravity429(body))
 	})
 
+	t.Run("通用 check quota 视为配额耗尽", func(t *testing.T) {
+		body := []byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)
+		require.Equal(t, antigravity429QuotaExhausted, classifyAntigravity429(body))
+	})
+
 	t.Run("未知429", func(t *testing.T) {
 		body := []byte(`{"error":{"message":"too many requests"}}`)
 		require.Equal(t, antigravity429Unknown, classifyAntigravity429(body))
@@ -144,6 +149,60 @@ func TestHandleSmartRetry_QuotaExhausted_UsesCreditsAndStoresIndependentState(t 
 	require.Len(t, upstream.requestBodies, 1)
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 	require.Empty(t, repo.modelRateLimitCalls, "overages 成功后不应写入普通 model_rate_limits")
+}
+
+func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) {
+	successResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+	}
+	upstream := &mockSmartRetryUpstream{
+		responses: []*http.Response{successResp},
+		errors:    []error{nil},
+	}
+	repo := &stubAntigravityAccountRepo{}
+	account := &Account{
+		ID:       107,
+		Name:     "acc-107",
+		Type:     AccountTypeOAuth,
+		Platform: PlatformAntigravity,
+		Extra: map[string]any{
+			"allow_overages": true,
+		},
+	}
+
+	respBody := []byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{},
+		Body:       io.NopCloser(bytes.NewReader(respBody)),
+	}
+	params := antigravityRetryLoopParams{
+		ctx:            context.Background(),
+		prefix:         "[test]",
+		account:        account,
+		accessToken:    "token",
+		action:         "generateContent",
+		body:           []byte(`{"model":"claude-opus-4-6-thinking","request":{}}`),
+		httpUpstream:   upstream,
+		accountRepo:    repo,
+		requestedModel: "claude-opus-4-6-thinking",
+		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
+			return nil
+		},
+	}
+
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
+	result := svc.handleSmartRetry(params, resp, respBody, "https://ag-1.test", 0, []string{"https://ag-1.test"})
+
+	require.NotNil(t, result)
+	require.Equal(t, smartRetryActionBreakWithResp, result.action)
+	require.NotNil(t, result.resp)
+	require.Nil(t, result.switchError)
+	require.Len(t, upstream.requestBodies, 1)
+	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Empty(t, repo.tempUnschedCalls, "credits 成功前不应临时禁用账号")
 }
 
 func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
@@ -268,7 +327,17 @@ func TestAntigravityRetryLoop_ModelRateLimitedNonClaude_InjectsCredits(t *testin
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 }
 
-func TestAntigravityRetryLoop_ModelRateLimitedClaude_DoesNotInjectCredits(t *testing.T) {
+func TestAntigravityRetryLoop_ModelRateLimitedClaude_InjectsCredits(t *testing.T) {
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://ag-1.test"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
 	account := &Account{
 		ID:          106,
 		Name:        "acc-106",
@@ -286,10 +355,19 @@ func TestAntigravityRetryLoop_ModelRateLimitedClaude_DoesNotInjectCredits(t *tes
 			},
 		},
 	}
-	upstream := &queuedHTTPUpstreamStub{}
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			},
+		},
+		errors: []error{nil},
+	}
 
-	svc := &AntigravityGatewayService{}
-	_, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
+	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
 		ctx:            context.Background(),
 		prefix:         "[test]",
 		account:        account,
@@ -303,11 +381,10 @@ func TestAntigravityRetryLoop_ModelRateLimitedClaude_DoesNotInjectCredits(t *tes
 		},
 	})
 
-	require.Error(t, err)
-	var switchErr *AntigravityAccountSwitchError
-	require.ErrorAs(t, err, &switchErr)
-	require.Equal(t, "claude-sonnet-4-6", switchErr.RateLimitedModel)
-	require.Empty(t, upstream.requestBodies, "Claude 模型限流时不应再走 credits 注入请求")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requestBodies, 1)
+	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 }
 
 func TestAntigravityRetryLoop_CreditsExhausted_DoesNotInject(t *testing.T) {

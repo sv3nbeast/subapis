@@ -25,12 +25,7 @@ func shouldAllowCreditsRateLimitBypass(ctx context.Context, account *Account, re
 	if !account.IsOveragesEnabled() || account.isCreditsExhausted() {
 		return false
 	}
-	modelKey := resolveCreditsOveragesModelKey(ctx, account, "", requestedModel)
-	return !isClaudeModelFamily(modelKey) && !isClaudeModelFamily(requestedModel)
-}
-
-func isClaudeModelFamily(model string) bool {
-	return strings.HasPrefix(normalizeAntigravityModelName(model), "claude-")
+	return true
 }
 
 // IsSchedulableForModel 结合模型级限流判断是否可调度。
@@ -47,7 +42,7 @@ func (a *Account) IsSchedulableForModelWithContext(ctx context.Context, requeste
 		return false
 	}
 	if a.isModelRateLimitedWithContext(ctx, requestedModel) {
-		// 非 Claude 模型允许通过 AI Credits 绕过模型级限流；Claude 保持严格隔离。
+		// overages 开启且 AI Credits 未标记耗尽时，允许绕过普通模型级限流。
 		if shouldAllowCreditsRateLimitBypass(ctx, a, requestedModel) {
 			return true
 		}
