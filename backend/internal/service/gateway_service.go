@@ -1867,7 +1867,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if len(candidates) == 0 {
-		return nil, ErrNoAvailableAccounts
+		return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
@@ -1954,7 +1954,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			MaxWaiting:     cfg.FallbackMaxWaiting,
 		})
 	}
-	return nil, ErrNoAvailableAccounts
+	return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 }
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
@@ -3442,6 +3442,23 @@ func (s *GatewayService) logDetailedSelectionFailure(
 		stats.SampleCapacityCooldownIDs,
 	)
 	return stats
+}
+
+func (s *GatewayService) noAvailableSelectionErrorForModel(
+	ctx context.Context,
+	groupID *int64,
+	sessionHash string,
+	requestedModel string,
+	platform string,
+	accounts []Account,
+	excludedIDs map[int64]struct{},
+	allowMixedScheduling bool,
+) error {
+	if requestedModel == "" {
+		return ErrNoAvailableAccounts
+	}
+	stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, allowMixedScheduling)
+	return fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 }
 
 func (s *GatewayService) collectSelectionFailureStats(

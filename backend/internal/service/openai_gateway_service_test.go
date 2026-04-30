@@ -211,6 +211,33 @@ func TestOpenAIGatewayService_GenerateSessionHash_UsesXXHash64(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestOpenAIGatewayService_LoadAwareUnsupportedModelReturnsModelError(t *testing.T) {
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{
+			accounts: []Account{
+				{
+					ID:          1,
+					Platform:    PlatformOpenAI,
+					Status:      StatusActive,
+					Schedulable: true,
+					Concurrency: 5,
+					Credentials: map[string]any{
+						"model_mapping": map[string]any{
+							"gpt-4o": "gpt-4o",
+						},
+					},
+				},
+			},
+		},
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+	}
+
+	result, err := svc.SelectAccountWithLoadAwareness(context.Background(), nil, "", "gpt-5.5", nil)
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no available OpenAI accounts supporting model: gpt-5.5")
+}
+
 func TestOpenAIGatewayService_GenerateSessionHash_AttachesLegacyHashToContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

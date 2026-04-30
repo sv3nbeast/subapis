@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +166,37 @@ func TestDiagnoseSelectionFailure_ModelCapacityCoolingDetail(t *testing.T) {
 	}
 	if !strings.Contains(diagnosis.Detail, "remaining=") {
 		t.Fatalf("detail=%s want contains remaining=", diagnosis.Detail)
+	}
+}
+
+func TestNoAvailableSelectionErrorForModel_PreservesUnsupportedStats(t *testing.T) {
+	svc := &GatewayService{}
+	accounts := []Account{
+		{
+			ID:          101,
+			Platform:    PlatformAntigravity,
+			Status:      StatusActive,
+			Schedulable: true,
+			Extra: map[string]any{
+				"mixed_scheduling": true,
+			},
+			Credentials: map[string]any{
+				"model_mapping": map[string]any{
+					"claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
+				},
+			},
+		},
+	}
+
+	err := svc.noAvailableSelectionErrorForModel(context.Background(), nil, "", "gpt-5.5", PlatformAnthropic, accounts, nil, true)
+	if !errors.Is(err, ErrNoAvailableAccounts) {
+		t.Fatalf("error=%v want ErrNoAvailableAccounts", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "supporting model: gpt-5.5") {
+		t.Fatalf("error=%q want supporting model", msg)
+	}
+	if !strings.Contains(msg, "eligible=0") || !strings.Contains(msg, "model_unsupported=1") {
+		t.Fatalf("error=%q want unsupported selection stats", msg)
 	}
 }

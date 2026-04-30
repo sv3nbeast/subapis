@@ -1627,7 +1627,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	if len(candidates) == 0 {
-		return nil, ErrNoAvailableAccounts
+		return nil, noAvailableOpenAISelectionError(requestedModel, false)
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
