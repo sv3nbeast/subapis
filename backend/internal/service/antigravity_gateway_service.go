@@ -1051,7 +1051,12 @@ func (s *AntigravityGatewayService) applyAntigravityUpstreamRequestHeaders(req *
 		req.Header.Set("Accept-Encoding", "gzip")
 	}
 
+	// Match the Antigravity worker behavior: when no explicit quota project is
+	// stored, the Cloud Code project is also the quota project for AI Credits.
 	quotaProjectID := strings.TrimSpace(account.GetCredential("quota_project_id"))
+	if quotaProjectID == "" {
+		quotaProjectID = strings.TrimSpace(account.GetCredential("project_id"))
+	}
 	if quotaProjectID != "" {
 		req.Header.Set("x-goog-user-project", quotaProjectID)
 	}

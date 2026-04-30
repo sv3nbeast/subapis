@@ -62,7 +62,6 @@ var (
 		"minimumcreditamountforusage",
 		"minimum credit amount for usage",
 		"minimum credit",
-		"resource has been exhausted",
 	}
 )
 
@@ -178,9 +177,9 @@ func shouldMarkCreditsExhausted(resp *http.Response, respBody []byte, reqErr err
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout {
 		return false
 	}
-	// 注意：不再检查 isURLLevelRateLimit。此函数仅在积分重试失败后调用，
-	// 如果注入 enabledCreditTypes 后仍返回 "Resource has been exhausted"，
-	// 说明积分也已耗尽，应该标记。clearCreditsExhausted 会在后续成功时自动清除。
+	// 通用 quota 429 只能说明本次请求没有成功消耗积分，不能证明 AI Credits 已耗尽。
+	// 只有上游明确返回 GOOGLE_ONE_AI/credit balance/minimum credit 等积分相关错误时，
+	// 才写入 AICredits key，避免把仍有余额的账号误判为积分耗尽。
 	if info := parseAntigravitySmartRetryInfo(respBody); info != nil {
 		return false
 	}
