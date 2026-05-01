@@ -40,12 +40,18 @@ type mockSmartRetryUpstream struct {
 	callIdx        int
 	calls          []string
 	requestBodies  [][]byte
+	transferEnc    [][]string
+	contentLengths []int64
 	repeatLast     bool // 超出范围时重复最后一个响应
 }
 
 func (m *mockSmartRetryUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	idx := m.callIdx
 	m.calls = append(m.calls, req.URL.String())
+	if req != nil {
+		m.transferEnc = append(m.transferEnc, append([]string(nil), req.TransferEncoding...))
+		m.contentLengths = append(m.contentLengths, req.ContentLength)
+	}
 	if req != nil && req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		m.requestBodies = append(m.requestBodies, body)

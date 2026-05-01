@@ -389,6 +389,9 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 					},
 				}
 			}
+			if bodyUsesCreditsOverages(p.body) {
+				applyCreditsOveragesRequestShape(retryReq)
+			}
 			s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
 			attemptsMade++
@@ -587,6 +590,9 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 			logger.LegacyPrintf("service.antigravity_gateway", "%s single_account_503_retry: request_build_failed error=%v", p.prefix, err)
 			break
 		}
+		if bodyUsesCreditsOverages(p.body) {
+			applyCreditsOveragesRequestShape(retryReq)
+		}
 		s.applyAntigravityUpstreamRequestHeaders(retryReq, p.account)
 
 		retryResp, retryErr := s.doAntigravityUpstreamRequestWith(retryReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)
@@ -699,6 +705,9 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 	if baseURL == "" {
 		return nil, errors.New("no antigravity forward base url configured")
 	}
+	if overagesInjected {
+		baseURL = resolveCreditsOveragesBaseURL(baseURL)
+	}
 	availableURLs := []string{baseURL}
 
 	var resp *http.Response
@@ -730,6 +739,9 @@ urlFallbackLoop:
 			upstreamReq, err := antigravity.NewAPIRequestWithURL(p.ctx, baseURL, p.action, p.accessToken, p.body)
 			if err != nil {
 				return nil, err
+			}
+			if overagesInjected {
+				applyCreditsOveragesRequestShape(upstreamReq)
 			}
 			s.applyAntigravityUpstreamRequestHeaders(upstreamReq, p.account)
 

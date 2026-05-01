@@ -32,6 +32,9 @@ type executeRequest struct {
 	URL                          string                  `json:"url"`
 	Headers                      http.Header             `json:"headers,omitempty"`
 	BodyBase64                   string                  `json:"body_base64,omitempty"`
+	TransferEncoding             []string                `json:"transfer_encoding,omitempty"`
+	ContentLength                int64                   `json:"content_length,omitempty"`
+	Host                         string                  `json:"host,omitempty"`
 	ProxyURL                     string                  `json:"proxy_url,omitempty"`
 	AccountConcurrency           int                     `json:"account_concurrency,omitempty"`
 	ResponseHeaderTimeoutSeconds int                     `json:"response_header_timeout_seconds,omitempty"`
@@ -109,6 +112,19 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		for _, value := range values {
 			upstreamReq.Header.Add(key, value)
 		}
+	}
+	if strings.TrimSpace(payload.Host) != "" {
+		upstreamReq.Host = strings.TrimSpace(payload.Host)
+	}
+	if len(payload.TransferEncoding) > 0 {
+		upstreamReq.TransferEncoding = append([]string(nil), payload.TransferEncoding...)
+		upstreamReq.ContentLength = payload.ContentLength
+		if upstreamReq.ContentLength == 0 {
+			upstreamReq.ContentLength = -1
+		}
+		upstreamReq.Header.Del("Content-Length")
+	} else if payload.ContentLength != 0 {
+		upstreamReq.ContentLength = payload.ContentLength
 	}
 
 	client, err := defaultWorkerRuntime.clientFor(payload)

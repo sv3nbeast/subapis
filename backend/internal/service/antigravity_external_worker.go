@@ -37,6 +37,9 @@ type antigravityExternalExecuteRequest struct {
 	URL                          string                  `json:"url"`
 	Headers                      http.Header             `json:"headers,omitempty"`
 	BodyBase64                   string                  `json:"body_base64,omitempty"`
+	TransferEncoding             []string                `json:"transfer_encoding,omitempty"`
+	ContentLength                int64                   `json:"content_length,omitempty"`
+	Host                         string                  `json:"host,omitempty"`
 	ProxyURL                     string                  `json:"proxy_url,omitempty"`
 	AccountConcurrency           int                     `json:"account_concurrency,omitempty"`
 	ResponseHeaderTimeoutSeconds int                     `json:"response_header_timeout_seconds,omitempty"`
@@ -172,6 +175,9 @@ func (e *antigravityExternalWorkerExecutor) do(req *http.Request, proxyURL strin
 		URL:                          req.URL.String(),
 		Headers:                      req.Header.Clone(),
 		BodyBase64:                   base64.StdEncoding.EncodeToString(body),
+		TransferEncoding:             append([]string(nil), req.TransferEncoding...),
+		ContentLength:                req.ContentLength,
+		Host:                         req.Host,
 		ProxyURL:                     strings.TrimSpace(proxyURL),
 		ResponseHeaderTimeoutSeconds: timeoutSeconds,
 		TLSProfile:                   profile,

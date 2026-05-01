@@ -153,6 +153,20 @@ func injectEnabledCreditTypes(body []byte) []byte {
 	return result
 }
 
+func applyCreditsOveragesRequestShape(req *http.Request) {
+	if req == nil || req.Body == nil {
+		return
+	}
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Del("Content-Length")
+}
+
+func bodyUsesCreditsOverages(body []byte) bool {
+	bodyLower := strings.ToLower(string(body))
+	return strings.Contains(bodyLower, "enabledcredittypes") && strings.Contains(bodyLower, "google_one_ai")
+}
+
 // resolveCreditsOveragesModelKey 解析当前请求对应的 overages 状态模型 key。
 func resolveCreditsOveragesModelKey(ctx context.Context, account *Account, upstreamModelName, requestedModel string) string {
 	modelKey := strings.TrimSpace(upstreamModelName)
@@ -258,6 +272,7 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 			p.prefix, modelKey, p.account.ID, err)
 		return &creditsOveragesRetryResult{handled: true}
 	}
+	applyCreditsOveragesRequestShape(creditsReq)
 	s.applyAntigravityUpstreamRequestHeaders(creditsReq, p.account)
 
 	creditsResp, err := s.doAntigravityUpstreamRequestWith(creditsReq, p.proxyURL, p.account, p.tlsProfile, p.httpUpstream)

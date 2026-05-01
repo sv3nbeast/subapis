@@ -208,7 +208,72 @@ func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) 
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 	require.Len(t, upstream.calls, 1)
 	require.Contains(t, upstream.calls[0], "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent")
+	require.Equal(t, []string{"chunked"}, upstream.transferEnc[0])
+	require.Equal(t, int64(-1), upstream.contentLengths[0])
 	require.Empty(t, repo.tempUnschedCalls, "credits 成功前不应临时禁用账号")
+}
+
+func TestAntigravityRetryLoop_ModelRateLimitedCreditsUsesDailyChunked(t *testing.T) {
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          108,
+		Name:        "acc-108",
+		Type:        AccountTypeOAuth,
+		Platform:    PlatformAntigravity,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"allow_overages": true,
+			modelRateLimitsKey: map[string]any{
+				"claude-opus-4-6-thinking": map[string]any{
+					"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
+					"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+				},
+			},
+		},
+	}
+	upstream := &mockSmartRetryUpstream{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			},
+		},
+		errors: []error{nil},
+	}
+
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
+	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+		ctx:            context.Background(),
+		prefix:         "[test]",
+		account:        account,
+		accessToken:    "token",
+		action:         "generateContent",
+		body:           []byte(`{"model":"claude-opus-4-6-thinking","request":{}}`),
+		httpUpstream:   upstream,
+		requestedModel: "claude-opus-4-6-thinking",
+		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.calls, 1)
+	require.Contains(t, upstream.calls[0], "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent")
+	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Equal(t, []string{"chunked"}, upstream.transferEnc[0])
+	require.Equal(t, int64(-1), upstream.contentLengths[0])
 }
 
 func TestResolveCreditsOveragesBaseURL(t *testing.T) {
@@ -620,6 +685,7 @@ func TestInjectEnabledCreditTypes(t *testing.T) {
 		require.NotNil(t, result)
 		require.Contains(t, string(result), `"enabledCreditTypes"`)
 		require.Contains(t, string(result), `GOOGLE_ONE_AI`)
+		require.True(t, bodyUsesCreditsOverages(result))
 	})
 
 	t.Run("非法 JSON 返回 nil", func(t *testing.T) {
