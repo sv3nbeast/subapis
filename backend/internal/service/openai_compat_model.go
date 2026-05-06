@@ -61,7 +61,7 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 		modelID = parts[len(parts)-1]
 	}
 	modelID = strings.TrimSpace(modelID)
-	if !strings.HasPrefix(strings.ToLower(modelID), "gpt-") {
+	if !isLikelyOpenAIGPT5OrCodexModel(modelID) {
 		return trimmed, "", false
 	}
 

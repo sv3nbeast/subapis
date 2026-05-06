@@ -328,7 +328,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	// OpenAI 仅匹配已知 GPT-5/Codex 族，避免未知 OpenAI 型号误计价。
-	if strings.Contains(modelLower, "gpt-5") || strings.Contains(modelLower, "codex") {
+	if isLikelyOpenAIGPT5OrCodexModel(modelLower) {
 		normalized := normalizeCodexModel(modelLower)
 		switch normalized {
 		case "gpt-5.3-codex-spark":
@@ -697,7 +697,7 @@ func isOpenAIGPT54Model(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
 	// 仅当模型字符串实际属于 GPT-5/Codex 族时才做归一判定，避免 normalizeCodexModel
 	// 的默认兜底把非 OpenAI 模型（claude-*、gemini-*、gpt-4o）误识别为 gpt-5.4。
-	if !strings.Contains(trimmed, "gpt-5") && !strings.Contains(trimmed, "codex") {
+	if !isLikelyOpenAIGPT5OrCodexModel(trimmed) {
 		return false
 	}
 	normalized := normalizeCodexModel(trimmed)

@@ -641,6 +641,7 @@ func normalizeModelNameForPricing(model string) string {
 	}
 
 	model = strings.TrimLeft(model, "/")
+	model = normalizeOpenAIGPT5Alias(model)
 	return model
 }
 

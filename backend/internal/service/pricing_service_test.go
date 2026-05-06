@@ -121,6 +121,19 @@ func TestGetModelPricing_Gpt55UsesDedicatedStaticFallbackWhenRemoteMissing(t *te
 	require.True(t, got.SupportsPromptCaching)
 }
 
+func TestGetModelPricing_Gpt55HyphenlessAliasUsesDedicatedStaticFallbackWhenRemoteMissing(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-5.1-codex": {InputCostPerToken: 1.25e-6},
+		},
+	}
+
+	got := svc.GetModelPricing("gpt5.5")
+	require.NotNil(t, got)
+	require.InDelta(t, 5e-6, got.InputCostPerToken, 1e-12)
+	require.InDelta(t, 30e-6, got.OutputCostPerToken, 1e-12)
+}
+
 func TestGetModelPricing_Gpt54MiniUsesDedicatedStaticFallbackWhenRemoteMissing(t *testing.T) {
 	svc := &PricingService{
 		pricingData: map[string]*LiteLLMModelPricing{

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -38,6 +39,55 @@ var codexModelMap = map[string]string{
 	"gpt-5.2-medium":             "gpt-5.2",
 	"gpt-5.2-high":               "gpt-5.2",
 	"gpt-5.2-xhigh":              "gpt-5.2",
+}
+
+var openAIGPT5AliasPattern = regexp.MustCompile(`^gpt-?5((?:\.\d+)?)(.*)$`)
+
+func normalizeOpenAIGPT5Alias(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	normalized = strings.ReplaceAll(normalized, " ", "-")
+
+	matches := openAIGPT5AliasPattern.FindStringSubmatch(normalized)
+	if len(matches) == 0 {
+		return normalized
+	}
+
+	version := matches[1]
+	rest := matches[2]
+	if version == "" && rest != "" {
+		first := rest[0]
+		if first >= '0' && first <= '9' {
+			return normalized
+		}
+	}
+	if rest != "" && rest[0] != '-' {
+		first := rest[0]
+		if first >= '0' && first <= '9' {
+			return normalized
+		}
+		rest = "-" + rest
+	}
+	return "gpt-5" + version + rest
+}
+
+func isLikelyOpenAIGPT5OrCodexModel(model string) bool {
+	modelID := strings.TrimSpace(model)
+	if modelID == "" {
+		return false
+	}
+	if strings.Contains(modelID, "/") {
+		parts := strings.Split(modelID, "/")
+		modelID = parts[len(parts)-1]
+	}
+	normalized := normalizeOpenAIGPT5Alias(modelID)
+	if strings.Contains(normalized, "codex") {
+		return true
+	}
+	return strings.HasPrefix(normalized, "gpt-5")
 }
 
 type codexTransformResult struct {
@@ -400,38 +450,46 @@ func normalizeCodexModel(model string) string {
 		parts := strings.Split(modelID, "/")
 		modelID = parts[len(parts)-1]
 	}
+	modelID = normalizeOpenAIGPT5Alias(modelID)
 
 	if mapped := getNormalizedCodexModel(modelID); mapped != "" {
 		return mapped
 	}
 
 	normalized := strings.ToLower(modelID)
+	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(normalized)
 
-	if strings.Contains(normalized, "gpt-5.5") || strings.Contains(normalized, "gpt 5.5") {
+	if strings.Contains(normalized, "gpt-5.5") || strings.Contains(compact, "gpt5.5") {
 		return "gpt-5.5"
 	}
-	if strings.Contains(normalized, "gpt-5.4-mini") || strings.Contains(normalized, "gpt 5.4 mini") {
+	if strings.Contains(normalized, "gpt-5.4-mini") || strings.Contains(compact, "gpt5.4mini") {
 		return "gpt-5.4-mini"
 	}
-	if strings.Contains(normalized, "gpt-5.4") || strings.Contains(normalized, "gpt 5.4") {
+	if strings.Contains(normalized, "gpt-5.4-nano") || strings.Contains(compact, "gpt5.4nano") {
+		return "gpt-5.4-nano"
+	}
+	if strings.Contains(normalized, "gpt-5.4") || strings.Contains(compact, "gpt5.4") {
 		return "gpt-5.4"
 	}
-	if strings.Contains(normalized, "gpt-5.2") || strings.Contains(normalized, "gpt 5.2") {
+	if strings.Contains(normalized, "gpt-5.2-codex") || strings.Contains(compact, "gpt5.2codex") {
 		return "gpt-5.2"
 	}
-	if strings.Contains(normalized, "gpt-5.3-codex-spark") || strings.Contains(normalized, "gpt 5.3 codex spark") {
+	if strings.Contains(normalized, "gpt-5.2") || strings.Contains(compact, "gpt5.2") {
+		return "gpt-5.2"
+	}
+	if strings.Contains(normalized, "gpt-5.3-codex-spark") || strings.Contains(compact, "gpt5.3codexspark") {
 		return "gpt-5.3-codex-spark"
 	}
-	if strings.Contains(normalized, "gpt-5.3-codex") || strings.Contains(normalized, "gpt 5.3 codex") {
+	if strings.Contains(normalized, "gpt-5.3-codex") || strings.Contains(compact, "gpt5.3codex") {
 		return "gpt-5.3-codex"
 	}
-	if strings.Contains(normalized, "gpt-5.3") || strings.Contains(normalized, "gpt 5.3") {
+	if strings.Contains(normalized, "gpt-5.3") || strings.Contains(compact, "gpt5.3") {
 		return "gpt-5.3-codex"
 	}
 	if strings.Contains(normalized, "codex") {
 		return "gpt-5.3-codex"
 	}
-	if strings.Contains(normalized, "gpt-5") || strings.Contains(normalized, "gpt 5") {
+	if strings.Contains(normalized, "gpt-5") || compact == "gpt5" {
 		return "gpt-5.4"
 	}
 
