@@ -1519,3 +1519,45 @@ ee71fe19 修复：localize remaining 前端 copy
 134df9b3 修复：dedupe legacy subscription history entries
 824d7b65 修复：将subscription orders纳入user balance history
 4d59c343 文档：record official 0.1.119 promotion
+
+## 2026-05-07 22:04:57 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `08da6ebd9a18a3806f917b3bfd4d5880ed356caf`
+- 官方提交: `a466e80ed6e9f498108286203a8a9e3a2d75e58a`
+- 合并基线: `a466e80ed6e9f498108286203a8a9e3a2d75e58a`
+- 官方领先数量: `0`
+- 本地领先数量: `195`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+08da6ebd merge: sync latest official updates
+56537070 merge: sync official upstream updates
+ba4cca99 文档：record official 0.1.124 sync analysis
+484dce12 修复：normalize gpt-5.5 aliases 针对 billing
+b91a18fe 修复：对齐antigravity credits request shape
+b8d64856 修复：use daily endpoint 针对 Antigravity AI Credits retry
+18d084b4 修复：retry Antigravity AI Credits only after quota exhaustion
+63084d32 Revert "fix: align Antigravity AI Credits quota project"
+d8eecd84 修复：对齐Antigravity AI Credits quota project
+f41c5968 修复：use antigravity credits overages 针对 quota exhaustion
+6142ec22 修复：更新antigravity user agent 到 1.23.2
+62afbf6b 修复：handle unsupported subscription models
+3abfe554 新增：auto assign proxies during account import
+b20658e1 修复：增加missing 前端 i18n labels
+5325a04a 修复：use mac antigravity user agent
+1da9158d 修复：use legacy antigravity ua 针对 abnormal OAuth streams
+0aa92b57 修复：fallback antigravity validation 测试 到 legacy wakeup
+f1c0d9be 修复：refresh antigravity token before validation probe
+7f7c545c 修复：对齐antigravity account test path
+ee71fe19 修复：localize remaining 前端 copy
