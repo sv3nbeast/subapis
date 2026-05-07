@@ -1458,3 +1458,64 @@ e441fd10 修复：恢复account-level quarantine 针对 antigravity quota exhaus
 0ff61085 修复：增加status aliases 与 route integrity checks
 63b506ac 修复：恢复public status page route
 4f240783 修复：加固 设置 runtime 与 restore 个人资料 locales
+
+## 2026-05-07 11:28:19 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `484dce126bb20fe578aa3d5864403a1f95f02e14`
+- 官方提交: `f3577bc69c5f28e859d5c37bd1546790c2a10f88`
+- 合并基线: `c056db740d56ce008292a7b414c804cc6f308208`
+- 官方领先数量: `118`
+- 本地领先数量: `192`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+f3577bc6 杂项：将VERSION同步到 0.1.124 [skip ci]
+7a9c1d7e 新增（前端）：增加account Codex image bridge control
+45b1e6ae 合并拉取请求 #2233（来源：Arron196/fix/codex-image-generation-bridge-switch）
+501b7f27 修复：稳定 anthropic passthrough timeout error
+e69319e7 合并拉取请求 #2224（来源：lyen1688/feat-email-oauth-github-google）
+989f87fe 修复：加固 markdown page image paths
+d52da453 合并拉取请求 #2202（来源：Michael-Jetson/main）
+fff4a300 新增（risk-control）：增加content moderation audit
+246e4821 新增（前端）：增加Codex image bridge toggle
+9c1f207b 文档：document Codex image bridge switch
+26043a8f 修复（openai）：gate Codex image bridge injection
+e69256a7 修复：完善邮箱快捷登录注册流程
+81edaa89 修复：放行 GitHub 和 Google 登录来源约束
+7f185422 修复：修复邮箱快捷登录前端回调兜底
+480fe27b 修复：更新邮箱 OAuth 单测契约
+93f884b7 修复：优化 GitHub OAuth 邮箱验证赋值
+af550fa6 新增：增加 GitHub 和 Google 邮箱快捷登录
+cf2d5067 修复（security）：增加JWT 认证 + visibility check 到 pages API
+4cbd4932 新增：增加redeem code affiliate rebate, batch concurrency API, 与 markdown page rendering
+a1106e81 合并拉取请求 #2165（来源：zhangdeyu/feature/support-select-search）
+
+### 本地领先
+
+484dce12 修复：normalize gpt-5.5 aliases 针对 billing
+b91a18fe 修复：对齐antigravity credits request shape
+b8d64856 修复：use daily endpoint 针对 Antigravity AI Credits retry
+18d084b4 修复：retry Antigravity AI Credits only after quota exhaustion
+63084d32 Revert "fix: align Antigravity AI Credits quota project"
+d8eecd84 修复：对齐Antigravity AI Credits quota project
+f41c5968 修复：use antigravity credits overages 针对 quota exhaustion
+6142ec22 修复：更新antigravity user agent 到 1.23.2
+62afbf6b 修复：handle unsupported subscription models
+3abfe554 新增：auto assign proxies during account import
+b20658e1 修复：增加missing 前端 i18n labels
+5325a04a 修复：use mac antigravity user agent
+1da9158d 修复：use legacy antigravity ua 针对 abnormal OAuth streams
+0aa92b57 修复：fallback antigravity validation 测试 到 legacy wakeup
+f1c0d9be 修复：refresh antigravity token before validation probe
+7f7c545c 修复：对齐antigravity account test path
+ee71fe19 修复：localize remaining 前端 copy
+134df9b3 修复：dedupe legacy subscription history entries
+824d7b65 修复：将subscription orders纳入user balance history
+4d59c343 文档：record official 0.1.119 promotion
