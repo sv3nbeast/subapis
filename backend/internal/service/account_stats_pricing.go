@@ -228,6 +228,10 @@ func applyAccountStatsCost(
 	if model == "" {
 		model = requestedModel
 	}
+	requestCount := 1
+	if usageLog != nil && usageLog.ImageCount > 0 {
+		requestCount = usageLog.ImageCount
+	}
 	usageLog.AccountStatsCost = resolveAccountStatsCost(
 		ctx,
 		cs,
@@ -236,7 +240,7 @@ func applyAccountStatsCost(
 		groupID,
 		model,
 		tokens,
-		1,
+		requestCount,
 		totalCost,
 	)
 }

@@ -69,7 +69,7 @@ func (r *balanceHistoryRedeemRepo) ListByUserPaginated(_ context.Context, userID
 		filtered = append(filtered, record)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		return balanceHistoryRecordTime(filtered[i]).After(balanceHistoryRecordTime(filtered[j]))
+		return redeemCodeHistoryTime(filtered[i]).After(redeemCodeHistoryTime(filtered[j]))
 	})
 	total := int64(len(filtered))
 	limit := params.Limit()
