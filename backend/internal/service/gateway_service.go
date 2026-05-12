@@ -3768,12 +3768,12 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		_, ok := ResolveBedrockModelID(account, requestedModel)
 		return ok
 	}
-	// OAuth/SetupToken 账号使用 Anthropic 标准映射（短ID → 长ID）
-	if account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
-		if account.Type == AccountTypeServiceAccount {
-			requestedModel = normalizeVertexAnthropicModelID(claude.NormalizeModelID(requestedModel))
-		} else {
-			requestedModel = claude.NormalizeModelID(requestedModel)
+	// Anthropic OAuth/SetupToken/ServiceAccount 的 model_mapping 只用于转发前改写上游模型，
+	// 不作为调度白名单。否则只配置少量映射的账号会把其它 Claude 模型提前拦截。
+	if account.Platform == PlatformAnthropic {
+		switch account.Type {
+		case AccountTypeOAuth, AccountTypeSetupToken, AccountTypeServiceAccount:
+			return true
 		}
 	}
 	// 其他平台使用账户的模型支持检查

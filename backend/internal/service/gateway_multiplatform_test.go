@@ -1178,9 +1178,20 @@ func TestGatewayService_isModelSupportedByAccount(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "Anthropic平台-有映射配置-只支持配置的模型",
+			name: "Anthropic OAuth账号-有映射配置-仍支持未映射模型",
 			account: &Account{
 				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4": "x"}},
+			},
+			model:    "claude-3-5-sonnet-20241022",
+			expected: true,
+		},
+		{
+			name: "Anthropic API Key账号-有映射配置-只支持配置的模型",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeAPIKey,
 				Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4": "x"}},
 			},
 			model:    "claude-3-5-sonnet-20241022",
@@ -1190,6 +1201,7 @@ func TestGatewayService_isModelSupportedByAccount(t *testing.T) {
 			name: "Anthropic平台-有映射配置-支持配置的模型",
 			account: &Account{
 				Platform:    PlatformAnthropic,
+				Type:        AccountTypeAPIKey,
 				Credentials: map[string]any{"model_mapping": map[string]any{"claude-3-5-sonnet-20241022": "x"}},
 			},
 			model:    "claude-3-5-sonnet-20241022",
