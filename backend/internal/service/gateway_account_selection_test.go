@@ -277,3 +277,95 @@ func TestSelectByLRU_TiePreferOAuth(t *testing.T) {
 		require.Equal(t, int64(2), result.account.ID)
 	}
 }
+
+func TestFilterByMinRPMUsage_SelectsLowestUsageRatio(t *testing.T) {
+	accounts := []accountWithLoad{
+		{account: &Account{ID: 1}, rpmUsage: accountRPMUsage{current: 4, base: 10, known: true}},
+		{account: &Account{ID: 2}, rpmUsage: accountRPMUsage{current: 1, base: 10, known: true}},
+		{account: &Account{ID: 3}, rpmUsage: accountRPMUsage{current: 2, base: 20, known: true}},
+	}
+
+	result := filterByMinRPMUsage(accounts)
+	require.Len(t, result, 2)
+	require.Equal(t, int64(2), result[0].account.ID)
+	require.Equal(t, int64(3), result[1].account.ID)
+}
+
+func TestFilterByMinRPMUsage_PreservesMixedOrUnknownPools(t *testing.T) {
+	accounts := []accountWithLoad{
+		{account: &Account{ID: 1}, rpmUsage: accountRPMUsage{current: 9, base: 10, known: true}},
+		{account: &Account{ID: 2}},
+	}
+
+	result := filterByMinRPMUsage(accounts)
+	require.Len(t, result, 2)
+	require.Equal(t, int64(1), result[0].account.ID)
+	require.Equal(t, int64(2), result[1].account.ID)
+}
+
+func TestSelectBalancedAccount_PrefersLowestAnthropicRPMWithinPriority(t *testing.T) {
+	ctx := context.WithValue(context.Background(), rpmPrefetchContextKey, map[int64]int{
+		1: 4,
+		2: 1,
+		3: 0,
+	})
+	now := time.Now()
+	old := now.Add(-2 * time.Hour)
+	accounts := []*Account{
+		{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &old, Extra: map[string]any{"base_rpm": 10}},
+		{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &now, Extra: map[string]any{"base_rpm": 10}},
+		{ID: 3, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 2, LastUsedAt: nil, Extra: map[string]any{"base_rpm": 10}},
+	}
+
+	selected := selectBalancedAccount(ctx, accounts, false, "last_used")
+	require.NotNil(t, selected)
+	require.Equal(t, int64(2), selected.ID, "同优先级内应先按 RPM 使用比例均衡，不能让低优先级账号越级")
+}
+
+func TestSelectBalancedAccount_NoBaseRPMPreservesLRU(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	old := now.Add(-2 * time.Hour)
+	accounts := []*Account{
+		{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &old},
+		{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &now},
+	}
+
+	selected := selectBalancedAccount(ctx, accounts, false, "last_used")
+	require.NotNil(t, selected)
+	require.Equal(t, int64(1), selected.ID)
+}
+
+func TestSelectByBalancedRPMOrLRU_RandomizesEqualRPMUsage(t *testing.T) {
+	accounts := []accountWithLoad{
+		{account: &Account{ID: 1}, rpmUsage: accountRPMUsage{current: 0, base: 10, known: true}},
+		{account: &Account{ID: 2}, rpmUsage: accountRPMUsage{current: 0, base: 10, known: true}},
+	}
+	validIDs := map[int64]bool{1: true, 2: true}
+
+	for i := 0; i < 20; i++ {
+		selected := selectByBalancedRPMOrLRU(accounts, false)
+		require.NotNil(t, selected)
+		require.True(t, validIDs[selected.account.ID])
+	}
+}
+
+func TestSelectBalancedAccount_EqualRPMUsageDoesNotForceLRUHotspot(t *testing.T) {
+	ctx := context.WithValue(context.Background(), rpmPrefetchContextKey, map[int64]int{
+		1: 0,
+		2: 0,
+	})
+	now := time.Now()
+	old := now.Add(-2 * time.Hour)
+	accounts := []*Account{
+		{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &old, Extra: map[string]any{"base_rpm": 10}},
+		{ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Priority: 1, LastUsedAt: &now, Extra: map[string]any{"base_rpm": 10}},
+	}
+	validIDs := map[int64]bool{1: true, 2: true}
+
+	for i := 0; i < 20; i++ {
+		selected := selectBalancedAccount(ctx, accounts, false, "last_used")
+		require.NotNil(t, selected)
+		require.True(t, validIDs[selected.ID])
+	}
+}

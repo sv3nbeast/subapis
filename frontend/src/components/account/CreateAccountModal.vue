@@ -3225,6 +3225,9 @@ const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
+const DEFAULT_ANTHROPIC_BASE_RPM = 15
+const DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE = 'serialize'
+const MAX_ANTHROPIC_ACCOUNTS_PER_PROXY = 1
 const poolModeEnabled = ref(false)
 const poolModeRetryCount = ref(DEFAULT_POOL_MODE_RETRY_COUNT)
 const customErrorCodesEnabled = ref(false)
@@ -3329,6 +3332,9 @@ const umqModeOptions = computed(() => [
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
+const autoSelectedAnthropicProxyId = ref<number | null>(null)
+const anthropicProxyCounts = ref<Record<number, number>>({})
+let anthropicProxyAutoSelectRun = 0
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -3490,6 +3496,98 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
+const shouldApplyAnthropicCreateDefaults = computed(() =>
+  form.platform === 'anthropic' && accountCategory.value === 'oauth-based'
+)
+
+const applyAnthropicCreateDefaults = () => {
+  if (!shouldApplyAnthropicCreateDefaults.value) {
+    return
+  }
+  rpmLimitEnabled.value = true
+  baseRpm.value = DEFAULT_ANTHROPIC_BASE_RPM
+  userMsgQueueMode.value = DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE
+  tlsFingerprintEnabled.value = true
+  tlsFingerprintProfileId.value = null
+}
+
+const clearAnthropicProxyAutoSelection = () => {
+  if (form.proxy_id === autoSelectedAnthropicProxyId.value) {
+    form.proxy_id = null
+  }
+  autoSelectedAnthropicProxyId.value = null
+}
+
+const loadAnthropicProxyCounts = async () => {
+  if (!props.show || !shouldApplyAnthropicCreateDefaults.value) {
+    anthropicProxyCounts.value = {}
+    clearAnthropicProxyAutoSelection()
+    return
+  }
+  if (props.proxies.length === 0) {
+    anthropicProxyCounts.value = {}
+    autoSelectAnthropicProxy()
+    return
+  }
+
+  const runId = ++anthropicProxyAutoSelectRun
+  try {
+    const entries = await Promise.all(
+      props.proxies
+        .filter((proxy) => proxy.status === 'active')
+        .map(async (proxy) => {
+          if (proxy.account_count === 0) {
+            return [proxy.id, 0] as const
+          }
+          try {
+            const accounts = await adminAPI.proxies.getProxyAccounts(proxy.id)
+            const count = accounts.filter((account) => account.platform === 'anthropic').length
+            return [proxy.id, count] as const
+          } catch {
+            return [proxy.id, Number.POSITIVE_INFINITY] as const
+          }
+        })
+    )
+    if (runId !== anthropicProxyAutoSelectRun) {
+      return
+    }
+    anthropicProxyCounts.value = Object.fromEntries(entries)
+    autoSelectAnthropicProxy()
+  } catch {
+    if (runId === anthropicProxyAutoSelectRun) {
+      anthropicProxyCounts.value = {}
+    }
+  }
+}
+
+const autoSelectAnthropicProxy = () => {
+  if (!props.show || !shouldApplyAnthropicCreateDefaults.value) {
+    clearAnthropicProxyAutoSelection()
+    return
+  }
+  if (form.proxy_id && form.proxy_id !== autoSelectedAnthropicProxyId.value) {
+    return
+  }
+
+  const candidates = props.proxies
+    .filter((proxy) => proxy.status === 'active')
+    .map((proxy) => ({
+      proxy,
+      anthropicCount: anthropicProxyCounts.value[proxy.id] ?? Number.POSITIVE_INFINITY,
+      totalCount: proxy.account_count ?? 0
+    }))
+    .filter((item) => item.anthropicCount <= MAX_ANTHROPIC_ACCOUNTS_PER_PROXY)
+    .sort((a, b) =>
+      a.anthropicCount - b.anthropicCount ||
+      a.totalCount - b.totalCount ||
+      a.proxy.id - b.proxy.id
+    )
+
+  const selected = candidates[0]?.proxy.id ?? null
+  autoSelectedAnthropicProxyId.value = selected
+  form.proxy_id = selected
+}
+
 // Watchers
 watch(
   () => props.show,
@@ -3514,9 +3612,28 @@ watch(
         antigravityModelRestrictionMode.value = 'mapping'
       }
     } else {
+      anthropicProxyAutoSelectRun++
+      anthropicProxyCounts.value = {}
+      autoSelectedAnthropicProxyId.value = null
       resetForm()
     }
   }
+)
+
+watch(
+  [() => props.show, () => form.platform, accountCategory, () => props.proxies],
+  ([show]) => {
+    if (!show) {
+      return
+    }
+    if (shouldApplyAnthropicCreateDefaults.value) {
+      applyAnthropicCreateDefaults()
+      void loadAnthropicProxyCounts()
+      return
+    }
+    clearAnthropicProxyAutoSelection()
+  },
+  { immediate: true }
 )
 
 // Sync form.type based on accountCategory, addMethod, and platform-specific type
@@ -4008,13 +4125,14 @@ const resetForm = () => {
   sessionLimitEnabled.value = false
   maxSessions.value = null
   sessionIdleTimeout.value = null
-  rpmLimitEnabled.value = false
-  baseRpm.value = null
+  rpmLimitEnabled.value = true
+  baseRpm.value = DEFAULT_ANTHROPIC_BASE_RPM
   rpmStrategy.value = 'tiered'
   rpmStickyBuffer.value = null
-  userMsgQueueMode.value = ''
-  tlsFingerprintEnabled.value = false
+  userMsgQueueMode.value = DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE
+  tlsFingerprintEnabled.value = true
   tlsFingerprintProfileId.value = null
+  autoSelectedAnthropicProxyId.value = null
   sessionIdMaskingEnabled.value = false
   cacheTTLOverrideEnabled.value = false
   cacheTTLOverrideTarget.value = '5m'

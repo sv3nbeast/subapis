@@ -75,6 +75,13 @@ type forceCacheBillingKeyType struct{}
 type accountWithLoad struct {
 	account  *Account
 	loadInfo *AccountLoadInfo
+	rpmUsage accountRPMUsage
+}
+
+type accountRPMUsage struct {
+	current int
+	base    int
+	known   bool
 }
 
 var ForceCacheBillingContextKey = forceCacheBillingKeyType{}
@@ -1760,16 +1767,19 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					loadInfo = &AccountLoadInfo{AccountID: acc.ID}
 				}
 				if loadInfo.LoadRate < 100 {
-					routingAvailable = append(routingAvailable, accountWithLoad{account: acc, loadInfo: loadInfo})
+					routingAvailable = append(routingAvailable, newAccountWithLoad(ctx, acc, loadInfo))
 				}
 			}
 
 			if len(routingAvailable) > 0 {
-				// 排序：优先级 > 负载率 > 最后使用时间
+				// 排序：优先级 > Anthropic RPM 使用率 > 负载率 > 最后使用时间
 				sort.SliceStable(routingAvailable, func(i, j int) bool {
 					a, b := routingAvailable[i], routingAvailable[j]
 					if a.account.Priority != b.account.Priority {
 						return a.account.Priority < b.account.Priority
+					}
+					if cmp := compareAccountRPMUsage(a.rpmUsage, b.rpmUsage); cmp != 0 {
+						return cmp < 0
 					}
 					if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
 						return a.loadInfo.LoadRate < b.loadInfo.LoadRate
@@ -2022,23 +2032,22 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				loadInfo = &AccountLoadInfo{AccountID: acc.ID}
 			}
 			if loadInfo.LoadRate < 100 {
-				available = append(available, accountWithLoad{
-					account:  acc,
-					loadInfo: loadInfo,
-				})
+				available = append(available, newAccountWithLoad(ctx, acc, loadInfo))
 			}
 		}
 
-		// 分层过滤选择：后缀避让 tier → 优先级 → 负载率 → LRU
+		// 分层过滤选择：后缀避让 tier → 优先级 → Anthropic RPM 使用率 → 负载率 → LRU
 		for len(available) > 0 {
 			// 1. 先在整个候选池中优先尝试未命中过的后缀；只有没有可选后才回退。
 			candidates := filterByPreferredEmailDomainSuffixes(ctx, available)
 			// 2. 在当前后缀 tier 内保持优先级语义。
 			candidates = filterByMinPriority(candidates)
-			// 3. 取负载率最低的集合
+			// 3. Anthropic OAuth/SetupToken 在同优先级内按当前 RPM 使用比例均衡。
+			candidates = filterByMinRPMUsage(candidates)
+			// 4. 取负载率最低的集合
 			candidates = filterByMinLoadRate(candidates)
-			// 4. LRU 选择最久未用的账号
-			selected := selectByLRU(candidates, preferOAuth)
+			// 5. RPM 已知时随机分散同使用率账号；否则沿用 LRU。
+			selected := selectByBalancedRPMOrLRU(candidates, preferOAuth)
 			if selected == nil {
 				break
 			}
@@ -2069,11 +2078,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 3: 兜底排队 ============
-	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
-	prioritizeAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
-	for _, acc := range candidates {
+	fallbackCandidates := append([]*Account(nil), candidates...)
+	for len(fallbackCandidates) > 0 {
+		acc := selectBalancedAccount(ctx, fallbackCandidates, preferOAuth, cfg.FallbackSelectionMode)
+		if acc == nil {
+			break
+		}
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
+			fallbackCandidates = removeAccountByID(fallbackCandidates, acc.ID)
 			continue // 会话限制已满，尝试下一个账号
 		}
 		return s.newSelectionResult(ctx, acc, false, nil, &AccountWaitPlan{
@@ -2087,16 +2100,18 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 }
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
-	ordered := append([]*Account(nil), candidates...)
-	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
-	prioritizeAccountsByPreferredEmailDomainSuffixes(ctx, ordered)
-
-	for _, acc := range ordered {
+	remaining := append([]*Account(nil), candidates...)
+	for len(remaining) > 0 {
+		acc := selectBalancedAccount(ctx, remaining, preferOAuth, "last_used")
+		if acc == nil {
+			break
+		}
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
 		if err == nil && result.Acquired {
 			// 会话数量限制检查
 			if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
 				result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
+				remaining = removeAccountByID(remaining, acc.ID)
 				continue
 			}
 			if sessionHash != "" && s.cache != nil {
@@ -2108,6 +2123,7 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 			}
 			return selection, true, nil
 		}
+		remaining = removeAccountByID(remaining, acc.ID)
 	}
 
 	return nil, false, nil
@@ -2211,6 +2227,232 @@ func filterByPreferredEmailDomainSuffixes(ctx context.Context, accounts []accoun
 		return accounts
 	}
 	return preferred
+}
+
+func newAccountWithLoad(ctx context.Context, account *Account, loadInfo *AccountLoadInfo) accountWithLoad {
+	return accountWithLoad{
+		account:  account,
+		loadInfo: loadInfo,
+		rpmUsage: accountRPMUsageFromContext(ctx, account),
+	}
+}
+
+func accountRPMUsageFromContext(ctx context.Context, account *Account) accountRPMUsage {
+	if account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return accountRPMUsage{}
+	}
+	baseRPM := account.GetBaseRPM()
+	if baseRPM <= 0 {
+		return accountRPMUsage{}
+	}
+	currentRPM, ok := rpmFromPrefetchContext(ctx, account.ID)
+	if !ok {
+		return accountRPMUsage{}
+	}
+	if currentRPM < 0 {
+		currentRPM = 0
+	}
+	return accountRPMUsage{current: currentRPM, base: baseRPM, known: true}
+}
+
+func compareAccountRPMUsage(a, b accountRPMUsage) int {
+	switch {
+	case !a.known || !b.known:
+		return 0
+	}
+
+	left := int64(a.current) * int64(b.base)
+	right := int64(b.current) * int64(a.base)
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// filterByMinRPMUsage keeps the lowest current RPM usage ratio only when all
+// candidates are Anthropic OAuth/SetupToken accounts with base_rpm. Mixed pools
+// preserve the previous ordering semantics.
+func filterByMinRPMUsage(accounts []accountWithLoad) []accountWithLoad {
+	if len(accounts) == 0 {
+		return accounts
+	}
+	min := accounts[0].rpmUsage
+	if !min.known {
+		return accounts
+	}
+	for _, item := range accounts {
+		if !item.rpmUsage.known {
+			return accounts
+		}
+		if compareAccountRPMUsage(item.rpmUsage, min) < 0 {
+			min = item.rpmUsage
+		}
+	}
+	result := make([]accountWithLoad, 0, len(accounts))
+	for _, item := range accounts {
+		if compareAccountRPMUsage(item.rpmUsage, min) == 0 {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func selectByBalancedRPMOrLRU(accounts []accountWithLoad, preferOAuth bool) *accountWithLoad {
+	if len(accounts) == 0 {
+		return nil
+	}
+	if len(accounts) == 1 {
+		return &accounts[0]
+	}
+	allRPMAware := true
+	for _, item := range accounts {
+		if !item.rpmUsage.known {
+			allRPMAware = false
+			break
+		}
+	}
+	if !allRPMAware {
+		return selectByLRU(accounts, preferOAuth)
+	}
+
+	candidateIdxs := make([]int, 0, len(accounts))
+	for i := range accounts {
+		candidateIdxs = append(candidateIdxs, i)
+	}
+	if preferOAuth {
+		oauthIdxs := make([]int, 0, len(candidateIdxs))
+		for _, idx := range candidateIdxs {
+			if accounts[idx].account.Type == AccountTypeOAuth {
+				oauthIdxs = append(oauthIdxs, idx)
+			}
+		}
+		if len(oauthIdxs) > 0 {
+			candidateIdxs = oauthIdxs
+		}
+	}
+	return &accounts[candidateIdxs[mathrand.Intn(len(candidateIdxs))]]
+}
+
+func filterAccountsByMinRPMUsage(ctx context.Context, accounts []*Account) []*Account {
+	if len(accounts) == 0 {
+		return accounts
+	}
+	min := accountRPMUsageFromContext(ctx, accounts[0])
+	if !min.known {
+		return accounts
+	}
+	for _, account := range accounts[1:] {
+		usage := accountRPMUsageFromContext(ctx, account)
+		if !usage.known {
+			return accounts
+		}
+		if compareAccountRPMUsage(usage, min) < 0 {
+			min = usage
+		}
+	}
+	result := make([]*Account, 0, len(accounts))
+	for _, account := range accounts {
+		usage := accountRPMUsageFromContext(ctx, account)
+		if compareAccountRPMUsage(usage, min) == 0 {
+			result = append(result, account)
+		}
+	}
+	return result
+}
+
+func selectBalancedAccount(ctx context.Context, accounts []*Account, preferOAuth bool, mode string) *Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	candidates := filterAccountsByPreferredEmailDomainSuffixes(ctx, accounts)
+	candidates = filterAccountsByMinPriority(candidates)
+	candidates = filterAccountsByMinRPMUsage(ctx, candidates)
+	if areAllAccountsRPMAware(ctx, candidates) {
+		return selectRandomAccount(candidates, preferOAuth)
+	}
+	if mode == "random" {
+		return selectRandomAccount(candidates, preferOAuth)
+	}
+	return selectAccountByLRU(candidates, preferOAuth)
+}
+
+func areAllAccountsRPMAware(ctx context.Context, accounts []*Account) bool {
+	if len(accounts) == 0 {
+		return false
+	}
+	for _, account := range accounts {
+		if !accountRPMUsageFromContext(ctx, account).known {
+			return false
+		}
+	}
+	return true
+}
+
+func filterAccountsByMinPriority(accounts []*Account) []*Account {
+	if len(accounts) == 0 {
+		return accounts
+	}
+	minPriority := accounts[0].Priority
+	for _, account := range accounts[1:] {
+		if account.Priority < minPriority {
+			minPriority = account.Priority
+		}
+	}
+	result := make([]*Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.Priority == minPriority {
+			result = append(result, account)
+		}
+	}
+	return result
+}
+
+func selectAccountByLRU(accounts []*Account, preferOAuth bool) *Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	wrapped := make([]accountWithLoad, 0, len(accounts))
+	for _, account := range accounts {
+		wrapped = append(wrapped, accountWithLoad{account: account})
+	}
+	selected := selectByLRU(wrapped, preferOAuth)
+	if selected == nil {
+		return nil
+	}
+	return selected.account
+}
+
+func selectRandomAccount(accounts []*Account, preferOAuth bool) *Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	candidates := accounts
+	if preferOAuth {
+		oauth := make([]*Account, 0, len(accounts))
+		for _, account := range accounts {
+			if account.Type == AccountTypeOAuth {
+				oauth = append(oauth, account)
+			}
+		}
+		if len(oauth) > 0 {
+			candidates = oauth
+		}
+	}
+	return candidates[mathrand.Intn(len(candidates))]
+}
+
+func removeAccountByID(accounts []*Account, accountID int64) []*Account {
+	result := make([]*Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.ID != accountID {
+			result = append(result, account)
+		}
+	}
+	return result
 }
 
 func (s *GatewayService) schedulingConfig() config.GatewaySchedulingConfig {
@@ -3019,7 +3261,7 @@ func sortAccountsByPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
 	shuffleWithinPriorityAndLastUsed(accounts, preferOAuth)
 }
 
-// shuffleWithinSortGroups 对排序后的 accountWithLoad 切片，按 (Priority, LoadRate, LastUsedAt) 分组后组内随机打乱。
+// shuffleWithinSortGroups 对排序后的 accountWithLoad 切片，按 (Priority, RPMUsage, LoadRate, LastUsedAt) 分组后组内随机打乱。
 // 防止并发请求读取同一快照时，确定性排序导致所有请求命中相同账号。
 func shuffleWithinSortGroups(accounts []accountWithLoad) {
 	if len(accounts) <= 1 {
@@ -3045,8 +3287,14 @@ func sameAccountWithLoadGroup(a, b accountWithLoad) bool {
 	if a.account.Priority != b.account.Priority {
 		return false
 	}
+	if compareAccountRPMUsage(a.rpmUsage, b.rpmUsage) != 0 {
+		return false
+	}
 	if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
 		return false
+	}
+	if a.rpmUsage.known && b.rpmUsage.known {
+		return true
 	}
 	return sameLastUsedAt(a.account.LastUsedAt, b.account.LastUsedAt)
 }
@@ -3177,22 +3425,7 @@ func (s *GatewayService) selectLegacyEligibleAccount(
 	if len(candidates) == 0 {
 		return nil
 	}
-	sortAccountsByPriorityAndLastUsed(candidates, preferOAuth)
-	candidates = filterAccountsByPreferredEmailDomainSuffixes(ctx, candidates)
-	return candidates[0]
-}
-
-// sortCandidatesForFallback 根据配置选择排序策略
-// mode: "last_used"(按最后使用时间) 或 "random"(随机)
-func (s *GatewayService) sortCandidatesForFallback(accounts []*Account, preferOAuth bool, mode string) {
-	if mode == "random" {
-		// 先按优先级排序，然后在同优先级内随机打乱
-		sortAccountsByPriorityOnly(accounts, preferOAuth)
-		shuffleWithinPriority(accounts)
-	} else {
-		// 默认按最后使用时间排序
-		sortAccountsByPriorityAndLastUsed(accounts, preferOAuth)
-	}
+	return selectBalancedAccount(ctx, candidates, preferOAuth, "last_used")
 }
 
 // sortAccountsByPriorityOnly 仅按优先级排序
