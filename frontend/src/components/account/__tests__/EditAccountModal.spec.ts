@@ -237,4 +237,34 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_image_generation_bridge).toBe(true)
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
   })
+
+  it('shows and submits Anthropic OAuth model mapping', async () => {
+    const account = buildAccount()
+    account.name = 'Anthropic OAuth'
+    account.platform = 'anthropic'
+    account.type = 'oauth'
+    account.credentials = {
+      access_token: 'token',
+      model_mapping: {
+        'claude-opus-4-7-thinking': 'claude-opus-4-7'
+      }
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    const inputs = wrapper.findAll('input')
+    expect(inputs.some((input) => input.element.value === 'claude-opus-4-7-thinking')).toBe(true)
+    expect(inputs.some((input) => input.element.value === 'claude-opus-4-7')).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
+      'claude-opus-4-7-thinking': 'claude-opus-4-7'
+    })
+  })
 })
