@@ -15,6 +15,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/invoiceapplication"
+	"github.com/Wei-Shaw/sub2api/ent/invoiceapplicationorder"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
@@ -487,6 +489,36 @@ func (_c *UserCreate) AddPaymentOrders(v ...*PaymentOrder) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddPaymentOrderIDs(ids...)
+}
+
+// AddInvoiceApplicationIDs adds the "invoice_applications" edge to the InvoiceApplication entity by IDs.
+func (_c *UserCreate) AddInvoiceApplicationIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddInvoiceApplicationIDs(ids...)
+	return _c
+}
+
+// AddInvoiceApplications adds the "invoice_applications" edges to the InvoiceApplication entity.
+func (_c *UserCreate) AddInvoiceApplications(v ...*InvoiceApplication) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddInvoiceApplicationIDs(ids...)
+}
+
+// AddInvoiceApplicationOrderIDs adds the "invoice_application_orders" edge to the InvoiceApplicationOrder entity by IDs.
+func (_c *UserCreate) AddInvoiceApplicationOrderIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddInvoiceApplicationOrderIDs(ids...)
+	return _c
+}
+
+// AddInvoiceApplicationOrders adds the "invoice_application_orders" edges to the InvoiceApplicationOrder entity.
+func (_c *UserCreate) AddInvoiceApplicationOrders(v ...*InvoiceApplicationOrder) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddInvoiceApplicationOrderIDs(ids...)
 }
 
 // AddAuthIdentityIDs adds the "auth_identities" edge to the AuthIdentity entity by IDs.
@@ -984,6 +1016,38 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(paymentorder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.InvoiceApplicationsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.InvoiceApplicationsTable,
+			Columns: []string{user.InvoiceApplicationsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplication.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.InvoiceApplicationOrdersIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.InvoiceApplicationOrdersTable,
+			Columns: []string{user.InvoiceApplicationOrdersColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

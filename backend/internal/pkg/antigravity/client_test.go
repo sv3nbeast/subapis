@@ -1304,19 +1304,23 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 			t.Errorf("Accept-Encoding 不匹配: got %s", ae)
 		}
 
-		// 验证请求体
-		var reqBody LoadCodeAssistRequest
+		// 验证请求体与真实 Antigravity 客户端一致：只带 metadata.ideType。
+		var reqBody map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			t.Fatalf("解析请求体失败: %v", err)
 		}
-		if reqBody.Metadata.IDEType != "ANTIGRAVITY" {
-			t.Errorf("IDEType 不匹配: got %s, want ANTIGRAVITY", reqBody.Metadata.IDEType)
+		metadata, ok := reqBody["metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("metadata 类型不匹配: got %#v", reqBody["metadata"])
 		}
-		if reqBody.Metadata.IDEVersion != GetClientVersion() {
-			t.Errorf("IDEVersion 不匹配: got %s, want %s", reqBody.Metadata.IDEVersion, GetClientVersion())
+		if metadata["ideType"] != "ANTIGRAVITY" {
+			t.Errorf("IDEType 不匹配: got %v, want ANTIGRAVITY", metadata["ideType"])
 		}
-		if reqBody.Metadata.IDEName != "antigravity" {
-			t.Errorf("IDEName 不匹配: got %s, want antigravity", reqBody.Metadata.IDEName)
+		if _, ok := metadata["ideVersion"]; ok {
+			t.Errorf("不应发送 ideVersion: got %#v", metadata["ideVersion"])
+		}
+		if _, ok := metadata["ideName"]; ok {
+			t.Errorf("不应发送 ideName: got %#v", metadata["ideName"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1790,6 +1794,13 @@ func TestClient_FetchUserInfo_SetsCloudCodeHeaders(t *testing.T) {
 		}
 		if host := r.Host; host == "daily-cloudcode-pa.googleapis.com" {
 			t.Errorf("不应继续强制 daily Host: got %s", host)
+		}
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("解析请求体失败: %v", err)
+		}
+		if len(reqBody) != 0 {
+			t.Fatalf("fetchUserInfo 请求体应为空 JSON 对象: got %#v", reqBody)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

@@ -17,7 +17,8 @@ const (
 // setAntigravityPrivacy 调用 Antigravity API 设置隐私并验证结果。
 // 流程：
 //  1. setUserSettings 清空设置 → 检查返回值 {"userSettings":{}}
-//  2. fetchUserInfo 二次验证隐私是否已生效（需要 project_id）
+//  2. fetchUserInfo 二次验证隐私是否已生效；真实 Antigravity 客户端请求体为空，
+//     project_id 只作为本地账号初始化是否完成的前置条件。
 //
 // 返回 privacy_mode 值："privacy_set" 成功，"privacy_set_failed" 失败，空串表示无法执行。
 func setAntigravityPrivacy(ctx context.Context, accessToken, projectID, proxyURL string) string {

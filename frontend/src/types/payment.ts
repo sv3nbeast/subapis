@@ -22,6 +22,10 @@ export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' 
 
 export type OrderType = 'balance' | 'subscription'
 
+export type InvoiceBuyerType = 'individual' | 'enterprise'
+
+export type InvoiceStatus = 'SUBMITTED' | 'PROCESSING' | 'ISSUED' | 'FAILED' | 'CANCELLED'
+
 // ==================== Configuration ====================
 
 export interface PaymentConfig {
@@ -93,6 +97,102 @@ export interface PaymentOrder {
   refund_request_reason?: string
   plan_id?: number
   provider_instance_id?: string
+}
+
+// ==================== Invoices ====================
+
+export interface InvoiceEligibleOrder {
+  order_id: number
+  out_trade_no: string
+  order_type: OrderType
+  pay_amount: number
+  refund_amount: number
+  created_at: string
+}
+
+export interface InvoiceOrderSnapshot {
+  order_id: number
+  out_trade_no: string
+  order_type: OrderType
+  order_amount: number
+  pay_amount: number
+  refund_amount: number
+  invoice_amount: number
+  created_at: string
+}
+
+export interface InvoiceApplication {
+  id: number
+  user_id: number
+  user_email: string
+  buyer_type: InvoiceBuyerType
+  buyer_name: string
+  buyer_tax_no: string
+  buyer_email: string
+  buyer_phone: string
+  buyer_address: string
+  buyer_bank_name: string
+  buyer_bank_account: string
+  invoice_amount: number
+  invoice_type: string
+  content: string
+  tax_rate: string
+  tax_classification_code: string
+  status: InvoiceStatus
+  provider: string
+  provider_order_id: string
+  provider_order_no: string
+  invoice_code: string
+  invoice_no: string
+  issued_at?: string
+  last_error_code: string
+  last_error_message: string
+  retry_count: number
+  orders?: InvoiceOrderSnapshot[]
+  submitted_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateInvoiceApplicationRequest {
+  order_ids: number[]
+  buyer_type: InvoiceBuyerType
+  buyer_name: string
+  buyer_tax_no?: string
+  buyer_email?: string
+  buyer_phone?: string
+  buyer_address?: string
+  buyer_bank_name?: string
+  buyer_bank_account?: string
+  remark?: string
+}
+
+export interface InvoicePublicConfig {
+  enabled: boolean
+  auto_issue_enabled: boolean
+}
+
+export type InvoiceProvider = '' | 'mock' | 'lexiang'
+
+export interface InvoiceConfig {
+  enabled: boolean
+  provider: InvoiceProvider
+  auto_issue_enabled: boolean
+  seller_name: string
+  seller_tax_no: string
+  seller_address: string
+  seller_phone: string
+  seller_bank_name: string
+  seller_bank_account: string
+  drawer_name: string
+  payee_name: string
+  reviewer_name: string
+  default_invoice_type: string
+  item_name: string
+  tax_rate: string
+  tax_classification_code: string
+  remark: string
+  provider_config: Record<string, string>
 }
 
 // ==================== Plans & Channels ====================

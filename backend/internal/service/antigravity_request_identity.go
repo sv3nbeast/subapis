@@ -24,6 +24,7 @@ const (
 	antigravityLineageFallbackKey         = "__fallback__"
 	antigravityLineageTTL                 = 24 * time.Hour
 	antigravityLineageCleanupInterval     = time.Hour
+	antigravityRequestBodyUserAgent       = "antigravity"
 )
 
 type antigravityRequestIdentity struct {
@@ -34,9 +35,10 @@ type antigravityRequestIdentity struct {
 }
 
 type antigravityRequestLineage struct {
-	UUID      string
-	Seq       uint64
-	UpdatedAt time.Time
+	CascadeID    string
+	TrajectoryID string
+	Seq          uint64
+	UpdatedAt    time.Time
 }
 
 type antigravityRequestLineageStore struct {
@@ -53,7 +55,7 @@ func newAntigravityRequestLineageStore() *antigravityRequestLineageStore {
 
 func (s *antigravityRequestLineageStore) nextRequestID(accountID int64, conversationKey string, now time.Time) string {
 	if s == nil {
-		return fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), antigravityLineageFallbackKey, 1)
+		return fmt.Sprintf("agent/%s/%d/%s/%d", generateAntigravityConversationUUID(), now.UnixMilli(), generateAntigravityConversationUUID(), 1)
 	}
 	if now.IsZero() {
 		now = time.Now()
@@ -75,15 +77,16 @@ func (s *antigravityRequestLineageStore) nextRequestID(accountID int64, conversa
 	lineage := s.lineages[storeKey]
 	if lineage == nil {
 		lineage = &antigravityRequestLineage{
-			UUID:      generateAntigravityConversationUUID(),
-			UpdatedAt: now,
+			CascadeID:    generateAntigravityConversationUUID(),
+			TrajectoryID: generateAntigravityConversationUUID(),
+			UpdatedAt:    now,
 		}
 		s.lineages[storeKey] = lineage
 	}
 
 	lineage.Seq++
 	lineage.UpdatedAt = now
-	return fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), lineage.UUID, lineage.Seq)
+	return fmt.Sprintf("agent/%s/%d/%s/%d", lineage.CascadeID, now.UnixMilli(), lineage.TrajectoryID, lineage.Seq)
 }
 
 func (s *antigravityRequestLineageStore) cleanupLocked(now time.Time) {
@@ -272,7 +275,7 @@ func (s *AntigravityGatewayService) buildCloudCodeRequestIdentity(
 	conversationKey := deriveAntigravityConversationKey(c, body, claudeReq)
 	sessionID := s.ensureCloudCodeSessionID(ctx, account)
 	worker := s.antigravityWorker(account)
-	requestID := fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), antigravityLineageFallbackKey, 1)
+	requestID := fmt.Sprintf("agent/%s/%d/%s/%d", generateAntigravityConversationUUID(), now.UnixMilli(), generateAntigravityConversationUUID(), 1)
 	if worker != nil {
 		requestID = worker.nextRequestID(conversationKey, now)
 	} else if s.requestLineage != nil {
@@ -281,7 +284,7 @@ func (s *AntigravityGatewayService) buildCloudCodeRequestIdentity(
 	return antigravityRequestIdentity{
 		SessionID:       sessionID,
 		RequestID:       requestID,
-		UserAgent:       antigravity.GetUserAgent(),
+		UserAgent:       antigravityRequestBodyUserAgent,
 		ConversationKey: conversationKey,
 	}
 }
@@ -294,8 +297,8 @@ func (s *AntigravityGatewayService) buildFreshSessionRecoveryIdentity(account *A
 	}
 	return antigravityRequestIdentity{
 		SessionID:       generateAntigravityCloudCodeSessionID(),
-		RequestID:       fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), generateAntigravityConversationUUID(), 1),
-		UserAgent:       antigravity.GetUserAgent(),
+		RequestID:       fmt.Sprintf("agent/%s/%d/%s/%d", generateAntigravityConversationUUID(), now.UnixMilli(), generateAntigravityConversationUUID(), 1),
+		UserAgent:       antigravityRequestBodyUserAgent,
 		ConversationKey: strings.TrimSpace(conversationKey),
 	}
 }

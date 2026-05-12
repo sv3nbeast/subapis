@@ -521,6 +521,7 @@ var ProviderSet = wire.NewSet(
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	NewPaymentService,
+	ProvideInvoiceService,
 	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,
 	ProvideStatusProbeService,
@@ -533,6 +534,13 @@ var ProviderSet = wire.NewSet(
 // payment.EncryptionKey provided by payment.ProviderSet.
 func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRepository, key payment.EncryptionKey) *PaymentConfigService {
 	return NewPaymentConfigService(entClient, settingRepo, []byte(key))
+}
+
+// ProvideInvoiceService creates and starts InvoiceService.
+func ProvideInvoiceService(entClient *dbent.Client, settingRepo SettingRepository) *InvoiceService {
+	svc := NewInvoiceService(entClient, settingRepo)
+	svc.Start()
+	return svc
 }
 
 // ProvidePaymentOrderExpiryService creates and starts PaymentOrderExpiryService.

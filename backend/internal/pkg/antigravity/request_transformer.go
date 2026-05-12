@@ -186,18 +186,19 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		requestID = "agent-" + uuid.New().String()
 	}
 	userAgent := strings.TrimSpace(opts.UserAgent)
-	if userAgent == "" || userAgent == "antigravity" {
-		userAgent = GetUserAgent()
+	if userAgent == "" {
+		userAgent = "antigravity"
 	}
 
 	// 6. 包装为 v1internal 请求
 	v1Req := V1InternalRequest{
-		Project:     projectID,
-		RequestID:   requestID,
-		UserAgent:   userAgent,
-		RequestType: requestType,
-		Model:       targetModel,
-		Request:     innerRequest,
+		Project:            projectID,
+		RequestID:          requestID,
+		UserAgent:          userAgent,
+		RequestType:        requestType,
+		Model:              targetModel,
+		EnabledCreditTypes: []string{"GOOGLE_ONE_AI"},
+		Request:            innerRequest,
 	}
 
 	return json.Marshal(v1Req)

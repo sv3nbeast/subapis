@@ -20,14 +20,16 @@ type PaymentHandler struct {
 	channelService *service.ChannelService
 	paymentService *service.PaymentService
 	configService  *service.PaymentConfigService
+	invoiceService *service.InvoiceService
 }
 
 // NewPaymentHandler creates a new PaymentHandler.
-func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService, channelService *service.ChannelService) *PaymentHandler {
+func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService, channelService *service.ChannelService, invoiceService *service.InvoiceService) *PaymentHandler {
 	return &PaymentHandler{
 		channelService: channelService,
 		paymentService: paymentService,
 		configService:  configService,
+		invoiceService: invoiceService,
 	}
 }
 
@@ -409,6 +411,139 @@ func (h *PaymentHandler) GetRefundEligibleProviders(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"provider_instance_ids": ids})
+}
+
+// GetInvoicePublicConfig returns the user-facing invoice feature switch.
+// GET /api/v1/payment/invoices/config
+func (h *PaymentHandler) GetInvoicePublicConfig(c *gin.Context) {
+	if _, ok := requireAuth(c); !ok {
+		return
+	}
+	if h.invoiceService == nil {
+		response.Success(c, service.InvoicePublicConfigResponse{Enabled: false, AutoIssueEnabled: false})
+		return
+	}
+	cfg, err := h.invoiceService.GetConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, service.InvoicePublicConfigResponse{
+		Enabled:          cfg.Enabled,
+		AutoIssueEnabled: cfg.AutoIssueEnabled,
+	})
+}
+
+// ListInvoiceEligibleOrders returns completed orders that can still be invoiced.
+// GET /api/v1/payment/invoices/eligible-orders
+func (h *PaymentHandler) ListInvoiceEligibleOrders(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	orders, err := h.invoiceService.ListEligibleOrders(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, orders)
+}
+
+// CreateInvoiceApplication creates a multi-order invoice application and starts auto issuing.
+// POST /api/v1/payment/invoices
+func (h *PaymentHandler) CreateInvoiceApplication(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	var req service.CreateInvoiceApplicationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	app, err := h.invoiceService.CreateApplication(c.Request.Context(), subject.UserID, req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, app)
+}
+
+// ListMyInvoices returns current user's invoice applications.
+// GET /api/v1/payment/invoices/my
+func (h *PaymentHandler) ListMyInvoices(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	items, total, err := h.invoiceService.ListUserApplications(c.Request.Context(), subject.UserID, page, pageSize)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, items, int64(total), page, pageSize)
+}
+
+// GetInvoiceApplication returns one current-user invoice application.
+// GET /api/v1/payment/invoices/:id
+func (h *PaymentHandler) GetInvoiceApplication(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid invoice ID")
+		return
+	}
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	app, err := h.invoiceService.GetApplication(c.Request.Context(), subject.UserID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, app)
+}
+
+// DownloadInvoiceFile downloads an issued invoice file.
+// GET /api/v1/payment/invoices/:id/files/:type
+func (h *PaymentHandler) DownloadInvoiceFile(c *gin.Context) {
+	subject, ok := requireAuth(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid invoice ID")
+		return
+	}
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	data, contentType, err := h.invoiceService.DownloadFile(c.Request.Context(), subject.UserID, id, c.Param("type"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="invoice-`+strconv.FormatInt(id, 10)+`.`+c.Param("type")+`"`)
+	c.Data(200, contentType, data)
 }
 
 // VerifyOrderRequest is the request body for verifying a payment order.

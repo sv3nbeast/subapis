@@ -153,6 +153,42 @@ func injectEnabledCreditTypes(body []byte) []byte {
 	return result
 }
 
+// stripEnabledCreditTypes removes AI Credits from a serialized v1internal body.
+func stripEnabledCreditTypes(body []byte) []byte {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	if _, exists := payload["enabledCreditTypes"]; !exists {
+		return body
+	}
+	delete(payload, "enabledCreditTypes")
+	result, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return result
+}
+
+func applyAntigravityCreditTypesPolicy(account *Account, body []byte) ([]byte, bool) {
+	if account == nil || account.Platform != PlatformAntigravity {
+		return body, bodyUsesCreditsOverages(body)
+	}
+	if account.IsOveragesEnabled() && !account.isCreditsExhausted() {
+		if bodyUsesCreditsOverages(body) {
+			return body, true
+		}
+		if creditsBody := injectEnabledCreditTypes(body); creditsBody != nil {
+			return creditsBody, true
+		}
+		return body, false
+	}
+	if strippedBody := stripEnabledCreditTypes(body); strippedBody != nil {
+		return strippedBody, false
+	}
+	return body, false
+}
+
 func applyCreditsOveragesRequestShape(req *http.Request) {
 	if req == nil || req.Body == nil {
 		return

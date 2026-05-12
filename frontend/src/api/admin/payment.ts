@@ -9,7 +9,9 @@ import type {
   PaymentOrder,
   PaymentChannel,
   SubscriptionPlan,
-  ProviderInstance
+  ProviderInstance,
+  InvoiceApplication,
+  InvoiceConfig
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -62,6 +64,16 @@ export const adminPaymentAPI = {
     return apiClient.put('/admin/payment/config', data)
   },
 
+  /** Get invoice provider configuration */
+  getInvoiceConfig() {
+    return apiClient.get<InvoiceConfig>('/admin/payment/invoice-config')
+  },
+
+  /** Update invoice provider configuration */
+  updateInvoiceConfig(data: InvoiceConfig) {
+    return apiClient.put<InvoiceConfig>('/admin/payment/invoice-config', data)
+  },
+
   // ==================== Dashboard ====================
 
   /** Get payment dashboard statistics */
@@ -106,6 +118,33 @@ export const adminPaymentAPI = {
   /** Process a refund */
   refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
     return apiClient.post(`/admin/payment/orders/${id}/refund`, data)
+  },
+
+  // ==================== Invoices ====================
+
+  /** Get invoice applications */
+  getInvoices(params?: {
+    page?: number
+    page_size?: number
+    status?: string
+    keyword?: string
+  }) {
+    return apiClient.get<BasePaginationResponse<InvoiceApplication>>('/admin/payment/invoices', { params })
+  },
+
+  /** Get a specific invoice application */
+  getInvoice(id: number) {
+    return apiClient.get<InvoiceApplication>(`/admin/payment/invoices/${id}`)
+  },
+
+  /** Retry issuing an invoice application */
+  retryInvoice(id: number) {
+    return apiClient.post<InvoiceApplication>(`/admin/payment/invoices/${id}/retry`)
+  },
+
+  /** Sync invoice status from provider */
+  syncInvoice(id: number) {
+    return apiClient.post<InvoiceApplication>(`/admin/payment/invoices/${id}/sync`)
   },
 
   // ==================== Channels ====================

@@ -213,7 +213,7 @@ func TestHandleSmartRetry_CheckQuota_UsesCreditsBeforeTempUnsched(t *testing.T) 
 	require.Empty(t, repo.tempUnschedCalls, "credits 成功前不应临时禁用账号")
 }
 
-func TestAntigravityRetryLoop_ModelRateLimitedCreditsUsesDailyChunked(t *testing.T) {
+func TestAntigravityRetryLoop_OveragesEnabledFirstRequestInjectsCreditsOnProdChunked(t *testing.T) {
 	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
 	oldAvailability := antigravity.DefaultURLAvailability
 	defer func() {
@@ -233,12 +233,63 @@ func TestAntigravityRetryLoop_ModelRateLimitedCreditsUsesDailyChunked(t *testing
 		Schedulable: true,
 		Extra: map[string]any{
 			"allow_overages": true,
-			modelRateLimitsKey: map[string]any{
-				"claude-opus-4-6-thinking": map[string]any{
-					"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
-					"rate_limit_reset_at": time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
-				},
+		},
+	}
+	upstream := &mockSmartRetryUpstream{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
 			},
+		},
+		errors: []error{nil},
+	}
+
+	svc := &AntigravityGatewayService{httpUpstream: upstream}
+	result, err := svc.antigravityRetryLoop(antigravityRetryLoopParams{
+		ctx:            context.Background(),
+		prefix:         "[test]",
+		account:        account,
+		accessToken:    "token",
+		action:         "generateContent",
+		body:           []byte(`{"enabledCreditTypes":["GOOGLE_ONE_AI"],"model":"claude-opus-4-6-thinking","request":{}}`),
+		httpUpstream:   upstream,
+		requestedModel: "claude-opus-4-6-thinking",
+		handleError: func(ctx context.Context, prefix string, account *Account, statusCode int, headers http.Header, body []byte, requestedModel string, groupID int64, sessionHash string, isStickySession bool) *handleModelRateLimitResult {
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.calls, 1)
+	require.Contains(t, upstream.calls[0], "https://cloudcode-pa.googleapis.com/v1internal:generateContent")
+	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Equal(t, []string{"chunked"}, upstream.transferEnc[0])
+	require.Equal(t, int64(-1), upstream.contentLengths[0])
+}
+
+func TestAntigravityRetryLoop_OveragesDisabledFirstRequestDoesNotInjectCredits(t *testing.T) {
+	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	oldAvailability := antigravity.DefaultURLAvailability
+	defer func() {
+		antigravity.BaseURLs = oldBaseURLs
+		antigravity.DefaultURLAvailability = oldAvailability
+	}()
+
+	antigravity.BaseURLs = []string{"https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	account := &Account{
+		ID:          109,
+		Name:        "acc-109",
+		Type:        AccountTypeOAuth,
+		Platform:    PlatformAntigravity,
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra: map[string]any{
+			"allow_overages": false,
 		},
 	}
 	upstream := &mockSmartRetryUpstream{
@@ -270,10 +321,9 @@ func TestAntigravityRetryLoop_ModelRateLimitedCreditsUsesDailyChunked(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.calls, 1)
-	require.Contains(t, upstream.calls[0], "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent")
-	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
-	require.Equal(t, []string{"chunked"}, upstream.transferEnc[0])
-	require.Equal(t, int64(-1), upstream.contentLengths[0])
+	require.Contains(t, upstream.calls[0], "https://cloudcode-pa.googleapis.com/v1internal:generateContent")
+	require.NotContains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Empty(t, upstream.transferEnc[0])
 }
 
 func TestResolveCreditsOveragesBaseURL(t *testing.T) {
@@ -314,7 +364,7 @@ func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
 		Type:     AccountTypeOAuth,
 		Platform: PlatformAntigravity,
 		Extra: map[string]any{
-			"allow_overages": true,
+			"allow_overages": false,
 		},
 	}
 
@@ -419,7 +469,7 @@ func TestAntigravityRetryLoop_ModelRateLimitedNonClaude_InjectsCredits(t *testin
 	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
 }
 
-func TestAntigravityRetryLoop_ModelRateLimitedClaude_InjectsCredits(t *testing.T) {
+func TestAntigravityRetryLoop_ModelRateLimitedClaude_DoesNotBypassWithCredits(t *testing.T) {
 	oldBaseURLs := append([]string(nil), antigravity.BaseURLs...)
 	oldAvailability := antigravity.DefaultURLAvailability
 	defer func() {
@@ -473,10 +523,12 @@ func TestAntigravityRetryLoop_ModelRateLimitedClaude_InjectsCredits(t *testing.T
 		},
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, upstream.requestBodies, 1)
-	require.Contains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	require.Error(t, err)
+	require.Nil(t, result)
+	var switchErr *AntigravityAccountSwitchError
+	require.ErrorAs(t, err, &switchErr)
+	require.Equal(t, "claude-sonnet-4-6", switchErr.RateLimitedModel)
+	require.Empty(t, upstream.requestBodies)
 }
 
 func TestAntigravityRetryLoop_CreditsExhausted_DoesNotInject(t *testing.T) {
@@ -702,6 +754,48 @@ func TestInjectEnabledCreditTypes(t *testing.T) {
 		require.NotNil(t, result)
 		require.Contains(t, string(result), `GOOGLE_ONE_AI`)
 		require.NotContains(t, string(result), `OLD`)
+	})
+}
+
+func TestApplyAntigravityCreditTypesPolicy(t *testing.T) {
+	t.Run("允许 overages 时保留真实客户端字段", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAntigravity,
+			Extra:    map[string]any{"allow_overages": true},
+		}
+		body, usesCredits := applyAntigravityCreditTypesPolicy(account, []byte(`{"model":"test","request":{}}`))
+		require.True(t, usesCredits)
+		require.Contains(t, string(body), `"enabledCreditTypes"`)
+		require.Contains(t, string(body), `GOOGLE_ONE_AI`)
+	})
+
+	t.Run("未允许 overages 时剥离真实客户端字段", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAntigravity,
+			Extra:    map[string]any{"allow_overages": false},
+		}
+		body, usesCredits := applyAntigravityCreditTypesPolicy(account, []byte(`{"enabledCreditTypes":["GOOGLE_ONE_AI"],"model":"test","request":{}}`))
+		require.False(t, usesCredits)
+		require.NotContains(t, string(body), `"enabledCreditTypes"`)
+		require.NotContains(t, string(body), `GOOGLE_ONE_AI`)
+	})
+
+	t.Run("AICredits 耗尽时剥离真实客户端字段", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAntigravity,
+			Extra: map[string]any{
+				"allow_overages": true,
+				modelRateLimitsKey: map[string]any{
+					creditsExhaustedKey: map[string]any{
+						"rate_limited_at":     time.Now().UTC().Format(time.RFC3339),
+						"rate_limit_reset_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+					},
+				},
+			},
+		}
+		body, usesCredits := applyAntigravityCreditTypesPolicy(account, []byte(`{"enabledCreditTypes":["GOOGLE_ONE_AI"],"model":"test","request":{}}`))
+		require.False(t, usesCredits)
+		require.NotContains(t, string(body), `"enabledCreditTypes"`)
 	})
 }
 

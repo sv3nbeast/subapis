@@ -658,24 +658,33 @@ func (s *AntigravityGatewayService) handleSingleAccountRetryInPlace(
 
 // antigravityRetryLoop 执行带 URL fallback 的重试循环
 func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopParams) (*antigravityRetryLoopResult, error) {
-	// 预检查：模型限流 + overages 启用 + 积分未耗尽 → 直接注入 AI Credits
-	overagesInjected := false
-	if p.requestedModel != "" && p.account.Platform == PlatformAntigravity &&
+	creditsEnabledForRequest := false
+	if policyBody, usesCredits := applyAntigravityCreditTypesPolicy(p.account, p.body); policyBody != nil {
+		p.body = policyBody
+		creditsEnabledForRequest = usesCredits
+		if usesCredits && p.account != nil {
+			logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: credits_enabled model=%s account=%d (enabledCreditTypes active)",
+				p.prefix, p.requestedModel, p.account.ID)
+		}
+	}
+
+	// 预检查：模型限流 + overages 启用 + 积分未耗尽 → 允许已注入 AI Credits 的请求绕过普通模型限流
+	rateLimitBypassWithCredits := false
+	if p.account != nil && p.requestedModel != "" && p.account.Platform == PlatformAntigravity &&
 		shouldAllowCreditsRateLimitBypass(p.ctx, p.account, p.requestedModel) &&
 		p.account.isModelRateLimitedWithContext(p.ctx, p.requestedModel) {
-		if creditsBody := injectEnabledCreditTypes(p.body); creditsBody != nil {
-			p.body = creditsBody
-			overagesInjected = true
-			logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: model_rate_limited_credits_inject model=%s account=%d (injecting enabledCreditTypes)",
+		if creditsEnabledForRequest || bodyUsesCreditsOverages(p.body) {
+			rateLimitBypassWithCredits = true
+			logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: model_rate_limited_credits_bypass model=%s account=%d",
 				p.prefix, p.requestedModel, p.account.ID)
 		}
 	}
 
 	// 预检查：如果账号已限流，直接返回切换信号
-	if p.requestedModel != "" {
+	if p.account != nil && p.requestedModel != "" {
 		if remaining := p.account.GetRateLimitRemainingTimeWithContext(p.ctx, p.requestedModel); remaining > 0 {
 			// 已注入积分的请求不再受普通模型限流预检查阻断。
-			if overagesInjected {
+			if rateLimitBypassWithCredits {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s pre_check: credits_injected_ignore_rate_limit remaining=%v model=%s account=%d",
 					p.prefix, remaining.Truncate(time.Millisecond), p.requestedModel, p.account.ID)
 			} else if p.bypassModelRateLimitPrecheck {
@@ -704,9 +713,6 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 	baseURL := resolveAntigravityForwardBaseURL()
 	if baseURL == "" {
 		return nil, errors.New("no antigravity forward base url configured")
-	}
-	if overagesInjected {
-		baseURL = resolveCreditsOveragesBaseURL(baseURL)
 	}
 	availableURLs := []string{baseURL}
 
@@ -740,7 +746,7 @@ urlFallbackLoop:
 			if err != nil {
 				return nil, err
 			}
-			if overagesInjected {
+			if bodyUsesCreditsOverages(p.body) {
 				applyCreditsOveragesRequestShape(upstreamReq)
 			}
 			s.applyAntigravityUpstreamRequestHeaders(upstreamReq, p.account)
@@ -790,7 +796,7 @@ urlFallbackLoop:
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 				_ = resp.Body.Close()
 
-				if overagesInjected && shouldMarkCreditsExhausted(resp, respBody, nil) {
+				if creditsEnabledForRequest && shouldMarkCreditsExhausted(resp, respBody, nil) {
 					modelKey := resolveCreditsOveragesModelKey(p.ctx, p.account, "", p.requestedModel)
 					s.handleCreditsRetryFailure(p.ctx, p.prefix, modelKey, p.account, &http.Response{
 						StatusCode: resp.StatusCode,
@@ -1458,6 +1464,9 @@ func (s *AntigravityGatewayService) tryAntigravityLegacyWakeupTest(
 			lastErr = err
 			continue
 		}
+		if policyBody, _ := applyAntigravityCreditTypesPolicy(account, body); policyBody != nil {
+			body = policyBody
+		}
 		for _, baseURL := range antigravityLegacyWakeupBaseURLs {
 			req, err := antigravity.NewAPIRequestWithURL(ctx, baseURL, "streamGenerateContent", accessToken, body)
 			if err != nil {
@@ -1539,11 +1548,12 @@ func buildAntigravityLegacyWakeupTestRequest(projectID string, model string) ([]
 	}
 	nowMS := time.Now().UnixMilli()
 	payload := map[string]any{
-		"project":     projectID,
-		"requestId":   fmt.Sprintf("req_%d_%s", nowMS, suffix),
-		"model":       model,
-		"userAgent":   antigravity.GetUserAgent(),
-		"requestType": "agent",
+		"project":            projectID,
+		"requestId":          fmt.Sprintf("req_%d_%s", nowMS, suffix),
+		"model":              model,
+		"userAgent":          antigravityRequestBodyUserAgent,
+		"requestType":        "agent",
+		"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
 		"request": map[string]any{
 			"contents": []map[string]any{
 				{
@@ -1772,17 +1782,18 @@ func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID,
 		requestID = "agent-" + uuid.New().String()
 	}
 	userAgent := strings.TrimSpace(identity.UserAgent)
-	if userAgent == "" || userAgent == "antigravity" {
-		userAgent = antigravity.GetUserAgent()
+	if userAgent == "" {
+		userAgent = antigravityRequestBodyUserAgent
 	}
 
 	wrapped := map[string]any{
-		"project":     projectID,
-		"requestId":   requestID,
-		"userAgent":   userAgent,
-		"requestType": "agent",
-		"model":       model,
-		"request":     request,
+		"project":            projectID,
+		"requestId":          requestID,
+		"userAgent":          userAgent,
+		"requestType":        "agent",
+		"model":              model,
+		"enabledCreditTypes": []string{"GOOGLE_ONE_AI"},
+		"request":            request,
 	}
 
 	return json.Marshal(wrapped)
@@ -2814,8 +2825,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 
 				fallbackWrapped, err := s.wrapV1InternalRequestWithIdentity(projectID, fallbackModel, injectedBody, requestIdentity)
 				if err == nil {
+					if policyBody, _ := applyAntigravityCreditTypesPolicy(account, fallbackWrapped); policyBody != nil {
+						fallbackWrapped = policyBody
+					}
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
+						if bodyUsesCreditsOverages(fallbackWrapped) {
+							applyCreditsOveragesRequestShape(fallbackReq)
+						}
 						s.applyAntigravityUpstreamRequestHeaders(fallbackReq, account)
 						fallbackResp, err := s.doAntigravityUpstreamRequest(fallbackReq, proxyURL, account, s.resolveTLSProfile(account))
 						if err == nil && fallbackResp.StatusCode < 400 {

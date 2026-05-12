@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/invoiceapplicationorder"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -719,6 +720,21 @@ func (_u *PaymentOrderUpdate) SetUser(v *User) *PaymentOrderUpdate {
 	return _u.SetUserID(v.ID)
 }
 
+// AddInvoiceApplicationOrderIDs adds the "invoice_application_order" edge to the InvoiceApplicationOrder entity by IDs.
+func (_u *PaymentOrderUpdate) AddInvoiceApplicationOrderIDs(ids ...int64) *PaymentOrderUpdate {
+	_u.mutation.AddInvoiceApplicationOrderIDs(ids...)
+	return _u
+}
+
+// AddInvoiceApplicationOrder adds the "invoice_application_order" edges to the InvoiceApplicationOrder entity.
+func (_u *PaymentOrderUpdate) AddInvoiceApplicationOrder(v ...*InvoiceApplicationOrder) *PaymentOrderUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddInvoiceApplicationOrderIDs(ids...)
+}
+
 // Mutation returns the PaymentOrderMutation object of the builder.
 func (_u *PaymentOrderUpdate) Mutation() *PaymentOrderMutation {
 	return _u.mutation
@@ -728,6 +744,27 @@ func (_u *PaymentOrderUpdate) Mutation() *PaymentOrderMutation {
 func (_u *PaymentOrderUpdate) ClearUser() *PaymentOrderUpdate {
 	_u.mutation.ClearUser()
 	return _u
+}
+
+// ClearInvoiceApplicationOrder clears all "invoice_application_order" edges to the InvoiceApplicationOrder entity.
+func (_u *PaymentOrderUpdate) ClearInvoiceApplicationOrder() *PaymentOrderUpdate {
+	_u.mutation.ClearInvoiceApplicationOrder()
+	return _u
+}
+
+// RemoveInvoiceApplicationOrderIDs removes the "invoice_application_order" edge to InvoiceApplicationOrder entities by IDs.
+func (_u *PaymentOrderUpdate) RemoveInvoiceApplicationOrderIDs(ids ...int64) *PaymentOrderUpdate {
+	_u.mutation.RemoveInvoiceApplicationOrderIDs(ids...)
+	return _u
+}
+
+// RemoveInvoiceApplicationOrder removes "invoice_application_order" edges to InvoiceApplicationOrder entities.
+func (_u *PaymentOrderUpdate) RemoveInvoiceApplicationOrder(v ...*InvoiceApplicationOrder) *PaymentOrderUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveInvoiceApplicationOrderIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -1065,6 +1102,51 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.InvoiceApplicationOrderCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedInvoiceApplicationOrderIDs(); len(nodes) > 0 && !_u.mutation.InvoiceApplicationOrderCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.InvoiceApplicationOrderIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1782,6 +1864,21 @@ func (_u *PaymentOrderUpdateOne) SetUser(v *User) *PaymentOrderUpdateOne {
 	return _u.SetUserID(v.ID)
 }
 
+// AddInvoiceApplicationOrderIDs adds the "invoice_application_order" edge to the InvoiceApplicationOrder entity by IDs.
+func (_u *PaymentOrderUpdateOne) AddInvoiceApplicationOrderIDs(ids ...int64) *PaymentOrderUpdateOne {
+	_u.mutation.AddInvoiceApplicationOrderIDs(ids...)
+	return _u
+}
+
+// AddInvoiceApplicationOrder adds the "invoice_application_order" edges to the InvoiceApplicationOrder entity.
+func (_u *PaymentOrderUpdateOne) AddInvoiceApplicationOrder(v ...*InvoiceApplicationOrder) *PaymentOrderUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddInvoiceApplicationOrderIDs(ids...)
+}
+
 // Mutation returns the PaymentOrderMutation object of the builder.
 func (_u *PaymentOrderUpdateOne) Mutation() *PaymentOrderMutation {
 	return _u.mutation
@@ -1791,6 +1888,27 @@ func (_u *PaymentOrderUpdateOne) Mutation() *PaymentOrderMutation {
 func (_u *PaymentOrderUpdateOne) ClearUser() *PaymentOrderUpdateOne {
 	_u.mutation.ClearUser()
 	return _u
+}
+
+// ClearInvoiceApplicationOrder clears all "invoice_application_order" edges to the InvoiceApplicationOrder entity.
+func (_u *PaymentOrderUpdateOne) ClearInvoiceApplicationOrder() *PaymentOrderUpdateOne {
+	_u.mutation.ClearInvoiceApplicationOrder()
+	return _u
+}
+
+// RemoveInvoiceApplicationOrderIDs removes the "invoice_application_order" edge to InvoiceApplicationOrder entities by IDs.
+func (_u *PaymentOrderUpdateOne) RemoveInvoiceApplicationOrderIDs(ids ...int64) *PaymentOrderUpdateOne {
+	_u.mutation.RemoveInvoiceApplicationOrderIDs(ids...)
+	return _u
+}
+
+// RemoveInvoiceApplicationOrder removes "invoice_application_order" edges to InvoiceApplicationOrder entities.
+func (_u *PaymentOrderUpdateOne) RemoveInvoiceApplicationOrder(v ...*InvoiceApplicationOrder) *PaymentOrderUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveInvoiceApplicationOrderIDs(ids...)
 }
 
 // Where appends a list predicates to the PaymentOrderUpdate builder.
@@ -2158,6 +2276,51 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.InvoiceApplicationOrderCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedInvoiceApplicationOrderIDs(); len(nodes) > 0 && !_u.mutation.InvoiceApplicationOrderCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.InvoiceApplicationOrderIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   paymentorder.InvoiceApplicationOrderTable,
+			Columns: []string{paymentorder.InvoiceApplicationOrderColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(invoiceapplicationorder.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

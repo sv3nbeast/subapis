@@ -50,7 +50,6 @@ const (
 )
 
 // defaultUserAgentVersion 可通过环境变量 ANTIGRAVITY_USER_AGENT_VERSION 配置。
-// 同时用于 User-Agent 和 loadCodeAssist.metadata.ideVersion，避免两处版本不一致。
 var defaultUserAgentVersion = "1.23.2"
 
 // defaultUserAgentOS/defaultUserAgentArch 默认模拟 macOS Antigravity 客户端。

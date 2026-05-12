@@ -11,6 +11,10 @@
           <Select v-model="orderFilters.payment_type" :options="paymentTypeFilterOptions" class="w-40" @change="loadOrders" />
           <Select v-model="orderFilters.order_type" :options="orderTypeFilterOptions" class="w-36" @change="loadOrders" />
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+            <button @click="openInvoiceConfigDialog" :disabled="invoiceConfigLoading" class="btn btn-secondary">
+              <Icon name="document" size="md" />
+              {{ t('payment.admin.invoiceConfig') }}
+            </button>
             <button @click="loadOrders" :disabled="ordersLoading" class="btn btn-secondary" :title="t('common.refresh')">
               <Icon name="refresh" size="md" :class="ordersLoading ? 'animate-spin' : ''" />
             </button>
@@ -108,6 +112,149 @@
     </BaseDialog>
 
     <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundSubmitting" @confirm="handleRefund" @cancel="showRefundDialog = false" />
+
+    <!-- Invoice Config Dialog -->
+    <BaseDialog :show="showInvoiceConfigDialog" :title="t('payment.admin.invoiceConfig')" width="extra-wide" @close="showInvoiceConfigDialog = false">
+      <form id="invoice-config-form" class="space-y-5" @submit.prevent="saveInvoiceConfig">
+        <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-200">
+          {{ t('payment.admin.invoiceConfigHint') }}
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="flex items-center justify-between rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+            <div>
+              <div class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.invoiceEnabled') }}</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.invoiceEnabledHint') }}</div>
+            </div>
+            <Toggle v-model="invoiceConfigForm.enabled" />
+          </div>
+          <div class="flex items-center justify-between rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+            <div>
+              <div class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.invoiceAutoIssue') }}</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.invoiceAutoIssueHint') }}</div>
+            </div>
+            <Toggle v-model="invoiceConfigForm.auto_issue_enabled" />
+          </div>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-3">
+          <div>
+            <label class="input-label">{{ t('payment.admin.invoiceProvider') }}</label>
+            <Select v-model="invoiceConfigForm.provider" :options="invoiceProviderOptions" class="mt-1 w-full" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.defaultInvoiceType') }}</label>
+            <Select v-model="invoiceConfigForm.default_invoice_type" :options="invoiceTypeOptions" class="mt-1 w-full" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.invoiceTaxRate') }}</label>
+            <input v-model="invoiceConfigForm.tax_rate" class="input mt-1 w-full" placeholder="6" />
+          </div>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="input-label">{{ t('payment.admin.invoiceItemName') }}</label>
+            <input v-model="invoiceConfigForm.item_name" class="input mt-1 w-full" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.invoiceTaxClassificationCode') }}</label>
+            <input v-model="invoiceConfigForm.tax_classification_code" class="input mt-1 w-full" />
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+          <h4 class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.admin.invoiceSellerInfo') }}</h4>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerName') }}</label>
+              <input v-model="invoiceConfigForm.seller_name" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerTaxNo') }}</label>
+              <input v-model="invoiceConfigForm.seller_tax_no" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerAddress') }}</label>
+              <input v-model="invoiceConfigForm.seller_address" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerPhone') }}</label>
+              <input v-model="invoiceConfigForm.seller_phone" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerBankName') }}</label>
+              <input v-model="invoiceConfigForm.seller_bank_name" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.sellerBankAccount') }}</label>
+              <input v-model="invoiceConfigForm.seller_bank_account" class="input mt-1 w-full" />
+            </div>
+          </div>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-3">
+          <div>
+            <label class="input-label">{{ t('payment.admin.drawerName') }}</label>
+            <input v-model="invoiceConfigForm.drawer_name" class="input mt-1 w-full" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.payeeName') }}</label>
+            <input v-model="invoiceConfigForm.payee_name" class="input mt-1 w-full" />
+          </div>
+          <div>
+            <label class="input-label">{{ t('payment.admin.reviewerName') }}</label>
+            <input v-model="invoiceConfigForm.reviewer_name" class="input mt-1 w-full" />
+          </div>
+        </div>
+
+        <div v-if="invoiceConfigForm.provider === 'lexiang'" class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+          <h4 class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">{{ t('payment.admin.invoiceProviderConfig') }}</h4>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <label class="input-label">{{ t('payment.admin.providerBaseUrl') }}</label>
+              <input v-model="invoiceConfigForm.provider_config.base_url" class="input mt-1 w-full" placeholder="https://..." />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.providerAppKey') }}</label>
+              <input v-model="invoiceConfigForm.provider_config.appkey" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.providerUsername') }}</label>
+              <input v-model="invoiceConfigForm.provider_config.username" class="input mt-1 w-full" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.providerPassword') }}</label>
+              <input v-model="invoiceConfigForm.provider_config.password" type="password" class="input mt-1 w-full" autocomplete="new-password" />
+            </div>
+            <div>
+              <label class="input-label">{{ t('payment.admin.providerSsqyuuid') }}</label>
+              <input v-model="invoiceConfigForm.provider_config.ssqyuuid" class="input mt-1 w-full" />
+            </div>
+            <div class="flex items-center justify-between rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+              <div>
+                <div class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.admin.providerEncrypted') }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.providerEncryptedHint') }}</div>
+              </div>
+              <Toggle v-model="invoiceProviderEncrypted" />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('payment.admin.invoiceRemark') }}</label>
+          <textarea v-model="invoiceConfigForm.remark" rows="2" class="input mt-1 w-full" />
+        </div>
+      </form>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn btn-secondary" @click="showInvoiceConfigDialog = false">{{ t('common.cancel') }}</button>
+          <button type="submit" form="invoice-config-form" :disabled="invoiceConfigSaving" class="btn btn-primary">
+            {{ invoiceConfigSaving ? t('common.saving') : t('common.save') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -118,11 +265,12 @@ import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
-import type { PaymentOrder } from '@/types/payment'
+import type { InvoiceConfig, PaymentOrder } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
@@ -149,6 +297,45 @@ const showDetailDialog = ref(false)
 const showRefundDialog = ref(false)
 const refundSubmitting = ref(false)
 const orderAuditLogs = ref<AuditLog[]>([])
+const showInvoiceConfigDialog = ref(false)
+const invoiceConfigLoading = ref(false)
+const invoiceConfigSaving = ref(false)
+const invoiceConfigForm = reactive<InvoiceConfig>({
+  enabled: false,
+  provider: '',
+  auto_issue_enabled: true,
+  seller_name: '',
+  seller_tax_no: '',
+  seller_address: '',
+  seller_phone: '',
+  seller_bank_name: '',
+  seller_bank_account: '',
+  drawer_name: '',
+  payee_name: '',
+  reviewer_name: '',
+  default_invoice_type: 'digital_normal',
+  item_name: '技术服务费',
+  tax_rate: '6',
+  tax_classification_code: '',
+  remark: '',
+  provider_config: {},
+})
+
+const invoiceProviderOptions = computed(() => [
+  { value: '', label: t('payment.admin.invoiceProviderUnset') },
+  { value: 'mock', label: t('payment.admin.invoiceProviderMock') },
+  { value: 'lexiang', label: t('payment.admin.invoiceProviderLexiang') },
+])
+
+const invoiceTypeOptions = computed(() => [
+  { value: 'digital_normal', label: t('payment.admin.invoiceTypeDigitalNormal') },
+  { value: 'digital_special', label: t('payment.admin.invoiceTypeDigitalSpecial') },
+])
+
+const invoiceProviderEncrypted = computed({
+  get: () => invoiceConfigForm.provider_config.encrypted === 'true',
+  set: (value: boolean) => { invoiceConfigForm.provider_config.encrypted = value ? 'true' : 'false' },
+})
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 function debounceLoadOrders() {
@@ -232,6 +419,63 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
     appStore.showSuccess(t('payment.admin.refundSuccess')); showRefundDialog.value = false; loadOrders()
   } catch (err: unknown) { appStore.showError(extractApiErrorMessage(err, t('common.error'))) }
   finally { refundSubmitting.value = false }
+}
+
+function applyInvoiceConfig(config: InvoiceConfig) {
+  Object.assign(invoiceConfigForm, {
+    enabled: config.enabled,
+    provider: config.provider || '',
+    auto_issue_enabled: config.auto_issue_enabled,
+    seller_name: config.seller_name || '',
+    seller_tax_no: config.seller_tax_no || '',
+    seller_address: config.seller_address || '',
+    seller_phone: config.seller_phone || '',
+    seller_bank_name: config.seller_bank_name || '',
+    seller_bank_account: config.seller_bank_account || '',
+    drawer_name: config.drawer_name || '',
+    payee_name: config.payee_name || '',
+    reviewer_name: config.reviewer_name || '',
+    default_invoice_type: config.default_invoice_type || 'digital_normal',
+    item_name: config.item_name || '技术服务费',
+    tax_rate: config.tax_rate || '6',
+    tax_classification_code: config.tax_classification_code || '',
+    remark: config.remark || '',
+    provider_config: { ...(config.provider_config || {}) },
+  })
+  if (!invoiceConfigForm.provider_config.encrypted) {
+    invoiceConfigForm.provider_config.encrypted = 'false'
+  }
+}
+
+async function openInvoiceConfigDialog() {
+  showInvoiceConfigDialog.value = true
+  invoiceConfigLoading.value = true
+  try {
+    const res = await adminPaymentAPI.getInvoiceConfig()
+    applyInvoiceConfig(res.data)
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    invoiceConfigLoading.value = false
+  }
+}
+
+async function saveInvoiceConfig() {
+  invoiceConfigSaving.value = true
+  try {
+    const payload: InvoiceConfig = {
+      ...invoiceConfigForm,
+      provider_config: { ...invoiceConfigForm.provider_config },
+    }
+    const res = await adminPaymentAPI.updateInvoiceConfig(payload)
+    applyInvoiceConfig(res.data)
+    appStore.showSuccess(t('common.saved'))
+    showInvoiceConfigDialog.value = false
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    invoiceConfigSaving.value = false
+  }
 }
 
 function formatDateTime(dateStr: string): string { return formatOrderDateTime(dateStr) }

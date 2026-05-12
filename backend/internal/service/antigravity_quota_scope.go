@@ -25,6 +25,9 @@ func shouldAllowCreditsRateLimitBypass(ctx context.Context, account *Account, re
 	if !account.IsOveragesEnabled() || account.isCreditsExhausted() {
 		return false
 	}
+	if strings.HasPrefix(normalizeAntigravityModelName(requestedModel), "claude-") {
+		return false
+	}
 	return true
 }
 

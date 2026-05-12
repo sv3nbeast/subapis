@@ -4611,6 +4611,207 @@
 
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                  {{ t('adminStatus.title') }}
+                </h2>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('adminStatus.description') }}
+                </p>
+                <p class="mt-1.5 text-xs">
+                  <router-link
+                    to="/status"
+                    class="inline-flex items-center gap-1 text-primary-600 hover:underline dark:text-primary-400"
+                  >
+                    {{ t('adminStatus.viewStatusPage') }}
+                    <span aria-hidden="true">→</span>
+                  </router-link>
+                </p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                :disabled="statusProbeLoading"
+                @click="loadStatusProbeSettings"
+              >
+                <Icon name="refresh" size="sm" :class="statusProbeLoading ? 'animate-spin' : ''" />
+                {{ t('common.refresh') }}
+              </button>
+            </div>
+          </div>
+          <div class="space-y-5 p-6">
+            <div v-if="statusProbeLoading" class="flex items-center gap-2 text-sm text-gray-500">
+              <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+              {{ t('common.loading') }}
+            </div>
+            <template v-else>
+              <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t('adminStatus.enabled') }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('adminStatus.enabledHint') }}
+                    </p>
+                  </div>
+                  <Toggle v-model="statusProbeForm.enabled" />
+                </div>
+                <div class="flex items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t('adminStatus.publicVisible') }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('adminStatus.publicVisibleHint') }}
+                    </p>
+                  </div>
+                  <Toggle v-model="statusProbeForm.public_visible" />
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label class="input-label">{{ t('adminStatus.interval') }}</label>
+                  <input
+                    v-model.number="statusProbeForm.interval_minutes"
+                    type="number"
+                    min="1"
+                    max="1440"
+                    class="input"
+                  />
+                </div>
+                <div>
+                  <label class="input-label">{{ t('adminStatus.retention') }}</label>
+                  <input
+                    v-model.number="statusProbeForm.retention_days"
+                    type="number"
+                    min="1"
+                    max="365"
+                    class="input"
+                  />
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                      {{ t('adminStatus.models') }}
+                    </h3>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('adminStatus.modelsHint') }}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                    @click="addStatusProbeModel"
+                  >
+                    <Icon name="plus" size="sm" />
+                    {{ t('adminStatus.addModel') }}
+                  </button>
+                </div>
+
+                <div v-if="statusProbeForm.models.length === 0" class="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">
+                  {{ t('adminStatus.noModels') }}
+                </div>
+
+                <div
+                  v-for="(model, index) in statusProbeForm.models"
+                  :key="index"
+                  class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800/60"
+                >
+                  <div class="mb-4 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                      <Toggle v-model="model.enabled" />
+                      <span class="text-sm font-medium text-gray-900 dark:text-white">
+                        {{ model.display_name || model.model || t('adminStatus.unnamedModel') }}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="rounded-md p-2 text-red-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                      :title="t('adminStatus.deleteModel')"
+                      @click="removeStatusProbeModel(index)"
+                    >
+                      <Icon name="trash" size="sm" />
+                    </button>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <label class="input-label">{{ t('adminStatus.modelId') }}</label>
+                      <input
+                        v-model="model.model"
+                        type="text"
+                        class="input"
+                        placeholder="claude-sonnet-4-6"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">{{ t('adminStatus.displayName') }}</label>
+                      <input
+                        v-model="model.display_name"
+                        type="text"
+                        class="input"
+                        placeholder="Claude Sonnet 4.6"
+                      />
+                    </div>
+                    <div>
+                      <label class="input-label">{{ t('adminStatus.baseUrl') }}</label>
+                      <input
+                        v-model="model.base_url"
+                        type="url"
+                        class="input"
+                        :placeholder="t('adminStatus.baseUrlPlaceholder')"
+                      />
+                      <p class="mt-1 text-xs text-gray-400">
+                        {{ t('adminStatus.baseUrlHint') }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="input-label">{{ t('adminStatus.apiKey') }}</label>
+                      <input
+                        v-model="model.api_key"
+                        type="password"
+                        class="input"
+                        :placeholder="model.api_key ? '••••••••' : t('adminStatus.apiKeyPlaceholder')"
+                      />
+                      <p class="mt-1 text-xs text-gray-400">
+                        {{ t('adminStatus.apiKeyHint') }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="input-label">{{ t('adminStatus.sortOrder') }}</label>
+                      <input
+                        v-model.number="model.sort_order"
+                        type="number"
+                        class="input"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  :disabled="statusProbeSaving"
+                  @click="saveStatusProbeSettings"
+                >
+                  <span v-if="statusProbeSaving" class="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-white"></span>
+                  {{ statusProbeSaving ? t('common.saving') : t('adminStatus.save') }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.channelMonitor.title') }}
             </h2>
@@ -6072,6 +6273,7 @@ import type {
   UpdateSettingsRequest,
   DefaultSubscriptionSetting,
   OpenAIFastPolicyRule,
+  StatusProbeModel,
   WeChatConnectMode,
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
@@ -6233,6 +6435,16 @@ const openaiFastPolicyForm = reactive({
 // 标记 openai_fast_policy_settings 是否已成功从后端加载，
 // 避免后端 GET 出错或字段缺失时，保存把默认规则覆盖成空数组。
 const openaiFastPolicyLoaded = ref(false);
+
+const statusProbeLoading = ref(false);
+const statusProbeSaving = ref(false);
+const statusProbeForm = reactive({
+  enabled: false,
+  public_visible: true,
+  interval_minutes: 5,
+  retention_days: 30,
+  models: [] as StatusProbeModel[],
+});
 
 const tablePageSizeMin = 5;
 const tablePageSizeMax = 1000;
@@ -6565,6 +6777,96 @@ const wsTestDialogOpen = ref(false);
 function openTestDialog() {
   wsTestResult.value = null;
   wsTestDialogOpen.value = true;
+}
+
+function assignStatusProbeSettings(settings: {
+  enabled: boolean;
+  public_visible: boolean;
+  interval_minutes: number;
+  retention_days: number;
+  models: StatusProbeModel[];
+}) {
+  statusProbeForm.enabled = settings.enabled;
+  statusProbeForm.public_visible = settings.public_visible;
+  statusProbeForm.interval_minutes = settings.interval_minutes || 5;
+  statusProbeForm.retention_days = settings.retention_days || 30;
+  statusProbeForm.models = Array.isArray(settings.models)
+    ? settings.models.map((model) => ({
+        model: model.model || "",
+        display_name: model.display_name || "",
+        sort_order: Number(model.sort_order) || 0,
+        enabled: model.enabled !== false,
+        api_key: model.api_key || "",
+        base_url: model.base_url || "",
+      }))
+    : [];
+}
+
+async function loadStatusProbeSettings() {
+  statusProbeLoading.value = true;
+  try {
+    const settings = await adminAPI.settings.getStatusProbeSettings();
+    assignStatusProbeSettings(settings);
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("adminStatus.loadFailed")),
+    );
+  } finally {
+    statusProbeLoading.value = false;
+  }
+}
+
+function addStatusProbeModel() {
+  statusProbeForm.models.push({
+    model: "",
+    display_name: "",
+    sort_order: statusProbeForm.models.length + 1,
+    enabled: true,
+    api_key: "",
+    base_url: "",
+  });
+}
+
+function removeStatusProbeModel(index: number) {
+  statusProbeForm.models.splice(index, 1);
+}
+
+async function saveStatusProbeSettings() {
+  statusProbeSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateStatusProbeSettings({
+      enabled: statusProbeForm.enabled,
+      public_visible: statusProbeForm.public_visible,
+      interval_minutes: Math.max(
+        1,
+        Math.floor(Number(statusProbeForm.interval_minutes) || 5),
+      ),
+      retention_days: Math.max(
+        1,
+        Math.floor(Number(statusProbeForm.retention_days) || 30),
+      ),
+      models: statusProbeForm.models
+        .map((model, index) => ({
+          model: model.model.trim(),
+          display_name: model.display_name.trim(),
+          sort_order: Number(model.sort_order) || index + 1,
+          enabled: model.enabled,
+          api_key: model.api_key,
+          base_url: model.base_url.trim().replace(/\/+$/, ""),
+        }))
+        .filter((model) => model.model !== ""),
+    });
+    assignStatusProbeSettings(updated);
+    appStore.statusProbeEnabled =
+      updated.enabled && updated.models.length > 0 && updated.public_visible;
+    appStore.showSuccess(t("adminStatus.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("adminStatus.saveFailed")),
+    );
+  } finally {
+    statusProbeSaving.value = false;
+  }
 }
 
 function toggleProviderExpand(idx: number) {
@@ -8509,6 +8811,7 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
+  loadStatusProbeSettings();
   loadSubscriptionGroups();
   loadAdminApiKey();
   loadOverloadCooldownSettings();

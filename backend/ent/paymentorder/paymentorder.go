@@ -94,6 +94,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// EdgeUser holds the string denoting the user edge name in mutations.
 	EdgeUser = "user"
+	// EdgeInvoiceApplicationOrder holds the string denoting the invoice_application_order edge name in mutations.
+	EdgeInvoiceApplicationOrder = "invoice_application_order"
 	// Table holds the table name of the paymentorder in the database.
 	Table = "payment_orders"
 	// UserTable is the table that holds the user relation/edge.
@@ -103,6 +105,13 @@ const (
 	UserInverseTable = "users"
 	// UserColumn is the table column denoting the user relation/edge.
 	UserColumn = "user_id"
+	// InvoiceApplicationOrderTable is the table that holds the invoice_application_order relation/edge.
+	InvoiceApplicationOrderTable = "invoice_application_orders"
+	// InvoiceApplicationOrderInverseTable is the table name for the InvoiceApplicationOrder entity.
+	// It exists in this package in order to avoid circular dependency with the "invoiceapplicationorder" package.
+	InvoiceApplicationOrderInverseTable = "invoice_application_orders"
+	// InvoiceApplicationOrderColumn is the table column denoting the invoice_application_order relation/edge.
+	InvoiceApplicationOrderColumn = "payment_order_id"
 )
 
 // Columns holds all SQL columns for paymentorder fields.
@@ -410,10 +419,31 @@ func ByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newUserStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByInvoiceApplicationOrderCount orders the results by invoice_application_order count.
+func ByInvoiceApplicationOrderCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newInvoiceApplicationOrderStep(), opts...)
+	}
+}
+
+// ByInvoiceApplicationOrder orders the results by invoice_application_order terms.
+func ByInvoiceApplicationOrder(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newInvoiceApplicationOrderStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newUserStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(UserInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, UserTable, UserColumn),
+	)
+}
+func newInvoiceApplicationOrderStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(InvoiceApplicationOrderInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, InvoiceApplicationOrderTable, InvoiceApplicationOrderColumn),
 	)
 }

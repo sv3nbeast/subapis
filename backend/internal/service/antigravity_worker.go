@@ -73,7 +73,7 @@ func (w *antigravityWorkerState) setSessionID(sessionID string) {
 
 func (w *antigravityWorkerState) nextRequestID(conversationKey string, now time.Time) string {
 	if w == nil {
-		return fmt.Sprintf("agent/%d/%s/%d", now.UnixMilli(), antigravityLineageFallbackKey, 1)
+		return fmt.Sprintf("agent/%s/%d/%s/%d", generateAntigravityConversationUUID(), now.UnixMilli(), generateAntigravityConversationUUID(), 1)
 	}
 	w.touch(now)
 	return w.requestLineage.nextRequestID(w.accountID, conversationKey, now)

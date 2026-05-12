@@ -12,7 +12,11 @@ import type {
   CheckoutInfoResponse,
   CreateOrderRequest,
   CreateOrderResult,
-  PaymentOrder
+  PaymentOrder,
+  InvoiceEligibleOrder,
+  InvoiceApplication,
+  CreateInvoiceApplicationRequest,
+  InvoicePublicConfig
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -85,5 +89,35 @@ export const paymentAPI = {
   /** Get provider instance IDs that allow user refund */
   getRefundEligibleProviders() {
     return apiClient.get<{ provider_instance_ids: string[] }>('/payment/orders/refund-eligible-providers')
+  },
+
+  /** Get user-facing invoice feature switch */
+  getInvoiceConfig() {
+    return apiClient.get<InvoicePublicConfig>('/payment/invoices/config')
+  },
+
+  /** Get orders that can be included in an invoice */
+  getInvoiceEligibleOrders() {
+    return apiClient.get<InvoiceEligibleOrder[]>('/payment/invoices/eligible-orders')
+  },
+
+  /** Create a multi-order invoice application and auto issue it */
+  createInvoiceApplication(data: CreateInvoiceApplicationRequest) {
+    return apiClient.post<InvoiceApplication>('/payment/invoices', data)
+  },
+
+  /** Get current user's invoice applications */
+  getMyInvoices(params?: { page?: number; page_size?: number }) {
+    return apiClient.get<BasePaginationResponse<InvoiceApplication>>('/payment/invoices/my', { params })
+  },
+
+  /** Get one invoice application */
+  getInvoice(id: number) {
+    return apiClient.get<InvoiceApplication>(`/payment/invoices/${id}`)
+  },
+
+  /** Build invoice file download URL */
+  invoiceFileURL(id: number, type: 'pdf' | 'ofd' | 'xml' = 'pdf') {
+    return `/api/v1/payment/invoices/${id}/files/${type}`
   }
 }

@@ -98,6 +98,7 @@ func provideCleanup(
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
+	invoiceService *service.InvoiceService,
 	statusProbeService *service.StatusProbeService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
 ) func() {
@@ -245,6 +246,12 @@ func provideCleanup(
 			{"PaymentOrderExpiryService", func() error {
 				if paymentOrderExpiry != nil {
 					paymentOrderExpiry.Stop()
+				}
+				return nil
+			}},
+			{"InvoiceService", func() error {
+				if invoiceService != nil {
+					invoiceService.Stop()
 				}
 				return nil
 			}},

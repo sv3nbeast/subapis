@@ -84,9 +84,7 @@ type UserInfo struct {
 // LoadCodeAssistRequest loadCodeAssist 请求
 type LoadCodeAssistRequest struct {
 	Metadata struct {
-		IDEType    string `json:"ideType"`
-		IDEVersion string `json:"ideVersion"`
-		IDEName    string `json:"ideName"`
+		IDEType string `json:"ideType"`
 	} `json:"metadata"`
 }
 
@@ -506,8 +504,6 @@ func (c *Client) GetUserInfo(ctx context.Context, accessToken string) (*UserInfo
 func (c *Client) LoadCodeAssist(ctx context.Context, accessToken string) (*LoadCodeAssistResponse, map[string]any, error) {
 	reqBody := LoadCodeAssistRequest{}
 	reqBody.Metadata.IDEType = "ANTIGRAVITY"
-	reqBody.Metadata.IDEVersion = GetClientVersion()
-	reqBody.Metadata.IDEName = "antigravity"
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -809,11 +805,6 @@ type SetUserSettingsRequest struct {
 	UserSettings map[string]any `json:"user_settings"`
 }
 
-// FetchUserInfoRequest fetchUserInfo 请求体
-type FetchUserInfoRequest struct {
-	Project string `json:"project"`
-}
-
 // FetchUserInfoResponse fetchUserInfo 响应体
 type FetchUserInfoResponse struct {
 	UserSettings map[string]any `json:"userSettings,omitempty"`
@@ -895,7 +886,7 @@ func (c *Client) SetUserSettings(ctx context.Context, accessToken string) (*SetU
 
 // FetchUserInfo 调用 fetchUserInfo API 获取用户隐私设置状态
 func (c *Client) FetchUserInfo(ctx context.Context, accessToken, projectID string) (*FetchUserInfoResponse, error) {
-	reqBody := FetchUserInfoRequest{Project: projectID}
+	reqBody := map[string]any{}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求失败: %w", err)

@@ -13,13 +13,15 @@ import (
 type PaymentHandler struct {
 	paymentService *service.PaymentService
 	configService  *service.PaymentConfigService
+	invoiceService *service.InvoiceService
 }
 
 // NewPaymentHandler creates a new admin PaymentHandler.
-func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService) *PaymentHandler {
+func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService, invoiceService *service.InvoiceService) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService: paymentService,
 		configService:  configService,
+		invoiceService: invoiceService,
 	}
 }
 
@@ -281,6 +283,118 @@ func (h *PaymentHandler) DeleteProvider(c *gin.Context) {
 	}
 	h.paymentService.RefreshProviders(c.Request.Context())
 	response.Success(c, gin.H{"message": "deleted"})
+}
+
+// ListInvoices returns invoice applications for admin.
+// GET /api/v1/admin/payment/invoices
+func (h *PaymentHandler) ListInvoices(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	page, pageSize := response.ParsePagination(c)
+	items, total, err := h.invoiceService.AdminListApplications(c.Request.Context(), page, pageSize, c.Query("status"), c.Query("keyword"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, items, int64(total), page, pageSize)
+}
+
+// GetInvoice returns invoice application detail for admin.
+// GET /api/v1/admin/payment/invoices/:id
+func (h *PaymentHandler) GetInvoice(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	id, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	app, err := h.invoiceService.GetApplication(c.Request.Context(), 0, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, app)
+}
+
+// RetryInvoice retries a failed or pending invoice application.
+// POST /api/v1/admin/payment/invoices/:id/retry
+func (h *PaymentHandler) RetryInvoice(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	id, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	app, err := h.invoiceService.AdminRetry(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, app)
+}
+
+// SyncInvoice queries provider status immediately.
+// POST /api/v1/admin/payment/invoices/:id/sync
+func (h *PaymentHandler) SyncInvoice(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	id, ok := parseIDParam(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.invoiceService.IssueAndSync(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	app, err := h.invoiceService.GetApplication(c.Request.Context(), 0, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, app)
+}
+
+// GetInvoiceConfig returns invoice provider config.
+// GET /api/v1/admin/payment/invoice-config
+func (h *PaymentHandler) GetInvoiceConfig(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	cfg, err := h.invoiceService.GetConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+
+// UpdateInvoiceConfig updates invoice provider config.
+// PUT /api/v1/admin/payment/invoice-config
+func (h *PaymentHandler) UpdateInvoiceConfig(c *gin.Context) {
+	if h.invoiceService == nil {
+		response.NotFound(c, "Invoice service is not available")
+		return
+	}
+	var req service.InvoiceConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	cfg, err := h.invoiceService.UpdateConfig(c.Request.Context(), &req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
 }
 
 // parseIDParam parses an int64 path parameter.

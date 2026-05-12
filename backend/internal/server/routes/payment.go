@@ -36,10 +36,20 @@ func RegisterPaymentRoutes(
 			orders.POST("", paymentHandler.CreateOrder)
 			orders.POST("/verify", paymentHandler.VerifyOrder)
 			orders.GET("/my", paymentHandler.GetMyOrders)
+			orders.GET("/refund-eligible-providers", paymentHandler.GetRefundEligibleProviders)
 			orders.GET("/:id", paymentHandler.GetOrder)
 			orders.POST("/:id/cancel", paymentHandler.CancelOrder)
 			orders.POST("/:id/refund-request", paymentHandler.RequestRefund)
-			orders.GET("/refund-eligible-providers", paymentHandler.GetRefundEligibleProviders)
+		}
+
+		invoices := authenticated.Group("/invoices")
+		{
+			invoices.GET("/config", paymentHandler.GetInvoicePublicConfig)
+			invoices.GET("/eligible-orders", paymentHandler.ListInvoiceEligibleOrders)
+			invoices.POST("", paymentHandler.CreateInvoiceApplication)
+			invoices.GET("/my", paymentHandler.ListMyInvoices)
+			invoices.GET("/:id", paymentHandler.GetInvoiceApplication)
+			invoices.GET("/:id/files/:type", paymentHandler.DownloadInvoiceFile)
 		}
 	}
 
@@ -83,6 +93,17 @@ func RegisterPaymentRoutes(
 			adminOrders.POST("/:id/retry", adminPaymentHandler.RetryFulfillment)
 			adminOrders.POST("/:id/refund", adminPaymentHandler.ProcessRefund)
 		}
+
+		invoices := adminGroup.Group("/invoices")
+		{
+			invoices.GET("", adminPaymentHandler.ListInvoices)
+			invoices.GET("/:id", adminPaymentHandler.GetInvoice)
+			invoices.POST("/:id/retry", adminPaymentHandler.RetryInvoice)
+			invoices.POST("/:id/sync", adminPaymentHandler.SyncInvoice)
+		}
+
+		adminGroup.GET("/invoice-config", adminPaymentHandler.GetInvoiceConfig)
+		adminGroup.PUT("/invoice-config", adminPaymentHandler.UpdateInvoiceConfig)
 
 		// Subscription Plans
 		plans := adminGroup.Group("/plans")
