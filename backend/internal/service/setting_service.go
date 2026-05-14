@@ -208,7 +208,7 @@ const (
 	defaultGoogleOAuthScopes     = "openid email profile"
 	defaultGoogleOAuthFrontend   = "/auth/oauth/callback"
 	defaultLoginAgreementMode    = "modal"
-	defaultLoginAgreementDate    = "2026-05-14"
+	defaultLoginAgreementDate    = "2026-05-13"
 )
 
 const defaultLoginAgreementTermsMD = `# 服务条款 / Terms of Service
@@ -473,23 +473,39 @@ func defaultLoginAgreementDocuments() []LoginAgreementDocument {
 		{
 			ID:        "terms",
 			Title:     "服务条款 / Terms of Service",
-			ContentMD: defaultLoginAgreementTermsMD,
+			ContentMD: defaultLoginAgreementTermsMDCurrent,
 		},
 		{
 			ID:        "usage-policy",
 			Title:     "使用政策 / Usage Policy",
-			ContentMD: defaultLoginAgreementUsagePolicyMD,
+			ContentMD: defaultLoginAgreementUsagePolicyMDCurrent,
 		},
 		{
 			ID:        "supported-regions",
 			Title:     "支持的国家和地区 / Supported Regions",
-			ContentMD: defaultLoginAgreementSupportedRegionsMD,
+			ContentMD: defaultLoginAgreementSupportedRegionsMDCurrent,
 		},
 		{
 			ID:        "service-specific-terms",
 			Title:     "服务特定条款 / Service-Specific Terms",
-			ContentMD: defaultLoginAgreementServiceSpecificTermsMD,
+			ContentMD: defaultLoginAgreementServiceSpecificTermsMDCurrent,
 		},
+	}
+}
+
+func isLegacyDefaultLoginAgreementContent(id, content string) bool {
+	content = strings.TrimSpace(content)
+	switch id {
+	case "terms":
+		return content == strings.TrimSpace(defaultLoginAgreementTermsMD)
+	case "usage-policy":
+		return content == strings.TrimSpace(defaultLoginAgreementUsagePolicyMD)
+	case "supported-regions":
+		return content == strings.TrimSpace(defaultLoginAgreementSupportedRegionsMD)
+	case "service-specific-terms":
+		return content == strings.TrimSpace(defaultLoginAgreementServiceSpecificTermsMD)
+	default:
+		return false
 	}
 }
 
@@ -545,6 +561,8 @@ func normalizeLoginAgreementDocuments(docs []LoginAgreementDocument) []LoginAgre
 				title = defaultDoc.Title
 			}
 			if content == "" {
+				content = defaultDoc.ContentMD
+			} else if isLegacyDefaultLoginAgreementContent(id, content) {
 				content = defaultDoc.ContentMD
 			}
 		}
