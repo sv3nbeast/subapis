@@ -228,7 +228,7 @@ func (s *BalanceNotifyService) getAccountQuotaNotifyEmails(ctx context.Context) 
 func (s *BalanceNotifyService) getSiteName(ctx context.Context) string {
 	name, err := s.settingRepo.GetValue(ctx, SettingKeySiteName)
 	if err != nil || name == "" {
-		return "Sub2API"
+		return "subapis"
 	}
 	return name
 }

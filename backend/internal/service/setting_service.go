@@ -208,8 +208,256 @@ const (
 	defaultGoogleOAuthScopes     = "openid email profile"
 	defaultGoogleOAuthFrontend   = "/auth/oauth/callback"
 	defaultLoginAgreementMode    = "modal"
-	defaultLoginAgreementDate    = "2026-03-31"
+	defaultLoginAgreementDate    = "2026-05-14"
 )
+
+const defaultLoginAgreementTermsMD = `# 服务条款 / Terms of Service
+
+**生效日期：2026-05-14**
+
+欢迎使用 subapis。本服务条款适用于您或您代表的组织访问和使用本平台提供的 API 聚合、密钥管理、订阅转换、计费、监控以及相关工具、文档和服务。使用本服务即表示您确认已阅读、理解并同意本条款、使用政策、支持的国家和地区政策以及服务特定条款。
+
+## 1. 服务范围
+
+subapis 提供统一 API 接入、转发、调度、用量统计、订阅与余额管理等服务。平台可能接入第三方模型、云平台、模型市场、兼容 API、支付渠道、身份服务或代理网络。该等第三方服务不属于 subapis 自有服务，可能受其各自条款、地区限制、价格、文档、模型可用性和风控策略约束。
+
+第三方服务的变更、暂停、终止、模型下线、输出拦截、价格调整、配额耗尽、区域不可用、账号验证或安全限制，均可能影响您使用本服务。平台会尽合理努力提供可用性管理和故障提示，但不承诺任何第三方服务持续可用。
+
+## 2. 账号、密钥与安全
+
+您应对账号、API Key、访问令牌、代理凭据、OAuth 授权、订阅分组、组织项目和其他凭据下发生的所有活动负责。您应妥善保管凭据，不得共享给未授权人员。如发现凭据泄露、异常调用、拒绝服务攻击、滥用或其他安全事件，应立即通知管理员并采取必要措施。
+
+## 3. 客户内容与输出
+
+您保留对提交到服务的输入内容的权利，并在适用法律允许范围内拥有由服务返回的输出内容。平台不会主张拥有您的输入或输出。您理解 AI 输出可能不准确、不完整、过时、带有偏见或不适合特定用途；在依赖、发布或用于重要场景前，您应自行审查和验证。
+
+除非另有明确说明，平台不会将您的客户内容用于训练自有模型。第三方模型或上游服务对数据的处理可能由其自身条款和数据处理政策约束。
+
+## 4. 合规与限制
+
+您及您的最终用户必须遵守所有适用法律法规、出口管制、制裁规定、第三方服务条款、模型使用政策和本平台规则。您不得绕过平台限流、鉴权、计费、风控、地区限制或安全机制，不得逆向工程、抓取、批量提取、复制服务行为或使用服务构建竞争性平台、模型或评测体系，除非已获得明确书面授权。
+
+## 5. 费用、额度与变更
+
+平台可根据套餐、分组、倍率、模型价格、请求类型、缓存、图片、工具调用或其他配置计费。您应确认费用、额度、订阅周期和退款规则。第三方模型价格、汇率、服务层级和计费规则可能变化，平台可据此调整计费配置并在合理范围内通知。
+
+## 6. 暂停与终止
+
+如您违反本条款、使用政策、第三方规则、法律要求，或您的使用可能造成安全、合规、运营、账务或上游账号风险，平台可限制、暂停、终止服务或拒绝相关请求。平台也可因维护、升级、故障、上游不可用或安全事件临时中断服务。
+
+## 7. 免责声明与责任限制
+
+服务按“现状”和“可用”提供。除法律强制要求外，平台不对第三方服务可用性、模型输出准确性、特定用途适用性、不中断或无错误作出保证。您应自行承担使用 AI 输出和集成服务的风险。
+
+## 8. 条款更新
+
+平台可不时更新条款。条款日期或内容变化后，您可能需要重新确认。继续使用服务即表示您接受更新后的条款。
+
+---
+
+**Effective Date: 2026-05-14**
+
+Welcome to subapis. These Terms govern your or your organization's access to and use of the API aggregation, key management, subscription conversion, billing, monitoring, tools, documentation, and related services provided by this platform. By using the Services, you confirm that you have read, understood, and agreed to these Terms, the Usage Policy, the Supported Regions Policy, and the Service-Specific Terms.
+
+## 1. Services
+
+subapis provides unified API access, forwarding, scheduling, usage metering, subscription and balance management, and related features. The platform may integrate third-party models, cloud platforms, model marketplaces, compatible APIs, payment providers, identity services, or proxy networks. Those third-party services are not owned by subapis and may be subject to their own terms, regional restrictions, pricing, documentation, model availability, and trust-and-safety policies.
+
+Changes, suspension, termination, model retirement, output blocking, price changes, quota exhaustion, regional unavailability, account verification, or security restrictions of third-party services may affect your use of the Services. The platform will use reasonable efforts to provide availability management and incident visibility but does not guarantee continued availability of any third-party service.
+
+## 2. Accounts, Keys, and Security
+
+You are responsible for all activity under your account, API keys, access tokens, proxy credentials, OAuth grants, subscription groups, organizations, projects, and other credentials. You must protect credentials from unauthorized access. If you suspect credential leakage, abnormal usage, denial-of-service activity, abuse, or any other security incident, notify the administrator and take appropriate action promptly.
+
+## 3. Customer Content and Outputs
+
+You retain rights in inputs submitted to the Services and, to the extent permitted by applicable law, own outputs returned by the Services. The platform does not claim ownership of your inputs or outputs. You understand that AI outputs may be inaccurate, incomplete, outdated, biased, or unsuitable for a particular use case; you are responsible for reviewing and verifying outputs before relying on or sharing them.
+
+Unless expressly stated otherwise, the platform does not use Customer Content to train its own models. Third-party models and upstream services may process data under their own terms and data-processing policies.
+
+## 4. Compliance and Restrictions
+
+You and your end users must comply with all applicable laws, export controls, sanctions rules, third-party terms, model usage policies, and platform rules. You may not bypass rate limits, authentication, billing, risk controls, regional restrictions, or security measures; reverse engineer, scrape, bulk extract, or copy service behavior; or use the Services to build a competing platform, model, or benchmark system without express written authorization.
+
+## 5. Fees, Quotas, and Changes
+
+The platform may bill based on plans, groups, multipliers, model prices, request types, cache usage, image generation, tool calls, or other configuration. You are responsible for reviewing fees, quotas, subscription periods, and refund rules. Third-party model prices, exchange rates, service tiers, and billing rules may change, and the platform may adjust billing configuration accordingly with reasonable notice.
+
+## 6. Suspension and Termination
+
+The platform may restrict, suspend, terminate, or reject requests if you violate these Terms, the Usage Policy, third-party rules, or legal requirements, or if your use creates security, compliance, operational, billing, or upstream-account risk. Services may also be temporarily interrupted due to maintenance, upgrades, incidents, upstream outages, or security events.
+
+## 7. Disclaimers and Limitation of Liability
+
+The Services are provided “as is” and “as available.” Except where prohibited by law, the platform makes no warranties regarding third-party availability, output accuracy, fitness for a particular purpose, uninterrupted operation, or error-free service. You are responsible for risks arising from AI outputs and service integrations.
+
+## 8. Updates
+
+The platform may update these Terms from time to time. When the date or content changes, you may be required to accept the updated terms again. Continued use of the Services constitutes acceptance of the updated terms.`
+
+const defaultLoginAgreementUsagePolicyMD = `# 使用政策 / Usage Policy
+
+**生效日期：2026-05-14**
+
+本使用政策说明使用 subapis 时禁止或受限制的行为。您应确保自己、组织成员、最终用户、下游客户、代理、员工、承包商和集成方均遵守本政策。
+
+## 1. 合法与安全使用
+
+不得使用服务从事违法、规避监管、侵犯他人权利、危害网络安全、逃避制裁或违反上游服务政策的活动。不得生成、请求、传播或协助实施恶意软件、凭据窃取、钓鱼、垃圾信息、未授权监控、欺诈、绕过访问控制、规避安全机制或其他滥用行为。
+
+## 2. 高风险场景
+
+不得在没有合格人工审查、专业监督和必要安全措施的情况下，将输出作为医疗、法律、金融、就业、信贷、保险、住房、执法、移民、教育录取、关键基础设施、安全控制或其他高影响决策的唯一依据。
+
+## 3. 有害内容与滥用
+
+不得使用服务生成或传播明显违法、极端暴力、性剥削、未成年人相关不当内容、仇恨或骚扰、诈骗、操纵、侵犯隐私、冒充他人、误导性政治动员、批量虚假内容或其他可能造成现实伤害的内容。
+
+## 4. 平台完整性
+
+不得绕过 API 限流、并发限制、计费、风控、模型限制、地区限制、账号隔离、代理分配、鉴权或审计机制。不得通过多账号、密钥共享、自动化注册、异常重试、请求拆分、伪造身份或其他方式规避平台规则。
+
+## 5. 上游与第三方政策
+
+当请求被转发到第三方模型、云平台或兼容接口时，您还必须遵守该上游的服务条款、使用政策、支持地区政策、数据处理条款和模型特定限制。上游可能拒绝、过滤、限流、暂停或要求验证相关请求。
+
+## 6. 监测与执行
+
+平台可为安全、合规、计费、排障和服务质量目的记录必要的请求元数据、错误、用量和风控信号。发现违规或高风险使用时，平台可限制模型、禁用密钥、暂停账号、拒绝请求、要求补充说明或终止服务。
+
+---
+
+**Effective Date: 2026-05-14**
+
+This Usage Policy describes prohibited and restricted conduct when using subapis. You must ensure that you, your organization members, end users, downstream customers, agents, employees, contractors, and integration partners comply with this Policy.
+
+## 1. Legal and Safe Use
+
+You may not use the Services for illegal activity, regulatory evasion, infringement of rights, cybersecurity harm, sanctions evasion, or violations of upstream provider policies. You may not generate, request, distribute, or facilitate malware, credential theft, phishing, spam, unauthorized surveillance, fraud, access-control bypass, security circumvention, or other abuse.
+
+## 2. High-Impact Use Cases
+
+You may not use outputs as the sole basis for medical, legal, financial, employment, credit, insurance, housing, law-enforcement, immigration, education-admission, critical-infrastructure, safety-control, or other high-impact decisions without qualified human review, professional oversight, and appropriate safeguards.
+
+## 3. Harmful Content and Abuse
+
+You may not use the Services to generate or distribute clearly illegal content, extreme violence, sexual exploitation, inappropriate content involving minors, hate or harassment, scams, manipulation, privacy violations, impersonation, misleading political persuasion, mass deceptive content, or other content likely to cause real-world harm.
+
+## 4. Platform Integrity
+
+You may not bypass API rate limits, concurrency limits, billing, risk controls, model restrictions, regional restrictions, account isolation, proxy allocation, authentication, or audit mechanisms. You may not evade platform rules through multiple accounts, key sharing, automated registration, abnormal retries, request splitting, identity spoofing, or similar techniques.
+
+## 5. Upstream and Third-Party Policies
+
+When requests are forwarded to third-party models, cloud platforms, or compatible APIs, you must also comply with the upstream provider's terms of service, usage policies, supported-region policies, data-processing terms, and model-specific restrictions. Upstream services may reject, filter, rate-limit, suspend, or require verification for requests.
+
+## 6. Monitoring and Enforcement
+
+The platform may log necessary request metadata, errors, usage, and risk signals for security, compliance, billing, troubleshooting, and service-quality purposes. If prohibited or high-risk use is detected, the platform may restrict models, disable keys, suspend accounts, reject requests, request additional information, or terminate service.`
+
+const defaultLoginAgreementSupportedRegionsMD = `# 支持的国家和地区 / Supported Regions
+
+**生效日期：2026-05-14**
+
+subapis 的服务可用性取决于平台运营要求、法律合规、支付可用性、上游模型和云服务的地区政策、网络质量、代理可用性以及账号风控状态。
+
+## 1. 地区可用性
+
+即使平台本身可访问，某些第三方模型、OAuth 服务、云平台、支付方式、代理网络、验证码、短信或订阅服务也可能仅在部分国家和地区可用。上游服务可能基于 IP、账号注册地、付款方式、项目、组织、设备、身份验证或风险信号实施地区限制。
+
+## 2. 禁止或受限制地区
+
+您不得从适用法律、制裁、出口管制、上游服务条款或平台规则禁止的地区访问或使用服务，也不得向受限制人员、实体、国家、行业或用途提供访问。若某一地区或用途需要许可、授权或合规审查，您应在使用前自行取得。
+
+## 3. 代理与位置声明
+
+如您配置代理、出口 IP、区域参数、项目位置或部署区域，您必须保证其使用合法、授权且符合上游政策。不得使用代理绕过法律、制裁、出口管制、上游地区限制、平台风控或账号验证。
+
+## 4. 变更
+
+支持地区可能因法规、上游政策、支付渠道、风控、可用性或运营原因随时变化。平台可限制、迁移、暂停或拒绝来自特定地区的请求。
+
+---
+
+**Effective Date: 2026-05-14**
+
+subapis availability depends on platform operations, legal compliance, payment availability, upstream model and cloud-service regional policies, network quality, proxy availability, and account risk status.
+
+## 1. Regional Availability
+
+Even if the platform itself is reachable, certain third-party models, OAuth services, cloud platforms, payment methods, proxy networks, CAPTCHA, SMS, or subscription services may be available only in specific countries or regions. Upstream services may enforce regional restrictions based on IP address, account registration location, payment method, project, organization, device, identity verification, or risk signals.
+
+## 2. Prohibited or Restricted Regions
+
+You may not access or use the Services from regions prohibited by applicable law, sanctions, export controls, upstream terms, or platform rules, and you may not provide access to restricted persons, entities, countries, industries, or use cases. If a region or use case requires licensing, authorization, or compliance review, you are responsible for obtaining it before use.
+
+## 3. Proxies and Location Representations
+
+If you configure proxies, exit IPs, regional parameters, project locations, or deployment regions, you must ensure that such use is lawful, authorized, and compliant with upstream policies. You may not use proxies to bypass law, sanctions, export controls, upstream regional restrictions, platform risk controls, or account verification.
+
+## 4. Changes
+
+Supported regions may change at any time due to regulation, upstream policy, payment channels, risk controls, availability, or operational reasons. The platform may restrict, migrate, suspend, or reject requests from specific regions.`
+
+const defaultLoginAgreementServiceSpecificTermsMD = `# 服务特定条款 / Service-Specific Terms
+
+**生效日期：2026-05-14**
+
+本服务特定条款补充说明 subapis 中不同功能和第三方服务的特殊规则。如本条款与通用服务条款冲突，以对相关功能更具体的条款为准。
+
+## 1. API 转发与模型调度
+
+平台可能根据分组、模型、账号状态、额度、并发、RPM、会话粘性、地区、代理、TLS 指纹、监控状态、错误冷却、模型映射和成本策略选择上游账号。调度结果不保证固定账号、固定模型、固定地区、固定延迟或固定服务层级。
+
+## 2. 模型映射与兼容接口
+
+平台可为兼容 OpenAI、Anthropic、Gemini、Antigravity、Claude Code、Codex 或其他协议提供模型映射、请求转换和响应桥接。映射不代表上游存在同名模型，也不保证不同模型在能力、价格、上下文、工具、图片、思考、缓存或输出格式上完全一致。
+
+## 3. OAuth、订阅和第三方账号
+
+使用 OAuth、订阅账号、API Key、服务账号或上游凭据时，您必须拥有合法授权。第三方账号可能触发验证码、短信验证、地区验证、隐私设置、风控、额度限制、封禁、降级或服务条款提示。平台可为稳定性执行刷新、探测、隐私设置、监控和错误恢复，但不保证账号不会被上游限制。
+
+## 4. 计费、用量和退款
+
+用量可能按请求、输入输出 token、缓存、图片、工具调用、服务层级、分组倍率、账号倍率、模型映射后模型或其他配置计费。因上游失败、客户端取消、重试、流式中断、缓存命中、预扣费或汇率差异导致的费用处理，以平台实际计费规则和订单记录为准。
+
+## 5. 监控、状态与 SLA
+
+渠道监控、SLA、可用模型、延迟和错误统计仅用于运营观察和调度辅助，不构成对单次请求成功、固定延迟或第三方服务持续可用的承诺。监控请求可能使用模板、探测模型、抽样或聚合逻辑，与真实用户请求路径可能存在差异。
+
+## 6. 充值、订阅、发票与支付
+
+充值、订阅、退款、发票和支付由平台配置的支付渠道和发票服务处理。支付成功、订阅生效、额度调整、退款扣减、发票开具和回调确认可能存在延迟，并可能受第三方支付、税务、合规或人工核验影响。
+
+---
+
+**Effective Date: 2026-05-14**
+
+These Service-Specific Terms supplement the general Terms for specific subapis features and third-party services. If these terms conflict with the general Terms, the more specific terms apply to the relevant feature.
+
+## 1. API Forwarding and Model Scheduling
+
+The platform may select upstream accounts based on group, model, account status, quota, concurrency, RPM, sticky sessions, region, proxy, TLS fingerprint, monitor status, error cooldowns, model mapping, and cost strategy. Scheduling does not guarantee a fixed account, model, region, latency, or service tier.
+
+## 2. Model Mapping and Compatible APIs
+
+The platform may provide model mapping, request transformation, and response bridging for OpenAI-compatible, Anthropic, Gemini, Antigravity, Claude Code, Codex, or other protocols. A mapping does not mean that an upstream model with the same name exists, and it does not guarantee identical capability, price, context length, tools, image support, reasoning behavior, cache behavior, or output format.
+
+## 3. OAuth, Subscriptions, and Third-Party Accounts
+
+When using OAuth, subscription accounts, API keys, service accounts, or upstream credentials, you must have lawful authorization. Third-party accounts may trigger CAPTCHA, SMS verification, regional verification, privacy settings, risk controls, quota limits, bans, downgrades, or terms-of-service notices. The platform may perform refresh, probes, privacy settings, monitoring, and error recovery for stability, but does not guarantee that upstream accounts will not be restricted.
+
+## 4. Billing, Usage, and Refunds
+
+Usage may be billed by request, input/output tokens, cache, image generation, tool calls, service tier, group multiplier, account multiplier, mapped upstream model, or other configuration. Fee handling for upstream failures, client cancellations, retries, streaming interruptions, cache hits, pre-deductions, or exchange-rate differences is governed by the platform's actual billing rules and order records.
+
+## 5. Monitoring, Status, and SLA
+
+Channel monitoring, SLA, available-model lists, latency, and error statistics are for operational visibility and scheduling assistance only. They do not guarantee success, fixed latency, or continued availability of third-party services for any individual request. Monitoring requests may use templates, probe models, sampling, or aggregation logic and may differ from real user request paths.
+
+## 6. Recharge, Subscriptions, Invoices, and Payments
+
+Recharge, subscriptions, refunds, invoices, and payments are processed through the payment providers and invoice services configured by the platform. Payment success, subscription activation, balance adjustment, refund deduction, invoice issuance, and callback confirmation may be delayed and may be affected by third-party payment, tax, compliance, or manual review requirements.`
 
 func normalizeLoginAgreementMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -224,25 +472,34 @@ func defaultLoginAgreementDocuments() []LoginAgreementDocument {
 	return []LoginAgreementDocument{
 		{
 			ID:        "terms",
-			Title:     "服务条款",
-			ContentMD: "",
+			Title:     "服务条款 / Terms of Service",
+			ContentMD: defaultLoginAgreementTermsMD,
 		},
 		{
 			ID:        "usage-policy",
-			Title:     "使用政策",
-			ContentMD: "",
+			Title:     "使用政策 / Usage Policy",
+			ContentMD: defaultLoginAgreementUsagePolicyMD,
 		},
 		{
 			ID:        "supported-regions",
-			Title:     "支持的国家和地区",
-			ContentMD: "",
+			Title:     "支持的国家和地区 / Supported Regions",
+			ContentMD: defaultLoginAgreementSupportedRegionsMD,
 		},
 		{
 			ID:        "service-specific-terms",
-			Title:     "服务特定条款",
-			ContentMD: "",
+			Title:     "服务特定条款 / Service-Specific Terms",
+			ContentMD: defaultLoginAgreementServiceSpecificTermsMD,
 		},
 	}
+}
+
+func defaultLoginAgreementDocumentByID(id string) (LoginAgreementDocument, bool) {
+	for _, doc := range defaultLoginAgreementDocuments() {
+		if doc.ID == id {
+			return doc, true
+		}
+	}
+	return LoginAgreementDocument{}, false
 }
 
 func normalizeLoginAgreementDocumentID(raw string) string {
@@ -282,6 +539,14 @@ func normalizeLoginAgreementDocuments(docs []LoginAgreementDocument) []LoginAgre
 		if id == "" {
 			sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s", i, title, content)))
 			id = hex.EncodeToString(sum[:])[:12]
+		}
+		if defaultDoc, ok := defaultLoginAgreementDocumentByID(id); ok {
+			if title == "" {
+				title = defaultDoc.Title
+			}
+			if content == "" {
+				content = defaultDoc.ContentMD
+			}
 		}
 		baseID := id
 		for suffix := 2; seen[id] > 0; suffix++ {
@@ -700,7 +965,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		LoginAgreementDocuments:          loginAgreementDocuments,
 		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
+		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "subapis"),
 		SiteLogo:                         settings[SettingKeySiteLogo],
 		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
@@ -2080,7 +2345,7 @@ func (s *SettingService) IsTotpEncryptionKeyConfigured() bool {
 func (s *SettingService) GetSiteName(ctx context.Context) string {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeySiteName)
 	if err != nil || value == "" {
-		return "Sub2API"
+		return "subapis"
 	}
 	return value
 }
@@ -2262,7 +2527,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyLoginAgreementMode:                       defaultLoginAgreementMode,
 		SettingKeyLoginAgreementUpdatedAt:                  defaultLoginAgreementDate,
 		SettingKeyLoginAgreementDocuments:                  loginAgreementDocumentsJSON,
-		SettingKeySiteName:                                 "Sub2API",
+		SettingKeySiteName:                                 "subapis",
 		SettingKeySiteLogo:                                 "",
 		SettingKeyPurchaseSubscriptionEnabled:              "false",
 		SettingKeyPurchaseSubscriptionURL:                  "",
@@ -2436,7 +2701,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
 		TurnstileSecretKeyConfigured:     settings[SettingKeyTurnstileSecretKey] != "",
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
+		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "subapis"),
 		SiteLogo:                         settings[SettingKeySiteLogo],
 		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
