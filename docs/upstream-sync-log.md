@@ -1561,3 +1561,64 @@ b20658e1 修复：增加missing 前端 i18n labels
 f1c0d9be 修复：refresh antigravity token before validation probe
 7f7c545c 修复：对齐antigravity account test path
 ee71fe19 修复：localize remaining 前端 copy
+
+## 2026-05-15 23:42:27 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `92b14b00fe7062522fccfe8daf1cf4d3db1e127b`
+- 官方提交: `6e66edbb095f91b13e329f48e06d655e9e454940`
+- 合并基线: `a466e80ed6e9f498108286203a8a9e3a2d75e58a`
+- 官方领先数量: `31`
+- 本地领先数量: `204`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+6e66edbb 杂项：更新sponsors
+18790386 修复（deploy）：移除数据库与 Redis 宿主机端口映射
+62ccd0ff 杂项：将VERSION同步到 0.1.126 [skip ci]
+3d7e7b78 合并拉取请求 #2356（来源：jack-atlas/fix/openai-messages-multi-tool-continuation）
+ea751f65 测试：更新admin 设置 contract 针对 Antigravity UA
+ca17c364 合并拉取请求 #2319（来源：wucm667/codex/fix-openai-unpriced-usage-log）
+ac91de85 合并拉取请求 #2353（来源：XiaoYu994/fix/openai-429-plan-type-sync）
+a07a0dac 新增：增加configurable Antigravity user agent 版本
+9377c967 修复：让消息 cache_control 改写默认关闭
+297b54d0 修复：完善工具名改写测试和格式
+1088e27c 合并拉取请求 #2340（来源：iFwu/fix/mimic-rewrite-tool-use-in-messages）
+c3a14717 修复：sync OpenAI plan type from usage limit errors
+1e2f5507 合并拉取请求 #2289（来源：wucm667/fix/ccswitch-import-model）
+348eeaa0 合并拉取请求 #2297（来源：ZeroDeng01/dev）
+f19421b1 合并拉取请求 #2247（来源：anzhen-tech/codex/fix-ws-replay-function-call-output）
+18cc4691 优化系统设置页标签导航
+87d73236 保留multi-tool context 中的 OpenAI messages continuation
+37ec21e1 合并分支 `main` 到 `dev`
+f788e6bd 修复（service）：handle unexpected default transport type, simplify warning append
+8b0b507a 合并拉取请求 #2314（来源：dexcoder6/fix/payment-result-nan）
+
+### 本地领先
+
+92b14b00 新增：integrate proxy capacity 与 homepage updates
+08f8f62d 修复：reset expired subscription renewal usage
+ca0f4c3b 修复：sync login agreement legal text
+a7d05ccc 新增：增加bilingual legal agreements 与 subapis branding
+6ed53bc7 修复：balance Anthropic account 默认值 与 scheduling
+b6625a26 修复：show Anthropic OAuth model mapping editor
+74da61b6 修复：allow Anthropic OAuth mapped accounts 到 route all models
+f852f3b2 修复：恢复status probe 设置 与 invoice flow
+9a0e4817 文档：record official sync promotion
+08da6ebd merge: sync latest official updates
+56537070 merge: sync official upstream updates
+ba4cca99 文档：record official 0.1.124 sync analysis
+484dce12 修复：normalize gpt-5.5 aliases 针对 billing
+b91a18fe 修复：对齐antigravity credits request shape
+b8d64856 修复：use daily endpoint 针对 Antigravity AI Credits retry
+18d084b4 修复：retry Antigravity AI Credits only after quota exhaustion
+63084d32 Revert "fix: align Antigravity AI Credits quota project"
+d8eecd84 修复：对齐Antigravity AI Credits quota project
+f41c5968 修复：use antigravity credits overages 针对 quota exhaustion
+6142ec22 修复：更新antigravity user agent 到 1.23.2
