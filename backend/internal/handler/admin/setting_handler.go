@@ -233,6 +233,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableMetadataPassthrough:              settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                       settings.EnableCCHSigning,
 		EnableAnthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
+		RewriteMessageCacheControl:             settings.RewriteMessageCacheControl,
+		AntigravityUserAgentVersion:            settings.AntigravityUserAgentVersion,
 		WebSearchEmulationEnabled:              settings.WebSearchEmulationEnabled,
 		PaymentVisibleMethodAlipaySource:       settings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        settings.PaymentVisibleMethodWxpaySource,
@@ -523,13 +525,15 @@ type UpdateSettingsRequest struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	EnableFingerprintUnification                  *bool `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough                     *bool `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                              *bool `json:"enable_cch_signing"`
-	EnableAnthropicCacheTTL1hInjection            *bool `json:"enable_anthropic_cache_ttl_1h_injection"`
-	ProxyAutoSelectMaxAnthropicAccountsPerProxy   *int  `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
-	ProxyAutoSelectMaxOpenAIAccountsPerProxy      *int  `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
-	ProxyAutoSelectMaxAntigravityAccountsPerProxy *int  `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
+	EnableFingerprintUnification                  *bool   `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough                     *bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                              *bool   `json:"enable_cch_signing"`
+	EnableAnthropicCacheTTL1hInjection            *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
+	RewriteMessageCacheControl                    *bool   `json:"rewrite_message_cache_control"`
+	AntigravityUserAgentVersion                   *string `json:"antigravity_user_agent_version"`
+	ProxyAutoSelectMaxAnthropicAccountsPerProxy   *int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
+	ProxyAutoSelectMaxOpenAIAccountsPerProxy      *int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
+	ProxyAutoSelectMaxAntigravityAccountsPerProxy *int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
 
 	// Payment visible method routing
 	PaymentVisibleMethodAlipaySource  *string `json:"payment_visible_method_alipay_source"`
@@ -1265,6 +1269,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.AntigravityUserAgentVersion != nil {
+		normalized := strings.TrimSpace(*req.AntigravityUserAgentVersion)
+		req.AntigravityUserAgentVersion = &normalized
+		if normalized != "" && !semverPattern.MatchString(normalized) {
+			response.Error(c, http.StatusBadRequest, "antigravity_user_agent_version must be empty or a valid semver (e.g. 1.23.2)")
+			return
+		}
+	}
 
 	// 交叉验证：如果同时设置了最低和最高版本号，最高版本号必须 >= 最低版本号
 	if req.MinClaudeCodeVersion != "" && req.MaxClaudeCodeVersion != "" {
@@ -1430,6 +1442,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.EnableAnthropicCacheTTL1hInjection
 			}
 			return previousSettings.EnableAnthropicCacheTTL1hInjection
+		}(),
+		RewriteMessageCacheControl: func() bool {
+			if req.RewriteMessageCacheControl != nil {
+				return *req.RewriteMessageCacheControl
+			}
+			return previousSettings.RewriteMessageCacheControl
+		}(),
+		AntigravityUserAgentVersion: func() string {
+			if req.AntigravityUserAgentVersion != nil {
+				return *req.AntigravityUserAgentVersion
+			}
+			return previousSettings.AntigravityUserAgentVersion
 		}(),
 		ProxyAutoSelectMaxAnthropicAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
 			req.ProxyAutoSelectMaxAnthropicAccountsPerProxy,
@@ -1779,6 +1803,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableMetadataPassthrough:              updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                       updatedSettings.EnableCCHSigning,
 		EnableAnthropicCacheTTL1hInjection:     updatedSettings.EnableAnthropicCacheTTL1hInjection,
+		RewriteMessageCacheControl:             updatedSettings.RewriteMessageCacheControl,
+		AntigravityUserAgentVersion:            updatedSettings.AntigravityUserAgentVersion,
 		PaymentVisibleMethodAlipaySource:       updatedSettings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        updatedSettings.PaymentVisibleMethodWxpaySource,
 		PaymentVisibleMethodAlipayEnabled:      updatedSettings.PaymentVisibleMethodAlipayEnabled,
@@ -2180,6 +2206,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")
+	}
+	if before.RewriteMessageCacheControl != after.RewriteMessageCacheControl {
+		changed = append(changed, "rewrite_message_cache_control")
+	}
+	if before.AntigravityUserAgentVersion != after.AntigravityUserAgentVersion {
+		changed = append(changed, "antigravity_user_agent_version")
 	}
 	if before.ProxyAutoSelectMaxAnthropicAccountsPerProxy != after.ProxyAutoSelectMaxAnthropicAccountsPerProxy {
 		changed = append(changed, "proxy_auto_select_max_anthropic_accounts_per_proxy")
