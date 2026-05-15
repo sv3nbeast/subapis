@@ -12,48 +12,89 @@ export default {
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
-    // User-focused value proposition
-    heroSubtitle: 'One Key, All AI Models',
-    heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
-    tags: {
-      subscriptionToApi: 'Subscription to API',
-      stickySession: 'Session Persistence',
-      realtimeBilling: 'Pay As You Go'
-    },
-    // Pain points section
-    painPoints: {
-      title: 'Sound Familiar?',
-      items: {
-        expensive: {
-          title: 'High Subscription Costs',
-          desc: 'Paying for multiple AI subscriptions that add up every month'
+    hero: {
+      eyebrow: 'Enterprise AI capability console',
+      titleLine1: 'One gateway for LLM access',
+      titleLine2: 'Deliver global ',
+      titleHighlight: 'AI reliably',
+      description:
+        'Govern model calls, monitoring, and cost through one access domain, API key, and security policy so teams can bring AI capability into products faster.',
+      baseUrlLabel: 'Swap the base URL to start integrating',
+      stats: {
+        channels: 'Core channels',
+        sla: 'SLA availability',
+        realtimeValue: 'Live',
+        billing: 'Usage billing'
+      },
+      features: {
+        routing: {
+          title: 'Real-time scheduling',
+          description: 'Switch dynamically by health, latency, cost, and policy to prioritize critical requests.'
         },
-        complex: {
-          title: 'Account Chaos',
-          desc: 'Managing scattered accounts and API keys across different platforms'
+        observability: {
+          title: 'Unified monitoring',
+          description: 'Visualize calls, spend, errors, cache hits, and SLA status from one operations surface.'
         },
-        unstable: {
-          title: 'Service Interruptions',
-          desc: 'Single accounts hitting rate limits and disrupting your workflow'
-        },
-        noControl: {
-          title: 'No Usage Control',
-          desc: "Can't track where your money goes or limit team member usage"
+        governance: {
+          title: 'Intelligent rate limits',
+          description: 'Protect core business priority with multi-dimensional policies during traffic bursts.'
         }
       }
     },
-    // Solutions section
-    solutions: {
-      title: 'We Solve These Problems',
-      subtitle: 'Three simple steps to stress-free AI access'
+    tags: {
+      unifiedGateway: 'Unified gateway',
+      serviceGovernance: 'Service governance',
+      realtimeBilling: 'Live billing'
+    },
+    value: {
+      eyebrow: 'Core Value',
+      title: 'Run AI services reliably and ship product innovation faster',
+      description:
+        'From unified access and cost visibility to global routing, SubAPIs provides production-ready API operations for AI applications.',
+      cards: {
+        gateway: {
+          title: 'Unified entry, fast integration',
+          description: 'Connect supported services through one API shape and reduce repeated app-side integration work.'
+        },
+        observability: {
+          title: 'Full-stack observability',
+          description: 'Monitor requests, latency, error rates, spend, and cache hits with traceable failure reasons.'
+        },
+        billing: {
+          title: 'Fine-grained billing and quota',
+          description: 'Configure rates, quotas, and invoices by user, group, and model so team usage stays clear.'
+        },
+        security: {
+          title: 'Enterprise permissions and controls',
+          description: 'Use model access, group isolation, rate limits, and service switches to protect production usage.'
+        }
+      }
+    },
+    workflow: {
+      eyebrow: 'Workflow',
+      title: 'Build your AI service control plane in 3 steps',
+      steps: {
+        access: {
+          title: 'Connect services',
+          description: 'Configure service channels, access keys, and base policies in the console for your applications.'
+        },
+        policy: {
+          title: 'Set governance policies',
+          description: 'Define permissions, routing, rate limits, rates, and quotas by team, user, model, and scenario.'
+        },
+        operate: {
+          title: 'Operate continuously',
+          description: 'Track request trends, spend, SLA, and failures from dashboards to improve service quality.'
+        }
+      }
     },
     features: {
-      unifiedGateway: 'One-Click Access',
-      unifiedGatewayDesc: 'Get a single API key to call all connected AI models. No separate applications needed.',
+      unifiedGateway: 'Unified Entry',
+      unifiedGatewayDesc: 'Connect supported services through one API shape and reduce app-side integration work.',
       multiAccount: 'Always Reliable',
-      multiAccountDesc: 'Smart routing across multiple upstream accounts with automatic failover. Say goodbye to errors.',
-      balanceQuota: 'Pay What You Use',
-      balanceQuotaDesc: 'Usage-based billing with quota limits. Full visibility into team consumption.'
+      multiAccountDesc: 'Route by availability and policy to reduce the impact of service failures.',
+      balanceQuota: 'Usage Control',
+      balanceQuotaDesc: 'Manage rates, quotas, and invoices with clear visibility into team consumption.'
     },
     // Comparison section
     comparison: {
@@ -82,7 +123,7 @@ export default {
         stability: {
           feature: 'Stability',
           official: 'Single account rate limits',
-          us: 'Multi-account pool, auto-failover'
+          us: 'Policy routing, failure switching'
         },
         control: {
           feature: 'Usage Control',
@@ -92,23 +133,57 @@ export default {
       }
     },
     providers: {
-      title: 'Supported AI Models',
-      description: 'One API, Multiple Choices',
+      title: 'Supported Core Channels',
+      description: 'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
       supported: 'Supported',
-      soon: 'Soon',
+      custom: 'On demand',
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
-      more: 'More'
+      more: 'Custom Channel'
+    },
+    channels: {
+      eyebrow: 'Service Channels',
+      title: 'Focused on currently supported AI service channels',
+      description: 'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
+      supported: 'Supported',
+      custom: 'On demand',
+      items: {
+        claude: {
+          name: 'Claude',
+          description: 'Messages API, model permissions, and usage governance'
+        },
+        gpt: {
+          name: 'GPT',
+          description: 'Chat API, unified keys, and billing policies'
+        },
+        gemini: {
+          name: 'Gemini',
+          description: 'Unified access, observability, and routing controls'
+        },
+        antigravity: {
+          name: 'Antigravity',
+          description: 'Service status, rate limits, and failure tracking'
+        },
+        custom: {
+          name: 'Custom Channel',
+          description: 'Extend compatible interfaces for business needs'
+        }
+      }
     },
     // CTA section
     cta: {
-      title: 'Ready to Get Started?',
-      description: 'Sign up now and get free trial credits to experience seamless AI access',
-      button: 'Sign Up Free'
+      title: 'Bring AI service capability into production workflows',
+      description:
+        'Start with SubAPIs to manage access policies, service quality, and call costs from one place, and provide stable, scalable AI API infrastructure for your products.',
+      button: 'Get Started'
     },
     footer: {
-      allRightsReserved: 'All rights reserved.'
+      allRightsReserved: 'All rights reserved.',
+      terms: 'Terms',
+      usagePolicy: 'Usage Policy',
+      supportedRegions: 'Supported Regions',
+      serviceSpecificTerms: 'Service-Specific Terms'
     }
   },
 
@@ -5371,6 +5446,11 @@ export default {
         cchSigningHint: 'Sign the billing header in forwarded requests with CCH hash. When disabled, the placeholder is preserved.',
         anthropicCacheTTL1hInjection: 'Anthropic Cache TTL Injection',
         anthropicCacheTTL1hInjectionHint: 'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
+        proxyAutoSelectCapacity: 'Proxy Auto-Select Capacity',
+        proxyAutoSelectCapacityHint: 'When adding accounts, proxies are selected by same-platform account count only. Accounts from other platforms do not consume this platform capacity.',
+        proxyAutoSelectAnthropic: 'Anthropic / IP',
+        proxyAutoSelectOpenAI: 'OpenAI / IP',
+        proxyAutoSelectAntigravity: 'Antigravity / IP',
       },
       webSearchEmulation: {
         title: 'Web Search Emulation',
@@ -5424,7 +5504,7 @@ export default {
         siteNamePlaceholder: 'SubAPIs',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
-        siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',
+        siteSubtitlePlaceholder: 'AI API Gateway Platform',
         siteSubtitleHint: 'Displayed on login and register pages',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',

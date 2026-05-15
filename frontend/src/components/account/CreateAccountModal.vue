@@ -3227,7 +3227,12 @@ const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const DEFAULT_ANTHROPIC_BASE_RPM = 15
 const DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE = 'serialize'
-const MAX_ANTHROPIC_ACCOUNTS_PER_PROXY = 1
+type ProxyAutoSelectPlatform = Extract<AccountPlatform, 'anthropic' | 'openai' | 'antigravity'>
+const DEFAULT_PROXY_AUTO_SELECT_LIMITS: Record<ProxyAutoSelectPlatform, number> = {
+  anthropic: 1,
+  openai: 1,
+  antigravity: 5
+}
 const poolModeEnabled = ref(false)
 const poolModeRetryCount = ref(DEFAULT_POOL_MODE_RETRY_COUNT)
 const customErrorCodesEnabled = ref(false)
@@ -3332,9 +3337,12 @@ const umqModeOptions = computed(() => [
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
-const autoSelectedAnthropicProxyId = ref<number | null>(null)
-const anthropicProxyCounts = ref<Record<number, number>>({})
-let anthropicProxyAutoSelectRun = 0
+const autoSelectedProxyId = ref<number | null>(null)
+const proxyPlatformCounts = ref<Record<number, number>>({})
+const proxyAutoSelectLimits = reactive<Record<ProxyAutoSelectPlatform, number>>({
+  ...DEFAULT_PROXY_AUTO_SELECT_LIMITS
+})
+let proxyAutoSelectRun = 0
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -3500,6 +3508,43 @@ const shouldApplyAnthropicCreateDefaults = computed(() =>
   form.platform === 'anthropic' && accountCategory.value === 'oauth-based'
 )
 
+const autoProxyPlatform = computed<ProxyAutoSelectPlatform | null>(() => {
+  if (form.platform === 'anthropic' || form.platform === 'openai' || form.platform === 'antigravity') {
+    return form.platform
+  }
+  return null
+})
+
+const normalizeProxyAutoSelectLimit = (value: unknown, fallback: number) => {
+  const numericValue = Math.floor(Number(value))
+  if (!Number.isFinite(numericValue)) {
+    return fallback
+  }
+  return Math.min(100, Math.max(1, numericValue))
+}
+
+const loadProxyAutoSelectLimits = async () => {
+  try {
+    const settings = await adminAPI.settings.getSettings()
+    proxyAutoSelectLimits.anthropic = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_anthropic_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.anthropic
+    )
+    proxyAutoSelectLimits.openai = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_openai_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.openai
+    )
+    proxyAutoSelectLimits.antigravity = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_antigravity_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
+    )
+  } catch {
+    proxyAutoSelectLimits.anthropic = DEFAULT_PROXY_AUTO_SELECT_LIMITS.anthropic
+    proxyAutoSelectLimits.openai = DEFAULT_PROXY_AUTO_SELECT_LIMITS.openai
+    proxyAutoSelectLimits.antigravity = DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
+  }
+}
+
 const applyAnthropicCreateDefaults = () => {
   if (!shouldApplyAnthropicCreateDefaults.value) {
     return
@@ -3511,26 +3556,27 @@ const applyAnthropicCreateDefaults = () => {
   tlsFingerprintProfileId.value = null
 }
 
-const clearAnthropicProxyAutoSelection = () => {
-  if (form.proxy_id === autoSelectedAnthropicProxyId.value) {
+const clearProxyAutoSelection = () => {
+  if (form.proxy_id === autoSelectedProxyId.value) {
     form.proxy_id = null
   }
-  autoSelectedAnthropicProxyId.value = null
+  autoSelectedProxyId.value = null
 }
 
-const loadAnthropicProxyCounts = async () => {
-  if (!props.show || !shouldApplyAnthropicCreateDefaults.value) {
-    anthropicProxyCounts.value = {}
-    clearAnthropicProxyAutoSelection()
+const loadProxyPlatformCounts = async () => {
+  const platform = autoProxyPlatform.value
+  if (!props.show || !platform) {
+    proxyPlatformCounts.value = {}
+    clearProxyAutoSelection()
     return
   }
   if (props.proxies.length === 0) {
-    anthropicProxyCounts.value = {}
-    autoSelectAnthropicProxy()
+    proxyPlatformCounts.value = {}
+    autoSelectProxy()
     return
   }
 
-  const runId = ++anthropicProxyAutoSelectRun
+  const runId = ++proxyAutoSelectRun
   try {
     const entries = await Promise.all(
       props.proxies
@@ -3541,50 +3587,52 @@ const loadAnthropicProxyCounts = async () => {
           }
           try {
             const accounts = await adminAPI.proxies.getProxyAccounts(proxy.id)
-            const count = accounts.filter((account) => account.platform === 'anthropic').length
+            const count = accounts.filter((account) => account.platform === platform).length
             return [proxy.id, count] as const
           } catch {
             return [proxy.id, Number.POSITIVE_INFINITY] as const
           }
         })
     )
-    if (runId !== anthropicProxyAutoSelectRun) {
+    if (runId !== proxyAutoSelectRun || autoProxyPlatform.value !== platform) {
       return
     }
-    anthropicProxyCounts.value = Object.fromEntries(entries)
-    autoSelectAnthropicProxy()
+    proxyPlatformCounts.value = Object.fromEntries(entries)
+    autoSelectProxy()
   } catch {
-    if (runId === anthropicProxyAutoSelectRun) {
-      anthropicProxyCounts.value = {}
+    if (runId === proxyAutoSelectRun) {
+      proxyPlatformCounts.value = {}
     }
   }
 }
 
-const autoSelectAnthropicProxy = () => {
-  if (!props.show || !shouldApplyAnthropicCreateDefaults.value) {
-    clearAnthropicProxyAutoSelection()
+const autoSelectProxy = () => {
+  const platform = autoProxyPlatform.value
+  if (!props.show || !platform) {
+    clearProxyAutoSelection()
     return
   }
-  if (form.proxy_id && form.proxy_id !== autoSelectedAnthropicProxyId.value) {
+  if (form.proxy_id && form.proxy_id !== autoSelectedProxyId.value) {
     return
   }
 
+  const maxAccountsPerProxy = proxyAutoSelectLimits[platform] ?? DEFAULT_PROXY_AUTO_SELECT_LIMITS[platform]
   const candidates = props.proxies
     .filter((proxy) => proxy.status === 'active')
     .map((proxy) => ({
       proxy,
-      anthropicCount: anthropicProxyCounts.value[proxy.id] ?? Number.POSITIVE_INFINITY,
+      platformCount: proxyPlatformCounts.value[proxy.id] ?? Number.POSITIVE_INFINITY,
       totalCount: proxy.account_count ?? 0
     }))
-    .filter((item) => item.anthropicCount <= MAX_ANTHROPIC_ACCOUNTS_PER_PROXY)
+    .filter((item) => item.platformCount < maxAccountsPerProxy)
     .sort((a, b) =>
-      a.anthropicCount - b.anthropicCount ||
+      a.platformCount - b.platformCount ||
       a.totalCount - b.totalCount ||
       a.proxy.id - b.proxy.id
     )
 
   const selected = candidates[0]?.proxy.id ?? null
-  autoSelectedAnthropicProxyId.value = selected
+  autoSelectedProxyId.value = selected
   form.proxy_id = selected
 }
 
@@ -3597,6 +3645,7 @@ watch(
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
         .catch(() => { tlsFingerprintProfiles.value = [] })
+      void loadProxyAutoSelectLimits().then(() => loadProxyPlatformCounts())
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       // Antigravity: 默认使用映射模式并填充默认映射
@@ -3612,9 +3661,9 @@ watch(
         antigravityModelRestrictionMode.value = 'mapping'
       }
     } else {
-      anthropicProxyAutoSelectRun++
-      anthropicProxyCounts.value = {}
-      autoSelectedAnthropicProxyId.value = null
+      proxyAutoSelectRun++
+      proxyPlatformCounts.value = {}
+      autoSelectedProxyId.value = null
       resetForm()
     }
   }
@@ -3628,10 +3677,8 @@ watch(
     }
     if (shouldApplyAnthropicCreateDefaults.value) {
       applyAnthropicCreateDefaults()
-      void loadAnthropicProxyCounts()
-      return
     }
-    clearAnthropicProxyAutoSelection()
+    void loadProxyPlatformCounts()
   },
   { immediate: true }
 )
@@ -4132,7 +4179,7 @@ const resetForm = () => {
   userMsgQueueMode.value = DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE
   tlsFingerprintEnabled.value = true
   tlsFingerprintProfileId.value = null
-  autoSelectedAnthropicProxyId.value = null
+  autoSelectedProxyId.value = null
   sessionIdMaskingEnabled.value = false
   cacheTTLOverrideEnabled.value = false
   cacheTTLOverrideTarget.value = '5m'

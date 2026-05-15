@@ -52,6 +52,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func normalizeProxyAutoSelectLimitFromRequest(value *int, previous, fallback int) int {
+	if value == nil {
+		return service.NormalizeProxyAutoSelectLimit(previous, fallback)
+	}
+	return service.NormalizeProxyAutoSelectLimit(*value, fallback)
+}
+
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
 	settingService       *service.SettingService
@@ -265,6 +272,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 	}
+	payload.ProxyAutoSelectMaxAnthropicAccountsPerProxy = settings.ProxyAutoSelectMaxAnthropicAccountsPerProxy
+	payload.ProxyAutoSelectMaxOpenAIAccountsPerProxy = settings.ProxyAutoSelectMaxOpenAIAccountsPerProxy
+	payload.ProxyAutoSelectMaxAntigravityAccountsPerProxy = settings.ProxyAutoSelectMaxAntigravityAccountsPerProxy
 
 	// OpenAI fast policy (stored under a dedicated setting key)
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
@@ -513,10 +523,13 @@ type UpdateSettingsRequest struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	EnableFingerprintUnification       *bool `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough          *bool `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                   *bool `json:"enable_cch_signing"`
-	EnableAnthropicCacheTTL1hInjection *bool `json:"enable_anthropic_cache_ttl_1h_injection"`
+	EnableFingerprintUnification                  *bool `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough                     *bool `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                              *bool `json:"enable_cch_signing"`
+	EnableAnthropicCacheTTL1hInjection            *bool `json:"enable_anthropic_cache_ttl_1h_injection"`
+	ProxyAutoSelectMaxAnthropicAccountsPerProxy   *int  `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
+	ProxyAutoSelectMaxOpenAIAccountsPerProxy      *int  `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
+	ProxyAutoSelectMaxAntigravityAccountsPerProxy *int  `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
 
 	// Payment visible method routing
 	PaymentVisibleMethodAlipaySource  *string `json:"payment_visible_method_alipay_source"`
@@ -1418,6 +1431,21 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableAnthropicCacheTTL1hInjection
 		}(),
+		ProxyAutoSelectMaxAnthropicAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
+			req.ProxyAutoSelectMaxAnthropicAccountsPerProxy,
+			previousSettings.ProxyAutoSelectMaxAnthropicAccountsPerProxy,
+			service.ProxyAutoSelectDefaultAnthropicAccountsPerProxy,
+		),
+		ProxyAutoSelectMaxOpenAIAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
+			req.ProxyAutoSelectMaxOpenAIAccountsPerProxy,
+			previousSettings.ProxyAutoSelectMaxOpenAIAccountsPerProxy,
+			service.ProxyAutoSelectDefaultOpenAIAccountsPerProxy,
+		),
+		ProxyAutoSelectMaxAntigravityAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
+			req.ProxyAutoSelectMaxAntigravityAccountsPerProxy,
+			previousSettings.ProxyAutoSelectMaxAntigravityAccountsPerProxy,
+			service.ProxyAutoSelectDefaultAntigravityAccountsPerProxy,
+		),
 		PaymentVisibleMethodAlipaySource: func() string {
 			if req.PaymentVisibleMethodAlipaySource != nil {
 				return strings.TrimSpace(*req.PaymentVisibleMethodAlipaySource)
@@ -1791,6 +1819,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 		RiskControlEnabled: updatedSettings.RiskControlEnabled,
 	}
+	payload.ProxyAutoSelectMaxAnthropicAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxAnthropicAccountsPerProxy
+	payload.ProxyAutoSelectMaxOpenAIAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxOpenAIAccountsPerProxy
+	payload.ProxyAutoSelectMaxAntigravityAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxAntigravityAccountsPerProxy
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
 		slog.Error("openai_fast_policy_settings_get_failed", "error", err)
 	} else if fastPolicy != nil {
@@ -2149,6 +2180,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableAnthropicCacheTTL1hInjection != after.EnableAnthropicCacheTTL1hInjection {
 		changed = append(changed, "enable_anthropic_cache_ttl_1h_injection")
+	}
+	if before.ProxyAutoSelectMaxAnthropicAccountsPerProxy != after.ProxyAutoSelectMaxAnthropicAccountsPerProxy {
+		changed = append(changed, "proxy_auto_select_max_anthropic_accounts_per_proxy")
+	}
+	if before.ProxyAutoSelectMaxOpenAIAccountsPerProxy != after.ProxyAutoSelectMaxOpenAIAccountsPerProxy {
+		changed = append(changed, "proxy_auto_select_max_openai_accounts_per_proxy")
+	}
+	if before.ProxyAutoSelectMaxAntigravityAccountsPerProxy != after.ProxyAutoSelectMaxAntigravityAccountsPerProxy {
+		changed = append(changed, "proxy_auto_select_max_antigravity_accounts_per_proxy")
 	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")

@@ -188,10 +188,13 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					return
 				}
 
-				// 窗口维护异步化（不阻塞请求）
 				if needsMaintenance {
-					maintenanceCopy := *subscription
-					subscriptionService.DoWindowMaintenance(&maintenanceCopy)
+					refreshed, maintErr := subscriptionService.EnsureWindowMaintenance(c.Request.Context(), subscription)
+					if maintErr != nil {
+						AbortWithError(c, 500, "INTERNAL_ERROR", "Failed to maintain subscription usage windows")
+						return
+					}
+					subscription = refreshed
 				}
 			} else {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查

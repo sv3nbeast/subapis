@@ -3415,6 +3415,60 @@
                   v-model="form.enable_anthropic_cache_ttl_1h_injection"
                 />
               </div>
+
+              <!-- Proxy Auto Select Capacity -->
+              <div
+                class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60"
+              >
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.proxyAutoSelectCapacity") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.proxyAutoSelectCapacityHint") }}
+                  </p>
+                </div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectAnthropic") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_anthropic_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectOpenAI") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_openai_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectAntigravity") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_antigravity_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
           <!-- Web Search Emulation -->
@@ -6704,6 +6758,9 @@ const form = reactive<SettingsForm>({
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
   enable_anthropic_cache_ttl_1h_injection: false,
+  proxy_auto_select_max_anthropic_accounts_per_proxy: 1,
+  proxy_auto_select_max_openai_accounts_per_proxy: 1,
+  proxy_auto_select_max_antigravity_accounts_per_proxy: 5,
   // Balance & quota notification
   balance_low_notify_enabled: false,
   balance_low_notify_threshold: 0,
@@ -7589,6 +7646,11 @@ function findDuplicateDefaultSubscription(
   });
 }
 
+function normalizeProxyAutoSelectLimit(value: number, fallback: number): number {
+  const normalized = Math.floor(Number(value) || fallback);
+  return Math.min(100, Math.max(1, normalized));
+}
+
 async function saveSettings() {
   saving.value = true;
   try {
@@ -7624,6 +7686,21 @@ async function saveSettings() {
 
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
+    form.proxy_auto_select_max_anthropic_accounts_per_proxy =
+      normalizeProxyAutoSelectLimit(
+        form.proxy_auto_select_max_anthropic_accounts_per_proxy,
+        1,
+      );
+    form.proxy_auto_select_max_openai_accounts_per_proxy =
+      normalizeProxyAutoSelectLimit(
+        form.proxy_auto_select_max_openai_accounts_per_proxy,
+        1,
+      );
+    form.proxy_auto_select_max_antigravity_accounts_per_proxy =
+      normalizeProxyAutoSelectLimit(
+        form.proxy_auto_select_max_antigravity_accounts_per_proxy,
+        5,
+      );
 
     const normalizedLoginAgreementDocuments =
       normalizeLoginAgreementDocumentsForSave();
@@ -7864,6 +7941,12 @@ async function saveSettings() {
       enable_cch_signing: form.enable_cch_signing,
       enable_anthropic_cache_ttl_1h_injection:
         form.enable_anthropic_cache_ttl_1h_injection,
+      proxy_auto_select_max_anthropic_accounts_per_proxy:
+        form.proxy_auto_select_max_anthropic_accounts_per_proxy,
+      proxy_auto_select_max_openai_accounts_per_proxy:
+        form.proxy_auto_select_max_openai_accounts_per_proxy,
+      proxy_auto_select_max_antigravity_accounts_per_proxy:
+        form.proxy_auto_select_max_antigravity_accounts_per_proxy,
       // Payment configuration
       payment_enabled: form.payment_enabled,
       risk_control_enabled: form.risk_control_enabled,

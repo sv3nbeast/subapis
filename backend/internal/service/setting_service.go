@@ -1032,6 +1032,15 @@ const (
 	channelMonitorIntervalFallback = 60
 )
 
+const (
+	proxyAutoSelectLimitMin = 1
+	proxyAutoSelectLimitMax = 100
+
+	ProxyAutoSelectDefaultAnthropicAccountsPerProxy   = 1
+	ProxyAutoSelectDefaultOpenAIAccountsPerProxy      = 1
+	ProxyAutoSelectDefaultAntigravityAccountsPerProxy = 5
+)
+
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
 // Empty / invalid input falls back to channelMonitorIntervalFallback.
 func parseChannelMonitorInterval(raw string) int {
@@ -1054,6 +1063,29 @@ func clampChannelMonitorInterval(v int) int {
 		return channelMonitorIntervalMax
 	}
 	return v
+}
+
+// NormalizeProxyAutoSelectLimit clamps a per-platform proxy capacity. The fallback
+// is used when the provided value is not positive.
+func NormalizeProxyAutoSelectLimit(value, fallback int) int {
+	if value <= 0 {
+		value = fallback
+	}
+	if value < proxyAutoSelectLimitMin {
+		return proxyAutoSelectLimitMin
+	}
+	if value > proxyAutoSelectLimitMax {
+		return proxyAutoSelectLimitMax
+	}
+	return value
+}
+
+func parseProxyAutoSelectLimit(raw string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return NormalizeProxyAutoSelectLimit(fallback, fallback)
+	}
+	return NormalizeProxyAutoSelectLimit(value, fallback)
 }
 
 // ChannelMonitorRuntime is the lightweight view of the channel monitor feature
@@ -1894,6 +1926,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
+	updates[SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxAnthropicAccountsPerProxy, ProxyAutoSelectDefaultAnthropicAccountsPerProxy))
+	updates[SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxOpenAIAccountsPerProxy, ProxyAutoSelectDefaultOpenAIAccountsPerProxy))
+	updates[SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxAntigravityAccountsPerProxy, ProxyAutoSelectDefaultAntigravityAccountsPerProxy))
 	updates[SettingPaymentVisibleMethodAlipaySource] = settings.PaymentVisibleMethodAlipaySource
 	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
 	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
@@ -2676,13 +2711,16 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyMaxClaudeCodeVersion: "",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
-		SettingKeyAllowUngroupedKeyScheduling:        "false",
-		SettingKeyEnableAnthropicCacheTTL1hInjection: "false",
-		SettingPaymentVisibleMethodAlipaySource:      "",
-		SettingPaymentVisibleMethodWxpaySource:       "",
-		SettingPaymentVisibleMethodAlipayEnabled:     "false",
-		SettingPaymentVisibleMethodWxpayEnabled:      "false",
-		openAIAdvancedSchedulerSettingKey:            "false",
+		SettingKeyAllowUngroupedKeyScheduling:                   "false",
+		SettingKeyEnableAnthropicCacheTTL1hInjection:            "false",
+		SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy:   strconv.Itoa(ProxyAutoSelectDefaultAnthropicAccountsPerProxy),
+		SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy:      strconv.Itoa(ProxyAutoSelectDefaultOpenAIAccountsPerProxy),
+		SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy: strconv.Itoa(ProxyAutoSelectDefaultAntigravityAccountsPerProxy),
+		SettingPaymentVisibleMethodAlipaySource:                 "",
+		SettingPaymentVisibleMethodWxpaySource:                  "",
+		SettingPaymentVisibleMethodAlipayEnabled:                "false",
+		SettingPaymentVisibleMethodWxpayEnabled:                 "false",
+		openAIAdvancedSchedulerSettingKey:                       "false",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -3055,6 +3093,18 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
 	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
 	result.EnableAnthropicCacheTTL1hInjection = settings[SettingKeyEnableAnthropicCacheTTL1hInjection] == "true"
+	result.ProxyAutoSelectMaxAnthropicAccountsPerProxy = parseProxyAutoSelectLimit(
+		settings[SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy],
+		ProxyAutoSelectDefaultAnthropicAccountsPerProxy,
+	)
+	result.ProxyAutoSelectMaxOpenAIAccountsPerProxy = parseProxyAutoSelectLimit(
+		settings[SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy],
+		ProxyAutoSelectDefaultOpenAIAccountsPerProxy,
+	)
+	result.ProxyAutoSelectMaxAntigravityAccountsPerProxy = parseProxyAutoSelectLimit(
+		settings[SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy],
+		ProxyAutoSelectDefaultAntigravityAccountsPerProxy,
+	)
 
 	// Web search emulation: quick enabled check from the JSON config
 	if raw := settings[SettingKeyWebSearchEmulationConfig]; raw != "" {

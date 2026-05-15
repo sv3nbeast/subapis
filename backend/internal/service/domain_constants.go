@@ -380,6 +380,12 @@ const (
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
 	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
+	// SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy Anthropic 账号创建时每个代理/IP 的同平台账号容量（默认 1）
+	SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy = "proxy_auto_select_max_anthropic_accounts_per_proxy"
+	// SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy OpenAI 账号创建时每个代理/IP 的同平台账号容量（默认 1）
+	SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy = "proxy_auto_select_max_openai_accounts_per_proxy"
+	// SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy Antigravity 账号创建时每个代理/IP 的同平台账号容量（默认 5）
+	SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy = "proxy_auto_select_max_antigravity_accounts_per_proxy"
 
 	// Balance Low Notification
 	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关

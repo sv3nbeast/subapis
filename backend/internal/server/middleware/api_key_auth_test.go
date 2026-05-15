@@ -57,7 +57,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		},
 	}
 
-	t.Run("standard_mode_needs_maintenance_does_not_block_request", func(t *testing.T) {
+	t.Run("standard_mode_syncs_expired_window_before_request", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeStandard}
 		cfg.SubscriptionMaintenance.WorkerCount = 1
 		cfg.SubscriptionMaintenance.QueueSize = 1
@@ -74,16 +74,22 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 			DailyWindowStart: &past,
 			DailyUsageUSD:    0,
 		}
-		maintenanceCalled := make(chan struct{}, 1)
+		resetDailyCalls := 0
 		subscriptionRepo := &stubUserSubscriptionRepo{
 			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+				clone := *sub
+				return &clone, nil
+			},
+			getByID: func(ctx context.Context, id int64) (*service.UserSubscription, error) {
 				clone := *sub
 				return &clone, nil
 			},
 			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
 			activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
 			resetDaily: func(ctx context.Context, id int64, start time.Time) error {
-				maintenanceCalled <- struct{}{}
+				resetDailyCalls++
+				sub.DailyUsageUSD = 0
+				sub.DailyWindowStart = &start
 				return nil
 			},
 			resetWeekly:  func(ctx context.Context, id int64, start time.Time) error { return nil },
@@ -100,12 +106,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
-		select {
-		case <-maintenanceCalled:
-			// ok
-		case <-time.After(time.Second):
-			t.Fatalf("expected maintenance to be scheduled")
-		}
+		require.Equal(t, 1, resetDailyCalls)
 	})
 
 	t.Run("simple_mode_bypasses_quota_check", func(t *testing.T) {
@@ -604,6 +605,7 @@ func (r *stubApiKeyRepo) GetRateLimitData(ctx context.Context, id int64) (*servi
 
 type stubUserSubscriptionRepo struct {
 	getActive      func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error)
+	getByID        func(ctx context.Context, id int64) (*service.UserSubscription, error)
 	updateStatus   func(ctx context.Context, subscriptionID int64, status string) error
 	activateWindow func(ctx context.Context, id int64, start time.Time) error
 	resetDaily     func(ctx context.Context, id int64, start time.Time) error
@@ -616,6 +618,9 @@ func (r *stubUserSubscriptionRepo) Create(ctx context.Context, sub *service.User
 }
 
 func (r *stubUserSubscriptionRepo) GetByID(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	if r.getByID != nil {
+		return r.getByID(ctx, id)
+	}
 	return nil, errors.New("not implemented")
 }
 

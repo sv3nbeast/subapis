@@ -49,10 +49,17 @@ type SubscriptionService struct {
 	// L1 缓存：加速中间件热路径的订阅查询
 	subCacheL1     *ristretto.Cache
 	subCacheGroup  singleflight.Group
+	maintGroup     singleflight.Group
 	subCacheTTL    time.Duration
 	subCacheJitter int // 抖动百分比
 
 	maintenanceQueue *SubscriptionMaintenanceQueue
+}
+
+type conditionalWindowResetRepository interface {
+	ResetDailyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error)
+	ResetWeeklyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error)
+	ResetMonthlyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error)
 }
 
 // NewSubscriptionService 创建订阅服务
@@ -710,7 +717,13 @@ func (s *SubscriptionService) CheckAndActivateWindow(ctx context.Context, sub *U
 
 	// 使用当天零点作为窗口起始时间
 	windowStart := startOfDay(time.Now())
-	return s.userSubRepo.ActivateWindows(ctx, sub.ID, windowStart)
+	if err := s.userSubRepo.ActivateWindows(ctx, sub.ID, windowStart); err != nil {
+		return err
+	}
+	sub.DailyWindowStart = &windowStart
+	sub.WeeklyWindowStart = &windowStart
+	sub.MonthlyWindowStart = &windowStart
+	return nil
 }
 
 // AdminResetQuota manually resets the daily, weekly, and/or monthly usage windows.
@@ -860,6 +873,85 @@ func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, grou
 	}
 
 	return needsMaintenance, nil
+}
+
+// EnsureWindowMaintenance 同步执行窗口维护，并返回维护后的最新订阅。
+//
+// 这用于请求鉴权热路径：如果窗口已经到期，必须在进入下游 handler 和最终入账前
+// 完成 DB 重置，避免“本次请求先入账、后台维护随后清零”的竞态。
+func (s *SubscriptionService) EnsureWindowMaintenance(ctx context.Context, sub *UserSubscription) (*UserSubscription, error) {
+	if s == nil || sub == nil {
+		return sub, nil
+	}
+
+	key := "maint:" + strconv.FormatInt(sub.ID, 10)
+	value, err, _ := s.maintGroup.Do(key, func() (any, error) {
+		current, err := s.userSubRepo.GetByID(ctx, sub.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		changed := false
+		if !current.IsWindowActivated() {
+			if err := s.CheckAndActivateWindow(ctx, current); err != nil {
+				return nil, err
+			}
+			changed = true
+		}
+
+		if resetRepo, ok := s.userSubRepo.(conditionalWindowResetRepository); ok {
+			windowStart := startOfDay(time.Now())
+			if current.NeedsDailyReset() {
+				reset, err := resetRepo.ResetDailyUsageIfExpired(ctx, current.ID, windowStart)
+				if err != nil {
+					return nil, err
+				}
+				changed = changed || reset
+			}
+			if current.NeedsWeeklyReset() {
+				reset, err := resetRepo.ResetWeeklyUsageIfExpired(ctx, current.ID, windowStart)
+				if err != nil {
+					return nil, err
+				}
+				changed = changed || reset
+			}
+			if current.NeedsMonthlyReset() {
+				reset, err := resetRepo.ResetMonthlyUsageIfExpired(ctx, current.ID, windowStart)
+				if err != nil {
+					return nil, err
+				}
+				changed = changed || reset
+			}
+		} else if current.NeedsDailyReset() || current.NeedsWeeklyReset() || current.NeedsMonthlyReset() {
+			if err := s.CheckAndResetWindows(ctx, current); err != nil {
+				return nil, err
+			}
+			changed = true
+		}
+
+		if changed {
+			s.InvalidateSubCache(current.UserID, current.GroupID)
+			if s.billingCacheService != nil {
+				_ = s.billingCacheService.InvalidateSubscription(ctx, current.UserID, current.GroupID)
+			}
+			refreshed, err := s.userSubRepo.GetByID(ctx, sub.ID)
+			if err == nil {
+				return refreshed, nil
+			}
+			return current, nil
+		}
+
+		return current, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	refreshed, ok := value.(*UserSubscription)
+	if !ok || refreshed == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	cp := *refreshed
+	return &cp, nil
 }
 
 // DoWindowMaintenance 异步执行窗口维护（激活+重置）

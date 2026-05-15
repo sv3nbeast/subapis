@@ -336,6 +336,57 @@ func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id i
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
+func (r *userSubscriptionRepository) ResetDailyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
+	threshold := time.Now().Add(-24 * time.Hour)
+	client := clientFromContext(ctx, r.client)
+	affected, err := client.UserSubscription.Update().
+		Where(
+			usersubscription.ID(id),
+			usersubscription.Or(
+				usersubscription.DailyWindowStartIsNil(),
+				usersubscription.DailyWindowStartLTE(threshold),
+			),
+		).
+		SetDailyUsageUsd(0).
+		SetDailyWindowStart(newWindowStart).
+		Save(ctx)
+	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) ResetWeeklyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
+	threshold := time.Now().Add(-7 * 24 * time.Hour)
+	client := clientFromContext(ctx, r.client)
+	affected, err := client.UserSubscription.Update().
+		Where(
+			usersubscription.ID(id),
+			usersubscription.Or(
+				usersubscription.WeeklyWindowStartIsNil(),
+				usersubscription.WeeklyWindowStartLTE(threshold),
+			),
+		).
+		SetWeeklyUsageUsd(0).
+		SetWeeklyWindowStart(newWindowStart).
+		Save(ctx)
+	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) ResetMonthlyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
+	threshold := time.Now().Add(-30 * 24 * time.Hour)
+	client := clientFromContext(ctx, r.client)
+	affected, err := client.UserSubscription.Update().
+		Where(
+			usersubscription.ID(id),
+			usersubscription.Or(
+				usersubscription.MonthlyWindowStartIsNil(),
+				usersubscription.MonthlyWindowStartLTE(threshold),
+			),
+		).
+		SetMonthlyUsageUsd(0).
+		SetMonthlyWindowStart(newWindowStart).
+		Save(ctx)
+	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
 // IncrementUsage 原子性地累加订阅用量。
 // 限额检查已在请求前由 BillingCacheService.CheckBillingEligibility 完成，
 // 此处仅负责记录实际消费，确保消费数据的完整性。
@@ -343,9 +394,30 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 	const updateSQL = `
 		UPDATE user_subscriptions us
 		SET
-			daily_usage_usd = us.daily_usage_usd + $1,
-			weekly_usage_usd = us.weekly_usage_usd + $1,
-			monthly_usage_usd = us.monthly_usage_usd + $1,
+			daily_usage_usd = CASE
+				WHEN us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN $1
+				ELSE us.daily_usage_usd + $1
+			END,
+			weekly_usage_usd = CASE
+				WHEN us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN $1
+				ELSE us.weekly_usage_usd + $1
+			END,
+			monthly_usage_usd = CASE
+				WHEN us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
+				ELSE us.monthly_usage_usd + $1
+			END,
+			daily_window_start = CASE
+				WHEN us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN DATE_TRUNC('day', NOW())
+				ELSE us.daily_window_start
+			END,
+			weekly_window_start = CASE
+				WHEN us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN DATE_TRUNC('day', NOW())
+				ELSE us.weekly_window_start
+			END,
+			monthly_window_start = CASE
+				WHEN us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN DATE_TRUNC('day', NOW())
+				ELSE us.monthly_window_start
+			END,
 			updated_at = NOW()
 		FROM groups g
 		WHERE us.id = $2

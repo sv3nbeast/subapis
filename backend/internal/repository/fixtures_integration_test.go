@@ -398,6 +398,15 @@ func mustCreateSubscription(t *testing.T, client *dbent.Client, s *service.UserS
 	if s.AssignedBy != nil {
 		create.SetAssignedBy(*s.AssignedBy)
 	}
+	if s.DailyWindowStart != nil {
+		create.SetDailyWindowStart(*s.DailyWindowStart)
+	}
+	if s.WeeklyWindowStart != nil {
+		create.SetWeeklyWindowStart(*s.WeeklyWindowStart)
+	}
+	if s.MonthlyWindowStart != nil {
+		create.SetMonthlyWindowStart(*s.MonthlyWindowStart)
+	}
 	if !s.CreatedAt.IsZero() {
 		create.SetCreatedAt(s.CreatedAt)
 	}

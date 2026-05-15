@@ -14,6 +14,7 @@ import (
 type billingCacheWorkerStub struct {
 	balanceUpdates      int64
 	subscriptionUpdates int64
+	subscriptionData    *SubscriptionCacheData
 }
 
 func (b *billingCacheWorkerStub) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
@@ -35,6 +36,10 @@ func (b *billingCacheWorkerStub) InvalidateUserBalance(ctx context.Context, user
 }
 
 func (b *billingCacheWorkerStub) GetSubscriptionCache(ctx context.Context, userID, groupID int64) (*SubscriptionCacheData, error) {
+	if b.subscriptionData != nil {
+		cp := *b.subscriptionData
+		return &cp, nil
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -101,4 +106,36 @@ func TestBillingCacheServiceEnqueueAfterStopReturnsFalse(t *testing.T) {
 		amount: 1,
 	})
 	require.False(t, enqueued)
+}
+
+func TestBillingCacheServiceCheckSubscriptionEligibilityIgnoresExpiredMonthlyCacheUsage(t *testing.T) {
+	limit := 1.0
+	cache := &billingCacheWorkerStub{
+		subscriptionData: &SubscriptionCacheData{
+			Status:       SubscriptionStatusActive,
+			ExpiresAt:    time.Now().Add(time.Hour),
+			MonthlyUsage: 10,
+		},
+	}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{})
+	t.Cleanup(svc.Stop)
+
+	past := time.Now().Add(-31 * 24 * time.Hour)
+	err := svc.CheckBillingEligibility(
+		context.Background(),
+		&User{ID: 1, Status: StatusActive},
+		&APIKey{ID: 1, Status: StatusActive},
+		&Group{ID: 2, SubscriptionType: SubscriptionTypeSubscription, MonthlyLimitUSD: &limit},
+		&UserSubscription{
+			ID:                 3,
+			UserID:             1,
+			GroupID:            2,
+			Status:             SubscriptionStatusActive,
+			ExpiresAt:          time.Now().Add(time.Hour),
+			MonthlyWindowStart: &past,
+			MonthlyUsageUSD:    10,
+		},
+	)
+
+	require.NoError(t, err)
 }

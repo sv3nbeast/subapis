@@ -434,6 +434,43 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
 	require.True(t, sub.ExpiresAt.After(expiresAt))
 }
 
+func TestAssignOrExtendSubscriptionActiveRenewalKeepsExpiredMonthlyWindowForAutomaticReset(t *testing.T) {
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	expiresAt := time.Now().Add(24 * time.Hour)
+	oldMonthlyWindow := time.Now().Add(-31 * 24 * time.Hour)
+	subRepo.seed(&UserSubscription{
+		ID:                 33,
+		UserID:             3003,
+		GroupID:            1,
+		StartsAt:           expiresAt.AddDate(0, 0, -30),
+		ExpiresAt:          expiresAt,
+		Status:             SubscriptionStatusActive,
+		MonthlyWindowStart: &oldMonthlyWindow,
+		MonthlyUsageUSD:    456.7,
+		Notes:              "old",
+	})
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
+	sub, renewed, err := svc.AssignOrExtendSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       3003,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "payment order 3",
+	})
+
+	require.NoError(t, err)
+	require.True(t, renewed)
+	require.Equal(t, 456.7, sub.MonthlyUsageUSD)
+	require.NotNil(t, sub.MonthlyWindowStart)
+	require.WithinDuration(t, oldMonthlyWindow, *sub.MonthlyWindowStart, time.Microsecond)
+	require.Zero(t, subRepo.resetMonthlyCalls)
+	require.True(t, sub.NeedsMonthlyReset(), "active renewal should not consume the pending automatic 30-day reset")
+	require.True(t, sub.ExpiresAt.After(expiresAt))
+}
+
 func TestBulkAssignSubscriptionCreatedReusedAndConflict(t *testing.T) {
 	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	groupRepo := &subscriptionGroupRepoStub{

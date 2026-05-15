@@ -12,48 +12,89 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
-    // 新增：面向用户的价值主张
-    heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
-    tags: {
-      subscriptionToApi: '订阅转 API',
-      stickySession: '会话保持',
-      realtimeBilling: '按量计费'
-    },
-    // 用户痛点区块
-    painPoints: {
-      title: '你是否也遇到这些问题？',
-      items: {
-        expensive: {
-          title: '订阅费用高',
-          desc: '每个 AI 服务都要单独订阅，每月支出越来越多'
+    hero: {
+      eyebrow: '企业级 AI 能力控制台',
+      titleLine1: '一个网关接入大模型',
+      titleLine2: '让全球 AI 能力',
+      titleHighlight: '稳定交付',
+      description:
+        '通过统一访问域名、API 密钥与安全策略，集中治理不同模型服务的调用、监控与成本，让团队更快把 AI 能力接入业务。',
+      baseUrlLabel: '替换基础 URL 即可接入',
+      stats: {
+        channels: '核心通道',
+        sla: 'SLA 可用性',
+        realtimeValue: '实时',
+        billing: '用量计费'
+      },
+      features: {
+        routing: {
+          title: '实时调度',
+          description: '按健康度、延迟、成本与策略动态切换，保障关键请求优先响应。'
         },
-        complex: {
-          title: '多账号难管理',
-          desc: '不同平台的账号、密钥分散各处，管理起来很麻烦'
+        observability: {
+          title: '统一监控',
+          description: '调用、费用、异常、缓存命中与 SLA 状态一站式可视化。'
         },
-        unstable: {
-          title: '服务不稳定',
-          desc: '单一账号容易触发限制，影响正常使用'
-        },
-        noControl: {
-          title: '用量无法控制',
-          desc: '不知道钱花在哪了，也无法限制团队成员的使用'
+        governance: {
+          title: '智能限流',
+          description: '多维策略保障核心业务优先级，避免突发拥堵拖垮服务。'
         }
       }
     },
-    // 解决方案区块
-    solutions: {
-      title: '我们帮你解决',
-      subtitle: '简单三步，开始省心使用 AI'
+    tags: {
+      unifiedGateway: '统一网关',
+      serviceGovernance: '服务治理',
+      realtimeBilling: '实时计费'
+    },
+    value: {
+      eyebrow: '核心价值',
+      title: '让团队稳定使用 AI 服务，更快落地产品创新',
+      description:
+        '从统一接入、成本可视化到全局调度，SubAPIs 为 AI 应用提供面向生产环境的 API 运营基础设施。',
+      cards: {
+        gateway: {
+          title: '统一入口，快速集成',
+          description: '用统一 API 规范连接已接入服务，减少业务侧重复适配，让应用更快上线。'
+        },
+        observability: {
+          title: '全链路可观测',
+          description: '实时监控调用量、延迟、错误率、费用与缓存命中，异常原因可追踪。'
+        },
+        billing: {
+          title: '精细化计费与配额',
+          description: '按用户、分组和模型配置倍率、额度与账单，让团队用量清晰可控。'
+        },
+        security: {
+          title: '企业级权限与风控',
+          description: '支持模型权限、分组隔离、限流策略和服务开关，保障生产调用边界。'
+        }
+      }
+    },
+    workflow: {
+      eyebrow: '工作流',
+      title: '用 3 个步骤构建你的 AI 服务控制平面',
+      steps: {
+        access: {
+          title: '接入服务',
+          description: '在控制台配置模型服务通道、访问密钥和基础策略，统一暴露给业务应用。'
+        },
+        policy: {
+          title: '配置治理策略',
+          description: '按团队、用户、模型和场景设置权限、路由、限流、倍率与额度。'
+        },
+        operate: {
+          title: '持续运营',
+          description: '通过仪表盘追踪请求趋势、消耗、SLA 和异常，持续优化服务质量。'
+        }
+      }
     },
     features: {
-      unifiedGateway: '一键接入',
-      unifiedGatewayDesc: '获取一个 API 密钥，即可调用所有已接入的 AI 模型，无需分别申请。',
+      unifiedGateway: '统一入口',
+      unifiedGatewayDesc: '用统一 API 规范连接已接入服务，减少业务侧重复适配。',
       multiAccount: '稳定可靠',
-      multiAccountDesc: '智能调度多个上游账号，自动切换和负载均衡，告别频繁报错。',
-      balanceQuota: '用多少付多少',
-      balanceQuotaDesc: '按实际使用量计费，支持设置配额上限，团队用量一目了然。'
+      multiAccountDesc: '按可用性和策略自动路由，降低服务异常对业务的影响。',
+      balanceQuota: '用量可控',
+      balanceQuotaDesc: '支持倍率、额度和账单管理，团队消耗一目了然。'
     },
     // 优势对比
     comparison: {
@@ -82,7 +123,7 @@ export default {
         stability: {
           feature: '服务稳定性',
           official: '单账号易触发限制',
-          us: '多账号池，自动切换'
+          us: '策略路由，异常切换'
         },
         control: {
           feature: '用量控制',
@@ -92,23 +133,57 @@ export default {
       }
     },
     providers: {
-      title: '已支持的 AI 模型',
-      description: '一个 API，多种选择',
+      title: '已支持的核心通道',
+      description: '先把当前可用通道做稳定、可监控、可计费，再按实际业务需求扩展。',
       supported: '已支持',
-      soon: '即将推出',
+      custom: '按需扩展',
       claude: 'Claude',
       gemini: 'Gemini',
       antigravity: 'Antigravity',
-      more: '更多'
+      more: '自定义通道'
+    },
+    channels: {
+      eyebrow: '服务通道',
+      title: '聚焦已支持的核心 AI 服务通道',
+      description: '先把当前可用通道做稳定、可监控、可计费，再按实际业务需求扩展。',
+      supported: '已支持',
+      custom: '按需扩展',
+      items: {
+        claude: {
+          name: 'Claude',
+          description: '消息接口、模型权限与用量治理'
+        },
+        gpt: {
+          name: 'GPT',
+          description: '聊天接口、统一密钥与计费策略'
+        },
+        gemini: {
+          name: 'Gemini',
+          description: '统一接入、可观测与路由控制'
+        },
+        antigravity: {
+          name: 'Antigravity',
+          description: '服务状态、限速和异常追踪'
+        },
+        custom: {
+          name: '自定义通道',
+          description: '按业务需要扩展兼容接口'
+        }
+      }
     },
     // CTA 区块
     cta: {
-      title: '准备好开始了吗？',
-      description: '注册即可获得免费试用额度，体验一站式 AI 服务',
-      button: '免费注册'
+      title: '将 AI 服务能力稳定落地到业务流程',
+      description:
+        '立即接入 SubAPIs，统一管理访问策略、服务质量和调用成本，为产品提供稳定、可扩展的 AI API 基础设施。',
+      button: '立即开始'
     },
     footer: {
-      allRightsReserved: '保留所有权利。'
+      allRightsReserved: '保留所有权利。',
+      terms: '服务条款',
+      usagePolicy: '使用政策',
+      supportedRegions: '支持的国家和地区',
+      serviceSpecificTerms: '服务特定条款'
     }
   },
 
@@ -5537,6 +5612,11 @@ export default {
         cchSigningHint: '对转发请求的 billing header 进行 CCH 哈希签名。关闭时保留原始占位符。',
         anthropicCacheTTL1hInjection: 'Anthropic 缓存 TTL 注入',
         anthropicCacheTTL1hInjectionHint: '开启后，对 Anthropic OAuth/Setup Token 请求体中已有的 ephemeral 缓存块强制写入 1h；响应 usage 默认按 5m 回写计费，账号级 TTL 计费设置优先。',
+        proxyAutoSelectCapacity: '代理自动选择容量',
+        proxyAutoSelectCapacityHint: '添加账号时仅统计同平台账号数量，其他平台账号不占用当前平台的代理/IP 容量。',
+        proxyAutoSelectAnthropic: 'Anthropic / IP',
+        proxyAutoSelectOpenAI: 'OpenAI / IP',
+        proxyAutoSelectAntigravity: 'Antigravity / IP',
       },
       webSearchEmulation: {
         title: 'Web Search 模拟',
@@ -5591,7 +5671,7 @@ export default {
         siteNamePlaceholder: 'SubAPIs',
         siteSubtitle: '站点副标题',
         siteSubtitleHint: '显示在登录和注册页面',
-        siteSubtitlePlaceholder: '订阅转 API 转换平台',
+        siteSubtitlePlaceholder: 'AI API 网关平台',
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"和"导入到 CC Switch"功能，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
