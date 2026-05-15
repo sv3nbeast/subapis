@@ -195,8 +195,9 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 	if existingSub != nil {
 		now := time.Now()
 		var newExpiresAt time.Time
+		wasExpired := !existingSub.ExpiresAt.After(now)
 
-		if existingSub.ExpiresAt.After(now) {
+		if !wasExpired {
 			// 未过期：从当前过期时间累加
 			newExpiresAt = existingSub.ExpiresAt.AddDate(0, 0, validityDays)
 		} else {
@@ -220,6 +221,22 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 		if err := s.userSubRepo.ExtendExpiry(txCtx, existingSub.ID, newExpiresAt); err != nil {
 			_ = tx.Rollback()
 			return nil, false, fmt.Errorf("extend subscription: %w", err)
+		}
+
+		if wasExpired {
+			windowStart := startOfDay(now)
+			if err := s.userSubRepo.ResetDailyUsage(txCtx, existingSub.ID, windowStart); err != nil {
+				_ = tx.Rollback()
+				return nil, false, fmt.Errorf("reset daily usage: %w", err)
+			}
+			if err := s.userSubRepo.ResetWeeklyUsage(txCtx, existingSub.ID, windowStart); err != nil {
+				_ = tx.Rollback()
+				return nil, false, fmt.Errorf("reset weekly usage: %w", err)
+			}
+			if err := s.userSubRepo.ResetMonthlyUsage(txCtx, existingSub.ID, windowStart); err != nil {
+				_ = tx.Rollback()
+				return nil, false, fmt.Errorf("reset monthly usage: %w", err)
+			}
 		}
 
 		// 如果订阅已过期或被暂停，恢复为active状态

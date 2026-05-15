@@ -2,13 +2,20 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"testing"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "modernc.org/sqlite"
 )
 
 type groupRepoNoop struct{}
@@ -129,10 +136,13 @@ func (userSubRepoNoop) BatchUpdateExpiredStatus(context.Context) (int64, error) 
 type subscriptionUserSubRepoStub struct {
 	userSubRepoNoop
 
-	nextID      int64
-	byID        map[int64]*UserSubscription
-	byUserGroup map[string]*UserSubscription
-	createCalls int
+	nextID            int64
+	byID              map[int64]*UserSubscription
+	byUserGroup       map[string]*UserSubscription
+	createCalls       int
+	resetDailyCalls   int
+	resetWeeklyCalls  int
+	resetMonthlyCalls int
 }
 
 func newSubscriptionUserSubRepoStub() *subscriptionUserSubRepoStub {
@@ -199,6 +209,88 @@ func (s *subscriptionUserSubRepoStub) GetByID(_ context.Context, id int64) (*Use
 	return &cp, nil
 }
 
+func (s *subscriptionUserSubRepoStub) ExtendExpiry(_ context.Context, id int64, expiresAt time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.ExpiresAt = expiresAt
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateStatus(_ context.Context, id int64, status string) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.Status = status
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateNotes(_ context.Context, id int64, notes string) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.Notes = notes
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, windowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	s.resetDailyCalls++
+	sub.DailyUsageUSD = 0
+	sub.DailyWindowStart = &windowStart
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, windowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	s.resetWeeklyCalls++
+	sub.WeeklyUsageUSD = 0
+	sub.WeeklyWindowStart = &windowStart
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, windowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	s.resetMonthlyCalls++
+	sub.MonthlyUsageUSD = 0
+	sub.MonthlyWindowStart = &windowStart
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func newSubscriptionAssignTestEntClient(t *testing.T) *dbent.Client {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:subscription_assign?mode=memory&cache=shared&_fk=1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
 func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {
 	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
 	groupRepo := &subscriptionGroupRepoStub{
@@ -251,6 +343,95 @@ func TestAssignSubscriptionConflictWhenSemanticsMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, "SUBSCRIPTION_ASSIGN_CONFLICT", infraerrorsReason(err))
 	require.Equal(t, 0, subRepo.createCalls, "conflict should not create or mutate existing subscription")
+}
+
+func TestAssignOrExtendSubscriptionExpiredRenewalResetsUsage(t *testing.T) {
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	expiredAt := time.Now().Add(-time.Hour)
+	oldDailyWindow := time.Now().Add(-48 * time.Hour)
+	oldWeeklyWindow := time.Now().Add(-8 * 24 * time.Hour)
+	oldMonthlyWindow := time.Now().Add(-31 * 24 * time.Hour)
+	subRepo.seed(&UserSubscription{
+		ID:                 31,
+		UserID:             3001,
+		GroupID:            1,
+		StartsAt:           expiredAt.AddDate(0, 0, -30),
+		ExpiresAt:          expiredAt,
+		Status:             SubscriptionStatusExpired,
+		DailyWindowStart:   &oldDailyWindow,
+		WeeklyWindowStart:  &oldWeeklyWindow,
+		MonthlyWindowStart: &oldMonthlyWindow,
+		DailyUsageUSD:      12.3,
+		WeeklyUsageUSD:     123.4,
+		MonthlyUsageUSD:    456.7,
+		Notes:              "old",
+	})
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
+	sub, renewed, err := svc.AssignOrExtendSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       3001,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "payment order 1",
+	})
+
+	require.NoError(t, err)
+	require.True(t, renewed)
+	require.Equal(t, SubscriptionStatusActive, sub.Status)
+	require.Zero(t, sub.DailyUsageUSD)
+	require.Zero(t, sub.WeeklyUsageUSD)
+	require.Zero(t, sub.MonthlyUsageUSD)
+	require.Equal(t, 1, subRepo.resetDailyCalls)
+	require.Equal(t, 1, subRepo.resetWeeklyCalls)
+	require.Equal(t, 1, subRepo.resetMonthlyCalls)
+	require.NotNil(t, sub.DailyWindowStart)
+	require.NotNil(t, sub.WeeklyWindowStart)
+	require.NotNil(t, sub.MonthlyWindowStart)
+	require.Equal(t, sub.DailyWindowStart, sub.WeeklyWindowStart)
+	require.Equal(t, sub.DailyWindowStart, sub.MonthlyWindowStart)
+	require.Contains(t, sub.Notes, "payment order 1")
+	require.True(t, sub.ExpiresAt.After(time.Now()))
+}
+
+func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	expiresAt := time.Now().Add(24 * time.Hour)
+	subRepo.seed(&UserSubscription{
+		ID:              32,
+		UserID:          3002,
+		GroupID:         1,
+		StartsAt:        expiresAt.AddDate(0, 0, -30),
+		ExpiresAt:       expiresAt,
+		Status:          SubscriptionStatusActive,
+		DailyUsageUSD:   12.3,
+		WeeklyUsageUSD:  123.4,
+		MonthlyUsageUSD: 456.7,
+		Notes:           "old",
+	})
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
+	sub, renewed, err := svc.AssignOrExtendSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       3002,
+		GroupID:      1,
+		ValidityDays: 30,
+		Notes:        "payment order 2",
+	})
+
+	require.NoError(t, err)
+	require.True(t, renewed)
+	require.Equal(t, 12.3, sub.DailyUsageUSD)
+	require.Equal(t, 123.4, sub.WeeklyUsageUSD)
+	require.Equal(t, 456.7, sub.MonthlyUsageUSD)
+	require.Zero(t, subRepo.resetDailyCalls)
+	require.Zero(t, subRepo.resetWeeklyCalls)
+	require.Zero(t, subRepo.resetMonthlyCalls)
+	require.True(t, sub.ExpiresAt.After(expiresAt))
 }
 
 func TestBulkAssignSubscriptionCreatedReusedAndConflict(t *testing.T) {
