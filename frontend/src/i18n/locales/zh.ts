@@ -14,11 +14,11 @@ export default {
     goToDashboard: '进入控制台',
     hero: {
       eyebrow: '企业级 AI 能力控制台',
-      titleLine1: '一个网关接入大模型',
-      titleLine2: '让全球 AI 能力',
-      titleHighlight: '稳定交付',
+      titleLine1: '统一模型接口网关',
+      titleLine2: '接入全球',
+      titleHighlight: 'AI 能力',
       description:
-        '通过统一访问域名、API 密钥与安全策略，集中治理不同模型服务的调用、监控与成本，让团队更快把 AI 能力接入业务。',
+        '通过统一域名、密钥体系与安全策略接入多方模型服务，让调用链路更清晰，扩展更从容，运营更可控。',
       baseUrlLabel: '替换基础 URL 即可接入',
       stats: {
         channels: '核心通道',
@@ -170,6 +170,17 @@ export default {
           description: '按业务需要扩展兼容接口'
         }
       }
+    },
+    announcements: {
+      modalTitle: '系统公告',
+      modalDescription: '查看最新通知、维护安排和平台服务变更。',
+      notifications: '通知',
+      system: '系统公告',
+      empty: '暂无公告',
+      emptyDescription: '当前没有需要展示的公告内容。',
+      todayClose: '今日关闭',
+      closeAnnouncement: '关闭公告',
+      unreadCount: '{count} 条未读公告'
     },
     // CTA 区块
     cta: {

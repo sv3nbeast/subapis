@@ -14,11 +14,11 @@ export default {
     goToDashboard: 'Go to Dashboard',
     hero: {
       eyebrow: 'Enterprise AI capability console',
-      titleLine1: 'One gateway for LLM access',
-      titleLine2: 'Deliver global ',
-      titleHighlight: 'AI reliably',
+      titleLine1: 'Unified model API gateway',
+      titleLine2: 'Access global ',
+      titleHighlight: 'AI capability',
       description:
-        'Govern model calls, monitoring, and cost through one access domain, API key, and security policy so teams can bring AI capability into products faster.',
+        'Use one domain, key system, and security policy to reach multiple model services, keeping the call path observable, extensible, and controlled.',
       baseUrlLabel: 'Swap the base URL to start integrating',
       stats: {
         channels: 'Core channels',
@@ -170,6 +170,17 @@ export default {
           description: 'Extend compatible interfaces for business needs'
         }
       }
+    },
+    announcements: {
+      modalTitle: 'System Announcements',
+      modalDescription: 'View recent notifications, maintenance plans, and platform service updates.',
+      notifications: 'Notifications',
+      system: 'System Announcements',
+      empty: 'No announcements',
+      emptyDescription: 'There are no announcements to show right now.',
+      todayClose: 'Close for today',
+      closeAnnouncement: 'Close',
+      unreadCount: '{count} unread announcements'
     },
     // CTA section
     cta: {
