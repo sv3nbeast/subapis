@@ -26,13 +26,13 @@
     </div>
 
     <!-- Header -->
-    <header class="fixed inset-x-0 top-0 z-50 px-4 py-4 sm:px-6">
+    <header class="fixed inset-x-0 top-0 z-50 px-4 py-3 sm:px-6">
       <nav class="home-nav mx-auto flex items-center justify-between gap-4">
-        <router-link to="/home" class="flex min-w-0 items-center gap-3">
-          <div class="h-10 w-10 overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-gray-200/70 dark:bg-dark-800 dark:ring-dark-700">
+        <router-link to="/home" class="flex min-w-0 items-center gap-2.5">
+          <div class="h-9 w-9 overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-gray-200/70 dark:bg-dark-800 dark:ring-dark-700">
             <img :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" class="h-full w-full object-contain" />
           </div>
-          <span class="home-brand-name truncate text-lg font-black tracking-tight text-gray-950 dark:text-white sm:text-xl">
+          <span class="home-brand-name truncate text-base font-black tracking-tight text-gray-950 dark:text-white sm:text-lg">
             {{ siteName }}
           </span>
         </router-link>
@@ -239,12 +239,12 @@
     <!-- Main Content -->
     <main ref="snapContainerRef" class="home-snap-container relative z-10 flex-1">
       <section class="home-section home-snap-section home-hero-section px-4 sm:px-6">
-        <div class="home-hero-shell mx-auto grid max-w-[82rem] items-center gap-12 lg:grid-cols-[minmax(0,44rem)_minmax(28rem,34rem)] lg:gap-16">
+        <div class="home-hero-shell mx-auto grid max-w-[72rem] items-center gap-8 lg:grid-cols-[minmax(0,38rem)_minmax(24rem,28rem)] lg:gap-10">
           <div class="home-hero-copy">
-            <div class="inline-flex rounded-full border border-primary-200 bg-primary-50/80 px-4 py-2 text-xs font-bold tracking-[0.14em] text-primary-700 shadow-sm dark:border-primary-800/70 dark:bg-primary-950/40 dark:text-primary-300">
+            <div class="inline-flex rounded-full border border-primary-200 bg-primary-50/80 px-3.5 py-1.5 text-[0.72rem] font-bold tracking-[0.14em] text-primary-700 shadow-sm dark:border-primary-800/70 dark:bg-primary-950/40 dark:text-primary-300">
               {{ t('home.hero.eyebrow') }}
             </div>
-            <h1 class="mt-7 text-4xl font-black leading-[0.98] tracking-[-0.06em] text-gray-950 dark:text-white sm:text-5xl lg:text-[3.85rem]">
+            <h1 class="mt-5 text-[2.3rem] font-black leading-[0.98] tracking-[-0.06em] text-gray-950 dark:text-white sm:text-[2.8rem] lg:text-[3.05rem]">
               {{ t('home.hero.titleLine1') }}
               <br />
               <span class="home-title-shimmer">
@@ -252,7 +252,7 @@
                 <span class="home-title-gradient">{{ t('home.hero.titleHighlight') }}</span>
               </span>
             </h1>
-            <p class="mt-7 max-w-[42rem] text-base leading-8 text-gray-600 dark:text-dark-300 sm:text-lg">
+            <p class="mt-4 max-w-[36rem] text-[0.95rem] leading-7 text-gray-600 dark:text-dark-300 sm:text-[0.98rem]">
               {{ t('home.hero.description') }}
             </p>
 
@@ -285,10 +285,10 @@
               </div>
             </div>
 
-            <div class="mt-7 flex flex-col items-start gap-3 sm:flex-row">
+            <div class="mt-6 flex flex-col items-start gap-3 sm:flex-row">
               <router-link
                 :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary min-w-[8.25rem] px-6 py-2.5 text-sm shadow-lg shadow-primary-500/30 sm:text-base"
+                class="btn btn-primary min-w-[7.5rem] px-5 py-2.5 text-sm shadow-lg shadow-primary-500/30"
               >
                 {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
                 <Icon name="arrowRight" size="md" class="ml-1.5" :stroke-width="2" />
@@ -298,20 +298,20 @@
                 :href="docUrl"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="btn btn-secondary min-w-[6.5rem] px-6 py-2.5 text-sm sm:text-base"
+                class="btn btn-secondary min-w-[6rem] px-5 py-2.5 text-sm"
               >
                 <Icon name="book" size="md" />
                 {{ t('home.docs') }}
               </a>
             </div>
 
-            <div class="home-stats-grid mt-9 grid max-w-[29rem] grid-cols-3 gap-5">
+            <div class="home-stats-grid mt-6 grid max-w-[24rem] grid-cols-3 gap-3">
               <div
                 v-for="stat in heroStats"
                 :key="stat.label"
                 class="home-stat-card"
               >
-                <div class="text-2xl font-black tracking-tight text-gray-950 dark:text-white sm:text-3xl">
+                <div class="text-lg font-black tracking-tight text-gray-950 dark:text-white sm:text-xl">
                   {{ stat.value }}
                 </div>
                 <div class="mt-1.5 text-xs font-medium text-gray-500 dark:text-dark-400">
@@ -332,8 +332,8 @@
                   <Icon :name="feature.icon" size="md" />
                 </div>
                 <div>
-                  <h3 class="text-base font-bold text-gray-950 dark:text-white">{{ feature.title }}</h3>
-                  <p class="mt-2 text-sm leading-6 text-gray-500 dark:text-dark-300">{{ feature.description }}</p>
+                  <h3 class="text-sm font-bold text-gray-950 dark:text-white">{{ feature.title }}</h3>
+                  <p class="mt-1.5 text-xs leading-5 text-gray-500 dark:text-dark-300">{{ feature.description }}</p>
                 </div>
               </div>
             </div>
@@ -342,18 +342,18 @@
       </section>
 
       <section class="home-section home-snap-section bg-white/70 px-4 dark:bg-dark-950/30 sm:px-6">
-        <div class="mx-auto max-w-7xl">
-          <div class="max-w-4xl">
+        <div class="mx-auto max-w-6xl">
+          <div class="max-w-3xl">
             <div class="home-section-label">{{ t('home.value.eyebrow') }}</div>
-            <h2 class="mt-5 text-4xl font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-5xl">
+            <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
               {{ t('home.value.title') }}
             </h2>
-            <p class="mt-5 text-lg leading-8 text-gray-600 dark:text-dark-300">
+            <p class="mt-4 text-base leading-7 text-gray-600 dark:text-dark-300">
               {{ t('home.value.description') }}
             </p>
           </div>
 
-          <div class="mt-12 grid gap-6 lg:grid-cols-2">
+          <div class="mt-9 grid gap-5 lg:grid-cols-2">
             <article
               v-for="card in valueCards"
               :key="card.title"
@@ -361,12 +361,12 @@
             >
               <div class="home-card-wash"></div>
               <div class="home-icon-soft">
-                <Icon :name="card.icon" size="lg" />
+                <Icon :name="card.icon" size="md" />
               </div>
-              <h3 class="mt-8 text-2xl font-bold tracking-tight text-gray-950 dark:text-white">
+              <h3 class="mt-6 text-xl font-bold tracking-tight text-gray-950 dark:text-white">
                 {{ card.title }}
               </h3>
-              <p class="mt-4 text-base leading-7 text-gray-600 dark:text-dark-300">
+              <p class="mt-3 text-sm leading-6 text-gray-600 dark:text-dark-300">
                 {{ card.description }}
               </p>
             </article>
@@ -375,30 +375,30 @@
       </section>
 
       <section class="home-section home-snap-section px-4 sm:px-6">
-        <div class="mx-auto max-w-7xl">
-          <div class="max-w-4xl">
+        <div class="mx-auto max-w-6xl">
+          <div class="max-w-3xl">
             <div class="home-section-label">{{ t('home.workflow.eyebrow') }}</div>
-            <h2 class="mt-5 text-4xl font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-5xl">
+            <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
               {{ t('home.workflow.title') }}
             </h2>
           </div>
 
-          <div class="mt-12 grid gap-6 lg:grid-cols-3">
+          <div class="mt-9 grid gap-5 lg:grid-cols-3">
             <article
               v-for="step in workflowSteps"
               :key="step.step"
               class="home-workflow-card"
             >
               <div class="home-icon-soft rounded-full">
-                <Icon :name="step.icon" size="lg" />
+                <Icon :name="step.icon" size="md" />
               </div>
-              <div class="mt-5 text-sm font-black tracking-[0.2em] text-gray-400 dark:text-dark-500">
+              <div class="mt-4 text-xs font-black tracking-[0.2em] text-gray-400 dark:text-dark-500">
                 {{ step.step }}
               </div>
-              <h3 class="mt-4 text-2xl font-bold tracking-tight text-gray-950 dark:text-white">
+              <h3 class="mt-3 text-xl font-bold tracking-tight text-gray-950 dark:text-white">
                 {{ step.title }}
               </h3>
-              <p class="mt-4 text-base leading-7 text-gray-600 dark:text-dark-300">
+              <p class="mt-3 text-sm leading-6 text-gray-600 dark:text-dark-300">
                 {{ step.description }}
               </p>
             </article>
@@ -411,16 +411,16 @@
         class="home-section home-snap-section home-channels-section bg-white/70 px-4 dark:bg-dark-950/30 sm:px-6"
         :class="{ 'is-visible': channelsVisible }"
       >
-        <div class="mx-auto max-w-7xl text-center">
+        <div class="mx-auto max-w-6xl text-center">
           <div class="home-section-label justify-center">{{ t('home.channels.eyebrow') }}</div>
-          <h2 class="mt-5 text-4xl font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-5xl">
+          <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
             {{ t('home.channels.title') }}
           </h2>
-          <p class="mx-auto mt-5 max-w-3xl text-lg leading-8 text-gray-600 dark:text-dark-300">
+          <p class="mx-auto mt-4 max-w-2xl text-base leading-7 text-gray-600 dark:text-dark-300">
             {{ t('home.channels.description') }}
           </p>
 
-          <div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
+          <div class="mt-9 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <article
               v-for="(channel, index) in supportedChannels"
               :key="channel.name"
@@ -429,11 +429,11 @@
               :style="{ transitionDelay: channelsVisible ? `${index * 90}ms` : '0ms' }"
             >
               <div class="home-provider-mark" :class="channel.markClass">{{ channel.shortName }}</div>
-              <h3 class="mt-5 text-xl font-bold text-gray-950 dark:text-white">{{ channel.name }}</h3>
-              <p class="mt-3 min-h-12 text-sm leading-6 text-gray-500 dark:text-dark-300">
+              <h3 class="mt-4 text-lg font-bold text-gray-950 dark:text-white">{{ channel.name }}</h3>
+              <p class="mt-2 min-h-10 text-xs leading-5 text-gray-500 dark:text-dark-300">
                 {{ channel.description }}
               </p>
-              <span class="mt-5 inline-flex rounded-full bg-primary-50 px-3 py-1 text-xs font-semibold text-primary-700 dark:bg-primary-950/50 dark:text-primary-300">
+              <span class="mt-4 inline-flex rounded-full bg-primary-50 px-2.5 py-1 text-[0.7rem] font-semibold text-primary-700 dark:bg-primary-950/50 dark:text-primary-300">
                 {{ channel.status }}
               </span>
             </article>
@@ -447,17 +447,17 @@
             <ServiceStatusOverview />
           </div>
 
-          <div class="overflow-hidden rounded-[2rem] border border-primary-100 bg-gradient-to-br from-primary-100 via-white to-cyan-50 p-8 text-center shadow-card-hover dark:border-primary-900/50 dark:from-primary-950/50 dark:via-dark-900 dark:to-dark-950 sm:p-12">
-            <h2 class="text-3xl font-black tracking-[-0.04em] text-gray-950 dark:text-white sm:text-4xl">
+          <div class="overflow-hidden rounded-[1.5rem] border border-primary-100 bg-gradient-to-br from-primary-100 via-white to-cyan-50 p-6 text-center shadow-card-hover dark:border-primary-900/50 dark:from-primary-950/50 dark:via-dark-900 dark:to-dark-950 sm:p-8">
+            <h2 class="text-2xl font-black tracking-[-0.04em] text-gray-950 dark:text-white sm:text-3xl">
               {{ t('home.cta.title') }}
             </h2>
-            <p class="mx-auto mt-5 max-w-3xl text-base leading-7 text-gray-600 dark:text-dark-300 sm:text-lg">
+            <p class="mx-auto mt-4 max-w-2xl text-sm leading-6 text-gray-600 dark:text-dark-300 sm:text-base">
               {{ t('home.cta.description') }}
             </p>
-            <div class="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <div class="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <router-link
                 :to="isAuthenticated ? dashboardPath : '/login'"
-                class="btn btn-primary px-7 py-3 text-base shadow-lg shadow-primary-500/30"
+                class="btn btn-primary px-6 py-2.5 text-sm shadow-lg shadow-primary-500/30"
               >
                 {{ isAuthenticated ? t('home.goToDashboard') : t('home.cta.button') }}
                 <Icon name="arrowRight" size="md" />
@@ -467,7 +467,7 @@
                 :href="docUrl"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="btn btn-secondary px-7 py-3 text-base"
+                class="btn btn-secondary px-6 py-2.5 text-sm"
               >
                 <Icon name="book" size="md" />
                 {{ t('home.docs') }}
@@ -909,7 +909,7 @@ onUnmounted(() => {
 }
 
 .home-nav {
-  max-width: min(100% - 2rem, 112rem);
+  max-width: min(100% - 2rem, 104rem);
   padding: 0.35rem 0;
 }
 
@@ -1075,8 +1075,8 @@ onUnmounted(() => {
   align-items: center;
   display: flex;
   min-height: 100vh;
-  padding-bottom: 3.75rem;
-  padding-top: 7.75rem;
+  padding-bottom: 2.5rem;
+  padding-top: 6.25rem;
   scroll-snap-align: start;
   scroll-snap-stop: always;
 }
@@ -1086,19 +1086,19 @@ onUnmounted(() => {
 }
 
 .home-hero-shell {
-  min-height: calc(100vh - 11.5rem);
+  min-height: calc(100vh - 8.75rem);
 }
 
 .home-hero-copy {
-  max-width: 44rem;
+  max-width: 38rem;
 }
 
 .home-hero-visual {
   align-items: center;
   display: flex;
   justify-content: center;
-  min-height: 28rem;
-  padding-top: 2rem;
+  min-height: 22rem;
+  padding-top: 0.5rem;
 }
 
 .home-title-gradient {
@@ -1133,13 +1133,13 @@ onUnmounted(() => {
 
 .home-hero-panel {
   border: 1px solid rgba(226, 232, 240, 0.82);
-  border-radius: 2rem;
+  border-radius: 1.45rem;
   background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 28px 72px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.1);
   display: grid;
-  gap: 1.25rem;
-  max-width: 34rem;
-  padding: 1.75rem;
+  gap: 0.75rem;
+  max-width: 28rem;
+  padding: 1rem;
   width: 100%;
   backdrop-filter: blur(18px);
 }
@@ -1148,12 +1148,12 @@ onUnmounted(() => {
   animation: home-float 5.8s ease-in-out infinite;
   align-items: flex-start;
   border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 1.125rem;
+  border-radius: 1rem;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
   display: flex;
-  gap: 1rem;
-  padding: 1.25rem;
+  gap: 0.75rem;
+  padding: 0.85rem;
   transition:
     border-color 220ms ease,
     box-shadow 220ms ease,
@@ -1162,12 +1162,12 @@ onUnmounted(() => {
 
 .home-hero-card:nth-child(2) {
   animation-delay: -1.4s;
-  margin-left: 1.5rem;
+  margin-left: 0.8rem;
 }
 
 .home-hero-card:nth-child(3) {
   animation-delay: -2.8s;
-  margin-left: 0.55rem;
+  margin-left: 0.25rem;
 }
 
 .home-hero-card:hover {
@@ -1179,20 +1179,20 @@ onUnmounted(() => {
 .home-icon-soft {
   align-items: center;
   background: linear-gradient(135deg, #ccfbf1 0%, #ecfeff 100%);
-  border-radius: 1rem;
+  border-radius: 0.9rem;
   color: #0d9488;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 2.875rem;
+  height: 2.25rem;
   justify-content: center;
-  width: 2.875rem;
+  width: 2.25rem;
 }
 
 .home-section-label {
   align-items: center;
   color: #0f766e;
   display: inline-flex;
-  font-size: 0.875rem;
+  font-size: 0.76rem;
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1219,9 +1219,9 @@ onUnmounted(() => {
 }
 
 .home-value-card {
-  border-radius: 1.5rem;
+  border-radius: 1.25rem;
   overflow: hidden;
-  padding: 2rem;
+  padding: 1.5rem;
   position: relative;
 }
 
@@ -1229,8 +1229,8 @@ onUnmounted(() => {
   background: linear-gradient(100deg, rgba(20, 184, 166, 0.16), rgba(6, 182, 212, 0.08), transparent 76%);
   border-bottom-left-radius: 70%;
   border-bottom-right-radius: 45%;
-  height: 6rem;
-  left: 3rem;
+  height: 4.8rem;
+  left: 2.5rem;
   position: absolute;
   top: 0;
   transform: skewX(-8deg);
@@ -1238,9 +1238,9 @@ onUnmounted(() => {
 }
 
 .home-workflow-card {
-  border-radius: 1.5rem;
+  border-radius: 1.25rem;
   overflow: hidden;
-  padding: 2rem;
+  padding: 1.5rem;
   position: relative;
 }
 
@@ -1257,12 +1257,12 @@ onUnmounted(() => {
 
 .home-channel-card {
   align-items: center;
-  border-radius: 1.375rem;
+  border-radius: 1.15rem;
   display: flex;
   flex-direction: column;
-  min-height: 14rem;
+  min-height: 12rem;
   opacity: 0;
-  padding: 1.5rem;
+  padding: 1.15rem;
   transform: translateY(1.35rem) scale(0.98);
   transition:
     opacity 560ms ease,
@@ -1286,14 +1286,14 @@ onUnmounted(() => {
 
 .home-provider-mark {
   align-items: center;
-  border-radius: 1rem;
+  border-radius: 0.9rem;
   color: #fff;
   display: inline-flex;
-  font-size: 1.125rem;
+  font-size: 1rem;
   font-weight: 900;
-  height: 3.25rem;
+  height: 2.8rem;
   justify-content: center;
-  width: 3.25rem;
+  width: 2.8rem;
 }
 
 .home-provider-claude {
@@ -1318,10 +1318,10 @@ onUnmounted(() => {
 
 .home-stat-card {
   border: 1px dashed rgba(20, 184, 166, 0.34);
-  border-radius: 1rem;
+  border-radius: 0.85rem;
   background: rgba(255, 255, 255, 0.58);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
-  padding: 1rem 1.15rem;
+  padding: 0.7rem 0.8rem;
   text-align: left;
   backdrop-filter: blur(10px);
   transition:
@@ -1338,12 +1338,12 @@ onUnmounted(() => {
 
 .home-url-card {
   border: 1px solid rgba(226, 232, 240, 0.86);
-  border-radius: 1.5rem;
+  border-radius: 1.1rem;
   background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.1);
-  margin-top: 2.35rem;
-  max-width: 36rem;
-  padding: 1.35rem 1.5rem 1.4rem;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.085);
+  margin-top: 1.65rem;
+  max-width: 30rem;
+  padding: 0.9rem 1rem 1rem;
   backdrop-filter: blur(18px);
   transition:
     box-shadow 220ms ease,
@@ -1351,7 +1351,7 @@ onUnmounted(() => {
 }
 
 .home-url-card:hover {
-  box-shadow: 0 24px 46px rgba(15, 23, 42, 0.13);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
   transform: translateY(-3px);
 }
 
@@ -1397,7 +1397,7 @@ onUnmounted(() => {
 .home-url-field {
   align-items: center;
   background: #f2f3f5;
-  border-radius: 1rem;
+  border-radius: 0.9rem;
   color: #111827;
   display: flex;
   font-family:
@@ -1407,13 +1407,13 @@ onUnmounted(() => {
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  font-size: clamp(0.95rem, 1.3vw, 1.08rem);
+  font-size: clamp(0.88rem, 1.05vw, 0.98rem);
   font-weight: 500;
   gap: 0.75rem;
   justify-content: space-between;
   line-height: 1.1;
-  min-height: 3rem;
-  padding: 0.45rem 0.45rem 0.45rem 0.875rem;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.3rem 0.3rem 0.7rem;
 }
 
 .home-url-copy {
@@ -1423,13 +1423,13 @@ onUnmounted(() => {
   color: #6b7280;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 2.25rem;
+  height: 2rem;
   justify-content: center;
   transition:
     background-color 160ms ease,
     color 160ms ease,
     transform 160ms ease;
-  width: 2.25rem;
+  width: 2rem;
 }
 
 .home-url-copy:hover {
@@ -1439,7 +1439,7 @@ onUnmounted(() => {
 }
 
 .home-status-compact {
-  max-height: min(38vh, 24rem);
+  max-height: min(35vh, 21rem);
   overflow: auto;
   scrollbar-width: thin;
 }
@@ -2201,16 +2201,52 @@ onUnmounted(() => {
 
 @media (max-height: 760px) and (min-width: 1024px) {
   .home-snap-section {
-    padding-bottom: 2.25rem;
-    padding-top: 6.25rem;
+    padding-bottom: 2rem;
+    padding-top: 5.75rem;
   }
 
   .home-hero-shell {
-    min-height: calc(100vh - 8.5rem);
+    min-height: calc(100vh - 7.75rem);
   }
 
   .home-hero-visual {
-    min-height: 24rem;
+    min-height: 20rem;
+  }
+}
+
+@media (max-width: 1279px) and (min-width: 1024px) {
+  .home-nav {
+    max-width: min(100% - 2rem, 70rem);
+  }
+
+  .home-hero-shell {
+    max-width: 67rem;
+    grid-template-columns: minmax(0, 35rem) minmax(21rem, 26rem);
+    gap: 2rem;
+  }
+
+  .home-hero-copy {
+    max-width: 35rem;
+  }
+
+  .home-hero-copy h1 {
+    font-size: 2.8rem;
+  }
+
+  .home-hero-copy p {
+    max-width: 34rem;
+  }
+
+  .home-hero-panel {
+    max-width: 26rem;
+  }
+
+  .home-hero-visual {
+    min-height: 21rem;
+  }
+
+  .home-url-card {
+    max-width: 28rem;
   }
 }
 
@@ -2221,8 +2257,18 @@ onUnmounted(() => {
 
   .home-snap-section {
     min-height: 100vh;
-    padding-bottom: 4rem;
-    padding-top: 7rem;
+    padding-bottom: 2.75rem;
+    padding-top: 5.75rem;
+  }
+
+  .home-hero-copy h1 {
+    font-size: clamp(2.15rem, 7vw, 2.75rem);
+  }
+
+  .home-hero-copy p {
+    margin-top: 1.1rem;
+    font-size: 0.95rem;
+    line-height: 1.7;
   }
 
   .home-hero-shell {
@@ -2236,12 +2282,12 @@ onUnmounted(() => {
 
   .home-hero-panel {
     gap: 0.75rem;
-    margin-top: 1.25rem;
-    padding: 1rem;
+    margin-top: 1rem;
+    padding: 0.75rem;
   }
 
   .home-hero-card {
-    padding: 0.95rem;
+    padding: 0.75rem;
   }
 
   .home-hero-card p {
@@ -2260,7 +2306,7 @@ onUnmounted(() => {
 
 @media (max-width: 420px) {
   .home-nav {
-    max-width: min(100% - 1.5rem, 112rem);
+    max-width: min(100% - 1.5rem, 104rem);
   }
 
   .home-announcement-backdrop {
@@ -2300,11 +2346,11 @@ onUnmounted(() => {
   }
 
   .home-snap-section {
-    padding-top: 6.75rem;
+    padding-top: 6.25rem;
   }
 
   .home-url-card {
-    padding: 1.1rem;
+    padding: 1rem;
   }
 
   .home-url-field {
