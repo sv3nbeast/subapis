@@ -1,6 +1,8 @@
 <template>
   <AppLayout>
     <MonitorHero
+      :title="t('modelStatus.title')"
+      :description="t('modelStatus.description')"
       :overall-status="overallStatus"
       :interval-seconds="DEFAULT_INTERVAL_SECONDS"
       :window="currentWindow"
@@ -16,6 +18,8 @@
       :countdown-seconds="countdown"
       :loading="loading"
       :detail-cache="detailCache"
+      :empty-title="t('modelStatus.empty.title')"
+      :empty-description="t('modelStatus.empty.description')"
       @card-click="openDetail"
     />
 
@@ -81,7 +85,7 @@ const overallStatus = computed<OverallStatus>(() => {
 })
 
 const detailTitle = computed(() => {
-  return detailTarget.value?.name || t('channelStatus.detailTitle')
+  return detailTarget.value?.name || t('modelStatus.detailTitle')
 })
 
 // ── Loaders ──
@@ -97,7 +101,7 @@ async function reload(silent = false) {
   } catch (err: unknown) {
     const e = err as { name?: string; code?: string }
     if (e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return
-    appStore.showError(extractApiErrorMessage(err, t('channelStatus.loadError')))
+    appStore.showError(extractApiErrorMessage(err, t('modelStatus.loadError')))
   } finally {
     if (abortController === ctrl) {
       if (!silent) loading.value = false
@@ -121,7 +125,7 @@ async function loadDetail(id: number, force = false) {
   try {
     detailCache[id] = await channelMonitorUserAPI.status(id)
   } catch (err: unknown) {
-    appStore.showError(extractApiErrorMessage(err, t('channelStatus.detailLoadError')))
+    appStore.showError(extractApiErrorMessage(err, t('modelStatus.detailLoadError')))
   }
 }
 

@@ -746,6 +746,7 @@ export default {
     channelPricing: 'Channel Pricing',
     channelMonitor: 'Channel Monitor',
     channelStatus: 'Channel Status',
+    modelStatus: 'Model Status',
     docs: 'Docs',
     sora: 'Sora Studio',
     serviceStatus: 'Service Status',
@@ -1311,6 +1312,19 @@ export default {
     empty: {
       title: 'No channels available',
       description: 'No monitored channels have been configured yet.'
+    }
+  },
+
+  // Model Status (authenticated user-facing view)
+  modelStatus: {
+    title: 'Model Status',
+    description: 'View availability, latency, and recent health for the models available to your account.',
+    loadError: 'Failed to load model status',
+    detailLoadError: 'Failed to load model detail',
+    detailTitle: 'Model Detail',
+    empty: {
+      title: 'No models available',
+      description: 'No monitored models have been configured yet.'
     }
   },
 

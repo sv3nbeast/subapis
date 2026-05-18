@@ -220,9 +220,6 @@ watch(
   (ids) => {
     const validIds = new Set(ids)
     const next = new Set([...expandedGroupIds.value].filter((id) => validIds.has(id)))
-    if (next.size === 0 && ids.length > 0) {
-      next.add(ids[0])
-    }
     expandedGroupIds.value = next
   },
   { immediate: true },

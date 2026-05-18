@@ -458,8 +458,9 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Channel Status',
-      titleKey: 'nav.channelStatus'
+      title: 'Model Status',
+      titleKey: 'modelStatus.title',
+      descriptionKey: 'modelStatus.description'
     }
   },
   {

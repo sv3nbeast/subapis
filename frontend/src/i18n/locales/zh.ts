@@ -746,6 +746,7 @@ export default {
     channelPricing: '渠道定价',
     channelMonitor: '渠道监控',
     channelStatus: '渠道状态',
+    modelStatus: '模型状态',
     docs: '文档',
     sora: 'Sora 创作',
     serviceStatus: '服务状态',
@@ -1315,6 +1316,19 @@ export default {
     empty: {
       title: '暂无可显示的渠道',
       description: '管理员尚未配置可监控的渠道。'
+    }
+  },
+
+  // Model Status (authenticated user-facing view)
+  modelStatus: {
+    title: '模型状态',
+    description: '查看当前可用模型的可用性、延迟和近期状态。',
+    loadError: '加载模型状态失败',
+    detailLoadError: '加载模型详情失败',
+    detailTitle: '模型详情',
+    empty: {
+      title: '暂无可显示的模型',
+      description: '管理员尚未配置可监控的模型。'
     }
   },
 
