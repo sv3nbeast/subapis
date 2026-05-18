@@ -720,7 +720,7 @@ export default {
     users: '用户管理',
     groups: '分组管理',
     channels: '渠道管理',
-    availableChannels: '可用渠道',
+    availableChannels: '可用分组',
     subscriptions: '订阅管理',
     accounts: '账号管理',
     proxies: 'IP管理',
@@ -1318,18 +1318,39 @@ export default {
     }
   },
 
-  // Available Channels (user-facing)
+  // Available Groups (user-facing)
   availableChannels: {
-    title: '可用渠道',
-    description: '查看您可访问的渠道与其支持的模型、定价',
-    searchPlaceholder: '搜索渠道或模型...',
-    empty: '暂无可用渠道',
+    eyebrow: '按 API Key 分组使用',
+    title: '可用分组',
+    description: '按分组查看当前账号可用的平台、模型范围、计费倍率与价格摘要。',
+    searchPlaceholder: '搜索分组、模型或服务来源...',
+    empty: '暂无可用分组',
     noModels: '未配置模型',
     noPricing: '未配置定价',
     exclusive: '专属',
     public: '公开',
     exclusiveTooltip: '管理员授权给你的专属分组',
     publicTooltip: '对所有用户公开的分组',
+    filters: {
+      allPlatforms: '全部平台',
+      allGroups: '全部分组'
+    },
+    stats: {
+      groups: '可用分组',
+      models: '可用模型',
+      sources: '服务来源',
+      exclusive: '专属分组'
+    },
+    groupCards: {
+      groupHint: '此分组可用于 {platform} 请求，按当前 {rate} 倍率计费。',
+      sourceCount: '来源',
+      modelCount: '模型',
+      serviceSource: '服务来源',
+      viewStatus: '查看状态',
+      priceStatus: '价格状态',
+      unknownBilling: '未配置',
+      intervalHint: '包含 {count} 组阶梯价格，默认显示基础价格摘要'
+    },
     columns: {
       name: '渠道名',
       description: '描述',

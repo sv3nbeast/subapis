@@ -720,7 +720,7 @@ export default {
     users: 'Users',
     groups: 'Groups',
     channels: 'Channels',
-    availableChannels: 'Available Channels',
+    availableChannels: 'Available Groups',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
     proxies: 'Proxies',
@@ -1314,18 +1314,39 @@ export default {
     }
   },
 
-  // Available Channels (user-facing)
+  // Available Groups (user-facing)
   availableChannels: {
-    title: 'Available Channels',
-    description: 'Channels you can access, along with their supported models and pricing',
-    searchPlaceholder: 'Search channels or models...',
-    empty: 'No available channels',
+    eyebrow: 'Use by API key group',
+    title: 'Available Groups',
+    description: 'View the platforms, model scope, billing multiplier, and pricing summary available to each group.',
+    searchPlaceholder: 'Search groups, models, or service sources...',
+    empty: 'No available groups',
     noModels: 'No models configured',
     noPricing: 'Pricing not configured',
     exclusive: 'Exclusive',
     public: 'Public',
     exclusiveTooltip: 'Exclusive groups granted to you by an admin',
     publicTooltip: 'Groups open to all users',
+    filters: {
+      allPlatforms: 'All Platforms',
+      allGroups: 'All Groups'
+    },
+    stats: {
+      groups: 'Available Groups',
+      models: 'Available Models',
+      sources: 'Service Sources',
+      exclusive: 'Exclusive Groups'
+    },
+    groupCards: {
+      groupHint: 'This group can be used for {platform} requests and is billed at the current {rate} multiplier.',
+      sourceCount: 'Sources',
+      modelCount: 'Models',
+      serviceSource: 'Service Source',
+      viewStatus: 'View Status',
+      priceStatus: 'Pricing Status',
+      unknownBilling: 'Not Configured',
+      intervalHint: 'Includes {count} tiered price sets; base price summary is shown by default'
+    },
     columns: {
       name: 'Channel',
       description: 'Description',
