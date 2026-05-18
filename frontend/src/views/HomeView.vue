@@ -56,15 +56,6 @@
             </span>
           </button>
 
-          <router-link
-            to="/docs"
-            class="home-nav-text-link hidden sm:inline-flex"
-            :title="t('home.guide')"
-          >
-            <Icon name="book" size="sm" />
-            <span>{{ t('home.guide') }}</span>
-          </router-link>
-
           <LocaleSwitcher />
 
           <a

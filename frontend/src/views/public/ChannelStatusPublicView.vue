@@ -15,7 +15,7 @@
           <span class="h-9 w-9 overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-gray-200/70 dark:bg-dark-800 dark:ring-dark-700">
             <img :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" class="h-full w-full object-contain" />
           </span>
-          <span class="truncate text-base font-black tracking-tight text-gray-950 dark:text-white sm:text-lg">
+          <span class="monitor-public-brand truncate text-base font-black tracking-tight text-gray-950 dark:text-white sm:text-lg">
             {{ siteName }}
           </span>
         </RouterLink>
@@ -520,33 +520,59 @@ onBeforeUnmount(() => {
   opacity: 0.15;
 }
 
-.monitor-public-nav-link {
+.monitor-public-nav {
+  padding: 0.35rem 0;
+}
+
+.monitor-public-brand {
+  font-style: italic;
+  letter-spacing: -0.045em;
+  transform: skewX(-6deg);
+}
+
+.monitor-public-nav-link,
+.monitor-public-icon-button,
+.monitor-public-dashboard-link {
+  align-items: center;
+  border-radius: 9999px;
   color: #475569;
-  font-size: 0.84rem;
-  font-weight: 700;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 2.25rem;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.monitor-public-nav-link {
+  padding: 0 0.8rem;
 }
 
 .monitor-public-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.3rem;
-  height: 2.3rem;
-  border-radius: 0.9rem;
-  color: #64748b;
+  width: 2.25rem;
 }
 
 .monitor-public-dashboard-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 2.35rem;
-  padding: 0 0.95rem;
-  border-radius: 9999px;
   background: #0f172a;
   color: #fff;
-  font-size: 0.8rem;
-  font-weight: 700;
+  padding: 0 1rem;
+}
+
+.monitor-public-nav-link:hover,
+.monitor-public-icon-button:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+.monitor-public-dashboard-link:hover {
+  background: #1f2937;
+  transform: translateY(-1px);
 }
 
 .monitor-public-head {
@@ -983,6 +1009,12 @@ onBeforeUnmount(() => {
 .monitor-public-dark .monitor-public-nav-link,
 .monitor-public-dark .monitor-public-icon-button {
   color: #cbd5e1;
+}
+
+.monitor-public-dark .monitor-public-nav-link:hover,
+.monitor-public-dark .monitor-public-icon-button:hover {
+  background: rgba(15, 23, 42, 0.72);
+  color: #5eead4;
 }
 
 .monitor-public-dark .monitor-public-dashboard-link {
