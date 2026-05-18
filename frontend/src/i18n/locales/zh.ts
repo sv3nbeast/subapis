@@ -1281,6 +1281,7 @@ export default {
     searchPlaceholder: '搜索渠道...',
     allProviders: '全部供应商',
     loadError: '加载渠道状态失败',
+    publicLoadFailedTitle: '暂时无法获取公开状态',
     detailLoadError: '加载渠道详情失败',
     detailTitle: '渠道详情',
     closeDetail: '关闭',

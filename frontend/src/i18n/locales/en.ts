@@ -1277,6 +1277,7 @@ export default {
     searchPlaceholder: 'Search channels...',
     allProviders: 'All Providers',
     loadError: 'Failed to load channel status',
+    publicLoadFailedTitle: 'Unable to load public status',
     detailLoadError: 'Failed to load channel detail',
     detailTitle: 'Channel Detail',
     closeDetail: 'Close',

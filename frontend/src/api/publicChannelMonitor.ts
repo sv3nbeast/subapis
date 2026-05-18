@@ -50,15 +50,29 @@ export interface PublicMonitorDetail {
   models: PublicMonitorModelDetail[]
 }
 
+function assertMonitorListResponse(value: unknown): asserts value is PublicMonitorListResponse {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as PublicMonitorListResponse).items)) {
+    throw new Error('Invalid public monitor response')
+  }
+}
+
+function assertMonitorDetailResponse(value: unknown): asserts value is PublicMonitorDetail {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as PublicMonitorDetail).models)) {
+    throw new Error('Invalid public monitor detail response')
+  }
+}
+
 export async function listPublicChannelMonitors(options?: { signal?: AbortSignal }): Promise<PublicMonitorListResponse> {
-  const { data } = await apiClient.get<PublicMonitorListResponse>('/public/channel-monitors', {
+  const { data } = await apiClient.get<unknown>('/public/channel-monitors', {
     signal: options?.signal,
   })
+  assertMonitorListResponse(data)
   return data
 }
 
 export async function getPublicChannelMonitorStatus(id: number): Promise<PublicMonitorDetail> {
-  const { data } = await apiClient.get<PublicMonitorDetail>(`/public/channel-monitors/${id}/status`)
+  const { data } = await apiClient.get<unknown>(`/public/channel-monitors/${id}/status`)
+  assertMonitorDetailResponse(data)
   return data
 }
 
