@@ -82,7 +82,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 
-	for _, key := range []string{"id", "status", "billing_model_source", "restrict_models"} {
+	for _, key := range []string{"id", "status", "billing_model_source", "restrict_models", "display_only"} {
 		_, exists := decoded[key]
 		require.Falsef(t, exists, "user DTO must not expose %q", key)
 	}

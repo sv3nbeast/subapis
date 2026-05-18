@@ -109,6 +109,7 @@ func registerRoutes(
 	// Public status endpoint (no auth required)
 	v1.GET("/status", h.Status.GetStatus)
 	v1.GET("/status/models/:model", h.Status.GetModelStatus)
+	v1.GET("/public/announcements", h.Announcement.ListPublic)
 	v1.GET("/public/channel-monitors", h.PublicChannelMonitor.List)
 	v1.GET("/public/channel-monitors/:id/status", h.PublicChannelMonitor.GetStatus)
 	r.GET("/api/status", h.Status.GetStatus)

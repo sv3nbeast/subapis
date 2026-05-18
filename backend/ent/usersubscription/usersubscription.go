@@ -37,6 +37,12 @@ const (
 	FieldWeeklyWindowStart = "weekly_window_start"
 	// FieldMonthlyWindowStart holds the string denoting the monthly_window_start field in the database.
 	FieldMonthlyWindowStart = "monthly_window_start"
+	// FieldQuotaCycleStartAt holds the string denoting the quota_cycle_start_at field in the database.
+	FieldQuotaCycleStartAt = "quota_cycle_start_at"
+	// FieldQuotaCycleEndAt holds the string denoting the quota_cycle_end_at field in the database.
+	FieldQuotaCycleEndAt = "quota_cycle_end_at"
+	// FieldQuotaCycleDays holds the string denoting the quota_cycle_days field in the database.
+	FieldQuotaCycleDays = "quota_cycle_days"
 	// FieldDailyUsageUsd holds the string denoting the daily_usage_usd field in the database.
 	FieldDailyUsageUsd = "daily_usage_usd"
 	// FieldWeeklyUsageUsd holds the string denoting the weekly_usage_usd field in the database.
@@ -103,6 +109,9 @@ var Columns = []string{
 	FieldDailyWindowStart,
 	FieldWeeklyWindowStart,
 	FieldMonthlyWindowStart,
+	FieldQuotaCycleStartAt,
+	FieldQuotaCycleEndAt,
+	FieldQuotaCycleDays,
 	FieldDailyUsageUsd,
 	FieldWeeklyUsageUsd,
 	FieldMonthlyUsageUsd,
@@ -139,6 +148,8 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultQuotaCycleDays holds the default value on creation for the "quota_cycle_days" field.
+	DefaultQuotaCycleDays int
 	// DefaultDailyUsageUsd holds the default value on creation for the "daily_usage_usd" field.
 	DefaultDailyUsageUsd float64
 	// DefaultWeeklyUsageUsd holds the default value on creation for the "weekly_usage_usd" field.
@@ -210,6 +221,21 @@ func ByWeeklyWindowStart(opts ...sql.OrderTermOption) OrderOption {
 // ByMonthlyWindowStart orders the results by the monthly_window_start field.
 func ByMonthlyWindowStart(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMonthlyWindowStart, opts...).ToFunc()
+}
+
+// ByQuotaCycleStartAt orders the results by the quota_cycle_start_at field.
+func ByQuotaCycleStartAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaCycleStartAt, opts...).ToFunc()
+}
+
+// ByQuotaCycleEndAt orders the results by the quota_cycle_end_at field.
+func ByQuotaCycleEndAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaCycleEndAt, opts...).ToFunc()
+}
+
+// ByQuotaCycleDays orders the results by the quota_cycle_days field.
+func ByQuotaCycleDays(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaCycleDays, opts...).ToFunc()
 }
 
 // ByDailyUsageUsd orders the results by the daily_usage_usd field.

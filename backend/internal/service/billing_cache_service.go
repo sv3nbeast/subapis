@@ -833,14 +833,20 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 	weeklyUsage := subData.WeeklyUsage
 	monthlyUsage := subData.MonthlyUsage
 	if subscription != nil {
-		if subscription.NeedsDailyReset() {
+		if subscription.NeedsQuotaCycleResetAt(time.Now()) {
 			dailyUsage = 0
-		}
-		if subscription.NeedsWeeklyReset() {
 			weeklyUsage = 0
-		}
-		if subscription.NeedsMonthlyReset() {
 			monthlyUsage = 0
+		} else {
+			if subscription.NeedsDailyReset() {
+				dailyUsage = 0
+			}
+			if subscription.NeedsWeeklyReset() {
+				weeklyUsage = 0
+			}
+			if subscription.NeedsMonthlyReset() {
+				monthlyUsage = 0
+			}
 		}
 	}
 

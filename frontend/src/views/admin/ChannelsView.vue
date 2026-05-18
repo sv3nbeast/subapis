@@ -210,6 +210,7 @@
                 <input
                   type="checkbox"
                   v-model="form.restrict_models"
+                  :disabled="form.display_only"
                   class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span class="input-label mb-0">{{ t('admin.channels.form.restrictModels', 'Restrict Models') }}</span>
@@ -219,10 +220,25 @@
               </p>
             </div>
 
+            <!-- Display Only -->
+            <div>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="form.display_only"
+                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <span class="input-label mb-0">{{ t('admin.channels.form.displayOnly', 'Display only') }}</span>
+              </label>
+              <p class="mt-1 ml-6 text-xs text-gray-400">
+                {{ t('admin.channels.form.displayOnlyHint', 'Show this channel and pricing to users without affecting routing, model restrictions, or billing.') }}
+              </p>
+            </div>
+
             <!-- Billing Basis -->
             <div>
               <label class="input-label">{{ t('admin.channels.form.billingModelSource', 'Billing Basis') }}</label>
-              <Select v-model="form.billing_model_source" :options="billingModelSourceOptions" />
+              <Select v-model="form.billing_model_source" :options="billingModelSourceOptions" :disabled="form.display_only" />
               <p class="mt-1 text-xs text-gray-400">
                 {{ t('admin.channels.form.billingModelSourceHint', 'Controls which model name is used for pricing lookup') }}
               </p>
@@ -709,6 +725,7 @@ const form = reactive({
   description: '',
   status: 'active',
   restrict_models: false,
+  display_only: false,
   apply_pricing_to_account_stats: false,
   billing_model_source: 'channel_mapped' as string,
   platforms: [] as PlatformSection[]
@@ -783,6 +800,7 @@ const groupToChannelMap = computed(() => {
   const map = new Map<number, Channel>()
   for (const ch of allChannelsForConflict.value) {
     if (editingChannel.value && ch.id === editingChannel.value.id) continue
+    if (ch.display_only) continue
     for (const gid of ch.group_ids || []) {
       map.set(gid, ch)
     }
@@ -791,6 +809,7 @@ const groupToChannelMap = computed(() => {
 })
 
 function isGroupInOtherChannel(groupId: number, _platform: string): boolean {
+  if (form.display_only) return false
   return groupToChannelMap.value.has(groupId)
 }
 
@@ -1198,6 +1217,7 @@ function resetForm() {
   form.description = ''
   form.status = 'active'
   form.restrict_models = false
+  form.display_only = false
   form.apply_pricing_to_account_stats = false
   form.billing_model_source = 'channel_mapped'
   form.platforms = []
@@ -1217,6 +1237,7 @@ async function openEditDialog(channel: Channel) {
   form.description = channel.description || ''
   form.status = channel.status
   form.restrict_models = channel.restrict_models || false
+  form.display_only = channel.display_only || false
   form.apply_pricing_to_account_stats = channel.apply_pricing_to_account_stats || false
   form.billing_model_source = channel.billing_model_source || 'channel_mapped'
   // Must load groups first so apiToForm can map groupID → platform
@@ -1236,6 +1257,11 @@ async function handleSubmit() {
   if (!form.name.trim()) {
     appStore.showError(t('admin.channels.nameRequired', 'Please enter a channel name'))
     return
+  }
+
+  if (form.display_only) {
+    form.restrict_models = false
+    form.billing_model_source = 'requested'
   }
 
   // Check for pricing entries with empty models (would be silently skipped)
@@ -1387,6 +1413,7 @@ async function handleSubmit() {
         model_mapping: Object.keys(model_mapping).length > 0 ? model_mapping : {},
         billing_model_source: form.billing_model_source,
         restrict_models: form.restrict_models,
+        display_only: form.display_only,
         apply_pricing_to_account_stats: form.apply_pricing_to_account_stats,
         features_config,
         account_stats_pricing_rules
@@ -1402,6 +1429,7 @@ async function handleSubmit() {
         model_mapping: Object.keys(model_mapping).length > 0 ? model_mapping : {},
         billing_model_source: form.billing_model_source,
         restrict_models: form.restrict_models,
+        display_only: form.display_only,
         apply_pricing_to_account_stats: form.apply_pricing_to_account_stats,
         features_config,
         account_stats_pricing_rules

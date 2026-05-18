@@ -187,6 +187,67 @@ func (_u *UserSubscriptionUpdate) ClearMonthlyWindowStart() *UserSubscriptionUpd
 	return _u
 }
 
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (_u *UserSubscriptionUpdate) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionUpdate {
+	_u.mutation.SetQuotaCycleStartAt(v)
+	return _u
+}
+
+// SetNillableQuotaCycleStartAt sets the "quota_cycle_start_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableQuotaCycleStartAt(v *time.Time) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetQuotaCycleStartAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (_u *UserSubscriptionUpdate) ClearQuotaCycleStartAt() *UserSubscriptionUpdate {
+	_u.mutation.ClearQuotaCycleStartAt()
+	return _u
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (_u *UserSubscriptionUpdate) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionUpdate {
+	_u.mutation.SetQuotaCycleEndAt(v)
+	return _u
+}
+
+// SetNillableQuotaCycleEndAt sets the "quota_cycle_end_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableQuotaCycleEndAt(v *time.Time) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetQuotaCycleEndAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (_u *UserSubscriptionUpdate) ClearQuotaCycleEndAt() *UserSubscriptionUpdate {
+	_u.mutation.ClearQuotaCycleEndAt()
+	return _u
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (_u *UserSubscriptionUpdate) SetQuotaCycleDays(v int) *UserSubscriptionUpdate {
+	_u.mutation.ResetQuotaCycleDays()
+	_u.mutation.SetQuotaCycleDays(v)
+	return _u
+}
+
+// SetNillableQuotaCycleDays sets the "quota_cycle_days" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableQuotaCycleDays(v *int) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetQuotaCycleDays(*v)
+	}
+	return _u
+}
+
+// AddQuotaCycleDays adds value to the "quota_cycle_days" field.
+func (_u *UserSubscriptionUpdate) AddQuotaCycleDays(v int) *UserSubscriptionUpdate {
+	_u.mutation.AddQuotaCycleDays(v)
+	return _u
+}
+
 // SetDailyUsageUsd sets the "daily_usage_usd" field.
 func (_u *UserSubscriptionUpdate) SetDailyUsageUsd(v float64) *UserSubscriptionUpdate {
 	_u.mutation.ResetDailyUsageUsd()
@@ -497,6 +558,24 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if _u.mutation.MonthlyWindowStartCleared() {
 		_spec.ClearField(usersubscription.FieldMonthlyWindowStart, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleStartAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleStartAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaCycleStartAtCleared() {
+		_spec.ClearField(usersubscription.FieldQuotaCycleStartAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleEndAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleEndAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaCycleEndAtCleared() {
+		_spec.ClearField(usersubscription.FieldQuotaCycleEndAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleDays(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaCycleDays(); ok {
+		_spec.AddField(usersubscription.FieldQuotaCycleDays, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DailyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldDailyUsageUsd, field.TypeFloat64, value)
@@ -830,6 +909,67 @@ func (_u *UserSubscriptionUpdateOne) SetNillableMonthlyWindowStart(v *time.Time)
 // ClearMonthlyWindowStart clears the value of the "monthly_window_start" field.
 func (_u *UserSubscriptionUpdateOne) ClearMonthlyWindowStart() *UserSubscriptionUpdateOne {
 	_u.mutation.ClearMonthlyWindowStart()
+	return _u
+}
+
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (_u *UserSubscriptionUpdateOne) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionUpdateOne {
+	_u.mutation.SetQuotaCycleStartAt(v)
+	return _u
+}
+
+// SetNillableQuotaCycleStartAt sets the "quota_cycle_start_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableQuotaCycleStartAt(v *time.Time) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetQuotaCycleStartAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (_u *UserSubscriptionUpdateOne) ClearQuotaCycleStartAt() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearQuotaCycleStartAt()
+	return _u
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (_u *UserSubscriptionUpdateOne) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionUpdateOne {
+	_u.mutation.SetQuotaCycleEndAt(v)
+	return _u
+}
+
+// SetNillableQuotaCycleEndAt sets the "quota_cycle_end_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableQuotaCycleEndAt(v *time.Time) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetQuotaCycleEndAt(*v)
+	}
+	return _u
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (_u *UserSubscriptionUpdateOne) ClearQuotaCycleEndAt() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearQuotaCycleEndAt()
+	return _u
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (_u *UserSubscriptionUpdateOne) SetQuotaCycleDays(v int) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetQuotaCycleDays()
+	_u.mutation.SetQuotaCycleDays(v)
+	return _u
+}
+
+// SetNillableQuotaCycleDays sets the "quota_cycle_days" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableQuotaCycleDays(v *int) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetQuotaCycleDays(*v)
+	}
+	return _u
+}
+
+// AddQuotaCycleDays adds value to the "quota_cycle_days" field.
+func (_u *UserSubscriptionUpdateOne) AddQuotaCycleDays(v int) *UserSubscriptionUpdateOne {
+	_u.mutation.AddQuotaCycleDays(v)
 	return _u
 }
 
@@ -1173,6 +1313,24 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if _u.mutation.MonthlyWindowStartCleared() {
 		_spec.ClearField(usersubscription.FieldMonthlyWindowStart, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleStartAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleStartAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaCycleStartAtCleared() {
+		_spec.ClearField(usersubscription.FieldQuotaCycleStartAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleEndAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleEndAt, field.TypeTime, value)
+	}
+	if _u.mutation.QuotaCycleEndAtCleared() {
+		_spec.ClearField(usersubscription.FieldQuotaCycleEndAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QuotaCycleDays(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedQuotaCycleDays(); ok {
+		_spec.AddField(usersubscription.FieldQuotaCycleDays, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DailyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldDailyUsageUsd, field.TypeFloat64, value)

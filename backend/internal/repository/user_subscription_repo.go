@@ -32,6 +32,9 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetNillableDailyWindowStart(sub.DailyWindowStart).
 		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
 		SetNillableMonthlyWindowStart(sub.MonthlyWindowStart).
+		SetNillableQuotaCycleStartAt(sub.QuotaCycleStartAt).
+		SetNillableQuotaCycleEndAt(sub.QuotaCycleEndAt).
+		SetQuotaCycleDays(normalizeQuotaCycleDays(sub.QuotaCycleDays)).
 		SetDailyUsageUsd(sub.DailyUsageUSD).
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
@@ -116,6 +119,9 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetNillableDailyWindowStart(sub.DailyWindowStart).
 		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
 		SetNillableMonthlyWindowStart(sub.MonthlyWindowStart).
+		SetNillableQuotaCycleStartAt(sub.QuotaCycleStartAt).
+		SetNillableQuotaCycleEndAt(sub.QuotaCycleEndAt).
+		SetQuotaCycleDays(normalizeQuotaCycleDays(sub.QuotaCycleDays)).
 		SetDailyUsageUsd(sub.DailyUsageUSD).
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
@@ -299,6 +305,32 @@ func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscripti
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
+func (r *userSubscriptionRepository) SetQuotaCycle(ctx context.Context, subscriptionID int64, startAt, endAt time.Time, cycleDays int) error {
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
+		SetQuotaCycleStartAt(startAt).
+		SetQuotaCycleEndAt(endAt).
+		SetQuotaCycleDays(normalizeQuotaCycleDays(cycleDays)).
+		Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) ResetUsageForQuotaCycle(ctx context.Context, subscriptionID int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error {
+	client := clientFromContext(ctx, r.client)
+	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
+		SetDailyUsageUsd(0).
+		SetWeeklyUsageUsd(0).
+		SetMonthlyUsageUsd(0).
+		SetDailyWindowStart(windowStart).
+		SetWeeklyWindowStart(windowStart).
+		SetMonthlyWindowStart(windowStart).
+		SetQuotaCycleStartAt(cycleStartAt).
+		SetQuotaCycleEndAt(cycleEndAt).
+		SetQuotaCycleDays(normalizeQuotaCycleDays(cycleDays)).
+		Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
 func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	client := clientFromContext(ctx, r.client)
 	_, err := client.UserSubscription.UpdateOneID(id).
@@ -392,36 +424,85 @@ func (r *userSubscriptionRepository) ResetMonthlyUsageIfExpired(ctx context.Cont
 // 此处仅负责记录实际消费，确保消费数据的完整性。
 func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int64, costUSD float64) error {
 	const updateSQL = `
+		WITH current_subscription AS (
+			SELECT
+				us.*,
+				(us.quota_cycle_end_at IS NOT NULL AND us.expires_at > NOW() AND us.quota_cycle_end_at <= NOW()) AS quota_cycle_expired,
+				GREATEST(COALESCE(NULLIF(us.quota_cycle_days, 0), 30), 1) AS effective_cycle_days
+			FROM user_subscriptions us
+			WHERE us.id = $2
+				AND us.deleted_at IS NULL
+		),
+		cycle_target AS (
+			SELECT
+				cs.*,
+				CASE
+					WHEN cs.quota_cycle_expired
+						THEN cs.quota_cycle_end_at
+							+ (
+								FLOOR(EXTRACT(EPOCH FROM (NOW() - cs.quota_cycle_end_at)) / (cs.effective_cycle_days * 86400))::INT
+								* cs.effective_cycle_days
+								* INTERVAL '1 day'
+							)
+					ELSE cs.quota_cycle_start_at
+				END AS next_quota_cycle_start_at,
+				CASE
+					WHEN cs.quota_cycle_expired
+						THEN LEAST(
+							cs.quota_cycle_end_at
+								+ (
+									(
+										FLOOR(EXTRACT(EPOCH FROM (NOW() - cs.quota_cycle_end_at)) / (cs.effective_cycle_days * 86400))::INT
+										+ 1
+									)
+									* cs.effective_cycle_days
+									* INTERVAL '1 day'
+								),
+							cs.expires_at
+						)
+					ELSE cs.quota_cycle_end_at
+				END AS next_quota_cycle_end_at
+			FROM current_subscription cs
+		)
 		UPDATE user_subscriptions us
 		SET
 			daily_usage_usd = CASE
-				WHEN us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN $1
+				WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN $1
 				ELSE us.daily_usage_usd + $1
 			END,
 			weekly_usage_usd = CASE
-				WHEN us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN $1
+				WHEN ct.quota_cycle_expired OR us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN $1
 				ELSE us.weekly_usage_usd + $1
 			END,
 			monthly_usage_usd = CASE
-				WHEN us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
+				WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
 				ELSE us.monthly_usage_usd + $1
 			END,
 			daily_window_start = CASE
-				WHEN us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN DATE_TRUNC('day', NOW())
+				WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN DATE_TRUNC('day', NOW())
 				ELSE us.daily_window_start
 			END,
 			weekly_window_start = CASE
-				WHEN us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN DATE_TRUNC('day', NOW())
+				WHEN ct.quota_cycle_expired OR us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN DATE_TRUNC('day', NOW())
 				ELSE us.weekly_window_start
 			END,
 			monthly_window_start = CASE
-				WHEN us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN DATE_TRUNC('day', NOW())
+				WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN DATE_TRUNC('day', NOW())
 				ELSE us.monthly_window_start
 			END,
+			quota_cycle_start_at = CASE
+				WHEN ct.quota_cycle_expired THEN ct.next_quota_cycle_start_at
+				ELSE COALESCE(us.quota_cycle_start_at, us.starts_at)
+			END,
+			quota_cycle_end_at = CASE
+				WHEN ct.quota_cycle_expired THEN ct.next_quota_cycle_end_at
+				ELSE COALESCE(us.quota_cycle_end_at, us.expires_at)
+			END,
+			quota_cycle_days = ct.effective_cycle_days,
 			updated_at = NOW()
-		FROM groups g
-		WHERE us.id = $2
-			AND us.deleted_at IS NULL
+		FROM cycle_target ct
+		JOIN groups g ON g.id = ct.group_id
+		WHERE us.id = ct.id
 			AND us.group_id = g.id
 			AND g.deleted_at IS NULL
 	`
@@ -511,6 +592,9 @@ func userSubscriptionEntityToService(m *dbent.UserSubscription) *service.UserSub
 		DailyWindowStart:   m.DailyWindowStart,
 		WeeklyWindowStart:  m.WeeklyWindowStart,
 		MonthlyWindowStart: m.MonthlyWindowStart,
+		QuotaCycleStartAt:  m.QuotaCycleStartAt,
+		QuotaCycleEndAt:    m.QuotaCycleEndAt,
+		QuotaCycleDays:     normalizeQuotaCycleDays(m.QuotaCycleDays),
 		DailyUsageUSD:      m.DailyUsageUsd,
 		WeeklyUsageUSD:     m.WeeklyUsageUsd,
 		MonthlyUsageUSD:    m.MonthlyUsageUsd,
@@ -547,6 +631,19 @@ func applyUserSubscriptionEntityToService(dst *service.UserSubscription, src *db
 		return
 	}
 	dst.ID = src.ID
+	dst.QuotaCycleStartAt = src.QuotaCycleStartAt
+	dst.QuotaCycleEndAt = src.QuotaCycleEndAt
+	dst.QuotaCycleDays = normalizeQuotaCycleDays(src.QuotaCycleDays)
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
+}
+
+func normalizeQuotaCycleDays(days int) int {
+	if days <= 0 {
+		return 30
+	}
+	if days > service.MaxValidityDays {
+		return service.MaxValidityDays
+	}
+	return days
 }

@@ -318,6 +318,9 @@ func populateChannelCache(channels []Channel, groupPlatforms map[int64]string) *
 		channels[i].normalizeBillingModelSource()
 		ch := &channels[i]
 		cache.byID[ch.ID] = ch
+		if ch.DisplayOnly {
+			continue
+		}
 		for _, gid := range ch.GroupIDs {
 			cache.channelByGroupID[gid] = ch
 			platform := groupPlatforms[gid]
@@ -680,8 +683,15 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		return nil, ErrChannelExists
 	}
 
-	if err := s.checkGroupConflicts(ctx, 0, input.GroupIDs); err != nil {
-		return nil, err
+	if !input.DisplayOnly {
+		if err := s.checkGroupConflicts(ctx, 0, input.GroupIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	if input.DisplayOnly {
+		input.RestrictModels = false
+		input.BillingModelSource = BillingModelSourceRequested
 	}
 
 	channel := &Channel{
@@ -690,6 +700,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		Status:                     StatusActive,
 		BillingModelSource:         input.BillingModelSource,
 		RestrictModels:             input.RestrictModels,
+		DisplayOnly:                input.DisplayOnly,
 		Features:                   input.Features,
 		GroupIDs:                   input.GroupIDs,
 		ModelPricing:               input.ModelPricing,
@@ -784,16 +795,20 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	if input.Status != "" {
 		channel.Status = input.Status
 	}
+	if input.DisplayOnly != nil {
+		channel.DisplayOnly = *input.DisplayOnly
+		if channel.DisplayOnly {
+			channel.RestrictModels = false
+			channel.BillingModelSource = BillingModelSourceRequested
+		}
+	}
 	if input.RestrictModels != nil {
-		channel.RestrictModels = *input.RestrictModels
+		channel.RestrictModels = *input.RestrictModels && !channel.DisplayOnly
 	}
 	if input.Features != nil {
 		channel.Features = *input.Features
 	}
 	if input.GroupIDs != nil {
-		if err := s.checkGroupConflicts(ctx, channel.ID, *input.GroupIDs); err != nil {
-			return err
-		}
 		channel.GroupIDs = *input.GroupIDs
 	}
 	if input.ModelPricing != nil {
@@ -803,7 +818,11 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.ModelMapping = input.ModelMapping
 	}
 	if input.BillingModelSource != "" {
-		channel.BillingModelSource = input.BillingModelSource
+		if channel.DisplayOnly {
+			channel.BillingModelSource = BillingModelSourceRequested
+		} else {
+			channel.BillingModelSource = input.BillingModelSource
+		}
 	}
 	if input.ApplyPricingToAccountStats != nil {
 		channel.ApplyPricingToAccountStats = *input.ApplyPricingToAccountStats
@@ -813,6 +832,11 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 	}
 	if input.FeaturesConfig != nil {
 		channel.FeaturesConfig = input.FeaturesConfig
+	}
+	if !channel.DisplayOnly {
+		if err := s.checkGroupConflicts(ctx, channel.ID, channel.GroupIDs); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -988,6 +1012,7 @@ type CreateChannelInput struct {
 	ModelMapping               map[string]map[string]string // platform → {src→dst}
 	BillingModelSource         string
 	RestrictModels             bool
+	DisplayOnly                bool
 	Features                   string
 	FeaturesConfig             map[string]any
 	ApplyPricingToAccountStats bool
@@ -1004,6 +1029,7 @@ type UpdateChannelInput struct {
 	ModelMapping               map[string]map[string]string // platform → {src→dst}
 	BillingModelSource         string
 	RestrictModels             *bool
+	DisplayOnly                *bool
 	Features                   *string
 	FeaturesConfig             map[string]any
 	ApplyPricingToAccountStats *bool

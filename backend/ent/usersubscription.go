@@ -41,6 +41,12 @@ type UserSubscription struct {
 	WeeklyWindowStart *time.Time `json:"weekly_window_start,omitempty"`
 	// MonthlyWindowStart holds the value of the "monthly_window_start" field.
 	MonthlyWindowStart *time.Time `json:"monthly_window_start,omitempty"`
+	// QuotaCycleStartAt holds the value of the "quota_cycle_start_at" field.
+	QuotaCycleStartAt *time.Time `json:"quota_cycle_start_at,omitempty"`
+	// QuotaCycleEndAt holds the value of the "quota_cycle_end_at" field.
+	QuotaCycleEndAt *time.Time `json:"quota_cycle_end_at,omitempty"`
+	// QuotaCycleDays holds the value of the "quota_cycle_days" field.
+	QuotaCycleDays int `json:"quota_cycle_days,omitempty"`
 	// DailyUsageUsd holds the value of the "daily_usage_usd" field.
 	DailyUsageUsd float64 `json:"daily_usage_usd,omitempty"`
 	// WeeklyUsageUsd holds the value of the "weekly_usage_usd" field.
@@ -123,11 +129,11 @@ func (*UserSubscription) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
 			values[i] = new(sql.NullFloat64)
-		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldAssignedBy:
+		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldQuotaCycleDays, usersubscription.FieldAssignedBy:
 			values[i] = new(sql.NullInt64)
 		case usersubscription.FieldStatus, usersubscription.FieldNotes:
 			values[i] = new(sql.NullString)
-		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldAssignedAt:
+		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldQuotaCycleStartAt, usersubscription.FieldQuotaCycleEndAt, usersubscription.FieldAssignedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -219,6 +225,26 @@ func (_m *UserSubscription) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.MonthlyWindowStart = new(time.Time)
 				*_m.MonthlyWindowStart = value.Time
+			}
+		case usersubscription.FieldQuotaCycleStartAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field quota_cycle_start_at", values[i])
+			} else if value.Valid {
+				_m.QuotaCycleStartAt = new(time.Time)
+				*_m.QuotaCycleStartAt = value.Time
+			}
+		case usersubscription.FieldQuotaCycleEndAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field quota_cycle_end_at", values[i])
+			} else if value.Valid {
+				_m.QuotaCycleEndAt = new(time.Time)
+				*_m.QuotaCycleEndAt = value.Time
+			}
+		case usersubscription.FieldQuotaCycleDays:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field quota_cycle_days", values[i])
+			} else if value.Valid {
+				_m.QuotaCycleDays = int(value.Int64)
 			}
 		case usersubscription.FieldDailyUsageUsd:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -354,6 +380,19 @@ func (_m *UserSubscription) String() string {
 		builder.WriteString("monthly_window_start=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	if v := _m.QuotaCycleStartAt; v != nil {
+		builder.WriteString("quota_cycle_start_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.QuotaCycleEndAt; v != nil {
+		builder.WriteString("quota_cycle_end_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("quota_cycle_days=")
+	builder.WriteString(fmt.Sprintf("%v", _m.QuotaCycleDays))
 	builder.WriteString(", ")
 	builder.WriteString("daily_usage_usd=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DailyUsageUsd))

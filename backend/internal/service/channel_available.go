@@ -30,6 +30,7 @@ type AvailableChannel struct {
 	Status             string
 	BillingModelSource string
 	RestrictModels     bool
+	DisplayOnly        bool
 	Groups             []AvailableGroupRef
 	SupportedModels    []SupportedModel
 }
@@ -91,6 +92,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 			Status:             ch.Status,
 			BillingModelSource: ch.BillingModelSource,
 			RestrictModels:     ch.RestrictModels,
+			DisplayOnly:        ch.DisplayOnly,
 			Groups:             groups,
 			SupportedModels:    supported,
 		})

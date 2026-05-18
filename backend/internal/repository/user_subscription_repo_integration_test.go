@@ -385,6 +385,41 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsageResetsExpiredWindowsToCurr
 	s.Require().False(got.NeedsMonthlyReset())
 }
 
+func (s *UserSubscriptionRepoSuite) TestIncrementUsageResetsExpiredQuotaCycleToCurrentCost() {
+	user := s.mustCreateUser("usage-expired-quota-cycle@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-usage-expired-quota-cycle")
+	now := time.Now()
+	cycleEnd := now.Add(-1 * time.Hour)
+	cycleStart := cycleEnd.AddDate(0, 0, -30)
+	newExpiresAt := cycleEnd.AddDate(0, 0, 30)
+	oldWindow := cycleStart
+	sub := s.mustCreateSubscription(user.ID, group.ID, func(c *dbent.UserSubscriptionCreate) {
+		c.SetExpiresAt(newExpiresAt)
+		c.SetDailyUsageUsd(10)
+		c.SetWeeklyUsageUsd(20)
+		c.SetMonthlyUsageUsd(30)
+		c.SetDailyWindowStart(oldWindow)
+		c.SetWeeklyWindowStart(oldWindow)
+		c.SetMonthlyWindowStart(oldWindow)
+		c.SetQuotaCycleStartAt(cycleStart)
+		c.SetQuotaCycleEndAt(cycleEnd)
+		c.SetQuotaCycleDays(30)
+	})
+
+	err := s.repo.IncrementUsage(s.ctx, sub.ID, 1.25)
+	s.Require().NoError(err, "IncrementUsage")
+
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().InDelta(1.25, got.DailyUsageUSD, 1e-6)
+	s.Require().InDelta(1.25, got.WeeklyUsageUSD, 1e-6)
+	s.Require().InDelta(1.25, got.MonthlyUsageUSD, 1e-6)
+	s.Require().NotNil(got.QuotaCycleStartAt)
+	s.Require().NotNil(got.QuotaCycleEndAt)
+	s.Require().WithinDuration(cycleEnd, *got.QuotaCycleStartAt, time.Second)
+	s.Require().WithinDuration(newExpiresAt, *got.QuotaCycleEndAt, time.Second)
+}
+
 func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	user := s.mustCreateUser("activate@test.com", service.RoleUser)
 	group := s.mustCreateGroup("g-activate")

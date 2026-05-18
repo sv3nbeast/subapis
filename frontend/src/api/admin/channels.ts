@@ -51,6 +51,7 @@ export interface Channel {
   status: ChannelStatus
   billing_model_source: BillingModelSource
   restrict_models: boolean
+  display_only: boolean
   features: string
   features_config?: Record<string, unknown>
   apply_pricing_to_account_stats: boolean
@@ -70,6 +71,7 @@ export interface CreateChannelRequest {
   model_mapping?: Record<string, Record<string, string>>
   billing_model_source?: string
   restrict_models?: boolean
+  display_only?: boolean
   features?: string
   features_config?: Record<string, unknown>
   apply_pricing_to_account_stats?: boolean
@@ -85,6 +87,7 @@ export interface UpdateChannelRequest {
   model_mapping?: Record<string, Record<string, string>>
   billing_model_source?: string
   restrict_models?: boolean
+  display_only?: boolean
   features?: string
   features_config?: Record<string, unknown>
   apply_pricing_to_account_stats?: boolean

@@ -2650,6 +2650,8 @@ export default {
         noGroupsMatch: 'No groups match your search',
         restrictModels: 'Restrict Models',
         restrictModelsHint: 'When enabled, only models in the pricing list are allowed. Others will be rejected.',
+        displayOnly: 'Display only',
+        displayOnlyHint: 'Show this channel and pricing to users without affecting routing, model restrictions, or billing.',
         defaultPerRequestPrice: 'Default per-request price (fallback when no tier matches)',
         defaultImagePrice: 'Default image price (fallback when no tier matches)',
         platformConfig: 'Platform Configuration',

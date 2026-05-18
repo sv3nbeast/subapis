@@ -502,6 +502,9 @@ type UserSubscription struct {
 	DailyWindowStart   *time.Time `json:"daily_window_start"`
 	WeeklyWindowStart  *time.Time `json:"weekly_window_start"`
 	MonthlyWindowStart *time.Time `json:"monthly_window_start"`
+	QuotaCycleStartAt  *time.Time `json:"quota_cycle_start_at"`
+	QuotaCycleEndAt    *time.Time `json:"quota_cycle_end_at"`
+	QuotaCycleDays     int        `json:"quota_cycle_days"`
 
 	DailyUsageUSD   float64 `json:"daily_usage_usd"`
 	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`

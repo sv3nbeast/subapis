@@ -41,18 +41,18 @@
           <button
             type="button"
             class="home-nav-action home-announcement-trigger"
-            :class="{ 'is-active': unreadHomeAnnouncements.length > 0 }"
+            :class="{ 'is-active': homeAnnouncementBadgeCount > 0 }"
             :title="t('home.announcements.modalTitle')"
             :aria-label="t('home.announcements.modalTitle')"
             @click="openAnnouncementModal"
           >
             <Icon name="bell" size="md" />
             <span
-              v-if="unreadHomeAnnouncements.length > 0"
+              v-if="homeAnnouncementBadgeCount > 0"
               class="home-announcement-badge"
-              :aria-label="t('home.announcements.unreadCount', { count: unreadHomeAnnouncements.length })"
+              :aria-label="t('home.announcements.unreadCount', { count: homeAnnouncementBadgeCount })"
             >
-              {{ unreadHomeAnnouncements.length > 9 ? '9+' : unreadHomeAnnouncements.length }}
+              {{ homeAnnouncementBadgeCount > 9 ? '9+' : homeAnnouncementBadgeCount }}
             </span>
           </button>
 
@@ -175,7 +175,7 @@
             </div>
 
             <div class="home-announcement-modal-body">
-              <div v-if="announcementStore.loading" class="home-announcement-loading">
+              <div v-if="homeAnnouncementsLoading" class="home-announcement-loading">
                 <div class="home-announcement-spinner"></div>
               </div>
 
@@ -187,7 +187,7 @@
                   v-for="item in activeAnnouncements"
                   :key="item.id"
                   class="home-announcement-timeline-item"
-                  :class="{ 'is-unread': !item.read_at }"
+                  :class="{ 'is-unread': isAnnouncementUnread(item) }"
                 >
                   <div class="home-announcement-timeline-dot"></div>
                   <div class="home-announcement-timeline-card">
@@ -195,7 +195,7 @@
                       <h3 class="text-base font-black text-gray-950 dark:text-white">
                         {{ item.title }}
                       </h3>
-                      <span v-if="!item.read_at" class="home-announcement-unread-pill">
+                      <span v-if="isAnnouncementUnread(item)" class="home-announcement-unread-pill">
                         {{ t('announcements.unread') }}
                       </span>
                     </div>
@@ -541,6 +541,7 @@ import { useAuthStore, useAppStore, useAnnouncementStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import HomeChannelStatusPreview from '@/components/status/HomeChannelStatusPreview.vue'
+import { announcementsAPI } from '@/api'
 import { listPublicChannelMonitors, type PublicMonitorView } from '@/api/publicChannelMonitor'
 import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
@@ -576,6 +577,8 @@ const appStore = useAppStore()
 const announcementStore = useAnnouncementStore()
 const announcementModalOpen = ref(false)
 const announcementTab = ref<'notifications' | 'system'>('system')
+const publicAnnouncements = ref<UserAnnouncement[]>([])
+const publicAnnouncementsLoading = ref(false)
 const publicMonitorItems = ref<PublicMonitorView[]>([])
 const publicMonitorLoading = ref(false)
 
@@ -703,7 +706,12 @@ const supportedChannels = computed<HomeChannel[]>(() => [
   }
 ])
 
-const homeAnnouncements = computed(() => announcementStore.announcements.slice(0, 20))
+const homeAnnouncements = computed(() =>
+  (isAuthenticated.value ? announcementStore.announcements : publicAnnouncements.value).slice(0, 20)
+)
+const homeAnnouncementsLoading = computed(() =>
+  isAuthenticated.value ? announcementStore.loading : publicAnnouncementsLoading.value
+)
 const notificationAnnouncements = computed(() =>
   homeAnnouncements.value.filter((announcement) => announcement.notify_mode === 'popup')
 )
@@ -711,7 +719,10 @@ const systemAnnouncements = computed(() =>
   homeAnnouncements.value.filter((announcement) => announcement.notify_mode !== 'popup')
 )
 const unreadHomeAnnouncements = computed(() =>
-  homeAnnouncements.value.filter((announcement) => !announcement.read_at)
+  isAuthenticated.value ? homeAnnouncements.value.filter((announcement) => !announcement.read_at) : []
+)
+const homeAnnouncementBadgeCount = computed(() =>
+  isAuthenticated.value ? unreadHomeAnnouncements.value.length : homeAnnouncements.value.length
 )
 const activeAnnouncements = computed<UserAnnouncement[]>(() =>
   announcementTab.value === 'notifications' ? notificationAnnouncements.value : systemAnnouncements.value
@@ -778,6 +789,25 @@ async function loadPublicMonitorPreview() {
   }
 }
 
+async function loadPublicAnnouncements(force = false) {
+  if (
+    isAuthenticated.value ||
+    publicAnnouncementsLoading.value ||
+    (!force && publicAnnouncements.value.length > 0)
+  ) {
+    return
+  }
+
+  publicAnnouncementsLoading.value = true
+  try {
+    publicAnnouncements.value = (await announcementsAPI.listPublic()).slice(0, 20)
+  } catch {
+    publicAnnouncements.value = []
+  } finally {
+    publicAnnouncementsLoading.value = false
+  }
+}
+
 function plainAnnouncementContent(content: string): string {
   return content
     .replace(/```[\s\S]*?```/g, ' ')
@@ -793,11 +823,20 @@ function formatAnnouncementTime(date: string): string {
   return formatRelativeWithDateTime(date)
 }
 
+function isAnnouncementUnread(announcement: UserAnnouncement): boolean {
+  return isAuthenticated.value && !announcement.read_at
+}
+
 async function openAnnouncementModal() {
   announcementModalOpen.value = true
   if (isAuthenticated.value) {
     await announcementStore.fetchAnnouncements(true)
     if (notificationAnnouncements.value.some((announcement) => !announcement.read_at)) {
+      announcementTab.value = 'notifications'
+    }
+  } else {
+    await loadPublicAnnouncements(true)
+    if (notificationAnnouncements.value.length > 0) {
       announcementTab.value = 'notifications'
     }
   }
@@ -912,6 +951,8 @@ onMounted(() => {
 
   if (authStore.isAuthenticated) {
     announcementStore.fetchAnnouncements()
+  } else {
+    void loadPublicAnnouncements()
   }
 
   void loadPublicMonitorPreview()

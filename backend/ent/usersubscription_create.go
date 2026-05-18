@@ -147,6 +147,48 @@ func (_c *UserSubscriptionCreate) SetNillableMonthlyWindowStart(v *time.Time) *U
 	return _c
 }
 
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (_c *UserSubscriptionCreate) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionCreate {
+	_c.mutation.SetQuotaCycleStartAt(v)
+	return _c
+}
+
+// SetNillableQuotaCycleStartAt sets the "quota_cycle_start_at" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableQuotaCycleStartAt(v *time.Time) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetQuotaCycleStartAt(*v)
+	}
+	return _c
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (_c *UserSubscriptionCreate) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionCreate {
+	_c.mutation.SetQuotaCycleEndAt(v)
+	return _c
+}
+
+// SetNillableQuotaCycleEndAt sets the "quota_cycle_end_at" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableQuotaCycleEndAt(v *time.Time) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetQuotaCycleEndAt(*v)
+	}
+	return _c
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (_c *UserSubscriptionCreate) SetQuotaCycleDays(v int) *UserSubscriptionCreate {
+	_c.mutation.SetQuotaCycleDays(v)
+	return _c
+}
+
+// SetNillableQuotaCycleDays sets the "quota_cycle_days" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableQuotaCycleDays(v *int) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetQuotaCycleDays(*v)
+	}
+	return _c
+}
+
 // SetDailyUsageUsd sets the "daily_usage_usd" field.
 func (_c *UserSubscriptionCreate) SetDailyUsageUsd(v float64) *UserSubscriptionCreate {
 	_c.mutation.SetDailyUsageUsd(v)
@@ -330,6 +372,10 @@ func (_c *UserSubscriptionCreate) defaults() error {
 		v := usersubscription.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.QuotaCycleDays(); !ok {
+		v := usersubscription.DefaultQuotaCycleDays
+		_c.mutation.SetQuotaCycleDays(v)
+	}
 	if _, ok := _c.mutation.DailyUsageUsd(); !ok {
 		v := usersubscription.DefaultDailyUsageUsd
 		_c.mutation.SetDailyUsageUsd(v)
@@ -379,6 +425,9 @@ func (_c *UserSubscriptionCreate) check() error {
 		if err := usersubscription.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.QuotaCycleDays(); !ok {
+		return &ValidationError{Name: "quota_cycle_days", err: errors.New(`ent: missing required field "UserSubscription.quota_cycle_days"`)}
 	}
 	if _, ok := _c.mutation.DailyUsageUsd(); !ok {
 		return &ValidationError{Name: "daily_usage_usd", err: errors.New(`ent: missing required field "UserSubscription.daily_usage_usd"`)}
@@ -460,6 +509,18 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.MonthlyWindowStart(); ok {
 		_spec.SetField(usersubscription.FieldMonthlyWindowStart, field.TypeTime, value)
 		_node.MonthlyWindowStart = &value
+	}
+	if value, ok := _c.mutation.QuotaCycleStartAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleStartAt, field.TypeTime, value)
+		_node.QuotaCycleStartAt = &value
+	}
+	if value, ok := _c.mutation.QuotaCycleEndAt(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleEndAt, field.TypeTime, value)
+		_node.QuotaCycleEndAt = &value
+	}
+	if value, ok := _c.mutation.QuotaCycleDays(); ok {
+		_spec.SetField(usersubscription.FieldQuotaCycleDays, field.TypeInt, value)
+		_node.QuotaCycleDays = value
 	}
 	if value, ok := _c.mutation.DailyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldDailyUsageUsd, field.TypeFloat64, value)
@@ -741,6 +802,60 @@ func (u *UserSubscriptionUpsert) UpdateMonthlyWindowStart() *UserSubscriptionUps
 // ClearMonthlyWindowStart clears the value of the "monthly_window_start" field.
 func (u *UserSubscriptionUpsert) ClearMonthlyWindowStart() *UserSubscriptionUpsert {
 	u.SetNull(usersubscription.FieldMonthlyWindowStart)
+	return u
+}
+
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsert) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldQuotaCycleStartAt, v)
+	return u
+}
+
+// UpdateQuotaCycleStartAt sets the "quota_cycle_start_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateQuotaCycleStartAt() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldQuotaCycleStartAt)
+	return u
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsert) ClearQuotaCycleStartAt() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldQuotaCycleStartAt)
+	return u
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsert) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldQuotaCycleEndAt, v)
+	return u
+}
+
+// UpdateQuotaCycleEndAt sets the "quota_cycle_end_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateQuotaCycleEndAt() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldQuotaCycleEndAt)
+	return u
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsert) ClearQuotaCycleEndAt() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldQuotaCycleEndAt)
+	return u
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsert) SetQuotaCycleDays(v int) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldQuotaCycleDays, v)
+	return u
+}
+
+// UpdateQuotaCycleDays sets the "quota_cycle_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateQuotaCycleDays() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldQuotaCycleDays)
+	return u
+}
+
+// AddQuotaCycleDays adds v to the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsert) AddQuotaCycleDays(v int) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldQuotaCycleDays, v)
 	return u
 }
 
@@ -1056,6 +1171,69 @@ func (u *UserSubscriptionUpsertOne) UpdateMonthlyWindowStart() *UserSubscription
 func (u *UserSubscriptionUpsertOne) ClearMonthlyWindowStart() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearMonthlyWindowStart()
+	})
+}
+
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsertOne) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleStartAt(v)
+	})
+}
+
+// UpdateQuotaCycleStartAt sets the "quota_cycle_start_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateQuotaCycleStartAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleStartAt()
+	})
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsertOne) ClearQuotaCycleStartAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearQuotaCycleStartAt()
+	})
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsertOne) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleEndAt(v)
+	})
+}
+
+// UpdateQuotaCycleEndAt sets the "quota_cycle_end_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateQuotaCycleEndAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleEndAt()
+	})
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsertOne) ClearQuotaCycleEndAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearQuotaCycleEndAt()
+	})
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsertOne) SetQuotaCycleDays(v int) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleDays(v)
+	})
+}
+
+// AddQuotaCycleDays adds v to the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsertOne) AddQuotaCycleDays(v int) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddQuotaCycleDays(v)
+	})
+}
+
+// UpdateQuotaCycleDays sets the "quota_cycle_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateQuotaCycleDays() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleDays()
 	})
 }
 
@@ -1554,6 +1732,69 @@ func (u *UserSubscriptionUpsertBulk) UpdateMonthlyWindowStart() *UserSubscriptio
 func (u *UserSubscriptionUpsertBulk) ClearMonthlyWindowStart() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearMonthlyWindowStart()
+	})
+}
+
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsertBulk) SetQuotaCycleStartAt(v time.Time) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleStartAt(v)
+	})
+}
+
+// UpdateQuotaCycleStartAt sets the "quota_cycle_start_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateQuotaCycleStartAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleStartAt()
+	})
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (u *UserSubscriptionUpsertBulk) ClearQuotaCycleStartAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearQuotaCycleStartAt()
+	})
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsertBulk) SetQuotaCycleEndAt(v time.Time) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleEndAt(v)
+	})
+}
+
+// UpdateQuotaCycleEndAt sets the "quota_cycle_end_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateQuotaCycleEndAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleEndAt()
+	})
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (u *UserSubscriptionUpsertBulk) ClearQuotaCycleEndAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearQuotaCycleEndAt()
+	})
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsertBulk) SetQuotaCycleDays(v int) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetQuotaCycleDays(v)
+	})
+}
+
+// AddQuotaCycleDays adds v to the "quota_cycle_days" field.
+func (u *UserSubscriptionUpsertBulk) AddQuotaCycleDays(v int) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddQuotaCycleDays(v)
+	})
+}
+
+// UpdateQuotaCycleDays sets the "quota_cycle_days" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateQuotaCycleDays() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateQuotaCycleDays()
 	})
 }
 

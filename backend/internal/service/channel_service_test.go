@@ -623,6 +623,21 @@ func TestGetChannelForGroup_NoChannel(t *testing.T) {
 	require.Nil(t, result)
 }
 
+func TestGetChannelForGroup_DisplayOnlyIgnored(t *testing.T) {
+	ch := Channel{
+		ID:          1,
+		Status:      StatusActive,
+		DisplayOnly: true,
+		GroupIDs:    []int64{10},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	result, err := svc.GetChannelForGroup(context.Background(), 10)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
 func TestGetChannelForGroup_CacheError(t *testing.T) {
 	repo := &mockChannelRepository{
 		listAllFn: func(_ context.Context) ([]Channel, error) {
@@ -724,6 +739,23 @@ func TestGetChannelModelPricing_NoMatch(t *testing.T) {
 	svc := newTestChannelService(repo)
 
 	result := svc.GetChannelModelPricing(context.Background(), 10, "gpt-5.1")
+	require.Nil(t, result)
+}
+
+func TestGetChannelModelPricing_DisplayOnlyIgnored(t *testing.T) {
+	ch := Channel{
+		ID:          1,
+		Status:      StatusActive,
+		DisplayOnly: true,
+		GroupIDs:    []int64{10},
+		ModelPricing: []ChannelModelPricing{
+			{ID: 100, Platform: "anthropic", Models: []string{"claude-opus-4"}, InputPrice: testPtrFloat64(15e-6)},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	result := svc.GetChannelModelPricing(context.Background(), 10, "claude-opus-4")
 	require.Nil(t, result)
 }
 
@@ -902,6 +934,27 @@ func TestResolveChannelMapping_NoMapping(t *testing.T) {
 	require.Equal(t, int64(1), result.ChannelID)
 }
 
+func TestResolveChannelMapping_DisplayOnlyIgnored(t *testing.T) {
+	ch := Channel{
+		ID:          1,
+		Status:      StatusActive,
+		DisplayOnly: true,
+		GroupIDs:    []int64{10},
+		ModelMapping: map[string]map[string]string{
+			"anthropic": {
+				"claude-sonnet-4": "claude-sonnet-4-20250514",
+			},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	result := svc.ResolveChannelMapping(context.Background(), 10, "claude-sonnet-4")
+	require.False(t, result.Mapped)
+	require.Equal(t, "claude-sonnet-4", result.MappedModel)
+	require.Equal(t, int64(0), result.ChannelID)
+}
+
 func TestResolveChannelMapping_DefaultBillingModelSource(t *testing.T) {
 	ch := Channel{
 		ID:                 1,
@@ -1048,6 +1101,24 @@ func TestIsModelRestricted_ModelNotFound(t *testing.T) {
 
 	restricted := svc.IsModelRestricted(context.Background(), 10, "gpt-5.1")
 	require.True(t, restricted)
+}
+
+func TestIsModelRestricted_DisplayOnlyIgnored(t *testing.T) {
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		RestrictModels: true,
+		DisplayOnly:    true,
+		GroupIDs:       []int64{10},
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4"}},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	restricted := svc.IsModelRestricted(context.Background(), 10, "unknown-model")
+	require.False(t, restricted)
 }
 
 func TestIsModelRestricted_CaseInsensitive(t *testing.T) {

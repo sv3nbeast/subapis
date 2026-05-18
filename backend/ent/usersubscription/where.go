@@ -110,6 +110,21 @@ func MonthlyWindowStart(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldMonthlyWindowStart, v))
 }
 
+// QuotaCycleStartAt applies equality check predicate on the "quota_cycle_start_at" field. It's identical to QuotaCycleStartAtEQ.
+func QuotaCycleStartAt(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleEndAt applies equality check predicate on the "quota_cycle_end_at" field. It's identical to QuotaCycleEndAtEQ.
+func QuotaCycleEndAt(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleDays applies equality check predicate on the "quota_cycle_days" field. It's identical to QuotaCycleDaysEQ.
+func QuotaCycleDays(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleDays, v))
+}
+
 // DailyUsageUsd applies equality check predicate on the "daily_usage_usd" field. It's identical to DailyUsageUsdEQ.
 func DailyUsageUsd(v float64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldDailyUsageUsd, v))
@@ -603,6 +618,146 @@ func MonthlyWindowStartIsNil() predicate.UserSubscription {
 // MonthlyWindowStartNotNil applies the NotNil predicate on the "monthly_window_start" field.
 func MonthlyWindowStartNotNil() predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldNotNull(FieldMonthlyWindowStart))
+}
+
+// QuotaCycleStartAtEQ applies the EQ predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtEQ(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtNEQ applies the NEQ predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtNEQ(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtIn applies the In predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtIn(vs ...time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldQuotaCycleStartAt, vs...))
+}
+
+// QuotaCycleStartAtNotIn applies the NotIn predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtNotIn(vs ...time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldQuotaCycleStartAt, vs...))
+}
+
+// QuotaCycleStartAtGT applies the GT predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtGT(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtGTE applies the GTE predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtGTE(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtLT applies the LT predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtLT(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtLTE applies the LTE predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtLTE(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldQuotaCycleStartAt, v))
+}
+
+// QuotaCycleStartAtIsNil applies the IsNil predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldQuotaCycleStartAt))
+}
+
+// QuotaCycleStartAtNotNil applies the NotNil predicate on the "quota_cycle_start_at" field.
+func QuotaCycleStartAtNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldQuotaCycleStartAt))
+}
+
+// QuotaCycleEndAtEQ applies the EQ predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtEQ(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtNEQ applies the NEQ predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtNEQ(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtIn applies the In predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtIn(vs ...time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldQuotaCycleEndAt, vs...))
+}
+
+// QuotaCycleEndAtNotIn applies the NotIn predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtNotIn(vs ...time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldQuotaCycleEndAt, vs...))
+}
+
+// QuotaCycleEndAtGT applies the GT predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtGT(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtGTE applies the GTE predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtGTE(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtLT applies the LT predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtLT(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtLTE applies the LTE predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtLTE(v time.Time) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldQuotaCycleEndAt, v))
+}
+
+// QuotaCycleEndAtIsNil applies the IsNil predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldQuotaCycleEndAt))
+}
+
+// QuotaCycleEndAtNotNil applies the NotNil predicate on the "quota_cycle_end_at" field.
+func QuotaCycleEndAtNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldQuotaCycleEndAt))
+}
+
+// QuotaCycleDaysEQ applies the EQ predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysEQ(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldQuotaCycleDays, v))
+}
+
+// QuotaCycleDaysNEQ applies the NEQ predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysNEQ(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldQuotaCycleDays, v))
+}
+
+// QuotaCycleDaysIn applies the In predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysIn(vs ...int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldQuotaCycleDays, vs...))
+}
+
+// QuotaCycleDaysNotIn applies the NotIn predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysNotIn(vs ...int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldQuotaCycleDays, vs...))
+}
+
+// QuotaCycleDaysGT applies the GT predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysGT(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldQuotaCycleDays, v))
+}
+
+// QuotaCycleDaysGTE applies the GTE predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysGTE(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldQuotaCycleDays, v))
+}
+
+// QuotaCycleDaysLT applies the LT predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysLT(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldQuotaCycleDays, v))
+}
+
+// QuotaCycleDaysLTE applies the LTE predicate on the "quota_cycle_days" field.
+func QuotaCycleDaysLTE(v int) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldQuotaCycleDays, v))
 }
 
 // DailyUsageUsdEQ applies the EQ predicate on the "daily_usage_usd" field.

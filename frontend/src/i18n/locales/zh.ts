@@ -2740,6 +2740,8 @@ export default {
         noGroupsMatch: '没有匹配的分组',
         restrictModels: '限制模型',
         restrictModelsHint: '开启后，仅允许模型定价列表中的模型。不在列表中的模型请求将被拒绝。',
+        displayOnly: '仅展示',
+        displayOnlyHint: '只向用户展示渠道和价格，不影响调度、模型限制或真实计费。',
         defaultPerRequestPrice: '默认单次价格（未命中层级时使用）',
         defaultImagePrice: '默认图片价格（未命中层级时使用）',
         platformConfig: '平台配置',

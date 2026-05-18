@@ -14,6 +14,9 @@ type UserSubscription struct {
 	DailyWindowStart   *time.Time
 	WeeklyWindowStart  *time.Time
 	MonthlyWindowStart *time.Time
+	QuotaCycleStartAt  *time.Time
+	QuotaCycleEndAt    *time.Time
+	QuotaCycleDays     int
 
 	DailyUsageUSD   float64
 	WeeklyUsageUSD  float64
@@ -69,6 +72,62 @@ func (s *UserSubscription) NeedsMonthlyReset() bool {
 		return false
 	}
 	return time.Since(*s.MonthlyWindowStart) >= 30*24*time.Hour
+}
+
+func (s *UserSubscription) EffectiveQuotaCycleDays() int {
+	if s == nil || s.QuotaCycleDays <= 0 {
+		return 30
+	}
+	if s.QuotaCycleDays > MaxValidityDays {
+		return MaxValidityDays
+	}
+	return s.QuotaCycleDays
+}
+
+func (s *UserSubscription) NeedsQuotaCycleResetAt(now time.Time) bool {
+	if s == nil || s.QuotaCycleEndAt == nil {
+		return false
+	}
+	if !s.ExpiresAt.After(now) {
+		return false
+	}
+	return !now.Before(*s.QuotaCycleEndAt)
+}
+
+func (s *UserSubscription) NextQuotaCycleAfter(now time.Time) (time.Time, time.Time, int) {
+	days := s.EffectiveQuotaCycleDays()
+	if s == nil {
+		return now, now.AddDate(0, 0, days), days
+	}
+	if s.QuotaCycleEndAt == nil {
+		start := s.StartsAt
+		if start.IsZero() {
+			start = now
+		}
+		end := start.AddDate(0, 0, days)
+		if end.After(s.ExpiresAt) {
+			end = s.ExpiresAt
+		}
+		return start, end, days
+	}
+
+	start := *s.QuotaCycleEndAt
+	end := start.AddDate(0, 0, days)
+	if end.After(s.ExpiresAt) {
+		end = s.ExpiresAt
+	}
+	for !end.After(now) && end.Before(s.ExpiresAt) {
+		start = end
+		nextEnd := end.AddDate(0, 0, days)
+		if !nextEnd.After(end) {
+			break
+		}
+		end = nextEnd
+		if end.After(s.ExpiresAt) {
+			end = s.ExpiresAt
+		}
+	}
+	return start, end, days
 }
 
 func (s *UserSubscription) DailyResetTime() *time.Time {

@@ -114,6 +114,12 @@ func (userSubRepoNoop) UpdateStatus(context.Context, int64, string) error {
 func (userSubRepoNoop) UpdateNotes(context.Context, int64, string) error {
 	panic("unexpected UpdateNotes call")
 }
+func (userSubRepoNoop) SetQuotaCycle(context.Context, int64, time.Time, time.Time, int) error {
+	panic("unexpected SetQuotaCycle call")
+}
+func (userSubRepoNoop) ResetUsageForQuotaCycle(context.Context, int64, time.Time, time.Time, time.Time, int) error {
+	panic("unexpected ResetUsageForQuotaCycle call")
+}
 func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
@@ -235,6 +241,36 @@ func (s *subscriptionUserSubRepoStub) UpdateNotes(_ context.Context, id int64, n
 		return ErrSubscriptionNotFound
 	}
 	sub.Notes = notes
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) SetQuotaCycle(_ context.Context, id int64, startAt, endAt time.Time, cycleDays int) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.QuotaCycleStartAt = &startAt
+	sub.QuotaCycleEndAt = &endAt
+	sub.QuotaCycleDays = cycleDays
+	sub.UpdatedAt = time.Now()
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetUsageForQuotaCycle(_ context.Context, id int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.DailyUsageUSD = 0
+	sub.WeeklyUsageUSD = 0
+	sub.MonthlyUsageUSD = 0
+	sub.DailyWindowStart = &windowStart
+	sub.WeeklyWindowStart = &windowStart
+	sub.MonthlyWindowStart = &windowStart
+	sub.QuotaCycleStartAt = &cycleStartAt
+	sub.QuotaCycleEndAt = &cycleEndAt
+	sub.QuotaCycleDays = cycleDays
 	sub.UpdatedAt = time.Now()
 	return nil
 }
@@ -402,17 +438,22 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
 	}
 	subRepo := newSubscriptionUserSubRepoStub()
 	expiresAt := time.Now().Add(24 * time.Hour)
+	cycleStart := expiresAt.AddDate(0, 0, -30)
+	cycleEnd := expiresAt
 	subRepo.seed(&UserSubscription{
-		ID:              32,
-		UserID:          3002,
-		GroupID:         1,
-		StartsAt:        expiresAt.AddDate(0, 0, -30),
-		ExpiresAt:       expiresAt,
-		Status:          SubscriptionStatusActive,
-		DailyUsageUSD:   12.3,
-		WeeklyUsageUSD:  123.4,
-		MonthlyUsageUSD: 456.7,
-		Notes:           "old",
+		ID:                32,
+		UserID:            3002,
+		GroupID:           1,
+		StartsAt:          cycleStart,
+		ExpiresAt:         expiresAt,
+		Status:            SubscriptionStatusActive,
+		QuotaCycleStartAt: &cycleStart,
+		QuotaCycleEndAt:   &cycleEnd,
+		QuotaCycleDays:    30,
+		DailyUsageUSD:     12.3,
+		WeeklyUsageUSD:    123.4,
+		MonthlyUsageUSD:   456.7,
+		Notes:             "old",
 	})
 
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
@@ -428,6 +469,8 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsUsage(t *testing.T) {
 	require.Equal(t, 12.3, sub.DailyUsageUSD)
 	require.Equal(t, 123.4, sub.WeeklyUsageUSD)
 	require.Equal(t, 456.7, sub.MonthlyUsageUSD)
+	require.NotNil(t, sub.QuotaCycleEndAt)
+	require.WithinDuration(t, cycleEnd, *sub.QuotaCycleEndAt, time.Microsecond)
 	require.Zero(t, subRepo.resetDailyCalls)
 	require.Zero(t, subRepo.resetWeeklyCalls)
 	require.Zero(t, subRepo.resetMonthlyCalls)
@@ -441,14 +484,19 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsExpiredMonthlyWindowForAuto
 	subRepo := newSubscriptionUserSubRepoStub()
 	expiresAt := time.Now().Add(24 * time.Hour)
 	oldMonthlyWindow := time.Now().Add(-31 * 24 * time.Hour)
+	cycleStart := expiresAt.AddDate(0, 0, -30)
+	cycleEnd := expiresAt
 	subRepo.seed(&UserSubscription{
 		ID:                 33,
 		UserID:             3003,
 		GroupID:            1,
-		StartsAt:           expiresAt.AddDate(0, 0, -30),
+		StartsAt:           cycleStart,
 		ExpiresAt:          expiresAt,
 		Status:             SubscriptionStatusActive,
 		MonthlyWindowStart: &oldMonthlyWindow,
+		QuotaCycleStartAt:  &cycleStart,
+		QuotaCycleEndAt:    &cycleEnd,
+		QuotaCycleDays:     30,
 		MonthlyUsageUSD:    456.7,
 		Notes:              "old",
 	})
@@ -468,7 +516,72 @@ func TestAssignOrExtendSubscriptionActiveRenewalKeepsExpiredMonthlyWindowForAuto
 	require.WithinDuration(t, oldMonthlyWindow, *sub.MonthlyWindowStart, time.Microsecond)
 	require.Zero(t, subRepo.resetMonthlyCalls)
 	require.True(t, sub.NeedsMonthlyReset(), "active renewal should not consume the pending automatic 30-day reset")
+	require.NotNil(t, sub.QuotaCycleEndAt)
+	require.WithinDuration(t, cycleEnd, *sub.QuotaCycleEndAt, time.Microsecond)
 	require.True(t, sub.ExpiresAt.After(expiresAt))
+}
+
+func TestExtendSubscriptionShortenShrinksQuotaCycleBoundary(t *testing.T) {
+	subRepo := newSubscriptionUserSubRepoStub()
+	expiresAt := time.Now().Add(10 * 24 * time.Hour)
+	cycleStart := time.Now().Add(-20 * 24 * time.Hour)
+	cycleEnd := expiresAt
+	subRepo.seed(&UserSubscription{
+		ID:                34,
+		UserID:            3004,
+		GroupID:           1,
+		StartsAt:          cycleStart,
+		ExpiresAt:         expiresAt,
+		Status:            SubscriptionStatusActive,
+		QuotaCycleStartAt: &cycleStart,
+		QuotaCycleEndAt:   &cycleEnd,
+		QuotaCycleDays:    30,
+	})
+
+	svc := NewSubscriptionService(groupRepoNoop{}, subRepo, nil, newSubscriptionAssignTestEntClient(t), nil)
+	sub, err := svc.ExtendSubscription(context.Background(), 34, -5)
+
+	require.NoError(t, err)
+	require.NotNil(t, sub.QuotaCycleEndAt)
+	require.WithinDuration(t, sub.ExpiresAt, *sub.QuotaCycleEndAt, time.Microsecond)
+	require.True(t, sub.ExpiresAt.Before(expiresAt))
+}
+
+func TestEnsureWindowMaintenanceResetsExpiredQuotaCycleAfterActiveRenewal(t *testing.T) {
+	subRepo := newSubscriptionUserSubRepoStub()
+	oldCycleEnd := time.Now().Add(-time.Hour)
+	cycleStart := oldCycleEnd.AddDate(0, 0, -30)
+	newExpiresAt := oldCycleEnd.AddDate(0, 0, 30)
+	windowStart := cycleStart
+	subRepo.seed(&UserSubscription{
+		ID:                 35,
+		UserID:             3005,
+		GroupID:            1,
+		StartsAt:           cycleStart,
+		ExpiresAt:          newExpiresAt,
+		Status:             SubscriptionStatusActive,
+		DailyWindowStart:   &windowStart,
+		WeeklyWindowStart:  &windowStart,
+		MonthlyWindowStart: &windowStart,
+		QuotaCycleStartAt:  &cycleStart,
+		QuotaCycleEndAt:    &oldCycleEnd,
+		QuotaCycleDays:     30,
+		DailyUsageUSD:      12.3,
+		WeeklyUsageUSD:     123.4,
+		MonthlyUsageUSD:    456.7,
+	})
+
+	svc := NewSubscriptionService(groupRepoNoop{}, subRepo, nil, nil, nil)
+	refreshed, err := svc.EnsureWindowMaintenance(context.Background(), &UserSubscription{ID: 35})
+
+	require.NoError(t, err)
+	require.Zero(t, refreshed.DailyUsageUSD)
+	require.Zero(t, refreshed.WeeklyUsageUSD)
+	require.Zero(t, refreshed.MonthlyUsageUSD)
+	require.NotNil(t, refreshed.QuotaCycleStartAt)
+	require.NotNil(t, refreshed.QuotaCycleEndAt)
+	require.WithinDuration(t, oldCycleEnd, *refreshed.QuotaCycleStartAt, time.Microsecond)
+	require.WithinDuration(t, newExpiresAt, *refreshed.QuotaCycleEndAt, time.Microsecond)
 }
 
 func TestBulkAssignSubscriptionCreatedReusedAndConflict(t *testing.T) {

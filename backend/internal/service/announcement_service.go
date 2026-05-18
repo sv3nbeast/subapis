@@ -215,6 +215,35 @@ func (s *AnnouncementService) List(ctx context.Context, params pagination.Pagina
 	return s.announcementRepo.List(ctx, params, filters)
 }
 
+func (s *AnnouncementService) ListPublic(ctx context.Context) ([]Announcement, error) {
+	now := time.Now()
+	anns, err := s.announcementRepo.ListActive(ctx, now)
+	if err != nil {
+		return nil, fmt.Errorf("list active announcements: %w", err)
+	}
+
+	out := make([]Announcement, 0, len(anns))
+	for i := range anns {
+		a := anns[i]
+		if !a.IsActiveAt(now) {
+			continue
+		}
+		// Public home announcements are visible before login. Only publish
+		// announcements with no targeting rules so subscription/balance-specific
+		// messages are not leaked to anonymous visitors.
+		if len(a.Targeting.AnyOf) > 0 {
+			continue
+		}
+		out = append(out, a)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID > out[j].ID
+	})
+
+	return out, nil
+}
+
 func (s *AnnouncementService) ListForUser(ctx context.Context, userID int64, unreadOnly bool) ([]UserAnnouncement, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {

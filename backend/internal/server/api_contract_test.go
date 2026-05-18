@@ -1892,6 +1892,12 @@ func (stubUserSubscriptionRepo) UpdateStatus(ctx context.Context, subscriptionID
 func (stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
 }
+func (stubUserSubscriptionRepo) SetQuotaCycle(ctx context.Context, subscriptionID int64, startAt, endAt time.Time, cycleDays int) error {
+	return errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) ResetUsageForQuotaCycle(ctx context.Context, subscriptionID int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error {
+	return errors.New("not implemented")
+}
 func (stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	return errors.New("not implemented")
 }

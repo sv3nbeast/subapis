@@ -34,6 +34,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 		Status:             "active",
 		BillingModelSource: "upstream",
 		RestrictModels:     true,
+		DisplayOnly:        true,
 		CreatedAt:          now,
 		UpdatedAt:          now.Add(time.Hour),
 		GroupIDs:           []int64{1, 2, 3},
@@ -63,6 +64,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 	require.Equal(t, "active", resp.Status)
 	require.Equal(t, "upstream", resp.BillingModelSource)
 	require.True(t, resp.RestrictModels)
+	require.True(t, resp.DisplayOnly)
 	require.Equal(t, []int64{1, 2, 3}, resp.GroupIDs)
 	require.Equal(t, "2025-06-01T12:00:00Z", resp.CreatedAt)
 	require.Equal(t, "2025-06-01T13:00:00Z", resp.UpdatedAt)

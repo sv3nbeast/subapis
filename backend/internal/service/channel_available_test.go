@@ -175,3 +175,29 @@ func TestListAvailable_DefaultsEmptyBillingModelSource(t *testing.T) {
 	require.Equal(t, BillingModelSourceChannelMapped, byName["empty"])
 	require.Equal(t, BillingModelSourceUpstream, byName["explicit"])
 }
+
+func TestListAvailable_IncludesDisplayOnlyChannel(t *testing.T) {
+	channels := []Channel{{
+		ID:          1,
+		Name:        "display claude",
+		Status:      StatusActive,
+		DisplayOnly: true,
+		GroupIDs:    []int64{10},
+		ModelPricing: []ChannelModelPricing{
+			{ID: 100, Platform: "anthropic", Models: []string{"claude-opus-4"}, InputPrice: testPtrFloat64(15e-6)},
+		},
+	}}
+	groupRepo := &stubGroupRepoForAvailable{
+		activeGroups: []Group{{ID: 10, Name: "pro", Platform: "anthropic"}},
+	}
+	svc := newAvailableChannelService(channels, groupRepo)
+
+	out, err := svc.ListAvailable(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.True(t, out[0].DisplayOnly)
+	require.Len(t, out[0].Groups, 1)
+	require.Equal(t, int64(10), out[0].Groups[0].ID)
+	require.Len(t, out[0].SupportedModels, 1)
+	require.Equal(t, "claude-opus-4", out[0].SupportedModels[0].Name)
+}

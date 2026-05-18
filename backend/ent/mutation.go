@@ -46342,6 +46342,10 @@ type UserSubscriptionMutation struct {
 	daily_window_start      *time.Time
 	weekly_window_start     *time.Time
 	monthly_window_start    *time.Time
+	quota_cycle_start_at    *time.Time
+	quota_cycle_end_at      *time.Time
+	quota_cycle_days        *int
+	addquota_cycle_days     *int
 	daily_usage_usd         *float64
 	adddaily_usage_usd      *float64
 	weekly_usage_usd        *float64
@@ -46911,6 +46915,160 @@ func (m *UserSubscriptionMutation) ResetMonthlyWindowStart() {
 	delete(m.clearedFields, usersubscription.FieldMonthlyWindowStart)
 }
 
+// SetQuotaCycleStartAt sets the "quota_cycle_start_at" field.
+func (m *UserSubscriptionMutation) SetQuotaCycleStartAt(t time.Time) {
+	m.quota_cycle_start_at = &t
+}
+
+// QuotaCycleStartAt returns the value of the "quota_cycle_start_at" field in the mutation.
+func (m *UserSubscriptionMutation) QuotaCycleStartAt() (r time.Time, exists bool) {
+	v := m.quota_cycle_start_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaCycleStartAt returns the old "quota_cycle_start_at" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldQuotaCycleStartAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaCycleStartAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaCycleStartAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaCycleStartAt: %w", err)
+	}
+	return oldValue.QuotaCycleStartAt, nil
+}
+
+// ClearQuotaCycleStartAt clears the value of the "quota_cycle_start_at" field.
+func (m *UserSubscriptionMutation) ClearQuotaCycleStartAt() {
+	m.quota_cycle_start_at = nil
+	m.clearedFields[usersubscription.FieldQuotaCycleStartAt] = struct{}{}
+}
+
+// QuotaCycleStartAtCleared returns if the "quota_cycle_start_at" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) QuotaCycleStartAtCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldQuotaCycleStartAt]
+	return ok
+}
+
+// ResetQuotaCycleStartAt resets all changes to the "quota_cycle_start_at" field.
+func (m *UserSubscriptionMutation) ResetQuotaCycleStartAt() {
+	m.quota_cycle_start_at = nil
+	delete(m.clearedFields, usersubscription.FieldQuotaCycleStartAt)
+}
+
+// SetQuotaCycleEndAt sets the "quota_cycle_end_at" field.
+func (m *UserSubscriptionMutation) SetQuotaCycleEndAt(t time.Time) {
+	m.quota_cycle_end_at = &t
+}
+
+// QuotaCycleEndAt returns the value of the "quota_cycle_end_at" field in the mutation.
+func (m *UserSubscriptionMutation) QuotaCycleEndAt() (r time.Time, exists bool) {
+	v := m.quota_cycle_end_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaCycleEndAt returns the old "quota_cycle_end_at" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldQuotaCycleEndAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaCycleEndAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaCycleEndAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaCycleEndAt: %w", err)
+	}
+	return oldValue.QuotaCycleEndAt, nil
+}
+
+// ClearQuotaCycleEndAt clears the value of the "quota_cycle_end_at" field.
+func (m *UserSubscriptionMutation) ClearQuotaCycleEndAt() {
+	m.quota_cycle_end_at = nil
+	m.clearedFields[usersubscription.FieldQuotaCycleEndAt] = struct{}{}
+}
+
+// QuotaCycleEndAtCleared returns if the "quota_cycle_end_at" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) QuotaCycleEndAtCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldQuotaCycleEndAt]
+	return ok
+}
+
+// ResetQuotaCycleEndAt resets all changes to the "quota_cycle_end_at" field.
+func (m *UserSubscriptionMutation) ResetQuotaCycleEndAt() {
+	m.quota_cycle_end_at = nil
+	delete(m.clearedFields, usersubscription.FieldQuotaCycleEndAt)
+}
+
+// SetQuotaCycleDays sets the "quota_cycle_days" field.
+func (m *UserSubscriptionMutation) SetQuotaCycleDays(i int) {
+	m.quota_cycle_days = &i
+	m.addquota_cycle_days = nil
+}
+
+// QuotaCycleDays returns the value of the "quota_cycle_days" field in the mutation.
+func (m *UserSubscriptionMutation) QuotaCycleDays() (r int, exists bool) {
+	v := m.quota_cycle_days
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaCycleDays returns the old "quota_cycle_days" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldQuotaCycleDays(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaCycleDays is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaCycleDays requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaCycleDays: %w", err)
+	}
+	return oldValue.QuotaCycleDays, nil
+}
+
+// AddQuotaCycleDays adds i to the "quota_cycle_days" field.
+func (m *UserSubscriptionMutation) AddQuotaCycleDays(i int) {
+	if m.addquota_cycle_days != nil {
+		*m.addquota_cycle_days += i
+	} else {
+		m.addquota_cycle_days = &i
+	}
+}
+
+// AddedQuotaCycleDays returns the value that was added to the "quota_cycle_days" field in this mutation.
+func (m *UserSubscriptionMutation) AddedQuotaCycleDays() (r int, exists bool) {
+	v := m.addquota_cycle_days
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetQuotaCycleDays resets all changes to the "quota_cycle_days" field.
+func (m *UserSubscriptionMutation) ResetQuotaCycleDays() {
+	m.quota_cycle_days = nil
+	m.addquota_cycle_days = nil
+}
+
 // SetDailyUsageUsd sets the "daily_usage_usd" field.
 func (m *UserSubscriptionMutation) SetDailyUsageUsd(f float64) {
 	m.daily_usage_usd = &f
@@ -47395,7 +47553,7 @@ func (m *UserSubscriptionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserSubscriptionMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 20)
 	if m.created_at != nil {
 		fields = append(fields, usersubscription.FieldCreatedAt)
 	}
@@ -47428,6 +47586,15 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	}
 	if m.monthly_window_start != nil {
 		fields = append(fields, usersubscription.FieldMonthlyWindowStart)
+	}
+	if m.quota_cycle_start_at != nil {
+		fields = append(fields, usersubscription.FieldQuotaCycleStartAt)
+	}
+	if m.quota_cycle_end_at != nil {
+		fields = append(fields, usersubscription.FieldQuotaCycleEndAt)
+	}
+	if m.quota_cycle_days != nil {
+		fields = append(fields, usersubscription.FieldQuotaCycleDays)
 	}
 	if m.daily_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldDailyUsageUsd)
@@ -47477,6 +47644,12 @@ func (m *UserSubscriptionMutation) Field(name string) (ent.Value, bool) {
 		return m.WeeklyWindowStart()
 	case usersubscription.FieldMonthlyWindowStart:
 		return m.MonthlyWindowStart()
+	case usersubscription.FieldQuotaCycleStartAt:
+		return m.QuotaCycleStartAt()
+	case usersubscription.FieldQuotaCycleEndAt:
+		return m.QuotaCycleEndAt()
+	case usersubscription.FieldQuotaCycleDays:
+		return m.QuotaCycleDays()
 	case usersubscription.FieldDailyUsageUsd:
 		return m.DailyUsageUsd()
 	case usersubscription.FieldWeeklyUsageUsd:
@@ -47520,6 +47693,12 @@ func (m *UserSubscriptionMutation) OldField(ctx context.Context, name string) (e
 		return m.OldWeeklyWindowStart(ctx)
 	case usersubscription.FieldMonthlyWindowStart:
 		return m.OldMonthlyWindowStart(ctx)
+	case usersubscription.FieldQuotaCycleStartAt:
+		return m.OldQuotaCycleStartAt(ctx)
+	case usersubscription.FieldQuotaCycleEndAt:
+		return m.OldQuotaCycleEndAt(ctx)
+	case usersubscription.FieldQuotaCycleDays:
+		return m.OldQuotaCycleDays(ctx)
 	case usersubscription.FieldDailyUsageUsd:
 		return m.OldDailyUsageUsd(ctx)
 	case usersubscription.FieldWeeklyUsageUsd:
@@ -47618,6 +47797,27 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetMonthlyWindowStart(v)
 		return nil
+	case usersubscription.FieldQuotaCycleStartAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaCycleStartAt(v)
+		return nil
+	case usersubscription.FieldQuotaCycleEndAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaCycleEndAt(v)
+		return nil
+	case usersubscription.FieldQuotaCycleDays:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaCycleDays(v)
+		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		v, ok := value.(float64)
 		if !ok {
@@ -47668,6 +47868,9 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 // this mutation.
 func (m *UserSubscriptionMutation) AddedFields() []string {
 	var fields []string
+	if m.addquota_cycle_days != nil {
+		fields = append(fields, usersubscription.FieldQuotaCycleDays)
+	}
 	if m.adddaily_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldDailyUsageUsd)
 	}
@@ -47685,6 +47888,8 @@ func (m *UserSubscriptionMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case usersubscription.FieldQuotaCycleDays:
+		return m.AddedQuotaCycleDays()
 	case usersubscription.FieldDailyUsageUsd:
 		return m.AddedDailyUsageUsd()
 	case usersubscription.FieldWeeklyUsageUsd:
@@ -47700,6 +47905,13 @@ func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *UserSubscriptionMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case usersubscription.FieldQuotaCycleDays:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddQuotaCycleDays(v)
+		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		v, ok := value.(float64)
 		if !ok {
@@ -47741,6 +47953,12 @@ func (m *UserSubscriptionMutation) ClearedFields() []string {
 	if m.FieldCleared(usersubscription.FieldMonthlyWindowStart) {
 		fields = append(fields, usersubscription.FieldMonthlyWindowStart)
 	}
+	if m.FieldCleared(usersubscription.FieldQuotaCycleStartAt) {
+		fields = append(fields, usersubscription.FieldQuotaCycleStartAt)
+	}
+	if m.FieldCleared(usersubscription.FieldQuotaCycleEndAt) {
+		fields = append(fields, usersubscription.FieldQuotaCycleEndAt)
+	}
 	if m.FieldCleared(usersubscription.FieldAssignedBy) {
 		fields = append(fields, usersubscription.FieldAssignedBy)
 	}
@@ -47772,6 +47990,12 @@ func (m *UserSubscriptionMutation) ClearField(name string) error {
 		return nil
 	case usersubscription.FieldMonthlyWindowStart:
 		m.ClearMonthlyWindowStart()
+		return nil
+	case usersubscription.FieldQuotaCycleStartAt:
+		m.ClearQuotaCycleStartAt()
+		return nil
+	case usersubscription.FieldQuotaCycleEndAt:
+		m.ClearQuotaCycleEndAt()
 		return nil
 	case usersubscription.FieldAssignedBy:
 		m.ClearAssignedBy()
@@ -47819,6 +48043,15 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 		return nil
 	case usersubscription.FieldMonthlyWindowStart:
 		m.ResetMonthlyWindowStart()
+		return nil
+	case usersubscription.FieldQuotaCycleStartAt:
+		m.ResetQuotaCycleStartAt()
+		return nil
+	case usersubscription.FieldQuotaCycleEndAt:
+		m.ResetQuotaCycleEndAt()
+		return nil
+	case usersubscription.FieldQuotaCycleDays:
+		m.ResetQuotaCycleDays()
 		return nil
 	case usersubscription.FieldDailyUsageUsd:
 		m.ResetDailyUsageUsd()

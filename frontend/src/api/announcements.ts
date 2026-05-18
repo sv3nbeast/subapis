@@ -12,6 +12,11 @@ export async function list(unreadOnly: boolean = false): Promise<UserAnnouncemen
   return data
 }
 
+export async function listPublic(): Promise<UserAnnouncement[]> {
+  const { data } = await apiClient.get<UserAnnouncement[]>('/public/announcements')
+  return data
+}
+
 export async function markRead(id: number): Promise<{ message: string }> {
   const { data } = await apiClient.post<{ message: string }>(`/announcements/${id}/read`)
   return data
@@ -19,8 +24,8 @@ export async function markRead(id: number): Promise<{ message: string }> {
 
 const announcementsAPI = {
   list,
+  listPublic,
   markRead
 }
 
 export default announcementsAPI
-
