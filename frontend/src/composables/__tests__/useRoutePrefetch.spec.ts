@@ -28,11 +28,21 @@ const createMockRouter = (): Router => {
     { path: '/admin/accounts', components: { default: mockImportFn } },
     { path: '/admin/users', components: { default: mockImportFn } },
     { path: '/admin/groups', components: { default: mockImportFn } },
+    { path: '/admin/channels/pricing', components: { default: mockImportFn } },
+    { path: '/admin/channels/monitor', components: { default: mockImportFn } },
     { path: '/admin/subscriptions', components: { default: mockImportFn } },
     { path: '/admin/redeem', components: { default: mockImportFn } },
+    { path: '/admin/orders', components: { default: mockImportFn } },
+    { path: '/admin/orders/dashboard', components: { default: mockImportFn } },
+    { path: '/admin/orders/plans', components: { default: mockImportFn } },
     { path: '/dashboard', components: { default: mockImportFn } },
     { path: '/keys', components: { default: mockImportFn } },
     { path: '/usage', components: { default: mockImportFn } },
+    { path: '/available-channels', components: { default: mockImportFn } },
+    { path: '/channel-status', components: { default: mockImportFn } },
+    { path: '/subscriptions', components: { default: mockImportFn } },
+    { path: '/purchase', components: { default: mockImportFn } },
+    { path: '/orders', components: { default: mockImportFn } },
     { path: '/redeem', components: { default: mockImportFn } },
     { path: '/profile', components: { default: mockImportFn } }
   ]
@@ -99,7 +109,7 @@ describe('useRoutePrefetch', () => {
       const route = createMockRoute('/dashboard')
       const config = _getPrefetchConfig(route)
 
-      expect(config).toHaveLength(2)
+      expect(config).toHaveLength(3)
     })
 
     it('未定义的路由应该返回空数组', () => {
@@ -195,7 +205,8 @@ describe('useRoutePrefetch', () => {
 
     it('用户预加载映射表应该包含正确的路由', () => {
       expect(_userPrefetchMap).toHaveProperty('/dashboard')
-      expect(_userPrefetchMap['/dashboard']).toHaveLength(2)
+      expect(_userPrefetchMap['/dashboard']).toEqual(['/keys', '/usage', '/available-channels'])
+      expect(_userPrefetchMap['/available-channels']).toContain('/channel-status')
     })
   })
 

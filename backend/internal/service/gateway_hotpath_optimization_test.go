@@ -117,6 +117,13 @@ type modelsListAccountRepoStub struct {
 	listAllCalls     atomic.Int64
 }
 
+type gatewayModelsChannelRepoStub struct {
+	ChannelRepository
+
+	channels       []Channel
+	groupPlatforms map[int64]string
+}
+
 type stickyGatewayCacheHotpathStub struct {
 	GatewayCache
 
@@ -165,6 +172,20 @@ func (s *modelsListAccountRepoStub) ListSchedulable(ctx context.Context) ([]Acco
 	}
 	out := make([]Account, len(s.all))
 	copy(out, s.all)
+	return out, nil
+}
+
+func (s *gatewayModelsChannelRepoStub) ListAll(ctx context.Context) ([]Channel, error) {
+	out := make([]Channel, len(s.channels))
+	copy(out, s.channels)
+	return out, nil
+}
+
+func (s *gatewayModelsChannelRepoStub) GetGroupPlatforms(ctx context.Context, groupIDs []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(s.groupPlatforms))
+	for k, v := range s.groupPlatforms {
+		out[k] = v
+	}
 	return out, nil
 }
 
@@ -533,6 +554,52 @@ func TestGetAvailableModels_UsesShortCacheAndSupportsInvalidation(t *testing.T) 
 	require.Equal(t, int64(2), hit)
 	require.Equal(t, int64(2), miss)
 	require.Equal(t, int64(2), store)
+}
+
+func TestGetAvailableModels_PrefersGroupChannelSupportedModels(t *testing.T) {
+	resetGatewayHotpathStatsForTest()
+
+	groupID := int64(9)
+	accountRepo := &modelsListAccountRepoStub{
+		byGroup: map[int64][]Account{
+			groupID: {
+				{
+					ID:       1,
+					Platform: PlatformAnthropic,
+					Credentials: map[string]any{
+						"model_mapping": map[string]any{
+							"account-only-model": "account-only-model",
+						},
+					},
+				},
+			},
+		},
+	}
+	channelRepo := &gatewayModelsChannelRepoStub{
+		channels: []Channel{
+			{
+				ID:       100,
+				Status:   StatusActive,
+				GroupIDs: []int64{groupID},
+				ModelPricing: []ChannelModelPricing{
+					{Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4-6", "claude-opus-4-6"}},
+					{Platform: PlatformGemini, Models: []string{"gemini-2.5-pro"}},
+				},
+			},
+		},
+		groupPlatforms: map[int64]string{groupID: PlatformAnthropic},
+	}
+
+	svc := &GatewayService{
+		accountRepo:        accountRepo,
+		modelsListCache:    gocache.New(time.Minute, time.Minute),
+		modelsListCacheTTL: time.Minute,
+		channelService:     NewChannelService(channelRepo, nil, nil, nil),
+	}
+
+	models := svc.GetAvailableModels(context.Background(), &groupID, "")
+	require.Equal(t, []string{"claude-opus-4-6", "claude-sonnet-4-6"}, models)
+	require.Equal(t, int64(0), accountRepo.listByGroupCalls.Load())
 }
 
 func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {

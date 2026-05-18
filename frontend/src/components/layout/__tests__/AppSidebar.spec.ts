@@ -30,3 +30,19 @@ describe('AppSidebar header styles', () => {
     expect(sidebarBrandBlockMatch?.[0]).not.toContain('overflow: hidden;')
   })
 })
+
+describe('AppSidebar navigation responsiveness', () => {
+  it('uses optimistic active feedback and hover prefetch hooks for menu links', () => {
+    expect(componentSource).toContain('const pendingActivePath = ref<string | null>(null)')
+    expect(componentSource).toContain('const activePath = computed(() => pendingActivePath.value || route.path)')
+    expect(componentSource).toContain('function prefetchNavTarget(path: string)')
+    expect(componentSource).toContain('@pointerenter="prefetchNavTarget(item.path)"')
+    expect(componentSource).toContain('@focus="prefetchNavTarget(item.path)"')
+  })
+
+  it('keeps active and pressed states GPU-friendly', () => {
+    expect(styleSource).toContain('will-change: background-color, color, transform;')
+    expect(styleSource).toContain('.sidebar-link-active::before')
+    expect(styleSource).toContain('transform: translateX(2px) scale(0.985);')
+  })
+})

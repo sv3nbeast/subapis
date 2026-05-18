@@ -38,6 +38,8 @@
                   'sidebar-link-collapsed': sidebarCollapsed
                 }"
                 :title="sidebarCollapsed ? item.label : undefined"
+                @pointerenter="prefetchNavGroup(item)"
+                @focus="prefetchNavGroup(item)"
                 @click="handleGroupClick(item)"
               >
                 <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -60,7 +62,9 @@
                   :key="child.path"
                   :to="child.path"
                   class="sidebar-link mb-0.5 py-1.5 text-sm"
-                  :class="{ 'sidebar-link-active': route.path === child.path }"
+                  :class="{ 'sidebar-link-active': isActive(child.path) }"
+                  @pointerenter="prefetchNavTarget(child.path)"
+                  @focus="prefetchNavTarget(child.path)"
                   @click="handleMenuItemClick(child.path)"
                 >
                   <component :is="child.icon" class="h-4 w-4 flex-shrink-0" />
@@ -85,6 +89,8 @@
                       : undefined
               "
               @click="handleMenuItemClick(item.path)"
+              @pointerenter="prefetchNavTarget(item.path)"
+              @focus="prefetchNavTarget(item.path)"
             >
               <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
               <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -110,6 +116,8 @@
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
             @click="handleMenuItemClick(item.path)"
+            @pointerenter="prefetchNavTarget(item.path)"
+            @focus="prefetchNavTarget(item.path)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -130,6 +138,8 @@
             :title="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
             @click="handleMenuItemClick(item.path)"
+            @pointerenter="prefetchNavTarget(item.path)"
+            @focus="prefetchNavTarget(item.path)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -180,7 +190,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
@@ -241,6 +251,12 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
+const pendingActivePath = ref<string | null>(null)
+const activePath = computed(() => pendingActivePath.value || route.path)
+const prefetchedNavPaths = new Set<string>()
+let pendingActiveTimer: ReturnType<typeof setTimeout> | null = null
+
+type ComponentImportFn = () => Promise<unknown>
 
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
@@ -804,6 +820,8 @@ function closeMobile() {
 }
 
 function handleMenuItemClick(itemPath: string) {
+  markPendingActive(itemPath)
+
   if (mobileOpen.value) {
     setTimeout(() => {
       appStore.setMobileOpen(false)
@@ -824,12 +842,12 @@ function handleMenuItemClick(itemPath: string) {
 }
 
 function isActive(path: string): boolean {
-  return route.path === path || route.path.startsWith(path + '/')
+  return activePath.value === path || activePath.value.startsWith(path + '/')
 }
 
 function isGroupActive(item: NavItem): boolean {
   if (!item.children) return false
-  return item.children.some(child => route.path === child.path)
+  return item.children.some(child => isActive(child.path))
 }
 
 function isGroupExpanded(item: NavItem): boolean {
@@ -859,12 +877,67 @@ function handleGroupClick(item: NavItem) {
   }
   // Push to path and ensure expanded
   if (route.path !== item.path) {
+    markPendingActive(item.path)
     router.push(item.path)
   }
   if (!expandedGroups.value.has(item.path)) {
     expandedGroups.value.add(item.path)
   }
 }
+
+function markPendingActive(path: string) {
+  if (!path || path === route.path) {
+    pendingActivePath.value = null
+    return
+  }
+  pendingActivePath.value = path
+  if (pendingActiveTimer) {
+    clearTimeout(pendingActiveTimer)
+  }
+  pendingActiveTimer = setTimeout(() => {
+    pendingActivePath.value = null
+    pendingActiveTimer = null
+  }, 1400)
+}
+
+function prefetchNavTarget(path: string) {
+  if (!path || prefetchedNavPaths.has(path) || path === route.path) return
+
+  const resolved = router.resolve(path)
+  const importers: ComponentImportFn[] = []
+  for (const matched of resolved.matched) {
+    const component = matched.components?.default
+    if (typeof component === 'function') {
+      importers.push(component as ComponentImportFn)
+    }
+  }
+  if (importers.length === 0) return
+
+  prefetchedNavPaths.add(path)
+  Promise.all(importers.map((importer) => importer())).catch(() => {
+    prefetchedNavPaths.delete(path)
+  })
+}
+
+function prefetchNavGroup(item: NavItem) {
+  if (!item.expandOnly) {
+    prefetchNavTarget(item.path)
+  }
+  for (const child of item.children || []) {
+    prefetchNavTarget(child.path)
+  }
+}
+
+watch(
+  () => route.path,
+  () => {
+    pendingActivePath.value = null
+    if (pendingActiveTimer) {
+      clearTimeout(pendingActiveTimer)
+      pendingActiveTimer = null
+    }
+  }
+)
 
 // Initialize theme
 const savedTheme = localStorage.getItem('theme')
@@ -899,6 +972,12 @@ onMounted(async () => {
       (data.public_visible || isAdmin.value)
   } catch {
     appStore.statusProbeEnabled = false
+  }
+})
+
+onBeforeUnmount(() => {
+  if (pendingActiveTimer) {
+    clearTimeout(pendingActiveTimer)
   }
 })
 </script>

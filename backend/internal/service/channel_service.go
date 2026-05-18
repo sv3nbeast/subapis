@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,7 @@ type channelCache struct {
 	wildcardByGroupPlatform map[channelGroupPlatformKey][]*wildcardPricingEntry // (groupID, platform) → 通配符定价（前缀长度降序）
 	mappingByGroupModel     map[channelModelKey]string                          // (groupID, platform, model) → 映射目标
 	wildcardMappingByGP     map[channelGroupPlatformKey][]*wildcardMappingEntry // (groupID, platform) → 通配符映射（前缀长度降序）
+	modelsByGroupPlatform   map[channelGroupPlatformKey][]string                // (groupID, platform) → 该分组渠道配置暴露的具体模型
 	channelByGroupID        map[int64]*Channel                                  // groupID → 渠道
 	groupPlatform           map[int64]string                                    // groupID → platform
 
@@ -196,6 +198,7 @@ func newEmptyChannelCache() *channelCache {
 		wildcardByGroupPlatform: make(map[channelGroupPlatformKey][]*wildcardPricingEntry),
 		mappingByGroupModel:     make(map[channelModelKey]string),
 		wildcardMappingByGP:     make(map[channelGroupPlatformKey][]*wildcardMappingEntry),
+		modelsByGroupPlatform:   make(map[channelGroupPlatformKey][]string),
 		channelByGroupID:        make(map[int64]*Channel),
 		groupPlatform:           make(map[int64]string),
 		byID:                    make(map[int64]*Channel),
@@ -326,6 +329,7 @@ func populateChannelCache(channels []Channel, groupPlatforms map[int64]string) *
 			platform := groupPlatforms[gid]
 			expandPricingToCache(cache, ch, gid, platform)
 			expandMappingToCache(cache, ch, gid, platform)
+			expandSupportedModelsToCache(cache, ch, gid, platform)
 		}
 	}
 	return cache
@@ -343,6 +347,32 @@ func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
 // 各平台严格独立，只返回自身。
 func matchingPlatforms(groupPlatform string) []string {
 	return []string{groupPlatform}
+}
+
+// expandSupportedModelsToCache 将渠道的用户侧支持模型按分组平台展开。
+func expandSupportedModelsToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
+	modelSet := make(map[string]string)
+	for _, model := range ch.SupportedModels() {
+		if !isPlatformPricingMatch(platform, model.Platform) {
+			continue
+		}
+		if model.Name == "" {
+			continue
+		}
+		lower := strings.ToLower(model.Name)
+		if _, exists := modelSet[lower]; !exists {
+			modelSet[lower] = model.Name
+		}
+	}
+	if len(modelSet) == 0 {
+		return
+	}
+	models := make([]string, 0, len(modelSet))
+	for _, name := range modelSet {
+		models = append(models, name)
+	}
+	sort.Strings(models)
+	cache.modelsByGroupPlatform[channelGroupPlatformKey{groupID: gid, platform: platform}] = models
 }
 func (s *ChannelService) invalidateCache() {
 	s.cache.Store((*channelCache)(nil))
@@ -482,6 +512,24 @@ func (s *ChannelService) GetChannelModelPricing(ctx context.Context, groupID int
 
 	cp := pricing.Clone()
 	return &cp
+}
+
+// ListSupportedModelsForGroup returns the concrete model names configured for a group's channel.
+// It follows the same platform isolation rules as channel pricing/restriction checks.
+func (s *ChannelService) ListSupportedModelsForGroup(ctx context.Context, groupID int64, platform string) []string {
+	lk, err := s.lookupGroupChannel(ctx, groupID)
+	if err != nil {
+		slog.Warn("failed to load channel cache for supported models", "group_id", groupID, "error", err)
+		return nil
+	}
+	if lk == nil {
+		return nil
+	}
+	if strings.TrimSpace(platform) == "" {
+		platform = lk.platform
+	}
+	models := lk.cache.modelsByGroupPlatform[channelGroupPlatformKey{groupID: groupID, platform: platform}]
+	return cloneStringSlice(models)
 }
 
 // ResolveChannelMapping 解析渠道级模型映射（热路径 O(1)）

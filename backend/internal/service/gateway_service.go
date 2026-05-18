@@ -9536,8 +9536,9 @@ func (s *GatewayService) validateUpstreamBaseURL(raw string) (string, error) {
 	return normalized, nil
 }
 
-// GetAvailableModels returns the list of models available for a group
-// It aggregates model_mapping keys from all schedulable accounts in the group
+// GetAvailableModels returns the list of models available for a group.
+// It prefers the group's channel-supported model list, then falls back to legacy
+// schedulable account model_mapping keys for groups without channel model config.
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
 	if s.modelsListCache != nil {
@@ -9549,6 +9550,16 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		}
 	}
 	modelsListCacheMissTotal.Add(1)
+
+	if s.channelService != nil && groupID != nil && *groupID > 0 {
+		if models := s.channelService.ListSupportedModelsForGroup(ctx, *groupID, platform); len(models) > 0 {
+			if s.modelsListCache != nil {
+				s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
+				modelsListCacheStoreTotal.Add(1)
+			}
+			return cloneStringSlice(models)
+		}
+	}
 
 	var accounts []Account
 	var err error

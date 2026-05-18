@@ -15,7 +15,7 @@
       <AppHeader />
 
       <!-- Main Content -->
-      <main class="p-4 md:p-6 lg:p-8">
+      <main class="app-content-shell p-4 md:p-6 lg:p-8">
         <slot />
       </main>
     </div>
@@ -50,3 +50,29 @@ onMounted(() => {
 
 defineExpose({ replayTour })
 </script>
+
+<style scoped>
+.app-content-shell {
+  animation: app-content-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+@keyframes app-content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.998);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-content-shell {
+    animation: none;
+    will-change: auto;
+  }
+}
+</style>

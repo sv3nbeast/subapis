@@ -1091,6 +1091,27 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 // AntigravityModels 返回 Antigravity 支持的全部模型
 // GET /antigravity/models
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
+	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	var groupID *int64
+	if apiKey != nil {
+		groupID = apiKey.GroupID
+	}
+	if availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, service.PlatformAntigravity); len(availableModels) > 0 {
+		models := make([]antigravity.ClaudeModel, 0, len(availableModels))
+		for _, modelID := range availableModels {
+			models = append(models, antigravity.ClaudeModel{
+				ID:          modelID,
+				Type:        "model",
+				DisplayName: modelID,
+				CreatedAt:   "2024-01-01T00:00:00Z",
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   models,
+		})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   antigravity.DefaultModels(),
