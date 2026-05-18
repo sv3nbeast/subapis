@@ -34,11 +34,11 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
-  list as listChannelMonitorViews,
-  status as fetchChannelMonitorDetail,
-  type UserMonitorView,
-  type UserMonitorDetail,
-} from '@/api/channelMonitor'
+  listPublicChannelMonitors,
+  getPublicChannelMonitorStatus,
+  type PublicMonitorView as UserMonitorView,
+  type PublicMonitorDetail as UserMonitorDetail,
+} from '@/api/publicChannelMonitor'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import MonitorHero, {
   type MonitorWindow,
@@ -92,7 +92,7 @@ async function reload(silent = false) {
   abortController = ctrl
   if (!silent) loading.value = true
   try {
-    const res = await listChannelMonitorViews({ signal: ctrl.signal })
+    const res = await listPublicChannelMonitors({ signal: ctrl.signal })
     if (ctrl.signal.aborted || abortController !== ctrl) return
     items.value = res.items || []
   } catch (err: unknown) {
@@ -120,7 +120,7 @@ async function manualReload() {
 async function loadDetail(id: number, force = false) {
   if (!force && detailCache[id]) return
   try {
-    detailCache[id] = await fetchChannelMonitorDetail(id)
+    detailCache[id] = await getPublicChannelMonitorStatus(id)
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('channelStatus.detailLoadError')))
   }

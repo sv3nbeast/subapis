@@ -4,6 +4,8 @@ export default {
     viewOnGithub: 'View on GitHub',
     viewDocs: 'View Documentation',
     docs: 'Docs',
+    guide: 'Guide',
+    externalDocs: 'External Docs',
     defaultSubtitle: 'AI API Gateway Platform',
     terminal: 'Terminal',
     switchToLight: 'Switch to Light Mode',
@@ -182,12 +184,20 @@ export default {
       closeAnnouncement: 'Close',
       unreadCount: '{count} unread announcements'
     },
+    statusPreview: {
+      eyebrow: 'Service Status',
+      title: 'Track channel health and service quality at a glance',
+      description: 'Review core channel availability, latency trends, and failure states so integration and production risk stay visible.',
+      button: 'View service status',
+      guideLink: 'Read integration guide'
+    },
     // CTA section
     cta: {
       title: 'Bring AI service capability into production workflows',
       description:
         'Start with SubAPIs to manage access policies, service quality, and call costs from one place, and provide stable, scalable AI API infrastructure for your products.',
-      button: 'Get Started'
+      button: 'Get Started',
+      guideButton: 'View Guide'
     },
     footer: {
       allRightsReserved: 'All rights reserved.',
@@ -195,6 +205,266 @@ export default {
       usagePolicy: 'Usage Policy',
       supportedRegions: 'Supported Regions',
       serviceSpecificTerms: 'Service-Specific Terms'
+    }
+  },
+
+  docsGuide: {
+    nav: {
+      home: 'Home',
+      status: 'Status'
+    },
+    hero: {
+      eyebrow: 'SubAPIs Quick Start',
+      title: 'Go from account setup to first request in one guide',
+      description: 'Follow the flow from registration, balance setup, API key creation, Base URL configuration, and your first request to integrate SubAPIs into an app or CLI.',
+      primaryCta: 'Create Account',
+      secondaryCta: 'View Steps',
+      baseUrlLabel: 'Base URL',
+      envLabel: 'Environment'
+    },
+    sidebar: {
+      title: 'Docs'
+    },
+    navGroups: {
+      quickStart: 'Quick Start',
+      models: 'Models and Groups',
+      cli: 'CLI and Tools',
+      more: 'Advanced and Support'
+    },
+    quickStart: {
+      eyebrow: 'Quick Start',
+      title: 'Quick Start',
+      description: 'Complete account, balance, API key, and environment setup first, then validate with one minimal request. The sections below cover groups, CLI tools, advanced usage, and common failures.'
+    },
+    steps: {
+      register: {
+        title: 'Create an account',
+        description: 'Create a SubAPIs account with an email you can keep using for security and billing notifications.',
+        items: ['Enter your email and password', 'Complete email verification or OAuth login', 'Confirm you can enter the console', 'Apply an invite or promo code if available']
+      },
+      login: {
+        title: 'Open the console',
+        description: 'After login, review wallet, API keys, available channels, usage analytics, and service status.',
+        items: ['Confirm the account state in the header', 'Check wallet balance and recharge entry', 'Open API Key management', 'Review current service health']
+      },
+      billing: {
+        title: 'Add balance or choose a plan',
+        description: 'Prepare balance or quota based on expected usage. Start with a small test before production integration.',
+        items: ['Open wallet or plans', 'Choose an amount or plan', 'Wait for payment result sync', 'Confirm the balance update in billing']
+      },
+      token: {
+        title: 'Create an API key',
+        description: 'Create an API key for requests, then configure group, quota, model access, and security controls for your use case.',
+        items: ['Create a new API key', 'Select the proper user group', 'Set quota and expiry when needed', 'Store the secret safely']
+      },
+      environment: {
+        title: 'Configure the Base URL',
+        description: 'Replace the official SDK or CLI endpoint with the SubAPIs base URL and use the API key created in the console.',
+        items: ['OpenAI-compatible APIs use /v1', 'Claude messages use /v1/messages', 'Gemini uses the v1beta path', 'Antigravity uses its dedicated path']
+      },
+      firstCall: {
+        title: 'Send the first request',
+        description: 'Start with a simple chat request, verify connectivity, then observe usage and errors before production rollout.',
+        items: ['Run a test request first', 'Confirm response and billing records', 'Tune model and quotas for the workload', 'Enable monitoring and alerts for production']
+      }
+    },
+    examples: {
+      eyebrow: 'Examples',
+      title: 'Choose the endpoint for each interface',
+      description: 'SubAPIs shows the current core channel entry points. Actual model availability depends on console groups and channel configuration, without overstating coverage on the public pages.'
+    },
+    sections: {
+      models: {
+        eyebrow: 'Model Groups',
+        title: 'Models, groups, and quota',
+        description: 'This adapts the model marketplace and token group tutorial pattern for SubAPIs: check available channels first, then use groups to control the capability boundary of each API key.',
+        articles: {
+          market: {
+            title: 'Model marketplace and channels',
+            description: 'Use the marketplace to review models, channel status, rates, and pricing available to the current account or group.',
+            items: ['Confirm the model list visible to the group', 'Review rate and billing units for each model', 'Separate supported channels from on-demand channels', 'Validate one request with a test key before production'],
+            note: 'The docs list current core SubAPIs channels only and do not advertise broad model coverage.'
+          },
+          groups: {
+            title: 'Token group overview',
+            description: 'The API key group decides which models, quotas, and policies are available. A wrong group commonly appears as model unavailable or request denied.',
+            items: ['Create separate groups for different workloads', 'Configure model access and rates by group', 'Use different keys for test and production', 'Revalidate CLI config after group changes'],
+            note: 'If a model is reported missing, check the key group first.'
+          },
+          pricing: {
+            title: 'Quota, rates, and billing',
+            description: 'After adding balance, still review model rates and actual spend. Channels, models, and cache hits can all affect final billing.',
+            items: ['Confirm wallet balance or plan quota', 'Check requests and token usage in analytics', 'Review cache creation and cache read costs', 'Set quotas for high-frequency workloads'],
+            note: 'Run a small production-like test before full rollout to validate rates.'
+          },
+          routing: {
+            title: 'Routing and service status',
+            description: 'SubAPIs focuses on keeping request paths, status, and errors visible in one operations surface.',
+            items: ['Use service status to check channel health', 'Observe latency, error, and availability trends', 'Use stricter limits for critical workloads', 'Check request logs and status first during incidents'],
+            note: 'Do not rely only on SDK errors; console logs usually reveal permission, balance, model, or upstream causes faster.'
+          }
+        }
+      },
+      cli: {
+        eyebrow: 'CLI Tools',
+        title: 'CLI configuration guides',
+        description: 'Covers environment checks and configuration patterns for Claude Code, Codex, Gemini, and CC-Switch-like tools. Exact commands depend on the installed tool version.',
+        articles: {
+          env: {
+            title: 'Environment check',
+            description: 'Before configuring any CLI, confirm network access, environment variables, runtime, and API key validity.',
+            items: ['Confirm SubAPIs base domain is reachable', 'Confirm the API key has no extra spaces', 'Match the Base URL to the interface type', 'Validate with cURL before configuring complex tools'],
+            note: 'If cURL fails, debug key, balance, group, and network before debugging the CLI.'
+          },
+          claude: {
+            title: 'Claude Code configuration',
+            description: 'Claude-style tools usually need Anthropic-compatible key and base URL settings. Use the SubAPIs domain, with messages through /v1/messages.',
+            items: ['Use an API key created in SubAPIs', 'Set ANTHROPIC_BASE_URL to the base domain', 'Confirm the group allows Claude channels', 'Validate with a simple message first'],
+            note: 'Claude tools may use different environment variable names; follow the tool documentation when they differ.'
+          },
+          codex: {
+            title: 'Codex / OpenAI-compatible setup',
+            description: 'OpenAI-compatible tools usually use /v1 as the base path and call chat or Responses APIs with a Bearer key.',
+            items: ['Set OPENAI_API_KEY', 'Set OPENAI_BASE_URL to SubAPIs /v1', 'Pick a GPT or compatible model available to the group', 'Check model name and permissions when calls fail'],
+            note: 'Do not mix Claude paths with OpenAI /v1 paths.'
+          },
+          gemini: {
+            title: 'Gemini CLI setup',
+            description: 'Gemini-related tools commonly use v1beta-style paths. Confirm your group has Gemini channel access.',
+            items: ['Confirm Gemini channel is supported and available', 'Use /v1beta for the Base URL', 'Use model names from the console list', 'Run a minimal prompt first'],
+            note: 'Gemini tools differ in environment variable names; this page defines only the SubAPIs endpoint boundary.'
+          },
+          ccSwitch: {
+            title: 'CC-Switch-like tools',
+            description: 'When a switching tool manages Claude, Codex, and Gemini providers, configure each provider Base URL separately.',
+            items: ['Claude provider uses the base domain', 'OpenAI provider uses /v1', 'Gemini provider uses /v1beta', 'Test each provider independently'],
+            note: 'Switching tools manage local config only; actual model access is still controlled by SubAPIs groups.'
+          },
+          ccSwitchCli: {
+            title: 'CC-Switch-CLI usage',
+            description: 'Command-line switching tools are useful across projects and providers, but every provider still needs the correct endpoint path.',
+            items: ['Put the SubAPIs key into the matching provider', 'Set Base URL separately per provider', 'Run a minimal request after switching', 'Do not overwrite production config with test config'],
+            note: 'If the CLI generates config automatically, check whether /v1 or /v1beta was duplicated.'
+          },
+          cache: {
+            title: 'Cache hit troubleshooting',
+            description: 'High cache hit rates can come from business reuse, upstream cache, repeated CLI requests, or retry behavior.',
+            items: ['Check cache creation and read usage', 'Compare repeated prompt timing', 'Inspect whether the CLI repeats context', 'Use a separate key for isolated tests'],
+            note: 'High cache hits are not automatically a bug; judge with scheduling logs and request details.'
+          }
+        }
+      },
+      advanced: {
+        eyebrow: 'Advanced',
+        title: 'Advanced usage',
+        description: 'Before putting SubAPIs in real production traffic, plan migration, controls, and monitoring.',
+        articles: {
+          desktop: {
+            title: 'Claude Desktop scenarios',
+            description: 'For desktop clients or local MCP scenarios, make sure local proxies, Base URL, and API key settings are not overridden elsewhere.',
+            items: ['Confirm the client supports custom Base URL', 'Use a dedicated key for traceability', 'Do not write production keys into shared config', 'Reduce to a minimal config when debugging'],
+            note: 'Desktop tools vary widely; SubAPIs defines only gateway endpoint and key behavior.'
+          },
+          gateway: {
+            title: 'Migrating from official endpoints',
+            description: 'Do not replace every workload at once. Start with small test traffic and verify cost, latency, and error behavior.',
+            items: ['Replace the test environment Base URL first', 'Confirm model names exist in the group', 'Compare official endpoint and SubAPIs responses', 'Expand gradually to production traffic'],
+            note: 'Migration should be reversible. Keep the original config to reduce rollout risk.'
+          },
+          compatibleClaude: {
+            title: 'Compatible models in Claude Code',
+            description: 'When compatible models need to be used through Claude Code-like tools, first confirm the tool, request format, and model capability match.',
+            items: ['Confirm the model supports the required message format', 'Use a separate group for experimental configs', 'Validate plain text requests before project use', 'Do not use experimental models directly in production automation'],
+            note: 'Compatible access is advanced usage. When it fails, validate with the official interface shape first.'
+          },
+          image: {
+            title: 'Image and multimodal models',
+            description: 'Image or multimodal capability requires separate confirmation of channel, model, billing mode, and client support.',
+            items: ['Confirm the group enables image or multimodal capability', 'Review image billing units and rates', 'Test upload, generation, and response format', 'Limit image count and size before production'],
+            note: 'This guide defines configuration boundaries only; actual availability depends on the console.'
+          },
+          risk: {
+            title: 'Permissions, limits, and controls',
+            description: 'Use groups, quotas, expiry, model allowlists, and IP restrictions to reduce key leakage or misuse risk.',
+            items: ['Use stricter quotas for production keys', 'Enable model limits for high-risk workloads', 'Split keys by team or project', 'Rotate keys immediately on abnormal usage'],
+            note: 'Do not use one unlimited key for test, production, and personal tools.'
+          },
+          monitoring: {
+            title: 'Monitoring and incident diagnosis',
+            description: 'After launch, monitor request trends, errors, balance spend, and service status so issues are visible before users report them.',
+            items: ['Review status and usage pages regularly', 'Search logs by time range during incidents', 'Watch balance and rate-limit failures', 'Record key model and group settings'],
+            note: 'Suggested order: key permission -> balance -> model name -> Base URL -> upstream status.'
+          }
+        }
+      },
+      faq: {
+        eyebrow: 'FAQ',
+        title: 'Frequently asked questions',
+        description: 'Common issues seen during CLI and API integration.',
+        articles: {
+          noModel: {
+            title: 'What if the model does not exist?',
+            description: 'Most cases are caused by model name, token group, or channel permission mismatch.',
+            items: ['Confirm the exact model name', 'Check the API key group', 'Confirm the channel is enabled', 'Compare with the marketplace availability list'],
+            note: 'Do not only edit the client model name; confirm the console really exposes that model.'
+          },
+          auth: {
+            title: 'What if 401 or auth fails?',
+            description: 'Auth failures usually come from key format, copy mistakes, environment overrides, or missing request headers.',
+            items: ['Check Authorization Bearer format', 'Confirm the key has no extra newline', 'Confirm the CLI reads the latest environment variables', 'Create a new test key when needed'],
+            note: 'Browser, terminal, and IDE plugins may read different environments.'
+          },
+          billing: {
+            title: 'Why can I not call after payment?',
+            description: 'Balance is only one requirement. Also verify plan, group, channel status, and model permissions.',
+            items: ['Confirm payment result has synced', 'Check wallet balance update', 'Confirm the key is not expired or over quota', 'Check channel and model access'],
+            note: 'If recharge is closed or payment sync is delayed, check order status first.'
+          },
+          latency: {
+            title: 'What if requests are slow or stuck?',
+            description: 'Latency may come from upstream services, network, model queueing, tool retries, or large context.',
+            items: ['Review latency trends on service status', 'Test with a minimal prompt', 'Check rate limit or retry behavior', 'Record the exact request time for log lookup'],
+            note: 'With a specific API key and timestamp, scheduling logs are much easier to inspect.'
+          }
+        }
+      },
+      policies: {
+        eyebrow: 'Policies',
+        title: 'Terms and policies',
+        description: 'Expose login terms and usage boundaries in the docs so users can review compliance before integration.',
+        articles: {
+          terms: {
+            title: 'Terms of Service',
+            description: 'Covers service use, customer content, fees, suspension, termination, and liability boundaries.',
+            items: ['Read terms before integration', 'Confirm organizational authority and use boundaries', 'Understand fees and refund rules', 'Keep links available for your team'],
+            note: 'Formal terms are controlled by the configured legal document page.'
+          },
+          aup: {
+            title: 'Usage Policy (AUP)',
+            description: 'Defines prohibited uses, high-risk use case requirements, and user disclosure obligations.',
+            items: ['Illegal, fraudulent, abusive, and high-risk misuse is prohibited', 'High-risk scenarios need human review', 'Consumer-facing chatbots require AI disclosure', 'Products serving minors need extra safeguards'],
+            note: 'If your use case is near a high-risk domain, design human review and disclosure first.'
+          },
+          regions: {
+            title: 'Supported regions',
+            description: 'Lists countries and regions where commercial API access and services are currently supported.',
+            items: ['Confirm the customer region is supported', 'Watch sanctions and export restrictions', 'Contact support for unlisted regions', 'Some services may have extra restrictions'],
+            note: 'Region availability may change; rely on the formal supported regions page.'
+          },
+          serviceTerms: {
+            title: 'Service-specific terms',
+            description: 'Covers supplemental terms for team, enterprise, beta, fine-tuning, cloud-hosted, and development partner services.',
+            items: ['Team or enterprise users must be notified', 'Beta services are not for production reliance', 'Fine-tuning materials are customer content', 'Cloud-hosted services also follow cloud platform policies'],
+            note: 'Service-specific terms control for the applicable service.'
+          }
+        }
+      }
+    },
+    bottom: {
+      eyebrow: 'Ready to integrate',
+      title: 'Validate with a test request before production',
+      description: 'Use a separate API key for integration testing, then confirm model access, balance, rate limits, and logs before switching production traffic.',
+      button: 'Start Registration'
     }
   },
 

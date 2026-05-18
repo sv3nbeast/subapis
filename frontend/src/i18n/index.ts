@@ -72,9 +72,6 @@ function getPreferredLocale(): LocaleCode {
 function getDefaultLocale(): LocaleCode {
   const saved = safeStorageGet(LOCALE_KEY)
   if (saved && isLocaleCode(saved)) {
-    if (saved === 'en' && getBrowserLanguage().startsWith('zh')) {
-      return 'zh'
-    }
     return saved
   }
 

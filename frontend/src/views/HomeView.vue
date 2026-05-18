@@ -56,6 +56,15 @@
             </span>
           </button>
 
+          <router-link
+            to="/docs"
+            class="home-nav-text-link hidden sm:inline-flex"
+            :title="t('home.guide')"
+          >
+            <Icon name="book" size="sm" />
+            <span>{{ t('home.guide') }}</span>
+          </router-link>
+
           <LocaleSwitcher />
 
           <a
@@ -244,7 +253,7 @@
             <div class="inline-flex rounded-full border border-primary-200 bg-primary-50/80 px-3.5 py-1.5 text-[0.72rem] font-bold tracking-[0.14em] text-primary-700 shadow-sm dark:border-primary-800/70 dark:bg-primary-950/40 dark:text-primary-300">
               {{ t('home.hero.eyebrow') }}
             </div>
-            <h1 class="mt-5 text-[2.3rem] font-black leading-[0.98] tracking-[-0.06em] text-gray-950 dark:text-white sm:text-[2.8rem] lg:text-[3.05rem]">
+            <h1 class="mt-5 text-[2.34rem] font-black leading-[1.02] tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.82rem] lg:text-[3.08rem]">
               {{ t('home.hero.titleLine1') }}
               <br />
               <span class="home-title-shimmer">
@@ -252,7 +261,7 @@
                 <span class="home-title-gradient">{{ t('home.hero.titleHighlight') }}</span>
               </span>
             </h1>
-            <p class="mt-4 max-w-[36rem] text-[0.95rem] leading-7 text-gray-600 dark:text-dark-300 sm:text-[0.98rem]">
+            <p class="mt-4 max-w-[37rem] text-base leading-7 text-gray-600 dark:text-dark-300 sm:text-[1.04rem]">
               {{ t('home.hero.description') }}
             </p>
 
@@ -293,16 +302,13 @@
                 {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
                 <Icon name="arrowRight" size="md" class="ml-1.5" :stroke-width="2" />
               </router-link>
-              <a
-                v-if="docUrl"
-                :href="docUrl"
-                target="_blank"
-                rel="noopener noreferrer"
+              <router-link
+                to="/docs"
                 class="btn btn-secondary min-w-[6rem] px-5 py-2.5 text-sm"
               >
                 <Icon name="book" size="md" />
-                {{ t('home.docs') }}
-              </a>
+                {{ t('home.guide') }}
+              </router-link>
             </div>
 
             <div class="home-stats-grid mt-6 grid max-w-[24rem] grid-cols-3 gap-3">
@@ -332,8 +338,8 @@
                   <Icon :name="feature.icon" size="md" />
                 </div>
                 <div>
-                  <h3 class="text-sm font-bold text-gray-950 dark:text-white">{{ feature.title }}</h3>
-                  <p class="mt-1.5 text-xs leading-5 text-gray-500 dark:text-dark-300">{{ feature.description }}</p>
+                  <h3 class="text-[0.95rem] font-bold text-gray-950 dark:text-white">{{ feature.title }}</h3>
+                  <p class="mt-1.5 text-[0.82rem] leading-5 text-gray-500 dark:text-dark-300">{{ feature.description }}</p>
                 </div>
               </div>
             </div>
@@ -345,10 +351,10 @@
         <div class="mx-auto max-w-6xl">
           <div class="max-w-3xl">
             <div class="home-section-label">{{ t('home.value.eyebrow') }}</div>
-            <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
+            <h2 class="mt-4 text-[2.08rem] font-black leading-tight tracking-[-0.045em] text-gray-950 dark:text-white sm:text-[2.62rem]">
               {{ t('home.value.title') }}
             </h2>
-            <p class="mt-4 text-base leading-7 text-gray-600 dark:text-dark-300">
+            <p class="mt-4 text-[1.04rem] leading-7 text-gray-600 dark:text-dark-300">
               {{ t('home.value.description') }}
             </p>
           </div>
@@ -363,10 +369,10 @@
               <div class="home-icon-soft">
                 <Icon :name="card.icon" size="md" />
               </div>
-              <h3 class="mt-6 text-xl font-bold tracking-tight text-gray-950 dark:text-white">
+              <h3 class="mt-6 text-[1.32rem] font-bold tracking-tight text-gray-950 dark:text-white">
                 {{ card.title }}
               </h3>
-              <p class="mt-3 text-sm leading-6 text-gray-600 dark:text-dark-300">
+              <p class="mt-3 text-[0.94rem] leading-6 text-gray-600 dark:text-dark-300">
                 {{ card.description }}
               </p>
             </article>
@@ -378,7 +384,7 @@
         <div class="mx-auto max-w-6xl">
           <div class="max-w-3xl">
             <div class="home-section-label">{{ t('home.workflow.eyebrow') }}</div>
-            <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
+            <h2 class="mt-4 text-[2.08rem] font-black leading-tight tracking-[-0.045em] text-gray-950 dark:text-white sm:text-[2.62rem]">
               {{ t('home.workflow.title') }}
             </h2>
           </div>
@@ -395,10 +401,10 @@
               <div class="mt-4 text-xs font-black tracking-[0.2em] text-gray-400 dark:text-dark-500">
                 {{ step.step }}
               </div>
-              <h3 class="mt-3 text-xl font-bold tracking-tight text-gray-950 dark:text-white">
+              <h3 class="mt-3 text-[1.32rem] font-bold tracking-tight text-gray-950 dark:text-white">
                 {{ step.title }}
               </h3>
-              <p class="mt-3 text-sm leading-6 text-gray-600 dark:text-dark-300">
+              <p class="mt-3 text-[0.94rem] leading-6 text-gray-600 dark:text-dark-300">
                 {{ step.description }}
               </p>
             </article>
@@ -413,10 +419,10 @@
       >
         <div class="mx-auto max-w-6xl text-center">
           <div class="home-section-label justify-center">{{ t('home.channels.eyebrow') }}</div>
-          <h2 class="mt-4 text-[2.1rem] font-black tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.75rem]">
+          <h2 class="mt-4 text-[2.08rem] font-black leading-tight tracking-[-0.045em] text-gray-950 dark:text-white sm:text-[2.62rem]">
             {{ t('home.channels.title') }}
           </h2>
-          <p class="mx-auto mt-4 max-w-2xl text-base leading-7 text-gray-600 dark:text-dark-300">
+          <p class="mx-auto mt-4 max-w-2xl text-[1.04rem] leading-7 text-gray-600 dark:text-dark-300">
             {{ t('home.channels.description') }}
           </p>
 
@@ -429,8 +435,8 @@
               :style="{ transitionDelay: channelsVisible ? `${index * 90}ms` : '0ms' }"
             >
               <div class="home-provider-mark" :class="channel.markClass">{{ channel.shortName }}</div>
-              <h3 class="mt-4 text-lg font-bold text-gray-950 dark:text-white">{{ channel.name }}</h3>
-              <p class="mt-2 min-h-10 text-xs leading-5 text-gray-500 dark:text-dark-300">
+              <h3 class="mt-4 text-xl font-bold text-gray-950 dark:text-white">{{ channel.name }}</h3>
+              <p class="mt-2 min-h-10 text-[0.82rem] leading-5 text-gray-500 dark:text-dark-300">
                 {{ channel.description }}
               </p>
               <span class="mt-4 inline-flex rounded-full bg-primary-50 px-2.5 py-1 text-[0.7rem] font-semibold text-primary-700 dark:bg-primary-950/50 dark:text-primary-300">
@@ -441,17 +447,44 @@
         </div>
       </section>
 
-      <section class="home-section home-snap-section home-final-section px-4 sm:px-6">
-        <div class="home-final-content mx-auto flex w-full max-w-7xl flex-col gap-6">
-          <div class="home-status-compact">
-            <ServiceStatusOverview />
+      <section class="home-section home-snap-section home-status-section bg-white/70 px-4 dark:bg-dark-950/30 sm:px-6">
+        <div class="mx-auto grid w-full max-w-6xl items-center gap-7 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+          <div>
+            <div class="home-section-label">{{ t('home.statusPreview.eyebrow') }}</div>
+            <h2 class="mt-4 text-[2.08rem] font-black leading-tight tracking-[-0.045em] text-gray-950 dark:text-white sm:text-[2.62rem]">
+              {{ t('home.statusPreview.title') }}
+            </h2>
+            <p class="mt-4 text-[1.04rem] leading-7 text-gray-600 dark:text-dark-300">
+              {{ t('home.statusPreview.description') }}
+            </p>
+            <div class="mt-6 flex flex-wrap items-center gap-3">
+              <router-link to="/monitor" class="btn btn-secondary px-5 py-2.5 text-sm">
+                <Icon name="chart" size="md" />
+                {{ t('home.statusPreview.button') }}
+              </router-link>
+              <router-link to="/docs" class="home-inline-link">
+                {{ t('home.statusPreview.guideLink') }}
+                <Icon name="arrowRight" size="sm" />
+              </router-link>
+            </div>
           </div>
 
-          <div class="overflow-hidden rounded-[1.5rem] border border-primary-100 bg-gradient-to-br from-primary-100 via-white to-cyan-50 p-6 text-center shadow-card-hover dark:border-primary-900/50 dark:from-primary-950/50 dark:via-dark-900 dark:to-dark-950 sm:p-8">
-            <h2 class="text-2xl font-black tracking-[-0.04em] text-gray-950 dark:text-white sm:text-3xl">
+          <div class="home-status-showcase">
+            <HomeChannelStatusPreview :items="publicMonitorItems" :loading="publicMonitorLoading" />
+          </div>
+        </div>
+      </section>
+
+      <section class="home-section home-snap-section home-final-section px-4 sm:px-6">
+        <div class="home-final-content mx-auto flex w-full max-w-5xl flex-col gap-8">
+          <div class="home-final-card overflow-hidden rounded-[1.85rem] border border-primary-100 bg-gradient-to-br from-primary-100 via-white to-cyan-50 p-7 text-center shadow-card-hover dark:border-primary-900/50 dark:from-primary-950/50 dark:via-dark-900 dark:to-dark-950 sm:p-10">
+            <div class="home-final-orbit mx-auto mb-6">
+              <Icon name="sparkles" size="lg" />
+            </div>
+            <h2 class="text-[1.7rem] font-black leading-tight tracking-[-0.035em] text-gray-950 dark:text-white sm:text-[2.08rem]">
               {{ t('home.cta.title') }}
             </h2>
-            <p class="mx-auto mt-4 max-w-2xl text-sm leading-6 text-gray-600 dark:text-dark-300 sm:text-base">
+            <p class="mx-auto mt-4 max-w-2xl text-[0.96rem] leading-6 text-gray-600 dark:text-dark-300 sm:text-[1.04rem]">
               {{ t('home.cta.description') }}
             </p>
             <div class="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -462,16 +495,13 @@
                 {{ isAuthenticated ? t('home.goToDashboard') : t('home.cta.button') }}
                 <Icon name="arrowRight" size="md" />
               </router-link>
-              <a
-                v-if="docUrl"
-                :href="docUrl"
-                target="_blank"
-                rel="noopener noreferrer"
+              <router-link
+                to="/docs"
                 class="btn btn-secondary px-6 py-2.5 text-sm"
               >
                 <Icon name="book" size="md" />
-                {{ t('home.docs') }}
-              </a>
+                {{ t('home.cta.guideButton') }}
+              </router-link>
             </div>
           </div>
 
@@ -481,6 +511,12 @@
                 &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
               </p>
               <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+                <router-link
+                  to="/docs"
+                  class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
+                >
+                  {{ t('home.guide') }}
+                </router-link>
                 <a
                   v-if="docUrl"
                   :href="docUrl"
@@ -488,7 +524,7 @@
                   rel="noopener noreferrer"
                   class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
                 >
-                  {{ t('home.docs') }}
+                  {{ t('home.externalDocs') }}
                 </a>
                 <router-link
                   v-for="link in legalLinks"
@@ -513,7 +549,8 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore, useAnnouncementStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
-import ServiceStatusOverview from '@/components/status/ServiceStatusOverview.vue'
+import HomeChannelStatusPreview from '@/components/status/HomeChannelStatusPreview.vue'
+import { listPublicChannelMonitors, type PublicMonitorView } from '@/api/publicChannelMonitor'
 import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { formatRelativeWithDateTime } from '@/utils/format'
@@ -548,6 +585,8 @@ const appStore = useAppStore()
 const announcementStore = useAnnouncementStore()
 const announcementModalOpen = ref(false)
 const announcementTab = ref<'notifications' | 'system'>('system')
+const publicMonitorItems = ref<PublicMonitorView[]>([])
+const publicMonitorLoading = ref(false)
 
 // Site settings - directly from appStore (already initialized from injected config)
 const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?.site_name || appStore.siteName))
@@ -736,6 +775,18 @@ async function copyBaseUrl() {
   await copyToClipboard(apiBaseUrl.value)
 }
 
+async function loadPublicMonitorPreview() {
+  publicMonitorLoading.value = true
+  try {
+    const res = await listPublicChannelMonitors()
+    publicMonitorItems.value = res.items || []
+  } catch {
+    publicMonitorItems.value = []
+  } finally {
+    publicMonitorLoading.value = false
+  }
+}
+
 function plainAnnouncementContent(content: string): string {
   return content
     .replace(/```[\s\S]*?```/g, ' ')
@@ -872,6 +923,8 @@ onMounted(() => {
     announcementStore.fetchAnnouncements()
   }
 
+  void loadPublicMonitorPreview()
+
   snapContainerRef.value?.scrollTo({ top: 0, left: 0 })
   snapContainerRef.value?.addEventListener('wheel', handleSnapWheel, { passive: false })
   window.addEventListener('keydown', handleSnapKeydown)
@@ -937,6 +990,29 @@ onUnmounted(() => {
 
 .home-nav-action:hover,
 .home-nav-action.is-active {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+.home-nav-text-link {
+  align-items: center;
+  border-radius: 9999px;
+  color: #475569;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+  min-height: 2.25rem;
+  padding: 0 0.8rem;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.home-nav-text-link:hover {
   background: rgba(255, 255, 255, 0.72);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
   color: #0f766e;
@@ -1438,14 +1514,97 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
-.home-status-compact {
-  max-height: min(35vh, 21rem);
+.home-inline-link {
+  align-items: center;
+  color: #0f766e;
+  display: inline-flex;
+  font-size: 0.875rem;
+  font-weight: 800;
+  gap: 0.35rem;
+  transition:
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.home-inline-link:hover {
+  color: #0891b2;
+  transform: translateX(2px);
+}
+
+.home-status-section {
+  overflow: hidden;
+}
+
+.home-status-showcase {
+  border: 1px solid rgba(226, 232, 240, 0.86);
+  border-radius: 1.35rem;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(236, 254, 255, 0.78)),
+    #fff;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.09);
+  max-height: min(62vh, 35rem);
   overflow: auto;
+  padding: 0.6rem;
   scrollbar-width: thin;
 }
 
-.home-final-content > .home-status-compact + div {
-  flex: 0 0 auto;
+.home-final-section {
+  align-items: stretch;
+}
+
+.home-final-content {
+  justify-content: center;
+  min-height: calc(100vh - 8.75rem);
+}
+
+.home-final-card {
+  position: relative;
+}
+
+.home-final-card::before,
+.home-final-card::after {
+  border-radius: 9999px;
+  content: '';
+  pointer-events: none;
+  position: absolute;
+}
+
+.home-final-card::before {
+  background: rgba(20, 184, 166, 0.12);
+  height: 12rem;
+  left: -4rem;
+  top: -5rem;
+  width: 12rem;
+}
+
+.home-final-card::after {
+  background: rgba(6, 182, 212, 0.1);
+  bottom: -5rem;
+  height: 14rem;
+  right: -4rem;
+  width: 14rem;
+}
+
+.home-final-orbit {
+  align-items: center;
+  background: linear-gradient(135deg, #14b8a6, #0891b2);
+  border-radius: 1.25rem;
+  box-shadow: 0 18px 34px rgba(13, 148, 136, 0.25);
+  color: #fff;
+  display: flex;
+  height: 3.6rem;
+  justify-content: center;
+  position: relative;
+  width: 3.6rem;
+}
+
+.home-final-orbit::after {
+  animation: home-spin 12s linear infinite;
+  border: 1px dashed rgba(13, 148, 136, 0.32);
+  border-radius: 9999px;
+  content: '';
+  inset: -0.72rem;
+  position: absolute;
 }
 
 .home-announcement-backdrop {
@@ -1878,6 +2037,16 @@ onUnmounted(() => {
   color: #5eead4;
 }
 
+.home-page.home-dark .home-nav-text-link {
+  color: #cbd5e1;
+}
+
+.home-page.home-dark .home-nav-text-link:hover {
+  background: rgba(15, 23, 42, 0.66);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  color: #5eead4;
+}
+
 .home-page.home-dark .home-announcement-badge {
   border-color: #020617;
 }
@@ -1982,6 +2151,24 @@ onUnmounted(() => {
   color: #7dd3fc;
 }
 
+.home-page.home-dark .home-inline-link {
+  color: #5eead4;
+}
+
+.home-page.home-dark .home-inline-link:hover {
+  color: #67e8f9;
+}
+
+.home-page.home-dark .home-status-showcase {
+  border-color: rgba(148, 163, 184, 0.2);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.78), rgba(8, 22, 32, 0.62)),
+    rgba(15, 23, 42, 0.66);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 26px 70px rgba(0, 0, 0, 0.28);
+}
+
 .home-page.home-dark .home-provider-custom {
   background: linear-gradient(135deg, #475569, #0f172a);
 }
@@ -1995,7 +2182,7 @@ onUnmounted(() => {
   border-color: rgba(51, 65, 85, 0.66);
 }
 
-.home-page.home-dark .home-final-content > div:not(.home-status-compact) {
+.home-page.home-dark .home-final-card {
   border-color: rgba(94, 234, 212, 0.18);
   background:
     linear-gradient(135deg, rgba(20, 184, 166, 0.18), rgba(15, 23, 42, 0.74) 44%, rgba(8, 145, 178, 0.12)),
@@ -2230,7 +2417,7 @@ onUnmounted(() => {
   }
 
   .home-hero-copy h1 {
-    font-size: 2.8rem;
+    font-size: 2.72rem;
   }
 
   .home-hero-copy p {
@@ -2262,7 +2449,7 @@ onUnmounted(() => {
   }
 
   .home-hero-copy h1 {
-    font-size: clamp(2.15rem, 7vw, 2.75rem);
+    font-size: clamp(2.18rem, 7vw, 2.78rem);
   }
 
   .home-hero-copy p {

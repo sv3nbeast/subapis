@@ -145,6 +145,16 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/docs',
+    name: 'DocsGuide',
+    component: () => import('@/views/public/DocsGuideView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Docs',
+      titleKey: 'home.guide'
+    }
+  },
+  {
     path: '/status',
     name: 'ServiceStatus',
     component: () => import('@/views/user/StatusView.vue'),
@@ -174,8 +184,7 @@ const routes: RouteRecordRaw[] = [
     name: 'Dashboard',
     component: () => import('@/views/user/DashboardView.vue'),
     meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
+      requiresAuth: false,
       title: 'Dashboard',
       titleKey: 'dashboard.title',
       descriptionKey: 'dashboard.welcomeMessage'
@@ -445,10 +454,9 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/monitor',
     name: 'ChannelStatus',
-    component: () => import('@/views/user/ChannelStatusView.vue'),
+    component: () => import('@/views/public/ChannelStatusPublicView.vue'),
     meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
+      requiresAuth: false,
       title: 'Channel Status',
       titleKey: 'nav.channelStatus'
     }
@@ -678,7 +686,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/docs', '/setup', '/payment/result', '/payment/airwallex', '/legal', '/monitor', '/status']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',

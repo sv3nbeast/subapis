@@ -65,9 +65,9 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import {
-  status as fetchChannelMonitorDetail,
-  type UserMonitorDetail,
-} from '@/api/channelMonitor'
+  getPublicChannelMonitorStatus,
+  type PublicMonitorDetail as UserMonitorDetail,
+} from '@/api/publicChannelMonitor'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 
@@ -92,7 +92,7 @@ async function load(id: number) {
   detail.value = null
   loading.value = true
   try {
-    detail.value = await fetchChannelMonitorDetail(id)
+    detail.value = await getPublicChannelMonitorStatus(id)
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('channelStatus.detailLoadError')))
   } finally {
