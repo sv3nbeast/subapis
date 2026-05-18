@@ -1,49 +1,46 @@
 <template>
-  <div
-    class="group/model rounded-xl border border-gray-100 bg-white/80 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary-200 hover:shadow-sm dark:border-dark-700 dark:bg-dark-900/55 dark:hover:border-primary-500/30"
-  >
-    <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+  <tr class="border-t border-gray-100 transition-colors hover:bg-primary-50/35 dark:border-dark-700/70 dark:hover:bg-dark-700/35">
+    <td class="min-w-[15rem] px-3 py-2.5">
       <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="truncate text-sm font-semibold text-gray-900 dark:text-white">
-            {{ model.name }}
-          </span>
-          <span
-            :class="[
-              'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold',
-              billingModeClass,
-            ]"
-          >
-            {{ billingModeLabel }}
-          </span>
+        <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">
+          {{ model.name }}
         </div>
-        <p
+        <div
           v-if="hasIntervals"
-          class="mt-1 text-xs text-gray-500 dark:text-gray-400"
+          class="mt-0.5 text-[11px] text-gray-400 dark:text-gray-500"
         >
           {{ t('availableChannels.groupCards.intervalHint', { count: model.pricing?.intervals.length || 0 }) }}
-        </p>
-        <p v-else-if="!model.pricing" class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-          {{ noPricingLabel }}
-        </p>
-      </div>
-
-      <div class="grid min-w-0 grid-cols-2 gap-2 text-xs sm:min-w-[22rem] sm:grid-cols-4">
-        <div
-          v-for="item in priceItems"
-          :key="item.key"
-          class="rounded-lg bg-gray-50 px-2.5 py-2 dark:bg-dark-800/80"
-        >
-          <div class="text-[10px] font-medium text-gray-400 dark:text-gray-500">
-            {{ item.label }}
-          </div>
-          <div class="mt-0.5 font-semibold text-gray-800 dark:text-gray-100">
-            {{ item.value }}
-          </div>
         </div>
       </div>
-    </div>
-  </div>
+    </td>
+
+    <td class="whitespace-nowrap px-3 py-2.5">
+      <span
+        :class="[
+          'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold',
+          billingModeClass,
+        ]"
+      >
+        {{ billingModeLabel }}
+      </span>
+    </td>
+
+    <td class="whitespace-nowrap px-3 py-2.5 font-mono text-xs font-semibold text-gray-700 dark:text-gray-200">
+      {{ priceValues.input }}
+    </td>
+    <td class="whitespace-nowrap px-3 py-2.5 font-mono text-xs font-semibold text-gray-700 dark:text-gray-200">
+      {{ priceValues.output }}
+    </td>
+    <td class="whitespace-nowrap px-3 py-2.5 font-mono text-xs font-semibold text-gray-700 dark:text-gray-200">
+      {{ priceValues.cacheRead }}
+    </td>
+    <td class="whitespace-nowrap px-3 py-2.5 font-mono text-xs font-semibold text-gray-700 dark:text-gray-200">
+      {{ priceValues.cacheWrite }}
+    </td>
+    <td class="min-w-[7.5rem] whitespace-nowrap px-3 py-2.5 text-xs font-medium text-gray-600 dark:text-gray-300">
+      {{ priceValues.other }}
+    </td>
+  </tr>
 </template>
 
 <script setup lang="ts">
@@ -93,60 +90,45 @@ const billingModeClass = computed(() => {
   }
 })
 
-const priceItems = computed(() => {
+const priceValues = computed(() => {
   const pricing = props.model.pricing
   if (!pricing) {
-    return [
-      {
-        key: 'none',
-        label: t('availableChannels.groupCards.priceStatus'),
-        value: props.noPricingLabel,
-      },
-    ]
+    return {
+      input: '-',
+      output: '-',
+      cacheRead: '-',
+      cacheWrite: '-',
+      other: props.noPricingLabel,
+    }
   }
 
   if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
-    return [
-      {
-        key: 'per_request',
-        label: t('availableChannels.pricing.perRequestPrice'),
-        value: formatPrice(pricing.per_request_price, 1, t('availableChannels.pricing.unitPerRequest')),
-      },
-    ]
+    return {
+      input: '-',
+      output: '-',
+      cacheRead: '-',
+      cacheWrite: '-',
+      other: formatPrice(pricing.per_request_price, 1, t('availableChannels.pricing.unitPerRequest')),
+    }
   }
 
   if (pricing.billing_mode === BILLING_MODE_IMAGE) {
-    return [
-      {
-        key: 'image',
-        label: t('availableChannels.pricing.imageOutputPrice'),
-        value: formatPrice(pricing.image_output_price, 1, t('availableChannels.pricing.unitPerRequest')),
-      },
-    ]
+    return {
+      input: '-',
+      output: '-',
+      cacheRead: '-',
+      cacheWrite: '-',
+      other: formatPrice(pricing.image_output_price, 1, t('availableChannels.pricing.unitPerRequest')),
+    }
   }
 
-  return [
-    {
-      key: 'input',
-      label: t('availableChannels.pricing.inputPrice'),
-      value: formatPrice(pricing.input_price, perMillionScale, t('availableChannels.pricing.unitPerMillion')),
-    },
-    {
-      key: 'output',
-      label: t('availableChannels.pricing.outputPrice'),
-      value: formatPrice(pricing.output_price, perMillionScale, t('availableChannels.pricing.unitPerMillion')),
-    },
-    {
-      key: 'cache_read',
-      label: t('availableChannels.pricing.cacheReadPrice'),
-      value: formatPrice(pricing.cache_read_price, perMillionScale, t('availableChannels.pricing.unitPerMillion')),
-    },
-    {
-      key: 'cache_write',
-      label: t('availableChannels.pricing.cacheWritePrice'),
-      value: formatPrice(pricing.cache_write_price, perMillionScale, t('availableChannels.pricing.unitPerMillion')),
-    },
-  ]
+  return {
+    input: formatScaled(pricing.input_price, perMillionScale),
+    output: formatScaled(pricing.output_price, perMillionScale),
+    cacheRead: formatScaled(pricing.cache_read_price, perMillionScale),
+    cacheWrite: formatScaled(pricing.cache_write_price, perMillionScale),
+    other: '-',
+  }
 })
 
 function formatPrice(value: number | null, scale: number, unit: string): string {

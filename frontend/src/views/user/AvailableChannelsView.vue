@@ -1,22 +1,28 @@
 <template>
   <AppLayout>
-    <div class="space-y-6">
-      <section class="available-groups-hero overflow-hidden rounded-3xl border border-primary-100/80 bg-white/85 p-5 shadow-sm dark:border-primary-500/15 dark:bg-dark-800/85 sm:p-6">
-        <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div class="max-w-3xl">
-            <div class="mb-3 inline-flex items-center gap-2 rounded-full bg-primary-100 px-3 py-1 text-xs font-semibold text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
-              <Icon name="key" size="xs" />
-              {{ t('availableChannels.eyebrow') }}
+    <div class="space-y-4">
+      <section class="rounded-2xl border border-gray-200 bg-white/90 p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800/85">
+        <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-100 text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
+                <Icon name="key" size="sm" />
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-bold uppercase tracking-wide text-primary-600 dark:text-primary-300">
+                  {{ t('availableChannels.eyebrow') }}
+                </p>
+                <h1 class="truncate text-xl font-black tracking-tight text-gray-950 dark:text-white sm:text-2xl">
+                  {{ t('availableChannels.title') }}
+                </h1>
+              </div>
             </div>
-            <h1 class="text-2xl font-black tracking-tight text-gray-950 dark:text-white sm:text-3xl">
-              {{ t('availableChannels.title') }}
-            </h1>
-            <p class="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-500 dark:text-gray-400">
               {{ t('availableChannels.description') }}
             </p>
           </div>
 
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_10rem_9rem_auto] xl:w-[42rem]">
             <div class="relative w-full lg:w-80">
               <Icon
                 name="search"
@@ -31,7 +37,7 @@
               />
             </div>
 
-            <select v-model="platformFilter" class="input w-full bg-white/90 lg:w-40 dark:bg-dark-900/80">
+            <select v-model="platformFilter" class="input w-full bg-white/90 dark:bg-dark-900/80">
               <option value="">{{ t('availableChannels.filters.allPlatforms') }}</option>
               <option
                 v-for="platform in platformOptions"
@@ -42,7 +48,7 @@
               </option>
             </select>
 
-            <select v-model="groupTypeFilter" class="input w-full bg-white/90 lg:w-36 dark:bg-dark-900/80">
+            <select v-model="groupTypeFilter" class="input w-full bg-white/90 dark:bg-dark-900/80">
               <option value="all">{{ t('availableChannels.filters.allGroups') }}</option>
               <option value="public">{{ t('availableChannels.public') }}</option>
               <option value="exclusive">{{ t('availableChannels.exclusive') }}</option>
@@ -61,21 +67,15 @@
         </div>
       </section>
 
-      <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section class="flex flex-wrap gap-2">
         <div
           v-for="stat in summaryStats"
           :key="stat.key"
-          class="rounded-2xl border border-gray-100 bg-white/85 p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800/80"
+          class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/80 px-3 py-1.5 shadow-sm dark:border-dark-700 dark:bg-dark-800/80"
         >
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ stat.label }}</p>
-              <p class="mt-1 text-2xl font-black text-gray-950 dark:text-white">{{ stat.value }}</p>
-            </div>
-            <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary-100 text-primary-600 dark:bg-primary-500/15 dark:text-primary-300">
-              <Icon :name="stat.icon" size="md" />
-            </div>
-          </div>
+          <Icon :name="stat.icon" size="xs" class="text-primary-600 dark:text-primary-300" />
+          <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ stat.label }}</span>
+          <span class="text-sm font-black text-gray-950 dark:text-white">{{ stat.value }}</span>
         </div>
       </section>
 
@@ -276,24 +276,3 @@ async function loadChannels() {
 
 onMounted(loadChannels)
 </script>
-
-<style scoped>
-.available-groups-hero {
-  position: relative;
-}
-
-.available-groups-hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(20, 184, 166, 0.17), transparent 30%),
-    radial-gradient(circle at 92% 12%, rgba(6, 182, 212, 0.14), transparent 28%);
-}
-
-.available-groups-hero > * {
-  position: relative;
-  z-index: 1;
-}
-</style>

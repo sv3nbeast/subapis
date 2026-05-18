@@ -1355,6 +1355,7 @@ export default {
       supportedModels: 'Supported Models'
     },
     pricing: {
+      model: 'Model',
       billingMode: 'Billing Mode',
       billingModeToken: 'Per Token',
       billingModePerRequest: 'Per Request',
@@ -1365,6 +1366,7 @@ export default {
       cacheReadPrice: 'Cache Read',
       imageOutputPrice: 'Image Output',
       perRequestPrice: 'Per Request',
+      otherPrice: 'Other Price',
       intervals: 'Tiered Pricing',
       unitPerMillion: '/ 1M tokens',
       unitPerRequest: '/ request'

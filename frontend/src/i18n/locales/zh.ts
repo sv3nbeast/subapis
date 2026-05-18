@@ -1359,6 +1359,7 @@ export default {
       supportedModels: '支持模型'
     },
     pricing: {
+      model: '模型',
       billingMode: '计费模式',
       billingModeToken: '按 Token',
       billingModePerRequest: '按次',
@@ -1369,6 +1370,7 @@ export default {
       cacheReadPrice: '缓存读取',
       imageOutputPrice: '图片输出',
       perRequestPrice: '每次请求',
+      otherPrice: '其他价格',
       intervals: '阶梯定价',
       unitPerMillion: '/ 1M token',
       unitPerRequest: '/ 次'
