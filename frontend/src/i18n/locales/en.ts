@@ -1172,7 +1172,7 @@ export default {
     accountBilled: 'Account billed',
     accountMultiplier: 'Account rate',
     avgDuration: 'Avg Duration',
-    inputCacheReadRatio: 'Input Cache Read Ratio',
+    inputCacheReadRatio: 'Input Cache Hit Rate',
     cacheReadTokens: 'Read {tokens}',
     cacheWriteTokens: 'Write {tokens}',
     inSelectedRange: 'in selected range',

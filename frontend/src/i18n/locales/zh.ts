@@ -1176,7 +1176,7 @@ export default {
     accountBilled: '账号计费',
     accountMultiplier: '账号倍率',
     avgDuration: '平均耗时',
-    inputCacheReadRatio: '输入侧缓存读占比',
+    inputCacheReadRatio: '输入缓存命中率',
     cacheReadTokens: '读取 {tokens}',
     cacheWriteTokens: '写入 {tokens}',
     inSelectedRange: '所选范围内',

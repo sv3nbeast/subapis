@@ -41,7 +41,7 @@ const messages: Record<string, string> = {
   'usage.duration': 'Duration',
   'usage.time': 'Time',
   'usage.userAgent': 'User Agent',
-  'usage.inputCacheReadRatio': 'Input Cache Read Ratio',
+  'usage.inputCacheReadRatio': 'Input Cache Hit Rate',
   'usage.cacheReadTokens': 'Read {tokens}',
   'usage.cacheWriteTokens': 'Write {tokens}',
 }
@@ -182,7 +182,7 @@ describe('user UsageView tooltip', () => {
     await nextTick()
 
     const text = wrapper.text()
-    expect(text).toContain('Input Cache Read Ratio')
+    expect(text).toContain('Input Cache Hit Rate')
     expect(text).toContain('90.00%')
     expect(text).toContain('Service tier')
     expect(text).toContain('Fast')

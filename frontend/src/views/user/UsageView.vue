@@ -84,7 +84,7 @@
           </div>
         </div>
 
-        <!-- Input Cache Read Ratio -->
+        <!-- Input Cache Hit Rate -->
         <div class="card p-4">
           <div class="flex items-center gap-3">
             <div class="rounded-lg bg-cyan-100 p-2 dark:bg-cyan-900/30">
