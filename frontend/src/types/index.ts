@@ -1354,6 +1354,8 @@ export interface UsageStatsResponse {
   total_requests: number
   total_input_tokens: number
   total_output_tokens: number
+  total_cache_creation_tokens: number
+  total_cache_read_tokens: number
   total_cache_tokens: number
   total_tokens: number
   total_cost: number // 标准计费

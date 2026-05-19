@@ -2,7 +2,7 @@
   <AppLayout>
     <TablePageLayout>
       <template #actions>
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div class="grid grid-cols-2 gap-4 lg:grid-cols-5">
           <!-- Total Requests -->
           <div class="card p-4">
           <div class="flex items-center gap-3">
@@ -80,6 +80,27 @@
                 {{ formatDuration(usageStats?.average_duration_ms || 0) }}
               </p>
               <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.perRequest') }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Input Cache Read Ratio -->
+        <div class="card p-4">
+          <div class="flex items-center gap-3">
+            <div class="rounded-lg bg-cyan-100 p-2 dark:bg-cyan-900/30">
+              <Icon name="database" size="md" class="text-cyan-600 dark:text-cyan-400" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                {{ t('usage.inputCacheReadRatio') }}
+              </p>
+              <p class="text-xl font-bold text-cyan-600 dark:text-cyan-400">
+                {{ formatPercent(inputCacheReadRatio) }}
+              </p>
+              <p class="truncate text-xs text-gray-500 dark:text-gray-400">
+                {{ t('usage.cacheReadTokens', { tokens: formatTokens(cacheReadTokens) }) }} /
+                {{ t('usage.cacheWriteTokens', { tokens: formatTokens(cacheCreationTokens) }) }}
+              </p>
             </div>
           </div>
         </div>
@@ -558,6 +579,16 @@ const tokenTooltipData = ref<UsageLog | null>(null)
 // Usage stats from API
 const usageStats = ref<UsageStatsResponse | null>(null)
 
+const cacheCreationTokens = computed(() => usageStats.value?.total_cache_creation_tokens || 0)
+const cacheReadTokens = computed(() => usageStats.value?.total_cache_read_tokens || 0)
+const inputSideTokens = computed(
+  () => (usageStats.value?.total_input_tokens || 0) + cacheCreationTokens.value + cacheReadTokens.value
+)
+const inputCacheReadRatio = computed(() => {
+  if (inputSideTokens.value <= 0) return 0
+  return cacheReadTokens.value / inputSideTokens.value
+})
+
 const columns = computed<Column[]>(() => [
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
@@ -690,6 +721,8 @@ const formatTokens = (value: number): string => {
   }
   return value.toLocaleString()
 }
+
+const formatPercent = (value: number): string => `${(value * 100).toFixed(2)}%`
 
 type UsageTableQueryParams = UsageQueryParams & {
   sort_by?: string

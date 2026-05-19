@@ -41,6 +41,9 @@ const messages: Record<string, string> = {
   'usage.duration': 'Duration',
   'usage.time': 'Time',
   'usage.userAgent': 'User Agent',
+  'usage.inputCacheReadRatio': 'Input Cache Read Ratio',
+  'usage.cacheReadTokens': 'Read {tokens}',
+  'usage.cacheWriteTokens': 'Write {tokens}',
 }
 
 vi.mock('@/api', () => ({
@@ -131,9 +134,15 @@ describe('user UsageView tooltip', () => {
     })
     getStatsByDateRange.mockResolvedValue({
       total_requests: 1,
+      total_input_tokens: 20,
+      total_output_tokens: 5,
+      total_cache_creation_tokens: 10,
+      total_cache_read_tokens: 270,
+      total_cache_tokens: 280,
       total_tokens: 100,
       total_cost: 0.1,
-      avg_duration_ms: 1,
+      total_actual_cost: 0.1,
+      average_duration_ms: 1,
     })
     list.mockResolvedValue({ items: [] })
 
@@ -173,6 +182,8 @@ describe('user UsageView tooltip', () => {
     await nextTick()
 
     const text = wrapper.text()
+    expect(text).toContain('Input Cache Read Ratio')
+    expect(text).toContain('90.00%')
     expect(text).toContain('Service tier')
     expect(text).toContain('Fast')
     expect(text).toContain('Rate')
@@ -219,9 +230,15 @@ describe('user UsageView tooltip', () => {
     })
     getStatsByDateRange.mockResolvedValue({
       total_requests: 1,
+      total_input_tokens: 20,
+      total_output_tokens: 5,
+      total_cache_creation_tokens: 10,
+      total_cache_read_tokens: 270,
+      total_cache_tokens: 280,
       total_tokens: 100,
       total_cost: 0.1,
-      avg_duration_ms: 1,
+      total_actual_cost: 0.1,
+      average_duration_ms: 1,
     })
     list.mockResolvedValue({ items: [] })
 
