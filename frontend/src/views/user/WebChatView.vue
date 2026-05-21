@@ -41,10 +41,16 @@
             :class="{ 'session-item-active': !isDraftSession && session.id === activeSessionId }"
             @click="selectSession(session)"
           >
-            <span class="truncate text-sm font-bold">{{ session.title || session.model }}</span>
-            <span class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
-              {{ session.group_name || groupName(session.group_id) }} · {{ session.model }}
-            </span>
+            <div class="flex items-start justify-between gap-3">
+              <span class="truncate text-sm font-bold">{{ session.title || session.model }}</span>
+              <span class="session-time shrink-0">{{ formatSessionTime(session.updated_at) }}</span>
+            </div>
+            <div class="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span class="session-index">{{ formatSessionIndex(session.id) }}</span>
+              <span class="truncate">
+                {{ session.group_name || groupName(session.group_id) }} · {{ session.model }}
+              </span>
+            </div>
           </button>
 
           <div v-if="!sessions.length && !loading" class="rounded-2xl border border-dashed border-gray-200 p-5 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-gray-400">
@@ -117,28 +123,39 @@
               class="message-row"
               :class="message.role === 'user' ? 'message-row-user' : 'message-row-assistant'"
             >
-              <div class="message-bubble" :class="message.role === 'user' ? 'message-bubble-user' : 'message-bubble-assistant'">
-                <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ message.content }}</p>
-                <p v-if="message.status === 'error' || message.status === 'partial'" class="mt-2 text-xs font-medium text-red-500">
-                  {{ message.error_message || t('webChat.streamError') }}
+              <div class="message-stack" :class="message.role === 'user' ? 'message-stack-user' : 'message-stack-assistant'">
+                <div class="message-bubble" :class="message.role === 'user' ? 'message-bubble-user' : 'message-bubble-assistant'">
+                  <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ message.content }}</p>
+                  <p v-if="message.status === 'error' || message.status === 'partial'" class="mt-2 text-xs font-medium text-red-500">
+                    {{ message.error_message || t('webChat.streamError') }}
+                  </p>
+                </div>
+                <p class="message-time">
+                  {{ formatMessageTime(message.updated_at || message.created_at) }}
                 </p>
               </div>
             </div>
 
             <div v-if="sending && !streamingText" class="message-row message-row-assistant">
-              <div class="message-bubble message-bubble-assistant message-bubble-pending">
-                <span>{{ t('webChat.thinking') }}</span>
-                <span class="typing-dots" aria-hidden="true">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-                </span>
+              <div class="message-stack message-stack-assistant">
+                <div class="message-bubble message-bubble-assistant message-bubble-pending">
+                  <span>{{ t('webChat.thinking') }}</span>
+                  <span class="typing-dots" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </span>
+                </div>
+                <p class="message-time">{{ formatMessageTime(new Date().toISOString()) }}</p>
               </div>
             </div>
 
             <div v-if="sending && streamingText" class="message-row message-row-assistant">
-              <div class="message-bubble message-bubble-assistant">
-                <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ streamingText }}</p>
+              <div class="message-stack message-stack-assistant">
+                <div class="message-bubble message-bubble-assistant">
+                  <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ streamingText }}</p>
+                </div>
+                <p class="message-time">{{ formatMessageTime(new Date().toISOString()) }}</p>
               </div>
             </div>
           </template>
@@ -484,6 +501,50 @@ function groupName(groupID: number): string {
   return options.value.groups.find((group) => group.id === groupID)?.name || `#${groupID}`
 }
 
+function formatSessionIndex(id: number): string {
+  return `#${String(id).padStart(3, '0')}`
+}
+
+function parseSafeDate(value?: string): Date | null {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function formatSessionTime(value?: string): string {
+  const date = parseSafeDate(value)
+  if (!date) return ''
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startOfTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const diffDays = Math.round((startOfToday.getTime() - startOfTarget.getTime()) / 86_400_000)
+  if (diffDays === 0) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date)
+  }
+  if (diffDays === 1) {
+    return `${t('webChat.yesterday')} ${new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date)}`
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
+function formatMessageTime(value?: string): string {
+  const date = parseSafeDate(value)
+  if (!date) return ''
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
 async function scrollToBottom() {
   await nextTick()
   const el = messageListRef.value
@@ -650,6 +711,22 @@ function clamp(value: number, min: number, max: number) {
   transition: all 160ms ease;
 }
 
+.session-time {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgb(148 163 184);
+}
+
+.session-index {
+  flex: none;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 0.12rem 0.42rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgb(100 116 139);
+}
+
 .session-item:hover,
 .session-item-active {
   border-color: rgba(20, 184, 166, 0.28);
@@ -693,6 +770,21 @@ function clamp(value: number, min: number, max: number) {
   margin-bottom: 1rem;
 }
 
+.message-stack {
+  display: flex;
+  max-width: min(54rem, 90%);
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.message-stack-user {
+  align-items: flex-end;
+}
+
+.message-stack-assistant {
+  align-items: flex-start;
+}
+
 .message-row-user {
   justify-content: flex-end;
 }
@@ -702,9 +794,15 @@ function clamp(value: number, min: number, max: number) {
 }
 
 .message-bubble {
-  max-width: min(54rem, 90%);
   border-radius: 1.25rem;
   padding: 0.58rem 0.9rem;
+}
+
+.message-time {
+  padding: 0 0.15rem;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: rgb(148 163 184);
 }
 
 .message-bubble-user {

@@ -1425,6 +1425,7 @@ export default {
     send: 'Send',
     thinking: 'Waiting for reply',
     streamError: 'Streaming response error',
+    yesterday: 'Yesterday',
     resizeSessions: 'Drag to resize the session list',
     resizeContext: 'Drag to resize the context panel',
   },

@@ -1429,6 +1429,7 @@ export default {
     send: '发送',
     thinking: '正在等待回复',
     streamError: '流式响应异常',
+    yesterday: '昨天',
     resizeSessions: '拖拽调整会话列表宽度',
     resizeContext: '拖拽调整上下文面板宽度',
   },
