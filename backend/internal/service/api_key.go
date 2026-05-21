@@ -14,6 +14,11 @@ const (
 	StatusAPIKeyExpired        = "expired"
 )
 
+const (
+	APIKeySourceUser    = "user"
+	APIKeySourceWebChat = "web_chat"
+)
+
 // Rate limit window durations
 const (
 	RateLimitWindow5h = 5 * time.Hour
@@ -34,6 +39,8 @@ type APIKey struct {
 	Name        string
 	GroupID     *int64
 	Status      string
+	Source      string
+	IsHidden    bool
 	IPWhitelist []string
 	IPBlacklist []string
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。

@@ -309,6 +309,11 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyWebChatEnabled is a DB-backed soft switch for the user-facing web chat
+	// workbench. Defaults to false because it creates managed hidden API keys and can
+	// incur normal gateway usage charges.
+	SettingKeyWebChatEnabled = "web_chat_enabled"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

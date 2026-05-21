@@ -929,6 +929,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyWebChatEnabled,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
 	}
@@ -1032,6 +1033,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
+
+		WebChatEnabled: settings[SettingKeyWebChatEnabled] == "true",
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
@@ -1142,6 +1145,24 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 	}
 	return AvailableChannelsRuntime{
 		Enabled: vals[SettingKeyAvailableChannelsEnabled] == "true",
+	}
+}
+
+// WebChatRuntime is the lightweight view of the web-chat feature switch.
+type WebChatRuntime struct {
+	Enabled bool
+}
+
+// GetWebChatRuntime reads the web-chat feature switch directly from the
+// settings store. Fail-closed: unknown state must not expose chat or create
+// managed hidden keys.
+func (s *SettingService) GetWebChatRuntime(ctx context.Context) WebChatRuntime {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled})
+	if err != nil {
+		return WebChatRuntime{Enabled: false}
+	}
+	return WebChatRuntime{
+		Enabled: vals[SettingKeyWebChatEnabled] == "true",
 	}
 }
 
@@ -1270,6 +1291,7 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
+	WebChatEnabled                       bool `json:"web_chat_enabled"`
 	AffiliateEnabled                     bool `json:"affiliate_enabled"`
 	RiskControlEnabled                   bool `json:"risk_control_enabled"`
 }
@@ -1331,6 +1353,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
+		WebChatEnabled:                       settings.WebChatEnabled,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 	}, nil
@@ -1968,6 +1991,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+
+	// Web chat feature switch
+	updates[SettingKeyWebChatEnabled] = strconv.FormatBool(settings.WebChatEnabled)
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
@@ -2800,6 +2826,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
 
+		// Web chat feature (default disabled; opt-in)
+		SettingKeyWebChatEnabled: "false",
+
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
 
@@ -3172,6 +3201,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
+
+	// Web chat feature (default: disabled; strict true)
+	result.WebChatEnabled = settings[SettingKeyWebChatEnabled] == "true"
 
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"

@@ -128,6 +128,10 @@ func (h *APIKeyHandler) GetByID(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if key.IsHidden {
+		response.ErrorFrom(c, service.ErrAPIKeyNotFound)
+		return
+	}
 
 	// 验证所有权
 	if key.UserID != subject.UserID {

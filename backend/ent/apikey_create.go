@@ -113,6 +113,34 @@ func (_c *APIKeyCreate) SetNillableStatus(v *string) *APIKeyCreate {
 	return _c
 }
 
+// SetSource sets the "source" field.
+func (_c *APIKeyCreate) SetSource(v string) *APIKeyCreate {
+	_c.mutation.SetSource(v)
+	return _c
+}
+
+// SetNillableSource sets the "source" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableSource(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetSource(*v)
+	}
+	return _c
+}
+
+// SetIsHidden sets the "is_hidden" field.
+func (_c *APIKeyCreate) SetIsHidden(v bool) *APIKeyCreate {
+	_c.mutation.SetIsHidden(v)
+	return _c
+}
+
+// SetNillableIsHidden sets the "is_hidden" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableIsHidden(v *bool) *APIKeyCreate {
+	if v != nil {
+		_c.SetIsHidden(*v)
+	}
+	return _c
+}
+
 // SetLastUsedAt sets the "last_used_at" field.
 func (_c *APIKeyCreate) SetLastUsedAt(v time.Time) *APIKeyCreate {
 	_c.mutation.SetLastUsedAt(v)
@@ -387,6 +415,14 @@ func (_c *APIKeyCreate) defaults() error {
 		v := apikey.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.Source(); !ok {
+		v := apikey.DefaultSource
+		_c.mutation.SetSource(v)
+	}
+	if _, ok := _c.mutation.IsHidden(); !ok {
+		v := apikey.DefaultIsHidden
+		_c.mutation.SetIsHidden(v)
+	}
 	if _, ok := _c.mutation.Quota(); !ok {
 		v := apikey.DefaultQuota
 		_c.mutation.SetQuota(v)
@@ -456,6 +492,17 @@ func (_c *APIKeyCreate) check() error {
 		if err := apikey.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "APIKey.status": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.Source(); !ok {
+		return &ValidationError{Name: "source", err: errors.New(`ent: missing required field "APIKey.source"`)}
+	}
+	if v, ok := _c.mutation.Source(); ok {
+		if err := apikey.SourceValidator(v); err != nil {
+			return &ValidationError{Name: "source", err: fmt.Errorf(`ent: validator failed for field "APIKey.source": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.IsHidden(); !ok {
+		return &ValidationError{Name: "is_hidden", err: errors.New(`ent: missing required field "APIKey.is_hidden"`)}
 	}
 	if _, ok := _c.mutation.Quota(); !ok {
 		return &ValidationError{Name: "quota", err: errors.New(`ent: missing required field "APIKey.quota"`)}
@@ -534,6 +581,14 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.Source(); ok {
+		_spec.SetField(apikey.FieldSource, field.TypeString, value)
+		_node.Source = value
+	}
+	if value, ok := _c.mutation.IsHidden(); ok {
+		_spec.SetField(apikey.FieldIsHidden, field.TypeBool, value)
+		_node.IsHidden = value
 	}
 	if value, ok := _c.mutation.LastUsedAt(); ok {
 		_spec.SetField(apikey.FieldLastUsedAt, field.TypeTime, value)
@@ -790,6 +845,30 @@ func (u *APIKeyUpsert) SetStatus(v string) *APIKeyUpsert {
 // UpdateStatus sets the "status" field to the value that was provided on create.
 func (u *APIKeyUpsert) UpdateStatus() *APIKeyUpsert {
 	u.SetExcluded(apikey.FieldStatus)
+	return u
+}
+
+// SetSource sets the "source" field.
+func (u *APIKeyUpsert) SetSource(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldSource, v)
+	return u
+}
+
+// UpdateSource sets the "source" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateSource() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldSource)
+	return u
+}
+
+// SetIsHidden sets the "is_hidden" field.
+func (u *APIKeyUpsert) SetIsHidden(v bool) *APIKeyUpsert {
+	u.Set(apikey.FieldIsHidden, v)
+	return u
+}
+
+// UpdateIsHidden sets the "is_hidden" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateIsHidden() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldIsHidden)
 	return u
 }
 
@@ -1217,6 +1296,34 @@ func (u *APIKeyUpsertOne) SetStatus(v string) *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) UpdateStatus() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetSource sets the "source" field.
+func (u *APIKeyUpsertOne) SetSource(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetSource(v)
+	})
+}
+
+// UpdateSource sets the "source" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateSource() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateSource()
+	})
+}
+
+// SetIsHidden sets the "is_hidden" field.
+func (u *APIKeyUpsertOne) SetIsHidden(v bool) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetIsHidden(v)
+	})
+}
+
+// UpdateIsHidden sets the "is_hidden" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateIsHidden() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateIsHidden()
 	})
 }
 
@@ -1855,6 +1962,34 @@ func (u *APIKeyUpsertBulk) SetStatus(v string) *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) UpdateStatus() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetSource sets the "source" field.
+func (u *APIKeyUpsertBulk) SetSource(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetSource(v)
+	})
+}
+
+// UpdateSource sets the "source" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateSource() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateSource()
+	})
+}
+
+// SetIsHidden sets the "is_hidden" field.
+func (u *APIKeyUpsertBulk) SetIsHidden(v bool) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetIsHidden(v)
+	})
+}
+
+// UpdateIsHidden sets the "is_hidden" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateIsHidden() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateIsHidden()
 	})
 }
 

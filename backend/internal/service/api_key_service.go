@@ -521,6 +521,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	if apiKey.UserID != userID {
 		return nil, ErrInsufficientPerms
 	}
+	if apiKey.IsHidden {
+		return nil, ErrAPIKeyNotFound
+	}
 
 	// 验证 IP 白名单格式
 	if len(req.IPWhitelist) > 0 {
@@ -638,21 +641,24 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 // Delete 删除API Key
 func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) error {
-	key, ownerID, err := s.apiKeyRepo.GetKeyAndOwnerID(ctx, id)
+	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get api key: %w", err)
 	}
 
 	// 验证当前用户是否为该 API Key 的所有者
-	if ownerID != userID {
+	if apiKey.UserID != userID {
 		return ErrInsufficientPerms
+	}
+	if apiKey.IsHidden {
+		return ErrAPIKeyNotFound
 	}
 
 	// 清除Redis缓存（使用 userID 而非 apiKey.UserID）
 	if s.cache != nil {
 		_ = s.cache.DeleteCreateAttemptCount(ctx, userID)
 	}
-	s.InvalidateAuthCacheByKey(ctx, key)
+	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
 
 	if err := s.apiKeyRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete api key: %w", err)

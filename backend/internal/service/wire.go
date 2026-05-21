@@ -451,6 +451,7 @@ var ProviderSet = wire.NewSet(
 	NewRedeemService,
 	NewPromoService,
 	NewUsageService,
+	NewWebChatService,
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,

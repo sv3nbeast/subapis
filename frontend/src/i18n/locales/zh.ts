@@ -708,6 +708,7 @@ export default {
   nav: {
     dashboard: '仪表盘',
     announcements: '公告',
+    webChat: '网页对话',
     apiKeys: 'API 密钥',
     usage: '使用记录',
     redeem: '兑换',
@@ -1392,6 +1393,37 @@ export default {
       unitPerMillion: '/ 1M token',
       unitPerRequest: '/ 次'
     }
+  },
+
+  webChat: {
+    eyebrow: 'Browser Workbench',
+    title: '网页对话',
+    description: '无需配置 CLI，直接在控制台内使用可访问分组发起文本流式对话。',
+    sessions: '会话',
+    newChat: '新建对话',
+    noSessions: '暂无会话',
+    disabledTitle: '网页对话未开放',
+    disabledDescription: '该功能由管理员在系统设置中开启，默认关闭以避免上线后自动暴露。',
+    noGroupsTitle: '暂无可用分组',
+    noGroupsDescription: '当前账号没有可用于网页对话的分组或模型。',
+    emptyTitle: '选择或新建一个对话',
+    emptyDescription: '会话创建后会锁定分组和模型，切换模型请新建对话。',
+    selectGroup: '选择分组',
+    group: '分组',
+    model: '模型',
+    context: '当前上下文',
+    shortcuts: '快捷入口',
+    priceHint: '价格提示',
+    noPricing: '该模型暂未配置价格，实际扣费以网关记录为准。',
+    tokenPrice: '输入 {input} / 1M tokens，输出 {output} / 1M tokens。',
+    perRequestPrice: '按次计费：{price} / 次。',
+    imagePrice: '图片计费：{price} / 次。',
+    placeholder: '输入你的问题，Shift + Enter 换行...',
+    enterHint: 'Enter 发送，Shift + Enter 换行',
+    send: '发送',
+    streamError: '流式响应异常',
+    resizeSessions: '拖拽调整会话列表宽度',
+    resizeContext: '拖拽调整上下文面板宽度',
   },
 
   affiliate: {
@@ -5731,6 +5763,12 @@ export default {
           configureLink: '前往 渠道管理 > 渠道定价 配置模型价格',
           enabled: '启用可用渠道',
           enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。',
+        },
+        webChat: {
+          title: '网页对话',
+          description: '为不会配置 CLI 的用户提供控制台内文本流式对话。默认关闭，开启后会按分组自动创建隐藏托管密钥。',
+          enabled: '启用网页对话',
+          enabledHint: '关闭后用户端侧边栏入口隐藏，接口拒绝访问，已创建的隐藏密钥不会暴露给普通用户。',
         },
         riskControl: {
           title: '风控中心',

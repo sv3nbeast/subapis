@@ -111,6 +111,8 @@ type APIKeyMutation struct {
 	key                *string
 	name               *string
 	status             *string
+	source             *string
+	is_hidden          *bool
 	last_used_at       *time.Time
 	ip_whitelist       *[]string
 	appendip_whitelist []string
@@ -559,6 +561,78 @@ func (m *APIKeyMutation) OldStatus(ctx context.Context) (v string, err error) {
 // ResetStatus resets all changes to the "status" field.
 func (m *APIKeyMutation) ResetStatus() {
 	m.status = nil
+}
+
+// SetSource sets the "source" field.
+func (m *APIKeyMutation) SetSource(s string) {
+	m.source = &s
+}
+
+// Source returns the value of the "source" field in the mutation.
+func (m *APIKeyMutation) Source() (r string, exists bool) {
+	v := m.source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSource returns the old "source" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSource: %w", err)
+	}
+	return oldValue.Source, nil
+}
+
+// ResetSource resets all changes to the "source" field.
+func (m *APIKeyMutation) ResetSource() {
+	m.source = nil
+}
+
+// SetIsHidden sets the "is_hidden" field.
+func (m *APIKeyMutation) SetIsHidden(b bool) {
+	m.is_hidden = &b
+}
+
+// IsHidden returns the value of the "is_hidden" field in the mutation.
+func (m *APIKeyMutation) IsHidden() (r bool, exists bool) {
+	v := m.is_hidden
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsHidden returns the old "is_hidden" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldIsHidden(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsHidden is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsHidden requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsHidden: %w", err)
+	}
+	return oldValue.IsHidden, nil
+}
+
+// ResetIsHidden resets all changes to the "is_hidden" field.
+func (m *APIKeyMutation) ResetIsHidden() {
+	m.is_hidden = nil
 }
 
 // SetLastUsedAt sets the "last_used_at" field.
@@ -1526,7 +1600,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1550,6 +1624,12 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, apikey.FieldStatus)
+	}
+	if m.source != nil {
+		fields = append(fields, apikey.FieldSource)
+	}
+	if m.is_hidden != nil {
+		fields = append(fields, apikey.FieldIsHidden)
 	}
 	if m.last_used_at != nil {
 		fields = append(fields, apikey.FieldLastUsedAt)
@@ -1620,6 +1700,10 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.GroupID()
 	case apikey.FieldStatus:
 		return m.Status()
+	case apikey.FieldSource:
+		return m.Source()
+	case apikey.FieldIsHidden:
+		return m.IsHidden()
 	case apikey.FieldLastUsedAt:
 		return m.LastUsedAt()
 	case apikey.FieldIPWhitelist:
@@ -1675,6 +1759,10 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldGroupID(ctx)
 	case apikey.FieldStatus:
 		return m.OldStatus(ctx)
+	case apikey.FieldSource:
+		return m.OldSource(ctx)
+	case apikey.FieldIsHidden:
+		return m.OldIsHidden(ctx)
 	case apikey.FieldLastUsedAt:
 		return m.OldLastUsedAt(ctx)
 	case apikey.FieldIPWhitelist:
@@ -1769,6 +1857,20 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case apikey.FieldSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSource(v)
+		return nil
+	case apikey.FieldIsHidden:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsHidden(v)
 		return nil
 	case apikey.FieldLastUsedAt:
 		v, ok := value.(time.Time)
@@ -2103,6 +2205,12 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case apikey.FieldSource:
+		m.ResetSource()
+		return nil
+	case apikey.FieldIsHidden:
+		m.ResetIsHidden()
 		return nil
 	case apikey.FieldLastUsedAt:
 		m.ResetLastUsedAt()

@@ -10,6 +10,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -28,6 +29,10 @@ func NewAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB) service.APIKeyRepo
 	return newAPIKeyRepositoryWithSQL(client, sqlDB)
 }
 
+func NewWebChatAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB) service.WebChatAPIKeyRepository {
+	return newAPIKeyRepositoryWithSQL(client, sqlDB)
+}
+
 func newAPIKeyRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *apiKeyRepository {
 	return &apiKeyRepository{client: client, sql: sqlq}
 }
@@ -43,6 +48,8 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetKey(key.Key).
 		SetName(key.Name).
 		SetStatus(key.Status).
+		SetSource(normalizeAPIKeySource(key.Source)).
+		SetIsHidden(key.IsHidden).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
 		SetQuota(key.Quota).
@@ -304,7 +311,7 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+	q := r.activeQuery().Where(apikey.UserIDEQ(userID), apiKeyVisibleToUserPredicate())
 
 	// Apply filters
 	if filters.Search != "" {
@@ -365,7 +372,7 @@ func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, ap
 }
 
 func (r *apiKeyRepository) CountByUserID(ctx context.Context, userID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.UserIDEQ(userID)).Count(ctx)
+	count, err := r.activeQuery().Where(apikey.UserIDEQ(userID), apiKeyVisibleToUserPredicate()).Count(ctx)
 	return int64(count), err
 }
 
@@ -431,7 +438,7 @@ func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector
 
 // SearchAPIKeys searches API keys by user ID and/or keyword (name)
 func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]service.APIKey, error) {
-	q := r.activeQuery()
+	q := r.activeQuery().Where(apiKeyVisibleToUserPredicate())
 	if userID > 0 {
 		q = q.Where(apikey.UserIDEQ(userID))
 	}
@@ -450,6 +457,109 @@ func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyw
 		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
 	}
 	return outKeys, nil
+}
+
+func apiKeyVisibleToUserPredicate() predicate.APIKey {
+	return predicate.APIKey(func(s *entsql.Selector) {
+		col := s.C("is_hidden")
+		s.Where(entsql.Or(
+			entsql.IsNull(col),
+			entsql.IsFalse(col),
+		))
+	})
+}
+
+func (r *apiKeyRepository) EnsureWebChatKey(ctx context.Context, userID, groupID int64, groupName, key string) (*service.APIKey, bool, error) {
+	name := strings.TrimSpace(groupName)
+	if name == "" {
+		name = fmt.Sprintf("Group %d", groupID)
+	}
+	name = "Web Chat / " + name
+
+	var existing service.APIKey
+	if err := scanSingleRow(ctx, r.sql, `
+		SELECT id, user_id, key, name, group_id, status, source, is_hidden, quota, quota_used,
+		       rate_limit_5h, rate_limit_1d, rate_limit_7d, created_at, updated_at
+		FROM api_keys
+		WHERE user_id = $1
+		  AND group_id = $2
+		  AND source = $3
+		  AND is_hidden = true
+		  AND deleted_at IS NULL
+		LIMIT 1
+	`, []any{userID, groupID, service.APIKeySourceWebChat},
+		&existing.ID,
+		&existing.UserID,
+		&existing.Key,
+		&existing.Name,
+		&existing.GroupID,
+		&existing.Status,
+		&existing.Source,
+		&existing.IsHidden,
+		&existing.Quota,
+		&existing.QuotaUsed,
+		&existing.RateLimit5h,
+		&existing.RateLimit1d,
+		&existing.RateLimit7d,
+		&existing.CreatedAt,
+		&existing.UpdatedAt,
+	); err == nil {
+		return &existing, false, nil
+	} else if err != sql.ErrNoRows {
+		return nil, false, err
+	}
+
+	var created service.APIKey
+	if err := scanSingleRow(ctx, r.sql, `
+		INSERT INTO api_keys (
+			user_id, key, name, group_id, status, source, is_hidden,
+			ip_whitelist, ip_blacklist,
+			quota, quota_used, rate_limit_5h, rate_limit_1d, rate_limit_7d,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, true, '[]'::jsonb, '[]'::jsonb, 0, 0, 0, 0, 0, now(), now())
+		ON CONFLICT (user_id, group_id)
+			WHERE deleted_at IS NULL
+			  AND source = 'web_chat'
+			  AND is_hidden = true
+			  AND group_id IS NOT NULL
+		DO UPDATE SET
+			name = EXCLUDED.name,
+			status = CASE
+				WHEN api_keys.status = $7 THEN $5
+				ELSE api_keys.status
+			END,
+			updated_at = now()
+		RETURNING id, user_id, key, name, group_id, status, source, is_hidden, quota, quota_used,
+		          rate_limit_5h, rate_limit_1d, rate_limit_7d, created_at, updated_at
+	`, []any{
+		userID,
+		key,
+		name,
+		groupID,
+		service.StatusAPIKeyActive,
+		service.APIKeySourceWebChat,
+		service.StatusAPIKeyDisabled,
+	},
+		&created.ID,
+		&created.UserID,
+		&created.Key,
+		&created.Name,
+		&created.GroupID,
+		&created.Status,
+		&created.Source,
+		&created.IsHidden,
+		&created.Quota,
+		&created.QuotaUsed,
+		&created.RateLimit5h,
+		&created.RateLimit1d,
+		&created.RateLimit7d,
+		&created.CreatedAt,
+		&created.UpdatedAt,
+	); err != nil {
+		return nil, false, translatePersistenceError(err, nil, service.ErrAPIKeyExists)
+	}
+	return &created, true, nil
 }
 
 // ClearGroupIDByGroupID 将指定分组的所有 API Key 的 group_id 设为 nil
@@ -635,6 +745,8 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		RateLimit5h:   m.RateLimit5h,
 		RateLimit1d:   m.RateLimit1d,
 		RateLimit7d:   m.RateLimit7d,
+		Source:        normalizeAPIKeySource(m.Source),
+		IsHidden:      m.IsHidden,
 		Usage5h:       m.Usage5h,
 		Usage1d:       m.Usage1d,
 		Usage7d:       m.Usage7d,
@@ -649,6 +761,14 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		out.Group = groupEntityToService(m.Edges.Group)
 	}
 	return out
+}
+
+func normalizeAPIKeySource(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return service.APIKeySourceUser
+	}
+	return source
 }
 
 func userEntityToService(u *dbent.User) *service.User {

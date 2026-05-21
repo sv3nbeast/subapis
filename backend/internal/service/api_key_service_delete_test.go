@@ -252,6 +252,26 @@ func TestApiKeyService_Delete_Success(t *testing.T) {
 	require.False(t, exists, "delete should clear touch debounce cache")
 }
 
+func TestApiKeyService_Delete_HiddenWebChatKeyRejected(t *testing.T) {
+	repo := &apiKeyRepoStub{
+		apiKey: &APIKey{
+			ID:       77,
+			UserID:   7,
+			Key:      "sk-web-chat-hidden",
+			Source:   APIKeySourceWebChat,
+			IsHidden: true,
+		},
+	}
+	cache := &apiKeyCacheStub{}
+	svc := &APIKeyService{apiKeyRepo: repo, cache: cache}
+
+	err := svc.Delete(context.Background(), 77, 7)
+	require.ErrorIs(t, err, ErrAPIKeyNotFound)
+	require.Empty(t, repo.deletedIDs)
+	require.Empty(t, cache.invalidated)
+	require.Empty(t, cache.deleteAuthKeys)
+}
+
 // TestApiKeyService_Delete_NotFound 测试删除不存在的 API Key 时返回正确的错误。
 // 预期行为：
 //   - GetKeyAndOwnerID 返回 ErrAPIKeyNotFound 错误

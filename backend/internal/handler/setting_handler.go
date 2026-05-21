@@ -83,6 +83,8 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
 
+		WebChatEnabled: settings.WebChatEnabled,
+
 		AffiliateEnabled: settings.AffiliateEnabled,
 
 		RiskControlEnabled: settings.RiskControlEnabled,

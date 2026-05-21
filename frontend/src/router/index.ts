@@ -10,6 +10,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { resolveDocumentTitle } from './title'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 /**
  * Route definitions with lazy loading
@@ -200,6 +201,19 @@ const routes: RouteRecordRaw[] = [
       title: 'API Keys',
       titleKey: 'keys.title',
       descriptionKey: 'keys.description'
+    }
+  },
+  {
+    path: '/chat',
+    name: 'WebChat',
+    component: () => import('@/views/user/WebChatView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Web Chat',
+      titleKey: 'webChat.title',
+      descriptionKey: 'webChat.description',
+      requiresWebChat: true
     }
   },
   {
@@ -812,6 +826,11 @@ router.beforeEach((to, _from, next) => {
       next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
       return
     }
+  }
+
+  if (to.meta.requiresWebChat && !isFeatureFlagEnabled(FeatureFlags.webChat)) {
+    next(authStore.isAdmin ? '/admin/settings' : '/dashboard')
+    return
   }
 
   if (to.meta.requiresRiskControl) {

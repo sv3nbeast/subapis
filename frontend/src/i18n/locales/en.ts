@@ -708,6 +708,7 @@ export default {
   nav: {
     dashboard: 'Dashboard',
     announcements: 'Announcements',
+    webChat: 'Web Chat',
     apiKeys: 'API Keys',
     usage: 'Usage',
     redeem: 'Redeem',
@@ -1388,6 +1389,37 @@ export default {
       unitPerMillion: '/ 1M tokens',
       unitPerRequest: '/ request'
     }
+  },
+
+  webChat: {
+    eyebrow: 'Browser Workbench',
+    title: 'Web Chat',
+    description: 'Use accessible groups for streaming text chat directly in the console without configuring CLI tools.',
+    sessions: 'Sessions',
+    newChat: 'New Chat',
+    noSessions: 'No sessions yet',
+    disabledTitle: 'Web Chat is not available',
+    disabledDescription: 'An administrator can enable this in system settings. It is disabled by default to avoid automatic exposure.',
+    noGroupsTitle: 'No available groups',
+    noGroupsDescription: 'This account has no group or model available for web chat.',
+    emptyTitle: 'Select or create a chat',
+    emptyDescription: 'Group and model are locked after session creation. Create a new chat to switch models.',
+    selectGroup: 'Select group',
+    group: 'Group',
+    model: 'Model',
+    context: 'Current Context',
+    shortcuts: 'Shortcuts',
+    priceHint: 'Price Hint',
+    noPricing: 'No price is configured for this model. Actual billing follows gateway usage records.',
+    tokenPrice: 'Input {input} / 1M tokens, output {output} / 1M tokens.',
+    perRequestPrice: 'Per request: {price} / request.',
+    imagePrice: 'Image billing: {price} / request.',
+    placeholder: 'Ask a question. Shift + Enter for a new line...',
+    enterHint: 'Enter to send, Shift + Enter for a new line',
+    send: 'Send',
+    streamError: 'Streaming response error',
+    resizeSessions: 'Drag to resize the session list',
+    resizeContext: 'Drag to resize the context panel',
   },
 
   affiliate: {
@@ -5561,6 +5593,12 @@ export default {
           configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
           enabled: 'Enable Available Channels',
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
+        },
+        webChat: {
+          title: 'Web Chat',
+          description: 'Provide in-console streaming text chat for users who do not configure CLI tools. Disabled by default; enabling creates hidden managed keys per group as needed.',
+          enabled: 'Enable Web Chat',
+          enabledHint: 'When off, the sidebar entry is hidden, APIs reject access, and existing hidden keys remain invisible to normal users.',
         },
         riskControl: {
           title: 'Risk Control',

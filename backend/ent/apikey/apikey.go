@@ -31,6 +31,10 @@ const (
 	FieldGroupID = "group_id"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldSource holds the string denoting the source field in the database.
+	FieldSource = "source"
+	// FieldIsHidden holds the string denoting the is_hidden field in the database.
+	FieldIsHidden = "is_hidden"
 	// FieldLastUsedAt holds the string denoting the last_used_at field in the database.
 	FieldLastUsedAt = "last_used_at"
 	// FieldIPWhitelist holds the string denoting the ip_whitelist field in the database.
@@ -103,6 +107,8 @@ var Columns = []string{
 	FieldName,
 	FieldGroupID,
 	FieldStatus,
+	FieldSource,
+	FieldIsHidden,
 	FieldLastUsedAt,
 	FieldIPWhitelist,
 	FieldIPBlacklist,
@@ -152,6 +158,12 @@ var (
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	StatusValidator func(string) error
+	// DefaultSource holds the default value on creation for the "source" field.
+	DefaultSource string
+	// SourceValidator is a validator for the "source" field. It is called by the builders before save.
+	SourceValidator func(string) error
+	// DefaultIsHidden holds the default value on creation for the "is_hidden" field.
+	DefaultIsHidden bool
 	// DefaultQuota holds the default value on creation for the "quota" field.
 	DefaultQuota float64
 	// DefaultQuotaUsed holds the default value on creation for the "quota_used" field.
@@ -216,6 +228,16 @@ func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// BySource orders the results by the source field.
+func BySource(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSource, opts...).ToFunc()
+}
+
+// ByIsHidden orders the results by the is_hidden field.
+func ByIsHidden(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIsHidden, opts...).ToFunc()
 }
 
 // ByLastUsedAt orders the results by the last_used_at field.

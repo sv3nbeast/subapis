@@ -47,6 +47,13 @@ func (APIKey) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		field.String("source").
+			MaxLen(32).
+			Default("user").
+			Comment("Source of the API key, e.g. user or web_chat"),
+		field.Bool("is_hidden").
+			Default(false).
+			Comment("Whether this key is system-managed and hidden from normal user key lists"),
 		field.Time("last_used_at").
 			Optional().
 			Nillable().

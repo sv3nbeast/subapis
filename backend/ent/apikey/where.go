@@ -95,6 +95,16 @@ func Status(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldStatus, v))
 }
 
+// Source applies equality check predicate on the "source" field. It's identical to SourceEQ.
+func Source(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldSource, v))
+}
+
+// IsHidden applies equality check predicate on the "is_hidden" field. It's identical to IsHiddenEQ.
+func IsHidden(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldIsHidden, v))
+}
+
 // LastUsedAt applies equality check predicate on the "last_used_at" field. It's identical to LastUsedAtEQ.
 func LastUsedAt(v time.Time) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldLastUsedAt, v))
@@ -533,6 +543,81 @@ func StatusEqualFold(v string) predicate.APIKey {
 // StatusContainsFold applies the ContainsFold predicate on the "status" field.
 func StatusContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldStatus, v))
+}
+
+// SourceEQ applies the EQ predicate on the "source" field.
+func SourceEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldSource, v))
+}
+
+// SourceNEQ applies the NEQ predicate on the "source" field.
+func SourceNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldSource, v))
+}
+
+// SourceIn applies the In predicate on the "source" field.
+func SourceIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldSource, vs...))
+}
+
+// SourceNotIn applies the NotIn predicate on the "source" field.
+func SourceNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldSource, vs...))
+}
+
+// SourceGT applies the GT predicate on the "source" field.
+func SourceGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldSource, v))
+}
+
+// SourceGTE applies the GTE predicate on the "source" field.
+func SourceGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldSource, v))
+}
+
+// SourceLT applies the LT predicate on the "source" field.
+func SourceLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldSource, v))
+}
+
+// SourceLTE applies the LTE predicate on the "source" field.
+func SourceLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldSource, v))
+}
+
+// SourceContains applies the Contains predicate on the "source" field.
+func SourceContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldSource, v))
+}
+
+// SourceHasPrefix applies the HasPrefix predicate on the "source" field.
+func SourceHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldSource, v))
+}
+
+// SourceHasSuffix applies the HasSuffix predicate on the "source" field.
+func SourceHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldSource, v))
+}
+
+// SourceEqualFold applies the EqualFold predicate on the "source" field.
+func SourceEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldSource, v))
+}
+
+// SourceContainsFold applies the ContainsFold predicate on the "source" field.
+func SourceContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldSource, v))
+}
+
+// IsHiddenEQ applies the EQ predicate on the "is_hidden" field.
+func IsHiddenEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldIsHidden, v))
+}
+
+// IsHiddenNEQ applies the NEQ predicate on the "is_hidden" field.
+func IsHiddenNEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldIsHidden, v))
 }
 
 // LastUsedAtEQ applies the EQ predicate on the "last_used_at" field.

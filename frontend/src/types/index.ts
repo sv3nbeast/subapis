@@ -211,7 +211,6 @@ export interface PublicSettings {
   payment_enabled: boolean
   purchase_subscription_enabled: boolean
   purchase_subscription_url: string
-  risk_control_enabled: boolean
   table_default_page_size: number
   table_page_size_options: number[]
   custom_menu_items: CustomMenuItem[]
@@ -233,7 +232,9 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  web_chat_enabled: boolean
   affiliate_enabled: boolean
+  risk_control_enabled: boolean
 }
 
 export interface AuthResponse {

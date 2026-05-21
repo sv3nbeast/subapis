@@ -217,6 +217,9 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Web Chat feature switch (user-facing chat workbench)
+	WebChatEnabled bool `json:"web_chat_enabled"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
@@ -284,6 +287,8 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	WebChatEnabled bool `json:"web_chat_enabled"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

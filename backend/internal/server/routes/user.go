@@ -63,6 +63,17 @@ func RegisterUserRoutes(
 			keys.DELETE("/:id", h.APIKey.Delete)
 		}
 
+		// 网页对话（默认关闭，由公共设置 web_chat_enabled 控制入口与接口）
+		webChat := authenticated.Group("/web-chat")
+		{
+			webChat.GET("/options", h.WebChat.Options)
+			webChat.GET("/sessions", h.WebChat.ListSessions)
+			webChat.POST("/sessions", h.WebChat.CreateSession)
+			webChat.GET("/sessions/:id/messages", h.WebChat.ListMessages)
+			webChat.POST("/sessions/:id/messages", h.WebChat.SendMessage)
+			webChat.DELETE("/sessions/:id", h.WebChat.DeleteSession)
+		}
+
 		// 用户可用分组（非管理员接口）
 		groups := authenticated.Group("/groups")
 		{
