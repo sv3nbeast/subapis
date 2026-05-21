@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -1182,6 +1183,45 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	}
 
 	return out, modelID
+}
+
+func ensureAnthropicThinkingForModelAlias(body []byte, requestedModel string) []byte {
+	if !isAnthropicThinkingModelAlias(requestedModel) || len(body) == 0 {
+		return body
+	}
+
+	out := body
+	if thinkingType := gjson.GetBytes(out, "thinking.type").String(); thinkingType != "enabled" && thinkingType != "adaptive" {
+		if next, ok := setJSONValueBytes(out, "thinking.type", "enabled"); ok {
+			out = next
+		}
+	}
+	if !gjson.GetBytes(out, "thinking.budget_tokens").Exists() {
+		if next, ok := setJSONValueBytes(out, "thinking.budget_tokens", BudgetRectifyBudgetTokens); ok {
+			out = next
+		}
+	}
+	if maxTokens := gjson.GetBytes(out, "max_tokens").Int(); maxTokens < int64(BudgetRectifyMinMaxTokens) {
+		if next, ok := setJSONValueBytes(out, "max_tokens", BudgetRectifyMaxTokens); ok {
+			out = next
+		}
+	}
+	return out
+}
+
+func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, requestedModel string) {
+	if req == nil || !isAnthropicThinkingModelAlias(requestedModel) {
+		return
+	}
+	if req.Thinking == nil || (req.Thinking.Type != "enabled" && req.Thinking.Type != "adaptive") {
+		req.Thinking = &apicompat.AnthropicThinking{Type: "enabled"}
+	}
+	if req.Thinking.BudgetTokens <= 0 {
+		req.Thinking.BudgetTokens = BudgetRectifyBudgetTokens
+	}
+	if req.MaxTokens < BudgetRectifyMinMaxTokens {
+		req.MaxTokens = BudgetRectifyMaxTokens
+	}
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
@@ -4006,6 +4046,11 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		case AccountTypeOAuth, AccountTypeSetupToken, AccountTypeServiceAccount:
 			return true
 		}
+		if account.IsModelSupported(requestedModel) {
+			return true
+		}
+		upstreamModel := normalizeAnthropicModelIDForUpstream(requestedModel)
+		return upstreamModel != requestedModel && account.IsModelSupported(upstreamModel)
 	}
 	// 其他平台使用账户的模型支持检查
 	return account.IsModelSupported(requestedModel)
@@ -4627,14 +4672,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body
+		originalModel := parsed.Model
 		passthroughModel := parsed.Model
 		if passthroughModel != "" {
-			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
+			mappingResult := resolveAnthropicUpstreamModel(account, passthroughModel)
+			if mappedModel := mappingResult.Model; mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
-				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s)", parsed.Model, mappedModel, account.Name)
+				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s, source=%s)", parsed.Model, mappedModel, account.Name, mappingResult.Source)
 				passthroughModel = mappedModel
 			}
 		}
+		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
 			Body:          passthroughBody,
 			RequestModel:  passthroughModel,
@@ -4747,6 +4795,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		reqModel = mappedModel
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
+	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		body = injectAnthropicCacheControlTTL1h(body)
@@ -8973,6 +9022,9 @@ func resolveAccountUpstreamModel(account *Account, requestedModel string) string
 	if account.Platform == PlatformAntigravity {
 		return mapAntigravityModel(account, requestedModel)
 	}
+	if account.Platform == PlatformAnthropic {
+		return resolveAnthropicUpstreamModel(account, requestedModel).Model
+	}
 	return account.GetMappedModel(requestedModel)
 }
 
@@ -9002,12 +9054,15 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body
+		originalModel := parsed.Model
 		if reqModel := parsed.Model; reqModel != "" {
-			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
+			mappingResult := resolveAnthropicUpstreamModel(account, reqModel)
+			if mappedModel := mappingResult.Model; mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
-				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
+				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s, source=%s)", reqModel, mappedModel, account.Name, mappingResult.Source)
 			}
 		}
+		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
 	}
 
@@ -9057,6 +9112,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=%s)", parsed.Model, mappedModel, account.Name, mappingSource)
 		}
 	}
+	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
 
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)

@@ -66,14 +66,24 @@ func TestResolveAnthropicUpstreamModel(t *testing.T) {
 			wantSource:     "account",
 		},
 		{
-			name: "unmapped oauth model is passed through",
+			name: "oauth falls back to default alias mapping",
 			account: &Account{
 				Platform: PlatformAnthropic,
 				Type:     AccountTypeOAuth,
 			},
 			requestedModel: "claude-opus-4-7-thinking",
-			wantModel:      "claude-opus-4-7-thinking",
-			wantSource:     "",
+			wantModel:      "claude-opus-4-7",
+			wantSource:     "alias",
+		},
+		{
+			name: "api key falls back to dotted default alias mapping",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeAPIKey,
+			},
+			requestedModel: "claude-opus-4.7",
+			wantModel:      "claude-opus-4-7",
+			wantSource:     "alias",
 		},
 		{
 			name:           "nil account returns original",
@@ -89,6 +99,27 @@ func TestResolveAnthropicUpstreamModel(t *testing.T) {
 			got := resolveAnthropicUpstreamModel(tt.account, tt.requestedModel)
 			if got.Model != tt.wantModel || got.Source != tt.wantSource {
 				t.Fatalf("resolveAnthropicUpstreamModel() = (%q, %q), want (%q, %q)", got.Model, got.Source, tt.wantModel, tt.wantSource)
+			}
+		})
+	}
+}
+
+func TestIsAnthropicThinkingModelAlias(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-opus-4-7-thinking", want: true},
+		{model: "claude-opus-4.7-thinking", want: true},
+		{model: "claude-opus-4-7", want: false},
+		{model: "claude-opus-4.7", want: false},
+		{model: "claude-sonnet-4-5-thinking", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := isAnthropicThinkingModelAlias(tt.model); got != tt.want {
+				t.Fatalf("isAnthropicThinkingModelAlias(%q) = %v, want %v", tt.model, got, tt.want)
 			}
 		})
 	}

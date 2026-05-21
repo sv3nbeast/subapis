@@ -81,6 +81,38 @@ func TestRunCheckForModel_OffMode_PreservesDefaultBody(t *testing.T) {
 	}
 }
 
+func TestRunCheckForModel_AnthropicNormalizesMonitorModelAlias(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "thinking alias", model: "claude-opus-4-7-thinking", want: "claude-opus-4-7"},
+		{name: "dotted alias", model: "claude-opus-4.7", want: "claude-opus-4-7"},
+		{name: "dotted thinking alias", model: "claude-opus-4.7-thinking", want: "claude-opus-4-7"},
+		{name: "official id passthrough", model: "claude-opus-4-7", want: "claude-opus-4-7"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &captureHandler{respondText: allChallengeAnswers()}
+			endpoint := setupFakeAnthropic(t, h)
+
+			res := runCheckForModel(context.Background(), MonitorProviderAnthropic, endpoint, "sk-fake", tt.model, nil)
+
+			if h.lastBody["model"] != tt.want {
+				t.Fatalf("monitor body model = %v, want %s", h.lastBody["model"], tt.want)
+			}
+			if res.Model != tt.model {
+				t.Fatalf("result model = %q, want original model %q", res.Model, tt.model)
+			}
+			if res.Status != MonitorStatusOperational {
+				t.Fatalf("expected operational result, got status=%s message=%q", res.Status, res.Message)
+			}
+		})
+	}
+}
+
 func TestRunCheckForModel_MergeMode_UserFieldsWinButDenyListProtects(t *testing.T) {
 	h := &captureHandler{respondText: "the answer is 42"}
 	endpoint := setupFakeAnthropic(t, h)

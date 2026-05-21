@@ -184,7 +184,7 @@ var providerAdapters = map[string]providerAdapter{
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
 			return json.Marshal(map[string]any{
-				"model":      model,
+				"model":      normalizeAnthropicModelIDForUpstream(model),
 				"messages":   []map[string]string{{"role": "user", "content": prompt}},
 				"max_tokens": monitorChallengeMaxTokens,
 			})

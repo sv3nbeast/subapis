@@ -128,6 +128,26 @@ func TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder(t *testing.
 	require.Contains(t, resultStr, `"max_tokens":128000`)
 }
 
+func TestEnsureAnthropicThinkingForModelAlias(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-7","messages":[]}`)
+
+	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-4-7-thinking")
+
+	require.Equal(t, "enabled", gjson.GetBytes(result, "thinking.type").String())
+	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(result, "thinking.budget_tokens").Int())
+	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(result, "max_tokens").Int())
+}
+
+func TestEnsureAnthropicThinkingForModelAlias_PreservesClientThinking(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-7","max_tokens":80000,"thinking":{"type":"adaptive","budget_tokens":12345},"messages":[]}`)
+
+	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-4.7-thinking")
+
+	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+	require.Equal(t, int64(12345), gjson.GetBytes(result, "thinking.budget_tokens").Int())
+	require.Equal(t, int64(80000), gjson.GetBytes(result, "max_tokens").Int())
+}
+
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
 	body := []byte(`{"alpha":1,"system":[{"id":"block-1","type":"text","text":"Custom"}],"messages":[],"omega":2}`)
 

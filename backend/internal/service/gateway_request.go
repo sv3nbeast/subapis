@@ -156,6 +156,9 @@ func ParseGatewayRequest(body []byte, protocol string) (*ParsedRequest, error) {
 			return nil, fmt.Errorf("invalid model field type")
 		}
 		parsed.Model = modelResult.String()
+		if isAnthropicThinkingModelAlias(parsed.Model) {
+			parsed.ThinkingEnabled = true
+		}
 	}
 
 	// stream: 需要严格类型校验，非 bool 返回错误

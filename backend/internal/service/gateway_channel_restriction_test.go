@@ -65,6 +65,16 @@ func TestResolveAccountUpstreamModel_NonAntigravity(t *testing.T) {
 	require.Equal(t, "claude-sonnet-4-6", got, "no mapping = passthrough")
 }
 
+func TestResolveAccountUpstreamModel_AnthropicDefaultAlias(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+	}
+	got := resolveAccountUpstreamModel(account, "claude-opus-4-7-thinking")
+	require.Equal(t, "claude-opus-4-7", got)
+}
+
 // --- checkChannelPricingRestriction ---
 
 func TestCheckChannelPricingRestriction_NilGroupID(t *testing.T) {

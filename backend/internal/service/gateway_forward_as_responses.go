@@ -58,6 +58,7 @@ func (s *GatewayService) ForwardAsResponses(
 	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body)
 	mappedModel := resolveAnthropicUpstreamModel(account, originalModel).Model
 	anthropicReq.Model = mappedModel
+	applyAnthropicThinkingAliasToRequest(anthropicReq, originalModel)
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
 		zap.Int64("account_id", account.ID),

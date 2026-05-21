@@ -41,6 +41,8 @@ func resolveRequestedModelKey(ctx context.Context, account *Account, requestedMo
 	modelKey := account.GetMappedModel(requestedModel)
 	if account.Platform == PlatformAntigravity {
 		modelKey = resolveFinalAntigravityModelKey(ctx, account, requestedModel)
+	} else if account.Platform == PlatformAnthropic {
+		modelKey = resolveAnthropicUpstreamModel(account, requestedModel).Model
 	}
 	return strings.TrimSpace(modelKey)
 }

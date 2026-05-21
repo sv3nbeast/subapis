@@ -1,10 +1,61 @@
 package service
 
-import "github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+import (
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+)
 
 type anthropicModelMappingResult struct {
 	Model  string
 	Source string
+}
+
+var defaultAnthropicModelAliases = map[string]string{
+	"claude-opus-4.7":          "claude-opus-4-7",
+	"claude-opus-4-7-thinking": "claude-opus-4-7",
+	"claude-opus-4.7-thinking": "claude-opus-4-7",
+}
+
+func isAnthropicThinkingModelAlias(model string) bool {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed {
+	case "claude-opus-4-7-thinking", "claude-opus-4.7-thinking":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeAnthropicModelIDForUpstream(requestedModel string) string {
+	return resolveDefaultAnthropicUpstreamModel(requestedModel).Model
+}
+
+func resolveDefaultAnthropicUpstreamModel(requestedModel string) anthropicModelMappingResult {
+	result := anthropicModelMappingResult{Model: requestedModel}
+	trimmed := strings.TrimSpace(requestedModel)
+	if trimmed == "" {
+		return result
+	}
+	if mappedModel, ok := defaultAnthropicModelAliases[trimmed]; ok {
+		result.Model = mappedModel
+		result.Source = "alias"
+		return result
+	}
+	normalized := claude.NormalizeModelID(trimmed)
+	if normalized != trimmed {
+		result.Model = normalized
+		result.Source = "prefix"
+		return result
+	}
+	if trimmed != requestedModel {
+		result.Model = trimmed
+		result.Source = "trim"
+	}
+	return result
 }
 
 func resolveAnthropicUpstreamModel(account *Account, requestedModel string) anthropicModelMappingResult {
@@ -23,16 +74,19 @@ func resolveAnthropicUpstreamModel(account *Account, requestedModel string) anth
 		return result
 	}
 
-	normalized := claude.NormalizeModelID(requestedModel)
+	defaultResult := resolveDefaultAnthropicUpstreamModel(requestedModel)
+	normalized := defaultResult.Model
+	source := defaultResult.Source
 	if account.Type == AccountTypeServiceAccount {
-		normalized = normalizeVertexAnthropicModelID(normalized)
+		vertexModel := normalizeVertexAnthropicModelID(normalized)
+		if vertexModel != normalized {
+			source = "vertex"
+		}
+		normalized = vertexModel
 	}
 	if normalized != requestedModel {
 		result.Model = normalized
-		result.Source = "prefix"
-		if account.Type == AccountTypeServiceAccount {
-			result.Source = "vertex"
-		}
+		result.Source = source
 	}
 	return result
 }

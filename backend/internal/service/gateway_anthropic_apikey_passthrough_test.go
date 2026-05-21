@@ -299,6 +299,20 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			endpoint:      "messages",
 		},
 		{
+			name:          "Forward: 无账号映射时应用 Anthropic 默认别名",
+			model:         "claude-opus-4-7-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-4-7",
+			endpoint:      "messages",
+		},
+		{
+			name:          "Forward: 账号映射优先于 Anthropic 默认别名",
+			model:         "claude-opus-4-7-thinking",
+			modelMapping:  map[string]any{"claude-opus-4-7-thinking": "custom-opus-target"},
+			expectedModel: "custom-opus-target",
+			endpoint:      "messages",
+		},
+		{
 			name:          "Forward: 精确匹配映射应改写模型",
 			model:         "claude-sonnet-4-20250514",
 			modelMapping:  map[string]any{"claude-sonnet-4-20250514": "claude-sonnet-4-5-20241022"},
@@ -324,6 +338,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			model:         "claude-sonnet-4-20250514",
 			modelMapping:  map[string]any{"claude-3-haiku-20240307": "claude-3-opus-20240229"},
 			expectedModel: "claude-sonnet-4-20250514",
+			endpoint:      "count_tokens",
+		},
+		{
+			name:          "CountTokens: 无账号映射时应用 Anthropic 默认别名",
+			model:         "claude-opus-4.7-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-4-7",
 			endpoint:      "count_tokens",
 		},
 		{
@@ -396,6 +417,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 				require.NotNil(t, result)
 				require.Equal(t, tt.expectedModel, gjson.GetBytes(upstream.lastBody, "model").String(),
 					"Forward 上游请求体中的模型应为: %s", tt.expectedModel)
+				if isAnthropicThinkingModelAlias(tt.model) {
+					require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+					require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+					require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+				}
 			} else {
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
 
@@ -417,6 +443,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 				require.NoError(t, err)
 				require.Equal(t, tt.expectedModel, gjson.GetBytes(upstream.lastBody, "model").String(),
 					"CountTokens 上游请求体中的模型应为: %s", tt.expectedModel)
+				if isAnthropicThinkingModelAlias(tt.model) {
+					require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+					require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+					require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+				}
 			}
 		})
 	}

@@ -1208,6 +1208,16 @@ func TestGatewayService_isModelSupportedByAccount(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "Anthropic API Key账号-默认别名可命中上游模型白名单",
+			account: &Account{
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeAPIKey,
+				Credentials: map[string]any{"model_mapping": map[string]any{"claude-opus-4-7": "claude-opus-4-7"}},
+			},
+			model:    "claude-opus-4-7-thinking",
+			expected: true,
+		},
+		{
 			name:     "Gemini平台-无映射配置-支持所有模型",
 			account:  &Account{Platform: PlatformGemini, Type: AccountTypeAPIKey},
 			model:    "gemini-2.5-flash",
