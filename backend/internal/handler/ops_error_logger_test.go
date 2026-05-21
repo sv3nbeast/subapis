@@ -7,11 +7,52 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyOpsIdentityFieldsFromContext_PrefersAPIKeyAndFallsBackToSubject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+	accountID := int64(321)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.AccountID, accountID))
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 77, Concurrency: 3})
+
+	groupID := int64(10)
+	apiKey := &service.APIKey{
+		ID:      55,
+		UserID:  88,
+		GroupID: &groupID,
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	}
+	entry := &service.OpsInsertErrorLogInput{}
+
+	applyOpsIdentityFieldsFromContext(c, entry, apiKey)
+
+	require.NotNil(t, entry.APIKeyID)
+	require.Equal(t, apiKey.ID, *entry.APIKeyID)
+	require.NotNil(t, entry.UserID)
+	require.Equal(t, apiKey.UserID, *entry.UserID)
+	require.NotNil(t, entry.GroupID)
+	require.Equal(t, groupID, *entry.GroupID)
+	require.NotNil(t, entry.AccountID)
+	require.Equal(t, accountID, *entry.AccountID)
+	require.Equal(t, service.PlatformAnthropic, entry.Platform)
+
+	entry = &service.OpsInsertErrorLogInput{}
+	applyOpsIdentityFieldsFromContext(c, entry, nil)
+	require.Nil(t, entry.APIKeyID)
+	require.NotNil(t, entry.UserID)
+	require.Equal(t, int64(77), *entry.UserID)
+	require.NotNil(t, entry.AccountID)
+	require.Equal(t, accountID, *entry.AccountID)
+}
 
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	t.Helper()

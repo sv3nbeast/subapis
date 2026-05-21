@@ -127,24 +127,31 @@
                 <span v-else class="text-xs text-gray-400">-</span>
               </td>
 
-              <!-- User / Account -->
+              <!-- User / Key / Account -->
               <td class="px-4 py-2">
-                <template v-if="isUpstreamRow(log)">
-                  <el-tooltip v-if="log.account_id" :content="t('admin.ops.errorLog.accountId') + ' ' + log.account_id" placement="top" :show-after="500">
-                    <span class="max-w-[100px] truncate text-xs font-medium text-gray-900 dark:text-gray-200">
-                      {{ log.account_name || '-' }}
+                <div class="flex max-w-[180px] flex-col gap-0.5">
+                  <el-tooltip v-if="log.user_id || log.user_email" :content="formatUserTooltip(log)" placement="top" :show-after="500">
+                    <span class="truncate text-xs font-medium text-gray-900 dark:text-gray-200">
+                      {{ log.user_email || (log.user_id != null ? String(log.user_id) : '-') }}
                     </span>
                   </el-tooltip>
                   <span v-else class="text-xs text-gray-400">-</span>
-                </template>
-                <template v-else>
-                  <el-tooltip v-if="log.user_id" :content="t('admin.ops.errorLog.userId') + ' ' + log.user_id" placement="top" :show-after="500">
-                    <span class="max-w-[100px] truncate text-xs font-medium text-gray-900 dark:text-gray-200">
-                      {{ log.user_email || '-' }}
-                    </span>
-                  </el-tooltip>
-                  <span v-else class="text-xs text-gray-400">-</span>
-                </template>
+
+                  <div class="flex min-w-0 items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
+                    <el-tooltip v-if="log.api_key_id || log.api_key_name" :content="formatAPIKeyTooltip(log)" placement="top" :show-after="500">
+                      <span class="min-w-0 truncate font-mono">
+                        {{ log.api_key_name || (log.api_key_id != null ? `key:${log.api_key_id}` : '-') }}
+                      </span>
+                    </el-tooltip>
+                    <span v-if="log.api_key_id || log.api_key_name" class="text-gray-300 dark:text-gray-600">/</span>
+                    <el-tooltip v-if="log.account_id || log.account_name" :content="formatAccountTooltip(log)" placement="top" :show-after="500">
+                      <span class="min-w-0 truncate">
+                        {{ log.account_name || (log.account_id != null ? `acc:${log.account_id}` : '-') }}
+                      </span>
+                    </el-tooltip>
+                    <span v-else-if="!log.api_key_id && !log.api_key_name" class="text-gray-400">-</span>
+                  </div>
+                </div>
               </td>
 
               <!-- Status -->
@@ -218,17 +225,32 @@ import { getSeverityClass, formatDateTime } from '../utils/opsFormatters'
 
 const { t } = useI18n()
 
-function isUpstreamRow(log: OpsErrorLog): boolean {
-  const phase = String(log.phase || '').toLowerCase()
-  const owner = String(log.error_owner || '').toLowerCase()
-  return phase === 'upstream' && owner === 'provider'
-}
-
 function formatEndpointTooltip(log: OpsErrorLog): string {
   const parts: string[] = []
   if (log.inbound_endpoint) parts.push(`Inbound: ${log.inbound_endpoint}`)
   if (log.upstream_endpoint) parts.push(`Upstream: ${log.upstream_endpoint}`)
   return parts.join('\n') || ''
+}
+
+function formatUserTooltip(log: OpsErrorLog): string {
+  const parts: string[] = []
+  if (log.user_email) parts.push(log.user_email)
+  if (log.user_id != null) parts.push(`${t('admin.ops.errorLog.userId')} ${log.user_id}`)
+  return parts.join('\n')
+}
+
+function formatAPIKeyTooltip(log: OpsErrorLog): string {
+  const parts: string[] = []
+  if (log.api_key_name) parts.push(log.api_key_name)
+  if (log.api_key_id != null) parts.push(`${t('admin.ops.errorLog.apiKeyId')} ${log.api_key_id}`)
+  return parts.join('\n')
+}
+
+function formatAccountTooltip(log: OpsErrorLog): string {
+  const parts: string[] = []
+  if (log.account_name) parts.push(log.account_name)
+  if (log.account_id != null) parts.push(`${t('admin.ops.errorLog.accountId')} ${log.account_id}`)
+  return parts.join('\n')
 }
 
 function hasModelMapping(log: OpsErrorLog): boolean {
@@ -266,7 +288,7 @@ function getTypeBadge(log: OpsErrorLog): { label: string; className: string } {
   const phase = String(log.phase || '').toLowerCase()
   const owner = String(log.error_owner || '').toLowerCase()
 
-  if (isUpstreamRow(log)) {
+  if (phase === 'upstream' && owner === 'provider') {
     return { label: t('admin.ops.errorLog.typeUpstream'), className: 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-900/30 dark:text-red-400 dark:ring-red-500/30' }
   }
   if (phase === 'request' && owner === 'client') {

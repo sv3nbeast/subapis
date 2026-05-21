@@ -43,6 +43,9 @@ func TestBuildOpsErrorLogsWhere_UserQueryUsesExistsSubquery(t *testing.T) {
 		t.Fatalf("args len = %d, want 1", len(args))
 	}
 	if !strings.Contains(where, "EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.email ILIKE $") {
-		t.Fatalf("where should include EXISTS user email condition: %s", where)
+		t.Fatalf("where should include direct user email condition: %s", where)
+	}
+	if !strings.Contains(where, "EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = e.api_key_id AND u.email ILIKE $") {
+		t.Fatalf("where should include api-key owner email fallback condition: %s", where)
 	}
 }

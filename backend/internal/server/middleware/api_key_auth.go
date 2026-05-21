@@ -109,16 +109,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
+		setAPIKeyAuthContext(c, apiKey)
+
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
 		if cfg.RunMode == config.RunModeSimple {
-			c.Set(string(ContextKeyAPIKey), apiKey)
-			c.Set(string(ContextKeyUser), AuthSubject{
-				UserID:      apiKey.User.ID,
-				Concurrency: apiKey.User.Concurrency,
-			})
-			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
-			setGroupContext(c, apiKey.Group)
 			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 			c.Next()
 			return
@@ -210,17 +205,23 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		if subscription != nil {
 			c.Set(string(ContextKeySubscription), subscription)
 		}
-		c.Set(string(ContextKeyAPIKey), apiKey)
-		c.Set(string(ContextKeyUser), AuthSubject{
-			UserID:      apiKey.User.ID,
-			Concurrency: apiKey.User.Concurrency,
-		})
-		c.Set(string(ContextKeyUserRole), apiKey.User.Role)
-		setGroupContext(c, apiKey.Group)
 		_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 
 		c.Next()
 	}
+}
+
+func setAPIKeyAuthContext(c *gin.Context, apiKey *service.APIKey) {
+	if c == nil || apiKey == nil || apiKey.User == nil {
+		return
+	}
+	c.Set(string(ContextKeyAPIKey), apiKey)
+	c.Set(string(ContextKeyUser), AuthSubject{
+		UserID:      apiKey.User.ID,
+		Concurrency: apiKey.User.Concurrency,
+	})
+	c.Set(string(ContextKeyUserRole), apiKey.User.Role)
+	setGroupContext(c, apiKey.Group)
 }
 
 // GetAPIKeyFromContext 从上下文中获取API key

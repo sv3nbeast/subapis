@@ -398,6 +398,40 @@ func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) 
 	}
 }
 
+func applyOpsIdentityFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput, apiKey *service.APIKey) {
+	if c == nil || entry == nil {
+		return
+	}
+	if apiKey != nil {
+		entry.APIKeyID = &apiKey.ID
+		if apiKey.UserID > 0 {
+			v := apiKey.UserID
+			entry.UserID = &v
+		}
+		if apiKey.User != nil && apiKey.User.ID > 0 {
+			entry.UserID = &apiKey.User.ID
+		}
+		if apiKey.GroupID != nil {
+			entry.GroupID = apiKey.GroupID
+		}
+		// Prefer group platform if present (more stable than inferring from path).
+		if apiKey.Group != nil && apiKey.Group.Platform != "" {
+			entry.Platform = apiKey.Group.Platform
+		}
+	}
+	if entry.UserID == nil {
+		if subject, ok := middleware2.GetAuthSubjectFromContext(c); ok && subject.UserID > 0 {
+			v := subject.UserID
+			entry.UserID = &v
+		}
+	}
+	if entry.AccountID == nil && c.Request != nil {
+		if v, ok := c.Request.Context().Value(ctxkey.AccountID).(int64); ok && v > 0 {
+			entry.AccountID = &v
+		}
+	}
+}
+
 type opsCaptureWriter struct {
 	gin.ResponseWriter
 	limit int
@@ -699,19 +733,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			}
 			applyOpsLatencyFieldsFromContext(c, entry)
 
-			if apiKey != nil {
-				entry.APIKeyID = &apiKey.ID
-				if apiKey.User != nil {
-					entry.UserID = &apiKey.User.ID
-				}
-				if apiKey.GroupID != nil {
-					entry.GroupID = apiKey.GroupID
-				}
-				// Prefer group platform if present (more stable than inferring from path).
-				if apiKey.Group != nil && apiKey.Group.Platform != "" {
-					entry.Platform = apiKey.Group.Platform
-				}
-			}
+			applyOpsIdentityFieldsFromContext(c, entry, apiKey)
 
 			var clientIP string
 			if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {
@@ -902,19 +924,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			}
 		}
 
-		if apiKey != nil {
-			entry.APIKeyID = &apiKey.ID
-			if apiKey.User != nil {
-				entry.UserID = &apiKey.User.ID
-			}
-			if apiKey.GroupID != nil {
-				entry.GroupID = apiKey.GroupID
-			}
-			// Prefer group platform if present (more stable than inferring from path).
-			if apiKey.Group != nil && apiKey.Group.Platform != "" {
-				entry.Platform = apiKey.Group.Platform
-			}
-		}
+		applyOpsIdentityFieldsFromContext(c, entry, apiKey)
 
 		var clientIP string
 		if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {

@@ -178,6 +178,96 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 	})
 }
 
+func TestAPIKeyAuthSetsIdentityContextBeforeBillingRejection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	limit := 1.0
+	group := &service.Group{
+		ID:               42,
+		Name:             "sub",
+		Status:           service.StatusActive,
+		Hydrated:         true,
+		SubscriptionType: service.SubscriptionTypeSubscription,
+		DailyLimitUSD:    &limit,
+	}
+	user := &service.User{
+		ID:          7,
+		Role:        service.RoleUser,
+		Status:      service.StatusActive,
+		Balance:     10,
+		Concurrency: 3,
+	}
+	apiKey := &service.APIKey{
+		ID:     100,
+		UserID: user.ID,
+		Key:    "test-key",
+		Name:   "AI管家",
+		Status: service.StatusActive,
+		User:   user,
+		Group:  group,
+	}
+	apiKey.GroupID = &group.ID
+
+	apiKeyRepo := &stubApiKeyRepo{
+		getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+			if key != apiKey.Key {
+				return nil, service.ErrAPIKeyNotFound
+			}
+			clone := *apiKey
+			return &clone, nil
+		},
+	}
+	now := time.Now()
+	sub := &service.UserSubscription{
+		ID:               55,
+		UserID:           user.ID,
+		GroupID:          group.ID,
+		Status:           service.SubscriptionStatusActive,
+		ExpiresAt:        now.Add(24 * time.Hour),
+		DailyWindowStart: &now,
+		DailyUsageUSD:    10,
+	}
+	subscriptionRepo := &stubUserSubscriptionRepo{
+		getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+			clone := *sub
+			return &clone, nil
+		},
+		updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
+		activateWindow: func(ctx context.Context, id int64, start time.Time) error { return nil },
+		resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
+		resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
+		resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
+	}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
+	subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
+
+	router := gin.New()
+	var capturedAPIKey *service.APIKey
+	var capturedSubject AuthSubject
+	var capturedSubjectOK bool
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		capturedAPIKey, _ = GetAPIKeyFromContext(c)
+		capturedSubject, capturedSubjectOK = GetAuthSubjectFromContext(c)
+	})
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, cfg)))
+	router.GET("/t", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("x-api-key", apiKey.Key)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.NotNil(t, capturedAPIKey)
+	require.Equal(t, apiKey.ID, capturedAPIKey.ID)
+	require.True(t, capturedSubjectOK)
+	require.Equal(t, user.ID, capturedSubject.UserID)
+}
+
 func TestAPIKeyAuthSetsGroupContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

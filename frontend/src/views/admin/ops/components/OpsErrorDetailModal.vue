@@ -29,16 +29,23 @@
         </div>
 
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
-          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">
-            {{ isUpstreamError(detail) ? t('admin.ops.errorDetail.account') : t('admin.ops.errorDetail.user') }}
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.user') }}</div>
+          <div class="mt-1 truncate text-sm font-medium text-gray-900 dark:text-white" :title="formatUserTooltip(detail)">
+            {{ detail.user_email || (detail.user_id != null ? String(detail.user_id) : '—') }}
           </div>
-          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
-            <template v-if="isUpstreamError(detail)">
-              {{ detail.account_name || (detail.account_id != null ? String(detail.account_id) : '—') }}
-            </template>
-            <template v-else>
-              {{ detail.user_email || (detail.user_id != null ? String(detail.user_id) : '—') }}
-            </template>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.apiKey') }}</div>
+          <div class="mt-1 truncate text-sm font-medium text-gray-900 dark:text-white" :title="formatAPIKeyTooltip(detail)">
+            {{ detail.api_key_name || (detail.api_key_id != null ? String(detail.api_key_id) : '—') }}
+          </div>
+        </div>
+
+        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.account') }}</div>
+          <div class="mt-1 truncate text-sm font-medium text-gray-900 dark:text-white" :title="formatAccountTooltip(detail)">
+            {{ detail.account_name || (detail.account_id != null ? String(detail.account_id) : '—') }}
           </div>
         </div>
 
@@ -234,11 +241,28 @@ const title = computed(() => {
 
 const emptyText = computed(() => t('admin.ops.errorDetail.noErrorSelected'))
 
-function isUpstreamError(d: OpsErrorDetail | null): boolean {
-  if (!d) return false
-  const phase = String(d.phase || '').toLowerCase()
-  const owner = String(d.error_owner || '').toLowerCase()
-  return phase === 'upstream' && owner === 'provider'
+function formatUserTooltip(d: OpsErrorDetail | null): string {
+  if (!d) return ''
+  const parts: string[] = []
+  if (d.user_email) parts.push(d.user_email)
+  if (d.user_id != null) parts.push(`${t('admin.ops.errorDetail.userId')} ${d.user_id}`)
+  return parts.join('\n')
+}
+
+function formatAPIKeyTooltip(d: OpsErrorDetail | null): string {
+  if (!d) return ''
+  const parts: string[] = []
+  if (d.api_key_name) parts.push(d.api_key_name)
+  if (d.api_key_id != null) parts.push(`${t('admin.ops.errorDetail.apiKeyId')} ${d.api_key_id}`)
+  return parts.join('\n')
+}
+
+function formatAccountTooltip(d: OpsErrorDetail | null): string {
+  if (!d) return ''
+  const parts: string[] = []
+  if (d.account_name) parts.push(d.account_name)
+  if (d.account_id != null) parts.push(`${t('admin.ops.errorDetail.accountId')} ${d.account_id}`)
+  return parts.join('\n')
 }
 
 function formatRequestTypeLabel(type: number | null | undefined): string {

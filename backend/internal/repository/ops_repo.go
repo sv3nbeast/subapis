@@ -233,8 +233,9 @@ SELECT
   COALESCE(e.request_id, ''),
   COALESCE(e.error_message, ''),
   e.user_id,
-  COALESCE(u.email, ''),
+  COALESCE(u.email, u_api.email, ''),
   e.api_key_id,
+  COALESCE(k.name, ''),
   e.account_id,
   COALESCE(a.name, ''),
   e.group_id,
@@ -248,9 +249,11 @@ SELECT
   COALESCE(e.upstream_model, ''),
   e.request_type
 FROM ops_error_logs e
+LEFT JOIN api_keys k ON e.api_key_id = k.id
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
 LEFT JOIN users u ON e.user_id = u.id
+LEFT JOIN users u_api ON k.user_id = u_api.id
 LEFT JOIN users u2 ON e.resolved_by_user_id = u2.id
 ` + where + `
 ORDER BY e.created_at DESC
@@ -269,6 +272,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		var clientIP sql.NullString
 		var userID sql.NullInt64
 		var apiKeyID sql.NullInt64
+		var apiKeyName string
 		var accountID sql.NullInt64
 		var accountName string
 		var groupID sql.NullInt64
@@ -303,6 +307,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&userID,
 			&userEmail,
 			&apiKeyID,
+			&apiKeyName,
 			&accountID,
 			&accountName,
 			&groupID,
@@ -345,6 +350,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			v := apiKeyID.Int64
 			item.APIKeyID = &v
 		}
+		item.APIKeyName = apiKeyName
 		if accountID.Valid {
 			v := accountID.Int64
 			item.AccountID = &v
@@ -409,8 +415,9 @@ SELECT
   COALESCE(e.upstream_errors::text, ''),
   e.is_business_limited,
   e.user_id,
-  COALESCE(u.email, ''),
+  COALESCE(u.email, u_api.email, ''),
   e.api_key_id,
+  COALESCE(k.name, ''),
   e.account_id,
   COALESCE(a.name, ''),
   e.group_id,
@@ -434,7 +441,9 @@ SELECT
   e.request_body_bytes,
   COALESCE(e.request_headers::text, '')
 FROM ops_error_logs e
+LEFT JOIN api_keys k ON e.api_key_id = k.id
 LEFT JOIN users u ON e.user_id = u.id
+LEFT JOIN users u_api ON k.user_id = u_api.id
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
 WHERE e.id = $1
@@ -449,6 +458,7 @@ LIMIT 1`
 	var clientIP sql.NullString
 	var userID sql.NullInt64
 	var apiKeyID sql.NullInt64
+	var apiKeyName string
 	var accountID sql.NullInt64
 	var groupID sql.NullInt64
 	var authLatency sql.NullInt64
@@ -488,6 +498,7 @@ LIMIT 1`
 		&userID,
 		&out.UserEmail,
 		&apiKeyID,
+		&apiKeyName,
 		&accountID,
 		&out.AccountName,
 		&groupID,
@@ -544,6 +555,7 @@ LIMIT 1`
 		v := apiKeyID.Int64
 		out.APIKeyID = &v
 	}
+	out.APIKeyName = apiKeyName
 	if accountID.Valid {
 		v := accountID.Int64
 		out.AccountID = &v
@@ -1374,7 +1386,10 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 		like := "%" + userQuery + "%"
 		args = append(args, like)
 		n := itoa(len(args))
-		clauses = append(clauses, "EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.email ILIKE $"+n+")")
+		clauses = append(clauses, "("+
+			"EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.email ILIKE $"+n+")"+
+			" OR EXISTS (SELECT 1 FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = e.api_key_id AND u.email ILIKE $"+n+")"+
+			")")
 	}
 
 	return "WHERE " + strings.Join(clauses, " AND "), args
