@@ -30,6 +30,7 @@ type WebChatRepository interface {
 	CreateSession(ctx context.Context, session *WebChatSession) error
 	ListSessions(ctx context.Context, userID int64) ([]WebChatSession, error)
 	GetSession(ctx context.Context, userID, sessionID int64) (*WebChatSession, error)
+	UpdateSessionTarget(ctx context.Context, userID, sessionID, groupID int64, model string) error
 	DeleteSession(ctx context.Context, userID, sessionID int64) error
 	CreateMessage(ctx context.Context, message *WebChatMessage) error
 	UpdateMessageStatus(ctx context.Context, messageID int64, content, status, errorMessage string) error
@@ -42,20 +43,33 @@ type WebChatAPIKeyRepository interface {
 	EnsureWebChatKey(ctx context.Context, userID, groupID int64, groupName, key string) (*APIKey, bool, error)
 }
 
+type webChatAPIKeyManager interface {
+	GetAvailableGroups(ctx context.Context, userID int64) ([]Group, error)
+	GenerateKey() (string, error)
+}
+
+type webChatModelCatalog interface {
+	ListDisplayModelsForGroup(ctx context.Context, groupID int64, platform string) []SupportedModel
+}
+
+type webChatRuntimeReader interface {
+	GetWebChatRuntime(ctx context.Context) WebChatRuntime
+}
+
 type WebChatService struct {
 	repo           WebChatRepository
 	webChatKeyRepo WebChatAPIKeyRepository
-	apiKeyService  *APIKeyService
-	channelService *ChannelService
-	settingService *SettingService
+	apiKeyService  webChatAPIKeyManager
+	channelService webChatModelCatalog
+	settingService webChatRuntimeReader
 }
 
 func NewWebChatService(
 	repo WebChatRepository,
 	webChatKeyRepo WebChatAPIKeyRepository,
-	apiKeyService *APIKeyService,
-	channelService *ChannelService,
-	settingService *SettingService,
+	apiKeyService webChatAPIKeyManager,
+	channelService webChatModelCatalog,
+	settingService webChatRuntimeReader,
 ) *WebChatService {
 	return &WebChatService{
 		repo:           repo,
@@ -152,11 +166,11 @@ func (s *WebChatService) ListMessages(ctx context.Context, userID, sessionID int
 	return s.repo.ListMessages(ctx, userID, sessionID)
 }
 
-func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int64, content string) (*WebChatSession, *APIKey, []OpenAIChatMessage, *WebChatMessage, error) {
+func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int64, req WebChatSendMessageRequest) (*WebChatSession, *APIKey, []OpenAIChatMessage, *WebChatMessage, error) {
 	if !s.FeatureEnabled(ctx) {
 		return nil, nil, nil, nil, ErrWebChatDisabled
 	}
-	content = strings.TrimSpace(content)
+	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		return nil, nil, nil, nil, ErrWebChatEmptyMessage
 	}
@@ -168,9 +182,25 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	group, model, err := s.validateGroupModel(ctx, userID, session.GroupID, session.Model)
+	groupID := req.GroupID
+	if groupID <= 0 {
+		groupID = session.GroupID
+	}
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		modelName = session.Model
+	}
+	group, model, err := s.validateGroupModel(ctx, userID, groupID, modelName)
 	if err != nil {
 		return nil, nil, nil, nil, err
+	}
+
+	if group.ID != session.GroupID || model.Name != session.Model {
+		if err := s.repo.UpdateSessionTarget(ctx, userID, session.ID, group.ID, model.Name); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("update web chat session target: %w", err)
+		}
+		session.GroupID = group.ID
+		session.Model = model.Name
 	}
 
 	managedKey, err := s.ensureManagedKey(ctx, userID, group)
@@ -208,7 +238,6 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 	}
 	session.GroupName = group.Name
 	session.Platform = group.Platform
-	session.Model = model.Name
 	return session, managedKey, messages, assistantMessage, nil
 }
 
@@ -235,12 +264,15 @@ func (s *WebChatService) webChatGroups(ctx context.Context, userID int64) ([]Web
 	out := make([]WebChatGroupOption, 0, len(groups))
 	for i := range groups {
 		g := groups[i]
-		modelNames := s.supportedModels(ctx, g.ID, g.Platform)
-		models := make([]WebChatModelOption, 0, len(modelNames))
-		for _, name := range modelNames {
+		supported := s.displayModels(ctx, g.ID, g.Platform)
+		models := make([]WebChatModelOption, 0, len(supported))
+		for _, model := range supported {
+			if strings.TrimSpace(model.Name) == "" {
+				continue
+			}
 			models = append(models, WebChatModelOption{
-				Name:    name,
-				Pricing: s.modelPricing(ctx, g.ID, name),
+				Name:    model.Name,
+				Pricing: webChatPricingFromChannel(model.Pricing),
 			})
 		}
 		out = append(out, WebChatGroupOption{
@@ -281,15 +313,15 @@ func (s *WebChatService) validateGroupModel(ctx context.Context, userID, groupID
 	return nil, nil, ErrWebChatInvalidGroup
 }
 
-func (s *WebChatService) supportedModels(ctx context.Context, groupID int64, platform string) []string {
+func (s *WebChatService) displayModels(ctx context.Context, groupID int64, platform string) []SupportedModel {
 	if s.channelService == nil {
 		return nil
 	}
-	models := s.channelService.ListSupportedModelsForGroup(ctx, groupID, platform)
-	out := make([]string, 0, len(models))
+	models := s.channelService.ListDisplayModelsForGroup(ctx, groupID, platform)
+	out := make([]SupportedModel, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
-	for _, raw := range models {
-		name := strings.TrimSpace(raw)
+	for _, model := range models {
+		name := strings.TrimSpace(model.Name)
 		if name == "" || strings.Contains(name, "*") {
 			continue
 		}
@@ -298,16 +330,13 @@ func (s *WebChatService) supportedModels(ctx context.Context, groupID int64, pla
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, name)
+		model.Name = name
+		out = append(out, model)
 	}
 	return out
 }
 
-func (s *WebChatService) modelPricing(ctx context.Context, groupID int64, model string) *WebChatModelPricing {
-	if s.channelService == nil {
-		return nil
-	}
-	pricing := s.channelService.GetChannelModelPricing(ctx, groupID, model)
+func webChatPricingFromChannel(pricing *ChannelModelPricing) *WebChatModelPricing {
 	if pricing == nil {
 		return nil
 	}

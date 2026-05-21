@@ -42,6 +42,8 @@ type webChatCreateSessionRequest struct {
 
 type webChatSendMessageRequest struct {
 	Content string `json:"content" binding:"required"`
+	GroupID int64  `json:"group_id"`
+	Model   string `json:"model"`
 }
 
 func (h *WebChatHandler) Options(c *gin.Context) {
@@ -130,7 +132,11 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	session, managedKey, messages, assistantMessage, err := h.webChatService.PrepareSend(c.Request.Context(), subject.UserID, sessionID, req.Content)
+	session, managedKey, messages, assistantMessage, err := h.webChatService.PrepareSend(c.Request.Context(), subject.UserID, sessionID, service.WebChatSendMessageRequest{
+		Content: req.Content,
+		GroupID: req.GroupID,
+		Model:   req.Model,
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

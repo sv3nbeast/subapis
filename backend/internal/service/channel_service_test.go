@@ -162,6 +162,35 @@ func (m *mockChannelRepository) ReplaceModelPricing(ctx context.Context, channel
 	return nil
 }
 
+func TestListDisplayModelsForGroupIncludesDisplayOnlyChannels(t *testing.T) {
+	inputPrice := 0.000005
+	repo := &mockChannelRepository{
+		listAllFn: func(ctx context.Context) ([]Channel, error) {
+			return []Channel{{
+				ID:          6,
+				Name:        "Claude 模型",
+				Status:      StatusActive,
+				DisplayOnly: true,
+				GroupIDs:    []int64{2},
+				ModelPricing: []ChannelModelPricing{{
+					Platform:    PlatformAnthropic,
+					Models:      []string{"claude-opus-4-6", "claude-opus-4-6-thinking"},
+					BillingMode: BillingModeToken,
+					InputPrice:  &inputPrice,
+				}},
+			}}, nil
+		},
+	}
+	svc := NewChannelService(repo, nil, nil, nil)
+
+	models := svc.ListDisplayModelsForGroup(context.Background(), 2, PlatformAnthropic)
+
+	require.Len(t, models, 2)
+	require.Equal(t, "claude-opus-4-6", models[0].Name)
+	require.NotNil(t, models[0].Pricing)
+	require.Equal(t, "claude-opus-4-6-thinking", models[1].Name)
+}
+
 // ---------------------------------------------------------------------------
 // Mock: APIKeyAuthCacheInvalidator
 // ---------------------------------------------------------------------------

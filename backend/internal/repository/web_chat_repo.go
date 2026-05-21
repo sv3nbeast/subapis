@@ -110,6 +110,22 @@ func (r *webChatRepository) GetSession(ctx context.Context, userID, sessionID in
 	return &item, nil
 }
 
+func (r *webChatRepository) UpdateSessionTarget(ctx context.Context, userID, sessionID, groupID int64, model string) error {
+	res, err := r.sql.ExecContext(ctx, `
+		UPDATE web_chat_sessions
+		SET group_id = $3, model = $4, updated_at = now()
+		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+	`, sessionID, userID, groupID, model)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err == nil && affected == 0 {
+		return service.ErrWebChatSessionNotFound
+	}
+	return nil
+}
+
 func (r *webChatRepository) DeleteSession(ctx context.Context, userID, sessionID int64) error {
 	res, err := r.sql.ExecContext(ctx, `
 		UPDATE web_chat_sessions

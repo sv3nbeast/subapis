@@ -73,3 +73,9 @@ type WebChatCreateSessionRequest struct {
 	GroupID int64
 	Model   string
 }
+
+type WebChatSendMessageRequest struct {
+	Content string
+	GroupID int64
+	Model   string
+}

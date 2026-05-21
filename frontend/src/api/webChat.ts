@@ -117,7 +117,7 @@ export async function deleteSession(sessionID: number): Promise<void> {
 
 export async function streamMessage(
   sessionID: number,
-  content: string,
+  payload: { content: string; group_id?: number | null; model?: string },
   handlers: WebChatStreamHandlers = {},
 ): Promise<void> {
   const token = localStorage.getItem('auth_token')
@@ -130,7 +130,7 @@ export async function streamMessage(
   const response = await fetch(`${API_BASE_URL}/web-chat/sessions/${sessionID}/messages`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(payload),
     credentials: 'include',
     signal: handlers.signal,
   })

@@ -532,6 +532,65 @@ func (s *ChannelService) ListSupportedModelsForGroup(ctx context.Context, groupI
 	return cloneStringSlice(models)
 }
 
+// ListDisplayModelsForGroup returns model options for user-facing surfaces.
+//
+// Scheduling paths intentionally ignore display-only channels. Web Chat, however,
+// needs the same model catalog users see in "available channels", otherwise
+// display-only pricing channels produce an empty model selector even though they
+// are the configured source of model names and prices.
+func (s *ChannelService) ListDisplayModelsForGroup(ctx context.Context, groupID int64, platform string) []SupportedModel {
+	models := s.listDisplayModelsForGroup(ctx, groupID, platform)
+	s.fillGlobalPricingFallback(models)
+	return models
+}
+
+func (s *ChannelService) listDisplayModelsForGroup(ctx context.Context, groupID int64, platform string) []SupportedModel {
+	if s == nil || s.repo == nil || groupID <= 0 {
+		return nil
+	}
+	platform = strings.TrimSpace(platform)
+	channels, err := s.repo.ListAll(ctx)
+	if err != nil {
+		slog.Warn("failed to load channels for display models", "group_id", groupID, "error", err)
+		return nil
+	}
+	out := make([]SupportedModel, 0)
+	seen := make(map[string]struct{})
+	for i := range channels {
+		ch := &channels[i]
+		if !ch.IsActive() || !containsInt64(ch.GroupIDs, groupID) {
+			continue
+		}
+		for _, model := range ch.SupportedModels() {
+			if platform != "" && model.Platform != platform {
+				continue
+			}
+			name := strings.TrimSpace(model.Name)
+			if name == "" {
+				continue
+			}
+			key := model.Platform + "\x00" + strings.ToLower(name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			model.Name = name
+			if model.Pricing != nil {
+				cp := model.Pricing.Clone()
+				model.Pricing = &cp
+			}
+			out = append(out, model)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Platform != out[j].Platform {
+			return out[i].Platform < out[j].Platform
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 // ResolveChannelMapping 解析渠道级模型映射（热路径 O(1)）
 // 返回映射结果，包含映射后的模型名、渠道 ID、计费模型来源。
 func (s *ChannelService) ResolveChannelMapping(ctx context.Context, groupID int64, model string) ChannelMappingResult {

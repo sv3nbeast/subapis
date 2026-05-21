@@ -26,11 +26,11 @@
 
         <button
           class="mt-5 w-full rounded-2xl bg-primary-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-primary-600/20 transition hover:-translate-y-0.5 hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-          :disabled="!canCreateSession || creatingSession || sending"
-          @click="startNewSession"
+          :disabled="!enabled || !hasUsableModel || creatingSession || sending"
+          @click="startDraftSession"
         >
           <Icon name="plus" size="sm" class="mr-2 inline-block" />
-          {{ creatingSession ? t('common.creating') : t('webChat.newChat') }}
+          {{ t('webChat.newChat') }}
         </button>
 
         <div class="mt-5 space-y-2 overflow-y-auto pr-1">
@@ -38,7 +38,7 @@
             v-for="session in sessions"
             :key="session.id"
             class="session-item"
-            :class="{ 'session-item-active': session.id === activeSessionId }"
+            :class="{ 'session-item-active': !isDraftSession && session.id === activeSessionId }"
             @click="selectSession(session)"
           >
             <span class="truncate text-sm font-bold">{{ session.title || session.model }}</span>
@@ -112,22 +112,33 @@
 
           <template v-else>
             <div
-              v-for="message in messages"
+              v-for="message in displayMessages"
               :key="message.id"
               class="message-row"
               :class="message.role === 'user' ? 'message-row-user' : 'message-row-assistant'"
             >
               <div class="message-bubble" :class="message.role === 'user' ? 'message-bubble-user' : 'message-bubble-assistant'">
-                <p class="whitespace-pre-wrap break-words text-sm leading-7">{{ message.content }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ message.content }}</p>
                 <p v-if="message.status === 'error' || message.status === 'partial'" class="mt-2 text-xs font-medium text-red-500">
                   {{ message.error_message || t('webChat.streamError') }}
                 </p>
               </div>
             </div>
 
+            <div v-if="sending && !streamingText" class="message-row message-row-assistant">
+              <div class="message-bubble message-bubble-assistant message-bubble-pending">
+                <span>{{ t('webChat.thinking') }}</span>
+                <span class="typing-dots" aria-hidden="true">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </span>
+              </div>
+            </div>
+
             <div v-if="sending && streamingText" class="message-row message-row-assistant">
               <div class="message-bubble message-bubble-assistant">
-                <p class="whitespace-pre-wrap break-words text-sm leading-7">{{ streamingText }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ streamingText }}</p>
               </div>
             </div>
           </template>
@@ -136,7 +147,7 @@
         <form class="composer" @submit.prevent="send">
           <textarea
             v-model="draft"
-            rows="3"
+            rows="2"
             :placeholder="t('webChat.placeholder')"
             :disabled="!canSend"
             class="composer-input"
@@ -167,26 +178,30 @@
         <div class="context-card">
           <p class="context-label">{{ t('webChat.context') }}</p>
           <label class="input-label mt-4">{{ t('webChat.group') }}</label>
-          <select v-model.number="selectedGroupId" class="input" :disabled="Boolean(activeSession) || sending">
+          <select v-model.number="selectedGroupId" class="input" :disabled="sending">
             <option v-for="group in options.groups" :key="group.id" :value="group.id">
               {{ group.name }} · {{ platformLabel(group.platform) }}
             </option>
           </select>
 
           <label class="input-label mt-4">{{ t('webChat.model') }}</label>
-          <select v-model="selectedModel" class="input" :disabled="Boolean(activeSession) || sending">
+          <select v-model="selectedModel" class="input" :disabled="sending">
             <option v-for="model in selectedGroupModels" :key="model.name" :value="model.name">
               {{ model.name }}
             </option>
           </select>
 
-          <div class="mt-4 rounded-2xl border border-primary-100 bg-primary-50/70 p-4 dark:border-primary-500/20 dark:bg-primary-500/10">
-            <p class="text-xs font-bold uppercase tracking-[0.2em] text-primary-700 dark:text-primary-300">
+          <div class="pricing-card">
+            <p class="pricing-title">
               {{ t('webChat.priceHint') }}
             </p>
-            <p class="mt-2 text-sm leading-6 text-gray-700 dark:text-gray-200">
-              {{ pricingHint }}
-            </p>
+            <div v-if="pricingItems.length" class="pricing-grid">
+              <div v-for="item in pricingItems" :key="item.label" class="pricing-item">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
+            </div>
+            <p v-else class="pricing-empty">{{ t('webChat.noPricing') }}</p>
           </div>
         </div>
 
@@ -252,10 +267,12 @@ const sessionPanelWidthStorageKey = 'subapis.webChat.sessionPanelWidth'
 const contextPanelWidthStorageKey = 'subapis.webChat.contextPanelWidth'
 
 const activeSession = computed(() => sessions.value.find((item) => item.id === activeSessionId.value) || null)
+const isDraftSession = computed(() => activeSessionId.value === null)
 const selectedGroup = computed(() => options.value.groups.find((group) => group.id === selectedGroupId.value) || null)
 const selectedGroupModels = computed(() => selectedGroup.value?.models || [])
 const selectedModelOption = computed(() => selectedGroupModels.value.find((model) => model.name === selectedModel.value) || null)
 const hasUsableModel = computed(() => options.value.groups.some((group) => group.models.length > 0))
+const displayMessages = computed(() => messages.value)
 
 const webChatShellStyle = computed(() => ({
   '--web-chat-session-width': `${sessionPanelWidth.value}px`,
@@ -263,25 +280,29 @@ const webChatShellStyle = computed(() => ({
 }))
 
 const canCreateSession = computed(() => enabled.value && Boolean(selectedGroup.value && selectedModel.value))
-const canSend = computed(() => enabled.value && Boolean(activeSession.value) && !sending.value)
+const canSend = computed(() => canCreateSession.value && !sending.value && !creatingSession.value)
 
-const pricingHint = computed(() => {
+const pricingItems = computed(() => {
   const pricing = selectedModelOption.value?.pricing
-  if (!pricing) return t('webChat.noPricing')
+  if (!pricing) return []
   if (pricing.billing_mode === 'per_request') {
-    return t('webChat.perRequestPrice', { price: formatScaled(pricing.per_request_price ?? null, 1) })
+    return [{ label: t('webChat.perRequest'), value: formatScaled(pricing.per_request_price ?? null, 1) }]
   }
   if (pricing.billing_mode === 'image') {
-    return t('webChat.imagePrice', { price: formatScaled(pricing.image_output_price ?? pricing.per_request_price ?? null, 1) })
+    return [{ label: t('webChat.imageRequest'), value: formatScaled(pricing.image_output_price ?? pricing.per_request_price ?? null, 1) }]
   }
-  return t('webChat.tokenPrice', {
-    input: formatScaled(pricing.input_price ?? null, 1_000_000),
-    output: formatScaled(pricing.output_price ?? null, 1_000_000),
-  })
+  return [
+    { label: t('webChat.inputPrice'), value: formatScaled(pricing.input_price ?? null, 1_000_000) },
+    { label: t('webChat.outputPrice'), value: formatScaled(pricing.output_price ?? null, 1_000_000) },
+    { label: t('webChat.cacheWritePrice'), value: formatScaled(pricing.cache_write_price ?? null, 1_000_000) },
+    { label: t('webChat.cacheReadPrice'), value: formatScaled(pricing.cache_read_price ?? null, 1_000_000) },
+  ]
 })
 
 watch(selectedGroupId, () => {
-  if (activeSession.value) return
+  if (selectedGroupModels.value.some((model) => model.name === selectedModel.value)) {
+    return
+  }
   const first = selectedGroupModels.value[0]
   selectedModel.value = first?.name || ''
 })
@@ -317,7 +338,20 @@ async function loadInitial() {
   }
 }
 
-async function startNewSession() {
+function startDraftSession() {
+  activeSessionId.value = null
+  messages.value = []
+  streamingText.value = ''
+  draft.value = ''
+  sessionsOpen.value = false
+  if (!selectedGroup.value || selectedGroupModels.value.length === 0) {
+    const firstGroup = options.value.groups.find((group) => group.models.length > 0)
+    selectedGroupId.value = firstGroup?.id ?? null
+    selectedModel.value = firstGroup?.models[0]?.name || ''
+  }
+}
+
+async function createSessionForCurrentSelection() {
   if (!canCreateSession.value || !selectedGroupId.value || !selectedModel.value) return
   creatingSession.value = true
   try {
@@ -326,9 +360,13 @@ async function startNewSession() {
       model: selectedModel.value,
     })
     sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
-    await selectSession(session)
+    activeSessionId.value = session.id
+    selectedGroupId.value = session.group_id
+    selectedModel.value = session.model
+    return session
   } catch (err) {
     console.error(extractApiErrorMessage(err))
+    return null
   } finally {
     creatingSession.value = false
   }
@@ -356,13 +394,20 @@ async function removeCurrentSession() {
   activeSessionId.value = null
   if (sessions.value[0]) {
     await selectSession(sessions.value[0])
+  } else {
+    startDraftSession()
   }
 }
 
 async function send() {
   const content = draft.value.trim()
-  if (!canSend.value || !activeSession.value || !content) return
-  const sessionID = activeSession.value.id
+  if (!canSend.value || !content) return
+  const groupID = selectedGroupId.value
+  const model = selectedModel.value
+  if (!groupID || !model) return
+  const session = activeSession.value || await createSessionForCurrentSelection()
+  if (!session) return
+  const sessionID = session.id
   const localUserMessage: WebChatMessage = {
     id: Date.now(),
     session_id: sessionID,
@@ -381,9 +426,17 @@ async function send() {
 
   try {
     let assistantID = Date.now() + 1
-    await webChatAPI.streamMessage(sessionID, content, {
+    await webChatAPI.streamMessage(sessionID, {
+      content,
+      group_id: groupID,
+      model,
+    }, {
       onMeta(meta) {
         assistantID = meta.message_id
+        if (activeSession.value) {
+          activeSession.value.group_id = meta.group_id
+          activeSession.value.model = meta.model
+        }
       },
       onDelta(text) {
         streamingText.value += text
@@ -402,6 +455,12 @@ async function send() {
     })
     streamingText.value = ''
     sessions.value = await webChatAPI.listSessions()
+    const updated = sessions.value.find((item) => item.id === sessionID)
+    if (updated) {
+      activeSessionId.value = updated.id
+      selectedGroupId.value = updated.group_id
+      selectedModel.value = updated.model
+    }
   } catch (err) {
     messages.value.push({
       id: Date.now() + 2,
@@ -645,7 +704,7 @@ function clamp(value: number, min: number, max: number) {
 .message-bubble {
   max-width: min(54rem, 90%);
   border-radius: 1.25rem;
-  padding: 0.9rem 1rem;
+  padding: 0.58rem 0.9rem;
 }
 
 .message-bubble-user {
@@ -660,6 +719,15 @@ function clamp(value: number, min: number, max: number) {
   color: rgb(17, 24, 39);
 }
 
+.message-bubble-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: rgb(71, 85, 105);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
 .dark .message-bubble-assistant {
   border-color: rgba(71, 85, 105, 0.75);
   background: rgba(15, 23, 42, 0.9);
@@ -668,7 +736,7 @@ function clamp(value: number, min: number, max: number) {
 
 .composer {
   border-top: 1px solid rgba(148, 163, 184, 0.22);
-  padding: 1rem;
+  padding: 0.85rem 1rem;
 }
 
 .composer-input {
@@ -677,9 +745,10 @@ function clamp(value: number, min: number, max: number) {
   border-radius: 1.25rem;
   border: 1px solid rgb(209 213 219);
   background: rgba(255, 255, 255, 0.94);
-  padding: 0.9rem 1rem;
+  padding: 0.68rem 0.9rem;
   color: rgb(17 24 39);
   outline: none;
+  line-height: 1.55;
 }
 
 .composer-input:focus {
@@ -702,6 +771,109 @@ function clamp(value: number, min: number, max: number) {
 .context-card {
   border-radius: 1.5rem;
   padding: 1rem;
+}
+
+.pricing-card {
+  margin-top: 1rem;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(20, 184, 166, 0.14);
+  background: rgba(240, 253, 250, 0.74);
+  padding: 0.85rem;
+}
+
+.dark .pricing-card {
+  border-color: rgba(45, 212, 191, 0.18);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.pricing-title {
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgb(15, 118, 110);
+}
+
+.pricing-grid {
+  margin-top: 0.65rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.pricing-item {
+  min-width: 0;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.55rem 0.6rem;
+}
+
+.dark .pricing-item {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.pricing-item span {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 750;
+  color: rgb(100, 116, 139);
+}
+
+.pricing-item strong {
+  margin-top: 0.2rem;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  color: rgb(15, 23, 42);
+}
+
+.dark .pricing-item strong {
+  color: rgb(226, 232, 240);
+}
+
+.pricing-empty {
+  margin-top: 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: rgb(100, 116, 139);
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 0.22rem;
+}
+
+.typing-dots span {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.38;
+  animation: web-chat-dot 1s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes web-chat-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.32;
+  }
+  40% {
+    transform: translateY(-0.18rem);
+    opacity: 0.9;
+  }
 }
 
 .context-label {
