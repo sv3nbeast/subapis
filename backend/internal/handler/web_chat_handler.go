@@ -251,7 +251,7 @@ func buildAnthropicMessagesPayload(model string, messages []service.OpenAIChatMe
 		if role == "" {
 			role = service.WebChatMessageRoleUser
 		}
-		content, err := json.Marshal(strings.TrimSpace(message.Content))
+		content, err := buildAnthropicMessageContent(strings.TrimSpace(message.Content), role)
 		if err != nil {
 			return nil, err
 		}
@@ -268,6 +268,20 @@ func buildAnthropicMessagesPayload(model string, messages []service.OpenAIChatMe
 		Stream:    true,
 	}
 	return json.Marshal(payload)
+}
+
+func buildAnthropicMessageContent(text, role string) (json.RawMessage, error) {
+	block := apicompat.AnthropicContentBlock{
+		Type: "text",
+		Text: text,
+	}
+	if role == service.WebChatMessageRoleUser {
+		block.CacheControl = &apicompat.AnthropicCacheControl{
+			Type: "ephemeral",
+			TTL:  "5m",
+		}
+	}
+	return json.Marshal([]apicompat.AnthropicContentBlock{block})
 }
 
 func shouldUseAnthropicMessages(platform string) bool {

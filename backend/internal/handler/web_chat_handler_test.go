@@ -8,6 +8,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestWebChatHandleUpstreamSSEEventWritesDelta(t *testing.T) {
@@ -70,6 +71,8 @@ func TestWebChatBuildUpstreamPayloadUsesMessagesForClaudeLikePlatforms(t *testin
 	require.Equal(t, true, req["stream"])
 	require.Contains(t, req, "max_tokens")
 	require.Contains(t, req, "messages")
+	require.Equal(t, "ephemeral", gjson.GetBytes(payload, "messages.0.content.0.cache_control.type").String())
+	require.Equal(t, "5m", gjson.GetBytes(payload, "messages.0.content.0.cache_control.ttl").String())
 }
 
 func TestWebChatBuildUpstreamPayloadUsesChatCompletionsForOpenAI(t *testing.T) {
