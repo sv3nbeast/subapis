@@ -1594,7 +1594,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return nil, err
 	}
 	if len(accounts) == 0 {
-		return nil, ErrNoAvailableAccounts
+		freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts))
+		if !ok {
+			return nil, ErrNoAvailableAccounts
+		}
+		accounts = freshAccounts
+		useMixed = freshUseMixed
 	}
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
@@ -2007,44 +2012,20 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		"reason", "sticky_not_used_falling_back_to_load_balance",
 		"total_accounts", len(accounts),
 	)
-	candidates := make([]*Account, 0, len(accounts))
-	for i := range accounts {
-		acc := &accounts[i]
-		if isExcluded(acc.ID) {
-			continue
-		}
-		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
-		// re-check schedulability here so recently rate-limited/overloaded accounts
-		// are not selected again before the bucket is rebuilt.
-		if !s.isAccountSchedulableForSelection(acc) {
-			continue
-		}
-		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
-			continue
-		}
-		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
-			continue
-		}
-		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
-			continue
-		}
-		// 配额检查
-		if !s.isAccountSchedulableForQuota(acc) {
-			continue
-		}
-		// 窗口费用检查（非粘性会话路径）
-		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
-			continue
-		}
-		// RPM 检查（非粘性会话路径）
-		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
-			continue
-		}
-		candidates = append(candidates, acc)
-	}
+	candidates := s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
 
 	if len(candidates) == 0 {
-		return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
+		if freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts)); ok {
+			accounts = freshAccounts
+			useMixed = freshUseMixed
+			ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
+			ctx = s.withWindowCostPrefetch(ctx, accounts)
+			ctx = s.withRPMPrefetch(ctx, accounts)
+			candidates = s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
+		}
+		if len(candidates) == 0 {
+			return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
+		}
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
@@ -2165,6 +2146,50 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 	}
 
 	return nil, false, nil
+}
+
+func (s *GatewayService) filterSelectableAccounts(
+	ctx context.Context,
+	accounts []Account,
+	platform string,
+	allowMixedScheduling bool,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	allowStickyBudget bool,
+) []*Account {
+	candidates := make([]*Account, 0, len(accounts))
+	for i := range accounts {
+		acc := &accounts[i]
+		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
+		// re-check schedulability here so recently rate-limited/overloaded accounts
+		// are not selected again before the bucket is rebuilt.
+		if !s.isAccountSchedulableForSelection(acc) {
+			continue
+		}
+		if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
+			continue
+		}
+		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForQuota(acc) {
+			continue
+		}
+		if !s.isAccountSchedulableForWindowCost(ctx, acc, allowStickyBudget) {
+			continue
+		}
+		if !s.isAccountSchedulableForRPM(ctx, acc, allowStickyBudget) {
+			continue
+		}
+		candidates = append(candidates, acc)
+	}
+	return candidates
 }
 
 func avoidedEmailDomainSuffixSetFromContext(ctx context.Context) map[string]struct{} {
@@ -2729,6 +2754,72 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 			"tls_fingerprint", acc.IsTLSFingerprintEnabled())
 	}
 	return accounts, useMixed, nil
+}
+
+func (s *GatewayService) listSchedulableAccountsDirect(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
+	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
+	if useMixed {
+		platforms := []string{platform, PlatformAntigravity}
+		var accounts []Account
+		var err error
+		if groupID != nil {
+			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
+		} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
+		}
+		if err != nil {
+			return nil, useMixed, err
+		}
+		filtered := make([]Account, 0, len(accounts))
+		for _, acc := range accounts {
+			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+				continue
+			}
+			filtered = append(filtered, acc)
+		}
+		return filtered, useMixed, nil
+	}
+
+	var accounts []Account
+	var err error
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
+	} else if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, platform)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, platform)
+	}
+	if err != nil {
+		return nil, useMixed, err
+	}
+	return accounts, useMixed, nil
+}
+
+func (s *GatewayService) fallbackToDirectSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool, requestedModel string, cachedCount int) ([]Account, bool, bool) {
+	if s.schedulerSnapshot == nil {
+		return nil, false, false
+	}
+	freshAccounts, freshUseMixed, err := s.listSchedulableAccountsDirect(ctx, groupID, platform, hasForcePlatform)
+	if err != nil || len(freshAccounts) == 0 {
+		if err != nil {
+			slog.Warn("account_scheduling_snapshot_fallback_to_db_failed",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"model", requestedModel,
+				"cached_count", cachedCount,
+				"error", err)
+		}
+		return nil, false, false
+	}
+	slog.Warn("account_scheduling_snapshot_fallback_to_db",
+		"group_id", derefGroupID(groupID),
+		"platform", platform,
+		"model", requestedModel,
+		"cached_count", cachedCount,
+		"db_count", len(freshAccounts))
+	return freshAccounts, freshUseMixed, true
 }
 
 // IsSingleAntigravityAccountGroup 检查指定分组是否只有一个 antigravity 平台的可调度账号。
@@ -3623,16 +3714,34 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		}
 	}
 
+	useMixed := false
+
 	// 批量预取窗口费用+RPM 计数，避免逐个账号查询（N+1）
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
 
 	// 3. 按优先级+最久未用选择（考虑模型支持）
-	selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, platform, false, schedGroup, nil, preferOAuth, needsUpstreamCheck)
-
+	selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, platform, useMixed, schedGroup, nil, preferOAuth, needsUpstreamCheck)
+	if selected == nil && s.schedulerSnapshot != nil {
+		forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
+		if hasForcePlatform && forcePlatform == "" {
+			hasForcePlatform = false
+		}
+		if freshAccounts, freshUseMixed, freshErr := s.listSchedulableAccountsDirect(ctx, groupID, platform, hasForcePlatform); freshErr == nil && len(freshAccounts) > 0 {
+			slog.Warn("account_scheduling_snapshot_fallback_to_db",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"model", requestedModel,
+				"cached_count", len(accounts),
+				"db_count", len(freshAccounts))
+			accounts = freshAccounts
+			useMixed = freshUseMixed
+			selected = s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, platform, useMixed, schedGroup, nil, preferOAuth, needsUpstreamCheck)
+		}
+	}
 	if selected == nil {
-		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, false)
+		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 		if requestedModel != "" {
 			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
 		}
@@ -3771,7 +3880,18 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 
 	// 3. 按优先级+最久未用选择（考虑模型支持和混合调度）
 	selected := s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, nativePlatform, true, schedGroup, nil, preferOAuth, needsUpstreamCheck)
-
+	if selected == nil && s.schedulerSnapshot != nil {
+		if freshAccounts, freshUseMixed, freshErr := s.listSchedulableAccountsDirect(ctx, groupID, nativePlatform, false); freshErr == nil && len(freshAccounts) > 0 {
+			slog.Warn("account_scheduling_snapshot_fallback_to_db",
+				"group_id", derefGroupID(groupID),
+				"platform", nativePlatform,
+				"model", requestedModel,
+				"cached_count", len(accounts),
+				"db_count", len(freshAccounts))
+			accounts = freshAccounts
+			selected = s.selectLegacyEligibleAccount(ctx, groupID, accounts, excludedIDs, requestedModel, nativePlatform, freshUseMixed, schedGroup, nil, preferOAuth, needsUpstreamCheck)
+		}
+	}
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs, true)
 		if requestedModel != "" {

@@ -297,6 +297,40 @@ func (m *mockGroupRepoForGateway) UpdateSortOrders(ctx context.Context, updates 
 	return nil
 }
 
+type snapshotOnlyCacheStub struct {
+	accounts []*Account
+	hit      bool
+	byID     map[int64]*Account
+}
+
+func (s *snapshotOnlyCacheStub) GetSnapshot(context.Context, SchedulerBucket) ([]*Account, bool, error) {
+	return s.accounts, s.hit, nil
+}
+
+func (s *snapshotOnlyCacheStub) SetSnapshot(context.Context, SchedulerBucket, []Account) error {
+	return nil
+}
+func (s *snapshotOnlyCacheStub) GetAccount(_ context.Context, accountID int64) (*Account, error) {
+	if s.byID == nil {
+		return nil, nil
+	}
+	return s.byID[accountID], nil
+}
+func (s *snapshotOnlyCacheStub) SetAccount(context.Context, *Account) error { return nil }
+func (s *snapshotOnlyCacheStub) DeleteAccount(context.Context, int64) error { return nil }
+func (s *snapshotOnlyCacheStub) UpdateLastUsed(context.Context, map[int64]time.Time) error {
+	return nil
+}
+func (s *snapshotOnlyCacheStub) ListBuckets(context.Context) ([]SchedulerBucket, error) {
+	return nil, nil
+}
+func (s *snapshotOnlyCacheStub) TryLockBucket(context.Context, SchedulerBucket, time.Duration) (bool, error) {
+	return false, nil
+}
+func (s *snapshotOnlyCacheStub) UnlockBucket(context.Context, SchedulerBucket) error { return nil }
+func (s *snapshotOnlyCacheStub) GetOutboxWatermark(context.Context) (int64, error)   { return 0, nil }
+func (s *snapshotOnlyCacheStub) SetOutboxWatermark(context.Context, int64) error     { return nil }
+
 func ptr[T any](v T) *T {
 	return &v
 }
@@ -698,6 +732,133 @@ func TestGatewayService_SelectAccountForModelWithExclusions_ForcePlatform(t *tes
 	require.NotNil(t, acc)
 	require.Equal(t, int64(2), acc.ID)
 	require.Equal(t, PlatformAntigravity, acc.Platform)
+}
+
+func TestGatewayService_SelectAccountForModelWithExclusions_FallsBackToDBWhenSnapshotCandidateIsStale(t *testing.T) {
+	groupID := int64(2)
+	staleUntil := time.Now().Add(30 * time.Minute)
+	snapshotAccount := &Account{
+		ID:                     2001,
+		Platform:               PlatformAnthropic,
+		Type:                   AccountTypeOAuth,
+		Priority:               1,
+		Status:                 StatusActive,
+		Schedulable:            true,
+		TempUnschedulableUntil: &staleUntil,
+	}
+	dbAccount := Account{
+		ID:          2002,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Priority:    2,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	accountRepo := &mockAccountRepoForPlatform{
+		accounts:     []Account{dbAccount},
+		accountsByID: map[int64]*Account{dbAccount.ID: &dbAccount},
+	}
+	groupRepo := &mockGroupRepoForGateway{
+		groups: map[int64]*Group{
+			groupID: {
+				ID:       groupID,
+				Platform: PlatformAnthropic,
+				Status:   StatusActive,
+				Hydrated: true,
+			},
+		},
+	}
+	snapshotSvc := &SchedulerSnapshotService{
+		cache: &snapshotOnlyCacheStub{
+			accounts: []*Account{snapshotAccount},
+			hit:      true,
+			byID: map[int64]*Account{
+				dbAccount.ID: &dbAccount,
+			},
+		},
+		accountRepo: accountRepo,
+		groupRepo:   groupRepo,
+		cfg:         testConfig(),
+	}
+	svc := &GatewayService{
+		accountRepo:       accountRepo,
+		groupRepo:         groupRepo,
+		schedulerSnapshot: snapshotSvc,
+		cfg:               testConfig(),
+	}
+
+	acc, err := svc.SelectAccountForModelWithExclusions(context.Background(), &groupID, "", "claude-opus-4-6", nil)
+	require.NoError(t, err)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(2002), acc.ID)
+}
+
+func TestGatewayService_SelectAccountWithLoadAwareness_FallsBackToDBWhenSnapshotCandidateIsStale(t *testing.T) {
+	groupID := int64(2)
+	staleUntil := time.Now().Add(30 * time.Minute)
+	snapshotAccount := &Account{
+		ID:                     2101,
+		Platform:               PlatformAnthropic,
+		Type:                   AccountTypeOAuth,
+		Priority:               1,
+		Status:                 StatusActive,
+		Schedulable:            true,
+		TempUnschedulableUntil: &staleUntil,
+		Concurrency:            5,
+	}
+	dbAccount := Account{
+		ID:          2102,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Priority:    2,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 5,
+	}
+
+	accountRepo := &mockAccountRepoForPlatform{
+		accounts:     []Account{dbAccount},
+		accountsByID: map[int64]*Account{dbAccount.ID: &dbAccount},
+	}
+	groupRepo := &mockGroupRepoForGateway{
+		groups: map[int64]*Group{
+			groupID: {
+				ID:       groupID,
+				Platform: PlatformAnthropic,
+				Status:   StatusActive,
+				Hydrated: true,
+			},
+		},
+	}
+	snapshotSvc := &SchedulerSnapshotService{
+		cache: &snapshotOnlyCacheStub{
+			accounts: []*Account{snapshotAccount},
+			hit:      true,
+			byID: map[int64]*Account{
+				dbAccount.ID: &dbAccount,
+			},
+		},
+		accountRepo: accountRepo,
+		groupRepo:   groupRepo,
+		cfg:         testConfig(),
+	}
+	cfg := testConfig()
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	concurrencyCache := &mockConcurrencyCache{}
+	svc := &GatewayService{
+		accountRepo:        accountRepo,
+		groupRepo:          groupRepo,
+		schedulerSnapshot:  snapshotSvc,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	result, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "claude-opus-4-6", nil, "", 0)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Account)
+	require.Equal(t, int64(2102), result.Account.ID)
 }
 
 func TestGatewayService_SelectAccountForModelWithPlatform_ShufflesSamePriorityColdAccounts(t *testing.T) {
