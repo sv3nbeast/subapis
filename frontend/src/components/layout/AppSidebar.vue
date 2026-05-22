@@ -128,9 +128,24 @@
 
       <!-- Regular User View -->
       <template v-else-if="!appStore.backendModeEnabled">
-        <div class="sidebar-section">
+        <div
+          v-for="section in userNavSections"
+          :key="section.key"
+          class="sidebar-section"
+        >
+          <div
+            v-if="section.title"
+            class="sidebar-section-title"
+            :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }"
+            :aria-hidden="sidebarCollapsed ? 'true' : 'false'"
+          >
+            <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
+              {{ section.title }}
+            </span>
+          </div>
+
           <router-link
-            v-for="item in userNavItems"
+            v-for="item in section.items"
             :key="item.path"
             :to="item.path"
             class="sidebar-link mb-1"
@@ -218,6 +233,12 @@ interface NavItem {
    * 开关切换时菜单自动更新。
    */
   featureFlag?: () => boolean | undefined
+}
+
+interface NavSection {
+  key: string
+  title?: string
+  items: NavItem[]
 }
 
 // applyFeatureFlags 递归过滤掉 featureFlag() === false 的节点（含子节点）。
@@ -728,6 +749,54 @@ function finalizeNav(items: NavItem[]): NavItem[] {
 
 // User navigation items (for regular users)
 const userNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(true)))
+
+const userNavSections = computed<NavSection[]>(() => {
+  const items = userNavItems.value
+  const bucket = (paths: string[]) => items.filter(item => paths.includes(item.path))
+
+  return [
+    {
+      key: 'overview',
+      title: t('nav.sectionOverview'),
+      items: bucket(['/dashboard', '/chat', '/keys', '/usage']),
+    },
+    {
+      key: 'models',
+      title: t('nav.sectionModels'),
+      items: bucket(['/available-channels', '/channel-status', '/status']),
+    },
+    {
+      key: 'billing',
+      title: t('nav.sectionBilling'),
+      items: bucket(['/subscriptions', '/purchase', '/orders', '/redeem', '/affiliate']),
+    },
+    {
+      key: 'account',
+      title: t('nav.sectionAccount'),
+      items: bucket(['/profile']),
+    },
+    {
+      key: 'custom',
+      items: items.filter(item =>
+        ![
+          '/dashboard',
+          '/chat',
+          '/keys',
+          '/usage',
+          '/available-channels',
+          '/channel-status',
+          '/status',
+          '/subscriptions',
+          '/purchase',
+          '/orders',
+          '/redeem',
+          '/affiliate',
+          '/profile',
+        ].includes(item.path),
+      ),
+    },
+  ].filter(section => section.items.length > 0)
+})
 
 // Personal navigation items (for admin's "My Account" section, without Dashboard).
 // Admins access user-facing tools from this section just like regular users.
