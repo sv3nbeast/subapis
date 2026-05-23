@@ -76,6 +76,26 @@ func TestResolveAnthropicUpstreamModel(t *testing.T) {
 			wantSource:     "alias",
 		},
 		{
+			name: "oauth falls back to opus 4.6 thinking default alias mapping",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+			},
+			requestedModel: "claude-opus-4-6-thinking",
+			wantModel:      "claude-opus-4-6",
+			wantSource:     "alias",
+		},
+		{
+			name: "api key falls back to dotted opus 4.6 thinking default alias mapping",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeAPIKey,
+			},
+			requestedModel: "claude-opus-4.6-thinking",
+			wantModel:      "claude-opus-4-6",
+			wantSource:     "alias",
+		},
+		{
 			name: "api key falls back to dotted default alias mapping",
 			account: &Account{
 				Platform: PlatformAnthropic,
@@ -109,8 +129,12 @@ func TestIsAnthropicThinkingModelAlias(t *testing.T) {
 		model string
 		want  bool
 	}{
+		{model: "claude-opus-4-6-thinking", want: true},
+		{model: "claude-opus-4.6-thinking", want: true},
 		{model: "claude-opus-4-7-thinking", want: true},
 		{model: "claude-opus-4.7-thinking", want: true},
+		{model: "claude-opus-4-6", want: false},
+		{model: "claude-opus-4.6", want: false},
 		{model: "claude-opus-4-7", want: false},
 		{model: "claude-opus-4.7", want: false},
 		{model: "claude-sonnet-4-5-thinking", want: false},

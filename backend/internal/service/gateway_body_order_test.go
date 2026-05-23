@@ -129,9 +129,9 @@ func TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder(t *testing.
 }
 
 func TestEnsureAnthropicThinkingForModelAlias(t *testing.T) {
-	body := []byte(`{"model":"claude-opus-4-7","messages":[]}`)
+	body := []byte(`{"model":"claude-opus-4-6","messages":[]}`)
 
-	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-4-7-thinking")
+	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-4-6-thinking")
 
 	require.Equal(t, "enabled", gjson.GetBytes(result, "thinking.type").String())
 	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(result, "thinking.budget_tokens").Int())

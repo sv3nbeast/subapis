@@ -87,6 +87,9 @@ func TestRunCheckForModel_AnthropicNormalizesMonitorModelAlias(t *testing.T) {
 		model string
 		want  string
 	}{
+		{name: "opus 4.6 thinking alias", model: "claude-opus-4-6-thinking", want: "claude-opus-4-6"},
+		{name: "opus 4.6 dotted alias", model: "claude-opus-4.6", want: "claude-opus-4-6"},
+		{name: "opus 4.6 dotted thinking alias", model: "claude-opus-4.6-thinking", want: "claude-opus-4-6"},
 		{name: "thinking alias", model: "claude-opus-4-7-thinking", want: "claude-opus-4-7"},
 		{name: "dotted alias", model: "claude-opus-4.7", want: "claude-opus-4-7"},
 		{name: "dotted thinking alias", model: "claude-opus-4.7-thinking", want: "claude-opus-4-7"},

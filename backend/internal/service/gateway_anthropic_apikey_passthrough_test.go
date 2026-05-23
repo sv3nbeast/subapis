@@ -299,10 +299,17 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			endpoint:      "messages",
 		},
 		{
-			name:          "Forward: 无账号映射时应用 Anthropic 默认别名",
+			name:          "Forward: 无账号映射时应用 Anthropic 4.7 thinking 默认别名",
 			model:         "claude-opus-4-7-thinking",
 			modelMapping:  nil,
 			expectedModel: "claude-opus-4-7",
+			endpoint:      "messages",
+		},
+		{
+			name:          "Forward: 无账号映射时应用 Anthropic 4.6 thinking 默认别名",
+			model:         "claude-opus-4-6-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-4-6",
 			endpoint:      "messages",
 		},
 		{
@@ -341,10 +348,17 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			endpoint:      "count_tokens",
 		},
 		{
-			name:          "CountTokens: 无账号映射时应用 Anthropic 默认别名",
+			name:          "CountTokens: 无账号映射时应用 Anthropic 4.7 thinking 默认别名",
 			model:         "claude-opus-4.7-thinking",
 			modelMapping:  nil,
 			expectedModel: "claude-opus-4-7",
+			endpoint:      "count_tokens",
+		},
+		{
+			name:          "CountTokens: 无账号映射时应用 Anthropic 4.6 thinking 默认别名",
+			model:         "claude-opus-4.6-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-4-6",
 			endpoint:      "count_tokens",
 		},
 		{
