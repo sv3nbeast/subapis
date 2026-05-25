@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -138,14 +139,28 @@ func TestEnsureAnthropicThinkingForModelAlias(t *testing.T) {
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(result, "max_tokens").Int())
 }
 
-func TestEnsureAnthropicThinkingForModelAlias_PreservesClientThinking(t *testing.T) {
+func TestEnsureAnthropicThinkingForModelAlias_NormalizesAdaptiveThinking(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-7","max_tokens":80000,"thinking":{"type":"adaptive","budget_tokens":12345},"messages":[]}`)
 
 	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-4.7-thinking")
 
-	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+	require.Equal(t, "enabled", gjson.GetBytes(result, "thinking.type").String())
 	require.Equal(t, int64(12345), gjson.GetBytes(result, "thinking.budget_tokens").Int())
 	require.Equal(t, int64(80000), gjson.GetBytes(result, "max_tokens").Int())
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_NormalizesAdaptiveThinking(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:     "claude-opus-4-6",
+		MaxTokens: 1024,
+		Thinking:  &apicompat.AnthropicThinking{Type: "adaptive"},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-4-6-thinking")
+
+	require.Equal(t, "enabled", req.Thinking.Type)
+	require.Equal(t, BudgetRectifyBudgetTokens, req.Thinking.BudgetTokens)
+	require.Equal(t, BudgetRectifyMaxTokens, req.MaxTokens)
 }
 
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {

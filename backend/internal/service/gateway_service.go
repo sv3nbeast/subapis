@@ -1191,7 +1191,7 @@ func ensureAnthropicThinkingForModelAlias(body []byte, requestedModel string) []
 	}
 
 	out := body
-	if thinkingType := gjson.GetBytes(out, "thinking.type").String(); thinkingType != "enabled" && thinkingType != "adaptive" {
+	if thinkingType := gjson.GetBytes(out, "thinking.type").String(); thinkingType != "enabled" {
 		if next, ok := setJSONValueBytes(out, "thinking.type", "enabled"); ok {
 			out = next
 		}
@@ -1213,7 +1213,7 @@ func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, reque
 	if req == nil || !isAnthropicThinkingModelAlias(requestedModel) {
 		return
 	}
-	if req.Thinking == nil || (req.Thinking.Type != "enabled" && req.Thinking.Type != "adaptive") {
+	if req.Thinking == nil || req.Thinking.Type != "enabled" {
 		req.Thinking = &apicompat.AnthropicThinking{Type: "enabled"}
 	}
 	if req.Thinking.BudgetTokens <= 0 {

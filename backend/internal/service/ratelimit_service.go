@@ -930,8 +930,12 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		}
 
 		// Anthropic 平台：没有限流重置时间的 429 可能是非真实限流（如 Extra usage required），
-		// 不标记账号限流状态，直接透传错误给客户端
+		// 但如果响应体明确是 rate_limit_error，使用短冷却兜底，避免同一账号被连续命中。
 		if account.Platform == PlatformAnthropic {
+			if isAnthropicRateLimitErrorBody(responseBody) {
+				s.apply429FallbackRateLimit(ctx, account, "anthropic_rate_limit_no_reset_time")
+				return
+			}
 			slog.Warn("rate_limit_429_no_reset_time_skipped",
 				"account_id", account.ID,
 				"platform", account.Platform,
@@ -968,6 +972,10 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	}
 
 	slog.Info("account_rate_limited", "account_id", account.ID, "reset_at", resetAt)
+}
+
+func isAnthropicRateLimitErrorBody(body []byte) bool {
+	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()), "rate_limit_error")
 }
 
 func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
