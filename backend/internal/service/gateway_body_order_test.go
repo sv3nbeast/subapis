@@ -149,6 +149,18 @@ func TestEnsureAnthropicThinkingForModelAlias_NormalizesAdaptiveThinking(t *test
 	require.Equal(t, int64(80000), gjson.GetBytes(result, "max_tokens").Int())
 }
 
+func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-7","speed":"fast","max_tokens":64000,"messages":[{"role":"user","content":[{"type":"text","text":"keep speed mention"}]}],"metadata":{"speed":"nested"}}`)
+
+	result := sanitizeAnthropicUpstreamRequestBody(body)
+	resultStr := string(result)
+
+	assertJSONTokenOrder(t, resultStr, `"model"`, `"max_tokens"`, `"messages"`, `"metadata"`)
+	require.False(t, gjson.GetBytes(result, "speed").Exists())
+	require.Equal(t, "keep speed mention", gjson.GetBytes(result, "messages.0.content.0.text").String())
+	require.Equal(t, "nested", gjson.GetBytes(result, "metadata.speed").String())
+}
+
 func TestApplyAnthropicThinkingAliasToRequest_NormalizesAdaptiveThinking(t *testing.T) {
 	req := &apicompat.AnthropicRequest{
 		Model:     "claude-opus-4-6",

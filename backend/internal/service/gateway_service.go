@@ -1209,6 +1209,20 @@ func ensureAnthropicThinkingForModelAlias(body []byte, requestedModel string) []
 	return out
 }
 
+func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	out := body
+	if gjson.GetBytes(out, "speed").Exists() {
+		if next, ok := deleteJSONPathBytes(out, "speed"); ok {
+			out = next
+		}
+	}
+	return out
+}
+
 func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, requestedModel string) {
 	if req == nil || !isAnthropicThinkingModelAlias(requestedModel) {
 		return
@@ -4803,6 +4817,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
+		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
 			Body:          passthroughBody,
 			RequestModel:  passthroughModel,
@@ -4916,6 +4931,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
+	body = sanitizeAnthropicUpstreamRequestBody(body)
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		body = injectAnthropicCacheControlTTL1h(body)
@@ -9183,6 +9199,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
+		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
 	}
 
@@ -9233,6 +9250,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
+	body = sanitizeAnthropicUpstreamRequestBody(body)
 
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
