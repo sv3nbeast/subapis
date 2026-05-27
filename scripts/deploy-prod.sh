@@ -127,6 +127,16 @@ RSYNC_ARGS=(
   --exclude
   backend/internal/web/dist
   --exclude
+  backend/*.test
+  --exclude
+  backend/server
+  --exclude
+  .gocache
+  --exclude
+  __pycache__
+  --exclude
+  '*.pyc'
+  --exclude
   deploy/data
   --exclude
   deploy/postgres_data
@@ -149,6 +159,11 @@ TAR_EXCLUDES=(
   --exclude=node_modules
   --exclude=frontend/node_modules
   --exclude=backend/internal/web/dist
+  --exclude=backend/*.test
+  --exclude=backend/server
+  --exclude=.gocache
+  --exclude=__pycache__
+  --exclude='*.pyc'
   --exclude=deploy/data
   --exclude=deploy/postgres_data
   --exclude=deploy/redis_data
