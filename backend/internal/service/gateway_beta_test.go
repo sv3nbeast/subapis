@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"testing"
 
@@ -197,6 +199,26 @@ func TestSyncClaudeCodeSessionHeaderFromBody_AlwaysMatchesMetadataSession(t *tes
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	require.Equal(t, "123e4567-e89b-12d3-a456-426614174000", getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"))
+}
+
+func TestBuildUpstreamRequest_MimicClaudeCodeSignsCCHWithoutGlobalSetting(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.111.abc; cc_entrypoint=sdk-cli; cch=00000;"}],"messages":[{"role":"user","content":"hello"}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-6",
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.NotContains(t, string(body), "cch=00000")
+	require.Regexp(t, `cch=[0-9a-f]{5};`, string(body))
 }
 
 func TestDroppedBetaSet(t *testing.T) {

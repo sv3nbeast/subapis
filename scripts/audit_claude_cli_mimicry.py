@@ -87,6 +87,15 @@ EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS = {
     "interleaved-thinking-2025-05-14",
 }
 
+EXPECTED_COMPANION_ENDPOINTS = [
+    "GET /api/claude_cli/bootstrap",
+    "GET /api/claude_code_penguin_mode",
+    "GET /api/claude_code_grove",
+    "GET /api/oauth/account/settings",
+    "GET /v1/mcp_servers",
+    "GET /mcp-registry/v0/servers",
+]
+
 SEVERITY_WEIGHT = {"high": 25, "medium": 8, "low": 2}
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
@@ -1013,6 +1022,16 @@ def first_core_flow(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def companion_coverage(items: list[dict[str, Any]]) -> dict[str, Any]:
+    present = {endpoint_key(item) for item in items}
+    expected = list(EXPECTED_COMPANION_ENDPOINTS)
+    return {
+        "expected": expected,
+        "present": [endpoint for endpoint in expected if endpoint in present],
+        "missing": [endpoint for endpoint in expected if endpoint not in present],
+    }
+
+
 def official_mimic_fingerprint() -> dict[str, Any]:
     return {
         "user-agent": "claude-cli/2.1.111 (external, sdk-cli)",
@@ -1028,44 +1047,163 @@ def official_mimic_fingerprint() -> dict[str, Any]:
     }
 
 
-def flow_summary_findings(core: dict[str, Any] | None) -> list[Finding]:
-    if not core:
-        return [Finding("high", "flow.core", "flow summary has no POST /v1/messages core request")]
-    findings: list[Finding] = []
-    headers = core.get("headers") if isinstance(core.get("headers"), dict) else {}
-    expected = official_mimic_fingerprint()
-    for key, value in expected.items():
-        if key.startswith("x-anthropic-billing-header."):
-            system_entries = body_summary_value(core, "system_entries")
-            billing = ""
-            if isinstance(system_entries, list):
-                for entry in system_entries:
-                    if isinstance(entry, dict) and isinstance(entry.get("billing"), str):
-                        billing = entry["billing"]
-                        break
-            if "cc_entrypoint=sdk-cli" not in billing:
-                findings.append(Finding("high", key, "core billing header does not use sdk-cli entrypoint", "cc_entrypoint=sdk-cli", billing))
+def extract_cache_ttls_from_summary(body_summary: dict[str, Any]) -> list[str]:
+    ttl_values: list[str] = []
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        text = str(value).strip()
+        if text:
+            ttl_values.append(text)
+
+    for key in ("cache_control_ttls", "cache_ttls"):
+        value = body_summary.get(key)
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+        else:
+            add(value)
+
+    controls = body_summary.get("cache_controls")
+    if isinstance(controls, list):
+        for item in controls:
+            if isinstance(item, dict):
+                add(item.get("ttl"))
+            elif isinstance(item, str):
+                match = re.search(r"(?:ttl=|ttl:)([^,\s}]+)", item)
+                add(match.group(1) if match else item)
+
+    raw_body = body_summary.get("body")
+    if raw_body is not None:
+        if isinstance(raw_body, str):
+            raw_body = parse_json_body(raw_body)
+        for item in collect_cache_controls(raw_body):
+            match = re.search(r"ttl=([^,\s]+)", item)
+            if match:
+                add(match.group(1))
+
+    return ttl_values
+
+
+def usage_int(value: Any, *paths: str) -> int | None:
+    for path in paths:
+        found = json_get(value, path) if path else value
+        if found is None:
             continue
-        got = str(headers.get(key) or headers.get(key.lower()) or "")
-        if got != value:
-            severity = "high" if key in HIGH_RISK_HEADERS or key in STAINLESS_HEADERS else "medium"
-            findings.append(Finding(severity, f"header.{key}", "captured core request differs from expected official fingerprint", str(value), got))
+        try:
+            return int(found)
+        except (TypeError, ValueError):
+            continue
+    return None
 
-    beta = str(headers.get("anthropic-beta") or "")
+
+def extract_usage_cache_breakdown(item: dict[str, Any]) -> dict[str, int | None]:
+    candidates: list[Any] = []
+    for key in ("usage", "usage_summary", "response_usage"):
+        if isinstance(item.get(key), dict):
+            candidates.append(item[key])
+    response_summary = item.get("response_body_summary")
+    if isinstance(response_summary, dict):
+        if isinstance(response_summary.get("usage"), dict):
+            candidates.append(response_summary["usage"])
+        candidates.append(response_summary)
+
+    for usage in candidates:
+        five_min = usage_int(
+            usage,
+            "cache_creation.ephemeral_5m_input_tokens",
+            "cache_creation_5m_tokens",
+            "cache_creation5m_tokens",
+            "ephemeral_5m_input_tokens",
+        )
+        one_hour = usage_int(
+            usage,
+            "cache_creation.ephemeral_1h_input_tokens",
+            "cache_creation_1h_tokens",
+            "cache_creation1h_tokens",
+            "ephemeral_1h_input_tokens",
+        )
+        total = usage_int(usage, "cache_creation_input_tokens", "cache_creation_tokens")
+        if five_min is not None or one_hour is not None or total is not None:
+            return {"5m": five_min, "1h": one_hour, "total": total}
+    return {"5m": None, "1h": None, "total": None}
+
+
+def ttl_usage_consistency(core: dict[str, Any] | None) -> dict[str, Any]:
+    if not core:
+        return {"status": "unknown", "reason": "no core request"}
     body_summary = core.get("body_summary") if isinstance(core.get("body_summary"), dict) else {}
-    model = str(body_summary.get("model") or "").lower()
-    required_tokens = {"oauth-2025-04-20", "interleaved-thinking-2025-05-14"}
-    if "haiku" not in model:
-        required_tokens = set(EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS)
-    for token in required_tokens:
-        if token not in split_beta(beta):
-            findings.append(Finding("high", "header.anthropic-beta", f"captured core request is missing {token}", token, beta))
+    ttls = extract_cache_ttls_from_summary(body_summary)
+    breakdown = extract_usage_cache_breakdown(core)
+    has_1h_request = "1h" in ttls
+    has_usage = any(value is not None for value in breakdown.values())
+    if not ttls:
+        return {"status": "unknown", "reason": "no cache_control ttl summary", "ttls": ttls, "usage": breakdown}
+    if not has_usage:
+        return {"status": "unknown", "reason": "no response usage cache breakdown", "ttls": ttls, "usage": breakdown}
+    if has_1h_request and (breakdown["1h"] or 0) == 0 and (breakdown["5m"] or 0) > 0:
+        return {"status": "mismatch", "reason": "request sent 1h cache_control but usage was recorded as 5m", "ttls": ttls, "usage": breakdown}
+    return {"status": "ok", "reason": "", "ttls": ttls, "usage": breakdown}
 
-    metadata = body_summary.get("metadata_user_id") if isinstance(body_summary.get("metadata_user_id"), dict) else {}
-    session_id = str(metadata.get("session_id") or "")
-    header_session = str(headers.get("x-claude-code-session-id") or "")
-    if session_id and header_session and session_id != header_session:
-        findings.append(Finding("high", "header.x-claude-code-session-id", "captured core session header does not match metadata.user_id", session_id, header_session))
+
+def flow_summary_findings(items: list[dict[str, Any]]) -> list[Finding]:
+    core = first_core_flow(items)
+    if not core:
+        findings = [Finding("high", "flow.core", "flow summary has no POST /v1/messages core request")]
+    else:
+        findings = []
+    if core:
+        headers = core.get("headers") if isinstance(core.get("headers"), dict) else {}
+        expected = official_mimic_fingerprint()
+        for key, value in expected.items():
+            if key.startswith("x-anthropic-billing-header."):
+                system_entries = body_summary_value(core, "system_entries")
+                billing = ""
+                if isinstance(system_entries, list):
+                    for entry in system_entries:
+                        if isinstance(entry, dict) and isinstance(entry.get("billing"), str):
+                            billing = entry["billing"]
+                            break
+                if "cc_entrypoint=sdk-cli" not in billing:
+                    findings.append(Finding("high", key, "core billing header does not use sdk-cli entrypoint", "cc_entrypoint=sdk-cli", billing))
+                continue
+            got = str(headers.get(key) or headers.get(key.lower()) or "")
+            if got != value:
+                severity = "high" if key in HIGH_RISK_HEADERS or key in STAINLESS_HEADERS else "medium"
+                findings.append(Finding(severity, f"header.{key}", "captured core request differs from expected official fingerprint", str(value), got))
+
+        beta = str(headers.get("anthropic-beta") or "")
+        body_summary = core.get("body_summary") if isinstance(core.get("body_summary"), dict) else {}
+        model = str(body_summary.get("model") or "").lower()
+        required_tokens = {"oauth-2025-04-20", "interleaved-thinking-2025-05-14"}
+        if "haiku" not in model:
+            required_tokens = set(EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS)
+        for token in required_tokens:
+            if token not in split_beta(beta):
+                findings.append(Finding("high", "header.anthropic-beta", f"captured core request is missing {token}", token, beta))
+
+        metadata = body_summary.get("metadata_user_id") if isinstance(body_summary.get("metadata_user_id"), dict) else {}
+        session_id = str(metadata.get("session_id") or "")
+        header_session = str(headers.get("x-claude-code-session-id") or "")
+        if session_id and header_session and session_id != header_session:
+            findings.append(Finding("high", "header.x-claude-code-session-id", "captured core session header does not match metadata.user_id", session_id, header_session))
+
+    coverage = companion_coverage(items)
+    for endpoint in coverage["missing"]:
+        findings.append(Finding("medium", "flow.companion", "expected Claude Code companion endpoint was not observed", endpoint, "missing"))
+
+    consistency = ttl_usage_consistency(core)
+    if consistency["status"] == "mismatch":
+        findings.append(
+            Finding(
+                "high",
+                "body.cache_control.usage",
+                "cache_control ttl and usage accounting are inconsistent",
+                ",".join(consistency.get("ttls") or []),
+                str(consistency.get("usage")),
+            )
+        )
     return findings
 
 
@@ -1096,7 +1234,9 @@ def build_flow_summary_report(payload: dict[str, Any], show_values: bool) -> str
             group["sse"] = True
 
     core = first_core_flow(items)
-    findings = flow_summary_findings(core)
+    findings = flow_summary_findings(items)
+    coverage = companion_coverage(items)
+    consistency = ttl_usage_consistency(core)
     counts = finding_counts(findings)
     lines: list[str] = []
     lines.append("Claude CLI flow summary audit")
@@ -1112,6 +1252,14 @@ def build_flow_summary_report(payload: dict[str, Any], show_values: bool) -> str
         statuses = ",".join(f"{k}:{v}" for k, v in sorted(group["statuses"].items()))
         content_types = ",".join(f"{k or '(none)'}:{v}" for k, v in sorted(group["content_types"].items()))
         lines.append(f"- {key} count={group['count']} hosts={hosts} status={statuses} content_type={content_types} sse={str(group['sse']).lower()}")
+
+    lines.append("")
+    lines.append("Companion coverage")
+    lines.append(f"- present: {len(coverage['present'])}/{len(coverage['expected'])}")
+    if coverage["present"]:
+        lines.append(f"- observed: {', '.join(coverage['present'])}")
+    if coverage["missing"]:
+        lines.append(f"- missing: {', '.join(coverage['missing'])}")
 
     lines.append("")
     lines.append("Core request fingerprint")
@@ -1147,6 +1295,14 @@ def build_flow_summary_report(payload: dict[str, Any], show_values: bool) -> str
         lines.append("- No POST /v1/messages request found.")
 
     lines.append("")
+    lines.append("TTL and usage consistency")
+    lines.append(f"- status: {consistency['status']}")
+    if consistency.get("reason"):
+        lines.append(f"- reason: {consistency['reason']}")
+    lines.append(f"- request_ttls: {','.join(consistency.get('ttls') or [])}")
+    lines.append(f"- usage: {consistency.get('usage')}")
+
+    lines.append("")
     lines.append("Findings")
     if findings:
         for finding in sort_findings(findings):
@@ -1162,7 +1318,7 @@ def build_flow_summary_report(payload: dict[str, Any], show_values: bool) -> str
 def build_flow_summary_json_report(payload: dict[str, Any]) -> str:
     items = [item for item in payload.get("items", []) if isinstance(item, dict)]
     core = first_core_flow(items)
-    findings = flow_summary_findings(core)
+    findings = flow_summary_findings(items)
     endpoints: dict[str, dict[str, Any]] = {}
     for item in items:
         key = endpoint_key(item)
@@ -1181,6 +1337,8 @@ def build_flow_summary_json_report(payload: dict[str, Any]) -> str:
             "score": score_findings(findings),
             "counts": finding_counts(findings),
             "endpoints": endpoints,
+            "companion_coverage": companion_coverage(items),
+            "ttl_usage_consistency": ttl_usage_consistency(core),
             "findings": [finding.__dict__ for finding in sort_findings(findings)],
         },
         ensure_ascii=False,

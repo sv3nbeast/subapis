@@ -614,6 +614,11 @@ const (
 	ClaudeCodeAuxCompatModeForward = "forward"
 )
 
+const (
+	ClaudeCodeSyntheticCompanionModeAuxOnly     = "aux_only"
+	ClaudeCodeSyntheticCompanionModeAuxAndTitle = "aux_and_title"
+)
+
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
@@ -651,6 +656,9 @@ type GatewayConfig struct {
 	// ClaudeCodeAuxCompat: Claude Code 辅助端点兼容层配置。
 	// record/forward 均在本地返回兼容响应，不转发遥测/实验流量；forward 预留给未来显式实现。
 	ClaudeCodeAuxCompat GatewayClaudeCodeAuxCompatConfig `mapstructure:"claude_code_aux_compat"`
+	// ClaudeCodeMimicry: Claude Code 上游复原配置。不同于 aux_compat，这里控制
+	// 非 Claude CLI 客户端转 Anthropic OAuth/SetupToken 时的上游伪装行为。
+	ClaudeCodeMimicry GatewayClaudeCodeMimicryConfig `mapstructure:"claude_code_mimicry"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -732,6 +740,26 @@ type GatewayConfig struct {
 type GatewayClaudeCodeAuxCompatConfig struct {
 	// Mode: off/record/forward。默认 record，避免 Claude Code 因辅助端点 404 产生噪声。
 	Mode string `mapstructure:"mode"`
+}
+
+type GatewayClaudeCodeMimicryConfig struct {
+	// Enabled: 是否启用 Claude Code 上游伪装。默认开启，用于 Anthropic OAuth/SetupToken。
+	Enabled bool `mapstructure:"enabled"`
+	// SyntheticCompanion: 非 Claude CLI 客户端请求时，是否补发官方 CLI 常见辅助上游请求。
+	SyntheticCompanion GatewayClaudeCodeSyntheticCompanionConfig `mapstructure:"synthetic_companion"`
+}
+
+type GatewayClaudeCodeSyntheticCompanionConfig struct {
+	// Enabled: 是否启用 companion 上游探测。
+	Enabled bool `mapstructure:"enabled"`
+	// Mode: aux_only/aux_and_title。title 会额外消耗 Haiku 上游额度。
+	Mode string `mapstructure:"mode"`
+	// MinIntervalSeconds: 同 account + synthetic session 的最小触发间隔。
+	MinIntervalSeconds int `mapstructure:"min_interval_seconds"`
+	// TimeoutSeconds: 单个 companion 请求超时时间。
+	TimeoutSeconds int `mapstructure:"timeout_seconds"`
+	// FailOpen: companion 失败不影响用户主请求。
+	FailOpen bool `mapstructure:"fail_open"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -909,6 +937,8 @@ type GatewayUsageRecordConfig struct {
 type TLSFingerprintConfig struct {
 	// Enabled: 是否全局启用TLS指纹功能
 	Enabled bool `mapstructure:"enabled"`
+	// DefaultEnabledForAnthropicOAuth: Anthropic OAuth/SetupToken 默认启用 Node.js TLS 指纹。
+	DefaultEnabledForAnthropicOAuth bool `mapstructure:"default_enabled_for_anthropic_oauth"`
 	// Profiles: 预定义的TLS指纹配置模板
 	// key 为模板名称，如 "claude_cli_v2", "chrome_120" 等
 	Profiles map[string]TLSProfileConfig `mapstructure:"profiles"`
@@ -1344,6 +1374,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
 	cfg.Gateway.ClaudeCodeAuxCompat.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeAuxCompat.Mode))
+	cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode))
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
@@ -1687,6 +1718,13 @@ func setDefaults() {
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.claude_code_aux_compat.mode", ClaudeCodeAuxCompatModeRecord)
+	viper.SetDefault("gateway.claude_code_mimicry.enabled", true)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.enabled", true)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.mode", ClaudeCodeSyntheticCompanionModeAuxAndTitle)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds", 300)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.timeout_seconds", 5)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.fail_open", true)
+	viper.SetDefault("gateway.tls_fingerprint.default_enabled_for_anthropic_oauth", true)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
@@ -2312,6 +2350,18 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("gateway.claude_code_aux_compat.mode must be one of: %s/%s/%s",
 			ClaudeCodeAuxCompatModeOff, ClaudeCodeAuxCompatModeRecord, ClaudeCodeAuxCompatModeForward)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode)) {
+	case "", ClaudeCodeSyntheticCompanionModeAuxOnly, ClaudeCodeSyntheticCompanionModeAuxAndTitle:
+	default:
+		return fmt.Errorf("gateway.claude_code_mimicry.synthetic_companion.mode must be one of: %s/%s",
+			ClaudeCodeSyntheticCompanionModeAuxOnly, ClaudeCodeSyntheticCompanionModeAuxAndTitle)
+	}
+	if c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.MinIntervalSeconds < 0 {
+		return fmt.Errorf("gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds must be non-negative")
+	}
+	if c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.TimeoutSeconds <= 0 {
+		return fmt.Errorf("gateway.claude_code_mimicry.synthetic_companion.timeout_seconds must be positive")
 	}
 	if c.Gateway.ImageConcurrency.MaxConcurrentRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_concurrent_requests must be non-negative")

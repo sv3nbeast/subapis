@@ -149,6 +149,16 @@ func TestApplyToolsLastCacheBreakpoint_PassesThroughClientTTL(t *testing.T) {
 	require.Equal(t, "1h", gjson.GetBytes(out, "tools.0.cache_control.ttl").String())
 }
 
+func TestApplyToolsLastCacheBreakpointWithTTL_UsesRequestedTTLWithoutOverridingExplicitTTL(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"a","input_schema":{}},{"name":"b","input_schema":{},"cache_control":{"type":"ephemeral","ttl":"5m"}}]}`)
+	out := applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
+	require.Equal(t, "5m", gjson.GetBytes(out, "tools.1.cache_control.ttl").String())
+
+	body = []byte(`{"tools":[{"name":"a","input_schema":{}},{"name":"b","input_schema":{}}]}`)
+	out = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
+	require.Equal(t, "1h", gjson.GetBytes(out, "tools.1.cache_control.ttl").String())
+}
+
 func TestStripMessageCacheControl(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`)
 	out := stripMessageCacheControl(body)
@@ -160,6 +170,12 @@ func TestAddMessageCacheBreakpoints_LastMessageOnly(t *testing.T) {
 	out := addMessageCacheBreakpoints(body)
 	require.Equal(t, "ephemeral", gjson.GetBytes(out, "messages.0.content.0.cache_control.type").String())
 	require.Equal(t, "5m", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+}
+
+func TestAddMessageCacheBreakpointsWithTTL_UsesRequestedTTL(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	out := addMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
 }
 
 func TestAddMessageCacheBreakpoints_SecondToLastUserTurn(t *testing.T) {

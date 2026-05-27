@@ -58,6 +58,13 @@ func stripMessageCacheControl(body []byte) []byte {
 //
 // 调用前应先 stripMessageCacheControl 以保证幂等和稳定。
 func addMessageCacheBreakpoints(body []byte) []byte {
+	return addMessageCacheBreakpointsWithTTL(body, claude.DefaultCacheControlTTL)
+}
+
+func addMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
 		return body
@@ -67,7 +74,7 @@ func addMessageCacheBreakpoints(body []byte) []byte {
 		return body
 	}
 
-	body = injectCacheControlOnLastContentBlock(body, len(arr)-1, &arr[len(arr)-1])
+	body = injectCacheControlOnLastContentBlockWithTTL(body, len(arr)-1, &arr[len(arr)-1], ttl)
 
 	if len(arr) >= 4 {
 		userCount := 0
@@ -77,7 +84,7 @@ func addMessageCacheBreakpoints(body []byte) []byte {
 			}
 			userCount++
 			if userCount == 2 {
-				body = injectCacheControlOnLastContentBlock(body, i, &arr[i])
+				body = injectCacheControlOnLastContentBlockWithTTL(body, i, &arr[i], ttl)
 				break
 			}
 		}
@@ -88,11 +95,18 @@ func addMessageCacheBreakpoints(body []byte) []byte {
 
 // rewriteMessageCacheControlIfEnabled 按系统设置决定是否执行旧版 messages 缓存断点改写。
 func (s *GatewayService) rewriteMessageCacheControlIfEnabled(ctx context.Context, body []byte) []byte {
+	return s.rewriteMessageCacheControlIfEnabledWithTTL(ctx, body, claude.DefaultCacheControlTTL)
+}
+
+func (s *GatewayService) rewriteMessageCacheControlIfEnabledWithTTL(ctx context.Context, body []byte, ttl string) []byte {
 	if s == nil || !s.isRewriteMessageCacheControlEnabled(ctx) {
 		return body
 	}
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
 	body = stripMessageCacheControl(body)
-	return addMessageCacheBreakpoints(body)
+	return addMessageCacheBreakpointsWithTTL(body, ttl)
 }
 
 func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context) bool {
@@ -111,13 +125,20 @@ func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context
 //
 // msg 是调用方已持有的 gjson.Result 快照，用于省一次 GetBytes。
 func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Result) []byte {
+	return injectCacheControlOnLastContentBlockWithTTL(body, idx, msg, claude.DefaultCacheControlTTL)
+}
+
+func injectCacheControlOnLastContentBlockWithTTL(body []byte, idx int, msg *gjson.Result, ttl string) []byte {
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
 	content := msg.Get("content")
 
 	if content.Type == gjson.String {
 		text := content.String()
 		blockRaw := fmt.Sprintf(
 			`[{"type":"text","text":%s,"cache_control":{"type":"ephemeral","ttl":%q}}]`,
-			mustJSONString(text), claude.DefaultCacheControlTTL,
+			mustJSONString(text), ttl,
 		)
 		if next, err := sjson.SetRawBytes(body, fmt.Sprintf("messages.%d.content", idx), []byte(blockRaw)); err == nil {
 			body = next
@@ -142,12 +163,12 @@ func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Resul
 	pathPrefix := fmt.Sprintf("messages.%d.content.%d.cache_control", idx, lastBlockIdx)
 	existingCC := lastBlock.Get("cache_control")
 	if existingCC.Exists() {
-		if next, err := sjson.SetBytes(body, pathPrefix+".ttl", claude.DefaultCacheControlTTL); err == nil {
+		if next, err := sjson.SetBytes(body, pathPrefix+".ttl", ttl); err == nil {
 			body = next
 		}
 		return body
 	}
-	raw := fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, claude.DefaultCacheControlTTL)
+	raw := fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, ttl)
 	if next, err := sjson.SetRawBytes(body, pathPrefix, []byte(raw)); err == nil {
 		body = next
 	}

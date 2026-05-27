@@ -167,6 +167,13 @@ func TestLoadDefaultClaudeCodeAuxCompatConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, ClaudeCodeAuxCompatModeRecord, cfg.Gateway.ClaudeCodeAuxCompat.Mode)
+	require.True(t, cfg.Gateway.ClaudeCodeMimicry.Enabled)
+	require.True(t, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Enabled)
+	require.Equal(t, ClaudeCodeSyntheticCompanionModeAuxAndTitle, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode)
+	require.Equal(t, 300, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.MinIntervalSeconds)
+	require.Equal(t, 5, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.TimeoutSeconds)
+	require.True(t, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.FailOpen)
+	require.True(t, cfg.Gateway.TLSFingerprint.DefaultEnabledForAnthropicOAuth)
 }
 
 func TestLoadClaudeCodeAuxCompatConfigFromEnv(t *testing.T) {
@@ -1280,6 +1287,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway claude code aux compat invalid",
 			mutate:  func(c *Config) { c.Gateway.ClaudeCodeAuxCompat.Mode = "mirror" },
 			wantErr: "gateway.claude_code_aux_compat.mode",
+		},
+		{
+			name:    "gateway claude code companion invalid",
+			mutate:  func(c *Config) { c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode = "mirror" },
+			wantErr: "gateway.claude_code_mimicry.synthetic_companion.mode",
+		},
+		{
+			name:    "gateway claude code companion timeout",
+			mutate:  func(c *Config) { c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.TimeoutSeconds = 0 },
+			wantErr: "gateway.claude_code_mimicry.synthetic_companion.timeout_seconds",
 		},
 		{
 			name:    "gateway stream keepalive range",

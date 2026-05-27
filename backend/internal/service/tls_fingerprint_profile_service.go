@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -35,6 +36,7 @@ type TLSFingerprintProfileCache interface {
 type TLSFingerprintProfileService struct {
 	repo  TLSFingerprintProfileRepository
 	cache TLSFingerprintProfileCache
+	cfg   *config.Config
 
 	// 本地 ID→Profile 映射缓存，用于 DoWithTLS 热路径快速查找
 	localCache map[int64]*model.TLSFingerprintProfile
@@ -45,10 +47,12 @@ type TLSFingerprintProfileService struct {
 func NewTLSFingerprintProfileService(
 	repo TLSFingerprintProfileRepository,
 	cache TLSFingerprintProfileCache,
+	cfg *config.Config,
 ) *TLSFingerprintProfileService {
 	svc := &TLSFingerprintProfileService{
 		repo:       repo,
 		cache:      cache,
+		cfg:        cfg,
 		localCache: make(map[int64]*model.TLSFingerprintProfile),
 	}
 
@@ -177,7 +181,7 @@ func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profil
 //  2. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
 //  3. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
-	if account == nil || !account.IsTLSFingerprintEnabled() {
+	if account == nil || !s.shouldEnableTLSFingerprint(account) {
 		return nil
 	}
 	id := account.GetTLSFingerprintProfileID()
@@ -197,6 +201,26 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 	}
 	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
 	return forceHTTP1WithProxyForAnthropic(account, tlsfingerprint.BuiltInDefaultProfile())
+}
+
+func (s *TLSFingerprintProfileService) shouldEnableTLSFingerprint(account *Account) bool {
+	if account == nil || !account.SupportsTLSFingerprint() {
+		return false
+	}
+	if s != nil && s.cfg != nil && !s.cfg.Gateway.TLSFingerprint.Enabled {
+		return false
+	}
+	if account.Extra != nil {
+		if v, ok := account.Extra["enable_tls_fingerprint"]; ok {
+			if enabled, ok := v.(bool); ok {
+				return enabled
+			}
+		}
+	}
+	if account.IsAnthropicOAuthOrSetupToken() && s != nil && s.cfg != nil {
+		return s.cfg.Gateway.TLSFingerprint.DefaultEnabledForAnthropicOAuth
+	}
+	return false
 }
 
 func accountTLSFingerprintSeed(account *Account) uint64 {

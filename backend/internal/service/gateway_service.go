@@ -29,6 +29,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -590,6 +591,7 @@ type GatewayService struct {
 	debugGatewayBodyFile       atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService        *TLSFingerprintProfileService
 	balanceNotifyService       *BalanceNotifyService
+	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
 }
 
 // NewGatewayService creates a new GatewayService
@@ -657,6 +659,7 @@ func NewGatewayService(
 		channelService:             channelService,
 		resolver:                   resolver,
 		balanceNotifyService:       balanceNotifyService,
+		claudeCodeCompanionProbe:   NewClaudeCodeCompanionProbeService(httpUpstream),
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -946,14 +949,21 @@ func sanitizeSystemText(text string) string {
 }
 
 func marshalAnthropicSystemTextBlock(text string, includeCacheControl bool) ([]byte, error) {
+	return marshalAnthropicSystemTextBlockWithTTL(text, includeCacheControl, claude.DefaultCacheControlTTL)
+}
+
+func marshalAnthropicSystemTextBlockWithTTL(text string, includeCacheControl bool, ttl string) ([]byte, error) {
 	block := anthropicSystemTextBlockPayload{
 		Type: "text",
 		Text: text,
 	}
 	if includeCacheControl {
+		if ttl == "" {
+			ttl = claude.DefaultCacheControlTTL
+		}
 		block.CacheControl = &anthropicCacheControlPayload{
 			Type: "ephemeral",
-			TTL:  claude.DefaultCacheControlTTL,
+			TTL:  ttl,
 		}
 	}
 	return json.Marshal(block)
@@ -1365,15 +1375,15 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	//   1) messages cache：仅在配置开启时清除客户端断点并注入代理断点
 	//   2) tool rewrite：最后改 tools[*].name / tool_choice.name 并在 tools[-1]
 	//      上打断点；mapping 存入 gin.Context 供响应侧 bytes.Replace 还原。
-	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+	body = s.rewriteMessageCacheControlIfEnabledWithTTL(ctx, body, cacheTTLTarget1h)
 
 	if rw := buildToolNameRewriteFromBody(body); rw != nil {
-		body = applyToolNameRewriteToBody(body, rw)
+		body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
 		if c != nil {
 			c.Set(toolNameRewriteKey, rw)
 		}
 	} else {
-		body = applyToolsLastCacheBreakpoint(body)
+		body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 	}
 
 	return body
@@ -4673,7 +4683,7 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	//    signBillingHeaderCCH 替换成 xxhash64 签名。缺失 billing block 的系统 payload
 	//    是 Anthropic 判定第三方的关键信号之一（真实 CLI 每个请求都带）。
 	billingBlock, billingErr := buildBillingAttributionBlockJSON(body, claude.CLICurrentVersion)
-	ccPromptBlock, ccErr := marshalAnthropicSystemTextBlock(claudeCodeSystemPrompt, true)
+	ccPromptBlock, ccErr := marshalAnthropicSystemTextBlockWithTTL(claudeCodeSystemPrompt, true, cacheTTLTarget1h)
 	if billingErr != nil || ccErr != nil {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to build system blocks (billing=%v, cc=%v)", billingErr, ccErr)
 		return body
@@ -4958,6 +4968,47 @@ func (s *GatewayService) shouldInjectAnthropicCacheTTL1h(ctx context.Context, ac
 	return s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx)
 }
 
+func (s *GatewayService) shouldMimicClaudeCodeForAccount(account *Account, isClaudeCode bool) bool {
+	if isClaudeCode || account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return false
+	}
+	if s == nil || s.cfg == nil {
+		return true
+	}
+	cfg := s.cfg.Gateway.ClaudeCodeMimicry
+	if cfg.Enabled {
+		return true
+	}
+	return isZeroClaudeCodeMimicryConfig(cfg)
+}
+
+func isZeroClaudeCodeMimicryConfig(cfg config.GatewayClaudeCodeMimicryConfig) bool {
+	return !cfg.Enabled &&
+		!cfg.SyntheticCompanion.Enabled &&
+		strings.TrimSpace(cfg.SyntheticCompanion.Mode) == "" &&
+		cfg.SyntheticCompanion.MinIntervalSeconds == 0 &&
+		cfg.SyntheticCompanion.TimeoutSeconds == 0 &&
+		!cfg.SyntheticCompanion.FailOpen
+}
+
+func (s *GatewayService) triggerClaudeCodeCompanionProbe(ctx context.Context, account *Account, body []byte, token, tokenType, proxyURL string, tlsProfile *tlsfingerprint.Profile, model string) {
+	if s == nil || s.claudeCodeCompanionProbe == nil || s.cfg == nil {
+		return
+	}
+	sessionID := deriveClaudeCodeCompanionSessionID(account, body)
+	s.claudeCodeCompanionProbe.MaybeTrigger(ctx, ClaudeCodeCompanionProbeInput{
+		Account:      account,
+		Body:         body,
+		Token:        token,
+		TokenType:    tokenType,
+		ProxyURL:     proxyURL,
+		TLSProfile:   tlsProfile,
+		SessionID:    sessionID,
+		Config:       s.cfg.Gateway.ClaudeCodeMimicry,
+		RequestModel: model,
+	})
+}
+
 // Forward 转发请求到Claude API
 func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
 	startTime := time.Now()
@@ -5035,7 +5086,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	//
 	// 对于非 Claude Code 的第三方客户端（opencode 等），仍然走完整 mimicry。
 	isClaudeCode := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := s.shouldMimicClaudeCodeForAccount(account, isClaudeCode)
 
 	if shouldMimicClaudeCode {
 		// 与 Parrot 对齐：OAuth 账号无条件重写 system（即使客户端已发了 Claude Code
@@ -5075,12 +5126,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// D/E/F: 可选 messages cache 策略 + 工具名混淆 + tools[-1] 断点
 		// 与 forward_as_chat_completions / forward_as_responses 路径对齐，
 		// 原生 /v1/messages 路径也走同一套可配置字段级改写。
-		body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+		body = s.rewriteMessageCacheControlIfEnabledWithTTL(ctx, body, cacheTTLTarget1h)
 		if rw := buildToolNameRewriteFromBody(body); rw != nil {
-			body = applyToolNameRewriteToBody(body, rw)
+			body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
 			c.Set(toolNameRewriteKey, rw)
 		} else {
-			body = applyToolsLastCacheBreakpoint(body)
+			body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 		}
 	}
 
@@ -5127,6 +5178,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	body = StripEmptyTextBlocks(body)
+
+	if shouldMimicClaudeCode && tokenType == "oauth" && !IsClaudeCodeCompanionProbeTriggered(ctx) {
+		s.triggerClaudeCodeCompanionProbe(ctx, account, body, token, tokenType, proxyURL, tlsProfile, reqModel)
+		ctx = WithClaudeCodeCompanionProbeTriggered(ctx)
+	}
 
 	// 重试间复用同一请求体，避免每次 string(body) 产生额外分配。
 	setOpsUpstreamRequestBody(c, body)
@@ -6634,7 +6690,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		body = syncBillingHeaderVersion(body, fingerprint.UserAgent)
 	}
 	// CCH 签名：将 cch=00000 占位符替换为 xxHash64 签名（需在所有 body 修改之后）
-	if enableCCH {
+	if enableCCH || mimicClaudeCode {
 		body = signBillingHeaderCCH(body)
 	}
 
@@ -8382,9 +8438,6 @@ func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context,
 	if account.IsCacheTTLOverrideEnabled() {
 		return account.GetCacheTTLOverrideTarget(), true
 	}
-	if account.IsAnthropicOAuthOrSetupToken() && s != nil && s.settingService != nil && s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx) {
-		return cacheTTLTarget5m, true
-	}
 	return "", false
 }
 
@@ -9400,17 +9453,17 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	body = StripEmptyTextBlocks(body)
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
+	shouldMimicClaudeCode := s.shouldMimicClaudeCodeForAccount(account, isClaudeCodeCT)
 
 	if shouldMimicClaudeCode {
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
 		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
 
-		body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+		body = s.rewriteMessageCacheControlIfEnabledWithTTL(ctx, body, cacheTTLTarget1h)
 		if rw := buildToolNameRewriteFromBody(body); rw != nil {
-			body = applyToolNameRewriteToBody(body, rw)
+			body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
 		} else {
-			body = applyToolsLastCacheBreakpoint(body)
+			body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 		}
 	}
 
@@ -9773,7 +9826,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if ctFingerprint != nil && ctEnableFP {
 		body = syncBillingHeaderVersion(body, ctFingerprint.UserAgent)
 	}
-	if ctEnableCCH {
+	if ctEnableCCH || mimicClaudeCode {
 		body = signBillingHeaderCCH(body)
 	}
 

@@ -82,7 +82,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 否则会被 Anthropic 判为第三方应用并扣 extra usage。
 	// 见 applyClaudeCodeOAuthMimicryToBody 的 godoc。
 	isClaudeCode := false
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := s.shouldMimicClaudeCodeForAccount(account, isClaudeCode)
 
 	if shouldMimicClaudeCode {
 		anthropicBody = s.applyClaudeCodeOAuthMimicryToBody(ctx, c, account, anthropicBody, anthropicReq.System, mappedModel)
@@ -112,7 +112,12 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	}
 
 	// 11. Send request
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	if shouldMimicClaudeCode && tokenType == "oauth" && !IsClaudeCodeCompanionProbeTriggered(ctx) {
+		s.triggerClaudeCodeCompanionProbe(ctx, account, anthropicBody, token, tokenType, proxyURL, tlsProfile, mappedModel)
+		ctx = WithClaudeCodeCompanionProbeTriggered(ctx)
+	}
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()

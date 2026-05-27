@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+)
 
 func TestAccountSupportsTLSFingerprint_Antigravity(t *testing.T) {
 	account := &Account{
@@ -98,5 +102,38 @@ func TestResolveTLSProfile_AnthropicOAuthForcesHTTP1WithProxy(t *testing.T) {
 	}
 	if !profile.ForceHTTP1WithProxy {
 		t.Fatalf("expected anthropic oauth profile to force HTTP/1.1 when proxied")
+	}
+}
+
+func TestResolveTLSProfile_AnthropicOAuthDefaultEnabledFromConfig(t *testing.T) {
+	service := &TLSFingerprintProfileService{
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			TLSFingerprint: config.TLSFingerprintConfig{
+				Enabled:                         true,
+				DefaultEnabledForAnthropicOAuth: true,
+			},
+		}},
+	}
+	account := &Account{
+		ID:       202,
+		Name:     "anthropic-202",
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+	}
+
+	profile := service.ResolveTLSProfile(account)
+	if profile == nil {
+		t.Fatalf("expected default enabled anthropic oauth tls profile")
+	}
+
+	account.Extra = map[string]any{"enable_tls_fingerprint": false}
+	if profile := service.ResolveTLSProfile(account); profile != nil {
+		t.Fatalf("expected explicit account disable to override config default")
+	}
+
+	service.cfg.Gateway.TLSFingerprint.Enabled = false
+	account.Extra = nil
+	if profile := service.ResolveTLSProfile(account); profile != nil {
+		t.Fatalf("expected global tls fingerprint disable to win")
 	}
 }

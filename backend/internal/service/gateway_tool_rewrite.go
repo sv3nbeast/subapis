@@ -176,8 +176,15 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 //
 // 响应侧 bytes.Replace 会连带还原假名 → 真名。
 func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
+	return applyToolNameRewriteToBodyWithTTL(body, rw, claude.DefaultCacheControlTTL)
+}
+
+func applyToolNameRewriteToBodyWithTTL(body []byte, rw *ToolNameRewrite, ttl string) []byte {
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
 	if rw == nil || len(rw.Forward) == 0 {
-		body = applyToolsLastCacheBreakpoint(body)
+		body = applyToolsLastCacheBreakpointWithTTL(body, ttl)
 		return body
 	}
 
@@ -244,7 +251,7 @@ func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
 		})
 	}
 
-	body = applyToolsLastCacheBreakpoint(body)
+	body = applyToolsLastCacheBreakpointWithTTL(body, ttl)
 	return body
 }
 
@@ -256,6 +263,13 @@ func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
 //
 // 纯副作用函数，tools 不存在或为空数组时 no-op。
 func applyToolsLastCacheBreakpoint(body []byte) []byte {
+	return applyToolsLastCacheBreakpointWithTTL(body, claude.DefaultCacheControlTTL)
+}
+
+func applyToolsLastCacheBreakpointWithTTL(body []byte, ttl string) []byte {
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
 	tools := gjson.GetBytes(body, "tools")
 	if !tools.IsArray() {
 		return body
@@ -272,13 +286,13 @@ func applyToolsLastCacheBreakpoint(body []byte) []byte {
 	}
 
 	if existingCC.Exists() {
-		if next, err := sjson.SetBytes(body, fmt.Sprintf("tools.%d.cache_control.ttl", lastIdx), claude.DefaultCacheControlTTL); err == nil {
+		if next, err := sjson.SetBytes(body, fmt.Sprintf("tools.%d.cache_control.ttl", lastIdx), ttl); err == nil {
 			body = next
 		}
 		return body
 	}
 
-	raw := fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, claude.DefaultCacheControlTTL)
+	raw := fmt.Sprintf(`{"type":"ephemeral","ttl":%q}`, ttl)
 	if next, err := sjson.SetRawBytes(body, fmt.Sprintf("tools.%d.cache_control", lastIdx), []byte(raw)); err == nil {
 		body = next
 	}

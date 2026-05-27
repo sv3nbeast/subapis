@@ -76,6 +76,11 @@ python3 scripts/audit_claude_cli_mimicry.py \
   --flow-summary "$CAPTURE_DIR/flows.summary.json"
 ```
 
+When the summary includes `body_summary.cache_controls` or
+`body_summary.cache_control_ttls` plus response `usage`/`usage_summary`, the
+script also checks TTL and billing consistency. A request that sends `ttl=1h`
+must not be recorded only as `ephemeral_5m_input_tokens`.
+
 ## Latest Local Capture Result
 
 The local five-minute official capture on 2026-05-27 used Claude Code
@@ -165,6 +170,21 @@ Default `record` returns local success-compatible JSON for the auxiliary
 endpoints captured above and logs compact redacted metadata. `forward` is
 reserved and currently behaves record-compatible; production must not forward
 telemetry or experiment traffic unless explicitly implemented and enabled.
+
+For non-Claude-CLI clients routed through Anthropic OAuth/SetupToken mimicry,
+sub2api may also send a throttled upstream companion set:
+
+- `GET /api/claude_cli/bootstrap`
+- `GET /api/claude_code_penguin_mode`
+- `GET /api/claude_code_grove`
+- `GET /api/oauth/account/settings`
+- `GET /v1/mcp_servers?limit=1000`
+- `GET /mcp-registry/v0/servers?...`
+
+The audit script reports companion coverage from `--flow-summary`. Missing
+companion endpoints are medium severity because they affect behavioral parity,
+but they should remain throttled and fail-open so user requests are not blocked
+by auxiliary traffic.
 
 ## Notes
 
