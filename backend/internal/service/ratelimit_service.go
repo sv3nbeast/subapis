@@ -1411,6 +1411,13 @@ func persistOpenAI429PlanType(ctx context.Context, repo AccountRepository, accou
 // handle529 处理529过载错误
 // 根据配置决定是否暂停账号调度及冷却时长
 func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
+	if account.Platform == PlatformAnthropic {
+		// Anthropic 529 is a transient provider-side overload signal. Persisting it
+		// as account overload can empty small account pools after one failover loop.
+		slog.Info("anthropic_529_local_overload_skipped", "account_id", account.ID)
+		return
+	}
+
 	var settings *OverloadCooldownSettings
 	if s.settingService != nil {
 		var err error
@@ -1422,7 +1429,10 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 	// 回退到配置文件
 	if settings == nil {
-		cooldown := s.cfg.RateLimit.OverloadCooldownMinutes
+		cooldown := 0
+		if s.cfg != nil {
+			cooldown = s.cfg.RateLimit.OverloadCooldownMinutes
+		}
 		if cooldown <= 0 {
 			cooldown = 10
 		}
