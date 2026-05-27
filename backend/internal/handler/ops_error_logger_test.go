@@ -373,6 +373,17 @@ func TestClassifyOpsIsBusinessLimited_APIKeyBusinessLimitCodes(t *testing.T) {
 	}
 }
 
+func TestClassifyOpsModelNotFoundIsClientRequestLimited(t *testing.T) {
+	msg := "model: claude-opus-4-7-thinking"
+
+	phase := classifyOpsPhase("not_found_error", msg, "")
+	require.Equal(t, "request", phase)
+	require.True(t, classifyOpsIsBusinessLimited("not_found_error", phase, "", http.StatusNotFound, msg))
+	require.Equal(t, "client", classifyOpsErrorOwner(phase, msg))
+	require.Equal(t, "client_request", classifyOpsErrorSource(phase, msg))
+	require.False(t, classifyOpsIsRetryable("not_found_error", http.StatusNotFound))
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

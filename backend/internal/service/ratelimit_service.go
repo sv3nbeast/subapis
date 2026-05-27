@@ -30,6 +30,8 @@ type RateLimitService struct {
 	tokenCacheInvalidator TokenCacheInvalidator
 	usageCacheMu          sync.RWMutex
 	usageCache            map[int64]*geminiUsageCacheEntry
+	anthropicNoReset429Mu sync.Mutex
+	anthropicNoReset429   map[string]anthropicNoReset429State
 }
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
@@ -53,11 +55,23 @@ type geminiUsageTotalsBatchProvider interface {
 	GetGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, startTime, endTime time.Time) (map[int64]GeminiUsageTotals, error)
 }
 
+type anthropicNoReset429State struct {
+	Count  int
+	LastAt time.Time
+}
+
 const geminiPrecheckCacheTTL = time.Minute
 
 const (
 	defaultRateLimit429CooldownSeconds = 5
 	maxRateLimit429CooldownSeconds     = 7200
+)
+
+const (
+	anthropicNoReset429BackoffWindow = 2 * time.Minute
+	anthropicNoReset429FirstCooldown = 10 * time.Second
+	anthropicNoReset429NextCooldown  = 15 * time.Second
+	anthropicNoReset429MaxCooldown   = 30 * time.Second
 )
 
 const (
@@ -933,7 +947,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		// 但如果响应体明确是 rate_limit_error，使用短冷却兜底，避免同一账号被连续命中。
 		if account.Platform == PlatformAnthropic {
 			if isAnthropicRateLimitErrorBody(responseBody) {
-				s.apply429FallbackRateLimit(ctx, account, "anthropic_rate_limit_no_reset_time")
+				s.applyAnthropic429NoResetRateLimit(ctx, account)
 				return
 			}
 			slog.Warn("rate_limit_429_no_reset_time_skipped",
@@ -978,8 +992,67 @@ func isAnthropicRateLimitErrorBody(body []byte) bool {
 	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()), "rate_limit_error")
 }
 
+func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context, account *Account) {
+	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+	if enabled {
+		if adaptiveCooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now()); cooldown < adaptiveCooldown {
+			cooldown = adaptiveCooldown
+		}
+	}
+	s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", cooldown, enabled)
+}
+
+func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now time.Time) time.Duration {
+	key := anthropicNoReset429BackoffKey(account)
+
+	s.anthropicNoReset429Mu.Lock()
+	defer s.anthropicNoReset429Mu.Unlock()
+
+	if s.anthropicNoReset429 == nil {
+		s.anthropicNoReset429 = make(map[string]anthropicNoReset429State)
+	}
+	if len(s.anthropicNoReset429) > 128 {
+		for existingKey, state := range s.anthropicNoReset429 {
+			if now.Sub(state.LastAt) > anthropicNoReset429BackoffWindow {
+				delete(s.anthropicNoReset429, existingKey)
+			}
+		}
+	}
+
+	state := s.anthropicNoReset429[key]
+	if state.LastAt.IsZero() || now.Sub(state.LastAt) > anthropicNoReset429BackoffWindow {
+		state.Count = 0
+	}
+	state.Count++
+	state.LastAt = now
+	s.anthropicNoReset429[key] = state
+
+	switch {
+	case state.Count <= 1:
+		return anthropicNoReset429FirstCooldown
+	case state.Count == 2:
+		return anthropicNoReset429NextCooldown
+	default:
+		return anthropicNoReset429MaxCooldown
+	}
+}
+
+func anthropicNoReset429BackoffKey(account *Account) string {
+	if account == nil {
+		return "account:0"
+	}
+	if orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid")); orgUUID != "" {
+		return "org:" + orgUUID
+	}
+	return fmt.Sprintf("account:%d", account.ID)
+}
+
 func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
 	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+	s.apply429FallbackRateLimitWithCooldown(ctx, account, reason, cooldown, enabled)
+}
+
+func (s *RateLimitService) apply429FallbackRateLimitWithCooldown(ctx context.Context, account *Account, reason string, cooldown time.Duration, enabled bool) {
 	if !enabled {
 		slog.Info("rate_limit_429_fallback_ignored", "account_id", account.ID, "platform", account.Platform, "reason", reason)
 		return
@@ -987,8 +1060,45 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 
 	resetAt := time.Now().Add(cooldown)
 	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+	if err := s.setRateLimitedWithAnthropicOrgPeers(ctx, account, resetAt, reason); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+	}
+}
+
+func (s *RateLimitService) setRateLimitedWithAnthropicOrgPeers(ctx context.Context, account *Account, resetAt time.Time, reason string) error {
+	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+		return err
+	}
+	s.rateLimitAnthropicOrgPeers(ctx, account, resetAt, reason)
+	return nil
+}
+
+func (s *RateLimitService) rateLimitAnthropicOrgPeers(ctx context.Context, account *Account, resetAt time.Time, reason string) {
+	if account == nil || account.Platform != PlatformAnthropic || s.accountRepo == nil {
+		return
+	}
+	orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid"))
+	if orgUUID == "" {
+		return
+	}
+
+	peers, err := s.accountRepo.FindByExtraField(ctx, "org_uuid", orgUUID)
+	if err != nil {
+		slog.Warn("rate_limit_org_peer_lookup_failed", "account_id", account.ID, "org_uuid", orgUUID, "error", err)
+		return
+	}
+	for _, peer := range peers {
+		if peer.ID == account.ID || peer.Platform != PlatformAnthropic {
+			continue
+		}
+		if peer.RateLimitResetAt != nil && peer.RateLimitResetAt.After(resetAt) {
+			continue
+		}
+		if err := s.accountRepo.SetRateLimited(ctx, peer.ID, resetAt); err != nil {
+			slog.Warn("rate_limit_org_peer_set_failed", "account_id", account.ID, "peer_account_id", peer.ID, "org_uuid", orgUUID, "error", err)
+			continue
+		}
+		slog.Info("rate_limit_org_peer_set", "account_id", account.ID, "peer_account_id", peer.ID, "org_uuid", orgUUID, "reason", reason, "reset_at", resetAt)
 	}
 }
 

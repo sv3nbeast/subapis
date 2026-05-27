@@ -105,6 +105,8 @@ var (
 	modelsListCacheStoreTotal atomic.Int64
 )
 
+const maxShortRateLimitRetryWait = 3 * time.Second
+
 func GatewayWindowCostPrefetchStats() (cacheHit, cacheMiss, batchSQL, fallback, errCount int64) {
 	return windowCostPrefetchCacheHitTotal.Load(),
 		windowCostPrefetchCacheMissTotal.Load(),
@@ -2038,6 +2040,29 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			candidates = s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
 		}
 		if len(candidates) == 0 {
+			if wait := s.shortRetryWaitForRateLimitedAccounts(ctx, groupID, platform, useMixed, requestedModel, excludedIDs); wait > 0 {
+				slog.Info("account_scheduling_short_rate_limit_wait",
+					"group_id", derefGroupID(groupID),
+					"platform", platform,
+					"model", requestedModel,
+					"wait_ms", wait.Milliseconds())
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+				case <-timer.C:
+					if freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts)); ok {
+						accounts = freshAccounts
+						useMixed = freshUseMixed
+					}
+					ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
+					ctx = s.withWindowCostPrefetch(ctx, accounts)
+					ctx = s.withRPMPrefetch(ctx, accounts)
+					candidates = s.filterSelectableAccounts(ctx, accounts, platform, useMixed, requestedModel, excludedIDs, false)
+				}
+			}
+		}
+		if len(candidates) == 0 {
 			return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 		}
 	}
@@ -2130,6 +2155,104 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		})
 	}
 	return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
+}
+
+func (s *GatewayService) shortRetryWaitForRateLimitedAccounts(
+	ctx context.Context,
+	groupID *int64,
+	platform string,
+	allowMixedScheduling bool,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+) time.Duration {
+	if s.accountRepo == nil || platform != PlatformAnthropic {
+		return 0
+	}
+	accounts, err := s.rateLimitRetryCandidateAccounts(ctx, groupID, platform)
+	if err != nil {
+		slog.Debug("account_scheduling_short_rate_limit_wait_lookup_failed",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"model", requestedModel,
+			"error", err)
+		return 0
+	}
+
+	now := time.Now()
+	var minWait time.Duration
+	for i := range accounts {
+		acc := &accounts[i]
+		if _, excluded := excludedIDs[acc.ID]; excluded {
+			continue
+		}
+		if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
+			continue
+		}
+		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForModelSelectionIgnoringAccountRateLimit(ctx, acc, requestedModel, now) {
+			continue
+		}
+		if !s.isAccountSchedulableForQuota(acc) {
+			continue
+		}
+		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
+			continue
+		}
+		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
+			continue
+		}
+		if acc.RateLimitResetAt == nil {
+			continue
+		}
+		wait := acc.RateLimitResetAt.Sub(now)
+		if wait <= 0 || wait > maxShortRateLimitRetryWait {
+			continue
+		}
+		if minWait == 0 || wait < minWait {
+			minWait = wait
+		}
+	}
+	if minWait <= 0 {
+		return 0
+	}
+	return minWait + 25*time.Millisecond
+}
+
+func (s *GatewayService) rateLimitRetryCandidateAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+	if groupID != nil {
+		return s.accountRepo.ListByGroup(ctx, *groupID)
+	}
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		return s.accountRepo.ListByPlatform(ctx, platform)
+	}
+	return nil, nil
+}
+
+func (s *GatewayService) isAccountSchedulableForModelSelectionIgnoringAccountRateLimit(ctx context.Context, account *Account, requestedModel string, now time.Time) bool {
+	if account == nil {
+		return false
+	}
+	if !account.IsActive() || !account.Schedulable {
+		return false
+	}
+	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt) {
+		return false
+	}
+	if account.OverloadUntil != nil && now.Before(*account.OverloadUntil) {
+		return false
+	}
+	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
+		return false
+	}
+	if (account.Type == AccountTypeAPIKey || account.Type == AccountTypeBedrock) && account.IsQuotaExceeded() {
+		return false
+	}
+	if requestedModel != "" && account.isModelRateLimitedWithContext(ctx, requestedModel) {
+		return false
+	}
+	return true
 }
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {

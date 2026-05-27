@@ -229,6 +229,55 @@ func TestCalculateCostUnified_UsesPreResolvedPricing(t *testing.T) {
 	require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
 }
 
+func TestCalculateCostUnified_PartialIntervalInheritsBaseCosts(t *testing.T) {
+	bs := newTestBillingService()
+	resolver := NewModelPricingResolver(nil, bs)
+
+	resolved := &ResolvedPricing{
+		Mode: BillingModeToken,
+		BasePricing: &ModelPricing{
+			InputPricePerToken:             3e-6,
+			InputPricePerTokenPriority:     6e-6,
+			OutputPricePerToken:            15e-6,
+			OutputPricePerTokenPriority:    30e-6,
+			CacheCreationPricePerToken:     3.75e-6,
+			CacheReadPricePerToken:         0.3e-6,
+			CacheReadPricePerTokenPriority: 0.6e-6,
+			CacheCreation5mPrice:           3.75e-6,
+			CacheCreation1hPrice:           7.5e-6,
+			SupportsCacheBreakdown:         true,
+		},
+		SupportsCacheBreakdown: true,
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(128000), InputPrice: testPtrFloat64(5e-6)},
+		},
+	}
+
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx:   context.Background(),
+		Model: "claude-sonnet-4",
+		Tokens: UsageTokens{
+			InputTokens:           1000,
+			OutputTokens:          2000,
+			CacheCreationTokens:   3000,
+			CacheReadTokens:       4000,
+			CacheCreation5mTokens: 1000,
+			CacheCreation1hTokens: 2000,
+		},
+		RateMultiplier: 1,
+		ServiceTier:    "priority",
+		Resolver:       resolver,
+		Resolved:       resolved,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cost)
+
+	require.InDelta(t, 1000*5e-6, cost.InputCost, 1e-10)
+	require.InDelta(t, 2000*30e-6, cost.OutputCost, 1e-10)
+	require.InDelta(t, 1000*3.75e-6+2000*7.5e-6, cost.CacheCreationCost, 1e-10)
+	require.InDelta(t, 4000*0.6e-6, cost.CacheReadCost, 1e-10)
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

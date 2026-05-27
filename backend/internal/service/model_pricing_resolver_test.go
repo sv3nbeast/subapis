@@ -244,6 +244,29 @@ func TestResolve_WithChannelOverride_TokenPartialOverride(t *testing.T) {
 	require.InDelta(t, 15e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
 }
 
+func TestResolve_WithChannelOverride_DoesNotMutateFallbackPricing(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
+		Models:      []string{"claude-sonnet-4"},
+		BillingMode: BillingModeToken,
+		InputPrice:  testPtrFloat64(20e-6),
+	}})
+
+	withChannel := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+	require.NotNil(t, withChannel)
+	require.InDelta(t, 20e-6, withChannel.BasePricing.InputPricePerToken, 1e-12)
+
+	withoutChannel := r.Resolve(context.Background(), PricingInput{
+		Model: "claude-sonnet-4",
+	})
+	require.NotNil(t, withoutChannel)
+	require.NotNil(t, withoutChannel.BasePricing)
+	require.InDelta(t, 3e-6, withoutChannel.BasePricing.InputPricePerToken, 1e-12)
+}
+
 func TestResolve_WithChannelOverride_TokenWithIntervals(t *testing.T) {
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
 		Platform:    "anthropic",
@@ -274,6 +297,52 @@ func TestResolve_WithChannelOverride_TokenWithIntervals(t *testing.T) {
 	require.NotNil(t, iv2)
 	require.InDelta(t, 4e-6, iv2.InputPricePerToken, 1e-12)
 	require.InDelta(t, 16e-6, iv2.OutputPricePerToken, 1e-12)
+}
+
+func TestGetIntervalPricing_PartialIntervalInheritsBasePricing(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	r := NewModelPricingResolver(&ChannelService{}, bs)
+
+	resolved := &ResolvedPricing{
+		Mode: BillingModeToken,
+		BasePricing: &ModelPricing{
+			InputPricePerToken:             3e-6,
+			InputPricePerTokenPriority:     6e-6,
+			OutputPricePerToken:            15e-6,
+			OutputPricePerTokenPriority:    30e-6,
+			CacheCreationPricePerToken:     3.75e-6,
+			CacheReadPricePerToken:         0.3e-6,
+			CacheReadPricePerTokenPriority: 0.6e-6,
+			CacheCreation5mPrice:           3.75e-6,
+			CacheCreation1hPrice:           7.5e-6,
+			SupportsCacheBreakdown:         true,
+			LongContextInputThreshold:      200000,
+			LongContextInputMultiplier:     2,
+			LongContextOutputMultiplier:    1.5,
+			ImageOutputPricePerToken:       20e-6,
+		},
+		SupportsCacheBreakdown: true,
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(128000), InputPrice: testPtrFloat64(5e-6)},
+		},
+	}
+
+	pricing := r.GetIntervalPricing(resolved, 64000)
+	require.NotNil(t, pricing)
+	require.InDelta(t, 5e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 5e-6, pricing.InputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 30e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 3.75e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 0.3e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 0.6e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 3.75e-6, pricing.CacheCreation5mPrice, 1e-12)
+	require.InDelta(t, 7.5e-6, pricing.CacheCreation1hPrice, 1e-12)
+	require.True(t, pricing.SupportsCacheBreakdown)
+	require.Equal(t, 200000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	require.InDelta(t, 20e-6, pricing.ImageOutputPricePerToken, 1e-12)
 }
 
 func TestResolve_WithChannelOverride_TokenNilBasePricing(t *testing.T) {

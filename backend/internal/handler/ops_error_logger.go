@@ -1157,6 +1157,9 @@ func classifyOpsPhase(errType, message, code string) string {
 	if isOpsBusinessLimitedCode(code) {
 		return "request"
 	}
+	if isOpsModelNotFoundError(errType, msg) {
+		return "request"
+	}
 
 	switch errType {
 	case "authentication_error":
@@ -1184,7 +1187,7 @@ func classifyOpsPhase(errType, message, code string) string {
 
 func classifyOpsSeverity(errType string, status int) string {
 	switch errType {
-	case "invalid_request_error", "authentication_error", "billing_error", "subscription_error":
+	case "invalid_request_error", "authentication_error", "billing_error", "subscription_error", "not_found_error":
 		return "P3"
 	}
 	if status >= 500 {
@@ -1201,7 +1204,7 @@ func classifyOpsSeverity(errType string, status int) string {
 
 func classifyOpsIsRetryable(errType string, statusCode int) bool {
 	switch errType {
-	case "authentication_error", "invalid_request_error":
+	case "authentication_error", "invalid_request_error", "not_found_error":
 		return false
 	case "timeout_error":
 		return true
@@ -1221,6 +1224,9 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 	if isOpsBusinessLimitedCode(code) {
 		return true
 	}
+	if isOpsModelNotFoundError(errType, message) {
+		return true
+	}
 	if phase == "billing" || phase == "concurrency" {
 		// SLA/错误率排除“用户级业务限制”
 		return true
@@ -1231,6 +1237,18 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 	}
 	_ = status
 	return false
+}
+
+func isOpsModelNotFoundError(errType, message string) bool {
+	if errType != "not_found_error" {
+		return false
+	}
+	msg := strings.ToLower(message)
+	return strings.Contains(msg, "model:") ||
+		strings.Contains(msg, "requested model") ||
+		strings.Contains(msg, "model is not supported") ||
+		strings.Contains(msg, "model_not_found") ||
+		strings.Contains(msg, "unknown model")
 }
 
 func classifyOpsErrorOwner(phase string, message string) string {

@@ -85,7 +85,7 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 
 	resolved := &ResolvedPricing{
 		Mode:                   BillingModeToken,
-		BasePricing:            basePricing,
+		BasePricing:            cloneModelPricing(basePricing),
 		Source:                 source,
 		SupportsCacheBreakdown: basePricing != nil && basePricing.SupportsCacheBreakdown,
 	}
@@ -147,6 +147,8 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	// 否则用 flat 字段覆盖 BasePricing
 	if resolved.BasePricing == nil {
 		resolved.BasePricing = &ModelPricing{}
+	} else {
+		resolved.BasePricing = cloneModelPricing(resolved.BasePricing)
 	}
 
 	if chPricing.InputPrice != nil {
@@ -205,14 +207,16 @@ func (r *ModelPricingResolver) GetIntervalPricing(resolved *ResolvedPricing, tot
 		return resolved.BasePricing
 	}
 
-	return intervalToModelPricing(iv, resolved.SupportsCacheBreakdown)
+	return intervalToModelPricing(resolved.BasePricing, iv, resolved.SupportsCacheBreakdown)
 }
 
 // intervalToModelPricing 将区间定价转换为 ModelPricing
-func intervalToModelPricing(iv *PricingInterval, supportsCacheBreakdown bool) *ModelPricing {
-	pricing := &ModelPricing{
-		SupportsCacheBreakdown: supportsCacheBreakdown,
+func intervalToModelPricing(base *ModelPricing, iv *PricingInterval, supportsCacheBreakdown bool) *ModelPricing {
+	pricing := cloneModelPricing(base)
+	if pricing == nil {
+		pricing = &ModelPricing{}
 	}
+	pricing.SupportsCacheBreakdown = supportsCacheBreakdown
 	if iv.InputPrice != nil {
 		pricing.InputPricePerToken = *iv.InputPrice
 		pricing.InputPricePerTokenPriority = *iv.InputPrice
