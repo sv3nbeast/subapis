@@ -391,6 +391,33 @@ func TestPrepareSharedAnthropicThinkingHistory_DowngradesSharedOAuthHistory(t *t
 	require.Equal(t, "visible answer", content[1].(map[string]any)["text"])
 }
 
+func TestPrepareSharedAnthropicThinkingHistory_DropsMalformedSignatureOnlyThinkingBlock(t *testing.T) {
+	input := []byte(`{
+		"model":"claude-opus-4-7",
+		"thinking":{"type":"adaptive"},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","signature":"sig_without_thinking"}
+			]},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	out := PrepareSharedAnthropicThinkingHistory(input, account)
+
+	require.False(t, gjson.GetBytes(out, "thinking").Exists())
+	require.False(t, gjson.GetBytes(out, "messages.0.content.0.signature").Exists())
+	require.Equal(t, "text", gjson.GetBytes(out, "messages.0.content.0.type").String())
+	require.NotEmpty(t, gjson.GetBytes(out, "messages.0.content.0.text").String())
+}
+
+func TestIsThinkingBlockSignatureError_DetectsMissingThinkingField(t *testing.T) {
+	body := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking: each thinking block must contain thinking"}}`)
+
+	require.True(t, (&GatewayService{}).isThinkingBlockSignatureError(body))
+}
+
 func TestPrepareSharedAnthropicThinkingHistory_PreservesAPIKeyHistory(t *testing.T) {
 	input := []byte(`{"thinking":{"type":"adaptive"},"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"keep","signature":"sig_real"}]}]}`)
 

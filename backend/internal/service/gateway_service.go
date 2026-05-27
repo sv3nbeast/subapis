@@ -105,7 +105,7 @@ var (
 	modelsListCacheStoreTotal atomic.Int64
 )
 
-const maxShortRateLimitRetryWait = 3 * time.Second
+const maxShortRateLimitRetryWait = 30 * time.Second
 
 func GatewayWindowCostPrefetchStats() (cacheHit, cacheMiss, batchSQL, fallback, errCount int64) {
 	return windowCostPrefetchCacheHitTotal.Load(),
@@ -1639,10 +1639,29 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	if len(accounts) == 0 {
 		freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts))
 		if !ok {
-			return nil, ErrNoAvailableAccounts
+			if wait := s.shortRetryWaitForRateLimitedAccounts(ctx, groupID, platform, useMixed, requestedModel, excludedIDs); wait > 0 {
+				slog.Info("account_scheduling_empty_pool_short_rate_limit_wait",
+					"group_id", derefGroupID(groupID),
+					"platform", platform,
+					"model", requestedModel,
+					"wait_ms", wait.Milliseconds())
+				if err := sleepWithContext(ctx, wait); err != nil {
+					return nil, err
+				}
+				if freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts)); ok {
+					accounts = freshAccounts
+					useMixed = freshUseMixed
+				}
+				if len(accounts) == 0 {
+					return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
+				}
+			} else {
+				return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
+			}
+		} else {
+			accounts = freshAccounts
+			useMixed = freshUseMixed
 		}
-		accounts = freshAccounts
-		useMixed = freshUseMixed
 	}
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
@@ -2962,9 +2981,6 @@ func (s *GatewayService) listSchedulableAccountsDirect(ctx context.Context, grou
 }
 
 func (s *GatewayService) fallbackToDirectSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool, requestedModel string, cachedCount int) ([]Account, bool, bool) {
-	if s.schedulerSnapshot == nil {
-		return nil, false, false
-	}
 	freshAccounts, freshUseMixed, err := s.listSchedulableAccountsDirect(ctx, groupID, platform, hasForcePlatform)
 	if err != nil || len(freshAccounts) == 0 {
 		if err != nil {
@@ -7305,6 +7321,13 @@ func (s *GatewayService) isThinkingBlockSignatureError(respBody []byte) bool {
 	// 例如: "Expected `thinking` or `redacted_thinking`, but found `text`"
 	if strings.Contains(msg, "expected") && (strings.Contains(msg, "thinking") || strings.Contains(msg, "redacted_thinking")) {
 		logger.LegacyPrintf("service.gateway", "[SignatureCheck] Detected thinking block type error")
+		return true
+	}
+
+	// 检测 thinking block 结构错误。
+	// 例如: "each thinking block must contain thinking"
+	if strings.Contains(msg, "thinking block") && strings.Contains(msg, "must contain thinking") {
+		logger.LegacyPrintf("service.gateway", "[SignatureCheck] Detected malformed thinking block")
 		return true
 	}
 
