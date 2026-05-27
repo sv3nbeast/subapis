@@ -126,16 +126,14 @@ RSYNC_ARGS=(
   frontend/node_modules
   --exclude
   backend/internal/web/dist
-  --exclude
-  backend/*.test
+  --exclude=backend/*.test
   --exclude
   backend/server
   --exclude
   .gocache
   --exclude
   __pycache__
-  --exclude
-  '*.pyc'
+  --exclude=*.pyc
   --exclude
   deploy/data
   --exclude
