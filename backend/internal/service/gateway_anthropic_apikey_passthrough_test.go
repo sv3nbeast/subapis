@@ -266,6 +266,47 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBo
 	require.Empty(t, rec.Header().Get("Set-Cookie"))
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensDropsUnsupportedGenerationFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","temperature":0.5,"top_p":0.7,"top_k":10,"stream":true,"max_tokens":4096,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"thinking":{"type":"enabled","budget_tokens":32000},"metadata":{"user_id":"u"}}`)
+	parsed := &ParsedRequest{
+		Body:  body,
+		Model: "claude-3-5-sonnet-latest",
+	}
+
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
+		},
+	}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+	}
+	account := newAnthropicAPIKeyAccountForTest()
+
+	err := svc.ForwardCountTokens(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+
+	for _, field := range []string{"temperature", "top_p", "top_k", "stream", "metadata"} {
+		require.False(t, gjson.GetBytes(upstream.lastBody, field).Exists(), "%s should not be forwarded to count_tokens", field)
+	}
+	require.Equal(t, int64(4096), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+	require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+	require.Equal(t, "claude-3-5-sonnet-latest", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "hello", gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String())
+}
+
 // TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases 覆盖透传模式下模型映射的各种边界情况
 func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *testing.T) {
 	gin.SetMode(gin.TestMode)

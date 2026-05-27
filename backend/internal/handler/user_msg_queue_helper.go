@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -19,6 +20,61 @@ type UserMsgQueueHelper struct {
 	queueService *service.UserMessageQueueService
 	pingFormat   SSEPingFormat
 	pingInterval time.Duration
+}
+
+type UserMsgQueueAcquireError struct {
+	AccountID int64
+	Reason    string
+	Timeout   bool
+	Err       error
+}
+
+func (e *UserMsgQueueAcquireError) Error() string {
+	if e == nil {
+		return ""
+	}
+	switch e.Reason {
+	case "wait_timeout":
+		return fmt.Sprintf("umq wait timeout for account %d", e.AccountID)
+	case "delay_timeout":
+		return fmt.Sprintf("umq delay timeout for account %d", e.AccountID)
+	case "wait_canceled":
+		return fmt.Sprintf("umq wait canceled for account %d", e.AccountID)
+	case "delay_canceled":
+		return fmt.Sprintf("umq delay canceled for account %d", e.AccountID)
+	default:
+		if e.Err != nil {
+			return fmt.Sprintf("umq acquire failed for account %d: %v", e.AccountID, e.Err)
+		}
+		return fmt.Sprintf("umq acquire failed for account %d", e.AccountID)
+	}
+}
+
+func (e *UserMsgQueueAcquireError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *UserMsgQueueAcquireError) RetryableOnAnotherAccount() bool {
+	return e != nil && e.Timeout && (e.Reason == "wait_timeout" || e.Reason == "delay_timeout")
+}
+
+func newUserMsgQueueAcquireError(accountID int64, baseReason string, err error) *UserMsgQueueAcquireError {
+	timeout := errors.Is(err, context.DeadlineExceeded)
+	reason := baseReason
+	if timeout {
+		reason += "_timeout"
+	} else {
+		reason += "_canceled"
+	}
+	return &UserMsgQueueAcquireError{
+		AccountID: accountID,
+		Reason:    reason,
+		Timeout:   timeout,
+		Err:       err,
+	}
 }
 
 // NewUserMsgQueueHelper 创建用户消息串行队列辅助
@@ -65,7 +121,7 @@ func (h *UserMsgQueueHelper) AcquireWithWait(
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_ = h.queueService.Release(bgCtx, accountID, result.RequestID)
 				bgCancel()
-				return nil, ctx.Err()
+				return nil, newUserMsgQueueAcquireError(accountID, "delay", ctx.Err())
 			}
 		}
 		reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", accountID))
@@ -111,7 +167,7 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("umq wait timeout for account %d", accountID)
+			return nil, newUserMsgQueueAcquireError(accountID, "wait", ctx.Err())
 
 		case <-pingCh:
 			if !*streamStarted {
@@ -138,7 +194,7 @@ func (h *UserMsgQueueHelper) waitForLockWithPing(
 						bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						_ = h.queueService.Release(bgCtx, accountID, result.RequestID)
 						bgCancel()
-						return nil, ctx.Err()
+						return nil, newUserMsgQueueAcquireError(accountID, "delay", ctx.Err())
 					}
 				}
 				reqLog.Debug("gateway.umq_lock_acquired", zap.Int64("account_id", accountID))

@@ -771,11 +771,29 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					reqLog,
 				)
 				if qErr != nil {
-					// fail-open: 记录 warn，不阻止请求
 					reqLog.Warn("gateway.umq_acquire_failed",
 						zap.Int64("account_id", account.ID),
 						zap.Error(qErr),
 					)
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
+					var umqErr *UserMsgQueueAcquireError
+					if errors.As(qErr, &umqErr) && umqErr.RetryableOnAnotherAccount() && !c.Writer.Written() {
+						fs.FailedAccountIDs[account.ID] = struct{}{}
+						if fs.SwitchCount < fs.MaxSwitches {
+							fs.SwitchCount++
+							reqLog.Warn("gateway.umq_switch_account",
+								zap.Int64("account_id", account.ID),
+								zap.String("reason", umqErr.Reason),
+								zap.Int("switch_count", fs.SwitchCount),
+								zap.Int("max_switches", fs.MaxSwitches),
+							)
+							continue
+						}
+					}
+					h.handleUserMsgQueueError(c, qErr, streamStarted)
+					return
 				} else {
 					queueRelease = release
 				}
@@ -1434,6 +1452,20 @@ func (h *GatewayHandler) calculateSubscriptionRemaining(group *service.Group, su
 func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotType string, streamStarted bool) {
 	h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error",
 		fmt.Sprintf("Concurrency limit exceeded for %s, please retry later", slotType), streamStarted)
+}
+
+func (h *GatewayHandler) handleUserMsgQueueError(c *gin.Context, err error, streamStarted bool) {
+	message := "Request queue is busy, please retry later"
+	var umqErr *UserMsgQueueAcquireError
+	if errors.As(err, &umqErr) {
+		switch {
+		case umqErr.Timeout:
+			message = "Request queue wait timeout, please retry later"
+		case errors.Is(umqErr.Err, context.Canceled):
+			message = "Request queue canceled"
+		}
+	}
+	h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", message, streamStarted)
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {

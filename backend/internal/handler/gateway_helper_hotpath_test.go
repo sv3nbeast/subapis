@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -309,6 +310,60 @@ func TestAcquireAccountSlotWithWaitTimeout_ImmediateAttemptBeforeBackoff(t *test
 	require.ErrorAs(t, err, &cErr)
 	require.True(t, cErr.IsTimeout)
 	require.GreaterOrEqual(t, cache.accountAcquireCalls, 1)
+}
+
+type helperUserMsgQueueCacheStub struct {
+	acquireSeq []bool
+}
+
+func (s *helperUserMsgQueueCacheStub) AcquireLock(ctx context.Context, accountID int64, requestID string, lockTtlMs int) (bool, error) {
+	if len(s.acquireSeq) == 0 {
+		return false, nil
+	}
+	v := s.acquireSeq[0]
+	s.acquireSeq = s.acquireSeq[1:]
+	return v, nil
+}
+
+func (s *helperUserMsgQueueCacheStub) ReleaseLock(ctx context.Context, accountID int64, requestID string) (bool, error) {
+	return true, nil
+}
+
+func (s *helperUserMsgQueueCacheStub) GetLastCompletedMs(ctx context.Context, accountID int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *helperUserMsgQueueCacheStub) GetCurrentTimeMs(ctx context.Context) (int64, error) {
+	return time.Now().UnixMilli(), nil
+}
+
+func (s *helperUserMsgQueueCacheStub) ForceReleaseLock(ctx context.Context, accountID int64) error {
+	return nil
+}
+
+func (s *helperUserMsgQueueCacheStub) ScanLockKeys(ctx context.Context, maxCount int) ([]int64, error) {
+	return nil, nil
+}
+
+func TestUserMsgQueueAcquireWithWait_TimeoutReturnsTypedRetryableError(t *testing.T) {
+	queueSvc := service.NewUserMessageQueueService(
+		&helperUserMsgQueueCacheStub{acquireSeq: []bool{false, false, false}},
+		nil,
+		&config.UserMessageQueueConfig{LockTTLMs: 120000},
+	)
+	helper := NewUserMsgQueueHelper(queueSvc, SSEPingFormatNone, 5*time.Millisecond)
+	c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+	streamStarted := false
+
+	release, err := helper.AcquireWithWait(c, 1252, 0, false, &streamStarted, 30*time.Millisecond, nil)
+
+	require.Nil(t, release)
+	var umqErr *UserMsgQueueAcquireError
+	require.ErrorAs(t, err, &umqErr)
+	require.Equal(t, int64(1252), umqErr.AccountID)
+	require.Equal(t, "wait_timeout", umqErr.Reason)
+	require.True(t, umqErr.RetryableOnAnotherAccount())
+	require.False(t, streamStarted)
 }
 
 type helperConcurrencyCacheStubWithError struct {

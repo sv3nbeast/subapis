@@ -1225,6 +1225,33 @@ func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
 	return out
 }
 
+func sanitizeAnthropicCountTokensRequestBody(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	out := body
+	for _, field := range []string{
+		"temperature",
+		"top_p",
+		"top_k",
+		"stream",
+		"stop_sequences",
+		"service_tier",
+		"metadata",
+		"context_management",
+		"container",
+		"mcp_servers",
+	} {
+		if gjson.GetBytes(out, field).Exists() {
+			if next, ok := deleteJSONPathBytes(out, field); ok {
+				out = next
+			}
+		}
+	}
+	return sanitizeAnthropicUpstreamRequestBody(out)
+}
+
 func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, requestedModel string) {
 	if req == nil || !isAnthropicThinkingModelAlias(requestedModel) {
 		return
@@ -9322,7 +9349,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
-		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
+		passthroughBody = sanitizeAnthropicCountTokensRequestBody(passthroughBody)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
 	}
 
@@ -9373,7 +9400,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
-	body = sanitizeAnthropicUpstreamRequestBody(body)
+	body = sanitizeAnthropicCountTokensRequestBody(body)
 
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
