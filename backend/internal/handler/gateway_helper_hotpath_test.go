@@ -366,6 +366,27 @@ func TestUserMsgQueueAcquireWithWait_TimeoutReturnsTypedRetryableError(t *testin
 	require.False(t, streamStarted)
 }
 
+func TestUserMsgQueueAcquireWithWait_StreamCanSuppressPingForFailover(t *testing.T) {
+	queueSvc := service.NewUserMessageQueueService(
+		&helperUserMsgQueueCacheStub{acquireSeq: []bool{false, false, false}},
+		nil,
+		&config.UserMessageQueueConfig{LockTTLMs: 120000},
+	)
+	helper := NewUserMsgQueueHelper(queueSvc, SSEPingFormatClaude, 5*time.Millisecond)
+	c, rec := newHelperTestContext(http.MethodPost, "/v1/messages")
+	streamStarted := false
+
+	release, err := helper.AcquireWithWait(c, 1252, 0, false, &streamStarted, 30*time.Millisecond, nil)
+
+	require.Nil(t, release)
+	var umqErr *UserMsgQueueAcquireError
+	require.ErrorAs(t, err, &umqErr)
+	require.True(t, umqErr.RetryableOnAnotherAccount())
+	require.False(t, streamStarted)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, rec.Body.String())
+}
+
 type helperConcurrencyCacheStubWithError struct {
 	helperConcurrencyCacheStub
 	err error

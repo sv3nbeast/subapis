@@ -766,7 +766,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				// 串行模式：获取锁 + RPM 延迟 + 释放（当前行为不变）
 				baseRPM := account.GetBaseRPM()
 				release, qErr := h.userMsgQueueHelper.AcquireWithWait(
-					c, account.ID, baseRPM, reqStream, &streamStarted,
+					c, account.ID, baseRPM, false, &streamStarted,
 					h.cfg.Gateway.UserMessageQueue.WaitTimeout(),
 					reqLog,
 				)
