@@ -627,6 +627,47 @@ func FilterThinkingBlocksForRetry(body []byte) []byte {
 	return out
 }
 
+func PrepareSharedAnthropicThinkingHistory(body []byte, account *Account) []byte {
+	if len(body) == 0 || account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return body
+	}
+	if !hasHistoricalThinkingBlocks(body) {
+		return body
+	}
+	return FilterThinkingBlocksForRetry(body)
+}
+
+func hasHistoricalThinkingBlocks(body []byte) bool {
+	if !bytes.Contains(body, []byte(`"thinking"`)) && !bytes.Contains(body, []byte(`"redacted_thinking"`)) {
+		return false
+	}
+
+	jsonStr := *(*string)(unsafe.Pointer(&body))
+	msgsRes := gjson.Get(jsonStr, "messages")
+	if !msgsRes.Exists() || !msgsRes.IsArray() {
+		return false
+	}
+
+	hasThinking := false
+	msgsRes.ForEach(func(_, msg gjson.Result) bool {
+		content := msg.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, block gjson.Result) bool {
+			switch block.Get("type").String() {
+			case "thinking", "redacted_thinking":
+				hasThinking = true
+				return false
+			default:
+				return true
+			}
+		})
+		return !hasThinking
+	})
+	return hasThinking
+}
+
 // removeThinkingDependentContextStrategies 从 context_management.edits 中移除
 // 需要 thinking 启用的策略（如 clear_thinking_20251015）。
 // 当顶层 "thinking" 字段被禁用时必须调用，否则上游会返回

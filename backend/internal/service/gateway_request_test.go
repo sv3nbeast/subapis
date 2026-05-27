@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestParseGatewayRequest(t *testing.T) {
@@ -358,6 +359,50 @@ func TestFilterThinkingBlocksForRetry_DisablesThinkingAndPreservesAsText(t *test
 	require.True(t, ok)
 	require.Equal(t, "text", first["type"])
 	require.Equal(t, "Let me think...", first["text"])
+}
+
+func TestPrepareSharedAnthropicThinkingHistory_DowngradesSharedOAuthHistory(t *testing.T) {
+	input := []byte(`{
+		"model":"claude-opus-4-7",
+		"thinking":{"type":"adaptive"},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"private prior thought","signature":"sig_from_other_session"},
+				{"type":"text","text":"visible answer"}
+			]},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	out := PrepareSharedAnthropicThinkingHistory(input, account)
+
+	var req map[string]any
+	require.NoError(t, json.Unmarshal(out, &req))
+	require.False(t, gjson.GetBytes(out, "thinking").Exists())
+
+	msgs := req["messages"].([]any)
+	assistant := msgs[0].(map[string]any)
+	content := assistant["content"].([]any)
+	require.Len(t, content, 2)
+	require.Equal(t, "text", content[0].(map[string]any)["type"])
+	require.Equal(t, "private prior thought", content[0].(map[string]any)["text"])
+	require.False(t, gjson.GetBytes(out, "messages.0.content.0.signature").Exists())
+	require.Equal(t, "visible answer", content[1].(map[string]any)["text"])
+}
+
+func TestPrepareSharedAnthropicThinkingHistory_PreservesAPIKeyHistory(t *testing.T) {
+	input := []byte(`{"thinking":{"type":"adaptive"},"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"keep","signature":"sig_real"}]}]}`)
+
+	require.Equal(t, string(input), string(PrepareSharedAnthropicThinkingHistory(input, &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey})))
+}
+
+func TestPrepareSharedAnthropicThinkingHistory_TopLevelThinkingOnlyUnchanged(t *testing.T) {
+	input := []byte(`{"model":"claude-opus-4-7","thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hello"}]}`)
+
+	out := PrepareSharedAnthropicThinkingHistory(input, &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth})
+
+	require.Equal(t, string(input), string(out))
 }
 
 func TestFilterThinkingBlocksForRetry_DisablesThinkingEvenWithoutThinkingBlocks(t *testing.T) {

@@ -4968,6 +4968,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
+		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account)
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
 			Body:          passthroughBody,
 			RequestModel:  passthroughModel,
@@ -5082,6 +5083,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
 	body = sanitizeAnthropicUpstreamRequestBody(body)
+	body = PrepareSharedAnthropicThinkingHistory(body, account)
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		body = injectAnthropicCacheControlTTL1h(body)
@@ -9350,6 +9352,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		passthroughBody = sanitizeAnthropicCountTokensRequestBody(passthroughBody)
+		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
 	}
 
@@ -9401,6 +9404,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
 	body = sanitizeAnthropicCountTokensRequestBody(body)
+	body = PrepareSharedAnthropicThinkingHistory(body, account)
 
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
