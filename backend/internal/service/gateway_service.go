@@ -4666,7 +4666,7 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	}
 
 	// 2. 构造 system 数组，对齐真实 Claude Code CLI 的 2-block 形态：
-	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli; cch=00000;）
+	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=sdk-cli; cch=00000;）
 	//    [1] "You are Claude Code..." prompt block（带 cache_control 作为稳定缓存断点）
 	//
 	//    billing block 的 cch=00000 是占位符，会被 buildUpstreamRequest 里的
@@ -6725,14 +6725,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
-		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
-			}
-		}
-	}
+	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
@@ -7234,6 +7227,21 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 	if getHeaderRaw(req.Header, "x-client-request-id") == "" {
 		setHeaderRaw(req.Header, "x-client-request-id", uuid.NewString())
 	}
+}
+
+func syncClaudeCodeSessionHeaderFromBody(req *http.Request, body []byte) {
+	if req == nil {
+		return
+	}
+	uid := gjson.GetBytes(body, "metadata.user_id").String()
+	if uid == "" {
+		return
+	}
+	parsed := ParseMetadataUserID(uid)
+	if parsed == nil || parsed.SessionID == "" {
+		return
+	}
+	setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
 }
 
 func truncateForLog(b []byte, maxBytes int) string {
@@ -9845,14 +9853,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		}
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
-		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
-			}
-		}
-	}
+	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))

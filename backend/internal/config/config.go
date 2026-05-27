@@ -608,6 +608,12 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
+const (
+	ClaudeCodeAuxCompatModeOff     = "off"
+	ClaudeCodeAuxCompatModeRecord  = "record"
+	ClaudeCodeAuxCompatModeForward = "forward"
+)
+
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
@@ -642,6 +648,9 @@ type GatewayConfig struct {
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
+	// ClaudeCodeAuxCompat: Claude Code 辅助端点兼容层配置。
+	// record/forward 均在本地返回兼容响应，不转发遥测/实验流量；forward 预留给未来显式实现。
+	ClaudeCodeAuxCompat GatewayClaudeCodeAuxCompatConfig `mapstructure:"claude_code_aux_compat"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -718,6 +727,11 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+}
+
+type GatewayClaudeCodeAuxCompatConfig struct {
+	// Mode: off/record/forward。默认 record，避免 Claude Code 因辅助端点 404 产生噪声。
+	Mode string `mapstructure:"mode"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -1329,6 +1343,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.Environment = strings.TrimSpace(cfg.Log.Environment)
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
+	cfg.Gateway.ClaudeCodeAuxCompat.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeAuxCompat.Mode))
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
@@ -1671,6 +1686,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
+	viper.SetDefault("gateway.claude_code_aux_compat.mode", ClaudeCodeAuxCompatModeRecord)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
@@ -2290,6 +2306,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("gateway.connection_pool_isolation must be one of: %s/%s/%s",
 				ConnectionPoolIsolationProxy, ConnectionPoolIsolationAccount, ConnectionPoolIsolationAccountProxy)
 		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.ClaudeCodeAuxCompat.Mode)) {
+	case "", ClaudeCodeAuxCompatModeOff, ClaudeCodeAuxCompatModeRecord, ClaudeCodeAuxCompatModeForward:
+	default:
+		return fmt.Errorf("gateway.claude_code_aux_compat.mode must be one of: %s/%s/%s",
+			ClaudeCodeAuxCompatModeOff, ClaudeCodeAuxCompatModeRecord, ClaudeCodeAuxCompatModeForward)
 	}
 	if c.Gateway.ImageConcurrency.MaxConcurrentRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_concurrent_requests must be non-negative")

@@ -119,6 +119,7 @@ tests
 CLAUDE.md
 .claude
 scripts/*
+!scripts/audit_claude_cli_mimicry.py
 !scripts/deploy-prod.sh
 !scripts/rebuild-prod-sub2api.sh
 !scripts/rollback-prod.sh
@@ -133,6 +134,7 @@ deploy/.monitor_state
 .gocache/
 vite.config.js
 docs/*
+!docs/CLAUDE_CLI_MIMICRY_AUDIT.md
 !docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
 .serena/
 .codex/

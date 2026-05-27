@@ -160,6 +160,25 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultClaudeCodeAuxCompatConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, ClaudeCodeAuxCompatModeRecord, cfg.Gateway.ClaudeCodeAuxCompat.Mode)
+}
+
+func TestLoadClaudeCodeAuxCompatConfigFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_CLAUDE_CODE_AUX_COMPAT_MODE", "OFF")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Equal(t, ClaudeCodeAuxCompatModeOff, cfg.Gateway.ClaudeCodeAuxCompat.Mode)
+}
+
 func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")
@@ -1256,6 +1275,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway connection isolation",
 			mutate:  func(c *Config) { c.Gateway.ConnectionPoolIsolation = "invalid" },
 			wantErr: "gateway.connection_pool_isolation",
+		},
+		{
+			name:    "gateway claude code aux compat invalid",
+			mutate:  func(c *Config) { c.Gateway.ClaudeCodeAuxCompat.Mode = "mirror" },
+			wantErr: "gateway.claude_code_aux_compat.mode",
 		},
 		{
 			name:    "gateway stream keepalive range",

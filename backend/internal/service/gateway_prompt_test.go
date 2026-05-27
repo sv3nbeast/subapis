@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
 
@@ -176,6 +177,18 @@ func TestSystemIncludesClaudeCodePrompt(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestBuildBillingAttributionBlockUsesCapturedSDKEntrypoint(t *testing.T) {
+	block, err := buildBillingAttributionBlockJSON([]byte(`{"messages":[{"role":"user","content":"hello world from cli"}]}`), claude.CLICurrentVersion)
+	require.NoError(t, err)
+
+	var parsed map[string]string
+	require.NoError(t, json.Unmarshal(block, &parsed))
+	require.Equal(t, "text", parsed["type"])
+	require.Contains(t, parsed["text"], "cc_version=2.1.111.")
+	require.Contains(t, parsed["text"], "cc_entrypoint=sdk-cli")
+	require.Contains(t, parsed["text"], "cch=00000")
 }
 
 func TestInjectClaudeCodePrompt(t *testing.T) {
@@ -413,7 +426,7 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.Equal(t, "text", billingBlock["type"])
 			require.Contains(t, billingBlock["text"], "x-anthropic-billing-header:")
 			require.Contains(t, billingBlock["text"], "cc_version=")
-			require.Contains(t, billingBlock["text"], "cc_entrypoint=cli")
+			require.Contains(t, billingBlock["text"], "cc_entrypoint=sdk-cli")
 			require.Contains(t, billingBlock["text"], "cch=00000")
 
 			systemBlock, ok := systemArr[1].(map[string]any)

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -131,6 +132,11 @@ func TestFullClaudeCodeMimicryBetas_DoesNotDefaultRedactThinking(t *testing.T) {
 	require.Contains(t, required, claude.BetaClaudeCode)
 	require.Contains(t, required, claude.BetaOAuth)
 	require.Contains(t, required, claude.BetaInterleavedThinking)
+	require.Contains(t, required, claude.BetaContextManagement)
+	require.Contains(t, required, claude.BetaPromptCachingScope)
+	require.Contains(t, required, claude.BetaAdvancedToolUse)
+	require.Contains(t, required, claude.BetaEffort)
+	require.NotContains(t, required, claude.BetaExtendedCacheTTL)
 }
 
 func TestMergeAnthropicBetaDropping_PreservesIncomingRedactThinking(t *testing.T) {
@@ -140,6 +146,57 @@ func TestMergeAnthropicBetaDropping_PreservesIncomingRedactThinking(t *testing.T
 	got := mergeAnthropicBetaDropping(required, incoming, droppedBetaSet())
 
 	require.Contains(t, got, claude.BetaRedactThinking)
+}
+
+func TestDefaultClaudeCodeBetaHeadersMatchCapturedCLI2111(t *testing.T) {
+	require.Equal(t,
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		claude.DefaultBetaHeader,
+	)
+	require.Equal(t,
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15",
+		claude.HaikuBetaHeader,
+	)
+	require.NotContains(t, claude.DefaultBetaHeader, claude.BetaExtendedCacheTTL)
+	require.NotContains(t, claude.APIKeyBetaHeader, claude.BetaOAuth)
+}
+
+func TestApplyClaudeCodeMimicHeaders_OfficialCLI2111Fingerprint(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
+	require.NoError(t, err)
+	req.Header.Set("User-Agent", "curl/8")
+	req.Header.Set("X-Stainless-Package-Version", "old")
+	req.Header.Set("Accept", "text/event-stream")
+
+	applyClaudeCodeMimicHeaders(req, true)
+
+	require.Equal(t, "claude-cli/2.1.111 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, "0.81.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, "MacOS", getHeaderRaw(req.Header, "X-Stainless-OS"))
+	require.Equal(t, "arm64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, "node", getHeaderRaw(req.Header, "X-Stainless-Runtime"))
+	require.Equal(t, "v24.3.0", getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, "600", getHeaderRaw(req.Header, "X-Stainless-Timeout"))
+	require.Equal(t, "cli", getHeaderRaw(req.Header, "X-App"))
+	require.Equal(t, "true", getHeaderRaw(req.Header, "Anthropic-Dangerous-Direct-Browser-Access"))
+	require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
+	require.Equal(t, "stream", getHeaderRaw(req.Header, "x-stainless-helper-method"))
+	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
+}
+
+func TestSyncClaudeCodeSessionHeaderFromBody_AlwaysMatchesMetadataSession(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
+	require.NoError(t, err)
+
+	body := []byte(`{
+		"metadata": {
+			"user_id": "{\"device_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"account_uuid\":\"550e8400-e29b-41d4-a716-446655440000\",\"session_id\":\"123e4567-e89b-12d3-a456-426614174000\"}"
+		}
+	}`)
+
+	syncClaudeCodeSessionHeaderFromBody(req, body)
+
+	require.Equal(t, "123e4567-e89b-12d3-a456-426614174000", getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"))
 }
 
 func TestDroppedBetaSet(t *testing.T) {
