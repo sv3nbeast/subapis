@@ -1533,7 +1533,7 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 	}
 
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
-	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, string(responseBody))
 
 	return h.mapUpstreamError(statusCode)
 }

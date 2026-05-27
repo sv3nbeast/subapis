@@ -43,6 +43,43 @@ func TestHandleResponsesFailoverExhausted_UsesUpstreamMappingAndOpsContext(t *te
 	msg, exists := c.Get(service.OpsUpstreamErrorMessageKey)
 	require.True(t, exists)
 	require.Equal(t, "upstream quota exhausted", msg)
+
+	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
+	require.True(t, exists)
+	require.JSONEq(t, `{"error":{"message":"upstream quota exhausted"}}`, detail.(string))
+}
+
+func TestHandleMessagesFailoverExhausted_KeepsClientMessageAndStoresRawUpstreamDetail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h := &GatewayHandler{}
+	failoverErr := &service.UpstreamFailoverError{
+		StatusCode:   http.StatusForbidden,
+		ResponseBody: []byte(`{"error":{"type":"permission_error","message":"workspace forbidden by policy","code":"policy_denied"}}`),
+	}
+
+	h.handleFailoverExhausted(c, failoverErr, service.PlatformAnthropic, false)
+
+	require.Equal(t, http.StatusBadGateway, w.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Equal(t, "error", payload["type"])
+	errObj, ok := payload["error"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "upstream_error", errObj["type"])
+	require.Equal(t, "Upstream access forbidden, please contact administrator", errObj["message"])
+
+	msg, exists := c.Get(service.OpsUpstreamErrorMessageKey)
+	require.True(t, exists)
+	require.Equal(t, "workspace forbidden by policy", msg)
+
+	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
+	require.True(t, exists)
+	require.JSONEq(t, `{"error":{"type":"permission_error","message":"workspace forbidden by policy","code":"policy_denied"}}`, detail.(string))
 }
 
 func TestHandleCCFailoverExhausted_UsesSelectedPlatformForPassthroughAndOpsContext(t *testing.T) {
@@ -104,6 +141,10 @@ func TestHandleAnthropicFailoverExhausted_UsesUpstreamMappingAndOpsContext(t *te
 	status, exists := c.Get(service.OpsUpstreamStatusCodeKey)
 	require.True(t, exists)
 	require.Equal(t, http.StatusTooManyRequests, status)
+
+	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
+	require.True(t, exists)
+	require.JSONEq(t, `{"error":{"message":"Resource has been exhausted (e.g. check quota)."}}`, detail.(string))
 }
 
 func withPlatform(ctx context.Context, platform string) context.Context {

@@ -943,7 +943,7 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 	}
 
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
-	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, string(responseBody))
 	return h.mapUpstreamError(statusCode)
 }
 
@@ -1691,7 +1691,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 
 	// 记录原始上游状态码，以便 ops 错误日志捕获真实的上游错误
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
-	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, string(responseBody))
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
