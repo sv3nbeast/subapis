@@ -384,6 +384,23 @@ func TestClassifyOpsModelNotFoundIsClientRequestLimited(t *testing.T) {
 	require.False(t, classifyOpsIsRetryable("not_found_error", http.StatusNotFound))
 }
 
+func TestClassifyOpsClaudeCodeOnlyRestrictionIsClientBusinessLimited(t *testing.T) {
+	tests := []string{
+		"No available accounts: this group only allows Claude Code clients",
+		"This group is restricted to Claude Code clients (/v1/messages only)",
+	}
+
+	for _, msg := range tests {
+		t.Run(msg, func(t *testing.T) {
+			phase := classifyOpsPhase("api_error", msg, "")
+			require.Equal(t, "request", phase)
+			require.True(t, classifyOpsIsBusinessLimited("api_error", phase, "", http.StatusServiceUnavailable, msg))
+			require.Equal(t, "client", classifyOpsErrorOwner(phase, msg))
+			require.Equal(t, "client_request", classifyOpsErrorSource(phase, msg))
+		})
+	}
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

@@ -38,6 +38,8 @@ const (
 	opsErrInsufficientBalance        = "insufficient balance"
 	opsErrInsufficientAccountBalance = "insufficient account balance"
 	opsErrInsufficientQuota          = "insufficient_quota"
+	opsErrClaudeCodeOnly             = "only allows claude code clients"
+	opsErrRestrictedClaudeCodeOnly   = "restricted to claude code clients"
 
 	// 上游错误码常量 — 错误分类 (normalizeOpsErrorType / classifyOpsPhase / classifyOpsIsBusinessLimited)
 	opsCodeInsufficientBalance  = "INSUFFICIENT_BALANCE"
@@ -1157,6 +1159,9 @@ func classifyOpsPhase(errType, message, code string) string {
 	if isOpsBusinessLimitedCode(code) {
 		return "request"
 	}
+	if isOpsClientBusinessLimitMessage(msg) {
+		return "request"
+	}
 	if isOpsModelNotFoundError(errType, msg) {
 		return "request"
 	}
@@ -1224,6 +1229,9 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 	if isOpsBusinessLimitedCode(code) {
 		return true
 	}
+	if isOpsClientBusinessLimitMessage(message) {
+		return true
+	}
 	if isOpsModelNotFoundError(errType, message) {
 		return true
 	}
@@ -1237,6 +1245,15 @@ func classifyOpsIsBusinessLimited(errType, phase, code string, status int, messa
 	}
 	_ = status
 	return false
+}
+
+func isOpsClientBusinessLimitMessage(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, opsErrClaudeCodeOnly) ||
+		strings.Contains(msg, opsErrRestrictedClaudeCodeOnly)
 }
 
 func isOpsModelNotFoundError(errType, message string) bool {
