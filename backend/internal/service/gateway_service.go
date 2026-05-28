@@ -9366,14 +9366,22 @@ func (s *GatewayService) checkChannelPricingRestriction(ctx context.Context, gro
 func billingModelForRestriction(source, requestedModel, channelMappedModel string) string {
 	switch source {
 	case BillingModelSourceRequested:
-		return requestedModel
+		return normalizeAnthropicBillingRestrictionModel(requestedModel)
 	case BillingModelSourceUpstream:
 		return ""
 	case BillingModelSourceChannelMapped:
-		return channelMappedModel
+		return normalizeAnthropicBillingRestrictionModel(channelMappedModel)
 	default:
-		return channelMappedModel
+		return normalizeAnthropicBillingRestrictionModel(channelMappedModel)
 	}
+}
+
+func normalizeAnthropicBillingRestrictionModel(model string) string {
+	trimmed := strings.TrimSpace(model)
+	if mapped, ok := defaultAnthropicModelAliases[trimmed]; ok {
+		return mapped
+	}
+	return model
 }
 
 // isUpstreamModelRestrictedByChannel 检查账号映射后的上游模型是否受渠道定价限制。

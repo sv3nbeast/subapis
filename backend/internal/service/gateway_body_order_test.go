@@ -190,6 +190,20 @@ func TestApplyAnthropicThinkingAliasToRequest_NormalizesAdaptiveThinking(t *test
 	require.Equal(t, BudgetRectifyMaxTokens, req.MaxTokens)
 }
 
+func TestApplyAnthropicThinkingAliasToRequest_Opus48(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:     "claude-opus-4-8",
+		MaxTokens: 1024,
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-4.8-thinking")
+
+	require.NotNil(t, req.Thinking)
+	require.Equal(t, "enabled", req.Thinking.Type)
+	require.Equal(t, BudgetRectifyBudgetTokens, req.Thinking.BudgetTokens)
+	require.Equal(t, BudgetRectifyMaxTokens, req.MaxTokens)
+}
+
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
 	body := []byte(`{"alpha":1,"system":[{"id":"block-1","type":"text","text":"Custom"}],"messages":[],"omega":2}`)
 

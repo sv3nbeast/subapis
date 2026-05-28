@@ -18,6 +18,9 @@ var defaultAnthropicModelAliases = map[string]string{
 	"claude-opus-4.7":          "claude-opus-4-7",
 	"claude-opus-4-7-thinking": "claude-opus-4-7",
 	"claude-opus-4.7-thinking": "claude-opus-4-7",
+	"claude-opus-4.8":          "claude-opus-4-8",
+	"claude-opus-4-8-thinking": "claude-opus-4-8",
+	"claude-opus-4.8-thinking": "claude-opus-4-8",
 }
 
 func isAnthropicThinkingModelAlias(model string) bool {
@@ -27,7 +30,8 @@ func isAnthropicThinkingModelAlias(model string) bool {
 	}
 	switch trimmed {
 	case "claude-opus-4-6-thinking", "claude-opus-4.6-thinking",
-		"claude-opus-4-7-thinking", "claude-opus-4.7-thinking":
+		"claude-opus-4-7-thinking", "claude-opus-4.7-thinking",
+		"claude-opus-4-8-thinking", "claude-opus-4.8-thinking":
 		return true
 	default:
 		return false

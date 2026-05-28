@@ -186,6 +186,26 @@ func TestCheckChannelPricingRestriction_Requested_Allowed(t *testing.T) {
 		"requested model IS in pricing → allowed")
 }
 
+func TestCheckChannelPricingRestriction_AnthropicOpus48ThinkingAliasAllowedByBasePricing(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceRequested,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-8"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-opus-4.8-thinking"),
+		"Anthropic thinking aliases should be checked against their upstream base model")
+}
+
 func TestCheckChannelPricingRestriction_Upstream_SkipsPreCheck(t *testing.T) {
 	t.Parallel()
 	// upstream 模式：预检查始终跳过（返回 false），需逐账号检查
