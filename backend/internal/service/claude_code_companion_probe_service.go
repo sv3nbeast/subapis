@@ -298,9 +298,6 @@ func deriveClaudeCodeCompanionSessionID(account *Account, body []byte) string {
 			return parsed.SessionID
 		}
 	}
-	if hash := hashBodyForSessionSeed(body); hash != "" && account != nil {
-		return generateSessionUUID(claudeCodeCompanionFormatInt(account.ID) + "::" + hash)
-	}
 	if account != nil {
 		return "account-" + claudeCodeCompanionFormatInt(account.ID)
 	}

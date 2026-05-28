@@ -131,7 +131,7 @@ func TestClaudeCodeCompanionProbeService_ThrottlesByAccountAndSession(t *testing
 			Enabled: true,
 			SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
 				Enabled:            true,
-				Mode:               config.ClaudeCodeSyntheticCompanionModeAuxOnly,
+				Mode:               config.ClaudeCodeSyntheticCompanionModeAuxAndTitle,
 				MinIntervalSeconds: 300,
 				TimeoutSeconds:     1,
 				FailOpen:           true,
@@ -142,8 +142,105 @@ func TestClaudeCodeCompanionProbeService_ThrottlesByAccountAndSession(t *testing
 	service.MaybeTrigger(context.Background(), input)
 	service.MaybeTrigger(context.Background(), input)
 
-	_ = waitForCompanionRequests(t, upstream, 6)
+	_ = waitForCompanionRequests(t, upstream, 7)
 	time.Sleep(50 * time.Millisecond)
 	requests, _, _ := upstream.snapshot()
+	require.Len(t, requests, 7)
+}
+
+func TestClaudeCodeCompanionProbeService_ThrottlesStatelessRequestsByAccount(t *testing.T) {
+	upstream := &companionProbeRecordingUpstream{}
+	service := NewClaudeCodeCompanionProbeService(upstream)
+	cfg := config.GatewayClaudeCodeMimicryConfig{
+		Enabled: true,
+		SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
+			Enabled:            true,
+			Mode:               config.ClaudeCodeSyntheticCompanionModeAuxAndTitle,
+			MinIntervalSeconds: 300,
+			TimeoutSeconds:     1,
+			FailOpen:           true,
+		},
+	}
+	input := ClaudeCodeCompanionProbeInput{
+		Account:   &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		Body:      []byte(`{"messages":[{"role":"user","content":"first prompt"}]}`),
+		Token:     "oauth-token",
+		TokenType: "oauth",
+		Config:    cfg,
+	}
+	second := input
+	second.Body = []byte(`{"messages":[{"role":"user","content":"different prompt"}]}`)
+
+	require.Equal(t, "account-42", deriveClaudeCodeCompanionSessionID(input.Account, input.Body))
+	require.Equal(t, "account-42", deriveClaudeCodeCompanionSessionID(second.Account, second.Body))
+
+	service.MaybeTrigger(context.Background(), input)
+	service.MaybeTrigger(context.Background(), second)
+
+	_ = waitForCompanionRequests(t, upstream, 7)
+	time.Sleep(50 * time.Millisecond)
+	requests, _, _ := upstream.snapshot()
+	require.Len(t, requests, 7)
+}
+
+func TestClaudeCodeCompanionProbeService_StatelessThrottleIsAccountScoped(t *testing.T) {
+	upstream := &companionProbeRecordingUpstream{}
+	service := NewClaudeCodeCompanionProbeService(upstream)
+	cfg := config.GatewayClaudeCodeMimicryConfig{
+		Enabled: true,
+		SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
+			Enabled:            true,
+			Mode:               config.ClaudeCodeSyntheticCompanionModeAuxAndTitle,
+			MinIntervalSeconds: 300,
+			TimeoutSeconds:     1,
+			FailOpen:           true,
+		},
+	}
+
+	service.MaybeTrigger(context.Background(), ClaudeCodeCompanionProbeInput{
+		Account:   &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		Body:      []byte(`{"messages":[{"role":"user","content":"same prompt"}]}`),
+		Token:     "oauth-token",
+		TokenType: "oauth",
+		Config:    cfg,
+	})
+	service.MaybeTrigger(context.Background(), ClaudeCodeCompanionProbeInput{
+		Account:   &Account{ID: 43, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		Body:      []byte(`{"messages":[{"role":"user","content":"same prompt"}]}`),
+		Token:     "oauth-token",
+		TokenType: "oauth",
+		Config:    cfg,
+	})
+
+	requests := waitForCompanionRequests(t, upstream, 14)
+	require.Len(t, requests, 14)
+}
+
+func TestClaudeCodeCompanionProbeService_AuxOnlyOmitsTitleProbe(t *testing.T) {
+	upstream := &companionProbeRecordingUpstream{}
+	service := NewClaudeCodeCompanionProbeService(upstream)
+	service.MaybeTrigger(context.Background(), ClaudeCodeCompanionProbeInput{
+		Account:   &Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		Body:      []byte(`{"messages":[{"role":"user","content":"hello"}]}`),
+		Token:     "oauth-token",
+		TokenType: "oauth",
+		Config: config.GatewayClaudeCodeMimicryConfig{
+			Enabled: true,
+			SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
+				Enabled:            true,
+				Mode:               config.ClaudeCodeSyntheticCompanionModeAuxOnly,
+				MinIntervalSeconds: 300,
+				TimeoutSeconds:     1,
+				FailOpen:           true,
+			},
+		},
+	})
+
+	requests := waitForCompanionRequests(t, upstream, 6)
+	time.Sleep(50 * time.Millisecond)
+	requests, _, _ = upstream.snapshot()
 	require.Len(t, requests, 6)
+	for _, req := range requests {
+		require.NotEqual(t, "/v1/messages", req.URL.Path)
+	}
 }
