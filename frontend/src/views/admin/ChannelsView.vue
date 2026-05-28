@@ -106,6 +106,13 @@
                 <span class="text-xs">{{ t('common.edit', 'Edit') }}</span>
               </button>
               <button
+                @click="openCopyDialog(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+              >
+                <Icon name="copy" size="sm" />
+                <span class="text-xs">{{ t('common.copy', 'Copy') }}</span>
+              </button>
+              <button
                 @click="handleDelete(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
@@ -141,7 +148,7 @@
     <!-- Create/Edit Dialog -->
     <BaseDialog
       :show="showDialog"
-      :title="editingChannel ? t('admin.channels.editChannel', 'Edit Channel') : t('admin.channels.createChannel', 'Create Channel')"
+      :title="dialogTitle"
       width="extra-wide"
       @close="closeDialog"
     >
@@ -578,12 +585,7 @@
             :disabled="submitting"
             class="btn btn-primary"
           >
-            {{ submitting
-              ? t('common.submitting', 'Submitting...')
-              : editingChannel
-                ? t('common.update', 'Update')
-                : t('common.create', 'Create')
-            }}
+            {{ submitButtonText }}
           </button>
         </div>
       </template>
@@ -707,6 +709,7 @@ const sortState = reactive({
 // Dialog state
 const showDialog = ref(false)
 const editingChannel = ref<Channel | null>(null)
+const copyingChannel = ref<Channel | null>(null)
 const submitting = ref(false)
 const showDeleteDialog = ref(false)
 const deletingChannel = ref<Channel | null>(null)
@@ -764,6 +767,19 @@ function formatDate(value: string): string {
 
 // ── Platform section helpers ──
 const activePlatforms = computed(() => form.platforms.filter(s => s.enabled).map(s => s.platform))
+
+const dialogTitle = computed(() => {
+  if (editingChannel.value) return t('admin.channels.editChannel', 'Edit Channel')
+  if (copyingChannel.value) return t('admin.channels.copyChannel', 'Copy Channel')
+  return t('admin.channels.createChannel', 'Create Channel')
+})
+
+const submitButtonText = computed(() => {
+  if (submitting.value) return t('common.submitting', 'Submitting...')
+  if (editingChannel.value) return t('common.update', 'Update')
+  if (copyingChannel.value) return t('admin.channels.createCopy', 'Create Copy')
+  return t('common.create', 'Create')
+})
 
 function addPlatformSection(platform: GroupPlatform) {
   form.platforms.push({
@@ -991,8 +1007,9 @@ function formToAPI(): {
   const group_ids: number[] = []
   const model_pricing: ChannelModelPricing[] = []
   const model_mapping: Record<string, Record<string, string>> = {}
-  const features_config: Record<string, unknown> = editingChannel.value?.features_config
-    ? { ...editingChannel.value.features_config }
+  const sourceFeaturesConfig = editingChannel.value?.features_config || copyingChannel.value?.features_config
+  const features_config: Record<string, unknown> = sourceFeaturesConfig
+    ? { ...sourceFeaturesConfig }
     : {}
   const account_stats_pricing_rules: AccountStatsPricingRule[] = []
 
@@ -1226,6 +1243,7 @@ function resetForm() {
 
 async function openCreateDialog() {
   editingChannel.value = null
+  copyingChannel.value = null
   resetForm()
   await Promise.all([loadGroups(), loadAllChannelsForConflict(), loadWebSearchGlobalState()])
   showDialog.value = true
@@ -1233,6 +1251,7 @@ async function openCreateDialog() {
 
 async function openEditDialog(channel: Channel) {
   editingChannel.value = channel
+  copyingChannel.value = null
   form.name = channel.name
   form.description = channel.description || ''
   form.status = channel.status
@@ -1246,9 +1265,54 @@ async function openEditDialog(channel: Channel) {
   showDialog.value = true
 }
 
+function getCopiedChannelName(name: string): string {
+  return t('admin.channels.copyName', { name }, `${name} 副本`)
+}
+
+function clonePricingEntryForCopy(entry: PricingFormEntry): PricingFormEntry {
+  return {
+    ...entry,
+    models: [...entry.models],
+    intervals: (entry.intervals || []).map(interval => ({ ...interval }))
+  }
+}
+
+function cloneSectionForCopy(section: PlatformSection): PlatformSection {
+  return {
+    ...section,
+    collapsed: false,
+    group_ids: [],
+    model_mapping: { ...section.model_mapping },
+    model_pricing: section.model_pricing.map(clonePricingEntryForCopy),
+    account_stats_pricing_rules: section.account_stats_pricing_rules.map(rule => ({
+      ...rule,
+      group_ids: [],
+      pricing: rule.pricing.map(clonePricingEntryForCopy)
+    }))
+  }
+}
+
+async function openCopyDialog(channel: Channel) {
+  editingChannel.value = null
+  copyingChannel.value = channel
+  resetForm()
+  form.name = getCopiedChannelName(channel.name)
+  form.description = channel.description || ''
+  form.status = channel.status
+  form.restrict_models = channel.restrict_models || false
+  form.display_only = channel.display_only || false
+  form.apply_pricing_to_account_stats = channel.apply_pricing_to_account_stats || false
+  form.billing_model_source = channel.billing_model_source || 'channel_mapped'
+  await Promise.all([loadGroups(), loadAllChannelsForConflict(), loadWebSearchGlobalState()])
+  form.platforms = apiToForm(channel).map(cloneSectionForCopy)
+  activeTab.value = 'basic'
+  showDialog.value = true
+}
+
 function closeDialog() {
   showDialog.value = false
   editingChannel.value = null
+  copyingChannel.value = null
   resetForm()
 }
 
