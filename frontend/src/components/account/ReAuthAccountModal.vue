@@ -193,6 +193,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import type { Account } from '@/types'
+import { buildReauthAccountUpdatePayload } from '@/components/account/reauthPayload'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
@@ -372,11 +373,11 @@ const handleExchangeCode = async () => {
 
     try {
       // Update account with new credentials
-      await adminAPI.accounts.update(props.account.id, {
+      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
         type: 'oauth', // OpenAI OAuth is always 'oauth' type
         credentials,
         extra
-      })
+      }))
 
       // Clear error status after successful re-authorization
       await adminAPI.accounts.clearError(props.account.id)
@@ -407,12 +408,14 @@ const handleExchangeCode = async () => {
     if (!tokenInfo) return
 
     const credentials = geminiOAuth.buildCredentials(tokenInfo)
+    const extra = geminiOAuth.buildExtraInfo(tokenInfo)
 
     try {
-      await adminAPI.accounts.update(props.account.id, {
+      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
         type: 'oauth',
-        credentials
-      })
+        credentials,
+        extra
+      }))
       await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized')
@@ -441,10 +444,10 @@ const handleExchangeCode = async () => {
     const credentials = antigravityOAuth.buildCredentials(tokenInfo)
 
     try {
-      await adminAPI.accounts.update(props.account.id, {
+      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
         type: 'oauth',
         credentials
-      })
+      }))
       await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized')
@@ -477,11 +480,11 @@ const handleExchangeCode = async () => {
       const extra = claudeOAuth.buildExtraInfo(tokenInfo)
 
       // Update account with new credentials and type
-      await adminAPI.accounts.update(props.account.id, {
+      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
         type: addMethod.value, // Update type based on selected method
         credentials: tokenInfo,
         extra
-      })
+      }))
 
       // Clear error status after successful re-authorization
       await adminAPI.accounts.clearError(props.account.id)
@@ -520,11 +523,11 @@ const handleCookieAuth = async (sessionKey: string) => {
     const extra = claudeOAuth.buildExtraInfo(tokenInfo)
 
     // Update account with new credentials and type
-    await adminAPI.accounts.update(props.account.id, {
+    await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
       type: addMethod.value, // Update type based on selected method
       credentials: tokenInfo,
       extra
-    })
+    }))
 
     // Clear error status after successful re-authorization
     await adminAPI.accounts.clearError(props.account.id)
