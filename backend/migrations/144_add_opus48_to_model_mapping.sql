@@ -1,0 +1,5 @@
+-- No-op guard migration.
+--
+-- Claude Opus 4.8 support is intentionally limited to official Anthropic/Claude
+-- paths. Do not backfill Antigravity or Bedrock account mappings here; those
+-- upstreams need separate support verification before being exposed.

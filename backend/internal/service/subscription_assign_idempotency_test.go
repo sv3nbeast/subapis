@@ -225,6 +225,21 @@ func (s *subscriptionUserSubRepoStub) ExtendExpiry(_ context.Context, id int64, 
 	return nil
 }
 
+func (s *subscriptionUserSubRepoStub) Update(_ context.Context, sub *UserSubscription) error {
+	if sub == nil {
+		return ErrSubscriptionNilInput
+	}
+	existing := s.byID[sub.ID]
+	if existing == nil {
+		return ErrSubscriptionNotFound
+	}
+	cp := *sub
+	cp.UpdatedAt = time.Now()
+	s.byID[cp.ID] = &cp
+	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
+	return nil
+}
+
 func (s *subscriptionUserSubRepoStub) UpdateStatus(_ context.Context, id int64, status string) error {
 	sub := s.byID[id]
 	if sub == nil {

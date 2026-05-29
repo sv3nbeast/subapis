@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/net/http2"
@@ -67,7 +68,7 @@ func (s *HTTPUpstreamSuite) TestCustomResponseHeaderTimeout() {
 // 验证解析失败时拒绝回退到直连模式
 func (s *HTTPUpstreamSuite) TestGetOrCreateClient_InvalidURLReturnsError() {
 	svc := s.newService()
-	_, err := svc.getClientEntry("://bad-proxy-url", 1, 1, false, false)
+	_, err := svc.getClientEntry("://bad-proxy-url", 1, 1, service.HTTPUpstreamProfileDefault, false, false)
 	require.Error(s.T(), err, "expected error for invalid proxy URL")
 }
 
@@ -226,7 +227,7 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_ForceAttemptHTTP2Enabled
 	entry, err := svc.getClientEntryWithTLS("", 1, 3, &tlsfingerprint.Profile{
 		Name:          "test-antigravity",
 		ALPNProtocols: []string{"h2", "http/1.1"},
-	}, false, false)
+	}, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(s.T(), err)
 	require.NotNil(s.T(), entry)
 	transport, ok := entry.client.Transport.(*http2.Transport)
@@ -241,7 +242,7 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyUsesHTTP2ByDefa
 		ALPNProtocols: []string{"h2", "http/1.1"},
 	}
 
-	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, false, false)
+	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(s.T(), err)
 	require.NotNil(s.T(), entry)
 
@@ -258,7 +259,7 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyForceHTTP1UsesH
 		ForceHTTP1WithProxy: true,
 	}
 
-	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, false, false)
+	entry, err := svc.getClientEntryWithTLS("http://proxy.local:8080", 1, 3, profile, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(s.T(), err)
 	require.NotNil(s.T(), entry)
 

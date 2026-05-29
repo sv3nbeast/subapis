@@ -238,8 +238,18 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 		}
 
 		if err := s.runInTx(ctx, func(txCtx context.Context) error {
-			if err := s.userSubRepo.ExtendExpiry(txCtx, existingSub.ID, newExpiresAt); err != nil {
-				return fmt.Errorf("extend subscription: %w", err)
+			if wasExpired {
+				updatedSub := *existingSub
+				updatedSub.StartsAt = now
+				updatedSub.ExpiresAt = newExpiresAt
+				updatedSub.Status = SubscriptionStatusActive
+				if err := s.userSubRepo.Update(txCtx, &updatedSub); err != nil {
+					return fmt.Errorf("renew expired subscription: %w", err)
+				}
+			} else {
+				if err := s.userSubRepo.ExtendExpiry(txCtx, existingSub.ID, newExpiresAt); err != nil {
+					return fmt.Errorf("extend subscription: %w", err)
+				}
 			}
 
 			if wasExpired {
@@ -1201,6 +1211,9 @@ func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Gr
 	if group.HasDailyLimit() && sub.DailyWindowStart != nil {
 		limit := *group.DailyLimitUSD
 		resetsAt := sub.DailyWindowStart.Add(24 * time.Hour)
+		if dailyReset := sub.DailyResetTime(); dailyReset != nil {
+			resetsAt = *dailyReset
+		}
 		progress.Daily = &UsageWindowProgress{
 			LimitUSD:        limit,
 			UsedUSD:         sub.DailyUsageUSD,

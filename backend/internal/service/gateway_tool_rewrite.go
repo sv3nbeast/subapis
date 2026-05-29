@@ -23,6 +23,25 @@ var staticToolNameRewrites = map[string]string{
 	"session_":  "cc_ses_",
 }
 
+// claudeCodeCanonicalToolNameRewrites maps common third-party/OpenCode-style
+// tool names to the names Claude Code normally sends on OAuth traffic.
+var claudeCodeCanonicalToolNameRewrites = map[string]string{
+	"bash":         "Bash",
+	"read":         "Read",
+	"write":        "Write",
+	"edit":         "Edit",
+	"glob":         "Glob",
+	"grep":         "Grep",
+	"task":         "Task",
+	"webfetch":     "WebFetch",
+	"todowrite":    "TodoWrite",
+	"question":     "Question",
+	"skill":        "Skill",
+	"ls":           "LS",
+	"todoread":     "TodoRead",
+	"notebookedit": "NotebookEdit",
+}
+
 // fakeToolNamePrefixes 是"动态映射"的前缀池，与 Parrot _FAKE_PREFIXES 一致。
 // 当 tools 数量 > dynamicToolMapThreshold 时随机选用其中前缀生成可读假名。
 var fakeToolNamePrefixes = []string{
@@ -46,6 +65,7 @@ const dynamicToolMapThreshold = 5
 type ToolNameRewrite struct {
 	Forward        map[string]string
 	Reverse        map[string]string
+	ReverseFields  map[string]string
 	ReverseOrdered [][2]string
 }
 
@@ -92,17 +112,25 @@ func buildDynamicToolMap(toolNames []string) map[string]string {
 // sanitizeToolName 把真名转成假名。
 // 与 Parrot _sanitize_tool_name 语义一致：动态映射优先，再走静态前缀映射。
 func sanitizeToolName(name string, dynamic map[string]string) string {
+	fake, _ := sanitizeToolNameWithRestoreMode(name, dynamic)
+	return fake
+}
+
+func sanitizeToolNameWithRestoreMode(name string, dynamic map[string]string) (string, bool) {
+	if fake, ok := claudeCodeCanonicalToolNameRewrites[name]; ok {
+		return fake, true
+	}
 	if dynamic != nil {
 		if fake, ok := dynamic[name]; ok {
-			return fake
+			return fake, false
 		}
 	}
 	for prefix, replacement := range staticToolNameRewrites {
 		if strings.HasPrefix(name, prefix) {
-			return replacement + name[len(prefix):]
+			return replacement + name[len(prefix):], false
 		}
 	}
-	return name
+	return name, false
 }
 
 // shouldMimicToolName 指示某个 tool 是否需要重命名。
@@ -141,16 +169,24 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 	dynamic := buildDynamicToolMap(mimicableNames)
 
 	rw := &ToolNameRewrite{
-		Forward: make(map[string]string),
-		Reverse: make(map[string]string),
+		Forward:       make(map[string]string),
+		Reverse:       make(map[string]string),
+		ReverseFields: make(map[string]string),
 	}
 	for _, name := range mimicableNames {
-		fake := sanitizeToolName(name, dynamic)
+		fake, fieldOnlyRestore := sanitizeToolNameWithRestoreMode(name, dynamic)
 		if fake == name {
 			continue
 		}
 		rw.Forward[name] = fake
-		rw.Reverse[fake] = name
+		if _, exists := rw.Reverse[fake]; !exists {
+			rw.Reverse[fake] = name
+		}
+		if fieldOnlyRestore {
+			if _, exists := rw.ReverseFields[fake]; !exists {
+				rw.ReverseFields[fake] = name
+			}
+		}
 	}
 	if len(rw.Forward) == 0 {
 		return nil
@@ -158,6 +194,9 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 
 	rw.ReverseOrdered = make([][2]string, 0, len(rw.Reverse))
 	for fake, real := range rw.Reverse {
+		if _, fieldOnly := rw.ReverseFields[fake]; fieldOnly {
+			continue
+		}
 		rw.ReverseOrdered = append(rw.ReverseOrdered, [2]string{fake, real})
 	}
 	sort.SliceStable(rw.ReverseOrdered, func(i, j int) bool {
@@ -220,8 +259,8 @@ func applyToolNameRewriteToBodyWithTTL(body []byte, rw *ToolNameRewrite, ttl str
 		}
 	}
 
-	// 同步改写历史消息中的 tool_use.name，确保它和 tools[] 中的假名一致。
-	// 否则 Anthropic 会因为 tool_use 引用了未声明的原始工具名而拒绝请求。
+	// 同步改写历史消息中的工具名引用，确保它和 tools[] 中的假名一致。
+	// 否则 Anthropic 会因为 tool_use/tool_reference 引用了未声明的原始工具名而拒绝请求。
 	messages := gjson.GetBytes(body, "messages")
 	if messages.IsArray() {
 		messages.ForEach(func(msgKey, msg gjson.Result) bool {
@@ -232,18 +271,51 @@ func applyToolNameRewriteToBodyWithTTL(body []byte, rw *ToolNameRewrite, ttl str
 			}
 			content.ForEach(func(blkKey, blk gjson.Result) bool {
 				blkIdx := int(blkKey.Num)
-				if blk.Get("type").String() != "tool_use" {
-					return true
-				}
-				name := blk.Get("name").String()
-				if name == "" {
-					return true
-				}
-				if fake, ok := rw.Forward[name]; ok {
-					path := fmt.Sprintf("messages.%d.content.%d.name", msgIdx, blkIdx)
-					if next, err := sjson.SetBytes(body, path, fake); err == nil {
-						body = next
+				switch blk.Get("type").String() {
+				case "tool_use":
+					name := blk.Get("name").String()
+					if name == "" {
+						return true
 					}
+					if fake, ok := rw.Forward[name]; ok {
+						path := fmt.Sprintf("messages.%d.content.%d.name", msgIdx, blkIdx)
+						if next, err := sjson.SetBytes(body, path, fake); err == nil {
+							body = next
+						}
+					}
+				case "tool_reference":
+					name := blk.Get("tool_name").String()
+					if name == "" {
+						return true
+					}
+					if fake, ok := rw.Forward[name]; ok {
+						path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIdx, blkIdx)
+						if next, err := sjson.SetBytes(body, path, fake); err == nil {
+							body = next
+						}
+					}
+				case "tool_result":
+					nested := blk.Get("content")
+					if !nested.IsArray() {
+						return true
+					}
+					nested.ForEach(func(nestedKey, nestedBlock gjson.Result) bool {
+						nestedIdx := int(nestedKey.Num)
+						if nestedBlock.Get("type").String() != "tool_reference" {
+							return true
+						}
+						name := nestedBlock.Get("tool_name").String()
+						if name == "" {
+							return true
+						}
+						if fake, ok := rw.Forward[name]; ok {
+							path := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIdx, blkIdx, nestedIdx)
+							if next, err := sjson.SetBytes(body, path, fake); err == nil {
+								body = next
+							}
+						}
+						return true
+					})
 				}
 				return true
 			})
@@ -307,6 +379,9 @@ func applyToolsLastCacheBreakpointWithTTL(body []byte, ttl string) []byte {
 // rw 可为 nil；nil 时仍会做静态前缀还原。
 func restoreToolNamesInBytes(data []byte, rw *ToolNameRewrite) []byte {
 	if rw != nil {
+		for fake, real := range rw.ReverseFields {
+			data = replaceJSONToolNameFields(data, fake, real)
+		}
 		for _, pair := range rw.ReverseOrdered {
 			fake, real := pair[0], pair[1]
 			if fake == "" || fake == real {
@@ -327,6 +402,15 @@ func replaceAllBytes(data []byte, from, to string) []byte {
 		return data
 	}
 	return []byte(strings.ReplaceAll(string(data), from, to))
+}
+
+func replaceJSONToolNameFields(data []byte, from, to string) []byte {
+	if len(data) == 0 || from == "" || from == to || !strings.Contains(string(data), from) {
+		return data
+	}
+	data = replaceAllBytes(data, fmt.Sprintf(`"name":%q`, from), fmt.Sprintf(`"name":%q`, to))
+	data = replaceAllBytes(data, fmt.Sprintf(`"tool_name":%q`, from), fmt.Sprintf(`"tool_name":%q`, to))
+	return data
 }
 
 // toolNameRewriteFromContext 从 gin.Context 取出请求阶段保存的工具名映射。

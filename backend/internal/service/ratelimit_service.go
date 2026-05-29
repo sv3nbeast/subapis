@@ -28,10 +28,16 @@ type RateLimitService struct {
 	openAI403CounterCache OpenAI403CounterCache
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
+	runtimeBlocker        AccountRuntimeBlocker
 	usageCacheMu          sync.RWMutex
 	usageCache            map[int64]*geminiUsageCacheEntry
 	anthropicNoReset429Mu sync.Mutex
 	anthropicNoReset429   map[string]anthropicNoReset429State
+}
+
+type AccountRuntimeBlocker interface {
+	BlockAccountScheduling(account *Account, until time.Time, reason string)
+	ClearAccountSchedulingBlock(accountID int64)
 }
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
@@ -112,6 +118,24 @@ func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvali
 	s.tokenCacheInvalidator = invalidator
 }
 
+func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
+	s.runtimeBlocker = blocker
+}
+
+func (s *RateLimitService) notifyAccountSchedulingBlocked(account *Account, until time.Time, reason string) {
+	if s == nil || s.runtimeBlocker == nil || account == nil {
+		return
+	}
+	s.runtimeBlocker.BlockAccountScheduling(account, until, reason)
+}
+
+func (s *RateLimitService) notifyAccountSchedulingBlockCleared(accountID int64) {
+	if s == nil || s.runtimeBlocker == nil || accountID <= 0 {
+		return
+	}
+	s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
+}
+
 // ErrorPolicyResult 表示错误策略检查的结果
 type ErrorPolicyResult int
 
@@ -143,7 +167,7 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
-func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) (shouldDisable bool) {
+func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
@@ -157,6 +181,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	if !account.ShouldHandleErrorCode(statusCode) {
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
+	}
+
+	if len(requestedModel) > 0 && s.HandleUpstreamModelNotFound(ctx, account, requestedModel[0], statusCode, responseBody) {
+		return true
 	}
 
 	// 先尝试临时不可调度规则（401除外）
@@ -248,6 +276,8 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
 			if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, msg); err != nil {
 				slog.Warn("oauth_401_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
+			} else {
+				s.notifyAccountSchedulingBlocked(account, until, "oauth_401")
 			}
 			shouldDisable = true
 		} else {
@@ -343,6 +373,7 @@ func (s *RateLimitService) handleAntigravityOAuth401(ctx context.Context, accoun
 	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, refreshAt, reason); err != nil {
 		slog.Warn("antigravity_oauth_401_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
 	} else {
+		s.notifyAccountSchedulingBlocked(account, refreshAt, "antigravity_oauth_401")
 		slog.Info("antigravity_oauth_401_temp_unschedulable_set",
 			"account_id", account.ID,
 			"until", refreshAt.Format(time.RFC3339),
@@ -727,6 +758,7 @@ func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountSchedulingBlocked(account, time.Time{}, "auth_error")
 	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
 }
 
@@ -808,6 +840,7 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		s.handleAuthError(ctx, account, msg)
 		return true
 	}
+	s.notifyAccountSchedulingBlocked(account, until, "openai_403_temp")
 
 	slog.Warn(
 		"openai_403_temp_unschedulable",
@@ -872,6 +905,7 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
 		return
 	}
+	s.notifyAccountSchedulingBlocked(account, time.Time{}, "custom_error_code")
 	slog.Warn("account_disabled_custom_error", "account_id", account.ID, "status_code", statusCode, "error", errorMsg)
 }
 
@@ -887,6 +921,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 				return
 			}
+			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
 			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
 			return
 		}
@@ -898,6 +933,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 			return
 		}
+		s.notifyAccountSchedulingBlocked(account, result.resetAt, "429")
 
 		// 更新 session window：优先使用 5h-reset 头精确计算，否则从 resetAt 反推
 		windowEnd := result.resetAt
@@ -927,6 +963,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -938,6 +975,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -977,6 +1015,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountSchedulingBlocked(account, resetAt, "429")
 
 	// 根据重置时间反推5h窗口
 	windowEnd := resetAt
@@ -1069,6 +1108,7 @@ func (s *RateLimitService) setRateLimitedWithAnthropicOrgPeers(ctx context.Conte
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		return err
 	}
+	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
 	s.rateLimitAnthropicOrgPeers(ctx, account, resetAt, reason)
 	return nil
 }
@@ -1098,6 +1138,8 @@ func (s *RateLimitService) rateLimitAnthropicOrgPeers(ctx context.Context, accou
 			slog.Warn("rate_limit_org_peer_set_failed", "account_id", account.ID, "peer_account_id", peer.ID, "org_uuid", orgUUID, "error", err)
 			continue
 		}
+		peerCopy := peer
+		s.notifyAccountSchedulingBlocked(&peerCopy, resetAt, "anthropic_org_peer_429")
 		slog.Info("rate_limit_org_peer_set", "account_id", account.ID, "peer_account_id", peer.ID, "org_uuid", orgUUID, "reason", reason, "reset_at", resetAt)
 	}
 }
@@ -1454,6 +1496,7 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 		slog.Warn("overload_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountSchedulingBlocked(account, until, "529")
 
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
@@ -1579,6 +1622,7 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 		}
 	}
 	s.ResetOpenAI403Counter(ctx, accountID)
+	s.notifyAccountSchedulingBlockCleared(accountID)
 	return nil
 }
 
@@ -1619,6 +1663,9 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	}
 	if result.ClearedError || result.ClearedRateLimit {
 		s.ResetOpenAI403Counter(ctx, accountID)
+		if result.ClearedError && !result.ClearedRateLimit {
+			s.notifyAccountSchedulingBlockCleared(accountID)
+		}
 	}
 
 	return result, nil
@@ -1643,6 +1690,7 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
 	}
+	s.notifyAccountSchedulingBlockCleared(accountID)
 	return nil
 }
 
@@ -1735,8 +1783,50 @@ func (s *RateLimitService) HandleTempUnschedulable(ctx context.Context, account 
 	return s.tryTempUnschedulable(ctx, account, statusCode, responseBody)
 }
 
+const upstreamModelNotFoundCooldown = 30 * time.Minute
+const upstreamModelNotFoundReason = "upstream_404_model_not_found"
 const tempUnschedBodyMaxBytes = 64 << 10
 const tempUnschedMessageMaxBytes = 2048
+
+func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string, statusCode int, responseBody []byte) bool {
+	if s == nil || account == nil || s.accountRepo == nil {
+		return false
+	}
+	if !account.ShouldHandleErrorCode(statusCode) {
+		return false
+	}
+	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
+		return false
+	}
+	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
+	if modelKey == "" {
+		return false
+	}
+	resetAt := time.Now().Add(upstreamModelNotFoundCooldown)
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, upstreamModelNotFoundReason); err != nil {
+		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)
+		return true
+	}
+	slog.Info("upstream_model_not_found_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", resetAt)
+	return true
+}
+
+func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string) string {
+	modelKey := strings.TrimSpace(requestedModel)
+	if account == nil || modelKey == "" {
+		return modelKey
+	}
+	if account.Platform == PlatformAntigravity {
+		if resolved := strings.TrimSpace(resolveFinalAntigravityModelKey(ctx, account, modelKey)); resolved != "" {
+			return resolved
+		}
+		return modelKey
+	}
+	if mapped := strings.TrimSpace(account.GetMappedModel(modelKey)); mapped != "" {
+		return mapped
+	}
+	return modelKey
+}
 
 func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
 	if account == nil {

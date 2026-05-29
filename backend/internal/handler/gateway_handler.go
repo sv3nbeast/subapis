@@ -1958,6 +1958,12 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		msg := pkgerrors.Message(err)
 		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, 0
 	}
+	if errors.Is(err, service.ErrUserPlatformDailyQuotaExhausted) ||
+		errors.Is(err, service.ErrUserPlatformWeeklyQuotaExhausted) ||
+		errors.Is(err, service.ErrUserPlatformMonthlyQuotaExhausted) {
+		msg := pkgerrors.Message(err)
+		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, extractQuotaResetSeconds(err)
+	}
 	// 用户/分组 RPM 超限统一映射为 HTTP 429；保留与其它 rate_limit 一致的错误码便于客户端分类。
 	// 返回 Retry-After 秒数（当前分钟剩余秒数），让 SDK 自动退避。
 	if errors.Is(err, service.ErrGroupRPMExceeded) || errors.Is(err, service.ErrUserRPMExceeded) {
@@ -1974,6 +1980,30 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 		msg = "Billing error"
 	}
 	return http.StatusForbidden, "billing_error", msg, 0
+}
+
+func extractQuotaResetSeconds(err error) int {
+	const fallback = 60
+	appErr := pkgerrors.FromError(err)
+	if appErr == nil || appErr.Metadata == nil {
+		return fallback
+	}
+	raw := strings.TrimSpace(appErr.Metadata["window_resets_at"])
+	if raw == "" {
+		return fallback
+	}
+	resetAt, parseErr := time.Parse(time.RFC3339, raw)
+	if parseErr != nil {
+		return fallback
+	}
+	seconds := int(time.Until(resetAt).Seconds())
+	if seconds <= 0 {
+		return fallback
+	}
+	if time.Now().Add(time.Duration(seconds) * time.Second).Before(resetAt) {
+		seconds++
+	}
+	return seconds
 }
 
 func (h *GatewayHandler) metadataBridgeEnabled() bool {
@@ -2000,10 +2030,20 @@ func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger
 	)
 }
 
-func (h *GatewayHandler) submitUsageRecordTask(task service.UsageRecordTask) {
+func (h *GatewayHandler) submitUsageRecordTask(args ...any) {
+	var parent context.Context
+	var task service.UsageRecordTask
+	switch len(args) {
+	case 1:
+		task, _ = args[0].(service.UsageRecordTask)
+	case 2:
+		parent, _ = args[0].(context.Context)
+		task, _ = args[1].(service.UsageRecordTask)
+	}
 	if task == nil {
 		return
 	}
+	task = wrapUsageRecordTaskContext(parent, task)
 	if h.usageRecordWorkerPool != nil {
 		h.usageRecordWorkerPool.Submit(task)
 		return

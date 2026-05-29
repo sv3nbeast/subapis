@@ -309,6 +309,8 @@ const antigravityPresetMappings = [
 
 // Bedrock 预设映射（与后端 DefaultBedrockModelMapping 保持一致）
 const bedrockPresetMappings = [
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'us.anthropic.claude-opus-4-8-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.8-thinking', from: 'claude-opus-4-8-thinking', to: 'us.anthropic.claude-opus-4-8-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'us.anthropic.claude-opus-4-7-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'us.anthropic.claude-opus-4-6-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'us.anthropic.claude-opus-4-7-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
@@ -406,7 +408,7 @@ export function isValidWildcardPattern(pattern: string): boolean {
 }
 
 export function buildModelMappingObject(
-  mode: 'whitelist' | 'mapping',
+  mode: 'whitelist' | 'mapping' | 'combined',
   allowedModels: string[],
   modelMappings: { from: string; to: string }[]
 ): Record<string, string> | null {
@@ -441,4 +443,31 @@ export function buildModelMappingObject(
   }
 
   return Object.keys(mapping).length > 0 ? mapping : null
+}
+
+export function splitModelMappingObject(mapping: Record<string, unknown> | null | undefined): {
+  allowedModels: string[]
+  modelMappings: { from: string; to: string }[]
+} {
+  const allowedModels: string[] = []
+  const modelMappings: { from: string; to: string }[] = []
+
+  if (!mapping) {
+    return { allowedModels, modelMappings }
+  }
+
+  for (const [rawFrom, rawTo] of Object.entries(mapping)) {
+    const from = rawFrom.trim()
+    const to = typeof rawTo === 'string' ? rawTo.trim() : ''
+    if (!from || !to) {
+      continue
+    }
+    if (from === to) {
+      allowedModels.push(from)
+    } else {
+      modelMappings.push({ from, to })
+    }
+  }
+
+  return { allowedModels, modelMappings }
 }

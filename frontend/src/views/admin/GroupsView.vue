@@ -1274,8 +1274,91 @@
           </div>
         </div>
 
-        <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
+          v-if="canConfigureModelsList(createForm.platform)"
+          class="border-t pt-4"
+        >
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                自定义 /v1/models 列表
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                仅控制该分组密钥看到的模型列表，不改变调度和模型映射。
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                createForm.models_list_config.enabled =
+                  !createForm.models_list_config.enabled
+              "
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                createForm.models_list_config.enabled
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600',
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  createForm.models_list_config.enabled
+                    ? 'translate-x-6'
+                    : 'translate-x-1',
+                ]"
+              />
+            </button>
+          </div>
+          <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50 p-2 dark:border-dark-700 dark:bg-dark-800">
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                {{ createForm.models_list_config.items.filter((item) => item.selected).length }}/{{ createForm.models_list_config.items.length }}
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="selectAllModelsListItems(createForm.models_list_config)"
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="invertModelsListSelection(createForm.models_list_config)"
+                >
+                  反选
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="loadModelsListCandidates('create', createForm.platform, 0)"
+                >
+                  刷新
+                </button>
+              </div>
+            </div>
+            <div class="max-h-64 space-y-2 overflow-y-auto p-2">
+              <label
+                v-for="item in createForm.models_list_config.items"
+                :key="`create-model-list-${item.id}`"
+                class="flex cursor-pointer items-center gap-2 rounded border border-gray-100 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:text-gray-300 dark:hover:bg-dark-800"
+              >
+                <input
+                  type="checkbox"
+                  :checked="item.selected"
+                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600 dark:bg-dark-700"
+                  @change="toggleModelsListItem(createForm.models_list_config, item.id)"
+                />
+                <span class="font-mono text-xs">{{ item.id }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+	        <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
+	        <div
           v-if="
             ['anthropic', 'antigravity'].includes(createForm.platform) &&
             createForm.subscription_type !== 'subscription'
@@ -2454,6 +2537,95 @@
           </div>
         </div>
 
+        <div
+          v-if="canConfigureModelsList(editForm.platform)"
+          class="border-t pt-4"
+        >
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                自定义 /v1/models 列表
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                仅控制该分组密钥看到的模型列表，不改变调度和模型映射。
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                editForm.models_list_config.enabled =
+                  !editForm.models_list_config.enabled
+              "
+              :class="[
+                'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                editForm.models_list_config.enabled
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600',
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  editForm.models_list_config.enabled
+                    ? 'translate-x-6'
+                    : 'translate-x-1',
+                ]"
+              />
+            </button>
+          </div>
+          <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50 p-2 dark:border-dark-700 dark:bg-dark-800">
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                {{ editForm.models_list_config.items.filter((item) => item.selected).length }}/{{ editForm.models_list_config.items.length }}
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="selectAllModelsListItems(editForm.models_list_config)"
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="invertModelsListSelection(editForm.models_list_config)"
+                >
+                  反选
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  @click="
+                    loadModelsListCandidates(
+                      'edit',
+                      editForm.platform,
+                      editingGroup?.id || 0,
+                    )
+                  "
+                >
+                  刷新
+                </button>
+              </div>
+            </div>
+            <div class="max-h-64 space-y-2 overflow-y-auto p-2">
+              <label
+                v-for="item in editForm.models_list_config.items"
+                :key="`edit-model-list-${item.id}`"
+                class="flex cursor-pointer items-center gap-2 rounded border border-gray-100 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:text-gray-300 dark:hover:bg-dark-800"
+              >
+                <input
+                  type="checkbox"
+                  :checked="item.selected"
+                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600 dark:bg-dark-700"
+                  @change="toggleModelsListItem(editForm.models_list_config, item.id)"
+                />
+                <span class="font-mono text-xs">{{ item.id }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
         <div
           v-if="
@@ -2864,6 +3036,17 @@ import {
   resetMessagesDispatchFormState,
   type MessagesDispatchMappingRow,
 } from "./groupsMessagesDispatch";
+import {
+  buildModelsListConfig,
+  createModelsListState,
+  hydrateModelsListState,
+  invertModelsListSelection,
+  selectAllModelsListItems,
+  setModelsListCandidates,
+  toggleModelsListItem,
+  type ModelsListState,
+} from "./groupsModelsList";
+import { createModelsListCandidatesTracker } from "./groupsModelsListCandidates";
 
 const { t } = useI18n();
 const appStore = useAppStore();
@@ -3097,6 +3280,36 @@ const rpmOverridesGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
 const createMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
+const modelsListCandidatesTracker = createModelsListCandidatesTracker();
+
+const canConfigureModelsList = (platform: GroupPlatform) =>
+  ["anthropic", "openai", "gemini", "antigravity"].includes(platform);
+
+const loadModelsListCandidates = async (
+  mode: "create" | "edit",
+  platform: GroupPlatform,
+  groupID = 0,
+) => {
+  const request = { mode, groupID, platform };
+  const requestID = modelsListCandidatesTracker.next(request);
+  try {
+    const candidates = await adminAPI.groups.getModelsListCandidates(
+      groupID,
+      platform,
+    );
+    if (!modelsListCandidatesTracker.isCurrent(requestID, request)) {
+      return;
+    }
+    setModelsListCandidates(
+      mode === "create"
+        ? createForm.models_list_config
+        : editForm.models_list_config,
+      candidates,
+    );
+  } catch (error) {
+    console.error("Error loading models list candidates:", error);
+  }
+};
 
 const createForm = reactive({
   name: "",
@@ -3129,9 +3342,10 @@ const createForm = reactive({
   require_oauth_only: false,
   require_privacy_set: false,
   // 模型路由开关
-  model_routing_enabled: false,
-  // 支持的模型系列（仅 antigravity 平台）
-  supported_model_scopes: ["claude", "gemini_text", "gemini_image"] as string[],
+	  model_routing_enabled: false,
+	  models_list_config: createModelsListState() as ModelsListState,
+	  // 支持的模型系列（仅 antigravity 平台）
+	  supported_model_scopes: ["claude", "gemini_text", "gemini_image"] as string[],
   // MCP XML 协议注入开关（仅 antigravity 平台）
   mcp_xml_inject: true,
   // 从分组复制账号
@@ -3413,10 +3627,11 @@ const editForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
-  // 模型路由开关
-  model_routing_enabled: false,
-  // 支持的模型系列（仅 antigravity 平台）
-  supported_model_scopes: ["claude", "gemini_text", "gemini_image"] as string[],
+	  // 模型路由开关
+	  model_routing_enabled: false,
+	  models_list_config: createModelsListState() as ModelsListState,
+	  // 支持的模型系列（仅 antigravity 平台）
+	  supported_model_scopes: ["claude", "gemini_text", "gemini_image"] as string[],
   // MCP XML 协议注入开关（仅 antigravity 平台）
   mcp_xml_inject: true,
   // 从分组复制账号
@@ -3652,6 +3867,7 @@ const closeCreateModal = () => {
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
+  Object.assign(createForm.models_list_config, createModelsListState());
   createForm.mcp_xml_inject = true;
   createForm.copy_accounts_from_group_ids = [];
   createModelRoutingRules.value = [];
@@ -3705,10 +3921,11 @@ const handleCreateGroup = async () => {
       monthly_limit_usd: normalizeOptionalLimit(
         createForm.monthly_limit_usd as number | string | null,
       ),
-      model_routing: convertRoutingRulesToApiFormat(
-        createModelRoutingRules.value,
-      ),
-      messages_dispatch_model_config:
+	      model_routing: convertRoutingRulesToApiFormat(
+	        createModelRoutingRules.value,
+	      ),
+	      models_list_config: buildModelsListConfig(createForm.models_list_config),
+	      messages_dispatch_model_config:
         createForm.platform === "openai"
           ? messagesDispatchFormStateToConfig({
               allow_messages_dispatch: createForm.allow_messages_dispatch,
@@ -3780,6 +3997,10 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.require_oauth_only = group.require_oauth_only ?? false;
   editForm.require_privacy_set = group.require_privacy_set ?? false;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
+  Object.assign(
+    editForm.models_list_config,
+    hydrateModelsListState(group.models_list_config, []),
+  );
   editForm.supported_model_scopes = group.supported_model_scopes || [
     "claude",
     "gemini_text",
@@ -3792,6 +4013,7 @@ const handleEdit = async (group: AdminGroup) => {
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
     group.model_routing,
   );
+  await loadModelsListCandidates("edit", editForm.platform, group.id);
   showEditModal.value = true;
 };
 
@@ -3804,6 +4026,7 @@ const closeEditModal = () => {
   editingGroup.value = null;
   editModelRoutingRules.value = [];
   editForm.copy_accounts_from_group_ids = [];
+  Object.assign(editForm.models_list_config, createModelsListState());
   resetMessagesDispatchFormState(editForm);
 };
 
@@ -3834,10 +4057,11 @@ const handleUpdateGroup = async () => {
         editForm.fallback_group_id_on_invalid_request === null
           ? 0
           : editForm.fallback_group_id_on_invalid_request,
-      model_routing: convertRoutingRulesToApiFormat(
-        editModelRoutingRules.value,
-      ),
-      messages_dispatch_model_config:
+	      model_routing: convertRoutingRulesToApiFormat(
+	        editModelRoutingRules.value,
+	      ),
+	      models_list_config: buildModelsListConfig(editForm.models_list_config),
+	      messages_dispatch_model_config:
         editForm.platform === "openai"
           ? messagesDispatchFormStateToConfig({
               allow_messages_dispatch: editForm.allow_messages_dispatch,
@@ -3939,12 +4163,16 @@ watch(
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
     }
-    if (newVal !== "openai") {
-      resetMessagesDispatchFormState(createForm);
-    }
-    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
-      createForm.require_oauth_only = false;
-      createForm.require_privacy_set = false;
+	    if (newVal !== "openai") {
+	      resetMessagesDispatchFormState(createForm);
+	    }
+	    Object.assign(createForm.models_list_config, createModelsListState());
+	    if (canConfigureModelsList(newVal)) {
+	      loadModelsListCandidates("create", newVal, 0);
+	    }
+	    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
+	      createForm.require_oauth_only = false;
+	      createForm.require_privacy_set = false;
     }
   },
 );
@@ -3955,12 +4183,18 @@ watch(
     if (!["anthropic", "antigravity"].includes(newVal)) {
       editForm.fallback_group_id_on_invalid_request = null;
     }
-    if (newVal !== "openai") {
-      resetMessagesDispatchFormState(editForm);
-    }
-    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
-      editForm.require_oauth_only = false;
-      editForm.require_privacy_set = false;
+	    if (newVal !== "openai") {
+	      resetMessagesDispatchFormState(editForm);
+	    }
+	    if (!editingGroup.value || newVal !== editingGroup.value.platform) {
+	      Object.assign(editForm.models_list_config, createModelsListState());
+	    }
+	    if (canConfigureModelsList(newVal)) {
+	      loadModelsListCandidates("edit", newVal, editingGroup.value?.id || 0);
+	    }
+	    if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
+	      editForm.require_oauth_only = false;
+	      editForm.require_privacy_set = false;
     }
   },
 );

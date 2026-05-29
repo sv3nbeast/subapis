@@ -22,7 +22,24 @@ export type AuthSourceType =
   | "oidc"
   | "wechat"
   | "github"
-  | "google";
+  | "google"
+  | "dingtalk";
+
+export type DefaultPlatformQuotaPlatform =
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "antigravity";
+export type DefaultPlatformQuotaWindow = "daily" | "weekly" | "monthly";
+export type DefaultPlatformQuotaValue = number | null;
+export type DefaultPlatformQuotaSetting = Record<
+  DefaultPlatformQuotaWindow,
+  DefaultPlatformQuotaValue
+>;
+export type DefaultPlatformQuotasMap = Record<
+  DefaultPlatformQuotaPlatform,
+  DefaultPlatformQuotaSetting
+>;
 
 export interface AuthSourceDefaultsValue {
   balance: number;
@@ -30,6 +47,7 @@ export interface AuthSourceDefaultsValue {
   subscriptions: DefaultSubscriptionSetting[];
   grant_on_signup: boolean;
   grant_on_first_bind: boolean;
+  platform_quotas: DefaultPlatformQuotasMap;
 }
 
 export type AuthSourceDefaultsState = Record<
@@ -64,6 +82,18 @@ const AUTH_SOURCE_TYPES: AuthSourceType[] = [
   "wechat",
   "github",
   "google",
+  "dingtalk",
+];
+export const DEFAULT_PLATFORM_QUOTA_PLATFORMS: DefaultPlatformQuotaPlatform[] = [
+  "anthropic",
+  "openai",
+  "gemini",
+  "antigravity",
+];
+export const DEFAULT_PLATFORM_QUOTA_WINDOWS: DefaultPlatformQuotaWindow[] = [
+  "daily",
+  "weekly",
+  "monthly",
 ];
 const AUTH_SOURCE_DEFAULT_BALANCE = 0;
 const AUTH_SOURCE_DEFAULT_CONCURRENCY = 5;
@@ -163,6 +193,46 @@ export function normalizeDefaultSubscriptionSettings(
     }));
 }
 
+function emptyPlatformQuotaSetting(): DefaultPlatformQuotaSetting {
+  return { daily: null, weekly: null, monthly: null };
+}
+
+function normalizeQuotaValue(value: unknown): DefaultPlatformQuotaValue {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sanitizeQuotaValue(value: unknown): DefaultPlatformQuotaValue {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function buildPlatformQuotasMap(
+  source: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null | undefined,
+  valueNormalizer: (value: unknown) => DefaultPlatformQuotaValue,
+): DefaultPlatformQuotasMap {
+  return DEFAULT_PLATFORM_QUOTA_PLATFORMS.reduce((acc, platform) => {
+    const raw = source?.[platform] ?? {};
+    acc[platform] = DEFAULT_PLATFORM_QUOTA_WINDOWS.reduce((windows, key) => {
+      windows[key] = valueNormalizer(raw[key]);
+      return windows;
+    }, emptyPlatformQuotaSetting());
+    return acc;
+  }, {} as DefaultPlatformQuotasMap);
+}
+
+export function normalizePlatformQuotasMap(
+  quotas?: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null,
+): DefaultPlatformQuotasMap {
+  return buildPlatformQuotasMap(quotas, normalizeQuotaValue);
+}
+
+export function sanitizePlatformQuotasMap(
+  quotas?: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null,
+): DefaultPlatformQuotasMap {
+  return buildPlatformQuotasMap(quotas, sanitizeQuotaValue);
+}
+
 export function buildAuthSourceDefaultsState(
   settings: Partial<SystemSettings>,
 ): AuthSourceDefaultsState {
@@ -191,6 +261,11 @@ export function buildAuthSourceDefaultsState(
         raw[`auth_source_default_${source}_grant_on_signup`] === true,
       grant_on_first_bind:
         raw[`auth_source_default_${source}_grant_on_first_bind`] === true,
+      platform_quotas: normalizePlatformQuotasMap(
+        raw[`auth_source_default_${source}_platform_quotas`] as Partial<
+          DefaultPlatformQuotasMap
+        >,
+      ),
     };
     return acc;
   }, {} as AuthSourceDefaultsState);
@@ -218,6 +293,8 @@ export function appendAuthSourceDefaultsToUpdateRequest(
       current.grant_on_signup;
     target[`auth_source_default_${source}_grant_on_first_bind`] =
       current.grant_on_first_bind;
+    target[`auth_source_default_${source}_platform_quotas`] =
+      sanitizePlatformQuotasMap(current.platform_quotas);
   }
 
   return payload;
@@ -333,6 +410,7 @@ export interface SystemSettings {
   default_concurrency: number;
   default_user_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
+  default_platform_quotas: DefaultPlatformQuotasMap;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -561,6 +639,7 @@ export interface UpdateSettingsRequest {
   default_concurrency?: number;
   default_user_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
+  default_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -763,6 +842,9 @@ function normalizeSystemSettings(settings: SystemSettings): SystemSettings {
     custom_menu_items: normalizeSettingsArray(settings.custom_menu_items),
     custom_endpoints: normalizeSettingsArray(settings.custom_endpoints),
     default_subscriptions: normalizeSettingsArray(settings.default_subscriptions),
+    default_platform_quotas: normalizePlatformQuotasMap(
+      settings.default_platform_quotas,
+    ),
     payment_enabled_types: normalizeSettingsArray(settings.payment_enabled_types),
     account_quota_notify_emails: normalizeSettingsArray(
       settings.account_quota_notify_emails,
@@ -845,6 +927,110 @@ export async function sendTestEmail(
   const { data } = await apiClient.post<{ message: string }>(
     "/admin/settings/send-test-email",
     request,
+  );
+  return data;
+}
+
+// ==================== Notification Email Templates ====================
+
+export interface EmailTemplateOption {
+  value: string;
+  label?: string;
+  description?: string;
+  category?: string;
+  optional?: boolean;
+}
+
+export type EmailTemplateEventOption = string | EmailTemplateOption;
+
+export interface EmailTemplateSummary {
+  event: string;
+  locale: string;
+  subject: string;
+  is_custom?: boolean;
+  updated_at?: string;
+}
+
+export interface EmailTemplateListResponse {
+  events: EmailTemplateEventOption[];
+  locales: string[];
+  templates?: EmailTemplateSummary[];
+  placeholders?: string[];
+}
+
+export interface EmailTemplateDetail {
+  event: string;
+  locale: string;
+  subject: string;
+  html: string;
+  is_custom?: boolean;
+  updated_at?: string;
+  placeholders?: string[];
+}
+
+export interface UpdateEmailTemplateRequest {
+  subject: string;
+  html: string;
+}
+
+export interface PreviewEmailTemplateRequest {
+  event: string;
+  locale: string;
+  subject: string;
+  html: string;
+  variables?: Record<string, string>;
+}
+
+export interface EmailTemplatePreviewResponse {
+  subject: string;
+  html: string;
+}
+
+export async function getEmailTemplates(): Promise<EmailTemplateListResponse> {
+  const { data } = await apiClient.get<EmailTemplateListResponse>(
+    "/admin/settings/email-templates",
+  );
+  return data;
+}
+
+export async function getEmailTemplate(
+  event: string,
+  locale: string,
+): Promise<EmailTemplateDetail> {
+  const { data } = await apiClient.get<EmailTemplateDetail>(
+    `/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`,
+  );
+  return data;
+}
+
+export async function updateEmailTemplate(
+  event: string,
+  locale: string,
+  payload: UpdateEmailTemplateRequest,
+): Promise<EmailTemplateDetail> {
+  const { data } = await apiClient.put<EmailTemplateDetail>(
+    `/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`,
+    payload,
+  );
+  return data;
+}
+
+export async function restoreOfficialEmailTemplate(
+  event: string,
+  locale: string,
+): Promise<EmailTemplateDetail> {
+  const { data } = await apiClient.post<EmailTemplateDetail>(
+    `/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}/restore-official`,
+  );
+  return data;
+}
+
+export async function previewEmailTemplate(
+  payload: PreviewEmailTemplateRequest,
+): Promise<EmailTemplatePreviewResponse> {
+  const { data } = await apiClient.post<EmailTemplatePreviewResponse>(
+    "/admin/settings/email-template-preview",
+    payload,
   );
   return data;
 }
@@ -1191,6 +1377,11 @@ export const settingsAPI = {
   updateSettings,
   testSmtpConnection,
   sendTestEmail,
+  getEmailTemplates,
+  getEmailTemplate,
+  updateEmailTemplate,
+  restoreOfficialEmailTemplate,
+  previewEmailTemplate,
   getAdminApiKey,
   regenerateAdminApiKey,
   deleteAdminApiKey,

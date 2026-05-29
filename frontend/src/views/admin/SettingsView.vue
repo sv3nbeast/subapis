@@ -2952,6 +2952,63 @@
                   </div>
                 </div>
               </div>
+
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <div class="mb-3">
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.defaults.defaultPlatformQuotas") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.defaults.defaultPlatformQuotasHint") }}
+                  </p>
+                </div>
+
+                <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-700">
+                  <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
+                    <thead class="bg-gray-50 dark:bg-dark-800">
+                      <tr>
+                        <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">
+                          {{ t("admin.settings.platformQuota.platform") }}
+                        </th>
+                        <th
+                          v-for="windowKey in defaultPlatformQuotaWindows"
+                          :key="windowKey"
+                          class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400"
+                        >
+                          {{ platformQuotaWindowLabel(windowKey) }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-900">
+                      <tr
+                        v-for="platform in defaultPlatformQuotaPlatforms"
+                        :key="`default-platform-quota-${platform}`"
+                      >
+                        <td class="px-3 py-2 font-mono text-sm text-gray-700 dark:text-gray-300">
+                          {{ platform }}
+                        </td>
+                        <td
+                          v-for="windowKey in defaultPlatformQuotaWindows"
+                          :key="`${platform}-${windowKey}`"
+                          class="px-3 py-2"
+                        >
+                          <input
+                            v-model.number="form.default_platform_quotas[platform][windowKey]"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            class="input h-9"
+                            :placeholder="t('admin.settings.platformQuota.placeholder')"
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.defaults.platformQuotaNotice") }}
+                </p>
+              </div>
             </div>
           </div>
 
@@ -3223,6 +3280,63 @@
                             {{ t("common.delete") }}
                           </button>
                         </div>
+                      </div>
+                    </div>
+
+                    <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                      <div class="mb-3">
+                        <label class="font-medium text-gray-900 dark:text-white">
+                          {{ t("admin.settings.authSourceDefaults.platformQuotasOverride") }}
+                        </label>
+                        <p class="text-sm text-gray-500 dark:text-gray-400">
+                          {{ t("admin.settings.authSourceDefaults.platformQuotasOverrideHint") }}
+                        </p>
+                      </div>
+
+                      <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-700">
+                        <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
+                          <thead class="bg-gray-50 dark:bg-dark-800">
+                            <tr>
+                              <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">
+                                {{ t("admin.settings.platformQuota.platform") }}
+                              </th>
+                              <th
+                                v-for="windowKey in defaultPlatformQuotaWindows"
+                                :key="windowKey"
+                                class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400"
+                              >
+                                {{ platformQuotaWindowLabel(windowKey) }}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-900">
+                            <tr
+                              v-for="platform in defaultPlatformQuotaPlatforms"
+                              :key="`${authSource.source}-platform-quota-${platform}`"
+                            >
+                              <td class="px-3 py-2 font-mono text-sm text-gray-700 dark:text-gray-300">
+                                {{ platform }}
+                              </td>
+                              <td
+                                v-for="windowKey in defaultPlatformQuotaWindows"
+                                :key="`${authSource.source}-${platform}-${windowKey}`"
+                                class="px-3 py-2"
+                              >
+                                <input
+                                  v-model.number="
+                                    authSourceDefaults[authSource.source]
+                                      .platform_quotas[platform][windowKey]
+                                  "
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  class="input h-9"
+                                  :placeholder="t('admin.settings.platformQuota.placeholder')"
+                                />
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>
@@ -6405,10 +6519,14 @@ import { adminAPI } from "@/api";
 import {
   appendAuthSourceDefaultsToUpdateRequest,
   buildAuthSourceDefaultsState,
+  DEFAULT_PLATFORM_QUOTA_PLATFORMS,
+  DEFAULT_PLATFORM_QUOTA_WINDOWS,
   defaultWeChatConnectScopesForMode,
   deriveWeChatConnectStoredMode,
   normalizeDefaultSubscriptionSettings,
+  normalizePlatformQuotasMap,
   resolveWeChatConnectModeCapabilities,
+  sanitizePlatformQuotasMap,
 } from "@/api/admin/settings";
 import {
   defaultLoginAgreementDate,
@@ -6420,6 +6538,8 @@ import {
 import type {
   AuthSourceDefaultsState,
   AuthSourceType,
+  DefaultPlatformQuotaWindow,
+  DefaultPlatformQuotasMap,
   SystemSettings,
   UpdateSettingsRequest,
   DefaultSubscriptionSetting,
@@ -6725,6 +6845,7 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
+  default_platform_quotas: DefaultPlatformQuotasMap;
 };
 
 const form = reactive<SettingsForm>({
@@ -6748,6 +6869,7 @@ const form = reactive<SettingsForm>({
   affiliate_rebate_per_invitee_cap: 0,
   default_concurrency: 1,
   default_subscriptions: [],
+  default_platform_quotas: normalizePlatformQuotasMap(),
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
   site_name: "subapis",
@@ -6962,6 +7084,13 @@ const authSourceDefaultsMeta = computed(() => [
     ),
   },
 ]);
+
+const defaultPlatformQuotaPlatforms = DEFAULT_PLATFORM_QUOTA_PLATFORMS;
+const defaultPlatformQuotaWindows = DEFAULT_PLATFORM_QUOTA_WINDOWS;
+
+function platformQuotaWindowLabel(windowKey: DefaultPlatformQuotaWindow): string {
+  return t(`admin.settings.platformQuota.${windowKey}`);
+}
 
 // Proxies for web search emulation ProxySelector
 const webSearchProxies = ref<Proxy[]>([]);
@@ -7620,6 +7749,9 @@ async function loadSettings() {
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
     );
+    form.default_platform_quotas = normalizePlatformQuotasMap(
+      settings.default_platform_quotas,
+    );
     registrationEmailSuffixWhitelistTags.value =
       normalizeRegistrationEmailSuffixDomains(
         settings.registration_email_suffix_whitelist,
@@ -7975,6 +8107,9 @@ async function saveSettings() {
       affiliate_rebate_per_invitee_cap: Math.max(0, Number(form.affiliate_rebate_per_invitee_cap) || 0),
       default_concurrency: form.default_concurrency,
       default_subscriptions: normalizedDefaultSubscriptions,
+      default_platform_quotas: sanitizePlatformQuotasMap(
+        form.default_platform_quotas,
+      ),
       force_email_on_third_party_signup: form.force_email_on_third_party_signup,
       default_user_rpm_limit: form.default_user_rpm_limit,
       site_name: form.site_name,
@@ -8181,6 +8316,9 @@ async function saveSettings() {
       }
     }
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
+    form.default_platform_quotas = normalizePlatformQuotasMap(
+      updated.default_platform_quotas,
+    );
     registrationEmailSuffixWhitelistTags.value =
       normalizeRegistrationEmailSuffixDomains(
         updated.registration_email_suffix_whitelist,

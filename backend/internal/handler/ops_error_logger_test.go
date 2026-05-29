@@ -86,49 +86,6 @@ func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	opsErrorLogDrained.Store(false)
 }
 
-func TestAttachOpsRequestBodyToEntry_SanitizeAndTrim(t *testing.T) {
-	resetOpsErrorLoggerStateForTest(t)
-	gin.SetMode(gin.TestMode)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	raw := []byte(`{"access_token":"secret-token","messages":[{"role":"user","content":"hello"}]}`)
-	setOpsRequestContext(c, "claude-3", false, raw)
-
-	entry := &service.OpsInsertErrorLogInput{}
-	attachOpsRequestBodyToEntry(c, entry)
-
-	require.NotNil(t, entry.RequestBodyBytes)
-	require.Equal(t, len(raw), *entry.RequestBodyBytes)
-	require.NotNil(t, entry.RequestBodyJSON)
-	require.NotContains(t, *entry.RequestBodyJSON, "secret-token")
-	require.Contains(t, *entry.RequestBodyJSON, "[REDACTED]")
-	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
-}
-
-func TestAttachOpsRequestBodyToEntry_InvalidJSONKeepsSize(t *testing.T) {
-	resetOpsErrorLoggerStateForTest(t)
-	gin.SetMode(gin.TestMode)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	raw := []byte("not-json")
-	setOpsRequestContext(c, "claude-3", false, raw)
-
-	entry := &service.OpsInsertErrorLogInput{}
-	attachOpsRequestBodyToEntry(c, entry)
-
-	require.Nil(t, entry.RequestBodyJSON)
-	require.NotNil(t, entry.RequestBodyBytes)
-	require.Equal(t, len(raw), *entry.RequestBodyBytes)
-	require.False(t, entry.RequestBodyTruncated)
-	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
-}
-
 func TestEnqueueOpsErrorLog_QueueFullDrop(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 
@@ -165,37 +122,26 @@ func TestShouldSkipOpsErrorLog_UsesUpstreamContextText(t *testing.T) {
 	require.True(t, skip)
 }
 
-func TestAttachOpsRequestBodyToEntry_EarlyReturnBranches(t *testing.T) {
-	resetOpsErrorLoggerStateForTest(t)
+func TestSetOpsRequestContext_AcceptsOptionalBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	entry := &service.OpsInsertErrorLogInput{}
-	attachOpsRequestBodyToEntry(nil, entry)
-	attachOpsRequestBodyToEntry(&gin.Context{}, nil)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	raw := []byte(`{"model":"claude-3","messages":[]}`)
 
-	// 无请求体 key
-	attachOpsRequestBodyToEntry(c, entry)
-	require.Nil(t, entry.RequestBodyJSON)
-	require.Nil(t, entry.RequestBodyBytes)
-	require.False(t, entry.RequestBodyTruncated)
+	setOpsRequestContext(c, "claude-3", true, raw)
 
-	// 错误类型
-	c.Set(opsRequestBodyKey, "not-bytes")
-	attachOpsRequestBodyToEntry(c, entry)
-	require.Nil(t, entry.RequestBodyJSON)
-	require.Nil(t, entry.RequestBodyBytes)
-
-	// 空 bytes
-	c.Set(opsRequestBodyKey, []byte{})
-	attachOpsRequestBodyToEntry(c, entry)
-	require.Nil(t, entry.RequestBodyJSON)
-	require.Nil(t, entry.RequestBodyBytes)
-
-	require.Equal(t, int64(0), OpsErrorLogSanitizedTotal())
+	model, ok := c.Get(opsModelKey)
+	require.True(t, ok)
+	require.Equal(t, "claude-3", model)
+	stream, ok := c.Get(opsStreamKey)
+	require.True(t, ok)
+	require.Equal(t, true, stream)
+	body, ok := c.Get(opsRequestBodyKey)
+	require.True(t, ok)
+	require.Equal(t, raw, body)
+	require.Equal(t, "claude-3", c.Request.Context().Value(ctxkey.Model))
 }
 
 func TestEnqueueOpsErrorLog_EarlyReturnBranches(t *testing.T) {

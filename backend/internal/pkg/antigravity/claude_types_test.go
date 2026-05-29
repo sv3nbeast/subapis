@@ -25,4 +25,8 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 			t.Fatalf("expected model %q to be exposed in DefaultModels", id)
 		}
 	}
+
+	if _, ok := byID["claude-opus-4-8"]; ok {
+		t.Fatalf("unexpected Antigravity claude-opus-4-8 exposure")
+	}
 }

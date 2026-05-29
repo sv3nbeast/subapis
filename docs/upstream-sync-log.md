@@ -1622,3 +1622,64 @@ b8d64856 修复：use daily endpoint 针对 Antigravity AI Credits retry
 d8eecd84 修复：对齐Antigravity AI Credits quota project
 f41c5968 修复：use antigravity credits overages 针对 quota exhaustion
 6142ec22 修复：更新antigravity user agent 到 1.23.2
+
+## 2026-05-29 19:43:30 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `e07cc0e437509ea4a4340121020d2c4ced7ca9d2`
+- 官方提交: `7321e4dea807651dd6fc309eee3d057ba75e7e70`
+- 合并基线: `6e66edbb095f91b13e329f48e06d655e9e454940`
+- 官方领先数量: `326`
+- 本地领先数量: `250`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+7321e4de 杂项：将VERSION同步到 0.1.133 [skip ci]
+68901cbf 杂项（pricing）：更新model pricing metadata
+0a8c77f8 合并拉取请求 #2884（来源：Pluviobyte/fix/gemini-messages-tool-text-block-ordering）
+69e7c4db 合并拉取请求 #2865（来源：wey-gu/feat/usage-request-context）
+52292741 合并拉取请求 #2849（来源：Pluviobyte/fix/count-tokens-payload-filter）
+f68d3511 合并拉取请求 #2873（来源：wucm667/feat/account-quota-threshold-auto-pause）
+0a521f09 修复（gemini）：close tool_use block before text 中的 messages streaming
+c9caadb3 修复（account）：address second-round review 时 quota auto-pause
+8b7a8227 修复（account）：address review 时 OpenAI quota auto-pause
+1d46be02 合并拉取请求 #2830（来源：stabey/fix/anthropic-to-responses-cache-tokens）
+ead471d6 新增（account）：支持按 5h/7d 用量阈值自动暂停账号调度
+16842c2f 合并拉取请求 #2836（来源：siyuan-123/fix/openai-ws-compat-usage）
+21cd382f 合并拉取请求 #2855（来源：gaoren002/fix/concurrency-error-classification）
+e6a3f1e1 合并拉取请求 #2869（来源：Pluviobyte/fix/ws-first-token-terminal-event）
+fc9d79d9 合并拉取请求 #2835（来源：JIA-ss/fix/responses-passthrough-token-details）
+d3a8db80 合并拉取请求 #2833（来源：alfadb/fix/haiku-strip-context-management）
+433f8dcd 合并拉取请求 #2834（来源：DaydreamCoding/pr/openai-codex-cli-allow-claude-code）
+6bc19835 合并拉取请求 #2853（来源：wucm667/fix/system-update-already-up-to-date-response）
+6010c3cc 测试：修复内容审计日志异步断言
+514ac5c6 新增：适配 claude-opus-4-8
+
+### 本地领先
+
+e07cc0e4 修复：对齐ops sla drilldowns
+0361d72c 新增：增加channel copy action
+e75356c4 修复：支持 anthropic opus 4.8 aliases
+ed75475f 修复：throttle stateless claude companion probes by account
+60833cef 修复：将claude code only restrictions归类为client limits
+3bf6b27c 修复：保留account 设置 during reauth
+08bdd0b0 修复：improve claude code mimicry parity
+83664e51 修复：keep rsync excludes from glob expanding
+3eb86285 杂项：exclude local build artifacts from prod sync
+c1b70fc8 修复：对齐claude code cli mimicry
+2ebc92ae 修复：保留upstream failover detail 中的 ops logs
+92598ebf 修复：wait through short anthropic rate cooldowns
+3f4b58ec 修复：prefilter shared anthropic thinking history
+51b21c80 修复：keep umq waits failoverable 针对 streams
+f4d886ce 修复：avoid anthropic umq timeout upstream failures
+b02fdc23 修复：avoid anthropic 529 account overload cooldown
+5ed5957f 修复：improve anthropic throttling 与 pricing
+60481ce7 修复：drop unsupported anthropic speed field
+fc643278 修复：cool down anthropic 429 without reset
+0b6b63a6 修复：normalize anthropic opus 4.6 thinking 别名

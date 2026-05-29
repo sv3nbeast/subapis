@@ -33,7 +33,7 @@ func TestBuildDynamicToolMap_AboveThresholdIsStable(t *testing.T) {
 func TestSanitizeToolName_StaticPrefix(t *testing.T) {
 	require.Equal(t, "cc_sess_list", sanitizeToolName("sessions_list", nil))
 	require.Equal(t, "cc_ses_get", sanitizeToolName("session_get", nil))
-	require.Equal(t, "bash", sanitizeToolName("bash", nil))
+	require.Equal(t, "Bash", sanitizeToolName("bash", nil))
 }
 
 func TestSanitizeToolName_DynamicTakesPrecedence(t *testing.T) {
@@ -131,6 +131,43 @@ func TestApplyToolNameRewriteToBody_RenamesToolUseWithDynamicMapping(t *testing.
 	require.Equal(t, "web_search", gjson.GetBytes(out, "messages.0.content.1.name").String())
 	// tool_result 依靠 tool_use_id 关联，不需要 name 字段
 	require.Equal(t, "ok", gjson.GetBytes(out, "messages.1.content.0.content").String())
+}
+
+func TestApplyToolNameRewriteToBody_CanonicalizesOAuthToolNames(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"bash","input_schema":{}},{"name":"glob","input_schema":{}},{"name":"Bash","input_schema":{}}],"tool_choice":{"type":"tool","name":"glob"},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"bash","input":{}},{"type":"tool_reference","tool_name":"glob"},{"type":"tool_result","tool_use_id":"tu_1","content":[{"type":"tool_reference","tool_name":"bash"}]}]}]}`)
+	rw := buildToolNameRewriteFromBody(body)
+	require.NotNil(t, rw)
+	require.Equal(t, "Bash", rw.Forward["bash"])
+	require.Equal(t, "Glob", rw.Forward["glob"])
+	require.NotContains(t, rw.Forward, "Bash")
+	require.Equal(t, "bash", rw.ReverseFields["Bash"])
+	require.Equal(t, "glob", rw.ReverseFields["Glob"])
+	require.Empty(t, rw.ReverseOrdered, "canonical tool names should be restored only in JSON name fields")
+
+	out := applyToolNameRewriteToBody(body, rw)
+
+	require.Equal(t, "Bash", gjson.GetBytes(out, "tools.0.name").String())
+	require.Equal(t, "Glob", gjson.GetBytes(out, "tools.1.name").String())
+	require.Equal(t, "Bash", gjson.GetBytes(out, "tools.2.name").String())
+	require.Equal(t, "Glob", gjson.GetBytes(out, "tool_choice.name").String())
+	require.Equal(t, "Bash", gjson.GetBytes(out, "messages.0.content.0.name").String())
+	require.Equal(t, "Glob", gjson.GetBytes(out, "messages.0.content.1.tool_name").String())
+	require.Equal(t, "Bash", gjson.GetBytes(out, "messages.0.content.2.content.0.tool_name").String())
+}
+
+func TestRestoreToolNamesInBytes_CanonicalFieldsOnly(t *testing.T) {
+	rw := &ToolNameRewrite{
+		Forward:       map[string]string{"bash": "Bash", "glob": "Glob"},
+		Reverse:       map[string]string{"Bash": "bash", "Glob": "glob"},
+		ReverseFields: map[string]string{"Bash": "bash", "Glob": "glob"},
+	}
+
+	data := []byte(`{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_reference","tool_name":"Glob"},{"type":"text","text":"Bash and Glob are mentioned in prose"}]}`)
+	restored := restoreToolNamesInBytes(data, rw)
+
+	require.Equal(t, "bash", gjson.GetBytes(restored, "content.0.name").String())
+	require.Equal(t, "glob", gjson.GetBytes(restored, "content.1.tool_name").String())
+	require.Equal(t, "Bash and Glob are mentioned in prose", gjson.GetBytes(restored, "content.2.text").String())
 }
 
 func TestApplyToolsLastCacheBreakpoint_InjectsDefault(t *testing.T) {
