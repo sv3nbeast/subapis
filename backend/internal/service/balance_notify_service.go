@@ -87,8 +87,9 @@ func (s *BalanceNotifyService) CheckBalanceAfterDeduction(ctx context.Context, u
 }
 
 // CheckAccountQuotaAfterIncrement checks if any quota dimension crossed above its notify threshold.
-// The account's Extra fields contain pre-increment usage values.
-func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Context, account *Account, cost float64) {
+// When quotaState is provided, it contains post-increment usage from the DB transaction.
+// Otherwise the account's Extra fields contain pre-increment usage values.
+func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Context, account *Account, cost float64, quotaStates ...*AccountQuotaState) {
 	if account == nil || s.emailService == nil || s.settingRepo == nil || cost <= 0 {
 		return
 	}
@@ -102,6 +103,10 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 	}
 
 	siteName := s.getSiteName(ctx)
+	var quotaState *AccountQuotaState
+	if len(quotaStates) > 0 {
+		quotaState = quotaStates[0]
+	}
 
 	// Check each dimension
 	type quotaDim struct {
@@ -109,7 +114,20 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 		enabled   bool
 		threshold float64
 		oldUsed   float64
+		newUsed   float64
 		limit     float64
+	}
+
+	oldDailyUsed, newDailyUsed := account.GetQuotaDailyUsed(), account.GetQuotaDailyUsed()+cost
+	oldWeeklyUsed, newWeeklyUsed := account.GetQuotaWeeklyUsed(), account.GetQuotaWeeklyUsed()+cost
+	oldTotalUsed, newTotalUsed := account.GetQuotaUsed(), account.GetQuotaUsed()+cost
+	if quotaState != nil {
+		newDailyUsed = quotaState.DailyUsed
+		oldDailyUsed = newDailyUsed - cost
+		newWeeklyUsed = quotaState.WeeklyUsed
+		oldWeeklyUsed = newWeeklyUsed - cost
+		newTotalUsed = quotaState.TotalUsed
+		oldTotalUsed = newTotalUsed - cost
 	}
 
 	dims := []quotaDim{
@@ -117,21 +135,24 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 			name:      quotaDimDaily,
 			enabled:   account.GetQuotaNotifyDailyEnabled(),
 			threshold: account.GetQuotaNotifyDailyThreshold(),
-			oldUsed:   account.GetQuotaDailyUsed(),
+			oldUsed:   oldDailyUsed,
+			newUsed:   newDailyUsed,
 			limit:     account.GetQuotaDailyLimit(),
 		},
 		{
 			name:      quotaDimWeekly,
 			enabled:   account.GetQuotaNotifyWeeklyEnabled(),
 			threshold: account.GetQuotaNotifyWeeklyThreshold(),
-			oldUsed:   account.GetQuotaWeeklyUsed(),
+			oldUsed:   oldWeeklyUsed,
+			newUsed:   newWeeklyUsed,
 			limit:     account.GetQuotaWeeklyLimit(),
 		},
 		{
 			name:      quotaDimTotal,
 			enabled:   account.GetQuotaNotifyTotalEnabled(),
 			threshold: account.GetQuotaNotifyTotalThreshold(),
-			oldUsed:   account.GetQuotaUsed(),
+			oldUsed:   oldTotalUsed,
+			newUsed:   newTotalUsed,
 			limit:     account.GetQuotaLimit(),
 		},
 	}
@@ -140,9 +161,8 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 		if !dim.enabled || dim.threshold <= 0 {
 			continue
 		}
-		newUsed := dim.oldUsed + cost
 		// Only notify on first crossing
-		if dim.oldUsed < dim.threshold && newUsed >= dim.threshold {
+		if dim.oldUsed < dim.threshold && dim.newUsed >= dim.threshold {
 			dimCopy := dim // capture loop variable
 			go func() {
 				defer func() {
@@ -150,7 +170,7 @@ func (s *BalanceNotifyService) CheckAccountQuotaAfterIncrement(ctx context.Conte
 						slog.Error("panic in quota notification", "recover", r)
 					}
 				}()
-				s.sendQuotaAlertEmails(adminEmails, account.ID, account.Name, account.Platform, dimCopy.name, newUsed, dimCopy.limit, dimCopy.threshold, siteName)
+				s.sendQuotaAlertEmails(adminEmails, account.ID, account.Name, account.Platform, dimCopy.name, dimCopy.newUsed, dimCopy.limit, dimCopy.threshold, siteName)
 			}()
 		}
 	}
