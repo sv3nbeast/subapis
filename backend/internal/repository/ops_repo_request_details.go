@@ -34,37 +34,37 @@ func (r *opsRepository) ListRequestDetails(ctx context.Context, filter *service.
 			if kind != string(service.OpsRequestKindSuccess) && kind != string(service.OpsRequestKindError) {
 				return nil, 0, fmt.Errorf("invalid kind")
 			}
-			addCondition(fmt.Sprintf("kind = $%d", len(args)+1), kind)
+			addCondition(fmt.Sprintf("c.kind = $%d", len(args)+1), kind)
 		}
 
 		if platform := strings.TrimSpace(strings.ToLower(filter.Platform)); platform != "" {
-			addCondition(fmt.Sprintf("platform = $%d", len(args)+1), platform)
+			addCondition(fmt.Sprintf("c.platform = $%d", len(args)+1), platform)
 		}
 		if filter.GroupID != nil && *filter.GroupID > 0 {
-			addCondition(fmt.Sprintf("group_id = $%d", len(args)+1), *filter.GroupID)
+			addCondition(fmt.Sprintf("c.group_id = $%d", len(args)+1), *filter.GroupID)
 		}
 
 		if filter.UserID != nil && *filter.UserID > 0 {
-			addCondition(fmt.Sprintf("user_id = $%d", len(args)+1), *filter.UserID)
+			addCondition(fmt.Sprintf("c.user_id = $%d", len(args)+1), *filter.UserID)
 		}
 		if filter.APIKeyID != nil && *filter.APIKeyID > 0 {
-			addCondition(fmt.Sprintf("api_key_id = $%d", len(args)+1), *filter.APIKeyID)
+			addCondition(fmt.Sprintf("c.api_key_id = $%d", len(args)+1), *filter.APIKeyID)
 		}
 		if filter.AccountID != nil && *filter.AccountID > 0 {
-			addCondition(fmt.Sprintf("account_id = $%d", len(args)+1), *filter.AccountID)
+			addCondition(fmt.Sprintf("c.account_id = $%d", len(args)+1), *filter.AccountID)
 		}
 
 		if model := strings.TrimSpace(filter.Model); model != "" {
-			addCondition(fmt.Sprintf("model = $%d", len(args)+1), model)
+			addCondition(fmt.Sprintf("c.model = $%d", len(args)+1), model)
 		}
 		if requestID := strings.TrimSpace(filter.RequestID); requestID != "" {
-			addCondition(fmt.Sprintf("request_id = $%d", len(args)+1), requestID)
+			addCondition(fmt.Sprintf("c.request_id = $%d", len(args)+1), requestID)
 		}
 		if q := strings.TrimSpace(filter.Query); q != "" {
 			like := "%" + strings.ToLower(q) + "%"
 			startIdx := len(args) + 1
 			addCondition(
-				fmt.Sprintf("(LOWER(COALESCE(request_id,'')) LIKE $%d OR LOWER(COALESCE(model,'')) LIKE $%d OR LOWER(COALESCE(message,'')) LIKE $%d)",
+				fmt.Sprintf("(LOWER(COALESCE(c.request_id,'')) LIKE $%d OR LOWER(COALESCE(c.model,'')) LIKE $%d OR LOWER(COALESCE(c.message,'')) LIKE $%d)",
 					startIdx, startIdx+1, startIdx+2,
 				),
 				like, like, like,
@@ -72,10 +72,10 @@ func (r *opsRepository) ListRequestDetails(ctx context.Context, filter *service.
 		}
 
 		if filter.MinDurationMs != nil {
-			addCondition(fmt.Sprintf("duration_ms >= $%d", len(args)+1), *filter.MinDurationMs)
+			addCondition(fmt.Sprintf("c.duration_ms >= $%d", len(args)+1), *filter.MinDurationMs)
 		}
 		if filter.MaxDurationMs != nil {
-			addCondition(fmt.Sprintf("duration_ms <= $%d", len(args)+1), *filter.MaxDurationMs)
+			addCondition(fmt.Sprintf("c.duration_ms <= $%d", len(args)+1), *filter.MaxDurationMs)
 		}
 	}
 
@@ -135,7 +135,7 @@ WITH combined AS (
 )
 `
 
-	countQuery := fmt.Sprintf(`%s SELECT COUNT(1) FROM combined %s`, cte, where)
+	countQuery := fmt.Sprintf(`%s SELECT COUNT(1) FROM combined c %s`, cte, where)
 	var total int64
 	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		if err == sql.ErrNoRows {
@@ -145,13 +145,13 @@ WITH combined AS (
 		}
 	}
 
-	sort := "ORDER BY created_at DESC"
+	sort := "ORDER BY c.created_at DESC"
 	if filter != nil {
 		switch strings.TrimSpace(strings.ToLower(filter.Sort)) {
 		case "", "created_at_desc":
 			// default
 		case "duration_desc":
-			sort = "ORDER BY duration_ms DESC NULLS LAST, created_at DESC"
+			sort = "ORDER BY c.duration_ms DESC NULLS LAST, c.created_at DESC"
 		default:
 			return nil, 0, fmt.Errorf("invalid sort")
 		}
@@ -160,23 +160,32 @@ WITH combined AS (
 	listQuery := fmt.Sprintf(`
 %s
 SELECT
-  kind,
-  created_at,
-  request_id,
-  platform,
-  model,
-  duration_ms,
-  status_code,
-  error_id,
-  phase,
-  severity,
-  message,
-  user_id,
-  api_key_id,
-  account_id,
-  group_id,
-  stream
-FROM combined
+  c.kind,
+  c.created_at,
+  c.request_id,
+  c.platform,
+  c.model,
+  c.duration_ms,
+  c.status_code,
+  c.error_id,
+  c.phase,
+  c.severity,
+  c.message,
+  c.user_id,
+  COALESCE(u.email, u_api.email, '') AS user_email,
+  c.api_key_id,
+  COALESCE(k.name, '') AS api_key_name,
+  c.account_id,
+  COALESCE(a.name, '') AS account_name,
+  c.group_id,
+  COALESCE(g.name, '') AS group_name,
+  c.stream
+FROM combined c
+LEFT JOIN api_keys k ON c.api_key_id = k.id
+LEFT JOIN users u ON c.user_id = u.id
+LEFT JOIN users u_api ON k.user_id = u_api.id
+LEFT JOIN accounts a ON c.account_id = a.id
+LEFT JOIN groups g ON c.group_id = g.id
 %s
 %s
 LIMIT $%d OFFSET $%d
@@ -221,10 +230,14 @@ LIMIT $%d OFFSET $%d
 			severity sql.NullString
 			message  sql.NullString
 
-			userID    sql.NullInt64
-			apiKeyID  sql.NullInt64
-			accountID sql.NullInt64
-			groupID   sql.NullInt64
+			userID      sql.NullInt64
+			userEmail   sql.NullString
+			apiKeyID    sql.NullInt64
+			apiKeyName  sql.NullString
+			accountID   sql.NullInt64
+			accountName sql.NullString
+			groupID     sql.NullInt64
+			groupName   sql.NullString
 
 			stream bool
 		)
@@ -242,9 +255,13 @@ LIMIT $%d OFFSET $%d
 			&severity,
 			&message,
 			&userID,
+			&userEmail,
 			&apiKeyID,
+			&apiKeyName,
 			&accountID,
+			&accountName,
 			&groupID,
+			&groupName,
 			&stream,
 		); err != nil {
 			return nil, 0, err
@@ -264,10 +281,14 @@ LIMIT $%d OFFSET $%d
 			Severity:   severity.String,
 			Message:    message.String,
 
-			UserID:    toInt64Ptr(userID),
-			APIKeyID:  toInt64Ptr(apiKeyID),
-			AccountID: toInt64Ptr(accountID),
-			GroupID:   toInt64Ptr(groupID),
+			UserID:      toInt64Ptr(userID),
+			UserEmail:   strings.TrimSpace(userEmail.String),
+			APIKeyID:    toInt64Ptr(apiKeyID),
+			APIKeyName:  strings.TrimSpace(apiKeyName.String),
+			AccountID:   toInt64Ptr(accountID),
+			AccountName: strings.TrimSpace(accountName.String),
+			GroupID:     toInt64Ptr(groupID),
+			GroupName:   strings.TrimSpace(groupName.String),
 
 			Stream: stream,
 		}

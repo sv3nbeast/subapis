@@ -146,6 +146,39 @@ const kindBadgeClass = (kind: string) => {
   if (kind === 'error') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
 }
+
+function displayUser(row: OpsRequestDetail): string {
+  const email = String(row.user_email || '').trim()
+  if (email) return email
+  if (row.user_id != null) return `user:${row.user_id}`
+  return '-'
+}
+
+function formatActorMeta(row: OpsRequestDetail): string {
+  const parts: string[] = []
+  const keyName = String(row.api_key_name || '').trim()
+  if (keyName) parts.push(keyName)
+  else if (row.api_key_id != null) parts.push(`key:${row.api_key_id}`)
+
+  const accountName = String(row.account_name || '').trim()
+  if (accountName) parts.push(accountName)
+  else if (row.account_id != null) parts.push(`acc:${row.account_id}`)
+
+  return parts.join(' / ')
+}
+
+function formatActorTooltip(row: OpsRequestDetail): string {
+  const parts: string[] = []
+  if (row.user_email) parts.push(String(row.user_email))
+  if (row.user_id != null) parts.push(`user_id: ${row.user_id}`)
+  if (row.api_key_name) parts.push(`key: ${row.api_key_name}`)
+  if (row.api_key_id != null) parts.push(`api_key_id: ${row.api_key_id}`)
+  if (row.account_name) parts.push(`account: ${row.account_name}`)
+  if (row.account_id != null) parts.push(`account_id: ${row.account_id}`)
+  if (row.group_name) parts.push(`group: ${row.group_name}`)
+  if (row.group_id != null) parts.push(`group_id: ${row.group_id}`)
+  return parts.join('\n')
+}
 </script>
 
 <template>
@@ -205,6 +238,9 @@ const kindBadgeClass = (kind: string) => {
                     {{ t('admin.ops.requestDetails.table.model') }}
                   </th>
                   <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    {{ t('admin.ops.requestDetails.table.user') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                     {{ t('admin.ops.requestDetails.table.duration') }}
                   </th>
                   <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
@@ -233,6 +269,16 @@ const kindBadgeClass = (kind: string) => {
                   </td>
                   <td class="max-w-[240px] truncate px-4 py-3 text-xs text-gray-600 dark:text-gray-300" :title="row.model || ''">
                     {{ row.model || '-' }}
+                  </td>
+                  <td class="px-4 py-3">
+                    <div class="max-w-[220px]" :title="formatActorTooltip(row)">
+                      <div class="truncate text-xs font-medium text-gray-900 dark:text-gray-200">
+                        {{ displayUser(row) }}
+                      </div>
+                      <div class="truncate text-[11px] text-gray-500 dark:text-gray-400">
+                        {{ formatActorMeta(row) || '-' }}
+                      </div>
+                    </div>
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
                     {{ typeof row.duration_ms === 'number' ? `${row.duration_ms} ms` : '-' }}

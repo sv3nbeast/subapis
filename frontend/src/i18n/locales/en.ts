@@ -5173,6 +5173,7 @@ export default {
           kind: 'Kind',
           platform: 'Platform',
           model: 'Model',
+          user: 'User',
           duration: 'Duration',
           status: 'Status',
           requestId: 'Request ID',
