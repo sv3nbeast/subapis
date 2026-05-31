@@ -40,6 +40,17 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerSubmitUsageRecordTask_AcceptsPlainFuncInVariadicArgs(t *testing.T) {
+	h := &GatewayHandler{}
+	var called atomic.Bool
+
+	h.submitUsageRecordTask(func(ctx context.Context) {
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
+}
+
 func TestGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.T) {
 	h := &GatewayHandler{}
 	var called atomic.Bool
@@ -128,6 +139,17 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovere
 		called.Store(true)
 	})
 	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
+}
+
+func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_AcceptsPlainFuncInVariadicArgs(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	var called atomic.Bool
+
+	h.submitOpenAIUsageRecordTask(&service.OpenAIForwardResult{}, func(ctx context.Context) {
+		called.Store(true)
+	})
+
+	require.True(t, called.Load())
 }
 
 func TestOpenAIGatewayHandlerSubmitMandatoryUsageRecordTask_DroppedTaskSyncFallback(t *testing.T) {

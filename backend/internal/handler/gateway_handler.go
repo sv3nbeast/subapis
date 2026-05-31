@@ -2035,10 +2035,10 @@ func (h *GatewayHandler) submitUsageRecordTask(args ...any) {
 	var task service.UsageRecordTask
 	switch len(args) {
 	case 1:
-		task, _ = args[0].(service.UsageRecordTask)
+		task = usageRecordTaskFromAny(args[0])
 	case 2:
 		parent, _ = args[0].(context.Context)
-		task, _ = args[1].(service.UsageRecordTask)
+		task = usageRecordTaskFromAny(args[1])
 	}
 	if task == nil {
 		return

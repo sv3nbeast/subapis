@@ -72,6 +72,19 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	}
 }
 
+func usageRecordTaskFromAny(v any) service.UsageRecordTask {
+	switch task := v.(type) {
+	case nil:
+		return nil
+	case service.UsageRecordTask:
+		return task
+	case func(context.Context):
+		return service.UsageRecordTask(task)
+	default:
+		return nil
+	}
+}
+
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
@@ -1733,11 +1746,11 @@ func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(args ...any) {
 	switch len(args) {
 	case 2:
 		result, _ = args[0].(*service.OpenAIForwardResult)
-		task, _ = args[1].(service.UsageRecordTask)
+		task = usageRecordTaskFromAny(args[1])
 	case 3:
 		parent, _ = args[0].(context.Context)
 		result, _ = args[1].(*service.OpenAIForwardResult)
-		task, _ = args[2].(service.UsageRecordTask)
+		task = usageRecordTaskFromAny(args[2])
 	}
 	if result != nil && result.ImageCount > 0 {
 		h.submitMandatoryUsageRecordTask(parent, task)
