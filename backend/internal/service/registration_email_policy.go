@@ -53,6 +53,9 @@ func IsRegistrationEmailSuffixBlocked(email string, blacklist []string) bool {
 		return false
 	}
 	for _, blocked := range blacklist {
+		if strings.HasPrefix(blocked, "*.") && registrationEmailDomainMatchesWildcard(strings.TrimPrefix(suffix, "@"), blocked) {
+			return true
+		}
 		if registrationEmailSuffixMatchesOrSubdomain(suffix, blocked) {
 			return true
 		}

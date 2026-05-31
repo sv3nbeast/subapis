@@ -29,8 +29,8 @@ func TestParseRegistrationEmailSuffixWhitelist(t *testing.T) {
 }
 
 func TestParseRegistrationEmailSuffixBlacklist(t *testing.T) {
-	got := ParseRegistrationEmailSuffixBlacklist(`["example.com","@foo.bar","@invalid_domain"]`)
-	require.Equal(t, []string{"@example.com", "@foo.bar"}, got)
+	got := ParseRegistrationEmailSuffixBlacklist(`["example.com","@foo.bar","*.EDU.CN","@invalid_domain"]`)
+	require.Equal(t, []string{"@example.com", "@foo.bar", "*.edu.cn"}, got)
 }
 
 func TestIsRegistrationEmailSuffixAllowed(t *testing.T) {
@@ -57,5 +57,7 @@ func TestIsRegistrationEmailSuffixBlocked(t *testing.T) {
 func TestIsRegistrationEmailSuffixBlocked_Subdomain(t *testing.T) {
 	require.True(t, IsRegistrationEmailSuffixBlocked("user@cfg.accesswiki.net", []string{"@accesswiki.net"}))
 	require.True(t, IsRegistrationEmailSuffixBlocked("user@cfg.accesswiki.net", []string{"@cfg.accesswiki.net"}))
+	require.True(t, IsRegistrationEmailSuffixBlocked("user@school.edu.cn", []string{"*.edu.cn"}))
+	require.True(t, IsRegistrationEmailSuffixBlocked("user@edu.cn", []string{"*.edu.cn"}))
 	require.False(t, IsRegistrationEmailSuffixBlocked("user@cfg.accesswiki.net", []string{"@other.net"}))
 }

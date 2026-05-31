@@ -293,6 +293,7 @@ const baseSettingsResponse = {
   registration_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
+  registration_email_suffix_blacklist: [],
   promo_code_enabled: true,
   invitation_code_enabled: false,
   password_reset_enabled: false,
@@ -658,6 +659,46 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         antigravity_user_agent_version: "1.23.2",
+      }),
+    );
+  });
+
+  it("renders and submits registration email suffix blacklist settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      registration_email_suffix_whitelist: ["*.EDU.CN", "@allow.com"],
+      registration_email_suffix_blacklist: [
+        "@accesswiki.net",
+        "*.blocked.edu",
+      ],
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    expect(wrapper.text()).toContain("accesswiki.net");
+    expect(wrapper.text()).toContain("*.blocked.edu");
+
+    const blacklistInput = wrapper.get(
+      '[data-testid="registration-email-suffix-blacklist-input"]',
+    );
+    await blacklistInput.setValue("New-Domain.com");
+    await blacklistInput.trigger("keydown", { key: "Enter" });
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registration_email_suffix_whitelist: ["*.edu.cn", "@allow.com"],
+        registration_email_suffix_blacklist: [
+          "@accesswiki.net",
+          "*.blocked.edu",
+          "@new-domain.com",
+        ],
       }),
     );
   });
