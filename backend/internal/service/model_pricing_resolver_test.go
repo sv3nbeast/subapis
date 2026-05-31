@@ -345,6 +345,36 @@ func TestGetIntervalPricing_PartialIntervalInheritsBasePricing(t *testing.T) {
 	require.InDelta(t, 20e-6, pricing.ImageOutputPricePerToken, 1e-12)
 }
 
+func TestGetIntervalPricing_CacheWriteBreakdownOverrides(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	r := NewModelPricingResolver(&ChannelService{}, bs)
+
+	resolved := &ResolvedPricing{
+		Mode: BillingModeToken,
+		BasePricing: &ModelPricing{
+			CacheCreationPricePerToken: 3.75e-6,
+			CacheCreation5mPrice:       3.75e-6,
+			CacheCreation1hPrice:       3.75e-6,
+			SupportsCacheBreakdown:     false,
+		},
+		SupportsCacheBreakdown: false,
+		Intervals: []PricingInterval{
+			{
+				MinTokens:         0,
+				CacheWrite5mPrice: testPtrFloat64(4e-6),
+				CacheWrite1hPrice: testPtrFloat64(6e-6),
+			},
+		},
+	}
+
+	pricing := r.GetIntervalPricing(resolved, 100)
+	require.NotNil(t, pricing)
+	require.InDelta(t, 4e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 4e-6, pricing.CacheCreation5mPrice, 1e-12)
+	require.InDelta(t, 6e-6, pricing.CacheCreation1hPrice, 1e-12)
+	require.True(t, pricing.SupportsCacheBreakdown)
+}
+
 func TestResolve_WithChannelOverride_TokenNilBasePricing(t *testing.T) {
 	// Base pricing is nil (unknown model), channel has flat prices → creates new BasePricing.
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
@@ -695,6 +725,20 @@ func TestFilterValidIntervals(t *testing.T) {
 			name: "interval with only CacheWritePrice kept",
 			intervals: []PricingInterval{
 				{MinTokens: 0, CacheWritePrice: testPtrFloat64(3e-6)},
+			},
+			wantLen: 1,
+		},
+		{
+			name: "interval with only CacheWrite5mPrice kept",
+			intervals: []PricingInterval{
+				{MinTokens: 0, CacheWrite5mPrice: testPtrFloat64(3e-6)},
+			},
+			wantLen: 1,
+		},
+		{
+			name: "interval with only CacheWrite1hPrice kept",
+			intervals: []PricingInterval{
+				{MinTokens: 0, CacheWrite1hPrice: testPtrFloat64(5e-6)},
 			},
 			wantLen: 1,
 		},

@@ -85,6 +85,20 @@
                 :scale="perMillionScale"
               />
               <PricingRow
+                v-if="model.pricing.cache_write_5m_price != null"
+                :label="t(prefixKey('cacheWrite5mPrice'))"
+                :value="model.pricing.cache_write_5m_price"
+                :unit="t(prefixKey('unitPerMillion'))"
+                :scale="perMillionScale"
+              />
+              <PricingRow
+                v-if="model.pricing.cache_write_1h_price != null"
+                :label="t(prefixKey('cacheWrite1hPrice'))"
+                :value="model.pricing.cache_write_1h_price"
+                :unit="t(prefixKey('unitPerMillion'))"
+                :scale="perMillionScale"
+              />
+              <PricingRow
                 :label="t(prefixKey('cacheReadPrice'))"
                 :value="model.pricing.cache_read_price"
                 :unit="t(prefixKey('unitPerMillion'))"

@@ -185,11 +185,13 @@ func calculateAccountStatsTokenCost(pricing *ChannelModelPricing, tokens UsageTo
 		totalTokens := tokens.InputTokens + tokens.OutputTokens + tokens.CacheCreationTokens + tokens.CacheReadTokens
 		if interval := FindMatchingInterval(pricing.Intervals, totalTokens); interval != nil {
 			priceSource = &ChannelModelPricing{
-				InputPrice:      interval.InputPrice,
-				OutputPrice:     interval.OutputPrice,
-				CacheWritePrice: interval.CacheWritePrice,
-				CacheReadPrice:  interval.CacheReadPrice,
-				PerRequestPrice: interval.PerRequestPrice,
+				InputPrice:        interval.InputPrice,
+				OutputPrice:       interval.OutputPrice,
+				CacheWritePrice:   interval.CacheWritePrice,
+				CacheWrite5mPrice: interval.CacheWrite5mPrice,
+				CacheWrite1hPrice: interval.CacheWrite1hPrice,
+				CacheReadPrice:    interval.CacheReadPrice,
+				PerRequestPrice:   interval.PerRequestPrice,
 			}
 		}
 	}
@@ -201,13 +203,40 @@ func calculateAccountStatsTokenCost(pricing *ChannelModelPricing, tokens UsageTo
 	}
 	cost := float64(tokens.InputTokens)*deref(priceSource.InputPrice) +
 		float64(tokens.OutputTokens)*deref(priceSource.OutputPrice) +
-		float64(tokens.CacheCreationTokens)*deref(priceSource.CacheWritePrice) +
+		calculateAccountStatsCacheCreationCost(priceSource, tokens) +
 		float64(tokens.CacheReadTokens)*deref(priceSource.CacheReadPrice) +
 		float64(tokens.ImageOutputTokens)*deref(priceSource.ImageOutputPrice)
 	if cost <= 0 {
 		return nil
 	}
 	return &cost
+}
+
+func calculateAccountStatsCacheCreationCost(pricing *ChannelModelPricing, tokens UsageTokens) float64 {
+	if pricing == nil {
+		return 0
+	}
+	cacheWritePrice := derefFloat64(pricing.CacheWritePrice)
+	cacheWrite5mPrice := cacheWritePrice
+	if pricing.CacheWrite5mPrice != nil {
+		cacheWrite5mPrice = *pricing.CacheWrite5mPrice
+	}
+	cacheWrite1hPrice := cacheWritePrice
+	if pricing.CacheWrite1hPrice != nil {
+		cacheWrite1hPrice = *pricing.CacheWrite1hPrice
+	}
+	if tokens.CacheCreation5mTokens == 0 && tokens.CacheCreation1hTokens == 0 {
+		return float64(tokens.CacheCreationTokens) * cacheWrite5mPrice
+	}
+	return float64(tokens.CacheCreation5mTokens)*cacheWrite5mPrice +
+		float64(tokens.CacheCreation1hTokens)*cacheWrite1hPrice
+}
+
+func derefFloat64(price *float64) float64 {
+	if price == nil {
+		return 0
+	}
+	return *price
 }
 
 // applyAccountStatsCost resolves the account stats cost for a usage log entry.

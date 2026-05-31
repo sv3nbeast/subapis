@@ -312,8 +312,10 @@ const pricingItems = computed(() => {
     { label: t('webChat.inputPrice'), value: formatScaled(pricing.input_price ?? null, 1_000_000) },
     { label: t('webChat.outputPrice'), value: formatScaled(pricing.output_price ?? null, 1_000_000) },
     { label: t('webChat.cacheWritePrice'), value: formatScaled(pricing.cache_write_price ?? null, 1_000_000) },
+    { label: t('webChat.cacheWrite5mPrice'), value: formatScaled(pricing.cache_write_5m_price ?? null, 1_000_000) },
+    { label: t('webChat.cacheWrite1hPrice'), value: formatScaled(pricing.cache_write_1h_price ?? null, 1_000_000) },
     { label: t('webChat.cacheReadPrice'), value: formatScaled(pricing.cache_read_price ?? null, 1_000_000) },
-  ]
+  ].filter(item => item.value !== '-')
 })
 
 watch(selectedGroupId, () => {

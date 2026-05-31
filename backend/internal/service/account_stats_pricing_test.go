@@ -119,6 +119,24 @@ func TestAccountStatsPricing_TokenIntervals(t *testing.T) {
 	require.InDelta(t, 10.0, *got, 1e-12)
 }
 
+func TestAccountStatsPricing_CacheWriteBreakdown(t *testing.T) {
+	pricing := &ChannelModelPricing{
+		BillingMode:       BillingModeToken,
+		CacheWritePrice:   testPtrFloat64(0.01),
+		CacheWrite5mPrice: testPtrFloat64(0.02),
+		CacheWrite1hPrice: testPtrFloat64(0.03),
+	}
+
+	got := calculateAccountStatsCost(pricing, UsageTokens{
+		CacheCreationTokens:   300,
+		CacheCreation5mTokens: 100,
+		CacheCreation1hTokens: 200,
+	}, 1)
+
+	require.NotNil(t, got)
+	require.InDelta(t, 8.0, *got, 1e-12)
+}
+
 func TestAccountStatsPricing_WildcardUsesLongestPrefix(t *testing.T) {
 	pricing := []ChannelModelPricing{
 		{ID: 1, Models: []string{"claude-*"}},

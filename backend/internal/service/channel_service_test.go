@@ -2401,6 +2401,15 @@ func TestValidatePricingBillingMode(t *testing.T) {
 			errMsg:  "input_price must be >= 0",
 		},
 		{
+			name: "negative cache_write_1h_price - invalid",
+			pricing: []ChannelModelPricing{{
+				BillingMode:       BillingModeToken,
+				CacheWrite1hPrice: testPtrFloat64(-0.01),
+			}},
+			wantErr: true,
+			errMsg:  "cache_write_1h_price must be >= 0",
+		},
+		{
 			name: "interval with no price fields - invalid",
 			pricing: []ChannelModelPricing{{
 				BillingMode:     BillingModePerRequest,
@@ -2409,6 +2418,13 @@ func TestValidatePricingBillingMode(t *testing.T) {
 			}},
 			wantErr: true,
 			errMsg:  "has no price fields set",
+		},
+		{
+			name: "interval with only cache_write_1h_price - valid",
+			pricing: []ChannelModelPricing{{
+				BillingMode: BillingModeToken,
+				Intervals:   []PricingInterval{{MinTokens: 0, MaxTokens: testPtrInt(1000), CacheWrite1hPrice: testPtrFloat64(0.01)}},
+			}},
 		},
 	}
 

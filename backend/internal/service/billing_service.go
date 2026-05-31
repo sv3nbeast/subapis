@@ -492,6 +492,15 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 		pricing.CacheCreation5mPrice = *channelPricing.CacheWritePrice
 		pricing.CacheCreation1hPrice = *channelPricing.CacheWritePrice
 	}
+	if channelPricing.CacheWrite5mPrice != nil {
+		pricing.CacheCreationPricePerToken = *channelPricing.CacheWrite5mPrice
+		pricing.CacheCreation5mPrice = *channelPricing.CacheWrite5mPrice
+		pricing.SupportsCacheBreakdown = true
+	}
+	if channelPricing.CacheWrite1hPrice != nil {
+		pricing.CacheCreation1hPrice = *channelPricing.CacheWrite1hPrice
+		pricing.SupportsCacheBreakdown = true
+	}
 	if channelPricing.CacheReadPrice != nil {
 		pricing.CacheReadPricePerToken = *channelPricing.CacheReadPrice
 		pricing.CacheReadPricePerTokenPriority = *channelPricing.CacheReadPrice

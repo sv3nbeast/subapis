@@ -256,6 +256,76 @@ func TestInjectAnthropicCacheControlTTL1h_OnlyUpdatesExistingEphemeralCacheContr
 	require.Equal(t, "1h", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
 }
 
+func TestDisableThinkingIfToolChoiceForced_RemovesThinkingControls(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","temperature":0,"tool_choice":{"type":"any"},"thinking":{"type":"adaptive","budget_tokens":32000},"output_config":{"effort":"max"},"messages":[]}`)
+
+	result := disableThinkingIfToolChoiceForced(body)
+
+	require.False(t, gjson.GetBytes(result, "thinking").Exists())
+	require.False(t, gjson.GetBytes(result, "output_config").Exists())
+	require.Equal(t, "any", gjson.GetBytes(result, "tool_choice.type").String())
+	require.Equal(t, float64(0), gjson.GetBytes(result, "temperature").Float())
+}
+
+func TestDisableThinkingIfToolChoiceForced_KeepsAutoThinking(t *testing.T) {
+	body := []byte(`{"tool_choice":{"type":"auto"},"thinking":{"type":"enabled","budget_tokens":32000},"output_config":{"effort":"max"},"messages":[]}`)
+
+	result := disableThinkingIfToolChoiceForced(body)
+
+	require.Equal(t, "enabled", gjson.GetBytes(result, "thinking.type").String())
+	require.Equal(t, "max", gjson.GetBytes(result, "output_config.effort").String())
+}
+
+func TestDisableThinkingIfToolChoiceForced_PreservesOtherOutputConfig(t *testing.T) {
+	body := []byte(`{"tool_choice":{"type":"tool","name":"Bash"},"thinking":{"type":"enabled"},"output_config":{"effort":"max","trace":true},"messages":[]}`)
+
+	result := disableThinkingIfToolChoiceForced(body)
+
+	require.False(t, gjson.GetBytes(result, "thinking").Exists())
+	require.False(t, gjson.GetBytes(result, "output_config.effort").Exists())
+	require.True(t, gjson.GetBytes(result, "output_config.trace").Bool())
+}
+
+func TestNormalizeCacheControlTTLOrder_DowngradesLaterOneHourBlocks(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"a","input_schema":{},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`)
+
+	result := normalizeCacheControlTTLOrder(body)
+
+	require.Equal(t, "1h", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
+	require.True(t, gjson.GetBytes(result, "system.0.cache_control").Exists())
+	require.False(t, gjson.GetBytes(result, "system.0.cache_control.ttl").Exists())
+	require.False(t, gjson.GetBytes(result, "messages.0.content.0.cache_control.ttl").Exists())
+}
+
+func TestNormalizeCacheControlTTLOrder_SameSectionOrdering(t *testing.T) {
+	body := []byte(`{"system":[{"type":"text","text":"s1","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"s2","cache_control":{"type":"ephemeral","ttl":"5m"}},{"type":"text","text":"s3","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}`)
+
+	result := normalizeCacheControlTTLOrder(body)
+
+	require.Equal(t, "1h", gjson.GetBytes(result, "system.0.cache_control.ttl").String())
+	require.Equal(t, "5m", gjson.GetBytes(result, "system.1.cache_control.ttl").String())
+	require.False(t, gjson.GetBytes(result, "system.2.cache_control.ttl").Exists())
+}
+
+func TestNormalizeCacheControlTTLOrder_PreservesBytesWhenNoChange(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"type":"text","text":"<sys>&</sys>","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+
+	result := normalizeCacheControlTTLOrder(body)
+
+	require.Equal(t, body, result)
+}
+
+func TestNormalizeClaudeCodeMimicryUpstreamBody_CombinesProtocolFixes(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"Bash","input_schema":{},"cache_control":{"type":"ephemeral","ttl":"5m"}}],"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[],"tool_choice":{"type":"tool","name":"Bash"},"thinking":{"type":"enabled","budget_tokens":32000},"output_config":{"effort":"max"}}`)
+
+	result := normalizeClaudeCodeMimicryUpstreamBody(body)
+
+	require.False(t, gjson.GetBytes(result, "thinking").Exists())
+	require.False(t, gjson.GetBytes(result, "output_config").Exists())
+	require.Equal(t, "5m", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
+	require.False(t, gjson.GetBytes(result, "system.0.cache_control.ttl").Exists())
+}
+
 func TestGatewayCacheTTLGlobalSetting_TargetResolution(t *testing.T) {
 	repo := &gatewayTTLSettingRepo{data: map[string]string{
 		SettingKeyEnableAnthropicCacheTTL1hInjection: "true",

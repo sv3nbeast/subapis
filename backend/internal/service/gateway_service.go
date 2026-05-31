@@ -4937,6 +4937,130 @@ func enforceCacheControlLimit(body []byte) []byte {
 	return body
 }
 
+func normalizeClaudeCodeMimicryUpstreamBody(body []byte) []byte {
+	body = disableThinkingIfToolChoiceForced(body)
+	body = normalizeCacheControlTTLOrder(body)
+	return body
+}
+
+// disableThinkingIfToolChoiceForced keeps Anthropic requests valid when a
+// client forces tool use. Anthropic does not allow extended thinking together
+// with tool_choice.type=any/tool.
+func disableThinkingIfToolChoiceForced(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+
+	toolChoiceType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "tool_choice.type").String()))
+	if toolChoiceType != "any" && toolChoiceType != "tool" {
+		return body
+	}
+
+	out := body
+	modified := false
+	if gjson.GetBytes(out, "thinking").Exists() {
+		if next, ok := deleteJSONPathBytes(out, "thinking"); ok {
+			out = next
+			modified = true
+		}
+	}
+	if gjson.GetBytes(out, "output_config.effort").Exists() {
+		if next, ok := deleteJSONPathBytes(out, "output_config.effort"); ok {
+			out = next
+			modified = true
+		}
+	}
+	if outputConfig := gjson.GetBytes(out, "output_config"); outputConfig.Exists() && outputConfig.IsObject() && len(outputConfig.Map()) == 0 {
+		if next, ok := deleteJSONPathBytes(out, "output_config"); ok {
+			out = next
+			modified = true
+		}
+	}
+
+	if modified {
+		return out
+	}
+	return body
+}
+
+// normalizeCacheControlTTLOrder enforces Anthropic's prompt-caching TTL order:
+// a 1h cache block must not appear after a default/5m block in evaluation order
+// (tools -> system -> messages). Later 1h blocks are downgraded by removing ttl,
+// which preserves normal 5m billing semantics.
+func normalizeCacheControlTTLOrder(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+
+	original := body
+	out := body
+	seenDefaultOr5m := false
+	modified := false
+
+	processBlock := func(path string, block gjson.Result) {
+		cc := block.Get("cache_control")
+		if !cc.Exists() {
+			return
+		}
+		if !cc.IsObject() {
+			seenDefaultOr5m = true
+			return
+		}
+		ttl := cc.Get("ttl")
+		if ttl.Type != gjson.String || ttl.String() != cacheTTLTarget1h {
+			seenDefaultOr5m = true
+			return
+		}
+		if !seenDefaultOr5m {
+			return
+		}
+		if next, ok := deleteJSONPathBytes(out, path+".cache_control.ttl"); ok {
+			out = next
+			modified = true
+		}
+	}
+
+	if tools := gjson.GetBytes(out, "tools"); tools.IsArray() {
+		idx := 0
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			processBlock(fmt.Sprintf("tools.%d", idx), tool)
+			idx++
+			return true
+		})
+	}
+
+	if system := gjson.GetBytes(out, "system"); system.IsArray() {
+		idx := 0
+		system.ForEach(func(_, block gjson.Result) bool {
+			processBlock(fmt.Sprintf("system.%d", idx), block)
+			idx++
+			return true
+		})
+	}
+
+	if messages := gjson.GetBytes(out, "messages"); messages.IsArray() {
+		msgIdx := 0
+		messages.ForEach(func(_, msg gjson.Result) bool {
+			content := msg.Get("content")
+			if content.IsArray() {
+				contentIdx := 0
+				content.ForEach(func(_, block gjson.Result) bool {
+					processBlock(fmt.Sprintf("messages.%d.content.%d", msgIdx, contentIdx), block)
+					contentIdx++
+					return true
+				})
+			}
+			msgIdx++
+			return true
+		})
+	}
+
+	if modified {
+		return out
+	}
+	return original
+}
+
 // injectAnthropicCacheControlTTL1h 将已有 ephemeral cache_control 块的 ttl 强制写为 1h。
 // 仅修改已经存在的 cache_control，不新增缓存断点。
 func injectAnthropicCacheControlTTL1h(body []byte) []byte {
@@ -5204,6 +5328,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		body = injectAnthropicCacheControlTTL1h(body)
+	}
+	if shouldMimicClaudeCode {
+		body = normalizeClaudeCodeMimicryUpstreamBody(body)
 	}
 
 	// 获取凭证
@@ -6775,6 +6902,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 				}
 			}
 		}
+	}
+
+	if mimicClaudeCode {
+		body = normalizeClaudeCodeMimicryUpstreamBody(body)
 	}
 
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
@@ -9744,6 +9875,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
 	body = sanitizeAnthropicCountTokensRequestBody(body)
 	body = PrepareSharedAnthropicThinkingHistory(body, account)
+	if shouldMimicClaudeCode {
+		body = enforceCacheControlLimit(body)
+		body = normalizeClaudeCodeMimicryUpstreamBody(body)
+	}
 
 	// 获取凭证
 	token, tokenType, err := s.GetAccessToken(ctx, account)
@@ -10080,6 +10215,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
 	if ctFingerprint != nil && ctEnableFP {
 		body = syncBillingHeaderVersion(body, ctFingerprint.UserAgent)
+	}
+	if mimicClaudeCode {
+		body = normalizeClaudeCodeMimicryUpstreamBody(body)
 	}
 	if ctEnableCCH || mimicClaudeCode {
 		body = signBillingHeaderCCH(body)

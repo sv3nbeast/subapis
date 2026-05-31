@@ -87,6 +87,9 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
+	if shouldMimicClaudeCode {
+		anthropicBody = normalizeClaudeCodeMimicryUpstreamBody(anthropicBody)
+	}
 
 	// 8. Get access token
 	token, tokenType, err := s.GetAccessToken(ctx, account)

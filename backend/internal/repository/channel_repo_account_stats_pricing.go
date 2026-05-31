@@ -70,7 +70,8 @@ func (r *channelRepository) batchLoadAccountStatsModelPricing(ctx context.Contex
 
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, rule_id, platform, models, billing_mode, input_price, output_price,
-		        cache_write_price, cache_read_price, image_output_price, per_request_price, created_at, updated_at
+		        cache_write_price, cache_write_5m_price, cache_write_1h_price, cache_read_price,
+		        image_output_price, per_request_price, created_at, updated_at
 		 FROM channel_account_stats_model_pricing
 		 WHERE rule_id = ANY($1)
 		 ORDER BY rule_id, id`,
@@ -94,6 +95,8 @@ func (r *channelRepository) batchLoadAccountStatsModelPricing(ctx context.Contex
 			&pricing.InputPrice,
 			&pricing.OutputPrice,
 			&pricing.CacheWritePrice,
+			&pricing.CacheWrite5mPrice,
+			&pricing.CacheWrite1hPrice,
 			&pricing.CacheReadPrice,
 			&pricing.ImageOutputPrice,
 			&pricing.PerRequestPrice,
@@ -141,7 +144,8 @@ func (r *channelRepository) batchLoadAccountStatsIntervals(ctx context.Context, 
 
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, pricing_id, min_tokens, max_tokens, tier_label,
-		        input_price, output_price, cache_write_price, cache_read_price,
+		        input_price, output_price, cache_write_price, cache_write_5m_price,
+		        cache_write_1h_price, cache_read_price,
 		        per_request_price, sort_order, created_at, updated_at
 		 FROM channel_account_stats_pricing_intervals
 		 WHERE pricing_id = ANY($1)
@@ -164,6 +168,8 @@ func (r *channelRepository) batchLoadAccountStatsIntervals(ctx context.Context, 
 			&interval.InputPrice,
 			&interval.OutputPrice,
 			&interval.CacheWritePrice,
+			&interval.CacheWrite5mPrice,
+			&interval.CacheWrite1hPrice,
 			&interval.CacheReadPrice,
 			&interval.PerRequestPrice,
 			&interval.SortOrder,
@@ -233,8 +239,9 @@ func createAccountStatsModelPricingTx(ctx context.Context, tx *sql.Tx, ruleID in
 	}
 	if err := tx.QueryRowContext(ctx,
 		`INSERT INTO channel_account_stats_model_pricing
-		 (rule_id, platform, models, billing_mode, input_price, output_price, cache_write_price, cache_read_price, image_output_price, per_request_price)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 (rule_id, platform, models, billing_mode, input_price, output_price, cache_write_price,
+		  cache_write_5m_price, cache_write_1h_price, cache_read_price, image_output_price, per_request_price)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id, created_at, updated_at`,
 		ruleID,
 		pricing.Platform,
@@ -243,6 +250,8 @@ func createAccountStatsModelPricingTx(ctx context.Context, tx *sql.Tx, ruleID in
 		pricing.InputPrice,
 		pricing.OutputPrice,
 		pricing.CacheWritePrice,
+		pricing.CacheWrite5mPrice,
+		pricing.CacheWrite1hPrice,
 		pricing.CacheReadPrice,
 		pricing.ImageOutputPrice,
 		pricing.PerRequestPrice,
@@ -261,8 +270,9 @@ func createAccountStatsModelPricingTx(ctx context.Context, tx *sql.Tx, ruleID in
 func createAccountStatsIntervalTx(ctx context.Context, tx *sql.Tx, interval *service.PricingInterval) error {
 	return tx.QueryRowContext(ctx,
 		`INSERT INTO channel_account_stats_pricing_intervals
-		 (pricing_id, min_tokens, max_tokens, tier_label, input_price, output_price, cache_write_price, cache_read_price, per_request_price, sort_order)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 (pricing_id, min_tokens, max_tokens, tier_label, input_price, output_price, cache_write_price,
+		  cache_write_5m_price, cache_write_1h_price, cache_read_price, per_request_price, sort_order)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id, created_at, updated_at`,
 		interval.PricingID,
 		interval.MinTokens,
@@ -271,6 +281,8 @@ func createAccountStatsIntervalTx(ctx context.Context, tx *sql.Tx, interval *ser
 		interval.InputPrice,
 		interval.OutputPrice,
 		interval.CacheWritePrice,
+		interval.CacheWrite5mPrice,
+		interval.CacheWrite1hPrice,
 		interval.CacheReadPrice,
 		interval.PerRequestPrice,
 		interval.SortOrder,

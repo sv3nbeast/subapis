@@ -345,14 +345,16 @@ func webChatPricingFromChannel(pricing *ChannelModelPricing) *WebChatModelPricin
 		mode = string(BillingModeToken)
 	}
 	return &WebChatModelPricing{
-		BillingMode:      mode,
-		InputPrice:       pricing.InputPrice,
-		OutputPrice:      pricing.OutputPrice,
-		CacheWritePrice:  pricing.CacheWritePrice,
-		CacheReadPrice:   pricing.CacheReadPrice,
-		ImageOutputPrice: pricing.ImageOutputPrice,
-		PerRequestPrice:  pricing.PerRequestPrice,
-		Intervals:        pricing.Intervals,
+		BillingMode:       mode,
+		InputPrice:        pricing.InputPrice,
+		OutputPrice:       pricing.OutputPrice,
+		CacheWritePrice:   pricing.CacheWritePrice,
+		CacheWrite5mPrice: pricing.CacheWrite5mPrice,
+		CacheWrite1hPrice: pricing.CacheWrite1hPrice,
+		CacheReadPrice:    pricing.CacheReadPrice,
+		ImageOutputPrice:  pricing.ImageOutputPrice,
+		PerRequestPrice:   pricing.PerRequestPrice,
+		Intervals:         pricing.Intervals,
 	}
 }
 

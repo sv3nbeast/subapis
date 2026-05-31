@@ -126,10 +126,20 @@ const priceValues = computed(() => {
     input: formatScaled(pricing.input_price, perMillionScale),
     output: formatScaled(pricing.output_price, perMillionScale),
     cacheRead: formatScaled(pricing.cache_read_price, perMillionScale),
-    cacheWrite: formatScaled(pricing.cache_write_price, perMillionScale),
+    cacheWrite: formatCacheWrite(pricing),
     other: '-',
   }
 })
+
+function formatCacheWrite(pricing: NonNullable<UserSupportedModel['pricing']>): string {
+  const write5m = pricing.cache_write_5m_price
+  const write1h = pricing.cache_write_1h_price
+  if (write5m != null || write1h != null) {
+    const fallback = pricing.cache_write_price
+    return `5m ${formatScaled(write5m ?? fallback, perMillionScale)} / 1h ${formatScaled(write1h ?? fallback, perMillionScale)}`
+  }
+  return formatScaled(pricing.cache_write_price, perMillionScale)
+}
 
 function formatPrice(value: number | null, scale: number, unit: string): string {
   if (value == null) return '-'

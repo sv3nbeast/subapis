@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestMergeAnthropicBeta(t *testing.T) {
@@ -219,6 +220,50 @@ func TestBuildUpstreamRequest_MimicClaudeCodeSignsCCHWithoutGlobalSetting(t *tes
 
 	require.NotContains(t, string(body), "cch=00000")
 	require.Regexp(t, `cch=[0-9a-f]{5};`, string(body))
+}
+
+func TestBuildUpstreamRequest_MimicClaudeCodeNormalizesForcedToolChoice(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"model":"claude-sonnet-4-6","messages":[],"tool_choice":{"type":"any"},"thinking":{"type":"adaptive","budget_tokens":32000},"output_config":{"effort":"max"},"tools":[{"name":"Bash","input_schema":{},"cache_control":{"type":"ephemeral","ttl":"5m"}}],"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-6",
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.False(t, gjson.GetBytes(body, "thinking").Exists())
+	require.False(t, gjson.GetBytes(body, "output_config").Exists())
+	require.Equal(t, "any", gjson.GetBytes(body, "tool_choice.type").String())
+	require.False(t, gjson.GetBytes(body, "system.0.cache_control.ttl").Exists())
+	require.Equal(t, "5m", gjson.GetBytes(body, "tools.0.cache_control.ttl").String())
+}
+
+func TestBuildUpstreamRequest_RealClaudeCodeDoesNotNormalizeForcedToolChoice(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"model":"claude-sonnet-4-6","messages":[],"tool_choice":{"type":"any"},"thinking":{"type":"adaptive","budget_tokens":32000},"output_config":{"effort":"max"},"tools":[{"name":"Bash","input_schema":{},"cache_control":{"type":"ephemeral","ttl":"5m"}}],"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`),
+		"oauth-token",
+		"oauth",
+		"claude-sonnet-4-6",
+		true,
+		false,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, "adaptive", gjson.GetBytes(body, "thinking.type").String())
+	require.Equal(t, "max", gjson.GetBytes(body, "output_config.effort").String())
+	require.Equal(t, "1h", gjson.GetBytes(body, "system.0.cache_control.ttl").String())
 }
 
 func TestDroppedBetaSet(t *testing.T) {
