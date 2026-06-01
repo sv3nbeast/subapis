@@ -411,6 +411,53 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestFillUserDashboardByPlatform(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	today := time.Date(2026, 6, 1, 0, 0, 0, 0, time.Local)
+	rows := sqlmock.NewRows([]string{
+		"platform",
+		"total_requests",
+		"total_tokens",
+		"total_actual_cost",
+		"today_requests",
+		"today_tokens",
+		"today_actual_cost",
+	}).
+		AddRow("anthropic", int64(3), int64(1200), 4.5, int64(2), int64(700), 2.5).
+		AddRow("openai", int64(1), int64(300), 1.25, int64(0), int64(0), 0.0)
+
+	mock.ExpectQuery("WITH scoped AS \\(").
+		WithArgs(int64(25), today).
+		WillReturnRows(rows)
+
+	stats := &UserDashboardStats{}
+	err := repo.fillUserDashboardByPlatform(context.Background(), stats, 25, today)
+	require.NoError(t, err)
+	require.Equal(t, []usagestats.PlatformDashboardStats{
+		{
+			Platform:        "anthropic",
+			TotalRequests:   3,
+			TotalTokens:     1200,
+			TotalActualCost: 4.5,
+			TodayRequests:   2,
+			TodayTokens:     700,
+			TodayActualCost: 2.5,
+		},
+		{
+			Platform:        "openai",
+			TotalRequests:   1,
+			TotalTokens:     300,
+			TotalActualCost: 1.25,
+			TodayRequests:   0,
+			TodayTokens:     0,
+			TodayActualCost: 0,
+		},
+	}, stats.ByPlatform)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}

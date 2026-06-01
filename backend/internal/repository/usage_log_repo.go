@@ -2526,7 +2526,69 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	stats.Rpm = rpm
 	stats.Tpm = tpm
 
+	if err := r.fillUserDashboardByPlatform(ctx, stats, userID, today); err != nil {
+		return nil, err
+	}
+
 	return stats, nil
+}
+
+func (r *usageLogRepository) fillUserDashboardByPlatform(ctx context.Context, stats *UserDashboardStats, userID int64, today time.Time) error {
+	query := `
+		WITH scoped AS (
+			SELECT
+				COALESCE(NULLIF(g.platform, ''), NULLIF(a.platform, '')) AS platform,
+				ul.created_at,
+				ul.input_tokens,
+				ul.output_tokens,
+				ul.cache_creation_tokens,
+				ul.cache_read_tokens,
+				ul.actual_cost
+			FROM usage_logs ul
+			LEFT JOIN groups g ON g.id = ul.group_id
+			LEFT JOIN accounts a ON a.id = ul.account_id
+			WHERE ul.user_id = $1
+		)
+		SELECT
+			platform,
+			COUNT(*) AS total_requests,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
+			COALESCE(SUM(actual_cost), 0) AS total_actual_cost,
+			COUNT(*) FILTER (WHERE created_at >= $2) AS today_requests,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) FILTER (WHERE created_at >= $2), 0) AS today_tokens,
+			COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $2), 0) AS today_actual_cost
+		FROM scoped
+		WHERE platform IS NOT NULL
+		GROUP BY platform
+		ORDER BY total_actual_cost DESC, platform ASC
+	`
+	rows, err := r.sql.QueryContext(ctx, query, userID, today)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	items := make([]usagestats.PlatformDashboardStats, 0)
+	for rows.Next() {
+		var item usagestats.PlatformDashboardStats
+		if err := rows.Scan(
+			&item.Platform,
+			&item.TotalRequests,
+			&item.TotalTokens,
+			&item.TotalActualCost,
+			&item.TodayRequests,
+			&item.TodayTokens,
+			&item.TodayActualCost,
+		); err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	stats.ByPlatform = items
+	return nil
 }
 
 // getPerformanceStatsByAPIKey 获取指定 API Key 的 RPM 和 TPM（近5分钟平均值）

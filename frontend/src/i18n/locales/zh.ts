@@ -973,6 +973,17 @@ export default {
     input: '输入',
     output: '输出',
     cache: '缓存',
+    platformBreakdown: '平台用量拆分',
+    platformCount: '{count} 个平台',
+    platformOther: '其他',
+    platformQuota: {
+      title: '平台限额',
+      daily: '每日',
+      weekly: '每周',
+      monthly: '每月',
+      disabled: '已禁用',
+      resetsAt: '{time} 重置'
+    },
     recentUsage: '最近使用',
     last7Days: '近 7 天',
     noUsageRecords: '暂无使用记录',

@@ -974,6 +974,17 @@ export default {
     input: 'Input',
     output: 'Output',
     cache: 'Cache',
+    platformBreakdown: 'Platform Breakdown',
+    platformCount: '{count} platform(s)',
+    platformOther: 'Other',
+    platformQuota: {
+      title: 'Platform Quota',
+      daily: 'Daily',
+      weekly: 'Weekly',
+      monthly: 'Monthly',
+      disabled: 'Disabled',
+      resetsAt: 'Resets at {time}'
+    },
     recentUsage: 'Recent Usage',
     last7Days: 'Last 7 days',
     noUsageRecords: 'No usage records',
