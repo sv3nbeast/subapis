@@ -6744,6 +6744,10 @@ export default {
     notConfiguredDesc: 'The URL for this custom page has not been properly configured.',
   },
 
+  legalDocument: {
+    title: 'Legal Document'
+  },
+
   // Announcements Page
   announcements: {
     title: 'Announcements',

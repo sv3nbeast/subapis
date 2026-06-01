@@ -232,7 +232,7 @@ export default {
       more: '进阶与支持'
     },
     quickStart: {
-      eyebrow: 'Quick Start',
+      eyebrow: '快速开始',
       title: '快速开始',
       description: '先完成账号、余额、密钥和环境配置，再进行一次最小请求验证。后续教程会继续说明分组、CLI、进阶用法和常见问题。'
     },
@@ -275,7 +275,7 @@ export default {
     },
     sections: {
       models: {
-        eyebrow: 'Model Groups',
+        eyebrow: '模型分组',
         title: '模型、分组与额度说明',
         description: '参考模型广场和令牌分组的教程结构，改写为 SubAPIs 的使用方式：先看可用通道，再按分组控制 API Key 能力边界。',
         articles: {
@@ -306,7 +306,7 @@ export default {
         }
       },
       cli: {
-        eyebrow: 'CLI Tools',
+        eyebrow: 'CLI 工具',
         title: 'CLI 配置教程',
         description: '覆盖环境检查、Claude Code、Codex、Gemini 和 CC-Switch 类工具的配置思路。具体命令以你实际安装的工具版本为准。',
         articles: {
@@ -355,7 +355,7 @@ export default {
         }
       },
       advanced: {
-        eyebrow: 'Advanced',
+        eyebrow: '进阶',
         title: '进阶用法',
         description: '把 SubAPIs 放进真实业务前，建议先规划迁移方式、风控边界和监控策略。',
         articles: {
@@ -398,7 +398,7 @@ export default {
         }
       },
       faq: {
-        eyebrow: 'FAQ',
+        eyebrow: '常见问题',
         title: '常见问题',
         description: '整理 CLI 和 API 接入中最容易遇到的问题，便于快速定位。',
         articles: {
@@ -429,7 +429,7 @@ export default {
         }
       },
       policies: {
-        eyebrow: 'Policies',
+        eyebrow: '政策',
         title: '条款与政策',
         description: '把登录条款和使用边界放进教程页，方便用户在接入前确认合规要求。',
         articles: {
@@ -531,6 +531,9 @@ export default {
     totalCacheRead: '累计缓存读取',
     totalCost: '累计费用',
     avgDuration: '平均耗时',
+    date: '日期',
+    noDailyUsage: '暂无每日使用记录',
+    dateRange90d: '90 天',
     // Messages
     enterApiKey: '请输入 API Key',
     querySuccess: '查询成功',
@@ -602,6 +605,7 @@ export default {
 
   // Common
   common: {
+    login: '登录',
     loading: '加载中...',
     submitting: '提交中...',
     justNow: '刚刚',
@@ -756,6 +760,7 @@ export default {
     sora: 'Sora 创作',
     serviceStatus: '服务状态',
     riskControl: '风控中心',
+    payment: '支付',
   },
 
   // Auth
@@ -797,6 +802,14 @@ export default {
     turnstileFailed: '验证失败，请重试',
     completeVerification: '请完成验证',
     verifyYourEmail: '验证您的邮箱',
+    emailVerifyPageTitle: '验证邮箱',
+    oauthCallbackPageTitle: 'OAuth 回调',
+    linuxdoCallbackPageTitle: 'Linux.do 登录回调',
+    wechatCallbackPageTitle: '微信登录回调',
+    wechatPaymentCallbackPageTitle: '微信支付回调',
+    dingtalkCallbackPageTitle: '钉钉登录回调',
+    dingtalkEmailCompletionPageTitle: '钉钉邮箱补全',
+    oidcCallbackPageTitle: 'OIDC 登录回调',
     sessionExpired: '会话已过期',
     sessionExpiredDesc: '请返回注册页面重新开始。',
     verificationCode: '验证码',
@@ -838,6 +851,7 @@ export default {
       signIn: '使用 Linux.do 登录',
       orContinue: '或使用邮箱密码继续',
       callbackTitle: '正在完成登录',
+      linuxdoCallbackPageTitle: 'Linux.do 登录回调',
       callbackProcessing: '正在验证登录信息，请稍候...',
       callbackHint: '如果页面未自动跳转，请返回登录页重试。',
       callbackMissingToken: '登录信息缺失，请返回重试。',
@@ -848,12 +862,17 @@ export default {
       completing: '正在完成注册...',
       completeRegistrationFailed: '注册失败，请检查邀请码后重试。'
     },
+    wechat: {
+      callbackTitle: '微信登录回调',
+      wechatCallbackPageTitle: '微信登录回调'
+    },
     emailOAuth: {
       signIn: '使用 {providerName} 登录'
     },
     oidc: {
       signIn: '使用 {providerName} 登录',
       callbackTitle: '正在完成 {providerName} 登录',
+      oidcCallbackPageTitle: 'OIDC 登录回调',
       callbackProcessing: '正在验证 {providerName} 登录信息，请稍候...',
       callbackHint: '如果页面未自动跳转，请返回登录页重试。',
       callbackMissingToken: '登录信息缺失，请返回重试。',
@@ -866,6 +885,7 @@ export default {
     },
     oauth: {
       callbackTitle: 'OAuth 回调',
+      oauthCallbackPageTitle: 'OAuth 回调',
       callbackHint: '按需将授权码和状态值复制回后台授权流程。',
       invalidCallbackTitle: '无效的登录回调',
       invalidCallbackHint: '当前页面缺少有效的授权结果，请返回登录页重新发起快捷登录。',
@@ -904,9 +924,15 @@ export default {
     },
     wechatPayment: {
       callbackTitle: '正在完成微信支付',
+      wechatPaymentCallbackPageTitle: '微信支付回调',
       callbackProcessing: '正在确认支付结果，请稍候...',
       callbackMissingResumeToken: '支付回调信息缺失，请返回支付页重试。',
       backToPayment: '返回支付页面'
+    },
+    dingtalk: {
+      callbackTitle: '钉钉登录回调',
+      dingtalkCallbackPageTitle: '钉钉登录回调',
+      emailCompletionPageTitle: '钉钉邮箱补全'
     },
     wechatProviderName: '微信',
     // 忘记密码
@@ -1311,9 +1337,9 @@ export default {
       '30d': '30 天'
     },
     overall: {
-      operational: 'OPERATIONAL',
-      degraded: 'DEGRADED',
-      unavailable: 'UNAVAILABLE'
+      operational: '正常运行',
+      degraded: '部分受影响',
+      unavailable: '不可用'
     },
     columns: {
       name: '名称',
@@ -1413,7 +1439,7 @@ export default {
   },
 
   webChat: {
-    eyebrow: 'Browser Workbench',
+    eyebrow: '浏览器工作台',
     title: '网页对话',
     description: '无需配置 CLI，直接在控制台内使用可访问分组发起文本流式对话。',
     sessions: '会话',
@@ -6908,6 +6934,10 @@ export default {
     notFoundDesc: '该自定义页面不存在或已被删除。',
     notConfiguredTitle: '页面链接未配置',
     notConfiguredDesc: '该自定义页面的 URL 未正确配置。',
+  },
+
+  legalDocument: {
+    title: '条款文档'
   },
 
   // Announcements Page

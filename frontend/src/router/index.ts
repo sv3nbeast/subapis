@@ -25,7 +25,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/setup/SetupWizardView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Setup'
+      title: 'Setup',
+      titleKey: 'setup.title'
     }
   },
 
@@ -36,7 +37,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/HomeView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Home'
+      title: 'Home',
+      titleKey: 'home.defaultSubtitle'
     }
   },
   {
@@ -65,7 +67,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/auth/EmailVerifyView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Verify Email'
+      title: 'Verify Email',
+      titleKey: 'auth.emailVerifyPageTitle'
     }
   },
   {
@@ -96,7 +99,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: false,
       title: 'WeChat OAuth Callback',
-      titleKey: 'auth.wechatCallbackPageTitle'
+      titleKey: 'auth.wechat.wechatCallbackPageTitle'
     }
   },
   {
@@ -116,7 +119,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: false,
       title: 'DingTalk OAuth Callback',
-      titleKey: 'auth.dingtalkCallbackPageTitle'
+      titleKey: 'auth.dingtalk.dingtalkCallbackPageTitle'
     }
   },
   {
@@ -125,7 +128,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/auth/DingTalkEmailCompletionView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'DingTalk Email Completion'
+      title: 'DingTalk Email Completion',
+      titleKey: 'auth.dingtalk.emailCompletionPageTitle'
     }
   },
   {
@@ -154,7 +158,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/auth/ResetPasswordView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Reset Password'
+      title: 'Reset Password',
+      titleKey: 'auth.resetPasswordTitle'
     }
   },
   {
@@ -164,6 +169,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: false,
       title: 'Key Usage',
+      titleKey: 'keyUsage.title'
     }
   },
   {
@@ -192,7 +198,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/public/LegalDocumentView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Legal Document'
+      title: 'Legal Document',
+      titleKey: 'legalDocument.title'
     }
   },
 
@@ -703,7 +710,8 @@ const routes: RouteRecordRaw[] = [
     name: 'NotFound',
     component: () => import('@/views/NotFoundView.vue'),
     meta: {
-      title: '404 Not Found'
+      title: '404 Not Found',
+      titleKey: 'errors.pageNotFound'
     }
   }
 ]
