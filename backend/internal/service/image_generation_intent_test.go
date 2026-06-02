@@ -199,17 +199,20 @@ func TestOpenAIImageOutputCounterCountsMultilineSSEBodyPayload(t *testing.T) {
 	require.Equal(t, 1, counter.Count())
 }
 
-func TestOpenAIImageGenerationIntentFallbackMinimumBillableCount(t *testing.T) {
+func TestOpenAIImageOutputTokensFallbackMinimumBillableCount(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}],"tool_choice":{"type":"image_generation"}}`)
 	require.True(t, IsImageGenerationIntent(openAIResponsesEndpoint, "gpt-5.4", body))
 
 	result := &OpenAIForwardResult{
-		Model:      "gpt-5.4",
+		Model: "gpt-5.4",
+		Usage: OpenAIUsage{
+			ImageOutputTokens: 42,
+		},
 		ImageCount: 0,
 	}
-	if IsImageGenerationIntent(openAIResponsesEndpoint, result.Model, body) && result.ImageCount <= 0 {
+	if result.ImageCount <= 0 && result.Usage.ImageOutputTokens > 0 {
 		result.ImageCount = 1
 	}
 	require.Equal(t, 1, result.ImageCount)
