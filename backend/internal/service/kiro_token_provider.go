@@ -66,8 +66,9 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 		}
 	}
 
+	accessToken := strings.TrimSpace(account.GetCredential("access_token"))
 	expiresAt := account.GetCredentialAsTime("expires_at")
-	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= kiroTokenRefreshSkew
+	needsRefresh := accessToken == "" || expiresAt == nil || time.Until(*expiresAt) <= kiroTokenRefreshSkew
 
 	if needsRefresh && p.refreshAPI != nil && p.executor != nil {
 		result, err := p.refreshAPI.RefreshIfNeeded(ctx, account, p.executor, kiroTokenRefreshSkew)
@@ -92,8 +93,11 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 		}
 	}
 
-	accessToken := account.GetCredential("access_token")
+	accessToken = account.GetCredential("access_token")
 	if strings.TrimSpace(accessToken) == "" {
+		if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+			return "", errors.New("kiro access_token and refresh_token missing in credentials; reauthorize Kiro account")
+		}
 		return "", errors.New("access_token not found in credentials")
 	}
 

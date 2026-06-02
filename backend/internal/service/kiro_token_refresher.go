@@ -2,16 +2,17 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
 const kiroRefreshWindow = 15 * time.Minute
 
 type KiroTokenRefresher struct {
-	kiroOAuthService *KiroOAuthService
+	kiroOAuthService kiroAccountTokenRefresher
 }
 
-func NewKiroTokenRefresher(kiroOAuthService *KiroOAuthService) *KiroTokenRefresher {
+func NewKiroTokenRefresher(kiroOAuthService kiroAccountTokenRefresher) *KiroTokenRefresher {
 	return &KiroTokenRefresher{
 		kiroOAuthService: kiroOAuthService,
 	}
@@ -28,6 +29,9 @@ func (r *KiroTokenRefresher) CanRefresh(account *Account) bool {
 func (r *KiroTokenRefresher) NeedsRefresh(account *Account, _ time.Duration) bool {
 	if !r.CanRefresh(account) {
 		return false
+	}
+	if strings.TrimSpace(account.GetCredential("access_token")) == "" && strings.TrimSpace(account.GetCredential("refresh_token")) != "" {
+		return true
 	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {

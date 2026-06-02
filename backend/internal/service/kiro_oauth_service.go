@@ -276,6 +276,9 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 	if authMethod == "" {
 		authMethod = "social"
 	}
+	if strings.TrimSpace(input.RefreshToken) == "" {
+		return nil, fmt.Errorf("kiro refresh_token is empty; reauthorize Kiro account")
+	}
 
 	var token *kiropkg.TokenData
 	var err error

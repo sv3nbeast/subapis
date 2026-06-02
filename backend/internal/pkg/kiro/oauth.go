@@ -134,6 +134,28 @@ type socialTokenResponse struct {
 	ExpiresIn    int    `json:"expiresIn"`
 }
 
+func (r *socialTokenResponse) UnmarshalJSON(data []byte) error {
+	type tokenResponseFields struct {
+		AccessToken       string `json:"accessToken"`
+		AccessTokenSnake  string `json:"access_token"`
+		RefreshToken      string `json:"refreshToken"`
+		RefreshTokenSnake string `json:"refresh_token"`
+		ProfileArn        string `json:"profileArn"`
+		ProfileArnSnake   string `json:"profile_arn"`
+		ExpiresIn         int    `json:"expiresIn"`
+		ExpiresInSnake    int    `json:"expires_in"`
+	}
+	var fields tokenResponseFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	r.AccessToken = firstNonEmpty(fields.AccessToken, fields.AccessTokenSnake)
+	r.RefreshToken = firstNonEmpty(fields.RefreshToken, fields.RefreshTokenSnake)
+	r.ProfileArn = firstNonEmpty(fields.ProfileArn, fields.ProfileArnSnake)
+	r.ExpiresIn = firstPositive(fields.ExpiresIn, fields.ExpiresInSnake)
+	return nil
+}
+
 type registerClientResponse struct {
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
@@ -153,6 +175,28 @@ type createTokenResponse struct {
 	RefreshToken string `json:"refreshToken"`
 	ProfileArn   string `json:"profileArn"`
 	ExpiresIn    int    `json:"expiresIn"`
+}
+
+func (r *createTokenResponse) UnmarshalJSON(data []byte) error {
+	type tokenResponseFields struct {
+		AccessToken       string `json:"accessToken"`
+		AccessTokenSnake  string `json:"access_token"`
+		RefreshToken      string `json:"refreshToken"`
+		RefreshTokenSnake string `json:"refresh_token"`
+		ProfileArn        string `json:"profileArn"`
+		ProfileArnSnake   string `json:"profile_arn"`
+		ExpiresIn         int    `json:"expiresIn"`
+		ExpiresInSnake    int    `json:"expires_in"`
+	}
+	var fields tokenResponseFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	r.AccessToken = firstNonEmpty(fields.AccessToken, fields.AccessTokenSnake)
+	r.RefreshToken = firstNonEmpty(fields.RefreshToken, fields.RefreshTokenSnake)
+	r.ProfileArn = firstNonEmpty(fields.ProfileArn, fields.ProfileArnSnake)
+	r.ExpiresIn = firstPositive(fields.ExpiresIn, fields.ExpiresInSnake)
+	return nil
 }
 
 type userInfoResponse struct {
@@ -193,6 +237,24 @@ func (e *RefreshTokenInvalidError) Error() string {
 
 func GenerateSessionID() string {
 	return uuid.NewString()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func GenerateState() (string, error) {
@@ -453,6 +515,12 @@ func buildIDCTokenData(ctx context.Context, proxyURL string, resp *createTokenRe
 	if resp == nil {
 		return nil, fmt.Errorf("kiro idc token response is empty")
 	}
+	if strings.TrimSpace(resp.AccessToken) == "" {
+		return nil, fmt.Errorf("kiro idc token response missing access token")
+	}
+	if strings.TrimSpace(resp.RefreshToken) == "" {
+		return nil, fmt.Errorf("kiro idc token response missing refresh token")
+	}
 	expiresIn := resp.ExpiresIn
 	if expiresIn <= 0 {
 		expiresIn = 3600
@@ -488,6 +556,9 @@ func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refr
 	headers := oidcHeaders(accountKey, BuildMachineID(refreshToken, "", accountKey))
 	if err := doJSON(ctx, proxyURL, http.MethodPost, getOIDCEndpoint(region)+"/token", payload, &resp, headers); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(resp.AccessToken) == "" {
+		return nil, fmt.Errorf("kiro idc token response missing access token")
 	}
 	expiresIn := resp.ExpiresIn
 	if expiresIn <= 0 {

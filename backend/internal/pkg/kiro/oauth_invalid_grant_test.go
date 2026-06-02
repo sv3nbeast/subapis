@@ -184,6 +184,56 @@ func TestExchangeIDCDeviceCodePreservesProfileArn(t *testing.T) {
 	require.Equal(t, "kiro@example.com", token.Email)
 }
 
+func TestExchangeIDCDeviceCodeAcceptsSnakeCaseTokenResponse(t *testing.T) {
+	const profileArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/SNAKE"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"access-token","refresh_token":"refresh-token","profile_arn":"` + profileArn + `","expires_in":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := ExchangeIDCDeviceCode(context.Background(), "", "client-id", "client-secret", "device-code", "us-east-1", BuilderIDStartURL)
+	require.NoError(t, err)
+	require.Equal(t, "access-token", token.AccessToken)
+	require.Equal(t, "refresh-token", token.RefreshToken)
+	require.Equal(t, profileArn, token.ProfileArn)
+	require.Equal(t, "kiro@example.com", token.Email)
+}
+
+func TestExchangeIDCDeviceCodeRejectsMissingTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"expires_in":3600}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := ExchangeIDCDeviceCode(context.Background(), "", "client-id", "client-secret", "device-code", "us-east-1", BuilderIDStartURL)
+	require.Error(t, err)
+	require.Nil(t, token)
+	require.Contains(t, err.Error(), "missing access token")
+}
+
 func TestExchangeIDCAuthCodeUnwrapsJWTPlaintextCode(t *testing.T) {
 	const wrappedCode = "eyJraWQiOiJrZXktMTU2NDAyODA3OCIsImFsZyI6IkhTMzg0In0.eyJwbGFpbnRleHQiOiJaZ3pVWC1xbXhaQ09vRWl2QThTYmI1am81cGR4bk1tZmdWekYyNnhoRUhnIiwiZXhwIjoxNzgwMzk5NTQ5LCJ0eXBlIjoiYXV0aENvZGUifQ.Uj7PTQ4lvIu8IEy9Jdgv8Ipoifsu8CA5qu5Xp35CSMBhIwdrrshIY33InFh8eSX4"
 	const plaintextCode = "ZgzUX-qmxZCOoEivA8Sbb5jo5pdxnMmfgVzF26xhEHg"
@@ -239,6 +289,60 @@ func TestRefreshIDCTokenPreservesProfileArn(t *testing.T) {
 	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", BuilderIDStartURL)
 	require.NoError(t, err)
 	require.Equal(t, profileArn, token.ProfileArn)
+	require.Equal(t, "kiro@example.com", token.Email)
+}
+
+func TestRefreshIDCTokenAcceptsSnakeCaseTokenResponse(t *testing.T) {
+	const profileArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/REFRESH-SNAKE"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","profile_arn":"` + profileArn + `","expires_in":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", BuilderIDStartURL)
+	require.NoError(t, err)
+	require.Equal(t, "new-access", token.AccessToken)
+	require.Equal(t, "new-refresh", token.RefreshToken)
+	require.Equal(t, profileArn, token.ProfileArn)
+	require.Equal(t, "kiro@example.com", token.Email)
+}
+
+func TestRefreshIDCTokenAllowsMissingRefreshToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"new-access","expires_in":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "old-refresh-token", "us-east-1", BuilderIDStartURL)
+	require.NoError(t, err)
+	require.Equal(t, "new-access", token.AccessToken)
+	require.Empty(t, token.RefreshToken)
 	require.Equal(t, "kiro@example.com", token.Email)
 }
 
