@@ -3910,6 +3910,9 @@ const canExchangeCode = computed(() => {
     return authCode.trim() && antigravityOAuth.sessionId.value && !antigravityOAuth.loading.value
   }
   if (form.platform === 'kiro') {
+    if (kiroAccountType.value === 'idc') {
+      return kiroOAuth.sessionId.value && !kiroOAuth.loading.value
+    }
     return authCode.trim() && kiroOAuth.sessionId.value && !kiroOAuth.loading.value
   }
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
@@ -5688,7 +5691,8 @@ const getKiroOAuthErrorMessage = (error: any) =>
   t('admin.accounts.oauth.authFailed')
 
 const handleKiroExchange = async (authCode: string) => {
-  if (!authCode.trim() || !kiroOAuth.sessionId.value) return
+  if (!kiroOAuth.sessionId.value) return
+  if (!authCode.trim() && kiroAccountType.value !== 'idc') return
 
   const loginOption = (oauthFlowRef.value?.oauthLoginOption || '').trim().toLowerCase()
   if (loginOption === 'awsidc') {

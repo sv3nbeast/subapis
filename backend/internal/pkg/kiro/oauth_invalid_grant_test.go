@@ -99,6 +99,91 @@ func TestExchangeIDCAuthCodePreservesProfileArn(t *testing.T) {
 	require.Equal(t, "kiro@example.com", token.Email)
 }
 
+func TestRegisterIDCClientIncludesDeviceCodeGrant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/client/register", r.URL.Path)
+		var payload map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Contains(t, payload["grantTypes"], "urn:ietf:params:oauth:grant-type:device_code")
+		require.Contains(t, payload["grantTypes"], "authorization_code")
+		require.Contains(t, payload["grantTypes"], "refresh_token")
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"clientId":"client-id","clientSecret":"client-secret"}`))
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	reg, err := RegisterIDCClient(context.Background(), "", "http://127.0.0.1:9876/oauth/callback", BuilderIDStartURL, "us-east-1")
+	require.NoError(t, err)
+	require.Equal(t, "client-id", reg.ClientID)
+}
+
+func TestStartIDCDeviceAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/device_authorization", r.URL.Path)
+		var payload map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Equal(t, map[string]string{
+			"clientId":     "client-id",
+			"clientSecret": "client-secret",
+			"startUrl":     BuilderIDStartURL,
+		}, payload)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"deviceCode":"device-code","userCode":"ABCD-EFGH","verificationUri":"https://device.sso.us-east-1.amazonaws.com/","verificationUriComplete":"https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH","expiresIn":600,"interval":5}`))
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	device, err := StartIDCDeviceAuthorization(context.Background(), "", "client-id", "client-secret", BuilderIDStartURL, "us-east-1")
+	require.NoError(t, err)
+	require.Equal(t, "device-code", device.DeviceCode)
+	require.Equal(t, "ABCD-EFGH", device.UserCode)
+	require.Equal(t, "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH", device.VerificationURIComplete)
+}
+
+func TestExchangeIDCDeviceCodePreservesProfileArn(t *testing.T) {
+	const profileArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/DEVICE"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			var payload map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, map[string]string{
+				"clientId":     "client-id",
+				"clientSecret": "client-secret",
+				"deviceCode":   "device-code",
+				"grantType":    "urn:ietf:params:oauth:grant-type:device_code",
+			}, payload)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accessToken":"access-token","refreshToken":"refresh-token","profileArn":"` + profileArn + `","expiresIn":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := ExchangeIDCDeviceCode(context.Background(), "", "client-id", "client-secret", "device-code", "us-east-1", BuilderIDStartURL)
+	require.NoError(t, err)
+	require.Equal(t, profileArn, token.ProfileArn)
+	require.Equal(t, "kiro@example.com", token.Email)
+}
+
 func TestExchangeIDCAuthCodeUnwrapsJWTPlaintextCode(t *testing.T) {
 	const wrappedCode = "eyJraWQiOiJrZXktMTU2NDAyODA3OCIsImFsZyI6IkhTMzg0In0.eyJwbGFpbnRleHQiOiJaZ3pVWC1xbXhaQ09vRWl2QThTYmI1am81cGR4bk1tZmdWekYyNnhoRUhnIiwiZXhwIjoxNzgwMzk5NTQ5LCJ0eXBlIjoiYXV0aENvZGUifQ.Uj7PTQ4lvIu8IEy9Jdgv8Ipoifsu8CA5qu5Xp35CSMBhIwdrrshIY33InFh8eSX4"
 	const plaintextCode = "ZgzUX-qmxZCOoEivA8Sbb5jo5pdxnMmfgVzF26xhEHg"

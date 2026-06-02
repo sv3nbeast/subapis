@@ -38,12 +38,17 @@ type KiroAuthURLResult struct {
 }
 
 type KiroIDCAuthURLResult struct {
-	AuthURL   string `json:"auth_url"`
-	SessionID string `json:"session_id"`
-	State     string `json:"state"`
-	ClientID  string `json:"client_id"`
-	Region    string `json:"region"`
-	StartURL  string `json:"start_url"`
+	AuthURL                 string `json:"auth_url"`
+	SessionID               string `json:"session_id"`
+	State                   string `json:"state"`
+	ClientID                string `json:"client_id"`
+	Region                  string `json:"region"`
+	StartURL                string `json:"start_url"`
+	UserCode                string `json:"user_code,omitempty"`
+	VerificationURI         string `json:"verification_uri,omitempty"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	ExpiresIn               int    `json:"expires_in,omitempty"`
+	Interval                int    `json:"interval,omitempty"`
 }
 
 type KiroTokenInfo struct {
@@ -170,13 +175,19 @@ func (s *KiroOAuthService) ExchangeCode(ctx context.Context, input *KiroExchange
 		s.sessionStore.Delete(input.SessionID)
 		return toKiroTokenInfo(token), nil
 	case "idc":
-		if strings.TrimSpace(input.Code) == "" {
-			return nil, fmt.Errorf("authorization code is empty")
+		var token *kiropkg.TokenData
+		var err error
+		if strings.TrimSpace(session.DeviceCode) != "" {
+			token, err = kiropkg.ExchangeIDCDeviceCode(ctx, proxyURL, session.ClientID, session.ClientSecret, session.DeviceCode, session.Region, session.StartURL)
+		} else {
+			if strings.TrimSpace(input.Code) == "" {
+				return nil, fmt.Errorf("authorization code is empty")
+			}
+			if err := kiropkg.ValidateAuthCodeNotExpired(input.Code, time.Now()); err != nil {
+				return nil, err
+			}
+			token, err = kiropkg.ExchangeIDCAuthCode(ctx, proxyURL, session.ClientID, session.ClientSecret, input.Code, session.CodeVerifier, session.RedirectURI, session.Region, session.StartURL)
 		}
-		if err := kiropkg.ValidateAuthCodeNotExpired(input.Code, time.Now()); err != nil {
-			return nil, err
-		}
-		token, err := kiropkg.ExchangeIDCAuthCode(ctx, proxyURL, session.ClientID, session.ClientSecret, input.Code, session.CodeVerifier, session.RedirectURI, session.Region, session.StartURL)
 		if err != nil {
 			return nil, err
 		}
@@ -222,10 +233,15 @@ func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGe
 	if err != nil {
 		return nil, err
 	}
+	device, err := kiropkg.StartIDCDeviceAuthorization(ctx, proxyURL, reg.ClientID, reg.ClientSecret, startURL, region)
+	if err != nil {
+		return nil, err
+	}
 	sessionID := kiropkg.GenerateSessionID()
 	s.sessionStore.Set(sessionID, &kiropkg.AuthSession{
 		State:        state,
 		CodeVerifier: codeVerifier,
+		DeviceCode:   device.DeviceCode,
 		ProxyURL:     proxyURL,
 		CreatedAt:    time.Now(),
 		AuthType:     "idc",
@@ -235,13 +251,22 @@ func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGe
 		Region:       region,
 		StartURL:     startURL,
 	})
+	authURL := strings.TrimSpace(device.VerificationURIComplete)
+	if authURL == "" {
+		authURL = strings.TrimSpace(device.VerificationURI)
+	}
 	return &KiroIDCAuthURLResult{
-		AuthURL:   kiropkg.BuildIDCAuthURL(reg.ClientID, kiroIDCRedirectURI, state, kiropkg.GenerateCodeChallenge(codeVerifier), region),
-		SessionID: sessionID,
-		State:     state,
-		ClientID:  reg.ClientID,
-		Region:    region,
-		StartURL:  startURL,
+		AuthURL:                 authURL,
+		SessionID:               sessionID,
+		State:                   state,
+		ClientID:                reg.ClientID,
+		Region:                  region,
+		StartURL:                startURL,
+		UserCode:                device.UserCode,
+		VerificationURI:         device.VerificationURI,
+		VerificationURIComplete: device.VerificationURIComplete,
+		ExpiresIn:               device.ExpiresIn,
+		Interval:                device.Interval,
 	}, nil
 }
 

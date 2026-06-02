@@ -4,6 +4,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -86,4 +89,87 @@ func TestKiroOAuthService_ExchangeCodeRejectsEmptyCode(t *testing.T) {
 		State:     "expected-state",
 	})
 	require.EqualError(t, err, "authorization code is empty")
+}
+
+func TestKiroOAuthService_GenerateIDCAuthURLUsesDeviceAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/client/register":
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Contains(t, payload["grantTypes"], "urn:ietf:params:oauth:grant-type:device_code")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"clientId":"client-id","clientSecret":"client-secret"}`))
+		case "/device_authorization":
+			var payload map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, "client-id", payload["clientId"])
+			require.Equal(t, "https://d-example.awsapps.com/start", payload["startUrl"])
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"deviceCode":"device-code","userCode":"ABCD-EFGH","verificationUri":"https://device.example/","verificationUriComplete":"https://device.example/?user_code=ABCD-EFGH","expiresIn":600,"interval":5}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := kiropkg.SetOIDCEndpointOverrideForTest(server.URL)
+	t.Cleanup(func() { kiropkg.SetOIDCEndpointOverrideForTest(previous) })
+
+	svc := NewKiroOAuthService(nil)
+	result, err := svc.GenerateIDCAuthURL(context.Background(), &KiroGenerateIDCAuthURLInput{
+		StartURL: "https://d-example.awsapps.com/start",
+		Region:   "us-east-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://device.example/?user_code=ABCD-EFGH", result.AuthURL)
+	require.Equal(t, "ABCD-EFGH", result.UserCode)
+	require.Equal(t, 600, result.ExpiresIn)
+
+	session, ok := svc.sessionStore.Get(result.SessionID)
+	require.True(t, ok)
+	require.Equal(t, "device-code", session.DeviceCode)
+}
+
+func TestKiroOAuthService_ExchangeCodeUsesDeviceCodeWhenPresent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			var payload map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, "device-code", payload["deviceCode"])
+			require.Equal(t, "urn:ietf:params:oauth:grant-type:device_code", payload["grantType"])
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accessToken":"access-token","refreshToken":"refresh-token","expiresIn":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := kiropkg.SetOIDCEndpointOverrideForTest(server.URL)
+	t.Cleanup(func() { kiropkg.SetOIDCEndpointOverrideForTest(previous) })
+
+	svc := NewKiroOAuthService(nil)
+	svc.sessionStore.Set("idc-session", &kiropkg.AuthSession{
+		State:        "expected-state",
+		DeviceCode:   "device-code",
+		CreatedAt:    time.Now(),
+		AuthType:     "idc",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		Region:       "us-east-1",
+		StartURL:     "https://d-example.awsapps.com/start",
+	})
+
+	token, err := svc.ExchangeCode(context.Background(), &KiroExchangeCodeInput{
+		SessionID: "idc-session",
+		State:     "expected-state",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "access-token", token.AccessToken)
+	require.Equal(t, "kiro@example.com", token.Email)
 }

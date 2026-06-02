@@ -4248,12 +4248,12 @@ export default {
           step1GenerateUrl: 'Generate the authorization URL',
           generateAuthUrl: 'Generate Auth URL',
           step2OpenUrl: 'Open the URL in your browser and complete authorization',
-          openUrlDesc: 'Open the authorization URL in a new tab. If it returns an AWS IDC callback, paste that callback URL here first and then open the newly generated IDC URL.',
-          step3EnterCode: 'Enter Callback URL or Code',
-          authCodeDesc: 'Paste the callback URL after authorization, or paste only the code parameter value.',
+          openUrlDesc: 'Open the authorization URL in a new tab and finish sign-in. In AWS IDC mode, return here and click Complete Authorization after the browser authorization succeeds.',
+          step3EnterCode: 'Complete Authorization',
+          authCodeDesc: 'For normal Kiro sign-in, paste the callback URL or code. In AWS IDC mode, leave this empty and click Complete Authorization after browser authorization succeeds.',
           authCode: 'Callback URL or Code',
-          authCodePlaceholder: 'Option 1: Paste the complete callback URL\nOption 2: Paste only the code parameter value',
-          authCodeHint: 'The system auto-extracts code/state. AWS IDC continuation callbacks will generate the next IDC authorization URL.',
+          authCodePlaceholder: 'Normal Kiro sign-in: paste callback URL or code\nAWS IDC: leave empty, authorize in browser, then click Complete Authorization',
+          authCodeHint: 'Normal sign-in auto-extracts code/state. AWS IDC uses device authorization and does not need a local callback URL.',
           authModeTitle: 'Authorization Mode',
           oauthTitle: 'Kiro Sign-in',
           oauthSubtitle: 'Google/GitHub sign-in; may continue to AWS IDC',
@@ -4279,7 +4279,7 @@ export default {
           missingState: 'The callback is missing state. Paste the full callback URL, or regenerate the authorization URL and retry.',
           stateMismatch: 'The callback state does not match the current authorization session. Use the latest generated authorization URL and paste the latest callback URL.',
           missingIDCContinuation: 'This Kiro callback is missing issuer_url; regenerate the authorization URL and retry.',
-          idcContinuationReady: 'AWS IDC continuation detected. Open the newly generated IDC authorization URL, then paste the final callback URL.'
+          idcContinuationReady: 'Switched to AWS IDC device authorization. Open the newly generated authorization URL, finish sign-in, then click Complete Authorization.'
         }
                 },      // Gemini specific (platform-wide)
       gemini: {

@@ -10,6 +10,11 @@ export interface KiroIDCAuthUrlResponse extends KiroAuthUrlResponse {
   client_id?: string
   region?: string
   start_url?: string
+  user_code?: string
+  verification_uri?: string
+  verification_uri_complete?: string
+  expires_in?: number
+  interval?: number
 }
 
 export interface KiroTokenInfo {

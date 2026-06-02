@@ -44,6 +44,7 @@ const (
 type AuthSession struct {
 	State        string
 	CodeVerifier string
+	DeviceCode   string
 	ProxyURL     string
 	CreatedAt    time.Time
 	AuthType     string
@@ -136,6 +137,15 @@ type socialTokenResponse struct {
 type registerClientResponse struct {
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
+}
+
+type deviceAuthorizationResponse struct {
+	DeviceCode              string `json:"deviceCode"`
+	UserCode                string `json:"userCode"`
+	VerificationURI         string `json:"verificationUri"`
+	VerificationURIComplete string `json:"verificationUriComplete"`
+	ExpiresIn               int    `json:"expiresIn"`
+	Interval                int    `json:"interval"`
 }
 
 type createTokenResponse struct {
@@ -347,13 +357,31 @@ func RegisterIDCClient(ctx context.Context, proxyURL, redirectURI, issuerURL, re
 		"clientName":   "Kiro IDE",
 		"clientType":   "public",
 		"scopes":       []string{"codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations", "codewhisperer:transformations", "codewhisperer:taskassist"},
-		"grantTypes":   []string{"authorization_code", "refresh_token"},
+		"grantTypes":   []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"},
 		"redirectUris": []string{redirectURI},
 		"issuerUrl":    issuerURL,
 	}
 	var resp registerClientResponse
 	headers := oidcHeaders("", BuildMachineID("", "", "register-idc-client"))
 	if err := doJSON(ctx, proxyURL, http.MethodPost, getOIDCEndpoint(region)+"/client/register", payload, &resp, headers); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func StartIDCDeviceAuthorization(ctx context.Context, proxyURL, clientID, clientSecret, startURL, region string) (*deviceAuthorizationResponse, error) {
+	if region == "" {
+		region = defaultIDCRegion
+	}
+	payload := map[string]string{
+		"clientId":     clientID,
+		"clientSecret": clientSecret,
+		"startUrl":     startURL,
+	}
+	var resp deviceAuthorizationResponse
+	accountKey := BuildAccountKey(clientID, "", "", "", 0)
+	headers := oidcHeaders(accountKey, BuildMachineID("", "", "clientID:"+clientID))
+	if err := doJSON(ctx, proxyURL, http.MethodPost, getOIDCEndpoint(region)+"/device_authorization", payload, &resp, headers); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -380,6 +408,25 @@ func BuildIDCAuthURL(clientID, redirectURI, state, codeChallenge, region string)
 	return fmt.Sprintf("%s/authorize?%s", getOIDCEndpoint(region), params.Encode())
 }
 
+func ExchangeIDCDeviceCode(ctx context.Context, proxyURL, clientID, clientSecret, deviceCode, region, startURL string) (*TokenData, error) {
+	if region == "" {
+		region = defaultIDCRegion
+	}
+	payload := map[string]string{
+		"clientId":     clientID,
+		"clientSecret": clientSecret,
+		"deviceCode":   strings.TrimSpace(deviceCode),
+		"grantType":    "urn:ietf:params:oauth:grant-type:device_code",
+	}
+	var resp createTokenResponse
+	accountKey := BuildAccountKey(clientID, "", "", "", 0)
+	headers := oidcHeaders(accountKey, BuildMachineID("", "", "clientID:"+clientID))
+	if err := doJSON(ctx, proxyURL, http.MethodPost, getOIDCEndpoint(region)+"/token", payload, &resp, headers); err != nil {
+		return nil, err
+	}
+	return buildIDCTokenData(ctx, proxyURL, &resp, clientID, clientSecret, region, startURL)
+}
+
 func ExchangeIDCAuthCode(ctx context.Context, proxyURL, clientID, clientSecret, code, codeVerifier, redirectURI, region, startURL string) (*TokenData, error) {
 	if region == "" {
 		region = defaultIDCRegion
@@ -398,6 +445,13 @@ func ExchangeIDCAuthCode(ctx context.Context, proxyURL, clientID, clientSecret, 
 	headers := oidcHeaders(accountKey, BuildMachineID("", "", "clientID:"+clientID))
 	if err := doJSON(ctx, proxyURL, http.MethodPost, getOIDCEndpoint(region)+"/token", payload, &resp, headers); err != nil {
 		return nil, err
+	}
+	return buildIDCTokenData(ctx, proxyURL, &resp, clientID, clientSecret, region, startURL)
+}
+
+func buildIDCTokenData(ctx context.Context, proxyURL string, resp *createTokenResponse, clientID, clientSecret, region, startURL string) (*TokenData, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("kiro idc token response is empty")
 	}
 	expiresIn := resp.ExpiresIn
 	if expiresIn <= 0 {

@@ -4415,12 +4415,12 @@ export default {
           step1GenerateUrl: '生成授权链接',
           generateAuthUrl: '生成授权链接',
           step2OpenUrl: '在浏览器中打开链接并完成授权',
-          openUrlDesc: '请在新标签页打开授权链接。如果返回 AWS IDC 回调链接，先把该回调链接粘贴到这里，系统会生成下一步 IDC 授权链接。',
-          step3EnterCode: '输入回调链接或 Code',
-          authCodeDesc: '授权完成后，粘贴浏览器跳转后的回调链接，或仅粘贴 code 参数值。',
+          openUrlDesc: '请在新标签页打开授权链接并完成登录。AWS IDC 模式完成登录后，回到本页面直接点击完成授权。',
+          step3EnterCode: '完成授权',
+          authCodeDesc: '普通 Kiro 登录可粘贴回调链接或 code。AWS IDC 模式无需粘贴 code，完成浏览器授权后直接点击完成授权。',
           authCode: '回调链接或 Code',
-          authCodePlaceholder: '方式1：粘贴完整回调链接\n方式2：仅粘贴 code 参数值',
-          authCodeHint: '系统会自动解析 code/state；AWS IDC 中间回调会自动生成下一步 IDC 授权链接。',
+          authCodePlaceholder: '普通 Kiro 登录：粘贴完整回调链接或 code\nAWS IDC：留空，完成浏览器授权后直接点击完成授权',
+          authCodeHint: '普通登录会自动解析 code/state；AWS IDC 使用设备授权，无需复制本地回调链接。',
           authModeTitle: '授权模式',
           oauthTitle: 'Kiro 登录',
           oauthSubtitle: 'Google/GitHub 登录，可能继续跳转 AWS IDC',
@@ -4446,7 +4446,7 @@ export default {
           missingState: '回调缺少 state，请粘贴完整回调链接，或重新生成授权链接后重试。',
           stateMismatch: '回调 state 与当前授权会话不一致，请使用刚生成的授权链接完成登录，并粘贴最新回调链接。',
           missingIDCContinuation: '这个 Kiro 回调缺少 issuer_url，请重新生成授权链接后重试。',
-          idcContinuationReady: '已识别 AWS IDC 中间回调。请打开新生成的 IDC 授权链接，完成后再粘贴最终回调链接。'
+          idcContinuationReady: '已切换到 AWS IDC 设备授权。请打开新生成的授权链接，完成登录后直接点击完成授权。'
         }
       },
       // Gemini specific (platform-wide)
