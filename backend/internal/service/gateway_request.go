@@ -49,6 +49,7 @@ type SessionContext struct {
 	ClientIP  string
 	UserAgent string
 	APIKeyID  int64
+	UserID    int64
 }
 
 // ParsedRequest 保存网关请求的预解析结果
@@ -78,10 +79,31 @@ type ParsedRequest struct {
 
 	// GroupID 请求所属分组 ID（来自 API Key）
 	GroupID *int64
+	Group   *Group
 
 	// OnUpstreamAccepted 上游接受请求后立即调用（用于提前释放串行锁）
 	// 流式请求在收到 2xx 响应头后调用，避免持锁等流完成
 	OnUpstreamAccepted func()
+}
+
+func (p *ParsedRequest) CloneForBody(body []byte) (*ParsedRequest, error) {
+	if p == nil {
+		return nil, fmt.Errorf("empty request")
+	}
+	clone := *p
+	clone.Body = append([]byte(nil), body...)
+	if parsed, err := ParseGatewayRequest(clone.Body, domain.PlatformAnthropic); err == nil && parsed != nil {
+		clone.Model = parsed.Model
+		clone.Stream = parsed.Stream
+		clone.MetadataUserID = parsed.MetadataUserID
+		clone.System = parsed.System
+		clone.Messages = parsed.Messages
+		clone.HasSystem = parsed.HasSystem
+		clone.ThinkingEnabled = parsed.ThinkingEnabled
+		clone.OutputEffort = parsed.OutputEffort
+		clone.MaxTokens = parsed.MaxTokens
+	}
+	return &clone, nil
 }
 
 // NormalizeSessionUserAgent reduces UA noise for sticky-session and digest hashing.

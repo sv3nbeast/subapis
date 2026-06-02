@@ -29,7 +29,8 @@ export type DefaultPlatformQuotaPlatform =
   | "anthropic"
   | "openai"
   | "gemini"
-  | "antigravity";
+  | "antigravity"
+  | "kiro";
 export type DefaultPlatformQuotaWindow = "daily" | "weekly" | "monthly";
 export type DefaultPlatformQuotaValue = number | null;
 export type DefaultPlatformQuotaSetting = Record<
@@ -89,6 +90,7 @@ export const DEFAULT_PLATFORM_QUOTA_PLATFORMS: DefaultPlatformQuotaPlatform[] = 
   "openai",
   "gemini",
   "antigravity",
+  "kiro",
 ];
 export const DEFAULT_PLATFORM_QUOTA_WINDOWS: DefaultPlatformQuotaWindow[] = [
   "daily",

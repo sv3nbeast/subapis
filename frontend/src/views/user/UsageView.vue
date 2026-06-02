@@ -928,22 +928,22 @@ const exportToCSV = async () => {
     }
 
     const headers = [
-      'Time',
-      'API Key Name',
-      'Model',
-      'Reasoning Effort',
-      'Inbound Endpoint',
-      'Type',
-      'Billing Mode',
-      'Input Tokens',
-      'Output Tokens',
-      'Cache Read Tokens',
-      'Cache Creation Tokens',
-      'Rate Multiplier',
-      'Billed Cost',
-      'Original Cost',
-      'First Token (ms)',
-      'Duration (ms)'
+      t('usage.time'),
+      t('usage.apiKeyFilter'),
+      t('usage.model'),
+      t('usage.reasoningEffort'),
+      t('usage.inboundEndpoint'),
+      t('usage.type'),
+      t('admin.usage.billingMode'),
+      t('admin.usage.inputTokens'),
+      t('admin.usage.outputTokens'),
+      t('admin.usage.cacheReadTokens'),
+      t('admin.usage.cacheCreationTokens'),
+      t('usage.rate'),
+      t('usage.userBilled'),
+      t('usage.original'),
+      `${t('usage.firstToken')} (ms)`,
+      `${t('usage.duration')} (ms)`
     ]
     const rows = allLogs.map((log) =>
       [

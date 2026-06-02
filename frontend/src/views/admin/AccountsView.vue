@@ -226,7 +226,14 @@
           <template #cell-platform_type="{ row }">
             <div class="flex min-w-0 flex-col gap-1">
               <div class="flex flex-wrap items-center gap-1">
-                <PlatformTypeBadge :platform="row.platform" :type="row.type" :plan-type="row.credentials?.plan_type" :privacy-mode="row.extra?.privacy_mode" :subscription-expires-at="row.credentials?.subscription_expires_at" />
+                <PlatformTypeBadge
+                  :platform="row.platform"
+                  :type="row.type"
+                  :plan-type="row.credentials?.plan_type"
+                  :overages-enabled="isKiroOveragesEnabled(row)"
+                  :privacy-mode="row.extra?.privacy_mode"
+                  :subscription-expires-at="row.credentials?.subscription_expires_at"
+                />
                 <span
                   v-if="getAntigravityTierLabel(row)"
                   :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
@@ -274,6 +281,7 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+              @kiro-usage-meta="handleKiroUsageMeta(row, $event)"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -411,7 +419,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
 
-const { t } = useI18n()
+const { t, te, locale } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
@@ -491,6 +499,34 @@ const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const hiddenColumns = reactive<Set<string>>(new Set())
 const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
+
+const accountColumnFallbacks = {
+  name: { zh: '名称', en: 'Name' },
+  platformType: { zh: '平台/类型', en: 'Platform / Type' },
+  capacity: { zh: '容量', en: 'Capacity' },
+  status: { zh: '状态', en: 'Status' },
+  schedulable: { zh: '可调度', en: 'Schedulable' },
+  todayStats: { zh: '今日统计', en: "Today's Stats" },
+  groups: { zh: '分组', en: 'Groups' },
+  usageWindows: { zh: '额度窗口', en: 'Usage Windows' },
+  proxy: { zh: '代理', en: 'Proxy' },
+  priority: { zh: '优先级', en: 'Priority' },
+  billingRateMultiplier: { zh: '账号倍率', en: 'Account Rate' },
+  lastUsed: { zh: '最后使用', en: 'Last Used' },
+  createdAt: { zh: '创建时间', en: 'Created At' },
+  expiresAt: { zh: '过期时间', en: 'Expires At' },
+  notes: { zh: '备注', en: 'Notes' },
+  actions: { zh: '操作', en: 'Actions' }
+} as const
+
+type AccountColumnFallbackKey = keyof typeof accountColumnFallbacks
+
+const accountColumnLabel = (key: AccountColumnFallbackKey) => {
+  const i18nKey = `admin.accounts.columns.${key}`
+  if (te(i18nKey)) return t(i18nKey)
+  const lang = String(locale.value || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  return accountColumnFallbacks[key][lang]
+}
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -865,10 +901,29 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.schedulable !== next.schedulable ||
     current.status !== next.status ||
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
-    current.overload_until !== next.overload_until ||
-    current.temp_unschedulable_until !== next.temp_unschedulable_until ||
-    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
-  )
+	    current.overload_until !== next.overload_until ||
+	    current.temp_unschedulable_until !== next.temp_unschedulable_until ||
+	    current.kiro_quota_state !== next.kiro_quota_state ||
+	    current.kiro_quota_reason !== next.kiro_quota_reason ||
+	    current.kiro_quota_reset_at !== next.kiro_quota_reset_at ||
+	    current.kiro_runtime_state !== next.kiro_runtime_state ||
+	    current.kiro_runtime_reason !== next.kiro_runtime_reason ||
+	    current.kiro_runtime_reset_at !== next.kiro_runtime_reset_at ||
+	    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
+	  )
+	}
+
+const isKiroOveragesEnabled = (account: Account) => {
+  return account.platform === 'kiro' && account.credentials?.kiro_overages_enabled === true
+}
+
+const handleKiroUsageMeta = (account: Account, meta: { plan_type?: string; kiro_overages_enabled: boolean }) => {
+  if (account.platform !== 'kiro') return
+  account.credentials = {
+    ...(account.credentials || {}),
+    ...(meta.plan_type ? { plan_type: meta.plan_type } : {}),
+    kiro_overages_enabled: meta.kiro_overages_enabled
+  }
 }
 
 const syncAccountRefs = (nextAccount: Account) => {
@@ -1102,26 +1157,26 @@ function getAntigravityTierClass(row: any): string {
 const allColumns = computed(() => {
   const c = [
     { key: 'select', label: '', sortable: false },
-    { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
-    { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
-    { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
-    { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
-    { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
-    { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
+    { key: 'name', label: accountColumnLabel('name'), sortable: true },
+    { key: 'platform_type', label: accountColumnLabel('platformType'), sortable: false },
+    { key: 'capacity', label: accountColumnLabel('capacity'), sortable: false },
+    { key: 'status', label: accountColumnLabel('status'), sortable: true },
+    { key: 'schedulable', label: accountColumnLabel('schedulable'), sortable: true },
+    { key: 'today_stats', label: accountColumnLabel('todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
-    c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
+    c.push({ key: 'groups', label: accountColumnLabel('groups'), sortable: false })
   }
   c.push(
-    { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
-    { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
-    { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
-    { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
-    { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
-    { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
-    { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
-    { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
-    { key: 'actions', label: t('admin.accounts.columns.actions'), sortable: false }
+    { key: 'usage', label: accountColumnLabel('usageWindows'), sortable: false },
+    { key: 'proxy', label: accountColumnLabel('proxy'), sortable: false },
+    { key: 'priority', label: accountColumnLabel('priority'), sortable: true },
+    { key: 'rate_multiplier', label: accountColumnLabel('billingRateMultiplier'), sortable: true },
+    { key: 'last_used_at', label: accountColumnLabel('lastUsed'), sortable: true },
+    { key: 'created_at', label: accountColumnLabel('createdAt'), sortable: true },
+    { key: 'expires_at', label: accountColumnLabel('expiresAt'), sortable: true },
+    { key: 'notes', label: accountColumnLabel('notes'), sortable: false },
+    { key: 'actions', label: accountColumnLabel('actions'), sortable: false }
   )
   return c
 })
@@ -1398,10 +1453,16 @@ const accountMatchesCurrentFilters = (account: Account) => {
   if (filters.platform && account.platform !== filters.platform) return false
   if (filters.type && account.type !== filters.type) return false
   if (filters.status) {
-    const now = Date.now()
-    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
-    const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
-    const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
+	    const now = Date.now()
+	    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
+	    const kiroRuntimeResetAt = account.kiro_runtime_reset_at ? new Date(account.kiro_runtime_reset_at).getTime() : Number.NaN
+	    const isKiroRuntimeLimited =
+	      account.platform === 'kiro' &&
+	      account.kiro_runtime_state === 'cooldown' &&
+	      Number.isFinite(kiroRuntimeResetAt) &&
+	      kiroRuntimeResetAt > now
+	    const isRateLimited = (Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) || isKiroRuntimeLimited
+	    const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
 
     if (filters.status === 'active') {
