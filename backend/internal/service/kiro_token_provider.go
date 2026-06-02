@@ -96,7 +96,9 @@ func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	accessToken = account.GetCredential("access_token")
 	if strings.TrimSpace(accessToken) == "" {
 		if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
-			return "", errors.New("kiro access_token and refresh_token missing in credentials; reauthorize Kiro account")
+			const reason = "kiro access_token and refresh_token missing in credentials; reauthorize Kiro account"
+			p.disableAccountMissingTokens(ctx, account, reason)
+			return "", errors.New(reason)
 		}
 		return "", errors.New("access_token not found in credentials")
 	}
@@ -222,4 +224,16 @@ func (p *KiroTokenProvider) cacheAccessToken(ctx context.Context, account *Accou
 		}
 	}
 	return p.tokenCache.SetAccessToken(ctx, KiroTokenCacheKey(account), accessToken, ttl)
+}
+
+func (p *KiroTokenProvider) disableAccountMissingTokens(ctx context.Context, account *Account, reason string) {
+	if p == nil || p.accountRepo == nil || account == nil {
+		return
+	}
+	if err := p.accountRepo.SetError(ctx, account.ID, reason); err != nil {
+		return
+	}
+	if p.tokenCache != nil {
+		_ = p.tokenCache.DeleteAccessToken(ctx, KiroTokenCacheKey(account))
+	}
 }

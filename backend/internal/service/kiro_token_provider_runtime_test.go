@@ -14,6 +14,9 @@ type kiroTokenProviderRuntimeRepo struct {
 	AccountRepository
 	account                *Account
 	updateCredentialsCalls int
+	setErrorCalls          int
+	setErrorID             int64
+	setErrorMsg            string
 }
 
 func (r *kiroTokenProviderRuntimeRepo) GetByID(_ context.Context, _ int64) (*Account, error) {
@@ -29,6 +32,13 @@ func (r *kiroTokenProviderRuntimeRepo) UpdateCredentials(_ context.Context, id i
 		r.account = &Account{ID: id}
 	}
 	r.account.Credentials = cloneCredentials(credentials)
+	return nil
+}
+
+func (r *kiroTokenProviderRuntimeRepo) SetError(_ context.Context, id int64, errorMsg string) error {
+	r.setErrorCalls++
+	r.setErrorID = id
+	r.setErrorMsg = errorMsg
 	return nil
 }
 
@@ -142,4 +152,7 @@ func TestKiroTokenProviderGetAccessTokenMissingTokensRequiresReauthRuntime(t *te
 	require.Empty(t, token)
 	require.Contains(t, err.Error(), "reauthorize Kiro account")
 	require.Equal(t, int32(0), atomic.LoadInt32(&refresher.refreshCalls))
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Equal(t, account.ID, repo.setErrorID)
+	require.Contains(t, repo.setErrorMsg, "reauthorize Kiro account")
 }
