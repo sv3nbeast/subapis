@@ -99,6 +99,38 @@ func TestExchangeIDCAuthCodePreservesProfileArn(t *testing.T) {
 	require.Equal(t, "kiro@example.com", token.Email)
 }
 
+func TestExchangeIDCAuthCodeUnwrapsJWTPlaintextCode(t *testing.T) {
+	const wrappedCode = "eyJraWQiOiJrZXktMTU2NDAyODA3OCIsImFsZyI6IkhTMzg0In0.eyJwbGFpbnRleHQiOiJaZ3pVWC1xbXhaQ09vRWl2QThTYmI1am81cGR4bk1tZmdWekYyNnhoRUhnIiwiZXhwIjoxNzgwMzk5NTQ5LCJ0eXBlIjoiYXV0aENvZGUifQ.Uj7PTQ4lvIu8IEy9Jdgv8Ipoifsu8CA5qu5Xp35CSMBhIwdrrshIY33InFh8eSX4"
+	const plaintextCode = "ZgzUX-qmxZCOoEivA8Sbb5jo5pdxnMmfgVzF26xhEHg"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			var payload map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, plaintextCode, payload["code"])
+			require.NotEqual(t, wrappedCode, payload["code"])
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accessToken":"access-token","refreshToken":"refresh-token","expiresIn":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := ExchangeIDCAuthCode(context.Background(), "", "client-id", "client-secret", wrappedCode, "verifier", "http://127.0.0.1:9876/oauth/callback", "us-east-1", BuilderIDStartURL)
+	require.NoError(t, err)
+	require.Equal(t, "kiro@example.com", token.Email)
+}
+
 func TestRefreshIDCTokenPreservesProfileArn(t *testing.T) {
 	const profileArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/REFRESH"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +163,10 @@ func TestValidateAuthCodeNotExpiredDetectsExpiredJWTLikeCode(t *testing.T) {
 	expiresAt, ok := ParseAuthCodeExpiry(code)
 	require.True(t, ok)
 	require.Equal(t, time.Date(2026, 6, 2, 3, 49, 48, 0, time.UTC), expiresAt.UTC())
+	plaintext, ok := ParseAuthCodePlaintext(code)
+	require.True(t, ok)
+	require.Equal(t, "5g_TJISDm42Px28XlQC6wqJAnfnzx88HGJSYqF_kPLA", plaintext)
+	require.Equal(t, plaintext, ResolveAuthCodeForTokenExchange(code))
 
 	err := ValidateAuthCodeNotExpired(code, expiresAt.Add(time.Second))
 	require.Error(t, err)

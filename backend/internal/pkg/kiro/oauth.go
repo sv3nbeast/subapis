@@ -217,22 +217,50 @@ func ValidateAuthCodeNotExpired(code string, now time.Time) error {
 	return nil
 }
 
+func ResolveAuthCodeForTokenExchange(code string) string {
+	plaintext, ok := ParseAuthCodePlaintext(code)
+	if ok && strings.TrimSpace(plaintext) != "" {
+		return plaintext
+	}
+	return strings.TrimSpace(code)
+}
+
 func ParseAuthCodeExpiry(code string) (time.Time, bool) {
-	parts := strings.Split(strings.TrimSpace(code), ".")
-	if len(parts) < 2 {
-		return time.Time{}, false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return time.Time{}, false
-	}
-	var parsed struct {
-		Exp int64 `json:"exp"`
-	}
-	if err := json.Unmarshal(payload, &parsed); err != nil || parsed.Exp <= 0 {
+	parsed, ok := parseAuthCodePayload(code)
+	if !ok || parsed.Exp <= 0 {
 		return time.Time{}, false
 	}
 	return time.Unix(parsed.Exp, 0), true
+}
+
+func ParseAuthCodePlaintext(code string) (string, bool) {
+	parsed, ok := parseAuthCodePayload(code)
+	if !ok || strings.TrimSpace(parsed.Plaintext) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(parsed.Plaintext), true
+}
+
+func parseAuthCodePayload(code string) (struct {
+	Plaintext string `json:"plaintext"`
+	Exp       int64  `json:"exp"`
+}, bool) {
+	var parsed struct {
+		Plaintext string `json:"plaintext"`
+		Exp       int64  `json:"exp"`
+	}
+	parts := strings.Split(strings.TrimSpace(code), ".")
+	if len(parts) < 2 {
+		return parsed, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return parsed, false
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return parsed, false
+	}
+	return parsed, true
 }
 
 func BuildSocialSignInURL(redirectURI, codeChallenge, state string) string {
@@ -356,10 +384,11 @@ func ExchangeIDCAuthCode(ctx context.Context, proxyURL, clientID, clientSecret, 
 	if region == "" {
 		region = defaultIDCRegion
 	}
+	exchangeCode := ResolveAuthCodeForTokenExchange(code)
 	payload := map[string]string{
 		"clientId":     clientID,
 		"clientSecret": clientSecret,
-		"code":         code,
+		"code":         exchangeCode,
 		"codeVerifier": codeVerifier,
 		"redirectUri":  redirectURI,
 		"grantType":    "authorization_code",
