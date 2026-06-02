@@ -115,7 +115,7 @@ const labelClass = computed(() => {
   }
 
   // 正常状态或无天数：根据平台显示主题色
-  if (props.platform === 'anthropic') {
+  if (props.platform === 'anthropic' || props.platform === 'kiro') {
     return `${base} bg-orange-200/60 text-orange-800 dark:bg-orange-800/40 dark:text-orange-300`
   }
   if (props.platform === 'openai') {
@@ -129,8 +129,8 @@ const labelClass = computed(() => {
 
 // Badge color based on platform and subscription type
 const badgeClass = computed(() => {
-  if (props.platform === 'anthropic') {
-    // Claude: orange theme
+  if (props.platform === 'anthropic' || props.platform === 'kiro') {
+    // Claude/Kiro: orange theme
     return isSubscription.value
       ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
       : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'

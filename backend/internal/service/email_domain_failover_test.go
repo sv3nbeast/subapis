@@ -41,7 +41,7 @@ func TestShouldPreferDifferentEmailDomainSuffixForFailover(t *testing.T) {
 
 	t.Run("antigravity 429 rate limit exceeded reason", func(t *testing.T) {
 		err := &UpstreamFailoverError{
-			StatusCode: 429,
+			StatusCode:   429,
 			ResponseBody: []byte(`{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"}]}}`),
 		}
 		require.True(t, ShouldPreferDifferentEmailDomainSuffixForFailover(PlatformAntigravity, err))

@@ -123,7 +123,7 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
   })
 
-  it('includes attribution header env in anthropic terminal config', () => {
+  it('includes Claude Code default model in anthropic settings config', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -143,9 +143,17 @@ describe('UseKeyModal', () => {
       }
     })
 
-    const codeBlock = wrapper.find('pre code')
-    expect(codeBlock.exists()).toBe(true)
-    expect(codeBlock.text()).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1')
-    expect(codeBlock.text()).toContain('CLAUDE_CODE_ATTRIBUTION_HEADER=0')
+    const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
+    const terminalConfig = codeBlocks.find((content) => content.includes('export ANTHROPIC_BASE_URL='))
+    const settingsConfig = codeBlocks.find((content) => content.includes('"ANTHROPIC_BASE_URL"'))
+
+    expect(terminalConfig).toBeDefined()
+    expect(terminalConfig).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1')
+    expect(terminalConfig).not.toContain('CLAUDE_CODE_EFFORT_LEVEL')
+    expect(terminalConfig).not.toContain('CLAUDE_CODE_ATTRIBUTION_HEADER=0')
+
+    expect(settingsConfig).toBeDefined()
+    expect(settingsConfig).toContain('//, "model": "claude-opus-4-7" // 修改这里的模型名可指定使用模型，默认claude-opus-4-6')
+    expect(settingsConfig).not.toContain('CLAUDE_CODE_EFFORT_LEVEL')
   })
 })

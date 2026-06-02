@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,101 @@ func TestSanitizeAndTrimJSONPayload_PreservesTokenBudgetFields(t *testing.T) {
 
 	if got := decoded["access_token"]; got != "[REDACTED]" {
 		t.Fatalf("expected access_token to be redacted, got %#v", got)
+	}
+}
+
+func TestSanitizeErrorBodyForStorage_RedactsInlineImagesAndSecrets(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"error":{"message":"bad"},"image_url":"data:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789","b64_json":"ZmluYWw=","output":[{"type":"image_generation_call","result":"aW1hZ2UtMQ=="}],"authorization":"Bearer secret-token"}`
+	out, truncated := sanitizeErrorBodyForStorage(raw, 20*1024)
+
+	if truncated {
+		t.Fatalf("did not expect truncation")
+	}
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("expected valid JSON, got %s", out)
+	}
+	for _, leaked := range []string{
+		"abcdefghijklmnopqrstuvwxyz0123456789",
+		"ZmluYWw=",
+		"aW1hZ2UtMQ==",
+		"secret-token",
+	} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("sanitized output leaked %q: %s", leaked, out)
+		}
+	}
+	for _, expected := range []string{"[REDACTED_BASE64", "[REDACTED]"} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("expected %q in sanitized output: %s", expected, out)
+		}
+	}
+}
+
+func TestSanitizeErrorBodyForStorage_RedactsNonJSONBodyBeforeTruncation(t *testing.T) {
+	t.Parallel()
+
+	raw := `upstream failed access_token=secret-value body={"b64_json":"abcdefghijklmnopqrstuvwxyz0123456789","url":"data:image/jpeg;base64,abcdefghijklmnopqrstuvwxyz0123456789"}`
+	out, truncated := sanitizeErrorBodyForStorage(raw, 90)
+
+	if !truncated {
+		t.Fatalf("expected truncation")
+	}
+	for _, leaked := range []string{
+		"secret-value",
+		"abcdefghijklmnopqrstuvwxyz0123456789",
+	} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("sanitized output leaked %q: %s", leaked, out)
+		}
+	}
+	if !strings.Contains(out, "access_token=[REDACTED]") {
+		t.Fatalf("expected access_token redaction, got %s", out)
+	}
+	if !strings.Contains(out, "[REDACTED_BASE64") {
+		t.Fatalf("expected base64 redaction, got %s", out)
+	}
+}
+
+func TestSanitizeOpsUpstreamErrors_RedactsRequestAndResponseBodies(t *testing.T) {
+	t.Parallel()
+
+	entry := &OpsInsertErrorLogInput{
+		UpstreamErrors: []*OpsUpstreamErrorEvent{
+			{
+				UpstreamStatusCode:   429,
+				Message:              "quota",
+				Detail:               `{"refresh_token":"rt-secret","url":"data:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789"}`,
+				UpstreamRequestBody:  `{"messages":[{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789"}}]}],"api_key":"sk-secret"}`,
+				UpstreamResponseBody: `{"data":[{"b64_json":"ZmluYWw="}],"access_token":"at-secret"}`,
+			},
+		},
+	}
+
+	if err := sanitizeOpsUpstreamErrors(entry); err != nil {
+		t.Fatalf("sanitize upstream errors: %v", err)
+	}
+	if entry.UpstreamErrorsJSON == nil {
+		t.Fatalf("expected upstream errors JSON")
+	}
+	out := *entry.UpstreamErrorsJSON
+	for _, leaked := range []string{
+		"rt-secret",
+		"sk-secret",
+		"at-secret",
+		"abcdefghijklmnopqrstuvwxyz0123456789",
+		"ZmluYWw=",
+	} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("sanitized upstream errors leaked %q: %s", leaked, out)
+		}
+	}
+	if !strings.Contains(out, "[REDACTED_BASE64") {
+		t.Fatalf("expected base64 redaction in upstream errors: %s", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("expected credential redaction in upstream errors: %s", out)
 	}
 }
 

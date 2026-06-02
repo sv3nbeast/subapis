@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -301,11 +303,24 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 
 		detail := strings.TrimSpace(out.Detail)
 		if detail != "" {
-			// Keep upstream detail small; request bodies are not stored here, only upstream error payloads.
+			// Keep upstream detail small and strip image/base64 payloads before storage.
 			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, opsMaxStoredErrorBodyBytes)
 			out.Detail = sanitizedDetail
 		} else {
 			out.Detail = ""
+		}
+
+		if body := strings.TrimSpace(out.UpstreamRequestBody); body != "" {
+			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, opsMaxStoredErrorBodyBytes)
+			out.UpstreamRequestBody = sanitizedBody
+		} else {
+			out.UpstreamRequestBody = ""
+		}
+		if body := strings.TrimSpace(out.UpstreamResponseBody); body != "" {
+			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, opsMaxStoredErrorBodyBytes)
+			out.UpstreamResponseBody = sanitizedBody
+		} else {
+			out.UpstreamResponseBody = ""
 		}
 
 		// Drop fully-empty events (can happen if only status code was known).
@@ -458,6 +473,10 @@ func redactSensitiveJSON(v any) any {
 				out[k] = "[REDACTED]"
 				continue
 			}
+			if isLargeInlineMediaKey(k) {
+				out[k] = redactInlineMediaJSONValue(k, vv)
+				continue
+			}
 			out[k] = redactSensitiveJSON(vv)
 		}
 		return out
@@ -467,8 +486,60 @@ func redactSensitiveJSON(v any) any {
 			out = append(out, redactSensitiveJSON(vv))
 		}
 		return out
+	case string:
+		return redactInlineMediaAndSecretsInText(t)
 	default:
 		return v
+	}
+}
+
+func isLargeInlineMediaKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	switch k {
+	case "b64_json",
+		"partial_image_b64",
+		"image_b64",
+		"image_base64",
+		"data":
+		return true
+	case "result":
+		// OpenAI Responses image_generation_call.result stores generated image base64.
+		return true
+	default:
+		return false
+	}
+}
+
+func redactInlineMediaJSONValue(key string, v any) any {
+	switch t := v.(type) {
+	case string:
+		trimmed := strings.TrimSpace(t)
+		if trimmed == "" {
+			return t
+		}
+		if isKnownBase64ImageField(key) || looksLikeDataURI(trimmed) || looksLikeBase64Blob(trimmed) {
+			return inlineMediaRedactionPlaceholder(trimmed)
+		}
+		return redactInlineMediaAndSecretsInText(t)
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, item := range t {
+			out = append(out, redactInlineMediaJSONValue(key, item))
+		}
+		return out
+	case map[string]any:
+		return redactSensitiveJSON(t)
+	default:
+		return redactSensitiveJSON(t)
+	}
+}
+
+func isKnownBase64ImageField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "b64_json", "partial_image_b64", "image_b64", "image_base64", "result":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -567,6 +638,65 @@ func isSensitiveKey(key string) bool {
 	}
 
 	return false
+}
+
+var (
+	inlineDataURIBase64Regex     = regexp.MustCompile(`(?is)data:([a-z0-9.+-]+/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=_-]{16,})`)
+	jsonStringInlineBase64Regex  = regexp.MustCompile(`(?is)("(?:(?:b64_json|partial_image_b64|image_b64|image_base64|data|result))"\s*:\s*")([^"\\]{16,})(")`)
+	jsonStringSensitiveRegex     = regexp.MustCompile(`(?is)("(?:(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|authorization|password|passwd|client[_-]?secret|private[_-]?key|secret))"\s*:\s*")([^"\\]{6,})(")`)
+	textSensitiveAssignmentRegex = regexp.MustCompile(`(?i)\b((?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|authorization|password|passwd|client[_-]?secret|private[_-]?key|secret)\s*[:=]\s*)(["']?)[^"'\s,;，。；、]{6,}`)
+	textBearerTokenRegex         = regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}`)
+	textSensitiveQueryParamRegex = regexp.MustCompile(`(?i)([?&](?:key|api[_-]?key|client_secret|access_token|refresh_token|id_token|session_token|token)=)[^&"\s]+`)
+)
+
+func redactInlineMediaAndSecretsInText(text string) string {
+	if text == "" {
+		return text
+	}
+	out := inlineDataURIBase64Regex.ReplaceAllStringFunc(text, func(match string) string {
+		if parts := inlineDataURIBase64Regex.FindStringSubmatch(match); len(parts) == 3 {
+			return "data:" + parts[1] + ";base64," + inlineMediaRedactionPlaceholder(parts[2])
+		}
+		return "[REDACTED_BASE64]"
+	})
+	out = jsonStringInlineBase64Regex.ReplaceAllStringFunc(out, func(match string) string {
+		parts := jsonStringInlineBase64Regex.FindStringSubmatch(match)
+		if len(parts) != 4 || !looksLikeBase64Blob(parts[2]) {
+			return match
+		}
+		return parts[1] + inlineMediaRedactionPlaceholder(parts[2]) + parts[3]
+	})
+	out = jsonStringSensitiveRegex.ReplaceAllString(out, `${1}[REDACTED]${3}`)
+	out = textSensitiveQueryParamRegex.ReplaceAllString(out, `$1***`)
+	out = textSensitiveAssignmentRegex.ReplaceAllString(out, `${1}${2}[REDACTED]`)
+	out = textBearerTokenRegex.ReplaceAllString(out, `${1}[REDACTED]`)
+	return out
+}
+
+func looksLikeDataURI(value string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:") && strings.Contains(strings.ToLower(value), ";base64,")
+}
+
+func looksLikeBase64Blob(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 16 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '+', r == '/', r == '=', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func inlineMediaRedactionPlaceholder(value string) string {
+	return "[REDACTED_BASE64 len=" + strconv.Itoa(len(strings.TrimSpace(value))) + "]"
 }
 
 func trimConversationArrays(root map[string]any, maxBytes int) (map[string]any, bool) {
@@ -690,7 +820,7 @@ func sanitizeErrorBodyForStorage(raw string, maxBytes int) (sanitized string, tr
 		return out, trunc
 	}
 
-	// Non-JSON: best-effort truncate.
+	raw = redactInlineMediaAndSecretsInText(raw)
 	if maxBytes > 0 && len(raw) > maxBytes {
 		return truncateString(raw, maxBytes), true
 	}

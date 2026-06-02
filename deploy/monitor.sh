@@ -4,7 +4,7 @@
 # =============================================================================
 # 功能：
 #   1. 检测 /health 端点是否正常
-#   2. 读取服务状态探针结果验证模型可用性（不再重复发起模型请求）
+#   2. 读取渠道监控或服务状态探针结果验证模型可用性（不再重复发起模型请求）
 #   3. 状态变化时通过 Bark 推送通知（异常/恢复），不重复提醒
 #
 # 用法：
@@ -51,8 +51,13 @@ BARK_SOUND_RECOVER="${BARK_SOUND_RECOVER:-chord}"
 BARK_NOTIFY_ALERT="${BARK_NOTIFY_ALERT:-true}"
 BARK_NOTIFY_RECOVER="${BARK_NOTIFY_RECOVER:-true}"
 TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
+API_CHECK_SOURCE="${API_CHECK_SOURCE:-channel_monitor}"
 STATUS_API_PATH="${STATUS_API_PATH:-/api/v1/status/models}"
+CHANNEL_MONITOR_STALE_SECONDS="${CHANNEL_MONITOR_STALE_SECONDS:-1800}"
 SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
+PG_CONTAINER="${PG_CONTAINER:-sub2api-postgres}"
+PG_USER="${PG_USER:-sub2api}"
+PG_DB="${PG_DB:-sub2api}"
 
 # ---------------------------------------------------------------------------
 # 状态管理 - 仅记录已通知标记，防止重复推送
@@ -172,27 +177,52 @@ bark_send() {
   local title="$1"
   local body="$2"
   local sound="${3:-$BARK_SOUND_ALERT}"
-  local response http_code
+  local response http_code response_body
 
   # 使用 POST JSON 方式推送，避免中文 URL 编码问题
   response=$(curl -sS --max-time 10 \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{
-      \"title\": \"${title}\",
-      \"body\": \"${body}\",
-      \"group\": \"${BARK_GROUP}\",
-      \"sound\": \"${sound}\"
-    }" \
+    --data "$(build_bark_payload "$title" "$body" "$sound")" \
     -w "\n__HTTP_CODE__%{http_code}" \
     "${BARK_URL}" \
     2>/dev/null || true)
 
   http_code=$(echo "$response" | grep "__HTTP_CODE__" | sed 's/__HTTP_CODE__//')
+  response_body=$(echo "$response" | grep -v "__HTTP_CODE__" | tr '\n' ' ' | cut -c1-200)
   if [ -n "$http_code" ] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
     return 0
   fi
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [BARK-FAIL] HTTP ${http_code:-000} ${response_body}"
   return 1
+}
+
+build_bark_payload() {
+  local title="$1"
+  local body="$2"
+  local sound="$3"
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg title "$title" \
+      --arg body "$body" \
+      --arg group "$BARK_GROUP" \
+      --arg sound "$sound" \
+      '{title: $title, body: $body, group: $group, sound: $sound}'
+    return
+  fi
+
+  python3 - "$title" "$body" "$BARK_GROUP" "$sound" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "title": sys.argv[1],
+    "body": sys.argv[2],
+    "group": sys.argv[3],
+    "sound": sys.argv[4],
+}, ensure_ascii=False))
+PY
 }
 
 is_truthy() {
@@ -211,7 +241,7 @@ send_alert_if_enabled() {
   local body="$2"
   if is_truthy "$BARK_NOTIFY_ALERT"; then
     bark_send "$title" "$body" "$BARK_SOUND_ALERT"
-    return 0
+    return $?
   fi
   return 1
 }
@@ -221,7 +251,7 @@ send_recover_if_enabled() {
   local body="$2"
   if is_truthy "$BARK_NOTIFY_RECOVER"; then
     bark_send "$title" "$body" "$BARK_SOUND_RECOVER"
-    return 0
+    return $?
   fi
   return 1
 }
@@ -234,6 +264,151 @@ extract_json_string_field() {
   fi
 
   echo "$last_body" | tr -d '\n' | sed -n "s/.*\"${field}\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1
+}
+
+sql_literal() {
+  local escaped
+  escaped=$(printf "%s" "$1" | sed "s/'/''/g")
+  printf "'%s'" "$escaped"
+}
+
+is_api_status_operational() {
+  case "${1:-}" in
+    operational|ok)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_api_status_degraded() {
+  case "${1:-}" in
+    degraded)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+query_channel_monitor_status() {
+  local query_result model_literal field_separator
+  field_separator=$'\034'
+  model_literal=$(sql_literal "$TEST_MODEL")
+  query_result=$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -t -A -F "$field_separator" -v ON_ERROR_STOP=1 -c "
+    WITH latest AS (
+      SELECT DISTINCT ON (h.monitor_id, h.model)
+        h.monitor_id,
+        h.model,
+        h.status,
+        h.latency_ms,
+        h.message,
+        h.checked_at
+      FROM channel_monitor_histories h
+      ORDER BY h.monitor_id, h.model, h.checked_at DESC
+    )
+    SELECT
+      m.name,
+      m.primary_model,
+      COALESCE(latest.status, 'unknown') AS status,
+      COALESCE(latest.message, '') AS message,
+      COALESCE(latest.latency_ms::TEXT, '') AS latency_ms,
+      COALESCE(EXTRACT(EPOCH FROM latest.checked_at)::BIGINT::TEXT, '0') AS checked_epoch
+    FROM channel_monitors m
+    LEFT JOIN latest ON latest.monitor_id = m.id AND latest.model = m.primary_model
+    WHERE m.enabled = true
+      AND m.primary_model = ${model_literal}
+    ORDER BY m.id
+    LIMIT 1;
+  " 2>/dev/null || true)
+
+  if [ -z "$query_result" ]; then
+    return 1
+  fi
+
+  IFS="$field_separator" read -r channel_monitor_name channel_monitor_model channel_monitor_status channel_monitor_message channel_monitor_latency_ms channel_monitor_checked_epoch <<< "$query_result"
+  return 0
+}
+
+check_api_from_channel_monitor() {
+  local channel_monitor_name="" channel_monitor_model="" channel_monitor_status="" channel_monitor_message="" channel_monitor_latency_ms="" channel_monitor_checked_epoch=""
+
+  if ! query_channel_monitor_status; then
+    if [ "$api_notified" = "0" ]; then
+      api_notified=1
+      api_down_since_epoch=$(now_epoch)
+      if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 未配置到渠道监控，开始于 $(format_epoch "$api_down_since_epoch")"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 未配置到渠道监控，已发送 Bark 告警"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-FAILED] 模型 ${TEST_MODEL} 未配置到渠道监控，Bark 推送失败或已禁用"
+      fi
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 模型 ${TEST_MODEL} 仍未配置到渠道监控，已通知过"
+    fi
+    return
+  fi
+
+  local now_ts age_seconds
+  now_ts=$(now_epoch)
+  age_seconds=$((now_ts - ${channel_monitor_checked_epoch:-0}))
+  if [ -z "${channel_monitor_checked_epoch:-}" ] || [ "$channel_monitor_checked_epoch" = "0" ] || [ "$age_seconds" -gt "$CHANNEL_MONITOR_STALE_SECONDS" ]; then
+    channel_monitor_status="unknown"
+    if [ -z "$channel_monitor_message" ]; then
+      channel_monitor_message="渠道监控数据过期: ${age_seconds}s"
+    fi
+  fi
+
+  if is_api_status_operational "$channel_monitor_status"; then
+    if [ "$api_notified" = "1" ]; then
+      local recovery_suffix=""
+      recovery_suffix=$(build_recovery_suffix "$api_down_since_epoch")
+      if send_recover_if_enabled "API 调用已恢复" "模型 ${TEST_MODEL} 渠道监控恢复正常${recovery_suffix}"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] 模型 ${TEST_MODEL} 渠道监控恢复正常"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-FAILED] 模型 ${TEST_MODEL} 渠道监控恢复正常，Bark 推送失败或已禁用"
+      fi
+    fi
+    api_notified=0
+    api_down_since_epoch=0
+    return
+  fi
+
+  if is_api_status_degraded "$channel_monitor_status"; then
+    if [ -z "$channel_monitor_message" ]; then
+      channel_monitor_message="当前状态为 ${channel_monitor_status}"
+    fi
+    channel_monitor_message="${channel_monitor_message:0:160}"
+    local latency_suffix=""
+    if [ -n "$channel_monitor_latency_ms" ]; then
+      latency_suffix=", latency=${channel_monitor_latency_ms}ms"
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DEGRADED] 模型 ${TEST_MODEL} 渠道监控状态 ${channel_monitor_status}${latency_suffix}: ${channel_monitor_message}，不发送 Bark 告警"
+    return
+  fi
+
+  if [ -z "$channel_monitor_message" ]; then
+    channel_monitor_message="当前状态为 ${channel_monitor_status}"
+  fi
+  channel_monitor_message="${channel_monitor_message:0:160}"
+
+  if [ "$api_notified" = "0" ]; then
+    api_notified=1
+    api_down_since_epoch=$(now_epoch)
+    local latency_suffix=""
+    if [ -n "$channel_monitor_latency_ms" ]; then
+      latency_suffix=", latency=${channel_monitor_latency_ms}ms"
+    fi
+    if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 渠道监控状态 ${channel_monitor_status}${latency_suffix}: ${channel_monitor_message}，开始于 $(format_epoch "$api_down_since_epoch")"; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 渠道监控状态 ${channel_monitor_status}, 已发送 Bark 告警"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-FAILED] 模型 ${TEST_MODEL} 渠道监控状态 ${channel_monitor_status}，Bark 推送失败或已禁用"
+    fi
+  else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 模型 ${TEST_MODEL} 渠道监控仍为 ${channel_monitor_status}，已通知过"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -328,6 +503,11 @@ check_api() {
     return
   fi
 
+  if [ "$API_CHECK_SOURCE" = "channel_monitor" ]; then
+    check_api_from_channel_monitor
+    return
+  fi
+
   local status_url="${API_BASE_URL%/}${STATUS_API_PATH%/}/${TEST_MODEL}"
 
   if request_with_retry "StatusProbe" \
@@ -367,7 +547,7 @@ check_api() {
       if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 不可用: ${error_msg}，开始于 $(format_epoch "$api_down_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 模型 ${TEST_MODEL} 当前状态 ${current_status}, 已发送 Bark 告警"
       else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 模型 ${TEST_MODEL} 当前状态 ${current_status}，异常通知已禁用"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-FAILED] 模型 ${TEST_MODEL} 当前状态 ${current_status}，Bark 推送失败或已禁用"
       fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 模型 ${TEST_MODEL} 仍为 ${current_status}，已通知过"
@@ -391,7 +571,7 @@ check_api() {
       if send_alert_if_enabled "API 调用异常" "模型 ${TEST_MODEL} 状态读取失败: ${error_msg}, 已重试 ${RETRY_COUNT} 次，开始于 $(format_epoch "$api_down_since_epoch")"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] 已发送 Bark 告警"
       else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-SILENT] 服务状态读取异常已记录，异常通知已禁用"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-FAILED] 服务状态读取异常已记录，Bark 推送失败或已禁用"
       fi
     else
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] 服务状态读取仍异常，已通知过，不重复推送"
@@ -404,13 +584,9 @@ check_api() {
 # 直接查询本地数据库，无需暴露 API 端点
 # ---------------------------------------------------------------------------
 check_scheduling() {
-  local pg_container="${PG_CONTAINER:-sub2api-postgres}"
-  local pg_user="${PG_USER:-sub2api}"
-  local pg_db="${PG_DB:-sub2api}"
-
   # 通过 docker exec 查询账号调度状态
   local query_result
-  query_result=$(docker exec "$pg_container" psql -U "$pg_user" -d "$pg_db" -t -A -F',' -c "
+  query_result=$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -t -A -F',' -c "
     SELECT
       COUNT(*) FILTER (WHERE schedulable = true AND status = 'active') AS total,
       COUNT(*) FILTER (WHERE schedulable = true AND status = 'active'

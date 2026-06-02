@@ -44,7 +44,7 @@
             class="flex items-start justify-between gap-4"
           >
             <span class="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-dark-400">
-              {{ column.label }}
+              {{ resolveColumnLabel(column.label) }}
             </span>
             <div class="text-right text-sm text-gray-900 dark:text-gray-100">
               <slot :name="`cell-${column.key}`" :row="row" :value="row[column.key]" :expanded="actionsExpanded">
@@ -92,7 +92,7 @@
               :sort-order="sortOrder"
             >
               <div class="flex items-center space-x-1">
-                <span>{{ column.label }}</span>
+                <span>{{ resolveColumnLabel(column.label) }}</span>
                 <span v-if="column.sortable" class="text-gray-400 dark:text-dark-500">
                   <svg
                     v-if="sortKey === column.key"
@@ -202,7 +202,7 @@ import { useI18n } from 'vue-i18n'
 import type { Column } from './types'
 import Icon from '@/components/icons/Icon.vue'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const desktopViewportQuery = '(min-width: 768px)'
 const isDesktopViewport = ref(
@@ -375,6 +375,13 @@ const props = withDefaults(defineProps<Props>(), {
 const sortKey = ref<string>('')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const actionsExpanded = ref(false)
+
+const looksLikeI18nKey = (label: string) => /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+$/.test(label)
+
+const resolveColumnLabel = (label: string) => {
+  if (!looksLikeI18nKey(label)) return label
+  return te(label) ? t(label) : label
+}
 
 type PersistedSortState = {
   key: string

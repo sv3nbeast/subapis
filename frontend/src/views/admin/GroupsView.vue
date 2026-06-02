@@ -106,7 +106,9 @@
                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                     : value === 'antigravity'
                       ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                      : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                      : value === 'kiro'
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
               ]"
             >
               <PlatformIcon :platform="value" size="xs" />
@@ -646,6 +648,68 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
+          </div>
+        </div>
+
+        <!-- Kiro 模拟缓存配置 -->
+        <div v-if="createForm.platform === 'kiro'" class="border-t pt-4">
+          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.kiroCache.title") }}
+          </label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.kiroCache.description") }}
+          </p>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="createForm.kiro_cache_emulation_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.enabled") }}
+          </label>
+          <div v-if="createForm.kiro_cache_emulation_enabled">
+            <label class="input-label">{{ t("admin.groups.kiroCache.ratio") }}</label>
+            <input
+              v-model.number="createForm.kiro_cache_emulation_ratio"
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              class="input"
+              placeholder="1"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
+          </div>
+        </div>
+
+        <!-- Kiro 模拟缓存配置 -->
+        <div v-if="editForm.platform === 'kiro'" class="border-t pt-4">
+          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.kiroCache.title") }}
+          </label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.kiroCache.description") }}
+          </p>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.kiro_cache_emulation_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.enabled") }}
+          </label>
+          <div v-if="editForm.kiro_cache_emulation_enabled">
+            <label class="input-label">{{ t("admin.groups.kiroCache.ratio") }}</label>
+            <input
+              v-model.number="editForm.kiro_cache_emulation_ratio"
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              class="input"
+              placeholder="1"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
           </div>
         </div>
 
@@ -3107,6 +3171,7 @@ const platformOptions = computed(() => [
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
+  { value: "kiro", label: "Kiro" },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3115,6 +3180,7 @@ const platformFilterOptions = computed(() => [
   { value: "openai", label: "OpenAI" },
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
+  { value: "kiro", label: "Kiro" },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -3283,7 +3349,7 @@ const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
 
 const canConfigureModelsList = (platform: GroupPlatform) =>
-  ["anthropic", "openai", "gemini", "antigravity"].includes(platform);
+  ["anthropic", "openai", "gemini", "antigravity", "kiro"].includes(platform);
 
 const loadModelsListCandidates = async (
   mode: "create" | "edit",
@@ -3341,6 +3407,8 @@ const createForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  kiro_cache_emulation_enabled: false,
+  kiro_cache_emulation_ratio: 1,
   // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -3627,6 +3695,8 @@ const editForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  kiro_cache_emulation_enabled: false,
+  kiro_cache_emulation_ratio: 1,
 	  // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -3866,6 +3936,8 @@ const closeCreateModal = () => {
   resetMessagesDispatchFormState(createForm);
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
+  createForm.kiro_cache_emulation_enabled = false;
+  createForm.kiro_cache_emulation_ratio = 1;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   Object.assign(createForm.models_list_config, createModelsListState());
   createForm.mcp_xml_inject = true;
@@ -3944,6 +4016,10 @@ const handleCreateGroup = async () => {
     requestData.image_rate_multiplier = normalizeImageRateMultiplier(
       requestData.image_rate_multiplier,
     );
+    if (requestData.platform !== "kiro") {
+      requestData.kiro_cache_emulation_enabled = false;
+      requestData.kiro_cache_emulation_ratio = 0;
+    }
     await adminAPI.groups.create(requestData);
     appStore.showSuccess(t("admin.groups.groupCreated"));
     closeCreateModal();
@@ -3996,6 +4072,9 @@ const handleEdit = async (group: AdminGroup) => {
     messagesDispatchFormState.exact_model_mappings;
   editForm.require_oauth_only = group.require_oauth_only ?? false;
   editForm.require_privacy_set = group.require_privacy_set ?? false;
+  editForm.kiro_cache_emulation_enabled =
+    group.kiro_cache_emulation_enabled ?? false;
+  editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 1;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   Object.assign(
     editForm.models_list_config,
@@ -4080,6 +4159,10 @@ const handleUpdateGroup = async () => {
     payload.image_rate_multiplier = normalizeImageRateMultiplier(
       payload.image_rate_multiplier,
     );
+    if (payload.platform !== "kiro") {
+      payload.kiro_cache_emulation_enabled = false;
+      payload.kiro_cache_emulation_ratio = 0;
+    }
     await adminAPI.groups.update(editingGroup.value.id, payload);
     appStore.showSuccess(t("admin.groups.groupUpdated"));
     closeEditModal();

@@ -29,7 +29,8 @@ vi.mock('@/api/admin', () => ({
       toggleSchedulable: vi.fn()
     },
     proxies: {
-      getAll: getAllProxies
+      getAll: getAllProxies,
+      getAllWithCount: getAllProxies
     },
     groups: {
       getAll: getAllGroups
@@ -56,7 +57,9 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string) => key,
+      te: () => false,
+      locale: { value: 'zh-CN' }
     })
   }
 })
@@ -220,7 +223,7 @@ describe('admin AccountsView bulk edit scope', () => {
     expect(columnKeys).toContain('created_at')
     const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string; label: string; sortable: boolean }>
     expect(columns.find(column => column.key === 'created_at')).toMatchObject({
-      label: 'admin.accounts.columns.createdAt',
+      label: '创建时间',
       sortable: true
     })
   })

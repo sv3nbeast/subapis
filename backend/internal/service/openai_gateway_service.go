@@ -2389,7 +2389,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI && imageGenerationAllowed && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
-	if IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, reqBody) && !imageGenerationAllowed {
+	imageGenerationIntent := IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, reqBody)
+	if imageGenerationIntent && !imageGenerationAllowed {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
@@ -2718,7 +2719,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	if IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, reqBody) && !imageGenerationAllowed {
+	imageGenerationIntent = IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, reqBody)
+	if imageGenerationIntent && !imageGenerationAllowed {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
@@ -2731,7 +2733,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
-	if IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, reqBody) {
+	if imageGenerationIntent {
 		var imageCfgErr error
 		imageCfg, imageCfgErr := resolveOpenAIResponsesImageBillingConfigDetailed(reqBody, billingModel)
 		if imageCfgErr != nil {
@@ -2984,6 +2986,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				wsAttempts,
 			)
 			wsResult.UpstreamModel = upstreamModel
+			if imageGenerationIntent && wsResult.ImageCount <= 0 {
+				wsResult.ImageCount = 1
+			}
 			if wsResult.ImageCount > 0 {
 				wsResult.ImageSize = imageSizeTier
 				wsResult.ImageInputSize = imageInputSize
@@ -3142,6 +3147,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    firstTokenMs,
 		}
+		if imageGenerationIntent && imageCount <= 0 {
+			imageCount = 1
+		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount
 			forwardResult.ImageSize = imageSizeTier
@@ -3229,7 +3237,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	body = updatedBody
 
 	apiKey := getAPIKeyFromContext(c)
-	if IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) && !GroupAllowsImageGeneration(apiKeyGroup(apiKey)) {
+	imageGenerationIntent := IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
+	if imageGenerationIntent && !GroupAllowsImageGeneration(apiKeyGroup(apiKey)) {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
@@ -3242,7 +3251,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
-	if IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) {
+	if imageGenerationIntent {
 		var imageCfgErr error
 		imageCfg, imageCfgErr := resolveOpenAIResponsesImageBillingConfigDetailedFromBody(body, reqModel)
 		if imageCfgErr != nil {
@@ -3387,6 +3396,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		OpenAIWSMode:    false,
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
+	}
+	if imageGenerationIntent && imageCount <= 0 {
+		imageCount = 1
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount

@@ -175,6 +175,7 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
+const CLAUDE_CODE_DEFAULT_MODEL = 'claude-opus-4-7'
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -442,22 +443,19 @@ function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
       path = 'Terminal'
       content = `export ANTHROPIC_BASE_URL="${baseUrl}"
 export ANTHROPIC_AUTH_TOKEN="${apiKey}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
       break
     case 'cmd':
       path = 'Command Prompt'
       content = `set ANTHROPIC_BASE_URL=${baseUrl}
 set ANTHROPIC_AUTH_TOKEN=${apiKey}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
       break
     case 'powershell':
       path = 'PowerShell'
       content = `$env:ANTHROPIC_BASE_URL="${baseUrl}"
 $env:ANTHROPIC_AUTH_TOKEN="${apiKey}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-$env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
       break
     default:
       path = 'Terminal'
@@ -472,14 +470,20 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   "env": {
     "ANTHROPIC_BASE_URL": "${baseUrl}",
     "ANTHROPIC_AUTH_TOKEN": "${apiKey}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
+  //, "model": "${CLAUDE_CODE_DEFAULT_MODEL}" // 修改这里的模型名可指定使用模型，默认claude-opus-4-6
 }`
 
   return [
     { path, content },
-    { path: vscodeSettingsPath, content: vscodeContent, hint: 'VSCode Claude Code' }
+    {
+      path: vscodeSettingsPath,
+      content: vscodeContent,
+      hint: t('keys.useKeyModal.claudeCode.settingsHint', {
+        model: CLAUDE_CODE_DEFAULT_MODEL
+      })
+    }
   ]
 }
 

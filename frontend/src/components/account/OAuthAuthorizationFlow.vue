@@ -696,6 +696,7 @@ const getOAuthKey = (key: string) => {
   if (props.platform === 'openai') return `admin.accounts.oauth.openai.${key}`
   if (props.platform === 'gemini') return `admin.accounts.oauth.gemini.${key}`
   if (props.platform === 'antigravity') return `admin.accounts.oauth.antigravity.${key}`
+  if (props.platform === 'kiro') return `admin.accounts.oauth.kiro.${key}`
   return `admin.accounts.oauth.${key}`
 }
 
@@ -726,6 +727,10 @@ const sessionTokenInput = ref('')
 const codexSessionInput = ref('')
 const showHelpDialog = ref(false)
 const oauthState = ref('')
+const oauthCallbackPath = ref('')
+const oauthLoginOption = ref('')
+const oauthIssuerURL = ref('')
+const oauthIDCRegion = ref('')
 const projectId = ref('')
 
 // Computed: show method selection when either cookie or refresh token option is enabled
@@ -765,21 +770,27 @@ watch(inputMethod, (newVal) => {
   emit('update:inputMethod', newVal)
 })
 
-// Auto-extract code from callback URL (OpenAI/Gemini/Antigravity)
+// Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Kiro)
 // e.g., http://localhost:8085/callback?code=xxx...&state=...
 watch(authCodeInput, (newVal) => {
-  if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity') return
+  if (props.platform !== 'openai' && props.platform !== 'gemini' && props.platform !== 'antigravity' && props.platform !== 'kiro') return
 
   const trimmed = newVal.trim()
-  // Check if it looks like a URL with code parameter
-  if (trimmed.includes('?') && trimmed.includes('code=')) {
+  // Check if it looks like a callback URL.
+  if (trimmed.includes('?')) {
     try {
       // Try to parse as URL
       const url = new URL(trimmed)
       const code = url.searchParams.get('code')
       const stateParam = url.searchParams.get('state')
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity') && stateParam) {
+      if (stateParam) {
         oauthState.value = stateParam
+      }
+      if (props.platform === 'kiro') {
+        oauthCallbackPath.value = url.pathname || ''
+        oauthLoginOption.value = url.searchParams.get('login_option') || ''
+        oauthIssuerURL.value = url.searchParams.get('issuer_url') || ''
+        oauthIDCRegion.value = url.searchParams.get('idc_region') || ''
       }
       if (code && code !== trimmed) {
         // Replace the input with just the code
@@ -789,11 +800,21 @@ watch(authCodeInput, (newVal) => {
       // If URL parsing fails, try regex extraction
       const match = trimmed.match(/[?&]code=([^&]+)/)
       const stateMatch = trimmed.match(/[?&]state=([^&]+)/)
-      if ((props.platform === 'openai' || props.platform === 'gemini' || props.platform === 'antigravity') && stateMatch && stateMatch[1]) {
-        oauthState.value = stateMatch[1]
+      if (stateMatch && stateMatch[1]) {
+        oauthState.value = decodeURIComponent(stateMatch[1])
+      }
+      if (props.platform === 'kiro') {
+        const loginOptionMatch = trimmed.match(/[?&]login_option=([^&]+)/)
+        const issuerURLMatch = trimmed.match(/[?&]issuer_url=([^&]+)/)
+        const idcRegionMatch = trimmed.match(/[?&]idc_region=([^&]+)/)
+        const pathMatch = trimmed.match(/^https?:\/\/[^/]+([^?]*)/)
+        oauthCallbackPath.value = pathMatch?.[1] || ''
+        oauthLoginOption.value = loginOptionMatch?.[1] ? decodeURIComponent(loginOptionMatch[1]) : ''
+        oauthIssuerURL.value = issuerURLMatch?.[1] ? decodeURIComponent(issuerURLMatch[1]) : ''
+        oauthIDCRegion.value = idcRegionMatch?.[1] ? decodeURIComponent(idcRegionMatch[1]) : ''
       }
       if (match && match[1] && match[1] !== trimmed) {
-        authCodeInput.value = match[1]
+        authCodeInput.value = decodeURIComponent(match[1])
       }
     }
   }
@@ -841,6 +862,10 @@ const handleImportCodexSession = () => {
 defineExpose({
   authCode: authCodeInput,
   oauthState,
+  oauthCallbackPath,
+  oauthLoginOption,
+  oauthIssuerURL,
+  oauthIDCRegion,
   projectId,
   sessionKey: sessionKeyInput,
   refreshToken: refreshTokenInput,
@@ -850,6 +875,10 @@ defineExpose({
   reset: () => {
     authCodeInput.value = ''
     oauthState.value = ''
+    oauthCallbackPath.value = ''
+    oauthLoginOption.value = ''
+    oauthIssuerURL.value = ''
+    oauthIDCRegion.value = ''
     projectId.value = ''
     sessionKeyInput.value = ''
     refreshTokenInput.value = ''

@@ -58,6 +58,7 @@ const (
 	defaultModelsListCacheTTL    = 15 * time.Second
 	postUsageBillingTimeout      = 15 * time.Second
 	debugGatewayBodyEnv          = "SUB2API_DEBUG_GATEWAY_BODY"
+	defaultKiroStreamKeepalive   = 25 * time.Second
 )
 
 const (
@@ -621,6 +622,8 @@ type GatewayService struct {
 	deferredService            *DeferredService
 	concurrencyService         *ConcurrencyService
 	claudeTokenProvider        *ClaudeTokenProvider
+	kiroTokenProvider          *KiroTokenProvider
+	kiroCooldownStore          KiroCooldownStore
 	sessionLimitCache          SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
 	rpmCache                   RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
 	modelCapacityCooldownCache ModelCapacityCooldownCache
@@ -662,6 +665,8 @@ func NewGatewayService(
 	httpUpstream HTTPUpstream,
 	deferredService *DeferredService,
 	claudeTokenProvider *ClaudeTokenProvider,
+	kiroTokenProvider *KiroTokenProvider,
+	kiroCooldownStore KiroCooldownStore,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
 	modelCapacityCooldownCache ModelCapacityCooldownCache,
@@ -696,6 +701,8 @@ func NewGatewayService(
 		httpUpstream:               httpUpstream,
 		deferredService:            deferredService,
 		claudeTokenProvider:        claudeTokenProvider,
+		kiroTokenProvider:          kiroTokenProvider,
+		kiroCooldownStore:          kiroCooldownStore,
 		sessionLimitCache:          sessionLimitCache,
 		rpmCache:                   rpmCache,
 		modelCapacityCooldownCache: modelCapacityCooldownCache,
@@ -4456,6 +4463,13 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 		}
 		return accessToken, "oauth", nil
 	}
+	if account.Platform == PlatformKiro && account.Type == AccountTypeOAuth && s.kiroTokenProvider != nil {
+		accessToken, err := s.kiroTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return "", "", err
+		}
+		return accessToken, "oauth", nil
+	}
 
 	// 其他情况（Gemini 有自己的 TokenProvider，setup-token 类型等）直接从账号读取
 	accessToken := account.GetCredential("access_token")
@@ -5193,6 +5207,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.Body) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
+	}
+
+	if account != nil && account.Platform == PlatformKiro {
+		return s.forwardKiroMessages(ctx, c, account, parsed, startTime)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
@@ -9256,6 +9274,9 @@ type recordUsageOpts struct {
 	// 长上下文计费（仅 Gemini 路径需要）
 	LongContextThreshold  int
 	LongContextMultiplier float64
+
+	// Kiro 账号在上游返回 auto 等无法定价模型时使用保守计费兜底。
+	IsKiroAccount bool
 }
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
@@ -9396,6 +9417,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		requestedModel = input.OriginalModel
 	}
 
+	if opts == nil {
+		opts = &recordUsageOpts{}
+	}
+	opts.IsKiroAccount = account != nil && account.Platform == PlatformKiro
+
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, opts)
 
@@ -9490,6 +9516,27 @@ func (s *GatewayService) calculateRecordUsageCost(
 
 	// Token 计费
 	return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+}
+
+const kiroConservativeFallbackBillingModel = "claude-opus-4-6"
+
+func shouldUseKiroConservativeBillingFallback(result *ForwardResult, billingModel string, opts *recordUsageOpts) bool {
+	if result == nil {
+		return false
+	}
+	return opts != nil && opts.IsKiroAccount
+}
+
+func (s *GatewayService) calculateKiroConservativeTokenCost(tokens UsageTokens, multiplier float64) *CostBreakdown {
+	if s == nil || s.billingService == nil {
+		return nil
+	}
+	cost, err := s.billingService.CalculateCost(kiroConservativeFallbackBillingModel, tokens, multiplier)
+	if err != nil {
+		logger.LegacyPrintf("service.gateway", "Calculate conservative Kiro fallback cost failed: %v", err)
+		return nil
+	}
+	return cost
 }
 
 // resolveChannelPricing 检查指定模型是否存在渠道级别定价。
@@ -9596,6 +9643,12 @@ func (s *GatewayService) calculateTokenCost(
 	}
 	if err != nil {
 		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
+		if shouldUseKiroConservativeBillingFallback(result, billingModel, opts) {
+			if fallback := s.calculateKiroConservativeTokenCost(tokens, multiplier); fallback != nil {
+				logger.LegacyPrintf("service.gateway", "Using conservative Kiro fallback pricing for model=%s", billingModel)
+				return fallback
+			}
+		}
 		return &CostBreakdown{ActualCost: 0}
 	}
 	return cost

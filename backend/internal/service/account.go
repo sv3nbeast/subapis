@@ -47,6 +47,13 @@ type Account struct {
 	TempUnschedulableUntil  *time.Time
 	TempUnschedulableReason string
 
+	KiroQuotaState     string
+	KiroQuotaReason    string
+	KiroQuotaResetAt   *time.Time
+	KiroRuntimeState   string
+	KiroRuntimeReason  string
+	KiroRuntimeResetAt *time.Time
+
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
 	SessionWindowStatus string
@@ -129,7 +136,7 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
-	if (a.Type == AccountTypeAPIKey || a.Type == AccountTypeBedrock) && a.IsQuotaExceeded() {
+	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
@@ -170,6 +177,10 @@ func (a *Account) IsPrivacySet() bool {
 
 func (a *Account) IsGemini() bool {
 	return a.Platform == PlatformGemini
+}
+
+func (a *Account) IsKiro() bool {
+	return a.Platform == PlatformKiro
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -486,17 +497,17 @@ func (a *Account) GetModelMapping() map[string]string {
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
 	if a.Credentials == nil {
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
+		// 部分平台在未显式配置 model_mapping 时仍应使用默认映射，
+		// 以限制可调度/可转发的模型集合。
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+			return defaults
 		}
 		// Bedrock 默认映射由 forwardBedrock 统一处理（需配合 region prefix 调整）
 		return nil
 	}
 	if len(rawMapping) == 0 {
-		// Antigravity 平台使用默认映射
-		if a.Platform == domain.PlatformAntigravity {
-			return domain.DefaultAntigravityModelMapping
+		if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+			return defaults
 		}
 		return nil
 	}
@@ -519,11 +530,21 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return result
 	}
 
-	// Antigravity 平台使用默认映射
-	if a.Platform == domain.PlatformAntigravity {
-		return domain.DefaultAntigravityModelMapping
+	if defaults := defaultModelMappingForPlatform(a.Platform); defaults != nil {
+		return defaults
 	}
 	return nil
+}
+
+func defaultModelMappingForPlatform(platform string) map[string]string {
+	switch platform {
+	case domain.PlatformAntigravity:
+		return domain.DefaultAntigravityModelMapping
+	case domain.PlatformKiro:
+		return domain.DefaultKiroModelMapping
+	default:
+		return nil
+	}
 }
 
 func mapPtr(m map[string]any) uintptr {
