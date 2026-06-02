@@ -13,7 +13,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 11 // v11: reload snapshots for custom models_list_config
+const apiKeyAuthSnapshotVersion = 12 // v12: reload snapshots for Kiro cache emulation group settings
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -272,6 +272,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                apiKey.Group.ModelsListConfig,
+			KiroCacheEmulationEnabled:       apiKey.Group.KiroCacheEmulationEnabled,
+			KiroCacheEmulationRatio:         apiKey.Group.KiroCacheEmulationRatio,
 			RPMLimit:                        apiKey.Group.RPMLimit,
 		}
 	}
@@ -343,6 +345,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                snapshot.Group.ModelsListConfig,
+			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
+			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 		}
 	}
