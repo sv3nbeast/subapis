@@ -42,6 +42,10 @@ const (
 	opsErrInsufficientQuota          = "insufficient_quota"
 	opsErrClaudeCodeOnly             = "only allows claude code clients"
 	opsErrRestrictedClaudeCodeOnly   = "restricted to claude code clients"
+	opsErrRequestsPerMinuteExceeded  = "requests-per-minute limit exceeded"
+	opsErrConcurrencyLimitExceeded   = "concurrency limit exceeded"
+	opsErrRequestQueueBusy           = "request queue is busy"
+	opsErrRequestQueueWaitTimeout    = "request queue wait timeout"
 
 	// 上游错误码常量 — 错误分类 (normalizeOpsErrorType / classifyOpsPhase / classifyOpsIsBusinessLimited)
 	opsCodeInsufficientBalance  = "INSUFFICIENT_BALANCE"
@@ -1239,8 +1243,15 @@ func isOpsClientBusinessLimitMessage(message string) bool {
 	if msg == "" {
 		return false
 	}
+	if strings.Contains(msg, "upstream") {
+		return false
+	}
 	return strings.Contains(msg, opsErrClaudeCodeOnly) ||
-		strings.Contains(msg, opsErrRestrictedClaudeCodeOnly)
+		strings.Contains(msg, opsErrRestrictedClaudeCodeOnly) ||
+		strings.Contains(msg, opsErrRequestsPerMinuteExceeded) ||
+		strings.Contains(msg, opsErrConcurrencyLimitExceeded) ||
+		strings.Contains(msg, opsErrRequestQueueBusy) ||
+		strings.Contains(msg, opsErrRequestQueueWaitTimeout)
 }
 
 func isOpsModelNotFoundError(errType, message string) bool {

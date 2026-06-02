@@ -347,6 +347,37 @@ func TestClassifyOpsClaudeCodeOnlyRestrictionIsClientBusinessLimited(t *testing.
 	}
 }
 
+func TestClassifyOpsLocalRateLimitsAreClientBusinessLimited(t *testing.T) {
+	tests := []string{
+		"group requests-per-minute limit exceeded",
+		"user requests-per-minute limit exceeded",
+		"Concurrency limit exceeded for user, please retry later",
+		"Concurrency limit exceeded for account, please retry later",
+		"Request queue is busy, please retry later",
+		"Request queue wait timeout, please retry later",
+	}
+
+	for _, msg := range tests {
+		t.Run(msg, func(t *testing.T) {
+			phase := classifyOpsPhase("api_error", msg, "")
+			require.Equal(t, "request", phase)
+			require.True(t, classifyOpsIsBusinessLimited("api_error", phase, "", http.StatusTooManyRequests, msg))
+			require.Equal(t, "client", classifyOpsErrorOwner(phase, msg))
+			require.Equal(t, "client_request", classifyOpsErrorSource(phase, msg))
+		})
+	}
+}
+
+func TestClassifyOpsUpstreamRateLimitRemainsSLAError(t *testing.T) {
+	msg := "Upstream rate limit exceeded, please retry later"
+
+	phase := classifyOpsPhase("rate_limit_error", msg, "")
+	require.Equal(t, "upstream", phase)
+	require.False(t, classifyOpsIsBusinessLimited("rate_limit_error", phase, "", http.StatusTooManyRequests, msg))
+	require.Equal(t, "provider", classifyOpsErrorOwner(phase, msg))
+	require.Equal(t, "upstream_http", classifyOpsErrorSource(phase, msg))
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
