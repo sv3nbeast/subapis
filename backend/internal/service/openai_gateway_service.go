@@ -2986,7 +2986,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				wsAttempts,
 			)
 			wsResult.UpstreamModel = upstreamModel
-			if imageGenerationIntent && wsResult.ImageCount <= 0 {
+			if wsResult.ImageCount <= 0 && wsResult.Usage.ImageOutputTokens > 0 {
 				wsResult.ImageCount = 1
 			}
 			if wsResult.ImageCount > 0 {
@@ -3147,7 +3147,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    firstTokenMs,
 		}
-		if imageGenerationIntent && imageCount <= 0 {
+		if imageCount <= 0 && usage.ImageOutputTokens > 0 {
 			imageCount = 1
 		}
 		if imageCount > 0 {
@@ -3397,7 +3397,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
 	}
-	if imageGenerationIntent && imageCount <= 0 {
+	if imageCount <= 0 && usage.ImageOutputTokens > 0 {
 		imageCount = 1
 	}
 	if imageCount > 0 {
