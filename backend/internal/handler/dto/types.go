@@ -116,6 +116,10 @@ type Group struct {
 	RequireOAuthOnly  bool `json:"require_oauth_only"`
 	RequirePrivacySet bool `json:"require_privacy_set"`
 
+	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
+	KiroCacheEmulationEnabled bool    `json:"kiro_cache_emulation_enabled"`
+	KiroCacheEmulationRatio   float64 `json:"kiro_cache_emulation_ratio"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
 

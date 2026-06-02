@@ -189,6 +189,8 @@ func groupFromServiceBase(g *service.Group) Group {
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
+		KiroCacheEmulationEnabled:       g.KiroCacheEmulationEnabled,
+		KiroCacheEmulationRatio:         g.KiroCacheEmulationRatio,
 		RPMLimit:                        g.RPMLimit,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,
