@@ -358,9 +358,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
+	maxKiro429Retries := 10
 
 	for idx, endpoint := range endpoints {
-		for attempt := 0; attempt <= maxRetries; attempt++ {
+		for attempt := 0; attempt <= maxKiro429Retries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
 			if err != nil {
 				return nil, requestCtx, err
@@ -378,6 +379,19 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			}
 
 			if resp.StatusCode == http.StatusTooManyRequests {
+				if attempt < maxKiro429Retries {
+					_ = resp.Body.Close()
+					logger.L().Warn("kiro upstream 429 retrying same account",
+						zap.Int64("account_id", account.ID),
+						zap.Int("attempt", attempt+1),
+						zap.Int("max_retries", maxKiro429Retries),
+					)
+					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
+						return nil, requestCtx, sleepErr
+					}
+					continue
+				}
+
 				cooldown, err := s.markKiro429(ctx, accountKey)
 				if err != nil {
 					_ = resp.Body.Close()

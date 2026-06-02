@@ -24,6 +24,7 @@ type stubKiroCooldownStore struct {
 	successErr   error
 	mark429TTL   time.Duration
 	mark429Err   error
+	mark429Calls int
 	suspendedTTL time.Duration
 	suspendedErr error
 	state        *kirocooldown.State
@@ -85,6 +86,7 @@ func (s *stubKiroCooldownStore) MarkSuccess(context.Context, string) error {
 }
 
 func (s *stubKiroCooldownStore) Mark429(context.Context, string) (time.Duration, error) {
+	s.mark429Calls++
 	return s.mark429TTL, s.mark429Err
 }
 
@@ -291,6 +293,127 @@ func TestExecuteKiroUpstreamCooldownReturnsFailoverError(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.Equal(t, "kiro token is in cooldown for 33s (reason: rate_limit_exceeded)", string(failoverErr.ResponseBody))
 	require.False(t, failoverErr.RetryableOnSameAccount)
+}
+
+func TestExecuteKiroUpstreamRetriesKiro429BeforeCooldown(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down"}`),
+			newJSONResponse(http.StatusOK, `{"ok":true}`),
+		},
+	}
+	store := &stubKiroCooldownStore{}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   store,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, 0, store.mark429Calls)
+}
+
+func TestExecuteKiroUpstreamMarksCooldownAfterKiro429RetriesExhausted(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: makeKiro429Responses(11),
+	}
+	store := &stubKiroCooldownStore{mark429TTL: 90 * time.Second}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   store,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	require.Equal(t, "1m30s", resp.Header.Get("x-kiro-cooldown"))
+	require.Len(t, upstream.requests, 11)
+	require.Equal(t, 1, store.mark429Calls)
+}
+
+func TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 1"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 2"}`),
+			newJSONResponse(http.StatusBadGateway, `{"message":"bad gateway 3"}`),
+		},
+	}
+	store := &stubKiroCooldownStore{}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   store,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	require.Len(t, upstream.requests, 3)
+	require.Equal(t, 0, store.mark429Calls)
+}
+
+func makeKiro429Responses(count int) []*http.Response {
+	responses := make([]*http.Response, 0, count)
+	for i := 0; i < count; i++ {
+		responses = append(responses, newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down"}`))
+	}
+	return responses
 }
 
 func TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(t *testing.T) {
