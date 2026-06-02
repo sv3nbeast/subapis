@@ -99,19 +99,31 @@ func (c *openAIImageOutputCounter) addDataArray(data gjson.Result) {
 		return
 	}
 	items := data.Array()
-	count := len(items)
-	if count > c.maxDataCount {
-		c.maxDataCount = count
-	}
+	count := 0
 	sizes := make([]string, 0, len(items))
 	for _, item := range items {
+		if !isOpenAIImagesAPIDataItem(item) {
+			continue
+		}
+		count++
 		if size := strings.TrimSpace(item.Get("size").String()); size != "" {
 			sizes = append(sizes, size)
 		}
 	}
+	if count > c.maxDataCount {
+		c.maxDataCount = count
+	}
 	if len(sizes) > 0 {
 		c.dataSizes = sizes
 	}
+}
+
+func isOpenAIImagesAPIDataItem(item gjson.Result) bool {
+	if !item.Exists() || !item.IsObject() {
+		return false
+	}
+	return strings.TrimSpace(item.Get("b64_json").String()) != "" ||
+		strings.TrimSpace(item.Get("url").String()) != ""
 }
 
 func (c *openAIImageOutputCounter) addOutputArray(output gjson.Result) {
@@ -129,7 +141,7 @@ func (c *openAIImageOutputCounter) addImageOutputItem(item gjson.Result) {
 		return
 	}
 	itemType := strings.TrimSpace(item.Get("type").String())
-	if itemType != "" && itemType != "image_generation_call" && itemType != "image_generation.completed" {
+	if itemType != "image_generation_call" && itemType != "image_generation.completed" {
 		return
 	}
 	if strings.Contains(strings.ToLower(item.Raw), "partial_image") {

@@ -159,6 +159,30 @@ func TestOpenAIImageOutputCounterCountsImagesAPIStreamShapes(t *testing.T) {
 	require.Equal(t, 3, dataCounter.Count())
 }
 
+func TestOpenAIImageOutputCounterIgnoresTextResponses(t *testing.T) {
+	jsonBody := []byte(`{
+		"id": "resp_text",
+		"model": "gpt-5.5",
+		"output": [
+			{"id":"msg_1","type":"message","content":[{"type":"output_text","text":"hello"}]},
+			{"id":"rs_1","type":"reasoning","summary":[]}
+		],
+		"data": [
+			{"id":"item_1","object":"response.output_text","text":"not an image"}
+		],
+		"usage": {"input_tokens": 10, "output_tokens": 2}
+	}`)
+
+	require.Equal(t, 0, countOpenAIResponseImageOutputsFromJSONBytes(jsonBody))
+	require.Nil(t, collectOpenAIResponseImageOutputSizesFromJSONBytes(jsonBody))
+
+	sseBody := "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n"
+
+	require.Equal(t, 0, countOpenAIImageOutputsFromSSEBody(sseBody))
+	require.Nil(t, collectOpenAIImageOutputSizesFromSSEBody(sseBody))
+}
+
 func TestOpenAIImageOutputCounterCountsMultilineSSEDataPayload(t *testing.T) {
 	counter := newOpenAIImageOutputCounter()
 	counter.AddSSEData([]byte("{\"type\":\"image_generation.completed\",\n\"b64_json\":\"final-a\"}"))
