@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -1032,10 +1031,9 @@ func TestOpenAIStreamingTimeout(t *testing.T) {
 	_ = pw.Close()
 	_ = pr.Close()
 
-	if err == nil || !strings.Contains(err.Error(), "stream data interval timeout") {
-		t.Fatalf("expected stream timeout error, got %v", err)
-	}
-	if !strings.Contains(rec.Body.String(), "\"type\":\"error\"") || !strings.Contains(rec.Body.String(), "stream_timeout") {
+	var finalizedErr *OpenAIStreamAlreadyFinalizedError
+	require.ErrorAs(t, err, &finalizedErr)
+	if !strings.Contains(rec.Body.String(), "event: response.failed") || !strings.Contains(rec.Body.String(), `"type":"response.failed"`) || !strings.Contains(rec.Body.String(), "stream_timeout") {
 		t.Fatalf("expected OpenAI-compatible error SSE event, got %q", rec.Body.String())
 	}
 }
@@ -1292,9 +1290,51 @@ func TestOpenAIStreamingPolicyResponseFailedBeforeOutputPassesThrough(t *testing
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
+	var finalizedErr *OpenAIStreamAlreadyFinalizedError
+	require.True(t, errors.As(err, &finalizedErr))
 	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "response.failed")
 	require.Contains(t, rec.Body.String(), "high-risk cyber activity")
+	require.NotContains(t, rec.Body.String(), "Upstream request failed")
+}
+
+func TestOpenAIStreamingReadErrorAfterOutputEmitsResponsesFailedTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       pr,
+		Header:     http.Header{"X-Request-Id": []string{"rid-read-error"}},
+	}
+
+	go func() {
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"))
+		_ = pw.CloseWithError(io.ErrUnexpectedEOF)
+	}()
+
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, time.Now(), "model", "model")
+	_ = pr.Close()
+	var finalizedErr *OpenAIStreamAlreadyFinalizedError
+	require.ErrorAs(t, err, &finalizedErr)
+	body := rec.Body.String()
+	require.Contains(t, body, "response.output_text.delta")
+	require.Contains(t, body, "event: response.failed")
+	require.Contains(t, body, `"type":"response.failed"`)
+	require.Contains(t, body, "stream_read_error")
+	require.NotContains(t, body, "event: error")
 }
 
 func TestOpenAIStreamingClientDisconnectDrainsUpstreamUsage(t *testing.T) {
@@ -1546,10 +1586,9 @@ func TestOpenAIStreamingTooLong(t *testing.T) {
 	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 2}, time.Now(), "model", "model")
 	_ = pr.Close()
 
-	if !errors.Is(err, bufio.ErrTooLong) {
-		t.Fatalf("expected ErrTooLong, got %v", err)
-	}
-	if !strings.Contains(rec.Body.String(), "\"type\":\"error\"") || !strings.Contains(rec.Body.String(), "response_too_large") {
+	var finalizedErr *OpenAIStreamAlreadyFinalizedError
+	require.ErrorAs(t, err, &finalizedErr)
+	if !strings.Contains(rec.Body.String(), "event: response.failed") || !strings.Contains(rec.Body.String(), `"type":"response.failed"`) || !strings.Contains(rec.Body.String(), "response_too_large") {
 		t.Fatalf("expected OpenAI-compatible error SSE event, got %q", rec.Body.String())
 	}
 }

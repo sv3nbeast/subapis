@@ -252,6 +252,25 @@ type OpenAIWSRetryMetricsSnapshot struct {
 	NonRetryableFastFallbackTotal int64 `json:"non_retryable_fast_fallback_total"`
 }
 
+// OpenAIStreamAlreadyFinalizedError means the upstream stream has already sent
+// a valid Responses terminal failure event to the client. Handler code should
+// not append another fallback error frame, because that produces mixed terminal
+// events and strict clients report it as a transport disconnect.
+type OpenAIStreamAlreadyFinalizedError struct {
+	Message string
+}
+
+func (e *OpenAIStreamAlreadyFinalizedError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "openai stream already finalized with response.failed"
+	}
+	return "openai stream already finalized with response.failed: " + e.Message
+}
+
+func newOpenAIStreamAlreadyFinalizedError(message string) *OpenAIStreamAlreadyFinalizedError {
+	return &OpenAIStreamAlreadyFinalizedError{Message: sanitizeUpstreamErrorMessage(message)}
+}
+
 type OpenAICompatibilityFallbackMetricsSnapshot struct {
 	SessionHashLegacyReadFallbackTotal int64   `json:"session_hash_legacy_read_fallback_total"`
 	SessionHashLegacyReadFallbackHit   int64   `json:"session_hash_legacy_read_fallback_hit"`
@@ -3914,6 +3933,17 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					return resultWithUsage(),
 						s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
 				}
+				setOpsUpstreamError(c, http.StatusBadGateway, failedMessage, "")
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: http.StatusBadGateway,
+					UpstreamRequestID:  upstreamRequestID,
+					Passthrough:        true,
+					Kind:               "stream_terminal_failed",
+					Message:            failedMessage,
+				})
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}
@@ -3956,7 +3986,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			return resultWithUsage(), nil
 		}
 		if sawFailedEvent {
-			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
+			return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError(failedMessage)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
@@ -4670,26 +4700,32 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	var streamFailoverErr error
-	sendErrorEvent := func(reason string) {
+	sendErrorEvent := func(reason string) bool {
 		if errorEventSent || clientDisconnected {
-			return
+			return false
 		}
 		errorEventSent = true
-		payload := `{"type":"error","sequence_number":0,"error":{"type":"upstream_error","message":` + strconv.Quote(reason) + `,"code":` + strconv.Quote(reason) + `}}`
+		payload := `{"type":"response.failed","response":{"id":"resp_` + strings.ReplaceAll(uuid.NewString(), "-", "") + `","object":"response","model":` + strconv.Quote(originalModel) + `,"status":"failed","output":[],"error":{"code":` + strconv.Quote(reason) + `,"message":` + strconv.Quote(reason) + `}}}`
 		if err := flushBuffered(); err != nil {
 			clientDisconnected = true
-			return
+			return false
 		}
-		if _, err := bufferedWriter.WriteString("data: " + payload + "\n\n"); err != nil {
+		if _, err := bufferedWriter.WriteString("event: response.failed\ndata: " + payload + "\n\n"); err != nil {
 			clientDisconnected = true
-			return
+			return false
 		}
 		if err := flushBuffered(); err != nil {
 			clientDisconnected = true
-			return
+			return false
+		}
+		sawTerminalEvent = true
+		sawFailedEvent = true
+		if failedMessage == "" {
+			failedMessage = reason
 		}
 		clientOutputStarted = true
 		lastDownstreamWriteAt = time.Now()
+		return true
 	}
 
 	needModelReplace := originalModel != mappedModel
@@ -4716,7 +4752,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 		}
 		if sawFailedEvent {
-			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
+			return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError(failedMessage)
 		}
 		if !clientDisconnected {
 			hadBufferedData := bufferedWriter.Buffered() > 0
@@ -4739,7 +4775,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return resultWithUsage(), nil, true
 		}
 		if sawFailedEvent {
-			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage), true
+			return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError(failedMessage), true
 		}
 		// 客户端断开/取消请求时，上游读取往往会返回 context canceled。
 		// /v1/responses 的 SSE 事件必须符合 OpenAI 协议；这里不注入自定义 error event，避免下游 SDK 解析失败。
@@ -4748,7 +4784,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
-			sendErrorEvent("response_too_large")
+			if sendErrorEvent("response_too_large") {
+				return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError("response_too_large"), true
+			}
 			return resultWithUsage(), scanErr, true
 		}
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
@@ -4762,7 +4800,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", scanErr), true
 		}
-		sendErrorEvent("stream_read_error")
+		if sendErrorEvent("stream_read_error") {
+			return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError("stream_read_error"), true
+		}
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
 	processSSELine := func(line string, queueDrained bool) {
@@ -4791,6 +4831,16 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, failedMessage)
 					return
 				}
+				setOpsUpstreamError(c, http.StatusBadGateway, failedMessage, "")
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: http.StatusBadGateway,
+					UpstreamRequestID:  upstreamRequestID,
+					Kind:               "stream_terminal_failed",
+					Message:            failedMessage,
+				})
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}
@@ -4932,7 +4982,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			sendErrorEvent("stream_timeout")
+			if sendErrorEvent("stream_timeout") {
+				return resultWithUsage(), newOpenAIStreamAlreadyFinalizedError("stream_timeout")
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
