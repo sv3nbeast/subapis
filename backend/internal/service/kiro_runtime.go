@@ -362,7 +362,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	for idx, endpoint := range endpoints {
 		for attempt := 0; attempt <= maxKiro429Retries; attempt++ {
-			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
+			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxKiro429Retries+1)
 			if err != nil {
 				return nil, requestCtx, err
 			}
@@ -514,11 +514,22 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 }
 
 func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
+	if isKiroRuntimeEndpointMode(account) && strings.TrimSpace(account.GetCredential("profile_arn")) != "" {
+		region := kiroRuntimeAPIRegion(account)
+		return []kiroEndpointConfig{
+			{
+				URL:       fmt.Sprintf("https://runtime.%s.kiro.dev/", region),
+				AmzTarget: kiroGenerateAssistantResponseTarget,
+				Name:      "KiroRuntime",
+			},
+		}
+	}
 	region := kiroAPIRegion(account)
 	return []kiroEndpointConfig{
 		{
-			URL:  fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
-			Name: "AmazonQ",
+			URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
+			AmzTarget: kiroGenerateAssistantResponseTarget,
+			Name:      "AmazonQ",
 		},
 	}
 }
@@ -529,6 +540,14 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 	_ = token
 	profileArn := resolveKiroPayloadProfileArn(account)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
+	if isKiroCLIWireMode(account) {
+		return kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
+			Origin:                     "KIRO_CLI",
+			UseNativeEffort:            true,
+			AttachEnvState:             true,
+			InjectThinkingSystemPrompt: false,
+		})
+	}
 	return kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
 }
 

@@ -5,10 +5,18 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/google/uuid"
+)
+
+const (
+	kiroAWSJSONContentType              = "application/x-amz-json-1.0"
+	kiroJSONContentType                 = "application/json"
+	kiroGenerateAssistantResponseTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
+	kiroGenerateAssistantResponsePath   = "/generateAssistantResponse"
 )
 
 func buildKiroAccountKey(account *Account) string {
@@ -114,6 +122,66 @@ func kiroAPIRegion(account *Account) string {
 	return region
 }
 
+func isKiroCLIWireMode(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	for _, key := range []string{"kiro_wire_mode", "wire_mode"} {
+		switch strings.ToLower(strings.TrimSpace(account.GetCredential(key))) {
+		case "cli", "kiro_cli", "kiro-cli":
+			return true
+		}
+	}
+	if strings.TrimSpace(account.GetCredential("profile_arn")) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("kiro_endpoint_mode"))) {
+	case "runtime", "kiro_runtime":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("preferred_endpoint"))) {
+	case "runtime", "kiro_runtime":
+		return true
+	}
+	return false
+}
+
+func isKiroRuntimeEndpointMode(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("kiro_endpoint_mode"))) {
+	case "runtime", "kiro_runtime":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("preferred_endpoint"))) {
+	case "runtime", "kiro_runtime":
+		return true
+	}
+	return isKiroCLIWireMode(account)
+}
+
+func kiroRuntimeAPIRegion(account *Account) string {
+	if account == nil {
+		return kiroDefaultRegion
+	}
+	if region := strings.TrimSpace(account.GetCredential("api_region")); region != "" {
+		return region
+	}
+	if region := kiroRegionFromProfileARN(account.GetCredential("profile_arn")); region != "" {
+		return region
+	}
+	return kiroDefaultRegion
+}
+
+func kiroRegionFromProfileARN(profileARN string) string {
+	parts := strings.Split(strings.TrimSpace(profileARN), ":")
+	if len(parts) >= 4 && strings.EqualFold(parts[0], "arn") && parts[3] != "" {
+		return parts[3]
+	}
+	return ""
+}
+
 func applyKiroConditionalHeaders(req *http.Request, account *Account) {
 	if req == nil || account == nil {
 		return
@@ -134,22 +202,43 @@ func resolveKiroPayloadProfileArn(account *Account) string {
 }
 
 func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account) (*http.Request, error) {
+	return newKiroJSONRequestWithAttempt(ctx, endpointURL, payload, token, accountKey, machineID, amzTarget, account, 1, 3)
+}
+
+func newKiroJSONRequestWithAttempt(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account, attempt, maxAttempts int) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	target := strings.TrimSpace(amzTarget)
+	if target == "" && isKiroGenerateAssistantResponseURL(req.URL) {
+		target = kiroGenerateAssistantResponseTarget
+	}
+
+	if target != "" {
+		req.Header.Set("Content-Type", kiroAWSJSONContentType)
+		req.Header.Set("X-Amz-Target", target)
+	} else {
+		req.Header.Set("Content-Type", kiroJSONContentType)
+	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
 	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
 	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
-	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
-	if amzTarget != "" {
-		req.Header.Set("X-Amz-Target", amzTarget)
+	if isKiroCLIWireMode(account) {
+		req.Header.Set("x-amzn-codewhisperer-optout", "false")
+	} else {
+		req.Header.Set("x-amzn-codewhisperer-optout", "true")
 	}
+	if attempt <= 0 {
+		attempt = 1
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	req.Header.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
+	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
 	if account != nil {
 		profileArn := strings.TrimSpace(account.GetCredential("profile_arn"))
 		if profileArn != "" {
@@ -158,4 +247,8 @@ func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte,
 	}
 	applyKiroConditionalHeaders(req, account)
 	return req, nil
+}
+
+func isKiroGenerateAssistantResponseURL(u *url.URL) bool {
+	return u != nil && strings.HasSuffix(strings.TrimRight(u.Path, "/"), kiroGenerateAssistantResponsePath)
 }

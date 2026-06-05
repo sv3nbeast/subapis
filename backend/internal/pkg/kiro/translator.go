@@ -47,6 +47,9 @@ const (
 
 var (
 	trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
+	kiroEnvBlockPattern  = regexp.MustCompile(`(?s)<env>(.*?)</env>`)
+	kiroEnvWorkingDir    = regexp.MustCompile(`(?m)^Working directory:\s*(.+?)\s*$`)
+	kiroEnvPlatform      = regexp.MustCompile(`(?m)^Platform:\s*(.+?)\s*$`)
 	requiredToolFields   = map[string][][]string{
 		"write":              {{"file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
@@ -58,6 +61,21 @@ var (
 		"bash":               {{"cmd", "command"}},
 		"execute":            {{"command"}},
 		"run_command":        {{"command"}},
+	}
+	kiroEffortRank = map[string]int{
+		"low":    0,
+		"medium": 1,
+		"high":   2,
+		"xhigh":  3,
+		"max":    4,
+	}
+	kiroModelEffortEnums = map[string][]string{
+		"claude-opus-4.8":      {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-4.7":      {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-4.6":      {"low", "medium", "high", "max"},
+		"claude-sonnet-4.6":    {"low", "medium", "high", "max"},
+		"claude-opus-4.6-1m":   {"low", "medium", "high", "max"},
+		"claude-sonnet-4.6-1m": {"low", "medium", "high", "max"},
 	}
 )
 
@@ -94,16 +112,32 @@ type KiroBuildResult struct {
 	Context KiroRequestContext
 }
 
+type KiroPayloadOptions struct {
+	Origin                     string
+	UseNativeEffort            bool
+	AttachEnvState             bool
+	InjectThinkingSystemPrompt bool
+}
+
 type KiroPayload struct {
-	ConversationState KiroConversationState `json:"conversationState"`
-	ProfileArn        string                `json:"profileArn,omitempty"`
-	InferenceConfig   *KiroInferenceConfig  `json:"inferenceConfig,omitempty"`
+	ConversationState            KiroConversationState             `json:"conversationState"`
+	ProfileArn                   string                            `json:"profileArn,omitempty"`
+	AdditionalModelRequestFields *KiroAdditionalModelRequestFields `json:"additionalModelRequestFields,omitempty"`
+	InferenceConfig              *KiroInferenceConfig              `json:"inferenceConfig,omitempty"`
 }
 
 type KiroInferenceConfig struct {
 	MaxTokens   int     `json:"maxTokens,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
 	TopP        float64 `json:"topP,omitempty"`
+}
+
+type KiroAdditionalModelRequestFields struct {
+	OutputConfig *KiroOutputConfig `json:"output_config,omitempty"`
+}
+
+type KiroOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type thinkingDirective struct {
@@ -148,8 +182,14 @@ type KiroUserInputMessage struct {
 }
 
 type KiroUserInputMessageContext struct {
-	ToolResults []KiroToolResult  `json:"toolResults,omitempty"`
+	EnvState    *KiroEnvState     `json:"envState,omitempty"`
 	Tools       []KiroToolWrapper `json:"tools,omitempty"`
+	ToolResults []KiroToolResult  `json:"toolResults,omitempty"`
+}
+
+type KiroEnvState struct {
+	OperatingSystem         string `json:"operatingSystem,omitempty"`
+	CurrentWorkingDirectory string `json:"currentWorkingDirectory,omitempty"`
 }
 
 type KiroToolResult struct {
@@ -279,9 +319,86 @@ func normalizeModelAlias(model string) string {
 	}
 }
 
+func resolveKiroNativeEffort(modelID string, body []byte, thinking *thinkingDirective) string {
+	requested := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "output_config.effort").String()))
+	if requested == "" {
+		if thinking == nil {
+			return ""
+		}
+		requested = strings.ToLower(strings.TrimSpace(thinking.Effort))
+		if requested == "" {
+			if thinking.Mode == "adaptive" || thinking.Mode == "enabled" {
+				requested = "medium"
+			}
+		}
+	}
+	if requested == "" {
+		return ""
+	}
+	if _, ok := kiroEffortRank[requested]; !ok {
+		return ""
+	}
+	enum, ok := kiroModelEffortEnums[strings.ToLower(strings.TrimSpace(modelID))]
+	if !ok {
+		return ""
+	}
+	for _, allowed := range enum {
+		if requested == allowed {
+			return requested
+		}
+	}
+	return enum[len(enum)-1]
+}
+
+func parseKiroEnvState(systemPrompt string) *KiroEnvState {
+	if systemPrompt == "" {
+		return nil
+	}
+	match := kiroEnvBlockPattern.FindStringSubmatch(systemPrompt)
+	if match == nil {
+		return nil
+	}
+	block := match[1]
+	env := &KiroEnvState{}
+	if wd := kiroEnvWorkingDir.FindStringSubmatch(block); wd != nil {
+		env.CurrentWorkingDirectory = strings.TrimSpace(wd[1])
+	}
+	if platform := kiroEnvPlatform.FindStringSubmatch(block); platform != nil {
+		env.OperatingSystem = normalizeKiroEnvPlatform(strings.TrimSpace(platform[1]))
+	}
+	if env.CurrentWorkingDirectory == "" && env.OperatingSystem == "" {
+		return nil
+	}
+	return env
+}
+
+func normalizeKiroEnvPlatform(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "darwin":
+		return "macos"
+	case "win32", "windows":
+		return "windows"
+	default:
+		return strings.TrimSpace(platform)
+	}
+}
+
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	return BuildKiroPayloadWithOptions(claudeBody, modelID, profileArn, headers, KiroPayloadOptions{
+		Origin:                     origin,
+		UseNativeEffort:            false,
+		AttachEnvState:             false,
+		InjectThinkingSystemPrompt: true,
+	})
+}
+
+func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
 	const kiroMaxOutputTokens = 32000
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
+	origin := strings.TrimSpace(options.Origin)
+	if origin == "" {
+		origin = "AI_EDITOR"
+	}
 	var maxTokens int64
 	if mt := gjson.GetBytes(claudeBody, "max_tokens"); mt.Exists() {
 		maxTokens = mt.Int()
@@ -323,6 +440,13 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		}
 	}
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
+	if !options.InjectThinkingSystemPrompt {
+		systemPrompt = buildInjectedSystemPrompt(baseSystem, nil, toolChoiceHint)
+	}
+	var envState *KiroEnvState
+	if options.AttachEnvState {
+		envState = parseKiroEnvState(baseSystem)
+	}
 
 	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
@@ -337,10 +461,11 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	if currentUserMsg != nil {
 		currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
 		currentToolResults = deduplicateToolResults(currentToolResults)
-		if len(kiroTools) > 0 || len(currentToolResults) > 0 {
+		if envState != nil || len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
-				Tools:       kiroTools,
+				EnvState:    envState,
 				ToolResults: currentToolResults,
+				Tools:       kiroTools,
 			}
 		}
 	}
@@ -370,6 +495,16 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		}
 	}
 
+	var additionalModelRequestFields *KiroAdditionalModelRequestFields
+	if options.UseNativeEffort {
+		if effort := resolveKiroNativeEffort(modelID, claudeBody, thinking); effort != "" {
+			requestCtx.ThinkingEnabled = true
+			additionalModelRequestFields = &KiroAdditionalModelRequestFields{
+				OutputConfig: &KiroOutputConfig{Effort: effort},
+			}
+		}
+	}
+
 	conversationID := uuid.NewString()
 
 	payload := KiroPayload{
@@ -380,8 +515,9 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 			CurrentMessage:  currentMessage,
 			History:         history,
 		},
-		ProfileArn:      profileArn,
-		InferenceConfig: inferenceConfig,
+		ProfileArn:                   profileArn,
+		AdditionalModelRequestFields: additionalModelRequestFields,
+		InferenceConfig:              inferenceConfig,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -1265,7 +1401,9 @@ func prependSystemHistory(history []KiroHistoryMessage, systemPrompt, modelID, o
 
 func normalizeOrigin(origin string) string {
 	switch origin {
-	case "KIRO_CLI", "AMAZON_Q":
+	case "KIRO_CLI":
+		return "KIRO_CLI"
+	case "AMAZON_Q":
 		return "CLI"
 	case "KIRO_AI_EDITOR", "KIRO_IDE", "":
 		return "AI_EDITOR"

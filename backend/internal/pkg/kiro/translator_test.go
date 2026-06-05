@@ -297,6 +297,54 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus46ThinkingModel(t *testin
 	require.Contains(t, systemContent, "[Context: Current time is ")
 }
 
+func TestBuildKiroPayloadOptionsForwardCLIWireFields(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"system":"You are Claude Code.\n<env>\nWorking directory: /Users/sven/project\nPlatform: darwin\n</env>",
+		"output_config":{"effort":"xhigh"},
+		"messages":[{"role":"user","content":"hello kiro"}],
+		"tools":[{"name":"read_file","description":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-4.8", "arn:aws:test", nil, KiroPayloadOptions{
+		Origin:                     "KIRO_CLI",
+		UseNativeEffort:            true,
+		AttachEnvState:             true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+	payload := result.Payload
+
+	require.Equal(t, "KIRO_CLI", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.origin").String())
+	require.Equal(t, "xhigh", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
+	require.Equal(t, "macos", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.envState.operatingSystem").String())
+	require.Equal(t, "/Users/sven/project", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.envState.currentWorkingDirectory").String())
+	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	require.NotContains(t, systemContent, "<thinking_effort>")
+
+	wire := string(payload)
+	require.Less(t, strings.Index(wire, `"profileArn"`), strings.Index(wire, `"additionalModelRequestFields"`))
+	require.Less(t, strings.Index(wire, `"envState"`), strings.Index(wire, `"tools"`))
+}
+
+func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffort(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"system":"<env>\nWorking directory: /Users/sven/project\nPlatform: darwin\n</env>",
+		"output_config":{"effort":"xhigh"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	require.False(t, gjson.GetBytes(payload, "additionalModelRequestFields").Exists())
+	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.envState").Exists())
+	require.Equal(t, "AI_EDITOR", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.origin").String())
+}
+
 // 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
 func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *testing.T) {

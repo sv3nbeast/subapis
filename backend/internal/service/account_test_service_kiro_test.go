@@ -49,6 +49,8 @@ func TestAccountTestService_KiroUsesKiroUpstreamInsteadOfAnthropic(t *testing.T)
 	require.Equal(t, "q.us-east-1.amazonaws.com", req.URL.Host)
 	require.Equal(t, "/generateAssistantResponse", req.URL.Path)
 	require.Equal(t, "Bearer kiro-access-token", req.Header.Get("Authorization"))
+	require.Equal(t, "application/x-amz-json-1.0", req.Header.Get("Content-Type"))
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", req.Header.Get("X-Amz-Target"))
 	require.Equal(t, "vibe", req.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Empty(t, req.Header.Get("anthropic-version"))
 	require.NotContains(t, req.URL.Host, "api.anthropic.com")
@@ -89,7 +91,8 @@ func TestAccountTestService_Kiro429DoesNotFallbackToCodeWhispererEndpoint(t *tes
 	require.Len(t, upstream.requests, 1)
 
 	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[0].URL.Host)
-	require.Empty(t, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "application/x-amz-json-1.0", upstream.requests[0].Header.Get("Content-Type"))
 	require.Contains(t, err.Error(), "API returned 429")
 }
 
@@ -239,7 +242,7 @@ func TestAccountTestService_KiroPreferredEndpointIsIgnored(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[0].URL.Host)
-	require.Empty(t, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", upstream.requests[0].Header.Get("X-Amz-Target"))
 }
 
 func TestBuildKiroPayloadForAccount_KiroBuilderIDWithoutProfileArnOmitsProfileArn(t *testing.T) {

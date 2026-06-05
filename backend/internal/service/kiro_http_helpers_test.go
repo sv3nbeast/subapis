@@ -95,12 +95,30 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER", req.Header.Get("x-amzn-kiro-profile-arn"))
 	require.Equal(t, "vibe", req.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Equal(t, "true", req.Header.Get("x-amzn-codewhisperer-optout"))
+	require.Equal(t, "application/x-amz-json-1.0", req.Header.Get("Content-Type"))
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", req.Header.Get("X-Amz-Target"))
 	require.Contains(t, req.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
 	require.Contains(t, req.Header.Get("User-Agent"), "md/nodejs#22.22.0")
 	require.Contains(t, req.Header.Get("User-Agent"), buildKiroMachineID(account))
 	require.Contains(t, req.Header.Get("X-Amz-User-Agent"), buildKiroMachineID(account))
 	require.True(t, strings.Contains(req.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34"))
 	require.Empty(t, req.Header.Get("Anthropic-Beta"))
+}
+
+func TestNewKiroJSONRequestKeepsMCPAsPlainJSON(t *testing.T) {
+	req, err := newKiroJSONRequest(
+		context.Background(),
+		"https://q.us-east-1.amazonaws.com/mcp",
+		[]byte(`{"jsonrpc":"2.0"}`),
+		"access-token",
+		"account-key",
+		"machine-id",
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
+	require.Empty(t, req.Header.Get("X-Amz-Target"))
 }
 
 func TestIsKiroInvalidModelIDBodyRecognizesKnownForms(t *testing.T) {
@@ -282,7 +300,7 @@ func TestBuildKiroEndpointsUsesOnlyAmazonQEndpoint(t *testing.T) {
 	require.Len(t, endpoints, 1)
 	require.Equal(t, "AmazonQ", endpoints[0].Name)
 	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[0].URL[8:])
-	require.Empty(t, endpoints[0].AmzTarget)
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", endpoints[0].AmzTarget)
 }
 
 func TestBuildKiroEndpointsIgnoresPreferredEndpoint(t *testing.T) {
