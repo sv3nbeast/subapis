@@ -155,6 +155,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	if parsedReq == nil {
 		parsedReq = &service.ParsedRequest{Model: reqModel, Stream: reqStream, Body: body}
 	}
+	attachAPIKeyGroupToParsedRequest(parsedReq, apiKey)
 	parsedReq.SessionContext = &service.SessionContext{
 		ClientIP:  ip.GetClientIP(c),
 		UserAgent: c.GetHeader("User-Agent"),

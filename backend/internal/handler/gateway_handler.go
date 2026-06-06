@@ -160,6 +160,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	attachAPIKeyGroupToParsedRequest(parsedReq, apiKey)
 	body = parsedReq.Body
 	reqModel := parsedReq.Model
 	reqStream := parsedReq.Stream
@@ -835,6 +836,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				parsedReq.Body = h.gatewayService.ReplaceModelInBody(parsedReq.Body, channelMapping.MappedModel)
 				body = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 			}
+			attachAPIKeyGroupToParsedRequest(parsedReq, currentAPIKey)
 
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
@@ -1052,6 +1054,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			return
 		}
 	}
+}
+
+func attachAPIKeyGroupToParsedRequest(parsedReq *service.ParsedRequest, apiKey *service.APIKey) {
+	if parsedReq == nil || apiKey == nil {
+		return
+	}
+	parsedReq.GroupID = apiKey.GroupID
+	parsedReq.Group = apiKey.Group
 }
 
 // Models handles listing available models
