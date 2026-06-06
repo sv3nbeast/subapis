@@ -4051,6 +4051,10 @@ export default {
         baseUrlHint: 'The address of the upstream Kiro-compatible service.',
         apiKeyHint: 'Kiro API Key from Kiro Console or your compatible upstream service.'
       },
+      droid: {
+        baseUrlHint: 'The address of the Factory.ai Droid-compatible service.',
+        apiKeyHint: 'API Key from Factory.ai or your compatible upstream service.'
+      },
       // OAuth flow
       oauth: {
         title: 'Claude Account Authorization',
@@ -4102,6 +4106,23 @@ export default {
         batchPartialSuccess: 'Partial success: {success} succeeded, {failed} failed',
         batchFailed: 'Batch creation failed',
         refreshTokenInputLabel: 'Refresh Token',
+        droid: {
+          title: 'Droid Account Authorization',
+          followSteps: 'Follow these steps to authorize your Droid account:',
+          step1GenerateUrl: 'Generate the device authorization info below',
+          generateAuthUrl: 'Generate Auth Info',
+          step2OpenUrl: 'Open the verification URL and finish authorization',
+          openUrlDesc: 'Open the verification URL in your browser, sign in to your Factory.ai / Droid account, and approve access.',
+          step3EnterCode: 'Click complete after browser authorization finishes',
+          authCodeDesc: 'Droid uses device authorization. No callback URL or pasted code is required. After the browser flow finishes, return here and click "Complete Authorization".',
+          authCode: 'Device Authorization',
+          authCodePlaceholder: 'No authorization code is required',
+          authCodeHint: 'After completing authorization in the browser, return here and click "Complete Authorization".',
+          completeAuth: 'Complete Authorization',
+          validating: 'Checking...',
+          authFailed: 'Droid authorization failed',
+          authorizationPending: 'Authorization is still pending. Complete the Droid sign-in flow in the browser first.'
+        },
         // OpenAI specific
         openai: {
           title: 'OpenAI Account Authorization',

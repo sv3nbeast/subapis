@@ -3172,6 +3172,7 @@ const platformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "kiro", label: "Kiro" },
+  { value: "droid", label: "Droid" },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3181,6 +3182,7 @@ const platformFilterOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "kiro", label: "Kiro" },
+  { value: "droid", label: "Droid" },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -3349,7 +3351,7 @@ const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
 
 const canConfigureModelsList = (platform: GroupPlatform) =>
-  ["anthropic", "openai", "gemini", "antigravity", "kiro"].includes(platform);
+  ["anthropic", "openai", "gemini", "antigravity", "kiro", "droid"].includes(platform);
 
 const loadModelsListCandidates = async (
   mode: "create" | "edit",

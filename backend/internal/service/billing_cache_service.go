@@ -28,6 +28,9 @@ var (
 	// RPM 超限错误。gateway_handler 负责映射为 HTTP 429。
 	ErrGroupRPMExceeded = infraerrors.TooManyRequests("GROUP_RPM_EXCEEDED", "group requests-per-minute limit exceeded")
 	ErrUserRPMExceeded  = infraerrors.TooManyRequests("USER_RPM_EXCEEDED", "user requests-per-minute limit exceeded")
+	// count_tokens 专用 RPM 超限错误，避免污染普通 messages 的普通 RPM 统计。
+	ErrCountTokensGroupRPMExceeded = infraerrors.TooManyRequests("COUNT_TOKENS_GROUP_RPM_EXCEEDED", "count_tokens group requests-per-minute limit exceeded")
+	ErrCountTokensUserRPMExceeded  = infraerrors.TooManyRequests("COUNT_TOKENS_USER_RPM_EXCEEDED", "count_tokens user requests-per-minute limit exceeded")
 
 	// user × platform quota（HTTP 429 Too Many Requests + Retry-After header）。
 	// 选用 429 而非 403：限额耗尽属于"暂时性资源用尽，重试可恢复"的场景（RFC 6585），
@@ -757,6 +760,51 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	return nil
 }
 
+// CheckCountTokensEligibility checks billing eligibility for /v1/messages/count_tokens.
+// It preserves balance/subscription and API key rate-limit checks, but uses isolated
+// count_tokens-specific RPM counters so probing traffic does not consume normal request RPM.
+func (s *BillingCacheService) CheckCountTokensEligibility(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, platforms ...string) error {
+	platform := ""
+	if len(platforms) > 0 {
+		platform = platforms[0]
+	}
+	if s.cfg.RunMode == config.RunModeSimple {
+		return nil
+	}
+	if s.circuitBreaker != nil && !s.circuitBreaker.Allow() {
+		return ErrBillingServiceUnavailable
+	}
+
+	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	if isSubscriptionMode {
+		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
+			return err
+		}
+	} else {
+		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
+			return err
+		}
+	}
+
+	if !isSubscriptionMode {
+		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
+			return err
+		}
+	}
+
+	if apiKey != nil && apiKey.HasRateLimits() {
+		if err := s.checkAPIKeyRateLimits(ctx, apiKey); err != nil {
+			return err
+		}
+	}
+
+	if err := s.checkCountTokensRPM(ctx, user, group); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // checkRPM 执行并行 RPM 限流，所有适用的限制同时生效，任一超限即拒绝：
 //
 //  1. (用户, 分组) rpm_override       — 最细粒度：管理员为特定用户在特定分组设定的专属限额。
@@ -835,6 +883,73 @@ func (s *BillingCacheService) checkRPM(ctx context.Context, user *User, group *G
 		}
 		if count > user.RPMLimit {
 			return ErrUserRPMExceeded
+		}
+	}
+
+	return nil
+}
+
+func (s *BillingCacheService) checkCountTokensRPM(ctx context.Context, user *User, group *Group) error {
+	if s == nil || s.userRPMCache == nil || user == nil {
+		return nil
+	}
+
+	if group != nil {
+		var override *int
+		if user.UserGroupRPMOverride != nil {
+			override = user.UserGroupRPMOverride
+		} else if s.userGroupRateRepo != nil {
+			dbOverride, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, user.ID, group.ID)
+			if err != nil {
+				logger.LegacyPrintf(
+					"service.billing_cache",
+					"Warning: count_tokens rpm override lookup failed for user=%d group=%d: %v",
+					user.ID, group.ID, err,
+				)
+			} else {
+				override = dbOverride
+			}
+		}
+
+		if override != nil {
+			if *override > 0 {
+				count, incErr := s.userRPMCache.IncrementCountTokensUserGroupRPM(ctx, user.ID, group.ID)
+				if incErr != nil {
+					logger.LegacyPrintf(
+						"service.billing_cache",
+						"Warning: count_tokens rpm increment (override) failed for user=%d group=%d: %v",
+						user.ID, group.ID, incErr,
+					)
+				} else if count > *override {
+					return ErrCountTokensGroupRPMExceeded
+				}
+			}
+		} else if group.RPMLimit > 0 {
+			count, err := s.userRPMCache.IncrementCountTokensUserGroupRPM(ctx, user.ID, group.ID)
+			if err != nil {
+				logger.LegacyPrintf(
+					"service.billing_cache",
+					"Warning: count_tokens rpm increment (group) failed for user=%d group=%d: %v",
+					user.ID, group.ID, err,
+				)
+			} else if count > group.RPMLimit {
+				return ErrCountTokensGroupRPMExceeded
+			}
+		}
+	}
+
+	if user.RPMLimit > 0 {
+		count, err := s.userRPMCache.IncrementCountTokensUserRPM(ctx, user.ID)
+		if err != nil {
+			logger.LegacyPrintf(
+				"service.billing_cache",
+				"Warning: count_tokens rpm increment (user) failed for user=%d: %v",
+				user.ID, err,
+			)
+			return nil
+		}
+		if count > user.RPMLimit {
+			return ErrCountTokensUserRPMExceeded
 		}
 	}
 

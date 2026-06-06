@@ -87,6 +87,7 @@ func ProvideTokenRefreshService(
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
 	kiroOAuthService *KiroOAuthService,
+	droidOAuthService *DroidOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -174,6 +175,19 @@ func ProvideKiroTokenProvider(
 ) *KiroTokenProvider {
 	p := NewKiroTokenProvider(accountRepo, tokenCache, kiroOAuthService)
 	executor := NewKiroTokenRefresher(kiroOAuthService)
+	p.SetRefreshAPI(refreshAPI, executor)
+	p.SetRefreshPolicy(GeminiProviderRefreshPolicy())
+	return p
+}
+
+func ProvideDroidTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	droidOAuthService *DroidOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+) *DroidTokenProvider {
+	p := NewDroidTokenProvider(accountRepo, tokenCache, droidOAuthService)
+	executor := NewDroidTokenRefresher(droidOAuthService)
 	p.SetRefreshAPI(refreshAPI, executor)
 	p.SetRefreshPolicy(GeminiProviderRefreshPolicy())
 	return p
@@ -529,11 +543,13 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(TokenCacheInvalidator), new(*CompositeTokenCacheInvalidator)),
 	NewAntigravityOAuthService,
 	NewKiroOAuthService,
+	NewDroidOAuthService,
 	ProvideOAuthRefreshAPI,
 	ProvideGeminiTokenProvider,
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideKiroTokenProvider,
+	ProvideDroidTokenProvider,
 	ProvideKiroCooldownStore,
 	ProvideOpenAITokenProvider,
 	ProvideClaudeTokenProvider,

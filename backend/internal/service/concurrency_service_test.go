@@ -32,9 +32,15 @@ type stubConcurrencyCacheForTest struct {
 	cleanupErr     error
 
 	// 记录调用
-	releasedAccountIDs []int64
-	releasedRequestIDs []string
-	loadBatchCalls     atomic.Int64
+	releasedAccountIDs          []int64
+	releasedRequestIDs          []string
+	countTokensAcquireMax       int
+	countTokensAcquireRequestID string
+	countTokensReleaseUserID    int64
+	countTokensReleaseRequestID string
+	countTokensAcquireCalls     atomic.Int64
+	countTokensReleaseCalls     atomic.Int64
+	loadBatchCalls              atomic.Int64
 }
 
 var _ ConcurrencyCache = (*stubConcurrencyCacheForTest)(nil)
@@ -77,6 +83,18 @@ func (c *stubConcurrencyCacheForTest) ReleaseUserSlot(_ context.Context, _ int64
 }
 func (c *stubConcurrencyCacheForTest) GetUserConcurrency(_ context.Context, _ int64) (int, error) {
 	return c.concurrency, c.concurrencyErr
+}
+func (c *stubConcurrencyCacheForTest) AcquireCountTokensUserSlot(_ context.Context, _ int64, maxConcurrency int, requestID string) (bool, error) {
+	c.countTokensAcquireCalls.Add(1)
+	c.countTokensAcquireMax = maxConcurrency
+	c.countTokensAcquireRequestID = requestID
+	return c.acquireResult, c.acquireErr
+}
+func (c *stubConcurrencyCacheForTest) ReleaseCountTokensUserSlot(_ context.Context, userID int64, requestID string) error {
+	c.countTokensReleaseCalls.Add(1)
+	c.countTokensReleaseUserID = userID
+	c.countTokensReleaseRequestID = requestID
+	return c.releaseErr
 }
 func (c *stubConcurrencyCacheForTest) IncrementWaitCount(_ context.Context, _ int64, _ int) (bool, error) {
 	return c.waitAllowed, c.waitErr
@@ -195,6 +213,46 @@ func TestAcquireUserSlot_UnlimitedConcurrency(t *testing.T) {
 	result, err := svc.AcquireUserSlot(context.Background(), 1, 0)
 	require.NoError(t, err)
 	require.True(t, result.Acquired)
+}
+
+func TestCalculateCountTokensMaxConcurrency(t *testing.T) {
+	tests := []struct {
+		name            string
+		userConcurrency int
+		want            int
+	}{
+		{name: "zero uses default", userConcurrency: 0, want: 2},
+		{name: "one clamps to default", userConcurrency: 1, want: 2},
+		{name: "four halves to default", userConcurrency: 4, want: 2},
+		{name: "ten caps at five", userConcurrency: 10, want: 5},
+		{name: "twenty caps at five", userConcurrency: 20, want: 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, CalculateCountTokensMaxConcurrency(tt.userConcurrency))
+		})
+	}
+}
+
+func TestAcquireCountTokensUserSlot_UsesIsolatedCacheAndRelease(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{acquireResult: true}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireCountTokensUserSlot(context.Background(), 42, 8)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.NotNil(t, result.ReleaseFunc)
+	require.Equal(t, int64(1), cache.countTokensAcquireCalls.Load())
+	require.Equal(t, 4, cache.countTokensAcquireMax)
+	require.NotEmpty(t, cache.countTokensAcquireRequestID)
+
+	result.ReleaseFunc()
+	require.Eventually(t, func() bool {
+		return cache.countTokensReleaseCalls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(42), cache.countTokensReleaseUserID)
+	require.Equal(t, cache.countTokensAcquireRequestID, cache.countTokensReleaseRequestID)
 }
 
 func TestGenerateRequestID_UsesStablePrefixAndMonotonicCounter(t *testing.T) {

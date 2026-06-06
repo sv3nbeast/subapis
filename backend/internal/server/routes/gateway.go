@@ -246,6 +246,50 @@ func RegisterGatewayRoutes(
 		antigravityV1Beta.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
 
+	// Droid / Factory.ai 专用路由（仅使用 droid 账户，不混合调度）
+	droidClaude := r.Group("/droid/claude/v1")
+	droidClaude.Use(bodyLimit)
+	droidClaude.Use(clientRequestID)
+	droidClaude.Use(opsErrorLogger)
+	droidClaude.Use(endpointNorm)
+	droidClaude.Use(middleware.ForcePlatform(service.PlatformDroid))
+	droidClaude.Use(gin.HandlerFunc(apiKeyAuth))
+	droidClaude.Use(requireGroupAnthropic)
+	{
+		droidClaude.POST("/messages", h.Gateway.Messages)
+		droidClaude.GET("/models", h.Gateway.Models)
+		droidClaude.GET("/usage", h.Gateway.Usage)
+	}
+
+	droidComm := r.Group("/droid/comm/v1")
+	droidComm.Use(bodyLimit)
+	droidComm.Use(clientRequestID)
+	droidComm.Use(opsErrorLogger)
+	droidComm.Use(endpointNorm)
+	droidComm.Use(middleware.ForcePlatform(service.PlatformDroid))
+	droidComm.Use(gin.HandlerFunc(apiKeyAuth))
+	droidComm.Use(requireGroupAnthropic)
+	{
+		droidComm.POST("/chat/completions", h.Gateway.ChatCompletions)
+		droidComm.GET("/models", h.Gateway.Models)
+	}
+
+	droidOpenAI := r.Group("/droid/openai")
+	droidOpenAI.Use(bodyLimit)
+	droidOpenAI.Use(clientRequestID)
+	droidOpenAI.Use(opsErrorLogger)
+	droidOpenAI.Use(endpointNorm)
+	droidOpenAI.Use(middleware.ForcePlatform(service.PlatformDroid))
+	droidOpenAI.Use(gin.HandlerFunc(apiKeyAuth))
+	droidOpenAI.Use(requireGroupAnthropic)
+	{
+		droidOpenAI.POST("/v1/responses", h.Gateway.Responses)
+		droidOpenAI.POST("/v1/responses/*subpath", h.Gateway.Responses)
+		droidOpenAI.POST("/responses", h.Gateway.Responses)
+		droidOpenAI.POST("/responses/*subpath", h.Gateway.Responses)
+		droidOpenAI.GET("/v1/models", h.Gateway.Models)
+	}
+
 }
 
 // getGroupPlatform extracts the group platform from the API Key stored in context.

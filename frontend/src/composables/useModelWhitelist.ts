@@ -99,6 +99,13 @@ const kiroModels = [
   'claude-haiku-4-5-20251001-thinking'
 ]
 
+const droidModels = [
+  'claude-sonnet-4-20250514',
+  'claude-opus-4-20250514',
+  'gpt-5',
+  'gpt-5-2025-08-07'
+]
+
 // 智谱 GLM
 const zhipuModels = [
   'glm-4', 'glm-4v', 'glm-4-plus', 'glm-4-0520',
@@ -230,6 +237,7 @@ const allModelsList: string[] = [
   ...claudeModels,
   ...geminiModels,
   ...kiroModels,
+  ...droidModels,
   ...zhipuModels,
   ...qwenModels,
   ...deepseekModels,
@@ -342,6 +350,12 @@ const kiroPresetMappings = [
   { label: 'Haiku 4.5 Thinking', from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' }
 ]
 
+const droidPresetMappings = [
+  { label: 'Claude Sonnet 4', from: 'claude-sonnet-4', to: 'claude-sonnet-4-20250514', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
+  { label: 'Claude Opus 4', from: 'claude-opus-4', to: 'claude-opus-4-20250514', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' },
+  { label: 'GPT-5', from: 'gpt-5', to: 'gpt-5-2025-08-07', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300' }
+]
+
 // Bedrock 预设映射（与后端 DefaultBedrockModelMapping 保持一致）
 const bedrockPresetMappings = [
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'us.anthropic.claude-opus-4-8-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
@@ -416,6 +430,7 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
     case 'kiro': return kiroModels
+    case 'droid': return droidModels
     case 'zhipu': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
@@ -441,6 +456,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'kiro') return kiroPresetMappings
+  if (platform === 'droid') return droidPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   return anthropicPresetMappings
 }

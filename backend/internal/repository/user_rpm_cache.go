@@ -18,8 +18,9 @@ import (
 //   - TTL：120s，覆盖当前分钟窗口 + 少量冗余。
 //   - 返回值语义：超限判断由调用方（billing_cache_service.checkRPM）与 RPMLimit 比较完成。
 const (
-	userGroupRPMKeyPrefix = "rpm:ug:"
-	userRPMKeyPrefix      = "rpm:u:"
+	userGroupRPMKeyPrefix   = "rpm:ug:"
+	userRPMKeyPrefix        = "rpm:u:"
+	countTokensRPMKeyPrefix = "rpm:ct:u:"
 
 	userRPMKeyTTL = 120 * time.Second
 )
@@ -70,6 +71,26 @@ func (c *userRPMCacheImpl) IncrementUserRPM(ctx context.Context, userID int64) (
 		return 0, err
 	}
 	key := fmt.Sprintf("%s%d:%d", userRPMKeyPrefix, userID, minute)
+	return c.atomicIncr(ctx, key)
+}
+
+// IncrementCountTokensUserRPM 递增 count_tokens 用户级分钟计数。
+func (c *userRPMCacheImpl) IncrementCountTokensUserRPM(ctx context.Context, userID int64) (int, error) {
+	minute, err := c.minuteTS(ctx)
+	if err != nil {
+		return 0, err
+	}
+	key := fmt.Sprintf("%s%d:%d", countTokensRPMKeyPrefix, userID, minute)
+	return c.atomicIncr(ctx, key)
+}
+
+// IncrementCountTokensUserGroupRPM 递增 count_tokens (user, group) 级分钟计数。
+func (c *userRPMCacheImpl) IncrementCountTokensUserGroupRPM(ctx context.Context, userID, groupID int64) (int, error) {
+	minute, err := c.minuteTS(ctx)
+	if err != nil {
+		return 0, err
+	}
+	key := fmt.Sprintf("%s%d:%d:%d", countTokensRPMKeyPrefix, userID, groupID, minute)
 	return c.atomicIncr(ctx, key)
 }
 

@@ -4228,6 +4228,10 @@ export default {
         baseUrlHint: '上游 Kiro 兼容服务地址。',
         apiKeyHint: 'Kiro 控制台或兼容上游服务提供的 API Key。'
       },
+      droid: {
+        baseUrlHint: 'Factory.ai Droid 兼容服务地址。',
+        apiKeyHint: 'Factory.ai 或兼容上游服务提供的 API Key。'
+      },
       // OAuth flow
       oauth: {
         title: 'Claude 账号授权',
@@ -4275,6 +4279,23 @@ export default {
         batchPartialSuccess: '部分成功：{success} 个成功，{failed} 个失败',
         batchFailed: '批量创建失败',
         refreshTokenInputLabel: '刷新令牌（Refresh Token）',
+        droid: {
+          title: 'Droid 账号授权',
+          followSteps: '按照以下步骤授权您的 Droid 账号：',
+          step1GenerateUrl: '点击下方按钮生成授权信息',
+          generateAuthUrl: '生成授权信息',
+          step2OpenUrl: '打开验证地址并完成授权',
+          openUrlDesc: '在浏览器中打开验证地址，登录您的 Factory.ai / Droid 账号并完成授权。',
+          step3EnterCode: '完成网页授权后点击完成授权',
+          authCodeDesc: 'Droid 使用设备码授权，无需粘贴回调 URL 或授权码。网页侧完成授权后，回到这里点击“完成授权”。',
+          authCode: '设备码授权',
+          authCodePlaceholder: '无需粘贴授权码',
+          authCodeHint: '完成网页授权后，返回此处点击“完成授权”。',
+          completeAuth: '完成授权',
+          validating: '查询中...',
+          authFailed: 'Droid 授权失败',
+          authorizationPending: '授权尚未完成，请先在网页完成 Droid 登录授权。'
+        },
         // OpenAI specific
         openai: {
           title: 'OpenAI 账户授权',

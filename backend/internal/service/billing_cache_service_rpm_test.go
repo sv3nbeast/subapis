@@ -14,13 +14,19 @@ import (
 
 // userRPMCacheStub 记录每种计数器被调用的次数，并可注入返回值与错误。
 type userRPMCacheStub struct {
-	userGroupCalls int32
-	userCalls      int32
+	userGroupCalls            int32
+	userCalls                 int32
+	countTokensUserGroupCalls int32
+	countTokensUserCalls      int32
 
-	userGroupCounts []int // 依次返回的计数值
-	userGroupErr    error
-	userCounts      []int
-	userErr         error
+	userGroupCounts            []int // 依次返回的计数值
+	userGroupErr               error
+	userCounts                 []int
+	userErr                    error
+	countTokensUserGroupCounts []int
+	countTokensUserGroupErr    error
+	countTokensUserCounts      []int
+	countTokensUserErr         error
 }
 
 func (s *userRPMCacheStub) IncrementUserGroupRPM(_ context.Context, _, _ int64) (int, error) {
@@ -41,6 +47,28 @@ func (s *userRPMCacheStub) IncrementUserRPM(_ context.Context, _ int64) (int, er
 	}
 	if idx < len(s.userCounts) {
 		return s.userCounts[idx], nil
+	}
+	return 1, nil
+}
+
+func (s *userRPMCacheStub) IncrementCountTokensUserGroupRPM(_ context.Context, _, _ int64) (int, error) {
+	idx := int(atomic.AddInt32(&s.countTokensUserGroupCalls, 1)) - 1
+	if s.countTokensUserGroupErr != nil {
+		return 0, s.countTokensUserGroupErr
+	}
+	if idx < len(s.countTokensUserGroupCounts) {
+		return s.countTokensUserGroupCounts[idx], nil
+	}
+	return 1, nil
+}
+
+func (s *userRPMCacheStub) IncrementCountTokensUserRPM(_ context.Context, _ int64) (int, error) {
+	idx := int(atomic.AddInt32(&s.countTokensUserCalls, 1)) - 1
+	if s.countTokensUserErr != nil {
+		return 0, s.countTokensUserErr
+	}
+	if idx < len(s.countTokensUserCounts) {
+		return s.countTokensUserCounts[idx], nil
 	}
 	return 1, nil
 }
@@ -250,4 +278,51 @@ func TestBillingCacheService_CheckRPM_NilUserIsNoop(t *testing.T) {
 	require.EqualValues(t, 0, atomic.LoadInt32(&cache.userGroupCalls))
 	require.EqualValues(t, 0, atomic.LoadInt32(&cache.userCalls))
 	require.EqualValues(t, 0, atomic.LoadInt32(&repo.calls))
+}
+
+func TestBillingCacheService_CheckCountTokensRPM_UsesIsolatedCounters(t *testing.T) {
+	cache := &userRPMCacheStub{
+		countTokensUserGroupCounts: []int{1},
+		countTokensUserCounts:      []int{1},
+	}
+	repo := &rpmOverrideRepoStub{override: nil}
+	svc := newBillingServiceForRPM(t, cache, repo)
+
+	user := &User{ID: 1, RPMLimit: 10}
+	group := &Group{ID: 10, RPMLimit: 10}
+
+	require.NoError(t, svc.checkCountTokensRPM(context.Background(), user, group))
+	require.EqualValues(t, 0, atomic.LoadInt32(&cache.userGroupCalls), "count_tokens 不应消耗普通 user-group RPM")
+	require.EqualValues(t, 0, atomic.LoadInt32(&cache.userCalls), "count_tokens 不应消耗普通 user RPM")
+	require.EqualValues(t, 1, atomic.LoadInt32(&cache.countTokensUserGroupCalls))
+	require.EqualValues(t, 1, atomic.LoadInt32(&cache.countTokensUserCalls))
+}
+
+func TestBillingCacheService_CheckCountTokensRPM_GroupLimitExceeded(t *testing.T) {
+	cache := &userRPMCacheStub{countTokensUserGroupCounts: []int{6}}
+	repo := &rpmOverrideRepoStub{override: nil}
+	svc := newBillingServiceForRPM(t, cache, repo)
+
+	user := &User{ID: 1, RPMLimit: 10}
+	group := &Group{ID: 10, RPMLimit: 5}
+
+	require.ErrorIs(t, svc.checkCountTokensRPM(context.Background(), user, group), ErrCountTokensGroupRPMExceeded)
+	require.EqualValues(t, 1, atomic.LoadInt32(&cache.countTokensUserGroupCalls))
+	require.EqualValues(t, 0, atomic.LoadInt32(&cache.countTokensUserCalls), "group 超限后应直接返回")
+}
+
+func TestBillingCacheService_CheckCountTokensRPM_UserLimitExceeded(t *testing.T) {
+	cache := &userRPMCacheStub{
+		countTokensUserGroupCounts: []int{1},
+		countTokensUserCounts:      []int{3},
+	}
+	repo := &rpmOverrideRepoStub{override: nil}
+	svc := newBillingServiceForRPM(t, cache, repo)
+
+	user := &User{ID: 1, RPMLimit: 2}
+	group := &Group{ID: 10, RPMLimit: 10}
+
+	require.ErrorIs(t, svc.checkCountTokensRPM(context.Background(), user, group), ErrCountTokensUserRPMExceeded)
+	require.EqualValues(t, 1, atomic.LoadInt32(&cache.countTokensUserGroupCalls))
+	require.EqualValues(t, 1, atomic.LoadInt32(&cache.countTokensUserCalls))
 }

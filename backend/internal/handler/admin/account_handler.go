@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -2059,6 +2060,36 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			}
 		}
 		response.Success(c, service.PrioritizeAntigravityModels(antigravity.DefaultModels()))
+		return
+	}
+
+	if account.IsDroid() {
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, droid.DefaultModels)
+			return
+		}
+
+		models := make([]droid.Model, 0, len(mapping))
+		for requestedModel := range mapping {
+			found := false
+			for _, dm := range droid.DefaultModels {
+				if dm.ID == requestedModel {
+					models = append(models, dm)
+					found = true
+					break
+				}
+			}
+			if !found {
+				models = append(models, droid.Model{
+					ID:          requestedModel,
+					Type:        "model",
+					DisplayName: requestedModel,
+					CreatedAt:   "",
+				})
+			}
+		}
+		response.Success(c, models)
 		return
 	}
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/tidwall/gjson"
 )
 
@@ -171,17 +172,34 @@ var providerAdapters = map[string]providerAdapter{
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
+			metadataUserID := newClaudeCodeMonitorMetadataUserID()
 			return json.Marshal(map[string]any{
 				"model":      normalizeAnthropicModelIDForUpstream(model),
 				"messages":   []map[string]string{{"role": "user", "content": prompt}},
 				"max_tokens": monitorChallengeMaxTokens,
+				"system": []map[string]any{
+					{
+						"type": "text",
+						"text": claudeCodeSystemPrompt,
+					},
+				},
+				"metadata": map[string]any{
+					"user_id": metadataUserID,
+				},
 			})
 		},
 		buildHeaders: func(apiKey string) map[string]string {
-			return map[string]string{
+			headers := map[string]string{
 				"x-api-key":         apiKey,
 				"anthropic-version": monitorAnthropicAPIVersion,
+				"anthropic-beta":    claude.DefaultBetaHeader,
 			}
+			for key, value := range claude.DefaultHeaders {
+				if value != "" {
+					headers[key] = value
+				}
+			}
+			return headers
 		},
 		textPath:    "content.0.text",
 		extractText: extractAnthropicMonitorText,
@@ -220,6 +238,15 @@ var providerOpenAIChatAdapter = providerAdapter{
 		return map[string]string{"Authorization": "Bearer " + apiKey}
 	},
 	textPath: "choices.0.message.content",
+}
+
+func newClaudeCodeMonitorMetadataUserID() string {
+	return FormatMetadataUserID(
+		generateClientID(),
+		"",
+		generateRandomUUID(),
+		claude.CLICurrentVersion,
+	)
 }
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。

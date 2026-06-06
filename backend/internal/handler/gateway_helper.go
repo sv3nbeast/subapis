@@ -228,6 +228,18 @@ func (h *ConcurrencyHelper) TryAcquireUserSlot(ctx context.Context, userID int64
 	return result.ReleaseFunc, true, nil
 }
 
+// TryAcquireCountTokensUserSlot 尝试立即获取 count_tokens 专属用户并发槽位。
+func (h *ConcurrencyHelper) TryAcquireCountTokensUserSlot(ctx context.Context, userID int64, userConcurrency int) (func(), bool, error) {
+	result, err := h.concurrencyService.AcquireCountTokensUserSlot(ctx, userID, userConcurrency)
+	if err != nil {
+		return nil, false, err
+	}
+	if !result.Acquired {
+		return nil, false, nil
+	}
+	return result.ReleaseFunc, true, nil
+}
+
 // TryAcquireAccountSlot 尝试立即获取账号并发槽位。
 // 返回值: (releaseFunc, acquired, error)
 func (h *ConcurrencyHelper) TryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (func(), bool, error) {

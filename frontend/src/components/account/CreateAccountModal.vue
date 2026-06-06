@@ -70,7 +70,7 @@
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
-        <div class="mt-2 flex rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
+        <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
           <button
             type="button"
             @click="form.platform = 'anthropic'"
@@ -159,6 +159,19 @@
           >
             <Icon name="sparkles" size="sm" />
             Kiro
+          </button>
+          <button
+            type="button"
+            @click="form.platform = 'droid'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'droid'
+                ? 'bg-white text-cyan-600 shadow-sm dark:bg-dark-600 dark:text-cyan-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <Icon name="cloud" size="sm" />
+            Droid
           </button>
         </div>
       </div>
@@ -1408,7 +1421,9 @@
                 ? 'https://api.openai.com'
                 : form.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : 'https://api.anthropic.com'
+                  : form.platform === 'droid'
+                    ? 'https://api.factory.ai/api/llm'
+                    : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -1425,7 +1440,9 @@
                 ? 'sk-proj-...'
                 : form.platform === 'gemini'
                   ? 'AIza...'
-                  : 'sk-ant-...'
+                  : form.platform === 'droid'
+                    ? 'factory_...'
+                    : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ apiKeyHint }}</p>
@@ -3429,7 +3446,6 @@ import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import {
-  claudeModels,
   getPresetMappingsByPlatform,
   getModelsByPlatform,
   commonErrorCodes,
@@ -3449,6 +3465,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
+import { useDroidOAuth } from '@/composables/useDroidOAuth'
 import type {
   Proxy,
   AdminGroup,
@@ -3512,6 +3529,7 @@ const oauthStepTitle = computed(() => {
       ? t('admin.accounts.oauth.kiro.importDialogTitle')
       : t('admin.accounts.oauth.kiro.title')
   }
+  if (form.platform === 'droid') return t('admin.accounts.oauth.droid.title')
   return t('admin.accounts.oauth.title')
 })
 
@@ -3520,6 +3538,7 @@ const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (form.platform === 'kiro') return t('admin.accounts.kiro.baseUrlHint')
+  if (form.platform === 'droid') return 'Factory.ai API base URL. Leave unchanged for the official Droid endpoint.'
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -3527,6 +3546,7 @@ const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   if (form.platform === 'kiro') return t('admin.accounts.kiro.apiKeyHint')
+  if (form.platform === 'droid') return 'Factory.ai API key used by Droid-compatible requests.'
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3550,6 +3570,7 @@ const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
 const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const kiroOAuth = useKiroOAuth() // For Kiro OAuth / IDC
+const droidOAuth = useDroidOAuth() // For Droid OAuth
 
 // Computed: current OAuth state for template binding
 const currentAuthUrl = computed(() => {
@@ -3557,6 +3578,7 @@ const currentAuthUrl = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.authUrl.value
   if (form.platform === 'antigravity') return antigravityOAuth.authUrl.value
   if (form.platform === 'kiro') return kiroOAuth.authUrl.value
+  if (form.platform === 'droid') return droidOAuth.authUrl.value
   return oauth.authUrl.value
 })
 
@@ -3565,6 +3587,7 @@ const currentSessionId = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.sessionId.value
   if (form.platform === 'antigravity') return antigravityOAuth.sessionId.value
   if (form.platform === 'kiro') return kiroOAuth.sessionId.value
+  if (form.platform === 'droid') return droidOAuth.sessionId.value
   return oauth.sessionId.value
 })
 
@@ -3573,6 +3596,7 @@ const currentOAuthLoading = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.loading.value
   if (form.platform === 'antigravity') return antigravityOAuth.loading.value
   if (form.platform === 'kiro') return kiroOAuth.loading.value
+  if (form.platform === 'droid') return droidOAuth.loading.value
   return oauth.loading.value
 })
 
@@ -3581,6 +3605,7 @@ const currentOAuthError = computed(() => {
   if (form.platform === 'gemini') return geminiOAuth.error.value
   if (form.platform === 'antigravity') return antigravityOAuth.error.value
   if (form.platform === 'kiro') return kiroOAuth.error.value
+  if (form.platform === 'droid') return droidOAuth.error.value
   return oauth.error.value
 })
 
@@ -4115,6 +4140,10 @@ watch(
       form.type = category === 'oauth-based' ? 'oauth' : 'apikey'
       return
     }
+	    if (form.platform === 'droid') {
+	      form.type = category === 'oauth-based' ? 'oauth' : 'apikey'
+	      return
+	    }
     // Bedrock 类型
     if (form.platform === 'anthropic' && category === 'bedrock') {
       form.type = 'bedrock' as AccountType
@@ -4143,7 +4172,9 @@ watch(
           ? 'https://generativelanguage.googleapis.com'
           : newPlatform === 'kiro'
             ? ''
-            : 'https://api.anthropic.com'
+            : newPlatform === 'droid'
+              ? 'https://api.factory.ai/api/llm'
+              : 'https://api.anthropic.com'
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -4167,6 +4198,10 @@ watch(
       kiroOAuthProvider.value = 'google'
       apiKeyBaseUrl.value = ''
       apiKeyValue.value = ''
+	    } else if (newPlatform === 'droid') {
+	      accountCategory.value = 'oauth-based'
+	      apiKeyBaseUrl.value = 'https://api.factory.ai/api/llm'
+	      apiKeyValue.value = ''
     } else {
       allowOverages.value = false
       antigravityWhitelistModels.value = []
@@ -4210,9 +4245,10 @@ watch(
     oauth.resetState()
     openaiOAuth.resetState()
 
-    geminiOAuth.resetState()
-    antigravityOAuth.resetState()
-    kiroOAuth.resetState()
+	    geminiOAuth.resetState()
+	    antigravityOAuth.resetState()
+	    kiroOAuth.resetState()
+	    droidOAuth.resetState()
   }
 )
 
@@ -4596,7 +4632,7 @@ const resetForm = () => {
   modelMappings.value = []
   openAICompactModelMappings.value = []
   modelRestrictionMode.value = 'whitelist'
-  allowedModels.value = [...claudeModels] // Default fill related models
+  allowedModels.value = [...getModelsByPlatform(form.platform)] // Default fill related models
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
@@ -4662,9 +4698,10 @@ const resetForm = () => {
   geminiTierAIStudio.value = 'aistudio_free'
   oauth.resetState()
   openaiOAuth.resetState()
-  geminiOAuth.resetState()
-  antigravityOAuth.resetState()
-  kiroOAuth.resetState()
+	  geminiOAuth.resetState()
+	  antigravityOAuth.resetState()
+	  kiroOAuth.resetState()
+	  droidOAuth.resetState()
   oauthFlowRef.value?.reset()
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
@@ -5011,7 +5048,9 @@ const handleSubmit = async () => {
       ? 'https://api.openai.com'
       : form.platform === 'gemini'
         ? 'https://generativelanguage.googleapis.com'
-        : 'https://api.anthropic.com'
+        : form.platform === 'droid'
+          ? 'https://api.factory.ai/api/llm'
+          : 'https://api.anthropic.com'
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
@@ -5067,11 +5106,12 @@ const handleSubmit = async () => {
 const goBackToBasicInfo = () => {
   step.value = 1
   oauth.resetState()
-  openaiOAuth.resetState()
-  geminiOAuth.resetState()
-  antigravityOAuth.resetState()
-  kiroOAuth.resetState()
-  oauthFlowRef.value?.reset()
+	  openaiOAuth.resetState()
+	  geminiOAuth.resetState()
+	  antigravityOAuth.resetState()
+	  kiroOAuth.resetState()
+	  droidOAuth.resetState()
+	  oauthFlowRef.value?.reset()
 }
 
 const handleGenerateUrl = async () => {
@@ -5099,6 +5139,8 @@ const handleGenerateUrl = async () => {
         kiroOAuthProvider.value === 'github' ? 'Github' : 'Google'
       )
     }
+  } else if (form.platform === 'droid') {
+    await droidOAuth.generateAuthUrl(form.proxy_id)
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
@@ -5761,6 +5803,37 @@ const handleKiroExchange = async (authCode: string) => {
   }
 }
 
+const handleDroidExchange = async () => {
+  if (!droidOAuth.sessionId.value) return
+
+  droidOAuth.loading.value = true
+  droidOAuth.error.value = ''
+
+  try {
+    const tokenInfo = await droidOAuth.exchangeAuthCode({
+      sessionId: droidOAuth.sessionId.value,
+      proxyId: form.proxy_id
+    })
+    if (!tokenInfo) {
+      if (droidOAuth.pending.value && droidOAuth.error.value) {
+        appStore.showInfo(droidOAuth.error.value, 4000)
+      }
+      return
+    }
+    const credentials = droidOAuth.buildCredentials(tokenInfo)
+    const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
+    await createAccountAndFinish('droid', 'oauth', credentials)
+  } catch (error: any) {
+    droidOAuth.error.value = error?.message || t('admin.accounts.oauth.authFailed')
+    appStore.showError(droidOAuth.error.value)
+  } finally {
+    droidOAuth.loading.value = false
+  }
+}
+
 // Anthropic OAuth 授权码兑换
 const handleAnthropicExchange = async (authCode: string) => {
   if (!authCode.trim() || !oauth.sessionId.value) return
@@ -5857,6 +5930,8 @@ const handleExchangeCode = async () => {
       return handleKiroExchange(authCode)
     case 'antigravity':
       return handleAntigravityExchange(authCode)
+    case 'droid':
+      return handleDroidExchange()
     default:
       return handleAnthropicExchange(authCode)
   }

@@ -60,6 +60,14 @@ func (s *rpmStatusCacheStub) IncrementUserRPM(context.Context, int64) (int, erro
 	return 0, nil
 }
 
+func (s *rpmStatusCacheStub) IncrementCountTokensUserGroupRPM(context.Context, int64, int64) (int, error) {
+	return 0, nil
+}
+
+func (s *rpmStatusCacheStub) IncrementCountTokensUserRPM(context.Context, int64) (int, error) {
+	return 0, nil
+}
+
 func (s *rpmStatusCacheStub) GetUserGroupRPM(_ context.Context, _, groupID int64) (int, error) {
 	return s.groupUsed[groupID], nil
 }

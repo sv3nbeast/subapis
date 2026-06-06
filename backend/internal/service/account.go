@@ -183,6 +183,10 @@ func (a *Account) IsKiro() bool {
 	return a.Platform == PlatformKiro
 }
 
+func (a *Account) IsDroid() bool {
+	return a.Platform == PlatformDroid
+}
+
 func (a *Account) GeminiOAuthType() string {
 	if a.Platform != PlatformGemini || a.Type != AccountTypeOAuth {
 		return ""
@@ -769,6 +773,12 @@ func (a *Account) GetBaseURL() string {
 		return ""
 	}
 	baseURL := a.GetCredential("base_url")
+	if a.Platform == PlatformDroid {
+		if strings.TrimSpace(baseURL) == "" {
+			return "https://api.factory.ai/api/llm"
+		}
+		return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	}
 	if baseURL == "" {
 		return "https://api.anthropic.com"
 	}

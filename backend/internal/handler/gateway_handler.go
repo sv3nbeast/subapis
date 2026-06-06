@@ -17,7 +17,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -1070,18 +1072,44 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
-	// Get available models from account configurations (without platform filter)
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, "")
+	// Get available models from account/channel configuration, scoped by the
+	// effective route platform when a dedicated compatibility path is used.
+	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 
 	if len(availableModels) > 0 {
-		// Build model list from whitelist
-		models := make([]claude.Model, 0, len(availableModels))
-		for _, modelID := range availableModels {
-			models = append(models, claude.Model{
+		availableModels = filterGatewayModelsByGroupConfig(availableModels, apiKey)
+		returnGatewayModelIDs(c, availableModels, platform)
+		return
+	}
+
+	// Fallback to default models
+	if platform == "openai" {
+		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(openai.DefaultModelIDs(), apiKey), platform)
+		return
+	}
+	if platform == service.PlatformGemini {
+		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(geminiDefaultModelIDs(), apiKey), platform)
+		return
+	}
+	if platform == service.PlatformDroid {
+		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(droid.DefaultModelIDs(), apiKey), platform)
+		return
+	}
+
+	returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(claude.DefaultModelIDs(), apiKey), platform)
+}
+
+func returnGatewayModelIDs(c *gin.Context, ids []string, platform string) {
+	if platform == service.PlatformOpenAI {
+		models := make([]openai.Model, 0, len(ids))
+		for _, modelID := range ids {
+			models = append(models, openai.Model{
 				ID:          modelID,
+				Object:      "model",
+				Created:     1738368000,
+				OwnedBy:     "openai",
 				Type:        "model",
 				DisplayName: modelID,
-				CreatedAt:   "2024-01-01T00:00:00Z",
 			})
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -1091,19 +1119,71 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	// Fallback to default models
-	if platform == "openai" {
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   openai.DefaultModels,
+	models := make([]claude.Model, 0, len(ids))
+	for _, modelID := range ids {
+		models = append(models, claude.Model{
+			ID:          modelID,
+			Type:        "model",
+			DisplayName: modelID,
+			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
-		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
-		"data":   claude.DefaultModels,
+		"data":   models,
 	})
+}
+
+func filterGatewayModelsByGroupConfig(models []string, apiKey *service.APIKey) []string {
+	if apiKey == nil || apiKey.Group == nil || !apiKey.Group.CustomModelsListEnabled() {
+		return models
+	}
+
+	out := make([]string, 0, len(apiKey.Group.ModelsListConfig.Models))
+	seen := make(map[string]struct{}, len(apiKey.Group.ModelsListConfig.Models))
+	for _, selected := range apiKey.Group.ModelsListConfig.Models {
+		selected = strings.TrimSpace(selected)
+		if selected == "" {
+			continue
+		}
+		for _, model := range models {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			if gatewayModelPatternMatches(selected, model) || gatewayModelPatternMatches(model, selected) {
+				id := model
+				if gatewayModelPatternMatches(model, selected) && !strings.Contains(selected, "*") {
+					id = selected
+				}
+				if _, ok := seen[id]; ok {
+					break
+				}
+				seen[id] = struct{}{}
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func gatewayModelPatternMatches(pattern, model string) bool {
+	if pattern == model {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(model, strings.TrimSuffix(pattern, "*"))
+	}
+	return false
+}
+
+func geminiDefaultModelIDs() []string {
+	ids := make([]string, len(geminicli.DefaultModels))
+	for i, model := range geminicli.DefaultModels {
+		ids[i] = model.ID
+	}
+	return ids
 }
 
 // AntigravityModels 返回 Antigravity 支持的全部模型
@@ -1541,6 +1621,11 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 // handleStreamingAwareError handles errors that may occur after streaming has started
 func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
 	if streamStarted {
+		if inboundIsResponses(c) {
+			if writeResponsesFailedSSE(c, errType, message) {
+				return
+			}
+		}
 		// Stream already started, send error as SSE event then close
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
@@ -1560,8 +1645,11 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。
 func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarted bool) bool {
-	if c == nil || c.Writer == nil || c.Writer.Written() {
+	if c == nil || c.Writer == nil {
 		return false
+	}
+	if c.Writer.Written() {
+		streamStarted = true
 	}
 	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
 	return true
@@ -1633,7 +1721,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 
-	_, ok = middleware2.GetAuthSubjectFromContext(c)
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
@@ -1686,12 +1774,30 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	setOpsRequestContext(c, parsedReq.Model, parsedReq.Stream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsedReq.Stream, false)))
 
+	streamStarted := false
+
 	// 获取订阅信息（可能为nil）
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 
+	// count_tokens 专属轻量并发闸门，避免探测请求挤占正式消息路径。
+	countTokensReleaseFunc, acquired, err := h.concurrencyHelper.TryAcquireCountTokensUserSlot(c.Request.Context(), subject.UserID, subject.Concurrency)
+	if err != nil {
+		reqLog.Warn("gateway.count_tokens_user_slot_acquire_failed", zap.Error(err))
+		h.handleConcurrencyError(c, err, "count_tokens", streamStarted)
+		return
+	}
+	if !acquired {
+		h.handleConcurrencyError(c, nil, "count_tokens", streamStarted)
+		return
+	}
+	countTokensReleaseFunc = wrapReleaseOnDone(c.Request.Context(), countTokensReleaseFunc)
+	if countTokensReleaseFunc != nil {
+		defer countTokensReleaseFunc()
+	}
+
 	// 校验 billing eligibility（订阅/余额）
-	// 【注意】不计算并发，但需要校验订阅/余额
-	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
+	// count_tokens 使用独立 RPM/并发闸门，不占用 messages 正常并发/RPM。
+	if err := h.billingCacheService.CheckCountTokensEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription); err != nil {
 		status, code, message, retryAfter := billingErrorDetails(err)
 		if retryAfter > 0 {
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
@@ -1966,7 +2072,10 @@ func billingErrorDetails(err error) (status int, code, message string, retryAfte
 	}
 	// 用户/分组 RPM 超限统一映射为 HTTP 429；保留与其它 rate_limit 一致的错误码便于客户端分类。
 	// 返回 Retry-After 秒数（当前分钟剩余秒数），让 SDK 自动退避。
-	if errors.Is(err, service.ErrGroupRPMExceeded) || errors.Is(err, service.ErrUserRPMExceeded) {
+	if errors.Is(err, service.ErrGroupRPMExceeded) ||
+		errors.Is(err, service.ErrUserRPMExceeded) ||
+		errors.Is(err, service.ErrCountTokensGroupRPMExceeded) ||
+		errors.Is(err, service.ErrCountTokensUserRPMExceeded) {
 		msg := pkgerrors.Message(err)
 		retrySeconds := 60 - int(time.Now().Unix()%60)
 		return http.StatusTooManyRequests, "rate_limit_exceeded", msg, retrySeconds

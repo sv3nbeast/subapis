@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 )
 
@@ -72,8 +74,148 @@ func newUpstreamModelSyncUpstreamError(message string, err error) error {
 	return &UpstreamModelSyncError{Kind: UpstreamModelSyncErrorUpstream, Message: message, Err: err}
 }
 
-// FetchUpstreamSupportedModels fetches the live model list from the account's upstream API format.
+func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	switch {
+	case account.Platform == PlatformAntigravity:
+		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
+	case account.Platform == PlatformKiro:
+		return s.buildKiroUpstreamModelsRequest(ctx, account)
+	case account.IsOpenAI():
+		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
+	case account.IsGemini():
+		return s.buildGeminiUpstreamModelsRequest(ctx, account)
+	case account.IsDroid():
+		return s.buildDroidUpstreamModelsRequest(ctx, account)
+	case account.IsAnthropic():
+		return s.buildAnthropicUpstreamModelsRequest(ctx, account)
+	default:
+		return nil, newUpstreamModelSyncUnsupportedError(
+			fmt.Sprintf("Unsupported platform for upstream model sync: %s", account.Platform), nil,
+		)
+	}
+}
+
+func (s *AccountTestService) buildKiroUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	return s.buildKiroUpstreamModelsPageRequest(ctx, account, "")
+}
+
+func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Context, account *Account, nextToken string) (*http.Request, error) {
+	if account.Type != AccountTypeOAuth {
+		return nil, newUpstreamModelSyncUnsupportedError(
+			fmt.Sprintf("Unsupported Kiro account type for upstream model sync: %s", account.Type), nil,
+		)
+	}
+
+	token := strings.TrimSpace(account.GetCredential("access_token"))
+	if token == "" && s.kiroTokenProvider != nil {
+		accessToken, tokenErr := s.kiroTokenProvider.GetAccessToken(ctx, account)
+		if tokenErr != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Failed to get Kiro access token", tokenErr)
+		}
+		token = strings.TrimSpace(accessToken)
+	}
+	if token == "" {
+		return nil, newUpstreamModelSyncConfigError("No Kiro access token is available", nil)
+	}
+
+	endpoint := strings.TrimRight(kiroRuntimeEndpoint(kiroUpstreamModelsRegion(account)), "/")
+	reqURL, err := url.Parse(endpoint + "/ListAvailableModels")
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list URL", err)
+	}
+	q := reqURL.Query()
+	q.Set("origin", kiroUsageOrigin)
+	q.Set("maxResults", "50")
+	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" {
+		q.Set("profileArn", profileArn)
+	}
+	if nextToken = strings.TrimSpace(nextToken); nextToken != "" {
+		q.Set("nextToken", nextToken)
+	}
+	reqURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list request", err)
+	}
+	(&AccountUsageService{}).applyKiroRuntimeHeaders(req, account, token)
+	return req, nil
+}
+
+func kiroUpstreamModelsRegion(account *Account) string {
+	if account == nil {
+		return kiroDefaultRegion
+	}
+	if region := strings.TrimSpace(account.GetCredential("api_region")); region != "" {
+		return region
+	}
+	if region := kiroRegionFromProfileArn(account.GetCredential("profile_arn")); region != "" {
+		return region
+	}
+	return kiroDefaultRegion
+}
+
+func kiroRegionFromProfileArn(profileArn string) string {
+	parts := strings.SplitN(strings.TrimSpace(profileArn), ":", 6)
+	if len(parts) < 6 || parts[0] != "arn" || parts[2] != "codewhisperer" {
+		return ""
+	}
+	return strings.TrimSpace(parts[3])
+}
+
+func (s *AccountTestService) buildDroidUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(account.GetCredential("base_url")), "/")
+	if baseURL == "" {
+		baseURL = droidFactoryDefaultBaseURL
+	}
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Droid base URL", err)
+	}
+
+	var accessToken string
+	switch account.Type {
+	case AccountTypeOAuth:
+		if s.droidTokenProvider == nil {
+			return nil, newUpstreamModelSyncConfigError("Droid token provider is not configured", nil)
+		}
+		accessToken, err = s.droidTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Failed to get Droid access token", err)
+		}
+	case AccountTypeAPIKey:
+		accessToken = strings.TrimSpace(account.GetCredential("api_key"))
+	default:
+		return nil, newUpstreamModelSyncUnsupportedError(
+			fmt.Sprintf("Unsupported Droid account type for upstream model sync: %s", account.Type), nil,
+		)
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, newUpstreamModelSyncConfigError("No Droid credential is available", nil)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Droid model list URL", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("X-Factory-Client", "cli")
+	req.Header.Set("User-Agent", droidFactoryUserAgent)
+	return req, nil
+}
+
 func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, account *Account) ([]string, error) {
+	if account != nil && account.IsKiro() {
+		return s.fetchKiroSupportedModels(ctx, account)
+	}
+	if account != nil && account.IsDroid() {
+		return s.fetchDroidSupportedModels(ctx, account)
+	}
+	return s.fetchUpstreamSupportedModelsDefault(ctx, account)
+}
+
+func (s *AccountTestService) fetchUpstreamSupportedModelsDefault(ctx context.Context, account *Account) ([]string, error) {
 	if s == nil {
 		return nil, newUpstreamModelSyncConfigError("Account test service is not configured", nil)
 	}
@@ -127,21 +269,89 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	return models, nil
 }
 
-func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
-	switch {
-	case account.Platform == PlatformAntigravity:
-		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
-	case account.IsOpenAI():
-		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
-	case account.IsGemini():
-		return s.buildGeminiUpstreamModelsRequest(ctx, account)
-	case account.IsAnthropic():
-		return s.buildAnthropicUpstreamModelsRequest(ctx, account)
-	default:
-		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported platform for upstream model sync: %s", account.Platform), nil,
-		)
+func (s *AccountTestService) fetchKiroSupportedModels(ctx context.Context, account *Account) ([]string, error) {
+	if s == nil {
+		return nil, newUpstreamModelSyncConfigError("Account test service is not configured", nil)
 	}
+	if account == nil {
+		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
+	}
+	if s.httpUpstream == nil {
+		return nil, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
+	}
+
+	const maxKiroModelListPages = 20
+	proxyURL := upstreamModelsProxyURL(account)
+	nextToken := ""
+	models := make([]string, 0)
+
+	for page := 0; page < maxKiroModelListPages; page++ {
+		req, err := s.buildKiroUpstreamModelsPageRequest(ctx, account, nextToken)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
+		if err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Failed to request Kiro model list", err)
+		}
+
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Failed to read Kiro model list", readErr)
+		}
+		if int64(len(body)) > upstreamModelsBodyLimit {
+			return nil, newUpstreamModelSyncUpstreamError("Kiro model list response is too large", fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit))
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil, newUpstreamModelSyncUpstreamError(
+				fmt.Sprintf("Kiro model list request failed with HTTP %d", resp.StatusCode),
+				fmt.Errorf("kiro model list returned HTTP %d", resp.StatusCode),
+			)
+		}
+
+		pageModels, pageNextToken, err := extractUpstreamModelPage(body)
+		if err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Kiro model list response was not valid JSON", err)
+		}
+		models = append(models, pageModels...)
+		nextToken = pageNextToken
+		if nextToken == "" {
+			result := dedupeAndSortModelIDs(models)
+			if len(result) == 0 {
+				return nil, newUpstreamModelSyncUpstreamError("Kiro returned no supported models", nil)
+			}
+			return result, nil
+		}
+	}
+
+	return nil, newUpstreamModelSyncUpstreamError("Kiro model list pagination did not finish", nil)
+}
+
+func (s *AccountTestService) fetchDroidSupportedModels(ctx context.Context, account *Account) ([]string, error) {
+	defaultModels := droid.DefaultModelIDs()
+	req, err := s.buildDroidUpstreamModelsRequest(ctx, account)
+	if err != nil {
+		return defaultModels, nil
+	}
+	proxyURL := upstreamModelsProxyURL(account)
+	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
+	if err != nil {
+		return defaultModels, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
+	if err != nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return defaultModels, nil
+	}
+
+	models, err := extractUpstreamModelIDs(body)
+	if err != nil || len(models) == 0 {
+		return defaultModels, nil
+	}
+	return dedupeAndSortModelIDs(append(defaultModels, models...)), nil
 }
 
 func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
@@ -405,26 +615,36 @@ func buildGeminiModelsURL(base string) string {
 }
 
 type upstreamModelEntry struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	ModelID   string `json:"modelId"`
+	ModelName string `json:"modelName"`
+}
+
+type upstreamModelPage struct {
+	Data      []upstreamModelEntry `json:"data"`
+	Models    []upstreamModelEntry `json:"models"`
+	NextToken string               `json:"nextToken"`
 }
 
 func extractUpstreamModelIDs(body []byte) ([]string, error) {
-	var response struct {
-		Data   []upstreamModelEntry `json:"data"`
-		Models []upstreamModelEntry `json:"models"`
-	}
+	models, _, err := extractUpstreamModelPage(body)
+	return models, err
+}
+
+func extractUpstreamModelPage(body []byte) ([]string, string, error) {
+	var response upstreamModelPage
 	if err := json.Unmarshal(body, &response); err != nil {
 		var arrayResponse []upstreamModelEntry
 		if arrayErr := json.Unmarshal(body, &arrayResponse); arrayErr != nil {
-			return nil, fmt.Errorf("parse upstream model list: %w", err)
+			return nil, "", fmt.Errorf("parse upstream model list: %w", err)
 		}
 
 		models := make([]string, 0, len(arrayResponse))
 		for _, entry := range arrayResponse {
 			models = append(models, upstreamModelEntryID(entry))
 		}
-		return dedupeAndSortModelIDs(models), nil
+		return dedupeAndSortModelIDs(models), "", nil
 	}
 
 	models := make([]string, 0, len(response.Data)+len(response.Models))
@@ -444,13 +664,19 @@ func extractUpstreamModelIDs(body []byte) ([]string, error) {
 		}
 	}
 
-	return dedupeAndSortModelIDs(models), nil
+	return dedupeAndSortModelIDs(models), strings.TrimSpace(response.NextToken), nil
 }
 
 func upstreamModelEntryID(entry upstreamModelEntry) string {
 	modelID := strings.TrimSpace(entry.ID)
 	if modelID == "" {
+		modelID = strings.TrimSpace(entry.ModelID)
+	}
+	if modelID == "" {
 		modelID = strings.TrimSpace(entry.Name)
+	}
+	if modelID == "" {
+		modelID = strings.TrimSpace(entry.ModelName)
 	}
 	return strings.TrimPrefix(modelID, "models/")
 }

@@ -44,6 +44,9 @@ func RegisterAdminRoutes(
 		// Kiro OAuth / IDC
 		registerKiroOAuthRoutes(admin, h)
 
+		// Droid OAuth
+		registerDroidOAuthRoutes(admin, h)
+
 		// 代理管理
 		registerProxyRoutes(admin, h)
 
@@ -381,6 +384,14 @@ func registerKiroOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		kiro.POST("/oauth/exchange-code", h.Admin.KiroOAuth.ExchangeCode)
 		kiro.POST("/oauth/refresh-token", h.Admin.KiroOAuth.RefreshToken)
 		kiro.POST("/oauth/import-token", h.Admin.KiroOAuth.ImportToken)
+	}
+}
+
+func registerDroidOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	droid := admin.Group("/droid")
+	{
+		droid.POST("/oauth/auth-url", h.Admin.DroidOAuth.GenerateAuthURL)
+		droid.POST("/oauth/exchange-code", h.Admin.DroidOAuth.ExchangeCode)
 	}
 }
 

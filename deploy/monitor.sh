@@ -5,7 +5,8 @@
 # 功能：
 #   1. 检测 /health 端点是否正常
 #   2. 读取渠道监控或服务状态探针结果验证模型可用性（不再重复发起模型请求）
-#   3. 状态变化时通过 Bark 推送通知（异常/恢复），不重复提醒
+#   3. 按渠道统计可用正常账号数，剩余 1 个时通过 Bark 告警
+#   4. 状态变化时通过 Bark 推送通知（异常/恢复），不重复提醒
 #
 # 用法：
 #   chmod +x monitor.sh
@@ -54,6 +55,7 @@ TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
 API_CHECK_SOURCE="${API_CHECK_SOURCE:-channel_monitor}"
 STATUS_API_PATH="${STATUS_API_PATH:-/api/v1/status/models}"
 CHANNEL_MONITOR_STALE_SECONDS="${CHANNEL_MONITOR_STALE_SECONDS:-1800}"
+CHANNEL_AVAILABLE_THRESHOLD="${CHANNEL_AVAILABLE_THRESHOLD:-1}"
 SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
 PG_CONTAINER="${PG_CONTAINER:-sub2api-postgres}"
 PG_USER="${PG_USER:-sub2api}"
@@ -65,6 +67,8 @@ PG_DB="${PG_DB:-sub2api}"
 # 状态文件格式（每行一个 key=value）:
 #   health_notified=0       # 0=未通知, 1=已通知异常
 #   api_notified=0
+#   channel_low_notified__anthropic=0
+#   channel_low_since_epoch__anthropic=0
 # ---------------------------------------------------------------------------
 init_state() {
   if [ ! -f "$STATE_FILE" ]; then
@@ -98,6 +102,14 @@ api_down_since_epoch=${api_down_since_epoch}
 scheduling_notified=${scheduling_notified}
 scheduling_low_since_epoch=${scheduling_low_since_epoch}
 EOF
+
+  while IFS= read -r var; do
+    case "$var" in
+      channel_low_notified__*|channel_low_since_epoch__*)
+        printf '%s=%s\n' "$var" "${!var}" >> "$STATE_FILE"
+        ;;
+    esac
+  done < <(compgen -A variable channel_low_ || true)
 }
 
 now_epoch() {
@@ -168,6 +180,56 @@ build_recovery_suffix() {
   else
     printf "；异常开始时间未知，持续 %s" "$duration_text"
   fi
+}
+
+platform_display_name() {
+  case "${1:-}" in
+    anthropic)
+      echo "Anthropic"
+      ;;
+    openai)
+      echo "OpenAI"
+      ;;
+    gemini)
+      echo "Gemini"
+      ;;
+    antigravity)
+      echo "Antigravity"
+      ;;
+    kiro)
+      echo "Kiro"
+      ;;
+    *)
+      echo "$1"
+      ;;
+  esac
+}
+
+platform_state_slug() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g; s/^_//; s/_$//'
+}
+
+platform_state_var() {
+  local prefix="$1"
+  local platform="$2"
+  local slug
+  slug=$(platform_state_slug "$platform")
+  printf '%s__%s' "$prefix" "$slug"
+}
+
+platform_state_value() {
+  local var_name="$1"
+  eval "printf '%s' \"\${${var_name}:-0}\""
+}
+
+normalize_non_negative_int() {
+  local value="${1:-}"
+  local fallback="${2:-0}"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+    return
+  fi
+  echo "$fallback"
 }
 
 # ---------------------------------------------------------------------------
@@ -654,6 +716,134 @@ check_scheduling() {
 }
 
 # ---------------------------------------------------------------------------
+# 检查 4：按渠道统计可用正常账号数（可用数 <= 1 时告警）
+# ---------------------------------------------------------------------------
+check_channel_availability() {
+  local query_result
+  query_result=$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -t -A -F $'\t' -v ON_ERROR_STOP=1 -c "
+    WITH platforms(platform) AS (
+      VALUES ('anthropic'), ('openai'), ('gemini'), ('antigravity'), ('kiro')
+    ),
+    counts AS (
+      SELECT
+        lower(btrim(platform)) AS platform,
+        COUNT(*) FILTER (
+          WHERE schedulable = true AND status = 'active'
+        ) AS total_accounts,
+        COUNT(*) FILTER (
+          WHERE schedulable = true AND status = 'active'
+            AND (rate_limit_reset_at IS NULL OR rate_limit_reset_at <= NOW())
+            AND (overload_until IS NULL OR overload_until <= NOW())
+            AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until <= NOW())
+        ) AS available_accounts,
+        COUNT(*) FILTER (
+          WHERE schedulable = true AND status = 'active'
+            AND rate_limit_reset_at IS NOT NULL AND rate_limit_reset_at > NOW()
+        ) AS rate_limited_accounts,
+        COUNT(*) FILTER (
+          WHERE schedulable = true AND status = 'active'
+            AND overload_until IS NOT NULL AND overload_until > NOW()
+        ) AS overloaded_accounts,
+        COUNT(*) FILTER (
+          WHERE schedulable = true AND status = 'active'
+            AND temp_unschedulable_until IS NOT NULL AND temp_unschedulable_until > NOW()
+        ) AS temp_unschedulable_accounts
+      FROM accounts
+      WHERE deleted_at IS NULL
+        AND platform IS NOT NULL
+        AND btrim(platform) <> ''
+      GROUP BY lower(btrim(platform))
+    )
+    SELECT
+      p.platform,
+      COALESCE(c.total_accounts, 0)::TEXT,
+      COALESCE(c.available_accounts, 0)::TEXT,
+      COALESCE(c.rate_limited_accounts, 0)::TEXT,
+      COALESCE(c.overloaded_accounts, 0)::TEXT,
+      COALESCE(c.temp_unschedulable_accounts, 0)::TEXT
+    FROM platforms p
+    LEFT JOIN counts c ON c.platform = p.platform
+    ORDER BY p.platform;
+  " 2>/dev/null || true)
+
+  if [ -z "$query_result" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] 无法查询按渠道可用账号数"
+    return
+  fi
+
+  local platform total available rate_limited overloaded temp_unsched
+  while IFS=$'\t' read -r platform total available rate_limited overloaded temp_unsched; do
+    platform=$(echo "${platform:-}" | tr -d ' ')
+    total=$(echo "${total:-0}" | tr -d ' ')
+    available=$(echo "${available:-0}" | tr -d ' ')
+    rate_limited=$(echo "${rate_limited:-0}" | tr -d ' ')
+    overloaded=$(echo "${overloaded:-0}" | tr -d ' ')
+    temp_unsched=$(echo "${temp_unsched:-0}" | tr -d ' ')
+
+    if [ -z "$platform" ]; then
+      continue
+    fi
+
+    local platform_name notified_var since_var notified since_epoch
+    platform_name=$(platform_display_name "$platform")
+    notified_var=$(platform_state_var "channel_low_notified" "$platform")
+    since_var=$(platform_state_var "channel_low_since_epoch" "$platform")
+    notified=$(platform_state_value "$notified_var")
+    since_epoch=$(platform_state_value "$since_var")
+
+    if [ "$total" = "0" ]; then
+      if [ "$notified" = "1" ]; then
+        printf -v "$notified_var" '%s' 0
+        printf -v "$since_var" '%s' 0
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [CLEAR] ${platform_name} 当前没有可统计账号，已清除低可用状态"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] ${platform_name} 当前没有可统计账号"
+      fi
+      continue
+    fi
+
+    local low_threshold
+    low_threshold=$(normalize_non_negative_int "$CHANNEL_AVAILABLE_THRESHOLD" 1)
+
+    if [ "$available" -le "$low_threshold" ]; then
+      local remaining_suffix alert_title alert_body
+      remaining_suffix="仅剩 ${available} 个"
+      if [ "$available" -eq 0 ]; then
+        remaining_suffix="已耗尽"
+      fi
+
+      if [ "$notified" = "0" ]; then
+        printf -v "$notified_var" '%s' 1
+        printf -v "$since_var" '%s' "$(now_epoch)"
+        alert_title="${platform_name} 可用账号告警"
+        alert_body="${platform_name} 可用正常账号${remaining_suffix}（当前可用 ${available}/${total}，限流 ${rate_limited}，过载 ${overloaded}，临时不可调度 ${temp_unsched}），开始于 $(format_epoch "$(platform_state_value "$since_var")")"
+        if send_alert_if_enabled "$alert_title" "$alert_body"; then
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT] ${platform_name} 可用账号 ${available}/${total}，已发送 Bark 告警"
+        else
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ALERT-FAILED] ${platform_name} 可用账号 ${available}/${total}，Bark 推送失败或已禁用"
+        fi
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SKIP] ${platform_name} 可用账号仍为 ${available}/${total}，已通知过"
+      fi
+      continue
+    fi
+
+    if [ "$notified" = "1" ]; then
+      local recovery_suffix=""
+      recovery_suffix=$(build_recovery_suffix "$since_epoch")
+      if send_recover_if_enabled "${platform_name} 可用账号恢复" "${platform_name} 可用正常账号恢复至 ${available}/${total}${recovery_suffix}"; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER] ${platform_name} 可用账号恢复正常"
+      else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [RECOVER-FAILED] ${platform_name} 可用账号恢复正常，Bark 推送失败或已禁用"
+      fi
+    fi
+    printf -v "$notified_var" '%s' 0
+    printf -v "$since_var" '%s' 0
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] ${platform_name} 可用账号正常: ${available}/${total}"
+  done <<< "$query_result"
+}
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 main() {
@@ -665,6 +855,7 @@ main() {
   check_health
   check_api
   check_scheduling
+  check_channel_availability
 
   write_state
 

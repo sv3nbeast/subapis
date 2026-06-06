@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sub2api 首页演示稿</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --bg-soft: #eef8fb;
+      --surface: rgba(255, 255, 255, 0.9);
+      --surface-strong: #ffffff;
+      --line: #dbe6ee;
+      --line-soft: rgba(219, 230, 238, 0.74);
+      --text: #0f172a;
+      --muted: #5b6879;
+      --muted-2: #7f8ca0;
+      --teal: #0f766e;
+      --cyan: #0ea5e9;
+      --blue: #2563eb;
+      --lime: #16a34a;
+      --amber: #d97706;
+      --rose: #e11d48;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+      --shadow-soft: 0 8px 22px rgba(15, 23, 42, 0.05);
+      --radius: 8px;
+      --max: 1240px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      color: var(--text);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.94), rgba(255,255,255,0.94)),
+        linear-gradient(135deg, var(--bg), var(--bg-soft));
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(14, 165, 233, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(14, 165, 233, 0.04) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.66), transparent 76%);
+      opacity: 0.75;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    h1, h2, h3, p { margin: 0; }
+
+    .shell {
+      width: min(calc(100% - 32px), var(--max));
+      margin: 0 auto;
+      position: relative;
+      z-index: 1;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(16px);
+      background: rgba(246, 248, 251, 0.76);
+      border-bottom: 1px solid rgba(219, 230, 238, 0.84);
+    }
+
+    .topbar-inner {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, #0f172a, #155e75 45%, #0ea5e9 100%);
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.16);
+      flex: 0 0 auto;
+    }
+
+    .brand-name {
+      font-size: 0.95rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .nav a,
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font-size: 0.88rem;
+      font-weight: 700;
+      transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .nav a {
+      color: var(--muted);
+    }
+
+    .nav a:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.84);
+      border-color: rgba(219, 230, 238, 0.9);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0f766e, #0ea5e9);
+      color: #fff;
+      box-shadow: 0 14px 24px rgba(14, 165, 233, 0.18);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--text);
+      border-color: var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .btn:hover,
+    .btn-primary:hover,
+    .btn-secondary:hover {
+      transform: translateY(-1px);
+    }
+
+    .hero {
+      padding: 42px 0 26px;
+    }
+
+    .hero-grid {
+      min-height: calc(100vh - 116px);
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(420px, 0.9fr);
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .hero-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 16px 0;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(14, 165, 233, 0.14);
+      background: rgba(255, 255, 255, 0.86);
+      color: #0f766e;
+      font-size: 0.74rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .title {
+      margin-top: 18px;
+      font-size: 3.45rem;
+      line-height: 1.04;
+      letter-spacing: 0;
+      font-weight: 900;
+      max-width: 12ch;
+    }
+
+    .title .accent {
+      color: transparent;
+      background: linear-gradient(90deg, #0f172a 0%, #0f766e 48%, #0ea5e9 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .desc {
+      margin-top: 18px;
+      max-width: 680px;
+      font-size: 1rem;
+      line-height: 1.82;
+      color: var(--muted);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    .url-card {
+      margin-top: 22px;
+      padding: 16px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .url-label {
+      font-size: 0.84rem;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .url-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      background: #f8fbfd;
+      border: 1px solid rgba(219, 230, 238, 0.84);
+      min-width: 0;
+    }
+
+    .url-base {
+      min-width: 0;
+      flex: 0 1 auto;
+      overflow-wrap: anywhere;
+      font-size: 0.94rem;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .url-path-wrap {
+      flex: 1 1 auto;
+      display: inline-grid;
+      justify-items: end;
+      min-width: 0;
+      color: var(--blue);
+      font-weight: 800;
+      overflow: hidden;
+    }
+
+    .url-path {
+      grid-area: 1 / 1;
+      opacity: 0;
+      transform: translateY(10px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: opacity 300ms ease, transform 300ms ease;
+    }
+
+    .url-path.is-active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .copy {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+      max-width: 640px;
+    }
+
+    .stat {
+      padding: 14px;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid var(--line-soft);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .stat-value {
+      font-size: 1.45rem;
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .stat-label {
+      margin-top: 8px;
+      font-size: 0.81rem;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+
+    .hero-panel {
+      display: grid;
+      gap: 14px;
+      align-content: center;
+    }
+
+    .board,
+    .preview {
+      border-radius: var(--radius);
+      border: 1px solid var(--line-soft);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .board {
+      padding: 18px;
+    }
+
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .head-title {
+      font-size: 0.95rem;
+      font-weight: 900;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.08);
+      color: var(--teal);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .route-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .route {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: var(--radius);
+      background: #f8fbfd;
+      border: 1px solid rgba(219, 230, 238, 0.82);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 0.74rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #0f766e, #0ea5e9);
+    }
+
+    .tag.gpt { background: linear-gradient(135deg, #059669, #10b981); }
+    .tag.gemini { background: linear-gradient(135deg, #2563eb, #38bdf8); }
+    .tag.kiro { background: linear-gradient(135deg, #7c3aed, #a855f7); }
+
+    .route-name {
+      min-width: 0;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      color: #0f172a;
+      overflow-wrap: anywhere;
+    }
+
+    .route-meta {
+      white-space: nowrap;
+      font-size: 0.78rem;
+      font-weight: 800;
+      color: var(--muted);
+    }
+
+    .preview {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 260px;
+    }
+
+    .preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid rgba(219, 230, 238, 0.82);
+    }
+
+    .preview-title {
+      font-size: 0.95rem;
+      font-weight: 900;
+    }
+
+    .preview-body {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 16px 18px 18px;
+    }
+
+    .mini {
+      padding: 14px;
+      border-radius: var(--radius);
+      background: #f8fbfd;
+      border: 1px solid rgba(219, 230, 238, 0.82);
+    }
+
+    .mini-k {
+      font-size: 0.72rem;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted-2);
+      margin-bottom: 8px;
+    }
+
+    .mini-v {
+      font-size: 1rem;
+      font-weight: 900;
+      line-height: 1.4;
+    }
+
+    .bars {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) 42px;
+      gap: 10px;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .bar {
+      position: relative;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(219, 230, 238, 0.84);
+      overflow: hidden;
+    }
+
+    .bar span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #14b8a6, #22d3ee, #60a5fa);
+    }
+
+    .bar.a span { width: 83%; }
+    .bar.b span { width: 68%; }
+    .bar.c span { width: 91%; }
+    .bar.d span { width: 49%; }
+
+    .section {
+      padding: 34px 0;
+    }
+
+    .section-head {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: 780px;
+    }
+
+    .section-tag {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(14, 165, 233, 0.14);
+      background: rgba(255, 255, 255, 0.84);
+      color: var(--teal);
+      font-size: 0.74rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .section-title {
+      font-size: 2rem;
+      line-height: 1.15;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .section-desc {
+      font-size: 0.98rem;
+      line-height: 1.8;
+      color: var(--muted);
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .card {
+      padding: 18px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      box-shadow: var(--shadow-soft);
+      min-height: 166px;
+    }
+
+    .card-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, rgba(20, 184, 166, 0.16), rgba(96, 165, 250, 0.16));
+      border: 1px solid rgba(219, 230, 238, 0.84);
+      margin-bottom: 14px;
+    }
+
+    .card-title {
+      font-size: 1rem;
+      font-weight: 900;
+      margin-bottom: 10px;
+    }
+
+    .card-copy {
+      font-size: 0.88rem;
+      line-height: 1.72;
+      color: var(--muted);
+    }
+
+    .status-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .status-panel,
+    .monitor-panel {
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .status-panel {
+      padding: 18px;
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 13px 0;
+      border-bottom: 1px solid rgba(219, 230, 238, 0.72);
+    }
+
+    .status-row:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .status-name {
+      font-size: 0.9rem;
+      font-weight: 800;
+    }
+
+    .status-desc {
+      margin-top: 5px;
+      font-size: 0.82rem;
+      line-height: 1.58;
+      color: var(--muted);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .ok { background: rgba(22, 163, 74, 0.1); color: var(--lime); }
+    .warn { background: rgba(217, 119, 6, 0.1); color: var(--amber); }
+    .bad { background: rgba(225, 29, 72, 0.1); color: var(--rose); }
+
+    .monitor-panel {
+      padding: 18px;
+    }
+
+    .monitor-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .monitor-title {
+      font-size: 0.95rem;
+      font-weight: 900;
+    }
+
+    .monitor-shell {
+      border-radius: var(--radius);
+      border: 1px solid rgba(219, 230, 238, 0.82);
+      overflow: hidden;
+      background: #f8fbfd;
+    }
+
+    .monitor-top {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-bottom: 1px solid rgba(219, 230, 238, 0.82);
+    }
+
+    .monitor-top > div {
+      padding: 14px 16px;
+      border-right: 1px solid rgba(219, 230, 238, 0.82);
+    }
+
+    .monitor-top > div:last-child { border-right: 0; }
+
+    .monitor-k {
+      font-size: 0.72rem;
+      font-weight: 900;
+      color: var(--muted-2);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .monitor-v {
+      font-size: 0.96rem;
+      font-weight: 900;
+    }
+
+    .monitor-body {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 16px;
+    }
+
+    .monitor-card {
+      padding: 14px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(219, 230, 238, 0.82);
+      background: #fff;
+    }
+
+    .monitor-card h3 {
+      font-size: 0.88rem;
+      font-weight: 900;
+      margin-bottom: 10px;
+    }
+
+    .monitor-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .monitor-list-row {
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr) 46px;
+      gap: 10px;
+      align-items: center;
+      font-size: 0.82rem;
+    }
+
+    .progress {
+      position: relative;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(219, 230, 238, 0.84);
+      overflow: hidden;
+    }
+
+    .progress span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #14b8a6, #22d3ee);
+    }
+
+    .progress.a span { width: 84%; }
+    .progress.b span { width: 65%; }
+    .progress.c span { width: 90%; }
+    .progress.d span { width: 46%; }
+
+    .footer {
+      padding: 34px 0 54px;
+    }
+
+    .cta {
+      padding: 24px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .cta-title {
+      font-size: 2rem;
+      line-height: 1.12;
+      font-weight: 900;
+    }
+
+    .cta-copy {
+      max-width: 760px;
+      margin: 0 auto;
+      margin-top: 12px;
+      font-size: 0.98rem;
+      line-height: 1.84;
+      color: var(--muted);
+    }
+
+    .cta-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .footnote {
+      margin-top: 16px;
+      font-size: 0.84rem;
+      color: var(--muted-2);
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 520ms ease, transform 520ms ease;
+    }
+
+    .reveal.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .hero-grid,
+      .status-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .feature-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 780px) {
+      .topbar-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 12px 0;
+        min-height: auto;
+      }
+
+      .hero {
+        padding-top: 24px;
+      }
+
+      .hero-grid {
+        min-height: auto;
+      }
+
+      .title {
+        font-size: 2.55rem;
+        max-width: 100%;
+      }
+
+      .stats,
+      .feature-grid,
+      .monitor-body,
+      .monitor-top {
+        grid-template-columns: 1fr;
+      }
+
+      .monitor-top > div {
+        border-right: 0;
+        border-bottom: 1px solid rgba(219, 230, 238, 0.82);
+      }
+
+      .monitor-top > div:last-child { border-bottom: 0; }
+
+      .route,
+      .bar-row,
+      .monitor-list-row {
+        grid-template-columns: 1fr;
+      }
+
+      .url-row {
+        flex-wrap: wrap;
+      }
+
+      .url-path-wrap {
+        justify-items: start;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="#top">
+        <span class="brand-mark"></span>
+        <span class="brand-name">sub2api / 首页演示</span>
+      </a>
+      <nav class="nav">
+        <a href="#capabilities">能力</a>
+        <a href="#status">状态</a>
+        <a href="#channels">渠道</a>
+        <a href="#cta" class="btn btn-secondary">进入控制台</a>
+        <a href="#cta" class="btn btn-primary">开始使用</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="shell hero-grid">
+        <div class="hero-copy reveal">
+          <div class="eyebrow">Gateway · Billing · Monitoring</div>
+          <h1 class="title">把 API 网关做成 <span class="accent">控制台入口</span></h1>
+          <p class="desc">
+            首页只回答三件事：这是个什么系统、支持什么通道、当前是否可用。
+            其余细节留给控制台和文档，不把首页做成说明书。
+          </p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#cta">开始使用</a>
+            <a class="btn btn-secondary" href="#capabilities">查看能力</a>
+          </div>
+
+          <div class="url-card">
+            <div class="url-label">API Base URL</div>
+            <div class="url-row">
+              <div class="url-base">https://api.subapis.com</div>
+              <div class="url-path-wrap">
+                <span class="url-path is-active">/v1/chat/completions</span>
+                <span class="url-path">/v1/messages</span>
+                <span class="url-path">/v1/responses</span>
+                <span class="url-path">/v1beta/models/{model}:generateContent</span>
+                <span class="url-path">/gemini-antigravity/v1</span>
+              </div>
+              <button class="copy" type="button" aria-label="复制基础地址">⧉</button>
+            </div>
+          </div>
+
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-value">4</div>
+              <div class="stat-label">主要渠道族群，Claude / GPT / Gemini / Antigravity</div>
+            </div>
+            <div class="stat">
+              <div class="stat-value">99.9%</div>
+              <div class="stat-label">稳定性目标，首页直接给出信号</div>
+            </div>
+            <div class="stat">
+              <div class="stat-value">Live</div>
+              <div class="stat-label">路由、计费、健康度统一展示</div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="hero-panel reveal">
+          <section class="board">
+            <div class="head">
+              <div class="head-title">Routing Board</div>
+              <span class="pill">online</span>
+            </div>
+            <div class="route-list">
+              <div class="route">
+                <span class="tag">Claude</span>
+                <div class="route-name">claude-opus-4-7-thinking · 思考模式与映射策略</div>
+                <div class="route-meta">p95 1.9s</div>
+              </div>
+              <div class="route">
+                <span class="tag gpt">GPT</span>
+                <div class="route-name">gpt-5-4 · 计费、缓存、订阅分离展示</div>
+                <div class="route-meta">p95 2.1s</div>
+              </div>
+              <div class="route">
+                <span class="tag gemini">Gemini</span>
+                <div class="route-name">gemini-pro · 缓存模拟、重试、限流</div>
+                <div class="route-meta">p95 1.4s</div>
+              </div>
+              <div class="route">
+                <span class="tag kiro">Kiro</span>
+                <div class="route-name">Kiro · OAuth / 额度 / 速率限制状态</div>
+                <div class="route-meta">p95 1.7s</div>
+              </div>
+            </div>
+            <div class="bars">
+              <div class="bar-row"><span>Routing</span><div class="bar a"><span></span></div><strong>84%</strong></div>
+              <div class="bar-row"><span>Cache</span><div class="bar b"><span></span></div><strong>68%</strong></div>
+              <div class="bar-row"><span>Billing</span><div class="bar c"><span></span></div><strong>91%</strong></div>
+              <div class="bar-row"><span>SLA</span><div class="bar d"><span></span></div><strong>49%</strong></div>
+            </div>
+          </section>
+
+          <section class="preview">
+            <div class="preview-head">
+              <div class="preview-title">Request Mix</div>
+              <span class="pill">last 24h</span>
+            </div>
+            <div class="preview-body">
+              <div class="mini">
+                <div class="mini-k">requests</div>
+                <div class="mini-v">12.4k / day</div>
+              </div>
+              <div class="mini">
+                <div class="mini-k">availability</div>
+                <div class="mini-v">99.92%</div>
+              </div>
+              <div class="mini">
+                <div class="mini-k">avg latency</div>
+                <div class="mini-v">1.8s p95</div>
+              </div>
+              <div class="mini">
+                <div class="mini-k">cache hit</div>
+                <div class="mini-v">67%</div>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section id="capabilities" class="section">
+      <div class="shell reveal">
+        <div class="section-head">
+          <div class="section-tag">Capabilities</div>
+          <h2 class="section-title">更像产品首页，不像说明页</h2>
+          <p class="section-desc">视觉层级压缩，直接把用户最关心的入口和信号放前面。</p>
+        </div>
+        <div class="feature-grid">
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">统一入口</div>
+            <div class="card-copy">Base URL、文档、登录、控制台入口在同一层级，让用户少走一步。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">路由可见</div>
+            <div class="card-copy">把 Claude / GPT / Gemini / Kiro / Antigravity 做成可扫读的状态面板。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">状态可读</div>
+            <div class="card-copy">延迟、缓存、SLA、计费、限流都应该在首页能快速判断。</div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="status" class="section">
+      <div class="shell reveal">
+        <div class="section-head">
+          <div class="section-tag">Status</div>
+          <h2 class="section-title">把健康度做成首页的一部分</h2>
+          <p class="section-desc">不是替代监控页，而是提供一个可信的可用性摘要。</p>
+        </div>
+
+        <div class="status-layout">
+          <aside class="status-panel">
+            <div class="status-row">
+              <div>
+                <div class="status-name">Routing Health</div>
+                <div class="status-desc">账号池、调度、映射和路由是否正常。</div>
+              </div>
+              <span class="badge ok">healthy</span>
+            </div>
+            <div class="status-row">
+              <div>
+                <div class="status-name">Cache Layer</div>
+                <div class="status-desc">缓存写入、读取、模拟和命中趋势。</div>
+              </div>
+              <span class="badge warn">watch</span>
+            </div>
+            <div class="status-row">
+              <div>
+                <div class="status-name">Billing Signal</div>
+                <div class="status-desc">用户看到的额度变化和后端计费是否一致。</div>
+              </div>
+              <span class="badge ok">aligned</span>
+            </div>
+            <div class="status-row">
+              <div>
+                <div class="status-name">SLA Noise</div>
+                <div class="status-desc">错误请求和业务限流是否污染统计。</div>
+              </div>
+              <span class="badge bad">needs review</span>
+            </div>
+          </aside>
+
+          <section class="monitor-panel">
+            <div class="monitor-head">
+              <div class="monitor-title">Public Monitor Preview</div>
+              <span class="pill">live preview</span>
+            </div>
+            <div class="monitor-shell">
+              <div class="monitor-top">
+                <div><div class="monitor-k">latency</div><div class="monitor-v">1.8s p95</div></div>
+                <div><div class="monitor-k">requests</div><div class="monitor-v">12.4k / day</div></div>
+                <div><div class="monitor-k">availability</div><div class="monitor-v">99.92%</div></div>
+              </div>
+              <div class="monitor-body">
+                <div class="monitor-card">
+                  <h3>Channel Mix</h3>
+                  <div class="monitor-list">
+                    <div class="monitor-list-row"><span>Claude</span><div class="progress a"><span></span></div><strong>84%</strong></div>
+                    <div class="monitor-list-row"><span>GPT</span><div class="progress b"><span></span></div><strong>65%</strong></div>
+                    <div class="monitor-list-row"><span>Gemini</span><div class="progress c"><span></span></div><strong>90%</strong></div>
+                    <div class="monitor-list-row"><span>Kiro</span><div class="progress d"><span></span></div><strong>46%</strong></div>
+                  </div>
+                </div>
+                <div class="monitor-card">
+                  <h3>Recent Notes</h3>
+                  <div class="card-copy">公告、状态、降级提示和路由摘要可以放在首页预览位，减少进入后台的跳转成本。</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="channels" class="section">
+      <div class="shell reveal">
+        <div class="section-head">
+          <div class="section-tag">Channels</div>
+          <h2 class="section-title">渠道区做成能一眼扫完的卡片墙</h2>
+          <p class="section-desc">不要再用长段落解释支持什么模型，直接把支持族群放进统一卡片。</p>
+        </div>
+        <div class="feature-grid" style="grid-template-columns: repeat(5, minmax(0, 1fr));">
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">Claude</div>
+            <div class="card-copy">思考模式、协议映射、原生兼容都可以集中表达。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">GPT</div>
+            <div class="card-copy">计次、订阅、缓存和模型定价在首页就应可见。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">Gemini</div>
+            <div class="card-copy">展示模型支持、限流和缓存模拟，不只是一句说明。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">Kiro</div>
+            <div class="card-copy">放置授权、重试和状态标签，避免用户猜测系统状态。</div>
+          </article>
+          <article class="card">
+            <div class="card-icon"></div>
+            <div class="card-title">Custom</div>
+            <div class="card-copy">保留自定义首页和自定义分组能力，不和默认首页冲突。</div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="cta" class="footer">
+      <div class="shell reveal">
+        <div class="cta">
+          <div class="cta-title">这次方向是干净的产品首页，不是说明页</div>
+          <p class="cta-copy">
+            这版保留了你现有页面的青蓝绿系，但把首屏信息顺序、卡片密度和视觉噪点收干净了。
+            如果这个接近，我再把它拆回 Vue 版本。
+          </p>
+          <div class="cta-actions">
+            <a class="btn btn-primary" href="#top">回到顶部</a>
+            <a class="btn btn-secondary" href="#channels">看渠道区</a>
+          </div>
+          <div class="footnote">独立演示稿，先看方向。</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const paths = Array.from(document.querySelectorAll('.url-path'));
+    let activeIndex = 0;
+    function rotatePath() {
+      paths.forEach((node, index) => node.classList.toggle('is-active', index === activeIndex));
+      activeIndex = (activeIndex + 1) % paths.length;
+    }
+    rotatePath();
+    setInterval(rotatePath, 2200);
+
+    const reveals = document.querySelectorAll('.reveal');
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+    reveals.forEach((el) => observer.observe(el));
+
+    const copyBtn = document.querySelector('.copy');
+    copyBtn?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText('https://api.subapis.com');
+        copyBtn.textContent = '✓';
+        setTimeout(() => copyBtn.textContent = '⧉', 1200);
+      } catch {
+        copyBtn.textContent = '!';
+        setTimeout(() => copyBtn.textContent = '⧉', 1200);
+      }
+    });
+  </script>
+</body>
+</html>

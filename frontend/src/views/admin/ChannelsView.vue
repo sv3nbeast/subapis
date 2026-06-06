@@ -737,7 +737,7 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro']
+const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'kiro', 'droid']
 
 function getPlatformTextColor(platform: string): string {
   switch (platform) {
@@ -746,6 +746,7 @@ function getPlatformTextColor(platform: string): string {
     case 'gemini': return 'text-blue-600 dark:text-blue-400'
     case 'antigravity': return 'text-purple-600 dark:text-purple-400'
     case 'kiro': return 'text-amber-600 dark:text-amber-400'
+    case 'droid': return 'text-cyan-600 dark:text-cyan-400'
     default: return 'text-gray-600 dark:text-gray-400'
   }
 }
@@ -757,6 +758,7 @@ function getRateBadgeClass(platform: string): string {
     case 'gemini': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
     case 'antigravity': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
     case 'kiro': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+    case 'droid': return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
     default: return 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
   }
 }

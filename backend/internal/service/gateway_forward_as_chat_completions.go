@@ -33,6 +33,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
 	startTime := time.Now()
+	if account != nil && account.Platform == PlatformDroid {
+		return s.forwardDroidOpenAI(ctx, c, account, body, droidEndpointComm, startTime)
+	}
 
 	// 1. Parse Chat Completions request
 	var ccReq apicompat.ChatCompletionsRequest

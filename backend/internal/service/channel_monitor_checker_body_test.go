@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/stretchr/testify/require"
 )
 
 // swapMonitorHTTPClient 临时替换 monitorHTTPClient 为不带 SSRF 校验的普通 client，
@@ -79,6 +82,36 @@ func TestRunCheckForModel_OffMode_PreservesDefaultBody(t *testing.T) {
 	if h.lastHeaders.Get("x-api-key") != "sk-fake" {
 		t.Errorf("expected adapter's x-api-key header, got %q", h.lastHeaders.Get("x-api-key"))
 	}
+}
+
+func TestRunCheckForModel_AnthropicDefaultRequestPassesClaudeCodeValidation(t *testing.T) {
+	h := &captureHandler{respondText: allChallengeAnswers()}
+	endpoint := setupFakeAnthropic(t, h)
+
+	res := runCheckForModel(context.Background(), MonitorProviderAnthropic, endpoint, "sk-fake", "claude-x", nil)
+
+	require.Equal(t, MonitorStatusOperational, res.Status, res.Message)
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], h.lastHeaders.Get("User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-App"], h.lastHeaders.Get("X-App"))
+	require.Equal(t, claude.DefaultBetaHeader, h.lastHeaders.Get("anthropic-beta"))
+	require.Equal(t, monitorAnthropicAPIVersion, h.lastHeaders.Get("anthropic-version"))
+
+	system, ok := h.lastBody["system"].([]any)
+	require.True(t, ok)
+	require.Len(t, system, 1)
+	systemBlock, ok := system[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, claudeCodeSystemPrompt, systemBlock["text"])
+
+	metadata, ok := h.lastBody["metadata"].(map[string]any)
+	require.True(t, ok)
+	userID, ok := metadata["user_id"].(string)
+	require.True(t, ok)
+	require.NotNil(t, ParseMetadataUserID(userID))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header = h.lastHeaders.Clone()
+	require.True(t, NewClaudeCodeValidator().Validate(req, h.lastBody))
 }
 
 func TestRunCheckForModel_AnthropicNormalizesMonitorModelAlias(t *testing.T) {

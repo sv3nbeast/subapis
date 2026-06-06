@@ -68,6 +68,7 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
 	kiroTokenProvider         *KiroTokenProvider
+	droidTokenProvider        *DroidTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
@@ -80,6 +81,7 @@ func NewAccountTestService(
 	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
 	kiroTokenProvider *KiroTokenProvider,
+	droidTokenProvider *DroidTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
@@ -90,6 +92,7 @@ func NewAccountTestService(
 		geminiTokenProvider:       geminiTokenProvider,
 		claudeTokenProvider:       claudeTokenProvider,
 		kiroTokenProvider:         kiroTokenProvider,
+		droidTokenProvider:        droidTokenProvider,
 		antigravityGatewayService: antigravityGatewayService,
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
@@ -194,6 +197,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	if account.Platform == PlatformAntigravity {
 		return s.routeAntigravityTest(c, account, modelID, prompt)
+	}
+
+	if account.Platform == PlatformDroid {
+		return s.testDroidAccountConnection(c, account, modelID)
 	}
 
 	if account.IsKiro() && account.Type == AccountTypeOAuth {
@@ -461,6 +468,128 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 	return s.processClaudeStream(c, pr)
 }
 
+func (s *AccountTestService) testDroidAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	ctx := c.Request.Context()
+
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = "claude-sonnet-4-20250514"
+	}
+	if mappedModel := account.GetMappedModel(testModelID); strings.TrimSpace(mappedModel) != "" {
+		testModelID = mappedModel
+	}
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	payload, err := createTestPayload(testModelID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create test payload")
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	endpoint := droidEndpointAnthropic
+	if strings.HasPrefix(strings.ToLower(testModelID), "gpt-") {
+		endpoint = droidEndpointComm
+	}
+
+	if account.Type == AccountTypeOAuth && s.droidTokenProvider == nil {
+		return s.sendErrorAndEnd(c, "Droid token provider not configured")
+	}
+
+	body := payloadBytes
+	if endpoint != droidEndpointAnthropic {
+		body = []byte(`{"model":"` + testModelID + `","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	}
+	body = prepareDroidTestRequestBody(body, endpoint, testModelID)
+
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+	var token string
+	switch account.Type {
+	case AccountTypeOAuth:
+		token, err = s.droidTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to get Droid access token: %s", err.Error()))
+		}
+	case AccountTypeAPIKey:
+		token = strings.TrimSpace(account.GetCredential("api_key"))
+		if token == "" {
+			return s.sendErrorAndEnd(c, "No API key available")
+		}
+	default:
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported Droid account type: %s", account.Type))
+	}
+
+	targetURL := droidFactoryDefaultBaseURL
+	if account.Type == AccountTypeAPIKey {
+		targetURL = account.GetBaseURL()
+	}
+	targetURL = strings.TrimRight(targetURL, "/")
+	switch endpoint {
+	case droidEndpointComm:
+		targetURL += "/o/v1/chat/completions"
+	default:
+		targetURL += "/a/v1/messages"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("X-Factory-Client", "cli")
+	applyDroidProviderHeaders(req.Header, body, endpoint)
+	req.Header.Set("User-Agent", droidFactoryUserAgent)
+	req.Header.Set("X-Session-ID", uuid.NewString())
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusForbidden {
+			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+		}
+		return s.sendErrorAndEnd(c, errMsg)
+	}
+
+	return s.processClaudeStream(c, resp.Body)
+}
+
+func prepareDroidTestRequestBody(body []byte, endpoint droidEndpointType, model string) []byte {
+	trimmedModel := strings.TrimSpace(model)
+	lowerModel := strings.ToLower(trimmedModel)
+	switch {
+	case endpoint == droidEndpointAnthropic && strings.Contains(lowerModel, "haiku") && trimmedModel != "claude-sonnet-4-20250514":
+		if out, ok := setJSONValueBytes(body, "model", "claude-sonnet-4-20250514"); ok {
+			body = out
+		}
+	case endpoint == droidEndpointOpenAI && lowerModel == "gpt-5":
+		if out, ok := setJSONValueBytes(body, "model", "gpt-5-2025-08-07"); ok {
+			body = out
+		}
+	}
+	body = stripDroidMetadata(body)
+	body = normalizeDroidStreamField(body)
+	body = ensureDroidSystemPrompt(body, endpoint)
+	body = sanitizeDroidSamplingFields(body)
+	return body
+}
+
 func formatKiroTestError(statusCode int, body []byte, requestedModel string, account *Account) string {
 	return fmt.Sprintf("API returned %d: %s", statusCode, string(body))
 }
@@ -468,9 +597,8 @@ func formatKiroTestError(statusCode int, body []byte, requestedModel string, acc
 func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, token string) (*http.Response, error) {
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	profileArn := resolveKiroPayloadProfileArn(account)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+	buildResult, err := (&GatewayService{}).buildKiroPayloadForAccount(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +611,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	maxRetries := 2
 	for idx, endpoint := range endpoints {
 		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
+			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
 			if err != nil {
 				return nil, err
 			}
@@ -513,7 +641,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+						buildResult, err = (&GatewayService{}).buildKiroPayloadForAccount(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil)
 						if err != nil {
 							return nil, err
 						}

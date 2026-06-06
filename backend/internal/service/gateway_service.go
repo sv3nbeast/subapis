@@ -623,6 +623,7 @@ type GatewayService struct {
 	concurrencyService         *ConcurrencyService
 	claudeTokenProvider        *ClaudeTokenProvider
 	kiroTokenProvider          *KiroTokenProvider
+	droidTokenProvider         *DroidTokenProvider
 	kiroCooldownStore          KiroCooldownStore
 	sessionLimitCache          SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
 	rpmCache                   RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
@@ -666,6 +667,7 @@ func NewGatewayService(
 	deferredService *DeferredService,
 	claudeTokenProvider *ClaudeTokenProvider,
 	kiroTokenProvider *KiroTokenProvider,
+	droidTokenProvider *DroidTokenProvider,
 	kiroCooldownStore KiroCooldownStore,
 	sessionLimitCache SessionLimitCache,
 	rpmCache RPMCache,
@@ -702,6 +704,7 @@ func NewGatewayService(
 		deferredService:            deferredService,
 		claudeTokenProvider:        claudeTokenProvider,
 		kiroTokenProvider:          kiroTokenProvider,
+		droidTokenProvider:         droidTokenProvider,
 		kiroCooldownStore:          kiroCooldownStore,
 		sessionLimitCache:          sessionLimitCache,
 		rpmCache:                   rpmCache,
@@ -1303,6 +1306,7 @@ func sanitizeAnthropicCountTokensRequestBody(body []byte) []byte {
 		"top_p",
 		"top_k",
 		"stream",
+		"max_tokens",
 		"stop_sequences",
 		"service_tier",
 		"metadata",
@@ -4470,6 +4474,13 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 		}
 		return accessToken, "oauth", nil
 	}
+	if account.Platform == PlatformDroid && account.Type == AccountTypeOAuth && s.droidTokenProvider != nil {
+		accessToken, err := s.droidTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return "", "", err
+		}
+		return accessToken, "oauth", nil
+	}
 
 	// 其他情况（Gemini 有自己的 TokenProvider，setup-token 类型等）直接从账号读取
 	accessToken := account.GetCredential("access_token")
@@ -5211,6 +5222,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	if account != nil && account.Platform == PlatformKiro {
 		return s.forwardKiroMessages(ctx, c, account, parsed, startTime)
+	}
+	if account != nil && account.Platform == PlatformDroid {
+		return s.forwardDroidMessages(ctx, c, account, parsed, startTime)
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
@@ -10389,6 +10403,13 @@ func (s *GatewayService) buildCustomRelayURL(baseURL, path string, account *Acco
 }
 
 func (s *GatewayService) validateUpstreamBaseURL(raw string) (string, error) {
+	if s == nil || s.cfg == nil {
+		normalized, err := urlvalidator.ValidateURLFormat(raw, false)
+		if err != nil {
+			return "", fmt.Errorf("invalid base_url: %w", err)
+		}
+		return normalized, nil
+	}
 	if s.cfg != nil && !s.cfg.Security.URLAllowlist.Enabled {
 		normalized, err := urlvalidator.ValidateURLFormat(raw, s.cfg.Security.URLAllowlist.AllowInsecureHTTP)
 		if err != nil {

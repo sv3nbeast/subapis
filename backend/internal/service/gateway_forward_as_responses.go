@@ -35,6 +35,9 @@ func (s *GatewayService) ForwardAsResponses(
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
 	startTime := time.Now()
+	if account != nil && account.Platform == PlatformDroid {
+		return s.forwardDroidOpenAI(ctx, c, account, body, droidEndpointOpenAI, startTime)
+	}
 
 	// 1. Parse Responses request
 	var responsesReq apicompat.ResponsesRequest

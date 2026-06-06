@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 )
 
 // ─── Config types ────────────────────────────────────────────────────────────
@@ -418,10 +420,25 @@ func newStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http
 }
 
 func newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	metadataUserID := FormatMetadataUserID(
+		generateClientID(),
+		"",
+		generateRandomUUID(),
+		claude.CLICurrentVersion,
+	)
 	reqBody, err := json.Marshal(map[string]any{
 		"model":      m.Model,
 		"max_tokens": 10,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"system": []map[string]any{
+			{
+				"type": "text",
+				"text": claudeCodeSystemPrompt,
+			},
+		},
+		"metadata": map[string]any{
+			"user_id": metadataUserID,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %v", err)
@@ -433,8 +450,18 @@ func newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig
 		return nil, fmt.Errorf("create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("x-api-key", m.ApiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+	for key, value := range claude.DefaultHeaders {
+		if value != "" {
+			req.Header.Set(key, value)
+		}
+	}
+	req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+	req.Header.Set("anthropic-version", monitorAnthropicAPIVersion)
+	if parsed := ParseMetadataUserID(metadataUserID); parsed != nil && parsed.SessionID != "" {
+		req.Header.Set("X-Claude-Code-Session-Id", parsed.SessionID)
+	}
 	return req, nil
 }
 

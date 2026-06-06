@@ -69,6 +69,14 @@ func (m *concurrencyCacheMock) GetUserConcurrency(ctx context.Context, userID in
 	return 0, nil
 }
 
+func (m *concurrencyCacheMock) AcquireCountTokensUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+	return true, nil
+}
+
+func (m *concurrencyCacheMock) ReleaseCountTokensUserSlot(ctx context.Context, userID int64, requestID string) error {
+	return nil
+}
+
 func (m *concurrencyCacheMock) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
 	return true, nil
 }

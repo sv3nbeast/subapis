@@ -18,10 +18,12 @@
                 ? 'from-green-500 to-green-600'
                 : isGemini
                   ? 'from-blue-500 to-blue-600'
-                  : isAntigravity
-                    ? 'from-purple-500 to-purple-600'
-                    : isKiro
-                      ? 'from-amber-500 to-amber-600'
+                    : isAntigravity
+                      ? 'from-purple-500 to-purple-600'
+                      : isKiro
+                        ? 'from-amber-500 to-amber-600'
+                        : isDroid
+                          ? 'from-cyan-500 to-cyan-600'
                       : 'from-orange-500 to-orange-600'
             ]"
           >
@@ -41,6 +43,8 @@
                       ? t('admin.accounts.antigravityAccount')
                       : isKiro
                         ? 'Kiro'
+                        : isDroid
+                          ? 'Droid'
                         : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
@@ -197,6 +201,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
+import { useDroidOAuth } from '@/composables/useDroidOAuth'
 import type { Account, AccountPlatform } from '@/types'
 import { buildReauthAccountUpdatePayload } from '@/components/account/reauthPayload'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -238,6 +243,7 @@ const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
 const kiroOAuth = useKiroOAuth()
+const droidOAuth = useDroidOAuth()
 
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
@@ -253,11 +259,13 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isKiro = computed(() => props.account?.platform === 'kiro')
+const isDroid = computed(() => props.account?.platform === 'droid')
 const currentOAuthPlatform = computed<AccountPlatform>(() => {
   if (isOpenAI.value) return 'openai'
   if (isGemini.value) return 'gemini'
   if (isAntigravity.value) return 'antigravity'
   if (isKiro.value) return 'kiro'
+  if (isDroid.value) return 'droid'
   return 'anthropic'
 })
 const isKiroIDCAccount = computed(() => {
@@ -273,6 +281,7 @@ const currentAuthUrl = computed(() => {
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
   if (isKiro.value) return kiroOAuth.authUrl.value
+  if (isDroid.value) return droidOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentSessionId = computed(() => {
@@ -280,6 +289,7 @@ const currentSessionId = computed(() => {
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
   if (isKiro.value) return kiroOAuth.sessionId.value
+  if (isDroid.value) return droidOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
@@ -287,6 +297,7 @@ const currentLoading = computed(() => {
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
   if (isKiro.value) return kiroOAuth.loading.value
+  if (isDroid.value) return droidOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
@@ -294,13 +305,14 @@ const currentError = computed(() => {
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
   if (isKiro.value) return kiroOAuth.error.value
+  if (isDroid.value) return droidOAuth.error.value
   return claudeOAuth.error.value
 })
 
 // Computed
 const isManualInputMethod = computed(() => {
   // OpenAI/Gemini/Antigravity/Kiro always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || isKiro.value || oauthFlowRef.value?.inputMethod === 'manual'
+  return isOpenAILike.value || isGemini.value || isAntigravity.value || isKiro.value || isDroid.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
 const canExchangeCode = computed(() => {
@@ -349,6 +361,7 @@ const resetState = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   kiroOAuth.resetState()
+  droidOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -380,6 +393,8 @@ const handleGenerateUrl = async () => {
       const provider = String(creds.provider || '').toLowerCase() === 'github' ? 'Github' : 'Google'
       await kiroOAuth.generateAuthUrl(props.account.proxy_id, provider)
     }
+  } else if (isDroid.value) {
+    await droidOAuth.generateAuthUrl(props.account.proxy_id)
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
@@ -565,6 +580,35 @@ const handleExchangeCode = async () => {
     } catch (error: any) {
       kiroOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(kiroOAuth.error.value)
+    }
+  } else if (isDroid.value) {
+    const sessionId = droidOAuth.sessionId.value
+    if (!sessionId) return
+
+    const tokenInfo = await droidOAuth.exchangeAuthCode({
+      sessionId,
+      proxyId: props.account.proxy_id
+    })
+    if (!tokenInfo) {
+      if (droidOAuth.pending.value && droidOAuth.error.value) {
+        appStore.showInfo(droidOAuth.error.value, 4000)
+      }
+      return
+    }
+    const credentials = droidOAuth.buildCredentials(tokenInfo)
+
+    try {
+      await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+        type: 'oauth',
+        credentials
+      })
+      await adminAPI.accounts.clearError(props.account.id)
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized')
+      handleClose()
+    } catch (error: any) {
+      droidOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(droidOAuth.error.value)
     }
   } else {
     // Claude OAuth flow

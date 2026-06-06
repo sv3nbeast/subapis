@@ -36,6 +36,9 @@ type ConcurrencyCache interface {
 	AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
 	ReleaseUserSlot(ctx context.Context, userID int64, requestID string) error
 	GetUserConcurrency(ctx context.Context, userID int64) (int, error)
+	// count_tokens 专用用户槽位；与普通消息用户槽位隔离，避免探测请求挤占正式对话并发。
+	AcquireCountTokensUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error)
+	ReleaseCountTokensUserSlot(ctx context.Context, userID int64, requestID string) error
 
 	// 等待队列计数（只在首次创建时设置 TTL）
 	IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error)
@@ -85,6 +88,9 @@ func (s *ConcurrencyService) CleanupStaleProcessSlots(ctx context.Context) error
 const (
 	// 默认等待队列额外槽位
 	defaultExtraWaitSlots = 20
+
+	defaultCountTokensConcurrency = 2
+	maxCountTokensConcurrency     = 5
 
 	defaultAccountLoadBatchCacheTTL = 200 * time.Millisecond
 	accountLoadBatchFetchTimeout    = 3 * time.Second
@@ -235,6 +241,49 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 		Acquired:    false,
 		ReleaseFunc: nil,
 	}, nil
+}
+
+func CalculateCountTokensMaxConcurrency(userConcurrency int) int {
+	if userConcurrency <= 0 {
+		return defaultCountTokensConcurrency
+	}
+	limit := userConcurrency / 2
+	if limit < defaultCountTokensConcurrency {
+		limit = defaultCountTokensConcurrency
+	}
+	if limit > maxCountTokensConcurrency {
+		limit = maxCountTokensConcurrency
+	}
+	return limit
+}
+
+// AcquireCountTokensUserSlot acquires an isolated user slot for /v1/messages/count_tokens.
+func (s *ConcurrencyService) AcquireCountTokensUserSlot(ctx context.Context, userID int64, userConcurrency int) (*AcquireResult, error) {
+	if s == nil || s.cache == nil {
+		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	}
+
+	maxConcurrency := CalculateCountTokensMaxConcurrency(userConcurrency)
+	requestID := generateRequestID()
+
+	acquired, err := s.cache.AcquireCountTokensUserSlot(ctx, userID, maxConcurrency, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if acquired {
+		return &AcquireResult{
+			Acquired: true,
+			ReleaseFunc: func() {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := s.cache.ReleaseCountTokensUserSlot(bgCtx, userID, requestID); err != nil {
+					logger.LegacyPrintf("service.concurrency", "Warning: failed to release count_tokens user slot for %d (req=%s): %v", userID, requestID, err)
+				}
+			},
+		}, nil
+	}
+
+	return &AcquireResult{Acquired: false, ReleaseFunc: nil}, nil
 }
 
 // ============================================

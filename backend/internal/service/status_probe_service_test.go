@@ -7,13 +7,73 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStatusProbeService_runProbe_UsesClaudeCodeCompatibleAnthropicPayload(t *testing.T) {
+	var (
+		gotBody   map[string]any
+		gotHeader http.Header
+		gotPath   string
+		gotMethod string
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = map[string]any{}
+		gotHeader = r.Header.Clone()
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"42"}]}`))
+	}))
+	defer ts.Close()
+
+	svc := &StatusProbeService{httpClient: ts.Client()}
+	latencyMs, errMsg := svc.runProbe(context.Background(), StatusProbeModelConfig{
+		Model:   "claude-sonnet-4-6",
+		ApiKey:  "test-key",
+		BaseURL: ts.URL,
+	})
+
+	require.Empty(t, errMsg)
+	require.GreaterOrEqual(t, latencyMs, 0)
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/v1/messages", gotPath)
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], gotHeader.Get("User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-App"], gotHeader.Get("X-App"))
+	require.Equal(t, claude.DefaultBetaHeader, gotHeader.Get("anthropic-beta"))
+	require.Equal(t, "2023-06-01", gotHeader.Get("anthropic-version"))
+	require.NotEmpty(t, gotHeader.Get("X-Claude-Code-Session-Id"))
+	require.Equal(t, "test-key", gotHeader.Get("x-api-key"))
+	require.Equal(t, "claude-sonnet-4-6", gotBody["model"])
+	require.Equal(t, float64(10), gotBody["max_tokens"])
+
+	system, ok := gotBody["system"].([]any)
+	require.True(t, ok)
+	require.Len(t, system, 1)
+	systemBlock, ok := system[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, claudeCodeSystemPrompt, strings.TrimSpace(systemBlock["text"].(string)))
+
+	metadata, ok := gotBody["metadata"].(map[string]any)
+	require.True(t, ok)
+	userID, ok := metadata["user_id"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, userID)
+	require.NotNil(t, ParseMetadataUserID(userID))
+
+	req := httptest.NewRequest(http.MethodPost, ts.URL+"/v1/messages", nil)
+	req.Header = gotHeader.Clone()
+	req = req.WithContext(req.Context())
+	require.True(t, NewClaudeCodeValidator().Validate(req, gotBody))
+}
 
 func TestStatusProbeService_LoadConfig_LegacyGlobalCredentialsPopulateModelConfig(t *testing.T) {
 	repo := &settingRepoStub{

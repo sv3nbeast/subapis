@@ -166,11 +166,10 @@ func TestSanitizeAnthropicCountTokensRequestBody_DropsGenerationFields(t *testin
 
 	result := sanitizeAnthropicCountTokensRequestBody(body)
 
-	for _, field := range []string{"temperature", "top_p", "top_k", "stream", "stop_sequences", "service_tier", "metadata", "context_management", "speed"} {
+	for _, field := range []string{"temperature", "top_p", "top_k", "stream", "max_tokens", "stop_sequences", "service_tier", "metadata", "context_management", "speed"} {
 		require.False(t, gjson.GetBytes(result, field).Exists(), "%s should be removed for count_tokens", field)
 	}
 	require.Equal(t, "claude-opus-4-7", gjson.GetBytes(result, "model").String())
-	require.Equal(t, int64(64000), gjson.GetBytes(result, "max_tokens").Int())
 	require.Equal(t, "enabled", gjson.GetBytes(result, "thinking.type").String())
 	require.Equal(t, "keep temperature mention", gjson.GetBytes(result, "messages.0.content.0.text").String())
 	require.Equal(t, "t", gjson.GetBytes(result, "tools.0.name").String())

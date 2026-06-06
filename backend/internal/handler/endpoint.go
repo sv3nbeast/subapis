@@ -22,6 +22,9 @@ const (
 	EndpointImagesGenerations = "/v1/images/generations"
 	EndpointImagesEdits       = "/v1/images/edits"
 	EndpointGeminiModels      = "/v1beta/models"
+	EndpointDroidMessages     = "/a/v1/messages"
+	EndpointDroidResponses    = "/o/v1/responses"
+	EndpointDroidCompletions  = "/o/v1/chat/completions"
 )
 
 // gin.Context keys used by the middleware and helpers below.
@@ -100,6 +103,15 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 			return EndpointGeminiModels
 		}
 		return EndpointMessages
+
+	case service.PlatformDroid:
+		if inbound == EndpointChatCompletions {
+			return EndpointDroidCompletions
+		}
+		if inbound == EndpointResponses {
+			return EndpointDroidResponses
+		}
+		return EndpointDroidMessages
 	}
 
 	// Unknown platform — fall back to inbound.

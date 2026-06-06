@@ -168,18 +168,10 @@ func kiroRuntimeAPIRegion(account *Account) string {
 	if region := strings.TrimSpace(account.GetCredential("api_region")); region != "" {
 		return region
 	}
-	if region := kiroRegionFromProfileARN(account.GetCredential("profile_arn")); region != "" {
+	if region := kiroRegionFromProfileArn(account.GetCredential("profile_arn")); region != "" {
 		return region
 	}
 	return kiroDefaultRegion
-}
-
-func kiroRegionFromProfileARN(profileARN string) string {
-	parts := strings.Split(strings.TrimSpace(profileARN), ":")
-	if len(parts) >= 4 && strings.EqualFold(parts[0], "arn") && parts[3] != "" {
-		return parts[3]
-	}
-	return ""
 }
 
 func applyKiroConditionalHeaders(req *http.Request, account *Account) {

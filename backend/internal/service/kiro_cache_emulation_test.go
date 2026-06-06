@@ -147,6 +147,44 @@ func TestKiroCacheEmulationPrefixPartialHit(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationAutoBreakpointWithoutCacheControl(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 90, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBodyWithoutControl("auto")
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 3000)
+	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("expected automatic cache creation, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 3000)
+	if second == nil || second.CacheReadInputTokens != first.CacheCreationInputTokens || second.CacheCreationInputTokens != 0 {
+		t.Fatalf("expected automatic cache read, first=%+v second=%+v", first, second)
+	}
+}
+
+func TestKiroCacheEmulationAutoBreakpointPrefersStablePrefix(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 91, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	firstBody := kiroCacheMultiMessageBodyWithoutControl("stable prefix", "question one")
+	secondBody := kiroCacheMultiMessageBodyWithoutControl("stable prefix", "question two")
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, firstBody, "claude-sonnet-4-6", 6000)
+	if first == nil || first.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected automatic prefix creation, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, secondBody, "claude-sonnet-4-6", 6000)
+	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheReadInputTokens >= 6000 {
+		t.Fatalf("expected stable prefix cache read, got %+v", second)
+	}
+	if second.InputTokens <= 0 {
+		t.Fatalf("changed tail should remain uncached input, got %+v", second)
+	}
+}
+
 func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	bodyWithoutMetadata := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello world"}]}`)
 	bodyWithMetadata := []byte(`{"model":"claude-sonnet-4-6","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":"hello world"}]}`)
@@ -205,8 +243,18 @@ func kiroCacheRequestBody(label string, oneHour bool) []byte {
 	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"%s}}]}]}`, strings.Repeat("cacheable prompt chunk "+label+" ", 512), ttl))
 }
 
+func kiroCacheRequestBodyWithoutControl(label string) []byte {
+	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q}]}]}`, strings.Repeat("cacheable prompt chunk "+label+" ", 512)))
+}
+
 func kiroCacheMultiMessageBody(prefixLabel, tailLabel string) []byte {
 	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
 	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 160)
 	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":%q}]}]}`, prefix, tail))
+}
+
+func kiroCacheMultiMessageBodyWithoutControl(prefixLabel, tailLabel string) []byte {
+	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
+	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 160)
+	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q}]},{"role":"user","content":[{"type":"text","text":%q}]}]}`, prefix, tail))
 }

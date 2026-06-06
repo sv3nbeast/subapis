@@ -41,9 +41,11 @@
                   ? 'https://generativelanguage.googleapis.com'
                   : account.platform === 'kiro'
                     ? 'https://your-kiro-upstream.example.com'
-                    : account.platform === 'antigravity'
-                      ? 'https://cloudcode-pa.googleapis.com'
-                      : 'https://api.anthropic.com'
+                    : account.platform === 'droid'
+                      ? 'https://api.factory.ai/api/llm'
+                      : account.platform === 'antigravity'
+                        ? 'https://cloudcode-pa.googleapis.com'
+                        : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -61,9 +63,11 @@
                   ? 'AIza...'
                   : account.platform === 'kiro'
                     ? 'sk-...'
-                    : account.platform === 'antigravity'
-                      ? 'sk-...'
-                      : 'sk-ant-...'
+                    : account.platform === 'droid'
+                      ? 'factory_...'
+                      : account.platform === 'antigravity'
+                        ? 'sk-...'
+                        : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -2389,6 +2393,7 @@ const baseUrlHint = computed(() => {
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (props.account.platform === 'kiro') return t('admin.accounts.kiro.baseUrlHint')
+  if (props.account.platform === 'droid') return 'Factory.ai API base URL. Leave unchanged for the official Droid endpoint.'
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -2861,7 +2866,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	          ? 'https://generativelanguage.googleapis.com'
 	          : newAccount.platform === 'kiro'
 	            ? ''
-	            : 'https://api.anthropic.com'
+	            : newAccount.platform === 'droid'
+	              ? 'https://api.factory.ai/api/llm'
+	              : 'https://api.anthropic.com'
 	    editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
 	    // Load model mappings and detect mode
@@ -3002,7 +3009,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : 'https://api.anthropic.com'
+          : newAccount.platform === 'droid'
+            ? 'https://api.factory.ai/api/llm'
+            : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
 	    // Load model mappings for OAuth accounts

@@ -95,6 +95,7 @@ type kiroCacheProfile struct {
 	minCacheable     int
 	blocks           []kiroCacheBlock
 	breakpoints      []kiroCacheBreakpoint
+	hasExplicitTTL   bool
 }
 
 type kiroCacheBlock struct {
@@ -166,6 +167,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 		if block.breakpointTTL != nil {
 			ttl := minDuration(*block.breakpointTTL, kiroCacheMaxSupportedTTL)
 			activeTTL = &ttl
+			profile.hasExplicitTTL = true
 			if _, ok := seenBreakpoints[index]; !ok {
 				profile.breakpoints = append(profile.breakpoints, kiroCacheBreakpoint{blockIndex: index, ttl: ttl})
 				seenBreakpoints[index] = struct{}{}
@@ -178,10 +180,47 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 			}
 		}
 	}
+	if len(profile.breakpoints) == 0 && !profile.hasExplicitTTL {
+		profile.addAutomaticBreakpoint(blocks)
+	}
 	if profile.lastCacheableBreakpoint() == nil {
 		return nil, false
 	}
 	return profile, true
+}
+
+func (p *kiroCacheProfile) addAutomaticBreakpoint(blocks []kiroPendingBlock) {
+	if p == nil || len(blocks) == 0 || len(p.blocks) != len(blocks) {
+		return
+	}
+	finalMessageIndex := -1
+	for _, block := range blocks {
+		if block.messageIndex != nil && *block.messageIndex > finalMessageIndex {
+			finalMessageIndex = *block.messageIndex
+		}
+	}
+
+	candidateIndex := -1
+	for i, block := range blocks {
+		if p.blocks[i].cumulativeTokens < p.minCacheable {
+			continue
+		}
+		if finalMessageIndex >= 0 && block.messageIndex != nil && *block.messageIndex == finalMessageIndex {
+			continue
+		}
+		candidateIndex = i
+	}
+	if candidateIndex < 0 {
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if p.blocks[i].cumulativeTokens >= p.minCacheable {
+				candidateIndex = i
+				break
+			}
+		}
+	}
+	if candidateIndex >= 0 {
+		p.breakpoints = append(p.breakpoints, kiroCacheBreakpoint{blockIndex: candidateIndex, ttl: kiroCacheDefaultTTL})
+	}
 }
 
 func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {

@@ -27,6 +27,8 @@ const (
 	accountSlotKeyPrefix = "concurrency:account:"
 	// 格式: concurrency:user:{userID}
 	userSlotKeyPrefix = "concurrency:user:"
+	// 格式: concurrency:count_tokens:user:{userID}
+	countTokensUserSlotKeyPrefix = "concurrency:count_tokens:user:"
 	// 等待队列计数器格式: concurrency:wait:{userID}
 	waitQueueKeyPrefix = "concurrency:wait:"
 	// 账号级等待队列计数器格式: wait:account:{accountID}
@@ -222,6 +224,10 @@ func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
 }
 
+func countTokensUserSlotKey(userID int64) string {
+	return fmt.Sprintf("%s%d", countTokensUserSlotKeyPrefix, userID)
+}
+
 func waitQueueKey(userID int64) string {
 	return fmt.Sprintf("%s%d", waitQueueKeyPrefix, userID)
 }
@@ -319,6 +325,20 @@ func (c *concurrencyCache) GetUserConcurrency(ctx context.Context, userID int64)
 		return 0, err
 	}
 	return result, nil
+}
+
+func (c *concurrencyCache) AcquireCountTokensUserSlot(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+	key := countTokensUserSlotKey(userID)
+	result, err := acquireScript.Run(ctx, c.rdb, []string{key}, maxConcurrency, c.slotTTLSeconds, requestID).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) ReleaseCountTokensUserSlot(ctx context.Context, userID int64, requestID string) error {
+	key := countTokensUserSlotKey(userID)
+	return c.rdb.ZRem(ctx, key, requestID).Err()
 }
 
 // Wait queue operations
@@ -500,7 +520,7 @@ func (c *concurrencyCache) CleanupStaleProcessSlots(ctx context.Context, activeR
 	}
 
 	// 1. 清理有序集合中非当前进程前缀的成员
-	slotPatterns := []string{accountSlotKeyPrefix + "*", userSlotKeyPrefix + "*"}
+	slotPatterns := []string{accountSlotKeyPrefix + "*", userSlotKeyPrefix + "*", countTokensUserSlotKeyPrefix + "*"}
 	for _, pattern := range slotPatterns {
 		if err := c.cleanupSlotsByPattern(ctx, pattern, activeRequestPrefix); err != nil {
 			return err
