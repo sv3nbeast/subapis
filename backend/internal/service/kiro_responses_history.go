@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,12 +19,15 @@ const (
 var globalKiroResponsesHistoryStore = &kiroResponsesHistoryStore{
 	items: make(map[string]kiroResponsesHistoryEntry),
 	now:   time.Now,
+	dir:   defaultKiroResponsesHistoryDir(),
 }
 
 type kiroResponsesHistoryStore struct {
-	mu    sync.Mutex
-	items map[string]kiroResponsesHistoryEntry
-	now   func() time.Time
+	mu           sync.Mutex
+	items        map[string]kiroResponsesHistoryEntry
+	now          func() time.Time
+	dir          string
+	lastPurgedAt time.Time
 }
 
 type kiroResponsesHistoryEntry struct {
@@ -33,6 +38,16 @@ type kiroResponsesHistoryEntry struct {
 	Input              json.RawMessage
 	Output             []apicompat.ResponsesOutput
 	StoredAt           time.Time
+}
+
+type kiroResponsesHistoryDiskEntry struct {
+	ID                 string                      `json:"id"`
+	PreviousResponseID string                      `json:"previous_response_id,omitempty"`
+	Model              string                      `json:"model,omitempty"`
+	Instructions       string                      `json:"instructions,omitempty"`
+	Input              json.RawMessage             `json:"input,omitempty"`
+	Output             []apicompat.ResponsesOutput `json:"output,omitempty"`
+	StoredAt           int64                       `json:"stored_at"`
 }
 
 func (s *kiroResponsesHistoryStore) load(id string) (kiroResponsesHistoryEntry, bool) {
@@ -46,10 +61,16 @@ func (s *kiroResponsesHistoryStore) load(id string) (kiroResponsesHistoryEntry, 
 
 	entry, ok := s.items[trimmed]
 	if !ok {
-		return kiroResponsesHistoryEntry{}, false
+		diskEntry, diskOK := s.loadFromDiskLocked(trimmed)
+		if !diskOK {
+			return kiroResponsesHistoryEntry{}, false
+		}
+		entry = diskEntry
+		s.items[trimmed] = diskEntry
 	}
-	if !entry.StoredAt.IsZero() && s.now().Sub(entry.StoredAt) > kiroResponsesHistoryTTL {
+	if s.entryExpired(entry) {
 		delete(s.items, trimmed)
+		s.removeDiskEntryLocked(trimmed)
 		return kiroResponsesHistoryEntry{}, false
 	}
 	return entry, true
@@ -63,9 +84,11 @@ func (s *kiroResponsesHistoryStore) save(entry kiroResponsesHistoryEntry) {
 	defer s.mu.Unlock()
 
 	if entry.StoredAt.IsZero() {
-		entry.StoredAt = s.now()
+		entry.StoredAt = s.currentTime()
 	}
 	s.items[entry.ID] = entry
+	_ = s.saveToDiskLocked(entry)
+	s.purgeExpiredDiskEntriesLocked()
 }
 
 func (s *kiroResponsesHistoryStore) expand(prevID string) (json.RawMessage, []apicompat.AnthropicMessage) {
@@ -207,4 +230,170 @@ func rawSystemText(raw json.RawMessage) string {
 		return strings.Join(texts, "\n\n")
 	}
 	return ""
+}
+
+func (s *kiroResponsesHistoryStore) entryExpired(entry kiroResponsesHistoryEntry) bool {
+	if entry.StoredAt.IsZero() {
+		return false
+	}
+	return s.currentTime().Sub(entry.StoredAt) > kiroResponsesHistoryTTL
+}
+
+func (s *kiroResponsesHistoryStore) saveToDiskLocked(entry kiroResponsesHistoryEntry) error {
+	dir := strings.TrimSpace(s.dir)
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	doc := kiroResponsesHistoryDiskEntry{
+		ID:                 entry.ID,
+		PreviousResponseID: entry.PreviousResponseID,
+		Model:              entry.Model,
+		Instructions:       entry.Instructions,
+		Input:              append(json.RawMessage(nil), entry.Input...),
+		Output:             entry.Output,
+		StoredAt:           entry.StoredAt.Unix(),
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := s.diskPath(entry.ID)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func (s *kiroResponsesHistoryStore) loadFromDiskLocked(id string) (kiroResponsesHistoryEntry, bool) {
+	dir := strings.TrimSpace(s.dir)
+	if dir == "" {
+		return kiroResponsesHistoryEntry{}, false
+	}
+	data, err := os.ReadFile(s.diskPath(id))
+	if err != nil {
+		return kiroResponsesHistoryEntry{}, false
+	}
+	var doc kiroResponsesHistoryDiskEntry
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return kiroResponsesHistoryEntry{}, false
+	}
+	if strings.TrimSpace(doc.ID) == "" {
+		doc.ID = id
+	}
+	entry := kiroResponsesHistoryEntry{
+		ID:                 doc.ID,
+		PreviousResponseID: doc.PreviousResponseID,
+		Model:              doc.Model,
+		Instructions:       doc.Instructions,
+		Input:              append(json.RawMessage(nil), doc.Input...),
+		Output:             doc.Output,
+	}
+	if doc.StoredAt > 0 {
+		entry.StoredAt = time.Unix(doc.StoredAt, 0)
+	}
+	if s.entryExpired(entry) {
+		s.removeDiskEntryLocked(id)
+		return kiroResponsesHistoryEntry{}, false
+	}
+	return entry, true
+}
+
+func (s *kiroResponsesHistoryStore) removeDiskEntryLocked(id string) {
+	dir := strings.TrimSpace(s.dir)
+	if dir == "" {
+		return
+	}
+	_ = os.Remove(s.diskPath(id))
+}
+
+func (s *kiroResponsesHistoryStore) purgeExpiredDiskEntriesLocked() {
+	dir := strings.TrimSpace(s.dir)
+	if dir == "" {
+		return
+	}
+	now := s.currentTime()
+	if !s.lastPurgedAt.IsZero() && now.Sub(s.lastPurgedAt) < time.Hour {
+		return
+	}
+	s.lastPurgedAt = now
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := now.Add(-kiroResponsesHistoryTTL)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		full := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(full)
+		}
+	}
+}
+
+func (s *kiroResponsesHistoryStore) diskPath(id string) string {
+	return filepath.Join(strings.TrimSpace(s.dir), sanitizeKiroResponsesHistoryID(id)+".json")
+}
+
+func sanitizeKiroResponsesHistoryID(id string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '_' || r == '-':
+			return r
+		default:
+			return -1
+		}
+	}, id)
+	if cleaned == "" {
+		return "invalid"
+	}
+	return cleaned
+}
+
+func defaultKiroResponsesHistoryDir() string {
+	if dir := strings.TrimSpace(os.Getenv("KIRO_RESPONSES_HISTORY_DIR")); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "kiro-responses")
+	}
+	if info, err := os.Stat("/app/data"); err == nil && info.IsDir() {
+		return filepath.Join("/app/data", "kiro-responses")
+	}
+	return filepath.Join(".", "data", "kiro-responses")
+}
+
+func newKiroResponsesHistoryStoreForDir(dir string) *kiroResponsesHistoryStore {
+	return &kiroResponsesHistoryStore{
+		items: make(map[string]kiroResponsesHistoryEntry),
+		now:   time.Now,
+		dir:   dir,
+	}
+}
+
+func (s *kiroResponsesHistoryStore) currentTime() time.Time {
+	if s == nil || s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }

@@ -826,6 +826,7 @@ func resetKiroResponsesHistoryStoreForTest() {
 	globalKiroResponsesHistoryStore = &kiroResponsesHistoryStore{
 		items: make(map[string]kiroResponsesHistoryEntry),
 		now:   time.Now,
+		dir:   "",
 	}
 }
 
