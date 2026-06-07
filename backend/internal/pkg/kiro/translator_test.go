@@ -76,6 +76,63 @@ func TestBuildKiroPayloadAlwaysIgnoresClientConversationMetadata(t *testing.T) {
 	require.False(t, gjson.GetBytes(result.Payload, "conversationState.agentContinuationId").Exists())
 }
 
+func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {
+	big := strings.Repeat("lorem ipsum dolor sit amet ", 80)
+	messages := []map[string]string{
+		{"role": "user", "content": "start the long task"},
+	}
+	for i := 0; i < 800; i++ {
+		messages = append(messages,
+			map[string]string{"role": "assistant", "content": "step result: " + big},
+			map[string]string{"role": "user", "content": "next: " + big},
+		)
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": "FINAL: summarize everything above"})
+	bodyMap := map[string]any{
+		"model":    "claude-opus-4-8",
+		"system":   "You are a helpful assistant.",
+		"messages": messages,
+	}
+	body, err := json.Marshal(bodyMap)
+	require.NoError(t, err)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
+
+	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
+	require.GreaterOrEqual(t, len(history), 3)
+	require.Contains(t, history[0].Get("userInputMessage.content").String(), "helpful assistant")
+
+	foundPlaceholder := false
+	for _, item := range history {
+		if strings.Contains(item.Get("userInputMessage.content").String(), "truncated to fit") {
+			foundPlaceholder = true
+			break
+		}
+	}
+	require.True(t, foundPlaceholder)
+}
+
+func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"system":"You are helpful.",
+		"messages":[
+			{"role":"user","content":"hello"},
+			{"role":"assistant","content":"hi"},
+			{"role":"user","content":"how are you?"}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	for _, item := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
+		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
+	}
+}
+
 func TestBuildKiroPayloadDoesNotInsertUserDotBeforeLeadingAssistant(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",

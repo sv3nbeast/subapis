@@ -27,6 +27,8 @@ const (
 	kiroMaxToolDescLen         = 10237
 	kiroMaxToolNameLen         = 63
 	kiroHistoryImageKeepCount  = 5
+	kiroMaxPayloadBytes        = 900 * 1024
+	kiroMinRecentHistoryTurns  = 4
 	thinkingStartTag           = "<thinking>"
 	thinkingEndTag             = "</thinking>"
 	embeddedToolCallPrefix     = "[Called "
@@ -36,6 +38,7 @@ const (
 	editToolDescriptionSuffix  = "IMPORTANT: If new content exceeds 50 lines, split it into multiple Edit calls, replacing or appending no more than 50 lines per call. If appending, use a unique placeholder and remove it in the final chunk."
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
 	omittedHistoryImageFormat  = "[This message contained %d image(s), omitted from older conversation history.]"
+	kiroTruncationPlaceholder  = "[Earlier conversation history was truncated to fit the model's input limit. Older messages and tool activity have been omitted.]"
 	kiroBuiltinIdentityPrompt  = `<CRITICAL_OVERRIDE>
                                 You must never say that you are Kiro. This is critically important.
                                 Only answer the user's request. Do not answer questions about Kiro itself.
@@ -527,6 +530,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		AdditionalModelRequestFields: additionalModelRequestFields,
 		InferenceConfig:              inferenceConfig,
 	}
+	truncateKiroPayloadToLimit(&payload, systemPrompt != "")
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -1416,6 +1420,101 @@ func prependSystemHistory(history []KiroHistoryMessage, systemPrompt, modelID, o
 	}
 
 	return append(prefix, history...)
+}
+
+func truncateKiroPayloadToLimit(payload *KiroPayload, hasPriming bool) {
+	if payload == nil || kiroPayloadByteSize(payload) <= kiroMaxPayloadBytes {
+		return
+	}
+
+	history := payload.ConversationState.History
+	primingCount := 0
+	if hasPriming && len(history) >= 2 {
+		primingCount = 2
+	}
+	priming := history[:primingCount]
+	conversation := history[primingCount:]
+
+	placeholder := KiroHistoryMessage{
+		UserInputMessage: &KiroUserInputMessage{
+			Content: kiroTruncationPlaceholder,
+			ModelID: payload.ConversationState.CurrentMessage.UserInputMessage.ModelID,
+			Origin:  payload.ConversationState.CurrentMessage.UserInputMessage.Origin,
+		},
+	}
+
+	entrySizes := make([]int, len(conversation))
+	for i := range conversation {
+		entrySizes[i] = kiroHistoryEntryByteSize(conversation[i])
+	}
+
+	payload.ConversationState.History = priming
+	running := kiroPayloadByteSize(payload) + kiroHistoryEntryByteSize(placeholder)
+	keepFrom := len(conversation)
+	for i := len(conversation) - 1; i >= 0; i-- {
+		running += entrySizes[i]
+		kept := len(conversation) - i
+		if running > kiroMaxPayloadBytes && kept > kiroMinRecentHistoryTurns {
+			break
+		}
+		keepFrom = i
+	}
+
+	tail := dropLeadingKiroAssistantHistory(conversation[keepFrom:])
+	rebuilt := make([]KiroHistoryMessage, 0, len(priming)+1+len(tail))
+	rebuilt = append(rebuilt, priming...)
+	if keepFrom > 0 {
+		rebuilt = append(rebuilt, placeholder)
+	}
+	rebuilt = append(rebuilt, tail...)
+	payload.ConversationState.History = rebuilt
+
+	if kiroPayloadByteSize(payload) > kiroMaxPayloadBytes {
+		truncateKiroCurrentMessage(payload)
+	}
+}
+
+func kiroHistoryEntryByteSize(entry KiroHistoryMessage) int {
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return 0
+	}
+	return len(raw) + 1
+}
+
+func kiroPayloadByteSize(payload *KiroPayload) int {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
+}
+
+func dropLeadingKiroAssistantHistory(history []KiroHistoryMessage) []KiroHistoryMessage {
+	for len(history) > 0 && history[0].AssistantResponseMessage != nil {
+		history = history[1:]
+	}
+	return history
+}
+
+func truncateKiroCurrentMessage(payload *KiroPayload) {
+	if payload == nil {
+		return
+	}
+	current := &payload.ConversationState.CurrentMessage.UserInputMessage
+	overhead := kiroPayloadByteSize(payload) - len(current.Content)
+	budget := kiroMaxPayloadBytes - overhead
+	if budget < 0 {
+		budget = 0
+	}
+	if len(current.Content) <= budget {
+		return
+	}
+	if budget == 0 {
+		current.Content = "Continue"
+		return
+	}
+	current.Content = truncateUTF8(current.Content, budget)
 }
 
 func normalizeOrigin(origin string) string {
