@@ -187,7 +187,8 @@ func looksLikeKiroProfileError(lower string) bool {
 	if lower == "" {
 		return false
 	}
-	return (strings.Contains(lower, "profilearn") && strings.Contains(lower, "required")) ||
+	return strings.Contains(lower, "no available kiro profile") ||
+		(strings.Contains(lower, "profilearn") && strings.Contains(lower, "required")) ||
 		(strings.Contains(lower, "profile arn") && strings.Contains(lower, "required")) ||
 		(strings.Contains(lower, "profile") && strings.Contains(lower, "not found")) ||
 		(strings.Contains(lower, "invalid profile")) ||

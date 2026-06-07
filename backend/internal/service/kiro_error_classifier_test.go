@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -63,4 +64,14 @@ func TestClassifyKiroHTTPErrorBadRequestCategories(t *testing.T) {
 			require.Equal(t, tt.body, classification.Message)
 		})
 	}
+}
+
+func TestClassifyKiroProfileUnavailable(t *testing.T) {
+	httpClassification := classifyKiroHTTPError(http.StatusBadGateway, "no available Kiro profile")
+	require.Equal(t, kiroErrorProfileError, httpClassification.Category)
+	require.Equal(t, http.StatusBadGateway, httpClassification.StatusCode)
+
+	errClassification := classifyKiroError(errors.New("no available Kiro profile"))
+	require.Equal(t, kiroErrorProfileError, errClassification.Category)
+	require.Equal(t, "no available Kiro profile", errClassification.Message)
 }
