@@ -580,10 +580,18 @@ type UpstreamFailoverError struct {
 	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	Cause                  error       // 内部原因，用于 errors.As 分类；不直接暴露给客户端
 }
 
 func (e *UpstreamFailoverError) Error() string {
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
+}
+
+func (e *UpstreamFailoverError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
@@ -8390,6 +8398,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						StatusCode:             http.StatusBadGateway,
 						ResponseBody:           body,
 						RetryableOnSameAccount: true,
+						Cause:                  ev.err,
 					}
 				}
 				sendErrorEvent("stream_read_error", disconnectMsg)

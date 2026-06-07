@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -236,8 +237,15 @@ type toolUseState struct {
 }
 
 type eventStreamMessage struct {
-	EventType string
-	Payload   []byte
+	EventType     string
+	MessageType   string
+	ExceptionType string
+	Payload       []byte
+}
+
+type UpstreamExceptionError struct {
+	ExceptionType string
+	Message       string
 }
 
 type kiroSemanticEventType string
@@ -565,6 +573,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	inThinkingBlock := false
 	stripThinkingLeadingNewline := false
 	var outputTextBuf strings.Builder
+	sawKiroSemanticOutput := false
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -1083,6 +1092,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err != nil {
 			return nil, err
 		}
+		if err := msg.ExceptionError(); err != nil {
+			return nil, err
+		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
 		}
@@ -1094,6 +1106,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
+			switch semanticEvents[i].Type {
+			case kiroSemanticContent, kiroSemanticReasoning, kiroSemanticAssistantTU, kiroSemanticToolUse, kiroSemanticToolInput:
+				sawKiroSemanticOutput = true
+			}
 			if err := applySemanticEvent(&semanticEvents[i]); err != nil {
 				return nil, err
 			}
@@ -1119,6 +1135,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	if err := closeThinking(); err != nil {
 		return nil, err
+	}
+	if !sawKiroSemanticOutput && usage.OutputTokens <= 0 {
+		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
 	if usage.OutputTokens == 0 {
 		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
@@ -2097,6 +2116,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		if err != nil {
 			return "", nil, usage, stopReason, err
 		}
+		if err := msg.ExceptionError(); err != nil {
+			return "", nil, usage, stopReason, err
+		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
 		}
@@ -2484,19 +2506,31 @@ func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
 	if _, err := io.ReadFull(reader, remaining); err != nil {
 		return nil, err
 	}
-	eventType := extractEventType(remaining[:headersLength])
+	headers := parseEventStreamHeaders(remaining[:headersLength])
+	eventType := headers[":event-type"]
 	payloadStart := headersLength
 	payloadEnd := uint32(len(remaining)) - 4
 	if payloadStart >= payloadEnd {
-		return &eventStreamMessage{EventType: eventType}, nil
+		return &eventStreamMessage{
+			EventType:     eventType,
+			MessageType:   headers[":message-type"],
+			ExceptionType: headers[":exception-type"],
+		}, nil
 	}
 	return &eventStreamMessage{
-		EventType: eventType,
-		Payload:   remaining[payloadStart:payloadEnd],
+		EventType:     eventType,
+		MessageType:   headers[":message-type"],
+		ExceptionType: headers[":exception-type"],
+		Payload:       remaining[payloadStart:payloadEnd],
 	}, nil
 }
 
 func extractEventType(headers []byte) string {
+	return parseEventStreamHeaders(headers)[":event-type"]
+}
+
+func parseEventStreamHeaders(headers []byte) map[string]string {
+	out := make(map[string]string)
 	offset := 0
 	for offset < len(headers) {
 		nameLen := int(headers[offset])
@@ -2522,9 +2556,7 @@ func extractEventType(headers []byte) string {
 			}
 			value := string(headers[offset : offset+valueLen])
 			offset += valueLen
-			if name == ":event-type" {
-				return value
-			}
+			out[name] = value
 			continue
 		}
 		next, ok := skipHeaderValue(headers, offset, valueType)
@@ -2533,7 +2565,53 @@ func extractEventType(headers []byte) string {
 		}
 		offset = next
 	}
-	return ""
+	return out
+}
+
+func (m *eventStreamMessage) ExceptionError() error {
+	if m == nil || !strings.EqualFold(m.MessageType, "exception") {
+		return nil
+	}
+	msg := extractKiroExceptionMessage(m.Payload)
+	exceptionType := strings.TrimSpace(m.ExceptionType)
+	if exceptionType == "" {
+		exceptionType = "Exception"
+	}
+	return &UpstreamExceptionError{
+		ExceptionType: exceptionType,
+		Message:       msg,
+	}
+}
+
+func (e *UpstreamExceptionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	exceptionType := strings.TrimSpace(e.ExceptionType)
+	if exceptionType == "" {
+		exceptionType = "Exception"
+	}
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		return fmt.Sprintf("kiro upstream exception: %s", exceptionType)
+	}
+	return fmt.Sprintf("kiro upstream exception: %s: %s", exceptionType, msg)
+}
+
+func extractKiroExceptionMessage(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return strings.TrimSpace(string(payload))
+	}
+	for _, key := range []string{"message", "Message", "error", "Error"} {
+		if msg, ok := body[key].(string); ok && strings.TrimSpace(msg) != "" {
+			return strings.TrimSpace(msg)
+		}
+	}
+	return strings.TrimSpace(string(payload))
 }
 
 func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {

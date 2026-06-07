@@ -1781,6 +1781,34 @@ func TestStreamEventStreamAsAnthropicUpstreamOutputTokensNotOverridden(t *testin
 	require.Contains(t, deltaSection, `"output_tokens":42`, "upstream outputTokens should not be overridden by estimation")
 }
 
+func TestStreamEventStreamAsAnthropicRejectsEmptyKiroStream(t *testing.T) {
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), strings.NewReader(""), &out, "claude-opus-4-8", 10, KiroRequestContext{})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty kiro event stream")
+	require.Empty(t, out.String())
+}
+
+func TestStreamEventStreamAsAnthropicRejectsKiroExceptionFrame(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamExceptionFrame(t, "ThrottlingException", map[string]any{
+		"message": "Too many requests, please wait before trying again.",
+		"reason":  nil,
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ThrottlingException")
+	require.Contains(t, err.Error(), "Too many requests")
+	require.Empty(t, out.String())
+}
+
 func buildEventStreamFrame(t *testing.T, eventType string, payload any) []byte {
 	t.Helper()
 	payloadBytes, err := json.Marshal(payload)
@@ -1792,6 +1820,38 @@ func buildEventStreamFrame(t *testing.T, eventType string, payload any) []byte {
 	_ = headers.WriteByte(7)
 	require.NoError(t, binary.Write(headers, binary.BigEndian, uint16(len(eventType))))
 	_, _ = headers.WriteString(eventType)
+
+	totalLength := uint32(12 + headers.Len() + len(payloadBytes) + 4)
+	frame := bytes.NewBuffer(nil)
+	require.NoError(t, binary.Write(frame, binary.BigEndian, totalLength))
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(headers.Len())))
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
+	_, _ = frame.Write(headers.Bytes())
+	_, _ = frame.Write(payloadBytes)
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
+	return frame.Bytes()
+}
+
+func buildEventStreamExceptionFrame(t *testing.T, exceptionType string, payload any) []byte {
+	t.Helper()
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return buildEventStreamFrameWithHeaders(t, map[string]string{
+		":message-type":   "exception",
+		":exception-type": exceptionType,
+	}, payloadBytes)
+}
+
+func buildEventStreamFrameWithHeaders(t *testing.T, headerValues map[string]string, payloadBytes []byte) []byte {
+	t.Helper()
+	headers := bytes.NewBuffer(nil)
+	for name, value := range headerValues {
+		_ = headers.WriteByte(byte(len(name)))
+		_, _ = headers.WriteString(name)
+		_ = headers.WriteByte(7)
+		require.NoError(t, binary.Write(headers, binary.BigEndian, uint16(len(value))))
+		_, _ = headers.WriteString(value)
+	}
 
 	totalLength := uint32(12 + headers.Len() + len(payloadBytes) + 4)
 	frame := bytes.NewBuffer(nil)

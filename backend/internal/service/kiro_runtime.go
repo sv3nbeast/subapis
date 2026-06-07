@@ -126,6 +126,17 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		upstreamModel := mappedModel
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
+			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "stream_failover",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, failoverErr
+			}
 			return nil, err
 		}
 		if streamResult.usage == nil {
@@ -260,6 +271,65 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		Stream:        false,
 		Duration:      time.Since(startTime),
 	}, nil
+}
+
+func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account *Account, err error) *UpstreamFailoverError {
+	if err == nil || account == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+
+	var exceptionErr *kiropkg.UpstreamExceptionError
+	if errors.As(err, &exceptionErr) {
+		statusCode := http.StatusBadGateway
+		retryableOnSameAccount := true
+		exceptionType := strings.ToLower(strings.TrimSpace(exceptionErr.ExceptionType))
+		exceptionMsg := strings.ToLower(strings.TrimSpace(exceptionErr.Message))
+		if strings.Contains(exceptionType, "throttl") ||
+			strings.Contains(exceptionType, "ratelimit") ||
+			strings.Contains(exceptionType, "rate_limit") ||
+			strings.Contains(exceptionMsg, "too many requests") ||
+			strings.Contains(exceptionMsg, "rate limit") {
+			if _, markErr := s.markKiro429(ctx, buildKiroAccountKey(account)); markErr != nil {
+				logger.L().Warn("kiro stream exception mark cooldown failed",
+					zap.Int64("account_id", account.ID),
+					zap.Error(markErr),
+				)
+			}
+			statusCode = http.StatusTooManyRequests
+			retryableOnSameAccount = false
+		}
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": sanitizeUpstreamErrorMessage(exceptionErr.Error()),
+			},
+		})
+		return &UpstreamFailoverError{
+			StatusCode:             statusCode,
+			ResponseBody:           body,
+			RetryableOnSameAccount: retryableOnSameAccount,
+			Cause:                  err,
+		}
+	}
+
+	if !strings.Contains(msg, "empty kiro event stream") {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "upstream_error",
+			"message": sanitizeUpstreamErrorMessage(err.Error()),
+		},
+	})
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           body,
+		RetryableOnSameAccount: true,
+		Cause:                  err,
+	}
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
