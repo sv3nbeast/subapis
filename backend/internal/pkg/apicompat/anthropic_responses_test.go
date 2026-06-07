@@ -1256,6 +1256,119 @@ func TestResponsesToAnthropicRequest_ToolChoiceLegacyFunctionName(t *testing.T) 
 	assert.Equal(t, "get_weather", tc["name"])
 }
 
+func TestResponsesToAnthropicRequest_ParallelFunctionCallsMerged(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "claude-sonnet-4-6",
+		Input: json.RawMessage(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"run two commands"}]},
+			{"type":"function_call","call_id":"call_a","name":"exec_command","arguments":"{\"cmd\":\"ls\"}"},
+			{"type":"function_call","call_id":"call_b","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}"},
+			{"type":"function_call_output","call_id":"call_a","output":"file1"},
+			{"type":"function_call_output","call_id":"call_b","output":"/home"}
+		]`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 3)
+	assert.Equal(t, "user", resp.Messages[0].Role)
+	assert.Equal(t, "assistant", resp.Messages[1].Role)
+	assert.Equal(t, "user", resp.Messages[2].Role)
+
+	assistantBlocks := parseContentBlocks(resp.Messages[1].Content)
+	require.Len(t, assistantBlocks, 2)
+	assert.Equal(t, "tool_use", assistantBlocks[0].Type)
+	assert.Equal(t, "call_a", assistantBlocks[0].ID)
+	assert.Equal(t, "tool_use", assistantBlocks[1].Type)
+	assert.Equal(t, "call_b", assistantBlocks[1].ID)
+
+	userBlocks := parseContentBlocks(resp.Messages[2].Content)
+	require.Len(t, userBlocks, 2)
+	assert.Equal(t, "tool_result", userBlocks[0].Type)
+	assert.Equal(t, "call_a", userBlocks[0].ToolUseID)
+	assert.Equal(t, "tool_result", userBlocks[1].Type)
+	assert.Equal(t, "call_b", userBlocks[1].ToolUseID)
+}
+
+func TestResponsesToAnthropicRequest_KiroLooseInputShapes(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "claude-sonnet-4-6",
+		Input: json.RawMessage(`[
+			{"type":"input_text","text":"describe this image"},
+			{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="},
+			{"type":"function_call","id":"call_lookup","name":"lookup","arguments":{"query":"image"}},
+			{"type":"tool_result","tool_call_id":"call_lookup","content":{"ok":true}}
+		]`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 3)
+
+	userBlocks := parseContentBlocks(resp.Messages[0].Content)
+	require.Len(t, userBlocks, 2)
+	assert.Equal(t, "text", userBlocks[0].Type)
+	assert.Equal(t, "describe this image", userBlocks[0].Text)
+	assert.Equal(t, "image", userBlocks[1].Type)
+	require.NotNil(t, userBlocks[1].Source)
+	assert.Equal(t, "image/png", userBlocks[1].Source.MediaType)
+
+	assistantBlocks := parseContentBlocks(resp.Messages[1].Content)
+	require.Len(t, assistantBlocks, 1)
+	assert.Equal(t, "tool_use", assistantBlocks[0].Type)
+	assert.Equal(t, "call_lookup", assistantBlocks[0].ID)
+	assert.JSONEq(t, `{"query":"image"}`, string(assistantBlocks[0].Input))
+
+	resultBlocks := parseContentBlocks(resp.Messages[2].Content)
+	require.Len(t, resultBlocks, 1)
+	assert.Equal(t, "tool_result", resultBlocks[0].Type)
+	assert.Equal(t, "call_lookup", resultBlocks[0].ToolUseID)
+
+	var output string
+	require.NoError(t, json.Unmarshal(resultBlocks[0].Content, &output))
+	assert.JSONEq(t, `{"ok":true}`, output)
+}
+
+func TestResponsesToAnthropicRequest_SingleObjectInput(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "claude-sonnet-4-6",
+		Input: json.RawMessage(`{"type":"input_text","text":"hello from object input"}`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "user", resp.Messages[0].Role)
+
+	blocks := parseContentBlocks(resp.Messages[0].Content)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, "text", blocks[0].Type)
+	assert.Equal(t, "hello from object input", blocks[0].Text)
+}
+
+func TestResponsesToAnthropicRequest_RoleMessageTopLevelText(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "claude-sonnet-4-6",
+		Input: json.RawMessage(`[
+			{"role":"user","text":"hello user"},
+			{"role":"assistant","text":"hello assistant"}
+		]`),
+	}
+
+	resp, err := ResponsesToAnthropicRequest(req)
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 2)
+
+	var userText string
+	require.NoError(t, json.Unmarshal(resp.Messages[0].Content, &userText))
+	assert.Equal(t, "hello user", userText)
+
+	assistantBlocks := parseContentBlocks(resp.Messages[1].Content)
+	require.Len(t, assistantBlocks, 1)
+	assert.Equal(t, "text", assistantBlocks[0].Type)
+	assert.Equal(t, "hello assistant", assistantBlocks[0].Text)
+}
+
 // ---------------------------------------------------------------------------
 // Image content block conversion tests
 // ---------------------------------------------------------------------------

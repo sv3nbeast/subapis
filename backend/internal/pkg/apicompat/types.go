@@ -228,15 +228,67 @@ type ResponsesInputItem struct {
 	// Role-based messages (developer/system/user/assistant)
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"` // string or []ResponsesContentPart
+	Text    string          `json:"text,omitempty"`
 
 	// type=function_call
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	ID        string `json:"id,omitempty"`
+	CallID     string `json:"call_id,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Arguments  string `json:"arguments,omitempty"`
+	ID         string `json:"id,omitempty"`
 
 	// type=function_call_output
 	Output string `json:"output,omitempty"`
+
+	// type=input_image / image_url
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Type       string          `json:"type,omitempty"`
+		Role       string          `json:"role,omitempty"`
+		Content    json.RawMessage `json:"content,omitempty"`
+		Text       string          `json:"text,omitempty"`
+		CallID     string          `json:"call_id,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+		Name       string          `json:"name,omitempty"`
+		Arguments  json.RawMessage `json:"arguments,omitempty"`
+		ID         string          `json:"id,omitempty"`
+		Output     json.RawMessage `json:"output,omitempty"`
+		ImageURL   string          `json:"image_url,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*item = ResponsesInputItem{
+		Type:       aux.Type,
+		Role:       aux.Role,
+		Content:    aux.Content,
+		Text:       aux.Text,
+		CallID:     aux.CallID,
+		ToolCallID: aux.ToolCallID,
+		Name:       aux.Name,
+		ID:         aux.ID,
+		ImageURL:   aux.ImageURL,
+	}
+	item.Output = rawJSONToString(aux.Output)
+	if len(aux.Arguments) > 0 && string(aux.Arguments) != "null" {
+		item.Arguments = rawJSONToString(aux.Arguments)
+	}
+	return nil
+}
+
+func rawJSONToString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
 }
 
 // ResponsesContentPart is a typed content part in a Responses message.

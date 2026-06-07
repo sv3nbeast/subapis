@@ -101,6 +101,11 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // a Responses API input array. Returns the system as raw JSON (for Anthropic's
 // polymorphic system field) and a list of Anthropic messages.
 func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+	trimmed := strings.TrimSpace(string(inputRaw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil, nil
+	}
+
 	// Try as plain string input.
 	var inputStr string
 	if err := json.Unmarshal(inputRaw, &inputStr); err == nil {
@@ -109,31 +114,61 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 	}
 
 	var items []ResponsesInputItem
-	if err := json.Unmarshal(inputRaw, &items); err != nil {
-		return nil, nil, fmt.Errorf("parse responses input: %w", err)
+	switch trimmed[0] {
+	case '[':
+		if err := json.Unmarshal(inputRaw, &items); err != nil {
+			return nil, nil, fmt.Errorf("parse responses input: %w", err)
+		}
+	case '{':
+		var item ResponsesInputItem
+		if err := json.Unmarshal(inputRaw, &item); err != nil {
+			return nil, nil, fmt.Errorf("parse responses input: %w", err)
+		}
+		items = []ResponsesInputItem{item}
+	default:
+		return nil, nil, fmt.Errorf("unsupported responses input shape")
 	}
 
 	var system json.RawMessage
 	var messages []AnthropicMessage
+	var pendingUserBlocks []AnthropicContentBlock
+
+	flushPendingUser := func() {
+		if len(pendingUserBlocks) == 0 {
+			return
+		}
+		content, _ := json.Marshal(pendingUserBlocks)
+		messages = append(messages, AnthropicMessage{
+			Role:    "user",
+			Content: content,
+		})
+		pendingUserBlocks = nil
+	}
 
 	for _, item := range items {
 		switch {
 		case item.Role == "system":
+			flushPendingUser()
 			// System prompt → Anthropic system field
 			text := extractTextFromContent(item.Content)
+			if text == "" {
+				text = strings.TrimSpace(item.Text)
+			}
 			if text != "" {
 				system, _ = json.Marshal(text)
 			}
 
 		case item.Type == "function_call":
+			flushPendingUser()
 			// function_call → assistant message with tool_use block
 			input := json.RawMessage("{}")
 			if item.Arguments != "" {
 				input = json.RawMessage(item.Arguments)
 			}
+			callID := firstNonEmpty(item.CallID, item.ID)
 			block := AnthropicContentBlock{
 				Type:  "tool_use",
-				ID:    fromResponsesCallIDToAnthropic(item.CallID),
+				ID:    fromResponsesCallIDToAnthropic(callID),
 				Name:  item.Name,
 				Input: input,
 			}
@@ -143,16 +178,18 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 				Content: blockJSON,
 			})
 
-		case item.Type == "function_call_output":
+		case item.Type == "function_call_output" || item.Type == "tool_result":
+			flushPendingUser()
 			// function_call_output → user message with tool_result block
-			outputContent := item.Output
+			outputContent := responsesToolOutputText(item)
 			if outputContent == "" {
 				outputContent = "(empty)"
 			}
 			contentJSON, _ := json.Marshal(outputContent)
+			callID := firstNonEmpty(item.CallID, item.ToolCallID, item.ID)
 			block := AnthropicContentBlock{
 				Type:      "tool_result",
-				ToolUseID: fromResponsesCallIDToAnthropic(item.CallID),
+				ToolUseID: fromResponsesCallIDToAnthropic(callID),
 				Content:   contentJSON,
 			}
 			blockJSON, _ := json.Marshal([]AnthropicContentBlock{block})
@@ -162,9 +199,19 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 			})
 
 		case item.Role == "user":
-			content, err := convertResponsesUserToAnthropicContent(item.Content)
-			if err != nil {
-				return nil, nil, err
+			flushPendingUser()
+			var content json.RawMessage
+			var err error
+			if strings.TrimSpace(item.Text) != "" && len(item.Content) == 0 {
+				content, _ = json.Marshal(item.Text)
+			} else {
+				content, err = convertResponsesUserToAnthropicContent(item.Content)
+				if err != nil {
+					return nil, nil, err
+				}
+				if isEmptyJSONContent(content) && strings.TrimSpace(item.Text) != "" {
+					content, _ = json.Marshal(item.Text)
+				}
 			}
 			messages = append(messages, AnthropicMessage{
 				Role:    "user",
@@ -172,18 +219,56 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 			})
 
 		case item.Role == "assistant":
-			content, err := convertResponsesAssistantToAnthropicContent(item.Content)
-			if err != nil {
-				return nil, nil, err
+			flushPendingUser()
+			var content json.RawMessage
+			var err error
+			if strings.TrimSpace(item.Text) != "" && len(item.Content) == 0 {
+				content, _ = json.Marshal([]AnthropicContentBlock{{Type: "text", Text: item.Text}})
+			} else {
+				content, err = convertResponsesAssistantToAnthropicContent(item.Content)
+				if err != nil {
+					return nil, nil, err
+				}
+				if isEmptyJSONContent(content) && strings.TrimSpace(item.Text) != "" {
+					content, _ = json.Marshal([]AnthropicContentBlock{{Type: "text", Text: item.Text}})
+				}
 			}
 			messages = append(messages, AnthropicMessage{
 				Role:    "assistant",
 				Content: content,
 			})
 
+		case item.Type == "input_text" || item.Type == "text":
+			if strings.TrimSpace(item.Text) != "" {
+				pendingUserBlocks = append(pendingUserBlocks, AnthropicContentBlock{
+					Type: "text",
+					Text: item.Text,
+				})
+			}
+
+		case item.Type == "input_image" || item.Type == "image" || item.Type == "image_url":
+			if src := responsesItemImageSource(item); src != nil {
+				pendingUserBlocks = append(pendingUserBlocks, AnthropicContentBlock{
+					Type:   "image",
+					Source: src,
+				})
+			}
+
+		case item.Type == "output_text":
+			flushPendingUser()
+			text := strings.TrimSpace(firstNonEmpty(item.Text, extractTextFromContent(item.Content)))
+			if text != "" {
+				content, _ := json.Marshal([]AnthropicContentBlock{{Type: "text", Text: text}})
+				messages = append(messages, AnthropicMessage{
+					Role:    "assistant",
+					Content: content,
+				})
+			}
+
 		default:
 			// Unknown role/type — attempt as user message
 			if item.Content != nil {
+				flushPendingUser()
 				messages = append(messages, AnthropicMessage{
 					Role:    "user",
 					Content: item.Content,
@@ -191,11 +276,74 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 			}
 		}
 	}
+	flushPendingUser()
 
 	// Merge consecutive same-role messages (Anthropic requires alternating roles)
 	messages = mergeConsecutiveMessages(messages)
 
 	return system, messages, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isEmptyJSONContent(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed == "" || trimmed == `""` || trimmed == "null" || trimmed == "[]"
+}
+
+func responsesToolOutputText(item ResponsesInputItem) string {
+	if item.Output != "" {
+		return item.Output
+	}
+	if len(item.Content) == 0 {
+		return ""
+	}
+
+	var s string
+	if err := json.Unmarshal(item.Content, &s); err == nil {
+		return s
+	}
+	if text := extractTextFromContent(item.Content); text != "" {
+		return text
+	}
+	if string(item.Content) == "null" {
+		return ""
+	}
+	return string(item.Content)
+}
+
+func responsesItemImageSource(item ResponsesInputItem) *AnthropicImageSource {
+	if src := dataURIToAnthropicImageSource(item.ImageURL); src != nil {
+		return src
+	}
+	if len(item.Content) == 0 {
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(item.Content, &s); err == nil {
+		return dataURIToAnthropicImageSource(s)
+	}
+	var part ResponsesContentPart
+	if err := json.Unmarshal(item.Content, &part); err == nil {
+		return dataURIToAnthropicImageSource(part.ImageURL)
+	}
+	var parts []ResponsesContentPart
+	if err := json.Unmarshal(item.Content, &parts); err == nil {
+		for _, part := range parts {
+			if src := dataURIToAnthropicImageSource(part.ImageURL); src != nil {
+				return src
+			}
+		}
+	}
+	return nil
 }
 
 // extractTextFromContent extracts text from a content field that may be a
