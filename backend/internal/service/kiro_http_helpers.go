@@ -216,6 +216,9 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
 	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
 	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	if req.URL != nil && req.URL.Host != "" {
+		req.Host = req.URL.Host
+	}
 	if isKiroCLIWireMode(account) {
 		req.Header.Set("x-amzn-codewhisperer-optout", "false")
 	} else {
