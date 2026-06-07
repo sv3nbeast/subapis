@@ -21,6 +21,7 @@ import (
 type stubKiroCooldownStore struct {
 	reserveWait  time.Duration
 	reserveErr   error
+	reserveCalls int
 	successErr   error
 	mark429TTL   time.Duration
 	mark429Err   error
@@ -78,6 +79,7 @@ func (r *recordingKiroErrorRepo) SetError(_ context.Context, id int64, errorMsg 
 }
 
 func (s *stubKiroCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
+	s.reserveCalls++
 	return s.reserveWait, s.reserveErr
 }
 
@@ -123,10 +125,10 @@ func TestGatewayServiceCheckAndWaitKiroCooldownReturnsNilWithoutWait(t *testing.
 	require.NoError(t, svc.checkAndWaitKiroCooldown(context.Background(), "token1"))
 }
 
-func TestGatewayServiceCheckAndWaitKiroCooldownPropagatesReserveError(t *testing.T) {
+func TestGatewayServiceCheckAndWaitKiroCooldownPropagatesStateError(t *testing.T) {
 	expected := errors.New("redis unavailable")
 	svc := &GatewayService{
-		kiroCooldownStore: &stubKiroCooldownStore{reserveErr: expected},
+		kiroCooldownStore: &stubKiroCooldownStore{stateErr: expected},
 	}
 
 	err := svc.checkAndWaitKiroCooldown(context.Background(), "token1")
@@ -139,16 +141,50 @@ func TestGatewayServiceCheckAndWaitKiroCooldownRequiresStore(t *testing.T) {
 	require.ErrorIs(t, err, errKiroCooldownStoreUnavailable)
 }
 
-func TestGatewayServiceCheckAndWaitKiroCooldownWaitsAndHonorsContext(t *testing.T) {
+func TestGatewayServiceCheckAndWaitKiroCooldownClears429WithoutWaiting(t *testing.T) {
+	store := &stubKiroCooldownStore{
+		reserveWait: 200 * time.Millisecond,
+		state: &kirocooldown.State{
+			Active:        true,
+			Reason:        kirocooldown.CooldownReason429,
+			CooldownUntil: time.Now().Add(2 * time.Minute),
+			Remaining:     2 * time.Minute,
+		},
+		clearResult: true,
+	}
 	svc := &GatewayService{
-		kiroCooldownStore: &stubKiroCooldownStore{reserveWait: 200 * time.Millisecond},
+		kiroCooldownStore: store,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	start := time.Now()
+	err := svc.checkAndWaitKiroCooldown(context.Background(), "token1")
 
-	err := svc.checkAndWaitKiroCooldown(ctx, "token1")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 50*time.Millisecond)
+	require.Equal(t, 0, store.reserveCalls, "Kiro 429 must not use ReserveRequest spacing")
+	require.True(t, store.clearCalled)
+	require.Equal(t, []string{"token1"}, store.clearKeys)
+}
+
+func TestGatewayServiceCheckAndWaitKiroCooldownBlocksSuspendedState(t *testing.T) {
+	store := &stubKiroCooldownStore{
+		state: &kirocooldown.State{
+			Active:        true,
+			Reason:        kirocooldown.CooldownReasonSuspended,
+			CooldownUntil: time.Now().Add(2 * time.Minute),
+			Remaining:     2 * time.Minute,
+		},
+	}
+	svc := &GatewayService{
+		kiroCooldownStore: store,
+	}
+
+	err := svc.checkAndWaitKiroCooldown(context.Background(), "token1")
+
+	var cooldownErr *kirocooldown.Error
+	require.ErrorAs(t, err, &cooldownErr)
+	require.Contains(t, err.Error(), kirocooldown.CooldownReasonSuspended)
+	require.Equal(t, 0, store.reserveCalls)
 }
 
 func TestAsKiroCooldownFailoverError(t *testing.T) {
@@ -168,61 +204,7 @@ func TestAsKiroCooldownFailoverErrorIgnoresNonCooldownErrors(t *testing.T) {
 	require.Nil(t, asKiroCooldownFailoverError(errors.New("redis unavailable")))
 }
 
-func TestGatewayServiceTryRecoverKiroCooldownPoolClearsOnlyTransientCooldown(t *testing.T) {
-	store := &stubKiroCooldownStore{
-		state: &kirocooldown.State{
-			Active:        true,
-			Reason:        kirocooldown.CooldownReason429,
-			CooldownUntil: time.Now().Add(time.Minute),
-			Remaining:     time.Minute,
-		},
-		clearResult: true,
-	}
-	svc := &GatewayService{kiroCooldownStore: store}
-	accounts := []Account{
-		{
-			ID:          42,
-			Platform:    PlatformKiro,
-			Type:        AccountTypeOAuth,
-			Status:      StatusActive,
-			Schedulable: true,
-		},
-	}
-
-	recovered := svc.tryRecoverKiroCooldownPool(context.Background(), accounts, "", nil, false)
-	require.True(t, recovered)
-	require.True(t, store.clearCalled)
-	require.Len(t, store.clearKeys, 1)
-	require.Equal(t, buildKiroAccountKey(&accounts[0]), store.clearKeys[0])
-}
-
-func TestGatewayServiceTryRecoverKiroCooldownPoolSkipsSuspended(t *testing.T) {
-	store := &stubKiroCooldownStore{
-		state: &kirocooldown.State{
-			Active:        true,
-			Reason:        kirocooldown.CooldownReasonSuspended,
-			CooldownUntil: time.Now().Add(time.Hour),
-			Remaining:     time.Hour,
-		},
-		clearResult: true,
-	}
-	svc := &GatewayService{kiroCooldownStore: store}
-	accounts := []Account{
-		{
-			ID:          42,
-			Platform:    PlatformKiro,
-			Type:        AccountTypeOAuth,
-			Status:      StatusActive,
-			Schedulable: true,
-		},
-	}
-
-	recovered := svc.tryRecoverKiroCooldownPool(context.Background(), accounts, "", nil, false)
-	require.False(t, recovered)
-	require.False(t, store.clearCalled)
-}
-
-func TestSelectAccountWithLoadAwarenessRecoversKiroCooldownPool(t *testing.T) {
+func TestSelectAccountWithLoadAwarenessDoesNotDependOnKiro429CooldownPool(t *testing.T) {
 	cfg := testConfig()
 	cfg.Gateway.Scheduling.LoadBatchEnabled = true
 
@@ -256,8 +238,7 @@ func TestSelectAccountWithLoadAwarenessRecoversKiroCooldownPool(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, account.ID, result.Account.ID)
-	require.True(t, store.clearCalled)
-	require.Equal(t, []string{buildKiroAccountKey(&account)}, store.clearKeys)
+	require.False(t, store.clearCalled)
 }
 
 func TestClassifyKiroHTTPErrorMonthlyRequestCount(t *testing.T) {
@@ -278,10 +259,15 @@ func TestClassifyKiroHTTPErrorPlain402IsTransient(t *testing.T) {
 	require.Equal(t, kiroErrorUpstreamTransient, classification.Category)
 }
 
-func TestExecuteKiroUpstreamCooldownReturnsFailoverError(t *testing.T) {
+func TestExecuteKiroUpstreamSuspendedCooldownReturnsFailoverError(t *testing.T) {
 	svc := &GatewayService{
 		kiroCooldownStore: &stubKiroCooldownStore{
-			reserveErr: kirocooldown.NewError(32500*time.Millisecond, kirocooldown.CooldownReason429),
+			state: &kirocooldown.State{
+				Active:        true,
+				Reason:        kirocooldown.CooldownReasonSuspended,
+				CooldownUntil: time.Now().Add(32500 * time.Millisecond),
+				Remaining:     32500 * time.Millisecond,
+			},
 		},
 	}
 
@@ -291,8 +277,52 @@ func TestExecuteKiroUpstreamCooldownReturnsFailoverError(t *testing.T) {
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-	require.Equal(t, "kiro token is in cooldown for 33s (reason: rate_limit_exceeded)", string(failoverErr.ResponseBody))
+	require.Equal(t, "kiro token is in cooldown for 33s (reason: account_suspended)", string(failoverErr.ResponseBody))
 	require.False(t, failoverErr.RetryableOnSameAccount)
+}
+
+func TestExecuteKiroUpstreamClears429CooldownAndContinues(t *testing.T) {
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusOK, `{"ok":true}`),
+		},
+	}
+	store := &stubKiroCooldownStore{
+		state: &kirocooldown.State{
+			Active:        true,
+			Reason:        kirocooldown.CooldownReason429,
+			CooldownUntil: time.Now().Add(time.Minute),
+			Remaining:     time.Minute,
+		},
+		clearResult: true,
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   store,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, 0, store.reserveCalls)
+	require.True(t, store.clearCalled)
+	require.Len(t, upstream.requests, 1)
 }
 
 func TestExecuteKiroUpstreamFallsBackToNextEndpointOnKiro429WithoutSleepOrCooldown(t *testing.T) {
@@ -707,7 +737,7 @@ func TestExecuteKiroUpstreamInvalidGrantForceRefreshSetsErrorWithoutTempUnschedu
 	require.False(t, repo.called, "non-retryable refresh errors should not mark temporary unschedulable")
 }
 
-func TestGatewayServiceIsAccountSchedulableForSelectionSkipsActiveKiroCooldown(t *testing.T) {
+func TestGatewayServiceIsAccountSchedulableForSelectionAllowsActiveKiro429Cooldown(t *testing.T) {
 	now := time.Now().Add(2 * time.Minute)
 	svc := &GatewayService{
 		kiroCooldownStore: &stubKiroCooldownStore{
@@ -727,5 +757,5 @@ func TestGatewayServiceIsAccountSchedulableForSelectionSkipsActiveKiroCooldown(t
 		Status:      StatusActive,
 		Schedulable: true,
 	}
-	require.False(t, svc.isAccountSchedulableForSelection(account))
+	require.True(t, svc.isAccountSchedulableForSelection(account))
 }

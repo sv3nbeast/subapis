@@ -38,21 +38,24 @@ func (s *GatewayService) checkAndWaitKiroCooldown(ctx context.Context, tokenKey 
 	if s == nil || s.kiroCooldownStore == nil {
 		return errKiroCooldownStoreUnavailable
 	}
-	waitFor, err := s.kiroCooldownStore.ReserveRequest(ctx, tokenKey)
+	state, err := s.kiroCooldownStore.GetState(ctx, tokenKey)
 	if err != nil {
 		return err
 	}
-	if waitFor <= 0 {
+	if state == nil || !state.Active {
 		return nil
 	}
-	timer := time.NewTimer(waitFor)
-	select {
-	case <-ctx.Done():
-		if !timer.Stop() {
-			<-timer.C
+
+	switch state.Reason {
+	case kirocooldown.CooldownReason429:
+		_, _ = s.kiroCooldownStore.ClearEarliestTransientCooldown(ctx, []string{tokenKey})
+		return nil
+	case kirocooldown.CooldownReasonSuspended:
+		return kirocooldown.NewError(state.Remaining, state.Reason)
+	default:
+		if state.Remaining > 0 {
+			return kirocooldown.NewError(state.Remaining, state.Reason)
 		}
-		return ctx.Err()
-	case <-timer.C:
 		return nil
 	}
 }

@@ -445,7 +445,7 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		require.Zero(t, fs.ForceAccountID)
 		require.Contains(t, fs.FailedAccountIDs, int64(1459))
 		require.Contains(t, fs.Kiro429SoftExcludedIDs, int64(1459))
-		require.Equal(t, 1, fs.SwitchCount)
+		require.Equal(t, 0, fs.SwitchCount, "Kiro 429 fast switching must not consume generic switch budget")
 		require.Empty(t, mock.calls)
 	})
 
@@ -518,6 +518,21 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		action := fs.HandleSelectionExhausted(context.Background())
 
 		require.Equal(t, FailoverExhausted, action)
+	})
+
+	t.Run("Kiro 429不受普通最大切号次数提前限制", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(0, false)
+		err := newTestKiro429FailoverErr()
+
+		for i := 1; i <= kiro429HardRetryLimit; i++ {
+			action := fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, err)
+			require.Equal(t, FailoverContinue, action)
+		}
+
+		require.Equal(t, kiro429HardRetryLimit, fs.Kiro429RetryCount[1459])
+		require.Contains(t, fs.FailedAccountIDs, int64(1459))
+		require.Zero(t, fs.SwitchCount)
 	})
 }
 

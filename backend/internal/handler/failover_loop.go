@@ -187,7 +187,6 @@ func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int
 		s.Kiro429SoftExcludedIDs[accountID] = struct{}{}
 		s.Kiro429LastSoftExcluded = accountID
 		s.FailedAccountIDs[accountID] = struct{}{}
-		s.SwitchCount++
 	case retryCount < kiro429HardRetryLimit:
 		s.ForceAccountID = accountID
 	default:
@@ -197,7 +196,6 @@ func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int
 			s.Kiro429LastSoftExcluded = 0
 		}
 		s.FailedAccountIDs[accountID] = struct{}{}
-		s.SwitchCount++
 	}
 
 	logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
