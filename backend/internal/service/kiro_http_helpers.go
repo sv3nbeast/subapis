@@ -239,7 +239,7 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 	}
 	req.Header.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
-	if account != nil {
+	if account != nil && isKiroRuntimeRequestURL(req.URL) {
 		profileArn := strings.TrimSpace(account.GetCredential("profile_arn"))
 		if profileArn != "" {
 			req.Header.Set("x-amzn-kiro-profile-arn", profileArn)
@@ -251,4 +251,8 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 
 func isKiroGenerateAssistantResponseURL(u *url.URL) bool {
 	return u != nil && strings.HasSuffix(strings.TrimRight(u.Path, "/"), kiroGenerateAssistantResponsePath)
+}
+
+func isKiroRuntimeRequestURL(u *url.URL) bool {
+	return u != nil && strings.HasPrefix(strings.ToLower(u.Host), "runtime.") && strings.HasSuffix(strings.ToLower(u.Host), ".kiro.dev")
 }

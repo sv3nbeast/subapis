@@ -118,6 +118,7 @@ func TestNewKiroJSONRequestCLIWireHeaders(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{
 			"kiro_wire_mode": "cli",
+			"profile_arn":    "arn:aws:codewhisperer:us-east-1:123456789012:profile/RUNTIME",
 		},
 	}
 
@@ -140,6 +141,7 @@ func TestNewKiroJSONRequestCLIWireHeaders(t *testing.T) {
 	require.Equal(t, "attempt=2; max=3", req.Header.Get("Amz-Sdk-Request"))
 	require.Equal(t, "*/*", req.Header.Get("Accept"))
 	require.Equal(t, "Bearer access-token", req.Header.Get("Authorization"))
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RUNTIME", req.Header.Get("x-amzn-kiro-profile-arn"))
 }
 
 func TestBuildKiroPayloadForAccountCLIWireMode(t *testing.T) {
