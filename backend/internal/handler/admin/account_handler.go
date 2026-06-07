@@ -943,6 +943,13 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if err != nil {
 		return nil, "", err
 	}
+	if account.Status == service.StatusError {
+		if recoveredAccount, recoverErr := h.adminService.ClearAccountError(ctx, account.ID); recoverErr != nil {
+			return nil, "", fmt.Errorf("failed to recover account after credential refresh: %w", recoverErr)
+		} else if recoveredAccount != nil {
+			updatedAccount = recoveredAccount
+		}
+	}
 
 	// 刷新成功后，清除 token 缓存，确保下次请求使用新 token
 	if h.tokenCacheInvalidator != nil {

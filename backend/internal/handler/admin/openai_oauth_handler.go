@@ -193,6 +193,16 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if account.Status == service.StatusError {
+		recoveredAccount, recoverErr := h.adminService.ClearAccountError(c.Request.Context(), accountID)
+		if recoverErr != nil {
+			response.ErrorFrom(c, recoverErr)
+			return
+		}
+		if recoveredAccount != nil {
+			updatedAccount = recoveredAccount
+		}
+	}
 
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }

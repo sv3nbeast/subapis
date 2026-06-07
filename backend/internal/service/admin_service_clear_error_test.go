@@ -28,6 +28,7 @@ func (r *accountRepoStubForClearAccountError) ClearError(ctx context.Context, id
 	r.clearErrorCalls++
 	r.account.Status = StatusActive
 	r.account.ErrorMessage = ""
+	r.account.Schedulable = true
 	return nil
 }
 
@@ -64,14 +65,14 @@ func TestAdminService_ClearAccountError_AlsoClearsRecoverableRuntimeState(t *tes
 			Platform:                PlatformOpenAI,
 			Type:                    AccountTypeOAuth,
 			Status:                  StatusError,
+			Schedulable:             false,
 			ErrorMessage:            "refresh failed",
 			RateLimitResetAt:        &resetAt,
 			TempUnschedulableUntil:  &until,
 			TempUnschedulableReason: "missing refresh token",
 		},
 	}
-	blocker := &runtimeBlockRecorder{}
-	svc := &adminServiceImpl{accountRepo: repo, runtimeBlocker: blocker}
+	svc := &adminServiceImpl{accountRepo: repo}
 
 	updated, err := svc.ClearAccountError(context.Background(), 31)
 	require.NoError(t, err)
@@ -84,5 +85,5 @@ func TestAdminService_ClearAccountError_AlsoClearsRecoverableRuntimeState(t *tes
 	require.Nil(t, updated.RateLimitResetAt)
 	require.Nil(t, updated.TempUnschedulableUntil)
 	require.Empty(t, updated.TempUnschedulableReason)
-	require.Equal(t, []int64{31}, blocker.clearedIDs)
+	require.True(t, updated.Schedulable)
 }

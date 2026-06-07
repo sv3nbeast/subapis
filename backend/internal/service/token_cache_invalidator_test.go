@@ -144,6 +144,24 @@ func TestCompositeTokenCacheInvalidator_Claude(t *testing.T) {
 	require.Equal(t, []string{"claude:account:600"}, cache.deletedKeys)
 }
 
+func TestCompositeTokenCacheInvalidator_Kiro(t *testing.T) {
+	cache := &geminiTokenCacheStub{}
+	invalidator := NewCompositeTokenCacheInvalidator(cache)
+	account := &Account{
+		ID:       1459,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"client_id_hash": "client-hash",
+			"access_token":   "kiro-token",
+		},
+	}
+
+	err := invalidator.InvalidateToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"kiro:client-hash", "kiro:account:1459"}, cache.deletedKeys)
+}
+
 func TestCompositeTokenCacheInvalidator_SkipNonOAuth(t *testing.T) {
 	cache := &geminiTokenCacheStub{}
 	invalidator := NewCompositeTokenCacheInvalidator(cache)

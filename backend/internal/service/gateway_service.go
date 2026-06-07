@@ -10015,7 +10015,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 处理错误响应
 	if resp.StatusCode >= 400 {
 		// 标记账号状态（429/529等）
-		s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		s.handleCountTokensUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -10113,9 +10113,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	}
 
 	if resp.StatusCode >= 400 {
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
+		s.handleCountTokensUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -10174,6 +10172,41 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	}
 	c.Data(resp.StatusCode, contentType, respBody)
 	return nil
+}
+
+func (s *GatewayService) handleCountTokensUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, respBody []byte) {
+	if s == nil || account == nil {
+		return
+	}
+	if statusCode == http.StatusUnauthorized && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+		s.handleKiroCountTokensUnauthorized(ctx, account, respBody)
+		return
+	}
+	if s.rateLimitService != nil {
+		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, headers, respBody)
+	}
+}
+
+func (s *GatewayService) handleKiroCountTokensUnauthorized(ctx context.Context, account *Account, respBody []byte) {
+	if s == nil || account == nil {
+		return
+	}
+	if s.rateLimitService != nil && s.rateLimitService.tokenCacheInvalidator != nil {
+		if err := s.rateLimitService.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
+			slog.Warn("kiro_count_tokens_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+	if s.kiroTokenProvider != nil {
+		if _, err := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account); err != nil {
+			slog.Warn("kiro_count_tokens_401_force_refresh_failed",
+				"account_id", account.ID,
+				"error", err,
+				"upstream_message", truncateString(sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(respBody)), 512),
+			)
+			return
+		}
+		slog.Info("kiro_count_tokens_401_force_refresh_succeeded", "account_id", account.ID)
+	}
 }
 
 func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(

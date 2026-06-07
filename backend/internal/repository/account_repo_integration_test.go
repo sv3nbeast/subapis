@@ -933,9 +933,39 @@ func (s *AccountRepoSuite) TestClearError_SyncSchedulerSnapshotOnRecovery() {
 	s.Require().NoError(err)
 	s.Require().Equal(service.StatusActive, got.Status)
 	s.Require().Empty(got.ErrorMessage)
+	s.Require().True(got.Schedulable)
 	s.Require().Len(cacheRecorder.setAccounts, 1)
 	s.Require().Equal(account.ID, cacheRecorder.setAccounts[0].ID)
 	s.Require().Equal(service.StatusActive, cacheRecorder.setAccounts[0].Status)
+	s.Require().True(cacheRecorder.setAccounts[0].Schedulable)
+}
+
+func (s *AccountRepoSuite) TestClearErrorRestoresSchedulingPool() {
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "g-clear-error"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "acc-clear-error-sched",
+		Status:      service.StatusActive,
+		Schedulable: true,
+	})
+	mustBindAccountToGroup(s.T(), s.client, account.ID, group.ID, 1)
+
+	s.Require().NoError(s.repo.SetError(s.ctx, account.ID, "invalid refresh token"))
+	schedBefore, err := s.repo.ListSchedulableByGroupID(s.ctx, group.ID)
+	s.Require().NoError(err)
+	s.Require().Len(schedBefore, 0)
+
+	s.Require().NoError(s.repo.ClearError(s.ctx, account.ID))
+
+	got, err := s.repo.GetByID(s.ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.StatusActive, got.Status)
+	s.Require().Empty(got.ErrorMessage)
+	s.Require().True(got.Schedulable)
+
+	schedAfter, err := s.repo.ListSchedulableByGroupID(s.ctx, group.ID)
+	s.Require().NoError(err)
+	s.Require().Len(schedAfter, 1)
+	s.Require().Equal(account.ID, schedAfter[0].ID)
 }
 
 // --- UpdateSessionWindow ---

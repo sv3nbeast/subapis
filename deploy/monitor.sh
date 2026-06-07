@@ -5,7 +5,7 @@
 # 功能：
 #   1. 检测 /health 端点是否正常
 #   2. 读取渠道监控或服务状态探针结果验证模型可用性（不再重复发起模型请求）
-#   3. 按渠道统计可用正常账号数，剩余 1 个时通过 Bark 告警
+#   3. 按渠道统计可用正常账号数，剩余 2 个时通过 Bark 告警
 #   4. 状态变化时通过 Bark 推送通知（异常/恢复），不重复提醒
 #
 # 用法：
@@ -55,7 +55,7 @@ TEST_MODEL="${TEST_MODEL:-claude-opus-4-6}"
 API_CHECK_SOURCE="${API_CHECK_SOURCE:-channel_monitor}"
 STATUS_API_PATH="${STATUS_API_PATH:-/api/v1/status/models}"
 CHANNEL_MONITOR_STALE_SECONDS="${CHANNEL_MONITOR_STALE_SECONDS:-1800}"
-CHANNEL_AVAILABLE_THRESHOLD="${CHANNEL_AVAILABLE_THRESHOLD:-1}"
+CHANNEL_AVAILABLE_THRESHOLD="${CHANNEL_AVAILABLE_THRESHOLD:-2}"
 SCHEDULING_THRESHOLD="${SCHEDULING_THRESHOLD:-10}"
 PG_CONTAINER="${PG_CONTAINER:-sub2api-postgres}"
 PG_USER="${PG_USER:-sub2api}"
