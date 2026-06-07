@@ -440,10 +440,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if _, err := s.markKiro429(ctx, accountKey); err != nil {
-				_ = resp.Body.Close()
-				return nil, currentToken, err
-			}
+			return resp, currentToken, nil
 		}
 		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 {
 			if attempt < 2 {

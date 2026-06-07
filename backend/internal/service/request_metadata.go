@@ -18,6 +18,7 @@ type RequestMetadata struct {
 	ThinkingEnabled            *bool
 	PrefetchedStickyAccountID  *int64
 	PrefetchedStickyGroupID    *int64
+	ForcedAccountID            *int64
 	SingleAccountRetry         *bool
 	AccountSwitchCount         *int
 	AvoidEmailDomainSuffixes   []string
@@ -80,6 +81,7 @@ var (
 	requestMetadataFallbackThinkingEnabledTotal     atomic.Int64
 	requestMetadataFallbackPrefetchedStickyAccount  atomic.Int64
 	requestMetadataFallbackPrefetchedStickyGroup    atomic.Int64
+	requestMetadataFallbackForcedAccount            atomic.Int64
 	requestMetadataFallbackSingleAccountRetryTotal  atomic.Int64
 	requestMetadataFallbackAccountSwitchCountTotal  atomic.Int64
 )
@@ -150,6 +152,15 @@ func WithPrefetchedStickySession(ctx context.Context, accountID, groupID int64, 
 	}, func(base context.Context) context.Context {
 		bridged := context.WithValue(base, ctxkey.PrefetchedStickyAccountID, accountID)
 		return context.WithValue(bridged, ctxkey.PrefetchedStickyGroupID, groupID)
+	})
+}
+
+func WithForcedAccountID(ctx context.Context, accountID int64, bridgeOldKeys bool) context.Context {
+	return updateRequestMetadata(ctx, bridgeOldKeys, func(md *RequestMetadata) {
+		account := accountID
+		md.ForcedAccountID = &account
+	}, func(base context.Context) context.Context {
+		return context.WithValue(base, ctxkey.ForcedAccountID, accountID)
 	})
 }
 
@@ -249,6 +260,25 @@ func PrefetchedStickyAccountIDFromContext(ctx context.Context) (int64, bool) {
 		return t, true
 	case int:
 		requestMetadataFallbackPrefetchedStickyAccount.Add(1)
+		return int64(t), true
+	}
+	return 0, false
+}
+
+func ForcedAccountIDFromContext(ctx context.Context) (int64, bool) {
+	if md := metadataFromContext(ctx); md != nil && md.ForcedAccountID != nil {
+		return *md.ForcedAccountID, true
+	}
+	if ctx == nil {
+		return 0, false
+	}
+	v := ctx.Value(ctxkey.ForcedAccountID)
+	switch t := v.(type) {
+	case int64:
+		requestMetadataFallbackForcedAccount.Add(1)
+		return t, true
+	case int:
+		requestMetadataFallbackForcedAccount.Add(1)
 		return int64(t), true
 	}
 	return 0, false

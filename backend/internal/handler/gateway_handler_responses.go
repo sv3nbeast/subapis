@@ -174,6 +174,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	for {
 		selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())
+		selectionCtx = fs.SelectionContext(selectionCtx, apiKey.GroupID, h.metadataBridgeEnabled())
 		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
 		if err != nil {
 			if len(fs.FailedAccountIDs) == 0 {

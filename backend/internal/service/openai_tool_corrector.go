@@ -108,6 +108,9 @@ func (c *CodexToolCorrector) CorrectToolCallsInSSEBytes(data []byte) ([]byte, bo
 	if next, changed := c.correctFunctionAtPath(updated, "delta.function_call"); changed {
 		collect(changed, next)
 	}
+	if next, changed := c.correctFunctionAtPath(updated, "item"); changed {
+		collect(changed, next)
+	}
 
 	choicesCount := int(gjson.GetBytes(updated, "choices.#").Int())
 	for i := 0; i < choicesCount; i++ {
@@ -122,6 +125,20 @@ func (c *CodexToolCorrector) CorrectToolCallsInSSEBytes(data []byte) ([]byte, bo
 			collect(changed, next)
 		}
 		if next, changed := c.correctFunctionAtPath(updated, prefix+".delta.function_call"); changed {
+			collect(changed, next)
+		}
+	}
+
+	outputCount := int(gjson.GetBytes(updated, "output.#").Int())
+	for i := 0; i < outputCount; i++ {
+		if next, changed := c.correctFunctionAtPath(updated, "output."+strconv.Itoa(i)); changed {
+			collect(changed, next)
+		}
+	}
+
+	responseOutputCount := int(gjson.GetBytes(updated, "response.output.#").Int())
+	for i := 0; i < responseOutputCount; i++ {
+		if next, changed := c.correctFunctionAtPath(updated, "response.output."+strconv.Itoa(i)); changed {
 			collect(changed, next)
 		}
 	}
@@ -191,7 +208,7 @@ func (c *CodexToolCorrector) correctFunctionAtPath(data []byte, functionPath str
 
 // correctToolParametersAtPath 修正指定路径下 arguments 参数。
 func (c *CodexToolCorrector) correctToolParametersAtPath(data []byte, argumentsPath, toolName string) ([]byte, bool) {
-	if toolName != "bash" && toolName != "edit" {
+	if toolName != "bash" && toolName != "edit" && !isAskUserQuestionTool(toolName) {
 		return data, false
 	}
 
@@ -301,8 +318,39 @@ func (c *CodexToolCorrector) correctToolArgumentsJSON(argsJSON, toolName string)
 			corrected = true
 			logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Renamed 'replace_all' to 'replaceAll' in edit tool")
 		}
+	default:
+		if isAskUserQuestionTool(toolName) {
+			if !gjson.Get(updated, "questions").Exists() {
+				if question := strings.TrimSpace(gjson.Get(updated, "question").String()); question != "" {
+					next, err := sjson.Set(updated, "questions", []string{question})
+					if err == nil {
+						updated = next
+						corrected = true
+						logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Wrapped 'question' string as 'questions' array in AskUserQuestion tool")
+					}
+				}
+			} else if questions := gjson.Get(updated, "questions"); questions.Type == gjson.String {
+				if question := strings.TrimSpace(questions.String()); question != "" {
+					next, err := sjson.Set(updated, "questions", []string{question})
+					if err == nil {
+						updated = next
+						corrected = true
+						logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Wrapped 'questions' string as array in AskUserQuestion tool")
+					}
+				}
+			}
+		}
 	}
 	return updated, corrected
+}
+
+func isAskUserQuestionTool(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	return normalized == "askuserquestion" ||
+		normalized == "ask_user_question" ||
+		normalized == "ask_user_questions"
 }
 
 func moveJSONField(input, from, to string) (string, bool) {

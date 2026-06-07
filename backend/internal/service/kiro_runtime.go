@@ -290,12 +290,6 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 			strings.Contains(exceptionType, "rate_limit") ||
 			strings.Contains(exceptionMsg, "too many requests") ||
 			strings.Contains(exceptionMsg, "rate limit") {
-			if _, markErr := s.markKiro429(ctx, buildKiroAccountKey(account)); markErr != nil {
-				logger.L().Warn("kiro stream exception mark cooldown failed",
-					zap.Int64("account_id", account.ID),
-					zap.Error(markErr),
-				)
-			}
 			statusCode = http.StatusTooManyRequests
 			retryableOnSameAccount = false
 		}
@@ -310,6 +304,7 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 			StatusCode:             statusCode,
 			ResponseBody:           body,
 			RetryableOnSameAccount: retryableOnSameAccount,
+			KiroRateLimited:        statusCode == http.StatusTooManyRequests,
 			Cause:                  err,
 		}
 	}
@@ -428,11 +423,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
-	maxKiro429Retries := 10
 
 	for idx, endpoint := range endpoints {
-		for attempt := 0; attempt <= maxKiro429Retries; attempt++ {
-			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxKiro429Retries+1)
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
 			if err != nil {
 				return nil, requestCtx, err
 			}
@@ -449,33 +443,20 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			}
 
 			if resp.StatusCode == http.StatusTooManyRequests {
-				if attempt < maxKiro429Retries {
-					_ = resp.Body.Close()
-					logger.L().Warn("kiro upstream 429 retrying same account",
-						zap.Int64("account_id", account.ID),
-						zap.Int("attempt", attempt+1),
-						zap.Int("max_retries", maxKiro429Retries),
-					)
-					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
-						return nil, requestCtx, sleepErr
-					}
-					continue
+				respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				if readErr != nil {
+					return nil, requestCtx, readErr
 				}
-
-				cooldown, err := s.markKiro429(ctx, accountKey)
-				if err != nil {
-					_ = resp.Body.Close()
-					return nil, requestCtx, err
+				if len(respBody) == 0 {
+					respBody = []byte(`{"message":"kiro upstream rate limited"}`)
 				}
-				if idx+1 < len(endpoints) {
-					_ = resp.Body.Close()
-					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
-						return nil, requestCtx, sleepErr
-					}
-					break
+				return nil, requestCtx, &UpstreamFailoverError{
+					StatusCode:      http.StatusTooManyRequests,
+					ResponseBody:    respBody,
+					ResponseHeaders: resp.Header.Clone(),
+					KiroRateLimited: true,
 				}
-				resp.Header.Set("x-kiro-cooldown", cooldown.String())
-				return resp, requestCtx, nil
 			}
 
 			if resp.StatusCode == http.StatusRequestTimeout || (resp.StatusCode >= 500 && resp.StatusCode < 600) {

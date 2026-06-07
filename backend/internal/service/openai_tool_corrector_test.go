@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -512,4 +514,107 @@ func TestCorrectToolParameters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCorrectAskUserQuestionQuestionsString(t *testing.T) {
+	corrector := NewCodexToolCorrector()
+
+	tests := []struct {
+		name string
+		body string
+		path string
+	}{
+		{
+			name: "function_call arguments string",
+			body: `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":\"确认是否继续？\"}"}}`,
+			path: "function_call.arguments",
+		},
+		{
+			name: "responses item function_call",
+			body: `{"type":"response.output_item.done","item":{"type":"function_call","name":"AskUserQuestion","arguments":"{\"questions\":\"确认是否继续？\"}"}}`,
+			path: "item.arguments",
+		},
+		{
+			name: "non streaming output function_call",
+			body: `{"output":[{"type":"function_call","name":"AskUserQuestion","arguments":"{\"question\":\"确认是否继续？\"}"}]}`,
+			path: "output.0.arguments",
+		},
+		{
+			name: "response output function_call",
+			body: `{"response":{"output":[{"type":"function_call","name":"ask_user_question","arguments":"{\"questions\":\"确认是否继续？\"}"}]}}`,
+			path: "response.output.0.arguments",
+		},
+		{
+			name: "object arguments",
+			body: `{"function_call":{"name":"AskUserQuestion","arguments":{"questions":"确认是否继续？"}}}`,
+			path: "function_call.arguments",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			corrected, changed := corrector.CorrectToolCallsInSSEData(tt.body)
+			if !changed {
+				t.Fatal("expected AskUserQuestion arguments to be corrected")
+			}
+
+			rawArgs := gjsonGetJSONPath(t, corrected, tt.path)
+			var args map[string]any
+			switch v := rawArgs.(type) {
+			case string:
+				if err := json.Unmarshal([]byte(v), &args); err != nil {
+					t.Fatalf("failed to unmarshal arguments string: %v", err)
+				}
+			case map[string]any:
+				args = v
+			default:
+				t.Fatalf("unexpected arguments type %T", rawArgs)
+			}
+
+			questions, ok := args["questions"].([]any)
+			if !ok || len(questions) != 1 {
+				t.Fatalf("questions = %#v, want single-item array", args["questions"])
+			}
+			if questions[0] != "确认是否继续？" {
+				t.Fatalf("questions[0] = %#v", questions[0])
+			}
+		})
+	}
+}
+
+func TestCorrectAskUserQuestionKeepsQuestionsArray(t *testing.T) {
+	corrector := NewCodexToolCorrector()
+	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[\"确认是否继续？\"]}"}}`
+
+	corrected, changed := corrector.CorrectToolCallsInSSEData(body)
+	if changed {
+		t.Fatalf("expected no correction for valid questions array, got %s", corrected)
+	}
+}
+
+func gjsonGetJSONPath(t *testing.T, body, path string) any {
+	t.Helper()
+	var payload any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	current := payload
+	for _, part := range strings.Split(path, ".") {
+		switch node := current.(type) {
+		case map[string]any:
+			current = node[part]
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil {
+				t.Fatalf("path %q expected array index, got %q", path, part)
+			}
+			if index < 0 || index >= len(node) {
+				t.Fatalf("path %q index %d out of range", path, index)
+			}
+			current = node[index]
+		default:
+			t.Fatalf("path %q hit unexpected type %T at %q", path, current, part)
+		}
+	}
+	return current
 }

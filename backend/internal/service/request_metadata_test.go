@@ -15,6 +15,7 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	ctx = WithIsMaxTokensOneHaikuRequest(ctx, true, false)
 	ctx = WithThinkingEnabled(ctx, true, false)
 	ctx = WithPrefetchedStickySession(ctx, 123, 456, false)
+	ctx = WithForcedAccountID(ctx, 789, false)
 	ctx = WithSingleAccountRetry(ctx, true, false)
 	ctx = WithAccountSwitchCount(ctx, 2, false)
 	ctx = WithAvoidEmailDomainSuffixes(ctx, []string{"Example.com", "example.com", "other.net"}, false)
@@ -36,6 +37,10 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(456), groupID)
 
+	forcedAccountID, ok := ForcedAccountIDFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, int64(789), forcedAccountID)
+
 	singleRetry, ok := SingleAccountRetryFromContext(ctx)
 	require.True(t, ok)
 	require.True(t, singleRetry)
@@ -54,6 +59,7 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	require.Nil(t, ctx.Value(ctxkey.ThinkingEnabled))
 	require.Nil(t, ctx.Value(ctxkey.PrefetchedStickyAccountID))
 	require.Nil(t, ctx.Value(ctxkey.PrefetchedStickyGroupID))
+	require.Nil(t, ctx.Value(ctxkey.ForcedAccountID))
 	require.Nil(t, ctx.Value(ctxkey.SingleAccountRetry))
 	require.Nil(t, ctx.Value(ctxkey.AccountSwitchCount))
 }
@@ -63,6 +69,7 @@ func TestRequestMetadataWrite_BridgeLegacyKeys(t *testing.T) {
 	ctx = WithIsMaxTokensOneHaikuRequest(ctx, true, true)
 	ctx = WithThinkingEnabled(ctx, true, true)
 	ctx = WithPrefetchedStickySession(ctx, 123, 456, true)
+	ctx = WithForcedAccountID(ctx, 789, true)
 	ctx = WithSingleAccountRetry(ctx, true, true)
 	ctx = WithAccountSwitchCount(ctx, 2, true)
 
@@ -70,6 +77,7 @@ func TestRequestMetadataWrite_BridgeLegacyKeys(t *testing.T) {
 	require.Equal(t, true, ctx.Value(ctxkey.ThinkingEnabled))
 	require.Equal(t, int64(123), ctx.Value(ctxkey.PrefetchedStickyAccountID))
 	require.Equal(t, int64(456), ctx.Value(ctxkey.PrefetchedStickyGroupID))
+	require.Equal(t, int64(789), ctx.Value(ctxkey.ForcedAccountID))
 	require.Equal(t, true, ctx.Value(ctxkey.SingleAccountRetry))
 	require.Equal(t, 2, ctx.Value(ctxkey.AccountSwitchCount))
 }

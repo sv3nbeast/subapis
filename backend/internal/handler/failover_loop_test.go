@@ -40,6 +40,13 @@ func newTestFailoverErr(statusCode int, retryable, forceBilling bool) *service.U
 	}
 }
 
+func newTestKiro429FailoverErr() *service.UpstreamFailoverError {
+	return &service.UpstreamFailoverError{
+		StatusCode:      429,
+		KiroRateLimited: true,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // NewFailoverState 测试
 // ---------------------------------------------------------------------------
@@ -404,6 +411,113 @@ func TestHandleFailoverError_TempUnschedule(t *testing.T) {
 		require.Equal(t, int64(42), mock.calls[0].accountID)
 		require.Equal(t, 502, mock.calls[0].failoverErr.StatusCode)
 		require.True(t, mock.calls[0].failoverErr.RetryableOnSameAccount)
+	})
+}
+
+func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
+	t.Run("前4次429立即重试同账号", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(10, false)
+		err := newTestKiro429FailoverErr()
+
+		for i := 1; i < kiro429SoftSwitchThreshold; i++ {
+			action := fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, err)
+			require.Equal(t, FailoverContinue, action)
+			require.Equal(t, i, fs.Kiro429RetryCount[1459])
+			require.Equal(t, int64(1459), fs.ForceAccountID)
+			require.NotContains(t, fs.FailedAccountIDs, int64(1459))
+			require.Equal(t, 0, fs.SwitchCount)
+		}
+		require.Empty(t, mock.calls)
+	})
+
+	t.Run("第5次429软切换到下一个账号", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(10, false)
+		err := newTestKiro429FailoverErr()
+
+		for i := 1; i <= kiro429SoftSwitchThreshold; i++ {
+			action := fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, err)
+			require.Equal(t, FailoverContinue, action)
+		}
+
+		require.Equal(t, kiro429SoftSwitchThreshold, fs.Kiro429RetryCount[1459])
+		require.Zero(t, fs.ForceAccountID)
+		require.Contains(t, fs.FailedAccountIDs, int64(1459))
+		require.Contains(t, fs.Kiro429SoftExcludedIDs, int64(1459))
+		require.Equal(t, 1, fs.SwitchCount)
+		require.Empty(t, mock.calls)
+	})
+
+	t.Run("无下一个账号时撤销软排除并继续当前账号", func(t *testing.T) {
+		fs := NewFailoverState(10, false)
+		err := newTestKiro429FailoverErr()
+		for i := 1; i <= kiro429SoftSwitchThreshold; i++ {
+			fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 1459, service.PlatformKiro, err)
+		}
+
+		action := fs.HandleSelectionExhausted(context.Background())
+
+		require.Equal(t, FailoverContinue, action)
+		require.Equal(t, int64(1459), fs.ForceAccountID)
+		require.NotContains(t, fs.FailedAccountIDs, int64(1459))
+		require.NotContains(t, fs.Kiro429SoftExcludedIDs, int64(1459))
+		require.Equal(t, kiro429SoftSwitchThreshold, fs.Kiro429RetryCount[1459])
+	})
+
+	t.Run("多账号无下一个账号时优先恢复最近软排除账号", func(t *testing.T) {
+		fs := NewFailoverState(20, false)
+		err := newTestKiro429FailoverErr()
+		for i := 1; i <= kiro429SoftSwitchThreshold; i++ {
+			fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 1459, service.PlatformKiro, err)
+		}
+		for i := 1; i <= kiro429SoftSwitchThreshold; i++ {
+			fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 1469, service.PlatformKiro, err)
+		}
+
+		action := fs.HandleSelectionExhausted(context.Background())
+
+		require.Equal(t, FailoverContinue, action)
+		require.Equal(t, int64(1469), fs.ForceAccountID)
+		require.Contains(t, fs.FailedAccountIDs, int64(1459))
+		require.NotContains(t, fs.FailedAccountIDs, int64(1469))
+		require.Contains(t, fs.Kiro429SoftExcludedIDs, int64(1459))
+		require.NotContains(t, fs.Kiro429SoftExcludedIDs, int64(1469))
+	})
+
+	t.Run("第12次429硬排除账号", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(20, false)
+		err := newTestKiro429FailoverErr()
+
+		for i := 1; i <= kiro429SoftSwitchThreshold; i++ {
+			fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, err)
+		}
+		fs.HandleSelectionExhausted(context.Background())
+		for i := kiro429SoftSwitchThreshold + 1; i <= kiro429HardRetryLimit; i++ {
+			action := fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, err)
+			require.Equal(t, FailoverContinue, action)
+		}
+
+		require.Equal(t, kiro429HardRetryLimit, fs.Kiro429RetryCount[1459])
+		require.Zero(t, fs.ForceAccountID)
+		require.Contains(t, fs.FailedAccountIDs, int64(1459))
+		require.NotContains(t, fs.Kiro429SoftExcludedIDs, int64(1459))
+		require.Empty(t, mock.calls)
+	})
+
+	t.Run("所有Kiro账号达到12次后耗尽", func(t *testing.T) {
+		fs := NewFailoverState(20, false)
+		err := newTestKiro429FailoverErr()
+		fs.LastFailoverErr = err
+		fs.Kiro429RetryCount[1459] = kiro429HardRetryLimit
+		fs.Kiro429RetryCount[1469] = kiro429HardRetryLimit
+		fs.FailedAccountIDs[1459] = struct{}{}
+		fs.FailedAccountIDs[1469] = struct{}{}
+
+		action := fs.HandleSelectionExhausted(context.Background())
+
+		require.Equal(t, FailoverExhausted, action)
 	})
 }
 

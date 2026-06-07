@@ -41,7 +41,7 @@ func (s *kiroStreamFailoverCooldownStore) ClearEarliestTransientCooldown(context
 	return false, nil
 }
 
-func TestGatewayServiceKiroStreamExceptionMarks429Cooldown(t *testing.T) {
+func TestGatewayServiceKiroStreamExceptionReturnsKiro429FailoverWithoutCooldown(t *testing.T) {
 	store := &kiroStreamFailoverCooldownStore{}
 	svc := &GatewayService{kiroCooldownStore: store}
 	account := &Account{
@@ -62,7 +62,8 @@ func TestGatewayServiceKiroStreamExceptionMarks429Cooldown(t *testing.T) {
 	require.NotNil(t, failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
 	require.False(t, failoverErr.RetryableOnSameAccount)
-	require.Equal(t, 1, store.mark429Calls)
+	require.True(t, failoverErr.KiroRateLimited)
+	require.Equal(t, 0, store.mark429Calls)
 }
 
 func TestGatewayServiceKiroEmptyStreamIsRetryableFailover(t *testing.T) {

@@ -332,6 +332,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 		for {
 			selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())
+			selectionCtx = fs.SelectionContext(selectionCtx, apiKey.GroupID, h.metadataBridgeEnabled())
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
 				if len(fs.FailedAccountIDs) == 0 {
@@ -624,6 +625,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				zap.Int("failed_account_count", len(fs.FailedAccountIDs)),
 			)
 			selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())
+			selectionCtx = fs.SelectionContext(selectionCtx, currentAPIKey.GroupID, h.metadataBridgeEnabled())
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
 				if len(fs.FailedAccountIDs) == 0 {
@@ -986,9 +988,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 绑定粘性会话（成功转发后绑定/刷新）
 			// - 无现有绑定（首次请求）：创建绑定
 			// - 选中账号与粘性账号一致：刷新 TTL
+			// - Kiro 429 请求内切换账号后最终成功：覆盖到成功账号
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
-			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
+			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasKiro429Retries()) {
 				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}

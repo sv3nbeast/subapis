@@ -295,9 +295,13 @@ func TestExecuteKiroUpstreamCooldownReturnsFailoverError(t *testing.T) {
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 
-func TestExecuteKiroUpstreamRetriesKiro429BeforeCooldown(t *testing.T) {
+func TestExecuteKiroUpstreamReturnsKiro429FailoverWithoutSleepOrCooldown(t *testing.T) {
 	originalSleep := kiroRetrySleep
-	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	sleepCalls := 0
+	kiroRetrySleep = func(context.Context, time.Duration) error {
+		sleepCalls++
+		return nil
+	}
 	t.Cleanup(func() { kiroRetrySleep = originalSleep })
 
 	account := &Account{
@@ -327,15 +331,25 @@ func TestExecuteKiroUpstreamRetriesKiro429BeforeCooldown(t *testing.T) {
 	require.NoError(t, err)
 
 	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Len(t, upstream.requests, 2)
+	require.Nil(t, resp)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.True(t, failoverErr.KiroRateLimited)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, 0, sleepCalls)
 	require.Equal(t, 0, store.mark429Calls)
 }
 
-func TestExecuteKiroUpstreamMarksCooldownAfterKiro429RetriesExhausted(t *testing.T) {
+func TestExecuteKiroUpstreamDoesNotMarkCooldownForKiro429(t *testing.T) {
 	originalSleep := kiroRetrySleep
-	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	sleepCalls := 0
+	kiroRetrySleep = func(context.Context, time.Duration) error {
+		sleepCalls++
+		return nil
+	}
 	t.Cleanup(func() { kiroRetrySleep = originalSleep })
 
 	account := &Account{
@@ -362,11 +376,14 @@ func TestExecuteKiroUpstreamMarksCooldownAfterKiro429RetriesExhausted(t *testing
 	require.NoError(t, err)
 
 	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
-	require.Equal(t, "1m30s", resp.Header.Get("x-kiro-cooldown"))
-	require.Len(t, upstream.requests, 11)
-	require.Equal(t, 1, store.mark429Calls)
+	require.Nil(t, resp)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.KiroRateLimited)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, 0, sleepCalls)
+	require.Equal(t, 0, store.mark429Calls)
 }
 
 func TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit(t *testing.T) {

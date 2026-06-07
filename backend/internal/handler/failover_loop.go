@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"go.uber.org/zap"
@@ -39,6 +40,14 @@ const (
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
 	singleAccountBackoffDelay = 2 * time.Second
+
+	kiro429SoftSwitchThreshold   = 5
+	kiro429HardRetryLimit        = 12
+	kiro429DecisionRetrySame     = "retry_same"
+	kiro429DecisionSoftSwitch    = "soft_switch"
+	kiro429DecisionResumeCurrent = "resume_current_no_next"
+	kiro429DecisionHardExclude   = "hard_exclude"
+	kiro429DecisionExhausted     = "exhausted"
 )
 
 // FailoverState 跨循环迭代共享的 failover 状态
@@ -47,9 +56,13 @@ type FailoverState struct {
 	MaxSwitches              int
 	FailedAccountIDs         map[int64]struct{}
 	SameAccountRetryCount    map[int64]int
+	Kiro429RetryCount        map[int64]int
+	Kiro429SoftExcludedIDs   map[int64]struct{}
+	Kiro429LastSoftExcluded  int64
 	AvoidEmailDomainSuffixes map[string]struct{}
 	ModelCapacityRetryState  *service.ModelCapacityRetryState
 	LastFailoverErr          *service.UpstreamFailoverError
+	ForceAccountID           int64
 	ForceCacheBilling        bool
 	hasBoundSession          bool
 }
@@ -60,6 +73,8 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		MaxSwitches:              maxSwitches,
 		FailedAccountIDs:         make(map[int64]struct{}),
 		SameAccountRetryCount:    make(map[int64]int),
+		Kiro429RetryCount:        make(map[int64]int),
+		Kiro429SoftExcludedIDs:   make(map[int64]struct{}),
 		AvoidEmailDomainSuffixes: make(map[string]struct{}),
 		ModelCapacityRetryState:  service.NewModelCapacityRetryState(0),
 		hasBoundSession:          hasBoundSession,
@@ -102,10 +117,15 @@ func (s *FailoverState) HandleFailoverError(
 	failoverErr *service.UpstreamFailoverError,
 ) FailoverAction {
 	s.LastFailoverErr = failoverErr
+	s.ForceAccountID = 0
 
 	// 缓存计费判断
 	if needForceCacheBilling(s.hasBoundSession, failoverErr) {
 		s.ForceCacheBilling = true
+	}
+
+	if isKiro429Failover(platform, failoverErr) {
+		return s.handleKiro429Failover(ctx, accountID, failoverErr)
 	}
 
 	// 同账号重试：对 RetryableOnSameAccount 的临时性错误，先在同一账号上重试
@@ -148,6 +168,53 @@ func (s *FailoverState) HandleFailoverError(
 	return FailoverContinue
 }
 
+func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) FailoverAction {
+	if s.Kiro429RetryCount == nil {
+		s.Kiro429RetryCount = make(map[int64]int)
+	}
+	if s.Kiro429SoftExcludedIDs == nil {
+		s.Kiro429SoftExcludedIDs = make(map[int64]struct{})
+	}
+	s.Kiro429RetryCount[accountID]++
+	retryCount := s.Kiro429RetryCount[accountID]
+
+	decision := kiro429DecisionRetrySame
+	switch {
+	case retryCount < kiro429SoftSwitchThreshold:
+		s.ForceAccountID = accountID
+	case retryCount == kiro429SoftSwitchThreshold:
+		decision = kiro429DecisionSoftSwitch
+		s.Kiro429SoftExcludedIDs[accountID] = struct{}{}
+		s.Kiro429LastSoftExcluded = accountID
+		s.FailedAccountIDs[accountID] = struct{}{}
+		s.SwitchCount++
+	case retryCount < kiro429HardRetryLimit:
+		s.ForceAccountID = accountID
+	default:
+		decision = kiro429DecisionHardExclude
+		delete(s.Kiro429SoftExcludedIDs, accountID)
+		if s.Kiro429LastSoftExcluded == accountID {
+			s.Kiro429LastSoftExcluded = 0
+		}
+		s.FailedAccountIDs[accountID] = struct{}{}
+		s.SwitchCount++
+	}
+
+	logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
+		zap.String("request_id", requestIDFromContext(ctx)),
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", failoverErr.StatusCode),
+		zap.Int("retry_count", retryCount),
+		zap.Int("soft_switch_threshold", kiro429SoftSwitchThreshold),
+		zap.Int("hard_retry_limit", kiro429HardRetryLimit),
+		zap.String("decision", decision),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("failed_account_count", len(s.FailedAccountIDs)),
+	)
+
+	return FailoverContinue
+}
+
 // HandleSelectionExhausted 处理选号失败（所有候选账号都在排除列表中）时的退避重试决策。
 // 针对 Antigravity 单账号分组的 503 (MODEL_CAPACITY_EXHAUSTED) 场景：
 // 清除排除列表、等待退避后重新选号。
@@ -156,6 +223,32 @@ func (s *FailoverState) HandleFailoverError(
 // 返回 FailoverExhausted 时，调用方应返回错误响应。
 // 返回 FailoverCanceled 时，调用方应直接 return。
 func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAction {
+	if s.LastFailoverErr != nil && s.LastFailoverErr.KiroRateLimited {
+		if s.resumeKiro429SoftExcludedAccount(ctx, s.Kiro429LastSoftExcluded) {
+			return FailoverContinue
+		}
+		softExcludedIDs := make([]int64, 0, len(s.Kiro429SoftExcludedIDs))
+		for accountID := range s.Kiro429SoftExcludedIDs {
+			softExcludedIDs = append(softExcludedIDs, accountID)
+		}
+		sort.Slice(softExcludedIDs, func(i, j int) bool { return softExcludedIDs[i] < softExcludedIDs[j] })
+		for _, accountID := range softExcludedIDs {
+			if s.resumeKiro429SoftExcludedAccount(ctx, accountID) {
+				return FailoverContinue
+			}
+		}
+		logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
+			zap.String("request_id", requestIDFromContext(ctx)),
+			zap.Int("soft_switch_threshold", kiro429SoftSwitchThreshold),
+			zap.Int("hard_retry_limit", kiro429HardRetryLimit),
+			zap.String("decision", kiro429DecisionExhausted),
+			zap.Int("switch_count", s.SwitchCount),
+			zap.Int("failed_account_count", len(s.FailedAccountIDs)),
+		)
+		s.LastFailoverErr.ResponseBody = []byte(`{"error":{"type":"rate_limit_error","message":"Kiro upstream busy/rate limited after retry budget exhausted"}}`)
+		return FailoverExhausted
+	}
+
 	if s.LastFailoverErr != nil &&
 		s.LastFailoverErr.StatusCode == http.StatusServiceUnavailable &&
 		s.SwitchCount <= s.MaxSwitches {
@@ -178,10 +271,79 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAc
 	return FailoverExhausted
 }
 
+func (s *FailoverState) resumeKiro429SoftExcludedAccount(ctx context.Context, accountID int64) bool {
+	if accountID <= 0 {
+		return false
+	}
+	if _, ok := s.Kiro429SoftExcludedIDs[accountID]; !ok {
+		return false
+	}
+	if s.Kiro429RetryCount[accountID] >= kiro429HardRetryLimit {
+		return false
+	}
+	delete(s.FailedAccountIDs, accountID)
+	delete(s.Kiro429SoftExcludedIDs, accountID)
+	if s.Kiro429LastSoftExcluded == accountID {
+		s.Kiro429LastSoftExcluded = 0
+	}
+	s.ForceAccountID = accountID
+	logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
+		zap.String("request_id", requestIDFromContext(ctx)),
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", s.LastFailoverErr.StatusCode),
+		zap.Int("retry_count", s.Kiro429RetryCount[accountID]),
+		zap.Int("soft_switch_threshold", kiro429SoftSwitchThreshold),
+		zap.Int("hard_retry_limit", kiro429HardRetryLimit),
+		zap.String("decision", kiro429DecisionResumeCurrent),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("failed_account_count", len(s.FailedAccountIDs)),
+	)
+	return true
+}
+
+func (s *FailoverState) SelectionContext(ctx context.Context, groupID *int64, bridgeOldKeys bool) context.Context {
+	if s == nil || s.ForceAccountID <= 0 {
+		return ctx
+	}
+	return service.WithForcedAccountID(ctx, s.ForceAccountID, bridgeOldKeys)
+}
+
+func (s *FailoverState) HasKiro429Retries() bool {
+	if s == nil {
+		return false
+	}
+	for _, count := range s.Kiro429RetryCount {
+		if count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // needForceCacheBilling 判断 failover 时是否需要强制缓存计费。
 // 粘性会话切换账号、或上游明确标记时，将 input_tokens 转为 cache_read 计费。
 func needForceCacheBilling(hasBoundSession bool, failoverErr *service.UpstreamFailoverError) bool {
 	return hasBoundSession || (failoverErr != nil && failoverErr.ForceCacheBilling)
+}
+
+func isKiro429Failover(platform string, failoverErr *service.UpstreamFailoverError) bool {
+	return platform == service.PlatformKiro &&
+		failoverErr != nil &&
+		failoverErr.KiroRateLimited &&
+		failoverErr.StatusCode == http.StatusTooManyRequests
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if requestID, _ := ctx.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
+		return strings.TrimSpace(requestID)
+	}
+	if requestID, _ := ctx.Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(requestID) != "" {
+		return strings.TrimSpace(requestID)
+	}
+	return ""
 }
 
 // sleepWithContext 等待指定时长，返回 false 表示 context 已取消。
