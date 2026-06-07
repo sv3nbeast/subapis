@@ -95,7 +95,7 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Empty(t, req.Header.Get("x-amzn-kiro-profile-arn"))
 	require.Equal(t, "vibe", req.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Equal(t, "true", req.Header.Get("x-amzn-codewhisperer-optout"))
-	require.Equal(t, "application/x-amz-json-1.0", req.Header.Get("Content-Type"))
+	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
 	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", req.Header.Get("X-Amz-Target"))
 	require.Contains(t, req.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
 	require.Contains(t, req.Header.Get("User-Agent"), "md/nodejs#22.22.0")

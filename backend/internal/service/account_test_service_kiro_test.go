@@ -96,7 +96,7 @@ func TestAccountTestService_Kiro429FallsBackToCodeWhispererEndpoint(t *testing.T
 	require.Equal(t, "application/json", upstream.requests[0].Header.Get("Content-Type"))
 	require.Equal(t, "codewhisperer.us-west-2.amazonaws.com", upstream.requests[1].URL.Host)
 	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", upstream.requests[1].Header.Get("X-Amz-Target"))
-	require.Equal(t, "application/x-amz-json-1.0", upstream.requests[1].Header.Get("Content-Type"))
+	require.Equal(t, "application/json", upstream.requests[1].Header.Get("Content-Type"))
 	require.Contains(t, err.Error(), "API returned 401")
 }
 

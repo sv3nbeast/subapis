@@ -340,7 +340,7 @@ func TestExecuteKiroUpstreamFallsBackToNextEndpointOnKiro429WithoutSleepOrCooldo
 	require.Equal(t, kiroJSONContentType, upstream.requests[0].Header.Get("Content-Type"))
 	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
 	require.Equal(t, kiroGenerateAssistantResponseTarget, upstream.requests[1].Header.Get("X-Amz-Target"))
-	require.Equal(t, kiroAWSJSONContentType, upstream.requests[1].Header.Get("Content-Type"))
+	require.Equal(t, "application/json", upstream.requests[1].Header.Get("Content-Type"))
 	require.Equal(t, 0, sleepCalls)
 	require.Equal(t, 0, store.mark429Calls)
 }

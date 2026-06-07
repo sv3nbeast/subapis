@@ -135,7 +135,7 @@ func TestNewKiroJSONRequestCLIWireHeaders(t *testing.T) {
 		3,
 	)
 	require.NoError(t, err)
-	require.Equal(t, kiroAWSJSONContentType, req.Header.Get("Content-Type"))
+	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
 	require.Equal(t, kiroGenerateAssistantResponseTarget, req.Header.Get("X-Amz-Target"))
 	require.Equal(t, "false", req.Header.Get("x-amzn-codewhisperer-optout"))
 	require.Equal(t, "attempt=2; max=3", req.Header.Get("Amz-Sdk-Request"))

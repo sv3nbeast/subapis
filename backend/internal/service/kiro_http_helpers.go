@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	kiroAWSJSONContentType              = "application/x-amz-json-1.0"
 	kiroJSONContentType                 = "application/json"
 	kiroGenerateAssistantResponseTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 	kiroGenerateAssistantResponsePath   = "/generateAssistantResponse"
@@ -208,11 +207,9 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 		target = kiroGenerateAssistantResponseTarget
 	}
 
+	req.Header.Set("Content-Type", kiroJSONContentType)
 	if target != "" {
-		req.Header.Set("Content-Type", kiroAWSJSONContentType)
 		req.Header.Set("X-Amz-Target", target)
-	} else {
-		req.Header.Set("Content-Type", kiroJSONContentType)
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Authorization", "Bearer "+token)
