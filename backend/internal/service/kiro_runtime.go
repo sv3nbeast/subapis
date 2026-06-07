@@ -592,7 +592,7 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 		}
 	}
 	region := kiroAPIRegion(account)
-	return []kiroEndpointConfig{
+	endpoints := []kiroEndpointConfig{
 		{
 			URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
 			Origin:    "AI_EDITOR",
@@ -612,6 +612,42 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 			Name:      "AmazonQ",
 		},
 	}
+	return sortKiroEndpointsByPreference(endpoints, account)
+}
+
+func sortKiroEndpointsByPreference(endpoints []kiroEndpointConfig, account *Account) []kiroEndpointConfig {
+	if len(endpoints) == 0 || account == nil {
+		return endpoints
+	}
+	var primaryName string
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("preferred_endpoint"))) {
+	case "kiro", "kiroide", "kiro_ide", "ide":
+		primaryName = "KiroIDE"
+	case "codewhisperer", "cw":
+		primaryName = "CodeWhisperer"
+	case "amazonq", "amazon_q", "q":
+		primaryName = "AmazonQ"
+	default:
+		return endpoints
+	}
+	primary := -1
+	for i, endpoint := range endpoints {
+		if endpoint.Name == primaryName {
+			primary = i
+			break
+		}
+	}
+	if primary <= 0 {
+		return endpoints
+	}
+	sorted := make([]kiroEndpointConfig, 0, len(endpoints))
+	sorted = append(sorted, endpoints[primary])
+	for i, endpoint := range endpoints {
+		if i != primary {
+			sorted = append(sorted, endpoint)
+		}
+	}
+	return sorted
 }
 
 func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {

@@ -291,8 +291,7 @@ func TestKiroAPIRegionIgnoresOIDCRegionFallback(t *testing.T) {
 func TestBuildKiroEndpointsUsesKiroGoDefaultFallbackOrder(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{
-			"api_region":         "us-west-2",
-			"preferred_endpoint": "cw",
+			"api_region": "us-west-2",
 		},
 	}
 
@@ -314,17 +313,31 @@ func TestBuildKiroEndpointsUsesKiroGoDefaultFallbackOrder(t *testing.T) {
 	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[2].AmzTarget)
 }
 
-func TestBuildKiroEndpointsKeepsDefaultOrderForPreferredEndpoint(t *testing.T) {
-	for _, preferred := range []string{"codewhisperer", "cw", "unknown"} {
-		account := &Account{
-			Credentials: map[string]any{
-				"api_region":         "us-west-2",
-				"preferred_endpoint": preferred,
-			},
-		}
+func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {
+	tests := []struct {
+		preferred string
+		want      []string
+	}{
+		{preferred: "kiro", want: []string{"KiroIDE", "CodeWhisperer", "AmazonQ"}},
+		{preferred: "codewhisperer", want: []string{"CodeWhisperer", "KiroIDE", "AmazonQ"}},
+		{preferred: "cw", want: []string{"CodeWhisperer", "KiroIDE", "AmazonQ"}},
+		{preferred: "amazonq", want: []string{"AmazonQ", "KiroIDE", "CodeWhisperer"}},
+		{preferred: "q", want: []string{"AmazonQ", "KiroIDE", "CodeWhisperer"}},
+		{preferred: "unknown", want: []string{"KiroIDE", "CodeWhisperer", "AmazonQ"}},
+	}
 
-		endpoints := buildKiroEndpoints(account)
-		require.Len(t, endpoints, 3)
-		require.Equal(t, []string{"KiroIDE", "CodeWhisperer", "AmazonQ"}, []string{endpoints[0].Name, endpoints[1].Name, endpoints[2].Name})
+	for _, tt := range tests {
+		t.Run(tt.preferred, func(t *testing.T) {
+			account := &Account{
+				Credentials: map[string]any{
+					"api_region":         "us-west-2",
+					"preferred_endpoint": tt.preferred,
+				},
+			}
+
+			endpoints := buildKiroEndpoints(account)
+			require.Len(t, endpoints, 3)
+			require.Equal(t, tt.want, []string{endpoints[0].Name, endpoints[1].Name, endpoints[2].Name})
+		})
 	}
 }
