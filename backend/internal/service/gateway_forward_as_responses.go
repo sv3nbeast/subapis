@@ -46,6 +46,10 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
+	storeKiroResponse := true
+	if responsesReq.Store != nil {
+		storeKiroResponse = *responsesReq.Store
+	}
 
 	// 2. Convert Responses → Anthropic
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
@@ -53,7 +57,12 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
 	if account != nil && account.Platform == PlatformKiro && strings.TrimSpace(responsesReq.PreviousResponseID) != "" {
-		historySystem, history := globalKiroResponsesHistoryStore.expand(responsesReq.PreviousResponseID)
+		historySystem, history, ok := globalKiroResponsesHistoryStore.expandRequired(responsesReq.PreviousResponseID)
+		if !ok {
+			msg := fmt.Sprintf("previous_response_id not found: %s", strings.TrimSpace(responsesReq.PreviousResponseID))
+			writeResponsesError(c, http.StatusNotFound, "invalid_request_error", msg)
+			return nil, fmt.Errorf("kiro responses previous_response_id not found: %s", strings.TrimSpace(responsesReq.PreviousResponseID))
+		}
 		anthropicReq.System = mergeKiroResponsesSystem(historySystem, anthropicReq.System)
 		if len(history) > 0 {
 			anthropicReq.Messages = append(history, anthropicReq.Messages...)
@@ -189,7 +198,7 @@ func (s *GatewayService) ForwardAsResponses(
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
-	if handleErr == nil && account != nil && account.Platform == PlatformKiro && result != nil && strings.TrimSpace(result.ResponseID) != "" {
+	if handleErr == nil && account != nil && account.Platform == PlatformKiro && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
 		globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 			ID:                 result.ResponseID,
 			PreviousResponseID: responsesReq.PreviousResponseID,

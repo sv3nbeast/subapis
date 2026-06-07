@@ -317,6 +317,88 @@ func TestForwardAsResponses_KiroStoresStreamingOutputForPreviousResponseHistory(
 	require.Equal(t, "continue", gjson.GetBytes(body, "messages.2.content.0.text").String())
 }
 
+func TestForwardAsResponses_KiroStoreFalseDoesNotPersistHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+
+	firstBody := []byte(`{"model":"claude-sonnet-4-6","input":[{"type":"input_text","text":"do not store"}],"store":false,"stream":false}`)
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(firstBody))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		anthropicMessagesSSECompletedResponse("msg_store_false", "claude-sonnet-4-6", "not stored", "", 10, 3),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "kiro",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "kiro-key"},
+	}
+
+	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
+		Body:  firstBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, firstResult)
+	require.Equal(t, "msg_store_false", firstResult.ResponseID)
+
+	secondBody := []byte(`{"model":"claude-sonnet-4-6","previous_response_id":"msg_store_false","input":[{"type":"input_text","text":"continue"}],"stream":false}`)
+	secondRec := httptest.NewRecorder()
+	secondCtx, _ := gin.CreateTestContext(secondRec)
+	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(secondBody))
+	secondCtx.Request.Header.Set("Content-Type", "application/json")
+
+	secondResult, err := svc.ForwardAsResponses(context.Background(), secondCtx, account, secondBody, &ParsedRequest{
+		Body:  secondBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.Error(t, err)
+	require.Nil(t, secondResult)
+	require.Equal(t, http.StatusNotFound, secondRec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(secondRec.Body.String(), "error.code").String())
+	require.Contains(t, gjson.Get(secondRec.Body.String(), "error.message").String(), "previous_response_id not found")
+	require.Len(t, upstream.bodies, 1, "missing history must fail before calling upstream")
+}
+
+func TestForwardAsResponses_KiroMissingPreviousResponseIDReturns404(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+
+	body := []byte(`{"model":"claude-sonnet-4-6","previous_response_id":"resp_missing","input":[{"type":"input_text","text":"continue"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "kiro",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "kiro-key"},
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.code").String())
+	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), "previous_response_id not found")
+	require.Empty(t, upstream.bodies)
+}
+
 func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -96,7 +96,19 @@ func (s *kiroResponsesHistoryStore) expand(prevID string) (json.RawMessage, []ap
 	if !ok {
 		return nil, nil
 	}
+	return s.expandEntry(prev)
+}
 
+func (s *kiroResponsesHistoryStore) expandRequired(prevID string) (json.RawMessage, []apicompat.AnthropicMessage, bool) {
+	prev, ok := s.load(prevID)
+	if !ok {
+		return nil, nil, false
+	}
+	system, messages := s.expandEntry(prev)
+	return system, messages, true
+}
+
+func (s *kiroResponsesHistoryStore) expandEntry(prev kiroResponsesHistoryEntry) (json.RawMessage, []apicompat.AnthropicMessage) {
 	chain := s.collectChain(prev)
 	messages := make([]apicompat.AnthropicMessage, 0, len(chain)*2)
 	var instructions []string
