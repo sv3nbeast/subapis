@@ -21,6 +21,7 @@ import (
 
 type kiroEndpointConfig struct {
 	URL       string
+	Origin    string
 	AmzTarget string
 	Name      string
 }
@@ -410,23 +411,24 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	buildResult, err := s.buildKiroPayloadForAccount(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers)
-	if err != nil {
-		return nil, requestCtx, err
-	}
-	payload := buildResult.Payload
-	requestCtx = buildResult.Context
-	logKiroStatelessReplay(account, buildResult.Payload)
-
 	endpoints := buildKiroEndpoints(account)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
+	var lastKiro429 *UpstreamFailoverError
 
 	for idx, endpoint := range endpoints {
+		buildResult, err := s.buildKiroPayloadForAccountEndpoint(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
+		if err != nil {
+			return nil, requestCtx, err
+		}
+		payload := buildResult.Payload
+		requestCtx = buildResult.Context
+		logKiroStatelessReplay(account, buildResult.Payload)
+
 		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
+			req, err := newKiroJSONRequestWithExplicitTarget(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
 			if err != nil {
 				return nil, requestCtx, err
 			}
@@ -451,12 +453,22 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 				if len(respBody) == 0 {
 					respBody = []byte(`{"message":"kiro upstream rate limited"}`)
 				}
-				return nil, requestCtx, &UpstreamFailoverError{
+				lastKiro429 = &UpstreamFailoverError{
 					StatusCode:      http.StatusTooManyRequests,
 					ResponseBody:    respBody,
 					ResponseHeaders: resp.Header.Clone(),
 					KiroRateLimited: true,
 				}
+				if idx+1 < len(endpoints) {
+					logger.L().Warn("kiro endpoint rate limited; trying next endpoint",
+						zap.Int64("account_id", account.ID),
+						zap.String("endpoint", endpoint.Name),
+						zap.String("next_endpoint", endpoints[idx+1].Name),
+						zap.String("request_id", buildKiroRequestID(resp)),
+					)
+					break
+				}
+				return nil, requestCtx, lastKiro429
 			}
 
 			if resp.StatusCode == http.StatusRequestTimeout || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
@@ -514,7 +526,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccount(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers)
+						buildResult, err = s.buildKiroPayloadForAccountEndpoint(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
 						if err != nil {
 							return nil, requestCtx, err
 						}
@@ -561,6 +573,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			return resp, requestCtx, nil
 		}
 	}
+	if lastKiro429 != nil {
+		return nil, requestCtx, lastKiro429
+	}
 	return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
 }
 
@@ -570,6 +585,7 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 		return []kiroEndpointConfig{
 			{
 				URL:       fmt.Sprintf("https://runtime.%s.kiro.dev/", region),
+				Origin:    "KIRO_CLI",
 				AmzTarget: kiroGenerateAssistantResponseTarget,
 				Name:      "KiroRuntime",
 			},
@@ -579,13 +595,30 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 	return []kiroEndpointConfig{
 		{
 			URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
+			Origin:    "AI_EDITOR",
+			AmzTarget: "",
+			Name:      "KiroIDE",
+		},
+		{
+			URL:       fmt.Sprintf("https://codewhisperer.%s.amazonaws.com/generateAssistantResponse", region),
+			Origin:    "AI_EDITOR",
 			AmzTarget: kiroGenerateAssistantResponseTarget,
+			Name:      "CodeWhisperer",
+		},
+		{
+			URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
+			Origin:    "AI_EDITOR",
+			AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
 			Name:      "AmazonQ",
 		},
 	}
 }
 
 func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account *Account, anthropicBody []byte, modelID, token, requestModel string, headers http.Header) (*kiropkg.KiroBuildResult, error) {
+	return s.buildKiroPayloadForAccountEndpoint(ctx, account, anthropicBody, modelID, token, requestModel, headers, kiroEndpointConfig{Origin: "AI_EDITOR"})
+}
+
+func (s *GatewayService) buildKiroPayloadForAccountEndpoint(ctx context.Context, account *Account, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, endpoint kiroEndpointConfig) (*kiropkg.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
@@ -599,7 +632,11 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 			InjectThinkingSystemPrompt: false,
 		})
 	}
-	return kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	origin := strings.TrimSpace(endpoint.Origin)
+	if origin == "" {
+		origin = "AI_EDITOR"
+	}
+	return kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, origin, headers)
 }
 
 func logKiroStatelessReplay(account *Account, payload []byte) {

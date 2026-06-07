@@ -198,12 +198,20 @@ func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte,
 }
 
 func newKiroJSONRequestWithAttempt(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account, attempt, maxAttempts int) (*http.Request, error) {
+	return newKiroJSONRequestWithAttemptAndDefaultTarget(ctx, endpointURL, payload, token, accountKey, machineID, amzTarget, account, attempt, maxAttempts, true)
+}
+
+func newKiroJSONRequestWithExplicitTarget(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account, attempt, maxAttempts int) (*http.Request, error) {
+	return newKiroJSONRequestWithAttemptAndDefaultTarget(ctx, endpointURL, payload, token, accountKey, machineID, amzTarget, account, attempt, maxAttempts, false)
+}
+
+func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account, attempt, maxAttempts int, defaultGenerateTarget bool) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	target := strings.TrimSpace(amzTarget)
-	if target == "" && isKiroGenerateAssistantResponseURL(req.URL) {
+	if defaultGenerateTarget && target == "" && isKiroGenerateAssistantResponseURL(req.URL) {
 		target = kiroGenerateAssistantResponseTarget
 	}
 

@@ -598,11 +598,6 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := (&GatewayService{}).buildKiroPayloadForAccount(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil)
-	if err != nil {
-		return nil, err
-	}
-	payload := buildResult.Payload
 
 	endpoints := buildKiroEndpoints(account)
 	proxyURL := kiroProxyURL(account)
@@ -610,8 +605,14 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 	for idx, endpoint := range endpoints {
+		buildResult, err := (&GatewayService{}).buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		payload := buildResult.Payload
+
 		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := newKiroJSONRequestWithAttempt(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
+			req, err := newKiroJSONRequestWithExplicitTarget(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
 			if err != nil {
 				return nil, err
 			}
@@ -641,7 +642,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = (&GatewayService{}).buildKiroPayloadForAccount(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil)
+						buildResult, err = (&GatewayService{}).buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
 						if err != nil {
 							return nil, err
 						}

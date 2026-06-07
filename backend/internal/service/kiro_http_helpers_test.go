@@ -288,7 +288,7 @@ func TestKiroAPIRegionIgnoresOIDCRegionFallback(t *testing.T) {
 	require.Equal(t, kiroDefaultRegion, kiroAPIRegion(account))
 }
 
-func TestBuildKiroEndpointsUsesOnlyAmazonQEndpoint(t *testing.T) {
+func TestBuildKiroEndpointsUsesKiroGoDefaultFallbackOrder(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{
 			"api_region":         "us-west-2",
@@ -297,13 +297,24 @@ func TestBuildKiroEndpointsUsesOnlyAmazonQEndpoint(t *testing.T) {
 	}
 
 	endpoints := buildKiroEndpoints(account)
-	require.Len(t, endpoints, 1)
-	require.Equal(t, "AmazonQ", endpoints[0].Name)
+	require.Len(t, endpoints, 3)
+	require.Equal(t, "KiroIDE", endpoints[0].Name)
 	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[0].URL[8:])
-	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", endpoints[0].AmzTarget)
+	require.Equal(t, "AI_EDITOR", endpoints[0].Origin)
+	require.Empty(t, endpoints[0].AmzTarget)
+
+	require.Equal(t, "CodeWhisperer", endpoints[1].Name)
+	require.Equal(t, "codewhisperer.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[1].URL[8:])
+	require.Equal(t, "AI_EDITOR", endpoints[1].Origin)
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", endpoints[1].AmzTarget)
+
+	require.Equal(t, "AmazonQ", endpoints[2].Name)
+	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[2].URL[8:])
+	require.Equal(t, "AI_EDITOR", endpoints[2].Origin)
+	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[2].AmzTarget)
 }
 
-func TestBuildKiroEndpointsIgnoresPreferredEndpoint(t *testing.T) {
+func TestBuildKiroEndpointsKeepsDefaultOrderForPreferredEndpoint(t *testing.T) {
 	for _, preferred := range []string{"codewhisperer", "cw", "unknown"} {
 		account := &Account{
 			Credentials: map[string]any{
@@ -313,8 +324,7 @@ func TestBuildKiroEndpointsIgnoresPreferredEndpoint(t *testing.T) {
 		}
 
 		endpoints := buildKiroEndpoints(account)
-		require.Len(t, endpoints, 1)
-		require.Equal(t, "AmazonQ", endpoints[0].Name)
-		require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[0].URL[8:])
+		require.Len(t, endpoints, 3)
+		require.Equal(t, []string{"KiroIDE", "CodeWhisperer", "AmazonQ"}, []string{endpoints[0].Name, endpoints[1].Name, endpoints[2].Name})
 	}
 }
