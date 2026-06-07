@@ -61,6 +61,7 @@ func (s *stubKiroAccountTokenRefresher) BuildAccountCredentials(tokenInfo *KiroT
 	return map[string]any{
 		"access_token": tokenInfo.AccessToken,
 		"expires_at":   tokenInfo.ExpiresAt,
+		"profile_arn":  tokenInfo.ProfileArn,
 	}
 }
 

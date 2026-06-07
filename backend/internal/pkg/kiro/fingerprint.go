@@ -223,6 +223,30 @@ func BuildRuntimeAmzUserAgent(accountKey, machineID string) string {
 	)
 }
 
+func BuildRestUserAgent(accountKey, machineID string) string {
+	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
+	return fmt.Sprintf(
+		"aws-sdk-js/%s ua/2.1 os/%s#%s lang/js md/nodejs#%s api/codewhispererruntime#%s m/N,E KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion,
+		fp.OSType,
+		fp.OSVersion,
+		fp.NodeVersion,
+		fp.RuntimeSDKVersion,
+		fp.KiroVersion,
+		fp.KiroHash,
+	)
+}
+
+func BuildRestAmzUserAgent(accountKey, machineID string) string {
+	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
+	return fmt.Sprintf(
+		"aws-sdk-js/%s KiroIDE-%s-%s",
+		fp.RuntimeSDKVersion,
+		fp.KiroVersion,
+		fp.KiroHash,
+	)
+}
+
 func BuildOIDCHeaders(accountKey, machineID string) map[string]string {
 	fp := globalRuntimeFingerprints().Get(fingerprintLookupKey(accountKey, "oidc-session"), machineID)
 	return map[string]string{

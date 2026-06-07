@@ -186,13 +186,6 @@ func applyKiroConditionalHeaders(req *http.Request, account *Account) {
 	}
 }
 
-func resolveKiroPayloadProfileArn(account *Account) string {
-	if account == nil {
-		return ""
-	}
-	return strings.TrimSpace(account.GetCredential("profile_arn"))
-}
-
 func newKiroJSONRequest(ctx context.Context, endpointURL string, payload []byte, token, accountKey, machineID, amzTarget string, account *Account) (*http.Request, error) {
 	return newKiroJSONRequestWithAttempt(ctx, endpointURL, payload, token, accountKey, machineID, amzTarget, account, 1, 3)
 }

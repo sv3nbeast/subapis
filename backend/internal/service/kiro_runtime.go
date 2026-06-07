@@ -622,7 +622,7 @@ func (s *GatewayService) buildKiroPayloadForAccountEndpoint(ctx context.Context,
 	_ = s
 	_ = ctx
 	_ = token
-	profileArn := resolveKiroPayloadProfileArn(account)
+	profileArn := s.resolveKiroPayloadProfileArn(ctx, account, token)
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	if isKiroCLIWireMode(account) {
 		return kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
