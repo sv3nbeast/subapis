@@ -395,6 +395,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
+	outputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
@@ -412,6 +413,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			ResponseID:      state.ResponseID,
 			Usage:           usage,
 			Model:           originalModel,
+			ResponsesOutput: outputAccumulator.BuildOutput(),
 			UpstreamModel:   mappedModel,
 			ReasoningEffort: reasoningEffort,
 			Stream:          true,
@@ -440,6 +442,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		// Convert to Responses events
 		events := apicompat.AnthropicEventToResponsesEvents(event, state)
 		for _, evt := range events {
+			outputAccumulator.ProcessEvent(&evt)
 			sse, err := apicompat.ResponsesEventToSSE(evt)
 			if err != nil {
 				logger.L().Warn("forward_as_responses stream: failed to marshal event",

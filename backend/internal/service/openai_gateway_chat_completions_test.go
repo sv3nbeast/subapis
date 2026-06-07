@@ -264,6 +264,59 @@ func TestForwardAsResponses_KiroExpandsPreviousResponseHistory(t *testing.T) {
 	require.Equal(t, "file list", gjson.GetBytes(body, "messages.2.content.0.content").String())
 }
 
+func TestForwardAsResponses_KiroStoresStreamingOutputForPreviousResponseHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+
+	firstBody := []byte(`{"model":"claude-sonnet-4-6","input":[{"type":"input_text","text":"start stream"}],"stream":true}`)
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(firstBody))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		anthropicMessagesSSECompletedResponse("msg_stream_first", "claude-sonnet-4-6", "streamed answer", "", 10, 3),
+		anthropicMessagesSSECompletedResponse("msg_stream_second", "claude-sonnet-4-6", "done", "", 20, 4),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "kiro",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "kiro-key"},
+	}
+
+	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
+		Body:  firstBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, firstResult)
+	require.Equal(t, "msg_stream_first", firstResult.ResponseID)
+	require.NotEmpty(t, firstResult.ResponsesOutput)
+
+	secondBody := []byte(`{"model":"claude-sonnet-4-6","previous_response_id":"msg_stream_first","input":[{"type":"input_text","text":"continue"}],"stream":false}`)
+	secondRec := httptest.NewRecorder()
+	secondCtx, _ := gin.CreateTestContext(secondRec)
+	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(secondBody))
+	secondCtx.Request.Header.Set("Content-Type", "application/json")
+
+	secondResult, err := svc.ForwardAsResponses(context.Background(), secondCtx, account, secondBody, &ParsedRequest{
+		Body:  secondBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, secondResult)
+	require.Len(t, upstream.bodies, 2)
+
+	body := upstream.bodies[1]
+	require.Equal(t, "start stream", gjson.GetBytes(body, "messages.0.content.0.text").String())
+	require.Equal(t, "streamed answer", gjson.GetBytes(body, "messages.1.content.0.text").String())
+	require.Equal(t, "continue", gjson.GetBytes(body, "messages.2.content.0.text").String())
+}
+
 func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
