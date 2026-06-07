@@ -111,15 +111,8 @@ func (s *GatewayService) listKiroAvailableProfileArn(ctx context.Context, accoun
 	if err != nil {
 		return "", err
 	}
-	accountKey := buildKiroAccountKey(account)
-	machineID := buildKiroMachineID(account)
-	req.Header.Set("Accept", "application/json")
+	applyKiroRestHeaders(req, account, accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	req.Header.Set("User-Agent", kiropkg.BuildRestUserAgent(accountKey, machineID))
-	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRestAmzUserAgent(accountKey, machineID))
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	applyKiroConditionalHeaders(req, account)
 
 	resp, err := s.httpUpstream.DoWithTLS(req, kiroProxyURL(account), account.ID, account.Concurrency, s.resolveKiroTLSProfile(account))
 	if err != nil {
@@ -197,4 +190,18 @@ func (s *GatewayService) resolveKiroTLSProfile(account *Account) *tlsfingerprint
 		return nil
 	}
 	return s.tlsFPProfileService.ResolveTLSProfile(account)
+}
+
+func applyKiroRestHeaders(req *http.Request, account *Account, token string) {
+	if req == nil {
+		return
+	}
+	accountKey := buildKiroAccountKey(account)
+	machineID := buildKiroMachineID(account)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	req.Header.Set("User-Agent", kiropkg.BuildRestUserAgent(accountKey, machineID))
+	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRestAmzUserAgent(accountKey, machineID))
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	applyKiroConditionalHeaders(req, account)
 }

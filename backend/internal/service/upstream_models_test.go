@@ -157,14 +157,14 @@ func TestBuildKiroUpstreamModelsRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://q.eu-central-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR&profileArn=arn%3Aaws%3Acodewhisperer%3Aeu-central-1%3A123456789012%3Aprofile%2FKIRO", req.URL.String())
 	require.Equal(t, "Bearer kiro-access-token", req.Header.Get("Authorization"))
-	require.Equal(t, "*/*", req.Header.Get("Accept"))
-	require.Equal(t, "vibe", req.Header.Get("x-amzn-kiro-agent-mode"))
+	require.Equal(t, "application/json", req.Header.Get("Accept"))
+	require.Empty(t, req.Header.Get("x-amzn-kiro-agent-mode"))
 	require.Equal(t, "true", req.Header.Get("x-amzn-codewhisperer-optout"))
-	require.Contains(t, req.Header.Get("User-Agent"), "api/codewhispererstreaming#")
+	require.Contains(t, req.Header.Get("User-Agent"), "api/codewhispererruntime#")
 	require.Contains(t, req.Header.Get("User-Agent"), "KiroIDE-")
 	require.Contains(t, req.Header.Get("X-Amz-User-Agent"), "KiroIDE-")
-	require.NotEmpty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
-	require.Equal(t, "attempt=1; max=3", req.Header.Get("Amz-Sdk-Request"))
+	require.Empty(t, req.Header.Get("Amz-Sdk-Invocation-Id"))
+	require.Empty(t, req.Header.Get("Amz-Sdk-Request"))
 }
 
 func TestBuildKiroUpstreamModelsRequestUsesProfileArnRegionWhenAPIRegionMissing(t *testing.T) {

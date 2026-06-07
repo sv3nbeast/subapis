@@ -138,7 +138,7 @@ func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Cont
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list request", err)
 	}
-	(&AccountUsageService{}).applyKiroRuntimeHeaders(req, account, token)
+	applyKiroRestHeaders(req, account, token)
 	return req, nil
 }
 

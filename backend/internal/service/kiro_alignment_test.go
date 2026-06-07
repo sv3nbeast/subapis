@@ -126,12 +126,14 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 		require.Equal(t, kiroUsageOrigin, r.URL.Query().Get("origin"))
 		require.Equal(t, kiroUsageResourceType, r.URL.Query().Get("resourceType"))
 		require.Equal(t, "Bearer kiro-access-token", r.Header.Get("Authorization"))
-		require.Equal(t, "*/*", r.Header.Get("Accept"))
+		require.Equal(t, "application/json", r.Header.Get("Accept"))
 		require.True(t, strings.Contains(r.Header.Get("User-Agent"), "KiroIDE-"))
 		require.True(t, strings.Contains(r.Header.Get("X-Amz-User-Agent"), "KiroIDE-"))
-		require.Equal(t, "vibe", r.Header.Get("x-amzn-kiro-agent-mode"))
+		require.True(t, strings.Contains(r.Header.Get("User-Agent"), "api/codewhispererruntime#"))
+		require.Empty(t, r.Header.Get("x-amzn-kiro-agent-mode"))
 		require.Equal(t, "true", r.Header.Get("x-amzn-codewhisperer-optout"))
-		require.NotEmpty(t, r.Header.Get("Amz-Sdk-Invocation-Id"))
+		require.Empty(t, r.Header.Get("Amz-Sdk-Invocation-Id"))
+		require.Empty(t, r.Header.Get("Amz-Sdk-Request"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"nextDateReset": ` + strconv.FormatInt(resetAt, 10) + `,
