@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +207,61 @@ func TestForwardAsResponses_AnthropicOpus48ThinkingAlias(t *testing.T) {
 	require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
 	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+}
+
+func TestForwardAsResponses_KiroExpandsPreviousResponseHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+
+	firstBody := []byte(`{"model":"claude-sonnet-4-6","instructions":"project rules","input":[{"type":"input_text","text":"inspect files"}],"stream":false}`)
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(firstBody))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		anthropicMessagesSSECompletedResponse("msg_first", "claude-sonnet-4-6", "use a tool", "", 10, 3),
+		anthropicMessagesSSECompletedResponse("msg_second", "claude-sonnet-4-6", "done", "", 20, 4),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "kiro",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "kiro-key"},
+	}
+
+	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
+		Body:  firstBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, firstResult)
+	require.Equal(t, "msg_first", firstResult.ResponseID)
+
+	secondBody := []byte(`{"model":"claude-sonnet-4-6","previous_response_id":"msg_first","input":[{"type":"function_call_output","call_id":"call_lookup","output":"file list"}],"stream":false}`)
+	secondRec := httptest.NewRecorder()
+	secondCtx, _ := gin.CreateTestContext(secondRec)
+	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(secondBody))
+	secondCtx.Request.Header.Set("Content-Type", "application/json")
+
+	secondResult, err := svc.ForwardAsResponses(context.Background(), secondCtx, account, secondBody, &ParsedRequest{
+		Body:  secondBody,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, secondResult)
+	require.Len(t, upstream.bodies, 2)
+
+	body := upstream.bodies[1]
+	require.Equal(t, "project rules", gjson.GetBytes(body, "system").String())
+	require.Equal(t, "inspect files", gjson.GetBytes(body, "messages.0.content.0.text").String())
+	require.Equal(t, "use a tool", gjson.GetBytes(body, "messages.1.content.0.text").String())
+	require.Equal(t, "tool_result", gjson.GetBytes(body, "messages.2.content.0.type").String())
+	require.Equal(t, "call_lookup", gjson.GetBytes(body, "messages.2.content.0.tool_use_id").String())
+	require.Equal(t, "file list", gjson.GetBytes(body, "messages.2.content.0.content").String())
 }
 
 func TestForwardAsChatCompletions_ClientDisconnectDrainsUpstreamUsage(t *testing.T) {
@@ -711,4 +767,39 @@ func TestForwardAsChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
 	require.NoError(t, upstream.lastReq.Context().Err())
+}
+
+func resetKiroResponsesHistoryStoreForTest() {
+	globalKiroResponsesHistoryStore = &kiroResponsesHistoryStore{
+		items: make(map[string]kiroResponsesHistoryEntry),
+		now:   time.Now,
+	}
+}
+
+func anthropicMessagesSSECompletedResponse(responseID, model, text, stopReason string, inputTokens, outputTokens int) *http.Response {
+	if stopReason == "" {
+		stopReason = "end_turn"
+	}
+	body := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"` + responseID + `","type":"message","role":"assistant","content":[],"model":"` + model + `","usage":{"input_tokens":` + fmt.Sprint(inputTokens) + `}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"` + stopReason + `"},"usage":{"output_tokens":` + fmt.Sprint(outputTokens) + `}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_" + responseID}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
 }

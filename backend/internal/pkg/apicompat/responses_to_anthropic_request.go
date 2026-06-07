@@ -67,6 +67,13 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	return out, nil
 }
 
+// ResponsesInputToAnthropicForKiro exposes the Responses input conversion used
+// by the Kiro compatibility history expander. It intentionally returns only the
+// input-derived system/messages and leaves request-level fields to callers.
+func ResponsesInputToAnthropicForKiro(inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+	return convertResponsesInputToAnthropic(inputRaw)
+}
+
 // defaultThinkingBudget returns a sensible thinking budget based on effort level.
 func defaultThinkingBudget(effort string) int {
 	switch effort {
@@ -516,6 +523,12 @@ func mergeConsecutiveMessages(messages []AnthropicMessage) []AnthropicMessage {
 		last.Content, _ = json.Marshal(combined)
 	}
 	return merged
+}
+
+// MergeAnthropicMessagesForKiro merges same-role messages after Kiro history
+// expansion so the rebuilt transcript remains valid for Anthropic-shaped input.
+func MergeAnthropicMessagesForKiro(messages []AnthropicMessage) []AnthropicMessage {
+	return mergeConsecutiveMessages(messages)
 }
 
 // parseContentBlocks attempts to parse content as []AnthropicContentBlock.

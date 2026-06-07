@@ -52,6 +52,14 @@ func (s *GatewayService) ForwardAsResponses(
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
+	if account != nil && account.Platform == PlatformKiro && strings.TrimSpace(responsesReq.PreviousResponseID) != "" {
+		historySystem, history := globalKiroResponsesHistoryStore.expand(responsesReq.PreviousResponseID)
+		anthropicReq.System = mergeKiroResponsesSystem(historySystem, anthropicReq.System)
+		if len(history) > 0 {
+			anthropicReq.Messages = append(history, anthropicReq.Messages...)
+			anthropicReq.Messages = apicompat.MergeAnthropicMessagesForKiro(anthropicReq.Messages)
+		}
+	}
 
 	// 3. Force upstream streaming (Anthropic works best with streaming)
 	anthropicReq.Stream = true
@@ -180,6 +188,16 @@ func (s *GatewayService) ForwardAsResponses(
 		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	}
+	if handleErr == nil && account != nil && account.Platform == PlatformKiro && result != nil && strings.TrimSpace(result.ResponseID) != "" {
+		globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
+			ID:                 result.ResponseID,
+			PreviousResponseID: responsesReq.PreviousResponseID,
+			Model:              originalModel,
+			Instructions:       responsesReq.Instructions,
+			Input:              append(json.RawMessage(nil), responsesReq.Input...),
+			Output:             result.ResponsesOutput,
+		})
 	}
 
 	return result, handleErr
@@ -343,8 +361,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 
 	return &ForwardResult{
 		RequestID:       requestID,
+		ResponseID:      responsesResp.ID,
 		Usage:           usage,
 		Model:           originalModel,
+		ResponsesOutput: responsesResp.Output,
 		UpstreamModel:   mappedModel,
 		ReasoningEffort: reasoningEffort,
 		Stream:          false,
@@ -389,6 +409,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
 			RequestID:       requestID,
+			ResponseID:      state.ResponseID,
 			Usage:           usage,
 			Model:           originalModel,
 			UpstreamModel:   mappedModel,
