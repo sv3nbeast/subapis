@@ -575,20 +575,95 @@ func TestCorrectAskUserQuestionQuestionsString(t *testing.T) {
 			if !ok || len(questions) != 1 {
 				t.Fatalf("questions = %#v, want single-item array", args["questions"])
 			}
-			if questions[0] != "确认是否继续？" {
+			question, ok := questions[0].(map[string]any)
+			if !ok {
+				t.Fatalf("questions[0] = %#v, want object", questions[0])
+			}
+			if question["question"] != "确认是否继续？" {
 				t.Fatalf("questions[0] = %#v", questions[0])
 			}
 		})
 	}
 }
 
-func TestCorrectAskUserQuestionKeepsQuestionsArray(t *testing.T) {
+func TestCorrectAskUserQuestionNormalizesQuestionsArray(t *testing.T) {
 	corrector := NewCodexToolCorrector()
 	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[\"确认是否继续？\"]}"}}`
 
 	corrected, changed := corrector.CorrectToolCallsInSSEData(body)
+	if !changed {
+		t.Fatal("expected string questions array to be corrected")
+	}
+
+	rawArgs := gjsonGetJSONPath(t, corrected, "function_call.arguments")
+	argsStr, ok := rawArgs.(string)
+	if !ok {
+		t.Fatalf("arguments = %T, want string", rawArgs)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+		t.Fatalf("failed to unmarshal arguments: %v", err)
+	}
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions = %#v, want single-item array", args["questions"])
+	}
+	question, ok := questions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("questions[0] = %#v, want object", questions[0])
+	}
+	if question["question"] != "确认是否继续？" {
+		t.Fatalf("questions[0] = %#v", questions[0])
+	}
+}
+
+func TestCorrectAskUserQuestionFillsMissingQuestionField(t *testing.T) {
+	corrector := NewCodexToolCorrector()
+	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[{\"question\":\"第一项？\"},{\"text\":\"第二项？\"},{\"title\":\"第三项？\",\"options\":[\"继续\",\"停止\"],\"metadata\":{\"source\":\"test\"}}]}"}}`
+
+	corrected, changed := corrector.CorrectToolCallsInSSEData(body)
+	if !changed {
+		t.Fatal("expected questions with missing question fields to be corrected")
+	}
+
+	rawArgs := gjsonGetJSONPath(t, corrected, "function_call.arguments")
+	argsStr, ok := rawArgs.(string)
+	if !ok {
+		t.Fatalf("arguments = %T, want string", rawArgs)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+		t.Fatalf("failed to unmarshal arguments: %v", err)
+	}
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) != 3 {
+		t.Fatalf("questions = %#v, want three-item array", args["questions"])
+	}
+	for i, want := range []string{"第一项？", "第二项？", "第三项？"} {
+		question, ok := questions[i].(map[string]any)
+		if !ok {
+			t.Fatalf("questions[%d] = %#v, want object", i, questions[i])
+		}
+		if question["question"] != want {
+			t.Fatalf("questions[%d].question = %#v, want %q", i, question["question"], want)
+		}
+	}
+	thirdQuestion := questions[2].(map[string]any)
+	if _, ok := thirdQuestion["options"].([]any); !ok {
+		t.Fatalf("questions[2].options = %#v, want array", thirdQuestion["options"])
+	}
+	if _, ok := thirdQuestion["metadata"].(map[string]any); !ok {
+		t.Fatalf("questions[2].metadata = %#v, want object", thirdQuestion["metadata"])
+	}
+}
+
+func TestCorrectAskUserQuestionKeepsValidQuestionObjects(t *testing.T) {
+	corrector := NewCodexToolCorrector()
+	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[{\"question\":\"确认是否继续？\"}]}"}}`
+
+	corrected, changed := corrector.CorrectToolCallsInSSEData(body)
 	if changed {
-		t.Fatalf("expected no correction for valid questions array, got %s", corrected)
+		t.Fatalf("expected no correction for valid question object array, got %s", corrected)
 	}
 }
 

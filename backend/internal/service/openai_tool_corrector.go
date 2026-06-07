@@ -320,24 +320,10 @@ func (c *CodexToolCorrector) correctToolArgumentsJSON(argsJSON, toolName string)
 		}
 	default:
 		if isAskUserQuestionTool(toolName) {
-			if !gjson.Get(updated, "questions").Exists() {
-				if question := strings.TrimSpace(gjson.Get(updated, "question").String()); question != "" {
-					next, err := sjson.Set(updated, "questions", []string{question})
-					if err == nil {
-						updated = next
-						corrected = true
-						logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Wrapped 'question' string as 'questions' array in AskUserQuestion tool")
-					}
-				}
-			} else if questions := gjson.Get(updated, "questions"); questions.Type == gjson.String {
-				if question := strings.TrimSpace(questions.String()); question != "" {
-					next, err := sjson.Set(updated, "questions", []string{question})
-					if err == nil {
-						updated = next
-						corrected = true
-						logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Wrapped 'questions' string as array in AskUserQuestion tool")
-					}
-				}
+			if next, changed := normalizeAskUserQuestionArguments(updated); changed {
+				updated = next
+				corrected = true
+				logger.LegacyPrintf("service.openai_tool_corrector", "[CodexToolCorrector] Normalized AskUserQuestion questions")
 			}
 		}
 	}
@@ -351,6 +337,104 @@ func isAskUserQuestionTool(name string) bool {
 	return normalized == "askuserquestion" ||
 		normalized == "ask_user_question" ||
 		normalized == "ask_user_questions"
+}
+
+func normalizeAskUserQuestionArguments(input string) (string, bool) {
+	questions := gjson.Get(input, "questions")
+	if !questions.Exists() {
+		questionText := strings.TrimSpace(gjson.Get(input, "question").String())
+		if questionText == "" {
+			return input, false
+		}
+		return setAskUserQuestionQuestions(input, []map[string]any{{"question": questionText}})
+	}
+
+	switch questions.Type {
+	case gjson.String:
+		questionText := strings.TrimSpace(questions.String())
+		if questionText == "" {
+			return input, false
+		}
+		return setAskUserQuestionQuestions(input, []map[string]any{{"question": questionText}})
+	case gjson.JSON:
+		if !questions.IsArray() {
+			return input, false
+		}
+		normalized := make([]map[string]any, 0, len(questions.Array()))
+		changed := false
+		questions.ForEach(func(_, item gjson.Result) bool {
+			question, itemChanged, ok := normalizeAskUserQuestionItem(item)
+			if !ok {
+				return true
+			}
+			normalized = append(normalized, question)
+			if itemChanged {
+				changed = true
+			}
+			return true
+		})
+		if len(normalized) == 0 {
+			return input, false
+		}
+		if len(normalized) != len(questions.Array()) {
+			changed = true
+		}
+		if !changed {
+			return input, false
+		}
+		return setAskUserQuestionQuestions(input, normalized)
+	default:
+		return input, false
+	}
+}
+
+func normalizeAskUserQuestionItem(item gjson.Result) (map[string]any, bool, bool) {
+	switch item.Type {
+	case gjson.String:
+		questionText := strings.TrimSpace(item.String())
+		if questionText == "" {
+			return nil, false, false
+		}
+		return map[string]any{"question": questionText}, true, true
+	case gjson.JSON:
+		if !item.IsObject() {
+			return nil, false, false
+		}
+		question, ok := item.Value().(map[string]any)
+		if !ok {
+			return nil, false, false
+		}
+		questionText := strings.TrimSpace(item.Get("question").String())
+		changed := false
+		if questionText == "" {
+			questionText = firstAskUserQuestionFallbackText(item, "text", "prompt", "title", "label", "message")
+			if questionText == "" {
+				return nil, false, false
+			}
+			changed = true
+		}
+		question["question"] = questionText
+		return question, changed, true
+	default:
+		return nil, false, false
+	}
+}
+
+func firstAskUserQuestionFallbackText(item gjson.Result, fields ...string) string {
+	for _, field := range fields {
+		if text := strings.TrimSpace(item.Get(field).String()); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func setAskUserQuestionQuestions(input string, questions []map[string]any) (string, bool) {
+	next, err := sjson.Set(input, "questions", questions)
+	if err != nil {
+		return input, false
+	}
+	return next, true
 }
 
 func moveJSONField(input, from, to string) (string, bool) {
