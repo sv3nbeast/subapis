@@ -1669,100 +1669,87 @@ func mapKiroToolName(name string, requestCtx *KiroRequestContext) string {
 }
 
 func normalizeKiroJSONSchema(schema any) any {
-	return normalizeKiroJSONSchemaValue(schema, true)
-}
-
-func normalizeKiroJSONSchemaValue(schema any, enforceObjectKeywords bool) any {
 	obj, ok := schema.(map[string]any)
 	if !ok || obj == nil {
-		return defaultKiroJSONSchema()
+		return map[string]any{"type": "object"}
 	}
-	normalized := make(map[string]any, len(obj)+4)
-	for key, value := range obj {
-		normalized[key] = normalizeSchemaChild(key, value)
-	}
+	normalized := cloneKiroJSONSchemaMap(obj)
+	cleanKiroJSONSchema(normalized)
 	if typ, ok := normalized["type"].(string); !ok || strings.TrimSpace(typ) == "" {
 		normalized["type"] = "object"
-	}
-	typ, _ := normalized["type"].(string)
-	needsObjectKeywords := enforceObjectKeywords ||
-		strings.TrimSpace(typ) == "object" ||
-		hasSchemaKey(normalized, "properties") ||
-		hasSchemaKey(normalized, "required") ||
-		hasSchemaKey(normalized, "additionalProperties")
-	if needsObjectKeywords {
-		properties, ok := normalized["properties"].(map[string]any)
-		if !ok || properties == nil {
-			normalized["properties"] = map[string]any{}
-		} else {
-			for key, value := range properties {
-				properties[key] = normalizeKiroJSONSchemaValue(value, false)
-			}
-			normalized["properties"] = properties
-		}
-		normalized["required"] = normalizeSchemaRequired(normalized["required"])
-		switch additional := normalized["additionalProperties"].(type) {
-		case bool:
-		case map[string]any:
-			normalized["additionalProperties"] = normalizeKiroJSONSchemaValue(additional, false)
-		default:
-			normalized["additionalProperties"] = true
-		}
 	}
 	return normalized
 }
 
-func hasSchemaKey(schema map[string]any, key string) bool {
-	_, ok := schema[key]
-	return ok
+func cloneKiroJSONSchemaMap(schema map[string]any) map[string]any {
+	cloned := make(map[string]any, len(schema))
+	for key, value := range schema {
+		cloned[key] = cloneKiroJSONSchemaValue(value)
+	}
+	return cloned
 }
 
-func defaultKiroJSONSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"properties":           map[string]any{},
-		"required":             []any{},
-		"additionalProperties": true,
-	}
-}
-
-func normalizeSchemaRequired(value any) []any {
-	arr, ok := value.([]any)
-	if !ok {
-		return []any{}
-	}
-	out := make([]any, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
+func cloneKiroJSONSchemaValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return cloneKiroJSONSchemaMap(v)
+	case []any:
+		cloned := make([]any, 0, len(v))
+		for _, item := range v {
+			cloned = append(cloned, cloneKiroJSONSchemaValue(item))
 		}
+		return cloned
+	default:
+		return value
 	}
-	return out
 }
 
-func normalizeSchemaChild(key string, value any) any {
-	switch key {
-	case "items", "not":
-		if obj, ok := value.(map[string]any); ok {
-			return normalizeKiroJSONSchemaValue(obj, false)
-		}
-		if arr, ok := value.([]any); ok {
-			out := make([]any, 0, len(arr))
+func cleanKiroJSONSchema(schema map[string]any) {
+	delete(schema, "additionalProperties")
+
+	if required, exists := schema["required"]; exists {
+		switch arr := required.(type) {
+		case []any:
+			cleaned := make([]any, 0, len(arr))
 			for _, item := range arr {
-				out = append(out, normalizeKiroJSONSchemaValue(item, false))
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					cleaned = append(cleaned, s)
+				}
 			}
-			return out
-		}
-	case "oneOf", "anyOf", "allOf":
-		if arr, ok := value.([]any); ok {
-			out := make([]any, 0, len(arr))
+			if len(cleaned) == 0 {
+				delete(schema, "required")
+			} else {
+				schema["required"] = cleaned
+			}
+		case []string:
+			cleaned := make([]string, 0, len(arr))
 			for _, item := range arr {
-				out = append(out, normalizeKiroJSONSchemaValue(item, false))
+				if strings.TrimSpace(item) != "" {
+					cleaned = append(cleaned, item)
+				}
 			}
-			return out
+			if len(cleaned) == 0 {
+				delete(schema, "required")
+			} else {
+				schema["required"] = cleaned
+			}
+		default:
+			delete(schema, "required")
 		}
 	}
-	return value
+
+	for _, value := range schema {
+		switch v := value.(type) {
+		case map[string]any:
+			cleanKiroJSONSchema(v)
+		case []any:
+			for _, item := range v {
+				if child, ok := item.(map[string]any); ok {
+					cleanKiroJSONSchema(child)
+				}
+			}
+		}
+	}
 }
 
 func processMessages(messages []gjson.Result, modelID, origin string, requestCtx *KiroRequestContext) ([]KiroHistoryMessage, *KiroUserInputMessage, []KiroToolResult) {

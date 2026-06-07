@@ -1399,18 +1399,47 @@ func TestBuildKiroPayloadAddsPlaceholderToolForHistoryToolUse(t *testing.T) {
 }
 
 func TestBuildKiroPayloadNormalizesToolJSONSchema(t *testing.T) {
+	inputSchema := map[string]any{
+		"properties":           nil,
+		"required":             []any{"", 1, "path"},
+		"additionalProperties": "sometimes",
+		"items": map[string]any{
+			"properties":           nil,
+			"required":             []any{1, "ok"},
+			"additionalProperties": 7,
+		},
+	}
+	bodyBytes, err := json.Marshal(map[string]any{
+		"model":    "claude-sonnet-4-5",
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+		"tools": []any{map[string]any{
+			"name":         "bad_schema",
+			"description":  "bad schema",
+			"input_schema": inputSchema,
+		}},
+	})
+	require.NoError(t, err)
+
+	kiroBuildResult, err := BuildKiroPayloadWithContext(bodyBytes, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := kiroBuildResult.Payload
+	schema := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.inputSchema.json")
+	require.Equal(t, "object", schema.Get("type").String())
+	require.False(t, schema.Get("additionalProperties").Exists())
+	require.Equal(t, "path", schema.Get("required.0").String())
+	require.False(t, schema.Get("items.additionalProperties").Exists())
+	require.Equal(t, "ok", schema.Get("items.required.0").String())
+	require.Contains(t, inputSchema, "additionalProperties", "schema sanitizer must not mutate caller input")
+}
+
+func TestBuildKiroPayloadDefaultsInvalidToolJSONSchemaToObject(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[{"role":"user","content":"hello"}],
 		"tools":[{
 			"name":"bad_schema",
 			"description":"bad schema",
-			"input_schema":{
-				"properties":null,
-				"required":null,
-				"additionalProperties":"sometimes",
-				"items":{"properties":null,"required":[1,"ok"],"additionalProperties":7}
-			}
+			"input_schema":"bad"
 		}]
 	}`)
 
@@ -1419,13 +1448,8 @@ func TestBuildKiroPayloadNormalizesToolJSONSchema(t *testing.T) {
 	payload := kiroBuildResult.Payload
 	schema := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.inputSchema.json")
 	require.Equal(t, "object", schema.Get("type").String())
-	require.True(t, schema.Get("properties").IsObject())
-	require.True(t, schema.Get("required").IsArray())
-	require.Len(t, schema.Get("required").Array(), 0)
-	require.True(t, schema.Get("additionalProperties").Bool())
-	require.Equal(t, "object", schema.Get("items.type").String())
-	require.Equal(t, "ok", schema.Get("items.required.0").String())
-	require.True(t, schema.Get("items.additionalProperties").Bool())
+	require.False(t, schema.Get("required").Exists())
+	require.False(t, schema.Get("additionalProperties").Exists())
 }
 
 func TestBuildKiroPayloadFiltersCurrentOrphanToolResult(t *testing.T) {
