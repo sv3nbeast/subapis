@@ -29,6 +29,8 @@ const (
 	kiroHistoryImageKeepCount  = 5
 	kiroMaxPayloadBytes        = 900 * 1024
 	kiroMinRecentHistoryTurns  = 4
+	kiroMinimalFallbackContent = "."
+	kiroToolResultsPrefix      = "Tool results:"
 	thinkingStartTag           = "<thinking>"
 	thinkingEndTag             = "</thinking>"
 	embeddedToolCallPrefix     = "[Called "
@@ -472,6 +474,14 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	if currentUserMsg != nil {
 		currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
 		currentToolResults = deduplicateToolResults(currentToolResults)
+		activeToolResultTurn := isKiroActiveToolResultTurn(currentUserMsg, currentToolResults)
+		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
+		if !activeToolResultTurn {
+			currentToolResultIDs = nil
+			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history)))
+			currentToolResults = nil
+		}
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs)
 		if envState != nil || len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				EnvState:    envState,
@@ -479,6 +489,8 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 				Tools:       kiroTools,
 			}
 		}
+	} else {
+		history = sanitizeKiroToolHistory(history, nil)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -1850,6 +1862,182 @@ func removeOrphanedToolUses(history []KiroHistoryMessage, orphaned map[string]bo
 		}
 		msg.ToolUses = filtered
 	}
+}
+
+func isKiroActiveToolResultTurn(currentUserMsg *KiroUserInputMessage, currentToolResults []KiroToolResult) bool {
+	if currentUserMsg == nil || len(currentToolResults) == 0 {
+		return false
+	}
+	content := strings.TrimSpace(currentUserMsg.Content)
+	return content == "" || content == "Tool results provided."
+}
+
+func collectKiroToolResultIDs(toolResults []KiroToolResult) map[string]bool {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	ids := make(map[string]bool, len(toolResults))
+	for _, result := range toolResults {
+		if result.ToolUseID != "" {
+			ids[result.ToolUseID] = true
+		}
+	}
+	return ids
+}
+
+func collectKiroHistoryToolNames(history []KiroHistoryMessage) map[string]string {
+	names := make(map[string]string)
+	for _, item := range history {
+		if item.AssistantResponseMessage == nil {
+			continue
+		}
+		for _, toolUse := range item.AssistantResponseMessage.ToolUses {
+			if toolUse.ToolUseID != "" && toolUse.Name != "" {
+				names[toolUse.ToolUseID] = toolUse.Name
+			}
+		}
+	}
+	return names
+}
+
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool) []KiroHistoryMessage {
+	if len(history) == 0 {
+		return history
+	}
+
+	toolNames := make(map[string]string)
+	for i := range history {
+		if history[i].AssistantResponseMessage == nil {
+			continue
+		}
+		for _, toolUse := range history[i].AssistantResponseMessage.ToolUses {
+			if toolUse.ToolUseID != "" && toolUse.Name != "" {
+				toolNames[toolUse.ToolUseID] = toolUse.Name
+			}
+		}
+	}
+
+	activeAssistantIdx := -1
+	if len(currentToolResultIDs) > 0 {
+		last := history[len(history)-1]
+		if last.AssistantResponseMessage != nil && len(last.AssistantResponseMessage.ToolUses) > 0 {
+			allCovered := true
+			for _, toolUse := range last.AssistantResponseMessage.ToolUses {
+				if !currentToolResultIDs[toolUse.ToolUseID] {
+					allCovered = false
+					break
+				}
+			}
+			if allCovered {
+				activeAssistantIdx = len(history) - 1
+			}
+		}
+	}
+
+	for i := range history {
+		msg := &history[i]
+		if msg.AssistantResponseMessage != nil {
+			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
+			if len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
+				msg.AssistantResponseMessage.ToolUses = nil
+			}
+		}
+		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
+			ctx := msg.UserInputMessage.UserInputMessageContext
+			if len(ctx.ToolResults) > 0 {
+				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames))
+				ctx.ToolResults = nil
+			}
+			ctx.Tools = nil
+			if len(ctx.Tools) == 0 && len(ctx.ToolResults) == 0 && ctx.EnvState == nil {
+				msg.UserInputMessage.UserInputMessageContext = nil
+			}
+		}
+		if msg.UserInputMessage != nil && strings.TrimSpace(msg.UserInputMessage.Content) == "" && len(msg.UserInputMessage.Images) == 0 {
+			msg.UserInputMessage.Content = kiroMinimalFallbackContent
+		}
+	}
+
+	cleaned := history[:0:0]
+	for _, msg := range history {
+		if msg.AssistantResponseMessage != nil && len(msg.AssistantResponseMessage.ToolUses) == 0 {
+			content := strings.TrimSpace(msg.AssistantResponseMessage.Content)
+			if content == "" || content == kiroMinimalFallbackContent {
+				continue
+			}
+		}
+		if msg.UserInputMessage != nil && len(cleaned) > 0 {
+			last := cleaned[len(cleaned)-1]
+			content := strings.TrimSpace(msg.UserInputMessage.Content)
+			if last.UserInputMessage != nil &&
+				content != "" &&
+				len(msg.UserInputMessage.Images) == 0 &&
+				strings.TrimSpace(last.UserInputMessage.Content) == content {
+				continue
+			}
+		}
+		cleaned = append(cleaned, msg)
+	}
+	return trimLeadingKiroAssistantHistory(cleaned)
+}
+
+var kiroPollutedToolCallTextPattern = regexp.MustCompile(`\[Called tool [^\]]*\]`)
+
+func stripKiroPollutedToolCallText(content string) string {
+	if !strings.Contains(content, "[Called tool ") {
+		return content
+	}
+	cleaned := kiroPollutedToolCallTextPattern.ReplaceAllString(content, "")
+	cleaned = regexp.MustCompile(`\n{3,}`).ReplaceAllString(cleaned, "\n\n")
+	return strings.TrimSpace(cleaned)
+}
+
+func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]string) string {
+	if len(toolResults) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(toolResults))
+	for _, result := range toolResults {
+		texts := make([]string, 0, len(result.Content))
+		for _, content := range result.Content {
+			if text := strings.TrimSpace(content.Text); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		body := strings.Join(texts, "\n")
+		if strings.TrimSpace(body) == "" {
+			body = "(no output)"
+		}
+		if name := strings.TrimSpace(names[result.ToolUseID]); name != "" {
+			parts = append(parts, fmt.Sprintf("[%s] %s", name, body))
+		} else {
+			parts = append(parts, body)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
+}
+
+func joinKiroHistoryText(existing, addition string) string {
+	existing = strings.TrimSpace(existing)
+	addition = strings.TrimSpace(addition)
+	switch {
+	case existing != "" && addition != "":
+		return existing + "\n\n" + addition
+	case addition != "":
+		return addition
+	default:
+		return existing
+	}
+}
+
+func trimLeadingKiroAssistantHistory(history []KiroHistoryMessage) []KiroHistoryMessage {
+	for len(history) > 0 && history[0].AssistantResponseMessage != nil {
+		history = history[1:]
+	}
+	return history
 }
 
 func collectHistoryToolNames(history []KiroHistoryMessage) []string {

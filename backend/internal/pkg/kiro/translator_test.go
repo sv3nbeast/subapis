@@ -1453,15 +1453,84 @@ func TestBuildKiroPayloadRemovesHistoryOrphanToolUse(t *testing.T) {
 	require.NoError(t, err)
 	payload := kiroBuildResult.Payload
 	history := gjson.GetBytes(payload, "conversationState.history").Array()
-	foundAssistantWithoutToolUses := false
 	for _, msg := range history {
-		if msg.Get("assistantResponseMessage").Exists() && msg.Get("assistantResponseMessage.content").String() == " " {
-			foundAssistantWithoutToolUses = true
-			require.False(t, msg.Get("assistantResponseMessage.toolUses").Exists())
-		}
+		require.NotEqual(t, " ", msg.Get("assistantResponseMessage.content").String())
+		require.False(t, msg.Get("assistantResponseMessage.toolUses").Exists())
 	}
-	require.True(t, foundAssistantWithoutToolUses)
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
+}
+
+func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[
+			{"role":"user","content":"run the build"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"running build"},
+				{"type":"tool_use","id":"t1","name":"exec_command","input":{"cmd":"make"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t1","content":"build ok"}
+			]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"t2","name":"exec_command","input":{"cmd":"test"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t2","content":"tests pass"}
+			]},
+			{"role":"user","content":"Summarize everything that happened above."}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
+		require.Equal(t, int64(0), msg.Get("assistantResponseMessage.toolUses.#").Int())
+		require.False(t, msg.Get("userInputMessage.userInputMessageContext.toolResults").Exists())
+		require.NotContains(t, msg.Get("assistantResponseMessage.content").String(), "[Called tool")
+	}
+	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Exists())
+	require.Contains(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String(), "Summarize everything")
+
+	var historyText strings.Builder
+	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
+		historyText.WriteString(msg.Get("assistantResponseMessage.content").String())
+		historyText.WriteString("\n")
+		historyText.WriteString(msg.Get("userInputMessage.content").String())
+		historyText.WriteString("\n")
+	}
+	historyText.WriteString(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+	combined := historyText.String()
+	require.Contains(t, combined, "[exec_command]")
+	require.Contains(t, combined, "tests pass")
+}
+
+func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"run ls"},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"t9","name":"exec_command","input":{"cmd":"ls"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t9","content":"file1 file2"}
+			]}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	history := gjson.GetBytes(payload, "conversationState.history").Array()
+	require.NotEmpty(t, history)
+	last := history[len(history)-1]
+	require.Equal(t, "t9", last.Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "t9", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 }
 
 func TestMergeAdjacentMessagesUsesDoubleNewline(t *testing.T) {
@@ -1513,16 +1582,14 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 	require.Equal(t, shortName, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String(), "MUST use the tool named '"+shortName+"'")
 
-	found := false
+	var historyText strings.Builder
 	for _, msg := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
-		for _, toolUse := range msg.Get("assistantResponseMessage.toolUses").Array() {
-			if toolUse.Get("toolUseId").String() == "toolu_01" {
-				found = true
-				require.Equal(t, shortName, toolUse.Get("name").String())
-			}
-		}
+		require.Equal(t, int64(0), msg.Get("assistantResponseMessage.toolUses.#").Int())
+		historyText.WriteString(msg.Get("userInputMessage.content").String())
+		historyText.WriteString("\n")
 	}
-	require.True(t, found)
+	historyText.WriteString(gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Contains(t, historyText.String(), "["+shortName+"] ok")
 }
 
 func TestParseNonStreamingEventStreamRestoresShortToolName(t *testing.T) {
