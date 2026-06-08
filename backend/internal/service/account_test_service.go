@@ -598,6 +598,12 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
+	payloadBuilder := &GatewayService{
+		accountRepo:         s.accountRepo,
+		httpUpstream:        s.httpUpstream,
+		kiroTokenProvider:   s.kiroTokenProvider,
+		tlsFPProfileService: s.tlsFPProfileService,
+	}
 
 	endpoints := buildKiroEndpoints(account)
 	proxyURL := kiroProxyURL(account)
@@ -605,7 +611,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 	for idx, endpoint := range endpoints {
-		buildResult, err := (&GatewayService{}).buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
+		buildResult, err := payloadBuilder.buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -642,7 +648,7 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = (&GatewayService{}).buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
+						buildResult, err = payloadBuilder.buildKiroPayloadForAccountEndpoint(ctx, account, preparedBody, modelID, currentToken, mappedModel, nil, endpoint)
 						if err != nil {
 							return nil, err
 						}

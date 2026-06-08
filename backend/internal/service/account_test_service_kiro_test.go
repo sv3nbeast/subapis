@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -138,6 +139,57 @@ func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaul
 	body, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
 	require.NotContains(t, string(body), `"profileArn":`)
+}
+
+func TestAccountTestService_KiroResolvesMissingProfileArnBeforeProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          8,
+		Name:        "kiro-profile-resolve",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-access-token",
+			"auth_method":  "idc",
+			"provider":     "AWS",
+			"region":       "us-east-1",
+			"start_url":    "https://d-example.awsapps.com/start",
+		},
+	}
+	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{8: account}}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED"}]}`),
+			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
+		},
+	}
+	svc := &AccountTestService{
+		accountRepo:         repo,
+		kiroTokenProvider:   NewKiroTokenProvider(nil, nil, nil),
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-6", "", AccountTestModeDefault)
+	require.Error(t, err)
+	require.Len(t, upstream.requests, 2)
+
+	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "/ListAvailableProfiles", upstream.requests[0].URL.Path)
+	require.Equal(t, "Bearer kiro-access-token", upstream.requests[0].Header.Get("Authorization"))
+	require.Equal(t, upstream.requests[0].URL.Host, upstream.requests[0].Host)
+
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
+	body, readErr := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, readErr)
+	require.Contains(t, string(body), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED"`)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED", account.GetCredential("profile_arn"))
 }
 
 func TestAccountTestService_KiroInvalidModelErrorPassthrough(t *testing.T) {
