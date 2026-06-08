@@ -761,11 +761,14 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return err
 		}
 		if inputMap != nil {
+			inputMap = normalizeKiroToolUseInput(name, inputMap)
 			encoded, err := json.Marshal(inputMap)
 			if err != nil {
 				return err
 			}
 			fragment = string(encoded)
+		} else if normalized, ok := normalizeKiroToolUseInputJSON(name, fragment); ok {
+			fragment = normalized
 		}
 		return emitStreamingToolInput(toolUseID, name, fragment)
 	}
@@ -3427,6 +3430,7 @@ func finalizeRawToolUse(toolUseID, name, rawInput string) KiroToolUse {
 	if strings.TrimSpace(repaired) != "" {
 		_ = json.Unmarshal([]byte(repaired), &tool.Input)
 	}
+	tool.Input = normalizeKiroToolUseInput(tool.Name, tool.Input)
 	tool.IsTruncated = isTruncatedToolUse(tool.Name, rawInput, tool.Input)
 	return tool
 }
@@ -3438,10 +3442,122 @@ func finalizeStructuredToolUse(toolUseID, name string, input map[string]any) Kir
 	tool := KiroToolUse{
 		ToolUseID: toolUseID,
 		Name:      normalizeResponseToolName(name),
-		Input:     input,
+		Input:     normalizeKiroToolUseInput(name, input),
 	}
 	tool.IsTruncated = hasMissingRequiredFields(tool.Name, tool.Input)
 	return tool
+}
+
+func normalizeKiroToolUseInput(toolName string, input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	if !isKiroAskUserQuestionTool(toolName) {
+		return input
+	}
+	if questions, ok := normalizeKiroAskUserQuestionValue(input["questions"]); ok {
+		input["questions"] = questions
+		return input
+	}
+	if question, ok := input["question"].(string); ok {
+		question = strings.TrimSpace(question)
+		if question != "" {
+			input["questions"] = []map[string]any{{"question": question}}
+		}
+	}
+	return input
+}
+
+func normalizeKiroToolUseInputJSON(toolName, rawInput string) (string, bool) {
+	if !isKiroAskUserQuestionTool(toolName) {
+		return rawInput, false
+	}
+	rawInput = strings.TrimSpace(rawInput)
+	if rawInput == "" {
+		return rawInput, false
+	}
+	var input map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &input); err != nil {
+		return rawInput, false
+	}
+	normalized := normalizeKiroToolUseInput(toolName, input)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return rawInput, false
+	}
+	return string(encoded), true
+}
+
+func isKiroAskUserQuestionTool(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = strings.ReplaceAll(normalized, " ", "_")
+	return normalized == "askuserquestion" ||
+		normalized == "ask_user_question" ||
+		normalized == "ask_user_questions"
+}
+
+func normalizeKiroAskUserQuestionValue(value any) ([]map[string]any, bool) {
+	switch v := value.(type) {
+	case string:
+		question := strings.TrimSpace(v)
+		if question == "" {
+			return nil, false
+		}
+		return []map[string]any{{"question": question}}, true
+	case []any:
+		normalized := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if question, ok := normalizeKiroAskUserQuestionItem(item); ok {
+				normalized = append(normalized, question)
+			}
+		}
+		if len(normalized) == 0 {
+			return nil, false
+		}
+		return normalized, true
+	case []map[string]any:
+		normalized := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if question, ok := normalizeKiroAskUserQuestionItem(item); ok {
+				normalized = append(normalized, question)
+			}
+		}
+		if len(normalized) == 0 {
+			return nil, false
+		}
+		return normalized, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeKiroAskUserQuestionItem(item any) (map[string]any, bool) {
+	switch v := item.(type) {
+	case string:
+		question := strings.TrimSpace(v)
+		if question == "" {
+			return nil, false
+		}
+		return map[string]any{"question": question}, true
+	case map[string]any:
+		question := strings.TrimSpace(getString(v, "question"))
+		if question == "" {
+			for _, field := range []string{"text", "prompt", "title", "label", "message"} {
+				question = strings.TrimSpace(getString(v, field))
+				if question != "" {
+					break
+				}
+			}
+		}
+		if question == "" {
+			return nil, false
+		}
+		v["question"] = question
+		return v, true
+	default:
+		return nil, false
+	}
 }
 
 func normalizeResponseToolName(name string) string {

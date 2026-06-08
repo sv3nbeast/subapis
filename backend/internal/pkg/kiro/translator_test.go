@@ -834,6 +834,25 @@ func TestParseNonStreamingEventStreamSkipsTruncatedToolUse(t *testing.T) {
 	require.NotContains(t, string(result.ResponseBody), `"type":"tool_use"`)
 }
 
+func TestParseNonStreamingEventStreamNormalizesAskUserQuestionInput(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_question",
+			"name":      "AskUserQuestion",
+			"input":     `{"questions":"确认是否继续？"}`,
+			"stop":      true,
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, "AskUserQuestion", gjson.GetBytes(result.ResponseBody, "content.0.name").String())
+	require.Equal(t, "确认是否继续？", gjson.GetBytes(result.ResponseBody, "content.0.input.questions.0.question").String())
+	require.False(t, gjson.GetBytes(result.ResponseBody, "content.0.input.questions").IsObject())
+}
+
 func TestParseNonStreamingEventStreamDropsIncompleteEmbeddedToolTail(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
@@ -1193,6 +1212,73 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseMapInput(t *testing.T) {
 	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
 	require.NoError(t, err)
 	require.Contains(t, out.String(), `"partial_json":"{\"query\":\"golang\"}"`)
+}
+
+func TestStreamEventStreamAsAnthropicNormalizesAskUserQuestionInput(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_question",
+			"name":      "ask_user_question",
+			"input": map[string]any{
+				"questions": []any{
+					"第一项？",
+					map[string]any{"text": "第二项？", "options": []any{"继续", "停止"}},
+				},
+			},
+			"stop": true,
+		},
+	}))
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+
+	var partialJSON string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if gjson.Get(payload, "delta.type").String() == "input_json_delta" {
+			partialJSON = gjson.Get(payload, "delta.partial_json").String()
+			break
+		}
+	}
+	require.NotEmpty(t, partialJSON)
+	require.Equal(t, "第一项？", gjson.Get(partialJSON, "questions.0.question").String())
+	require.Equal(t, "第二项？", gjson.Get(partialJSON, "questions.1.question").String())
+	require.True(t, gjson.Get(partialJSON, "questions.1.options").IsArray())
+}
+
+func TestStreamEventStreamAsAnthropicNormalizesAskUserQuestionJSONString(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_question",
+			"name":      "AskUserQuestion",
+			"input":     `{"question":"确认是否继续？"}`,
+			"stop":      true,
+		},
+	}))
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+
+	var partialJSON string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if gjson.Get(payload, "delta.type").String() == "input_json_delta" {
+			partialJSON = gjson.Get(payload, "delta.partial_json").String()
+			break
+		}
+	}
+	require.NotEmpty(t, partialJSON)
+	require.Equal(t, "确认是否继续？", gjson.Get(partialJSON, "questions.0.question").String())
 }
 
 func TestStreamEventStreamAsAnthropicIgnoresPingFrames(t *testing.T) {
