@@ -22,7 +22,10 @@ const (
 	kiroDefaultRegion = "us-east-1"
 )
 
-var resolveKiroRuntimeEndpoint = kiroRuntimeEndpoint
+var (
+	resolveKiroRuntimeEndpoint = kiroRuntimeEndpoint
+	resolveKiroRestEndpoint    = func() string { return kiroRestAPIBaseURL }
+)
 
 type kiroUsageLimitsResponse struct {
 	NextDateReset        any                      `json:"nextDateReset"`
@@ -222,7 +225,7 @@ func cloneUsageInfo(info *UsageInfo) *UsageInfo {
 }
 
 func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, account *Account, region, profileArn, token string) (*kiroUsageLimitsResponse, error) {
-	endpoint := resolveKiroRuntimeEndpoint(region)
+	endpoint := strings.TrimRight(resolveKiroRestEndpoint(), "/")
 	reqURL, err := url.Parse(endpoint + "/getUsageLimits")
 	if err != nil {
 		return nil, fmt.Errorf("build kiro usage url failed: %w", err)

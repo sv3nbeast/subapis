@@ -118,7 +118,7 @@ func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Cont
 		return nil, newUpstreamModelSyncConfigError("No Kiro access token is available", nil)
 	}
 
-	endpoint := strings.TrimRight(kiroRuntimeEndpoint(kiroUpstreamModelsRegion(account)), "/")
+	endpoint := strings.TrimRight(resolveKiroRestEndpoint(), "/")
 	reqURL, err := url.Parse(endpoint + "/ListAvailableModels")
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list URL", err)

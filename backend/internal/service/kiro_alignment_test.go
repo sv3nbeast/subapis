@@ -164,9 +164,9 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -220,9 +220,9 @@ func TestAccountUsageService_GetUsage_KiroActiveUsesCachedSnapshotWithinTTL(t *t
 	}))
 	defer successServer.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return successServer.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return successServer.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	firstUsage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestAccountUsageService_GetUsage_KiroActiveUsesCachedSnapshotWithinTTL(t *t
 		http.Error(w, `{"message":"temporary failure"}`, http.StatusInternalServerError)
 	}))
 	defer failingServer.Close()
-	resolveKiroRuntimeEndpoint = func(_ string) string { return failingServer.URL }
+	resolveKiroRestEndpoint = func() string { return failingServer.URL }
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -277,9 +277,9 @@ func TestAccountUsageService_GetUsage_KiroBuilderIDWithoutProfileArnOmitsProfile
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -324,9 +324,9 @@ func TestAccountUsageService_GetUsage_KiroEnterpriseUsesCredentialProfileArn(t *
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestAccountUsageService_GetUsage_KiroEnterpriseUsesCredentialProfileArn(t *
 	require.Equal(t, 64.0, usage.KiroCredit.CurrentUsage)
 }
 
-func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testing.T) {
+func TestAccountUsageService_GetUsage_KiroUsesCodeWhispererRestBaseRegardlessOfAPIRegion(t *testing.T) {
 	account := Account{
 		ID:       709,
 		Platform: PlatformKiro,
@@ -354,7 +354,6 @@ func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testin
 	svc := NewAccountUsageService(repo, nil, nil, nil, nil, NewUsageCache(), nil, nil)
 
 	const resolvedProfileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/REALAPIREGION"
-	gotRegions := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Equal(t, resolvedProfileArn, r.URL.Query().Get("profileArn"))
@@ -372,20 +371,16 @@ func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testin
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(region string) string {
-		gotRegions = append(gotRegions, region)
-		return server.URL
-	}
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	require.Equal(t, []string{"eu-west-1"}, gotRegions)
 }
 
-func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWithoutAPIRegionOrProfileArn(t *testing.T) {
+func TestAccountUsageService_GetUsage_KiroOmitsProfileArnWithoutAPIRegionOrProfileArn(t *testing.T) {
 	account := Account{
 		ID:       710,
 		Platform: PlatformKiro,
@@ -401,7 +396,6 @@ func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWit
 	repo := &stubOpenAIAccountRepo{accounts: []Account{account}}
 	svc := NewAccountUsageService(repo, nil, nil, nil, nil, NewUsageCache(), nil, nil)
 
-	gotRegions := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Empty(t, r.URL.Query().Get("profileArn"))
@@ -419,17 +413,13 @@ func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWit
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(region string) string {
-		gotRegions = append(gotRegions, region)
-		return server.URL
-	}
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	require.Equal(t, []string{kiroDefaultRegion}, gotRegions)
 }
 
 func TestAccountUsageService_GetUsage_KiroIncludesRuntimeCooldownState(t *testing.T) {
@@ -468,9 +458,9 @@ func TestAccountUsageService_GetUsage_KiroIncludesRuntimeCooldownState(t *testin
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -521,9 +511,9 @@ func TestAccountUsageService_GetUsage_KiroCachesErrorSnapshotWhenRefreshFailsWit
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	firstUsage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -614,9 +604,9 @@ func TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuot
 	}))
 	defer server.Close()
 
-	prevResolver := resolveKiroRuntimeEndpoint
-	resolveKiroRuntimeEndpoint = func(_ string) string { return server.URL }
-	defer func() { resolveKiroRuntimeEndpoint = prevResolver }()
+	prevResolver := resolveKiroRestEndpoint
+	resolveKiroRestEndpoint = func() string { return server.URL }
+	defer func() { resolveKiroRestEndpoint = prevResolver }()
 
 	_, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
