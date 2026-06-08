@@ -505,10 +505,10 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
 		if !activeToolResultTurn {
 			currentToolResultIDs = nil
-			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history)))
+			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
 			currentToolResults = nil
 		}
-		history = sanitizeKiroToolHistory(history, currentToolResultIDs)
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx)
 		if envState != nil || len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				EnvState:    envState,
@@ -517,7 +517,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			}
 		}
 	} else {
-		history = sanitizeKiroToolHistory(history, nil)
+		history = sanitizeKiroToolHistory(history, nil, requestCtx)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -1713,7 +1713,32 @@ func shortenToolNameIfNeeded(name string) string {
 			prefix = prefix[:len(prefix)-1]
 		}
 	}
-	return prefix + "_" + suffix
+	return prefix + "h" + suffix
+}
+
+func sanitizeKiroToolName(name string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(name), func(r rune) bool {
+		return r == '_' || r == '-'
+	})
+	if len(parts) == 0 {
+		return "tool"
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		lower := strings.ToLower(part[:1]) + part[1:]
+		if b.Len() == 0 {
+			_, _ = b.WriteString(lower)
+			continue
+		}
+		_, _ = b.WriteString(strings.ToUpper(lower[:1]) + lower[1:])
+	}
+	if b.Len() == 0 {
+		return "tool"
+	}
+	return b.String()
 }
 
 func mapKiroToolName(name string, requestCtx *KiroRequestContext) string {
@@ -1724,14 +1749,14 @@ func mapKiroToolName(name string, requestCtx *KiroRequestContext) string {
 	if name == "web_search" {
 		return "remote_web_search"
 	}
-	short := shortenToolNameIfNeeded(name)
-	if short != name && requestCtx != nil {
+	mapped := shortenToolNameIfNeeded(sanitizeKiroToolName(name))
+	if mapped != name && requestCtx != nil {
 		if requestCtx.ToolNameMap == nil {
 			requestCtx.ToolNameMap = make(map[string]string)
 		}
-		requestCtx.ToolNameMap[short] = name
+		requestCtx.ToolNameMap[mapped] = name
 	}
-	return short
+	return mapped
 }
 
 func normalizeKiroJSONSchema(schema any) any {
@@ -1938,7 +1963,7 @@ func collectKiroToolResultIDs(toolResults []KiroToolResult) map[string]bool {
 	return ids
 }
 
-func collectKiroHistoryToolNames(history []KiroHistoryMessage) map[string]string {
+func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRequestContext) map[string]string {
 	names := make(map[string]string)
 	for _, item := range history {
 		if item.AssistantResponseMessage == nil {
@@ -1946,14 +1971,14 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage) map[string]string
 		}
 		for _, toolUse := range item.AssistantResponseMessage.ToolUses {
 			if toolUse.ToolUseID != "" && toolUse.Name != "" {
-				names[toolUse.ToolUseID] = toolUse.Name
+				names[toolUse.ToolUseID] = restoreResponseToolName(toolUse.Name, requestCtx)
 			}
 		}
 	}
 	return names
 }
 
-func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool) []KiroHistoryMessage {
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
 	}
@@ -1965,7 +1990,7 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 		}
 		for _, toolUse := range history[i].AssistantResponseMessage.ToolUses {
 			if toolUse.ToolUseID != "" && toolUse.Name != "" {
-				toolNames[toolUse.ToolUseID] = toolUse.Name
+				toolNames[toolUse.ToolUseID] = restoreResponseToolName(toolUse.Name, requestCtx)
 			}
 		}
 	}

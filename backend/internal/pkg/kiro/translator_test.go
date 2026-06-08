@@ -1452,7 +1452,7 @@ func TestBuildAssistantMessageStructUsesSpacePlaceholderForToolOnly(t *testing.T
 	result := buildAssistantMessageStruct(msg, nil)
 	require.Equal(t, " ", result.Content)
 	require.Len(t, result.ToolUses, 1)
-	require.Equal(t, "read_file", result.ToolUses[0].Name)
+	require.Equal(t, "readFile", result.ToolUses[0].Name)
 	require.Equal(t, "/tmp/test.txt", result.ToolUses[0].Input["path"])
 }
 
@@ -1487,7 +1487,7 @@ func TestBuildKiroPayloadAddsPlaceholderToolForHistoryToolUse(t *testing.T) {
 	payload := kiroBuildResult.Payload
 	tools := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
 	require.Len(t, tools, 1)
-	require.Equal(t, "read_file", tools[0].Get("toolSpecification.name").String())
+	require.Equal(t, "readFile", tools[0].Get("toolSpecification.name").String())
 	require.Equal(t, "Tool used in conversation history", tools[0].Get("toolSpecification.description").String())
 	require.Equal(t, "object", tools[0].Get("toolSpecification.inputSchema.json.type").String())
 }
@@ -1671,8 +1671,37 @@ func TestLongToolNamesUseHashSuffixAndDoNotCollide(t *testing.T) {
 	require.Len(t, shortA, kiroMaxToolNameLen)
 	require.Len(t, shortB, kiroMaxToolNameLen)
 	require.NotEqual(t, shortA, shortB)
-	require.Regexp(t, `_[0-9a-f]{8}$`, shortA)
-	require.Regexp(t, `_[0-9a-f]{8}$`, shortB)
+	require.Regexp(t, `h[0-9a-f]{8}$`, shortA)
+	require.Regexp(t, `h[0-9a-f]{8}$`, shortB)
+}
+
+func TestBuildKiroPayloadMapsToolNamesToKiroCamelCaseAndRestoresResponses(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[{"role":"user","content":"use tool"}],
+		"tools":[{"name":"read_file","description":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"tool_choice":{"type":"tool","name":"read_file"}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	require.Equal(t, "read_file", result.Context.ToolNameMap["readFile"])
+	require.Equal(t, "readFile", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String(), "MUST use the tool named 'readFile'")
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_read",
+			"name":      "readFile",
+			"input":     `{"path":"/tmp/a.txt"}`,
+			"stop":      true,
+		},
+	}))
+	parsed, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", result.Context)
+	require.NoError(t, err)
+	require.Equal(t, "read_file", gjson.GetBytes(parsed.ResponseBody, "content.0.name").String())
 }
 
 func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
@@ -1707,7 +1736,8 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 		historyText.WriteString("\n")
 	}
 	historyText.WriteString(gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
-	require.Contains(t, historyText.String(), "["+shortName+"] ok")
+	require.Contains(t, historyText.String(), "["+longName+"] ok")
+	require.NotContains(t, historyText.String(), "["+shortName+"] ok")
 }
 
 func TestParseNonStreamingEventStreamRestoresShortToolName(t *testing.T) {
