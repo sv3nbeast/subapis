@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -31,6 +34,32 @@ func (w *openAIChatFailingWriter) Write(p []byte) (int, error) {
 	}
 	w.writes++
 	return w.ResponseWriter.Write(p)
+}
+
+type testKiroCooldownStore struct{}
+
+func (s *testKiroCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
+	return 0, nil
+}
+
+func (s *testKiroCooldownStore) MarkSuccess(context.Context, string) error {
+	return nil
+}
+
+func (s *testKiroCooldownStore) Mark429(context.Context, string) (time.Duration, error) {
+	return 0, nil
+}
+
+func (s *testKiroCooldownStore) MarkSuspended(context.Context, string) (time.Duration, error) {
+	return 0, nil
+}
+
+func (s *testKiroCooldownStore) GetState(context.Context, string) (*kirocooldown.State, error) {
+	return nil, nil
+}
+
+func (s *testKiroCooldownStore) ClearEarliestTransientCooldown(context.Context, []string) (bool, error) {
+	return false, nil
 }
 
 func TestNormalizeResponsesRequestServiceTier(t *testing.T) {
@@ -207,6 +236,99 @@ func TestForwardAsResponses_AnthropicOpus48ThinkingAlias(t *testing.T) {
 	require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
 	require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+}
+
+func TestForwardAsChatCompletions_KiroUsesRuntimeRequestPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: kiroEventStreamResponse(t, "kiro chat ok", 11, 5)}
+	svc := &GatewayService{
+		cfg:                 &config.Config{},
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &testKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          1459,
+		Name:        "kiro-oauth",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/KIRO",
+		},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.lastReq.URL.String())
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.lastReq.Host)
+	require.Equal(t, "Bearer kiro-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "vibe", upstream.lastReq.Header.Get("x-amzn-kiro-agent-mode"))
+	require.Equal(t, "claude-sonnet-4.6", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, "hello", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "kiro chat ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
+	require.Equal(t, "claude-sonnet-4-6", result.Model)
+	require.Equal(t, "claude-sonnet-4.6", result.UpstreamModel)
+}
+
+func TestForwardAsResponses_KiroUsesRuntimeRequestPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","input":[{"type":"input_text","text":"hello responses"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: kiroEventStreamResponse(t, "kiro responses ok", 12, 6)}
+	svc := &GatewayService{
+		cfg:                 &config.Config{},
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &testKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          1460,
+		Name:        "kiro-oauth",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "kiro-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/KIRO",
+		},
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.lastReq.URL.String())
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.lastReq.Host)
+	require.Equal(t, "Bearer kiro-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "vibe", upstream.lastReq.Header.Get("x-amzn-kiro-agent-mode"))
+	require.Equal(t, "claude-sonnet-4.6", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, "hello responses", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "kiro responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
+	require.Equal(t, "claude-sonnet-4-6", result.Model)
+	require.Equal(t, "claude-sonnet-4.6", result.UpstreamModel)
 }
 
 func TestForwardAsResponses_KiroExpandsPreviousResponseHistory(t *testing.T) {
@@ -938,4 +1060,50 @@ func anthropicMessagesSSECompletedResponse(responseID, model, text, stopReason s
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_" + responseID}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func kiroEventStreamResponse(t *testing.T, text string, inputTokens, outputTokens int) *http.Response {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": text},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": inputTokens,
+				"outputTokens":        outputTokens,
+			},
+		},
+	}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_runtime"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+}
+
+func kiroEventStreamFrame(t *testing.T, eventType string, payload any) []byte {
+	t.Helper()
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	headers := map[string]string{":event-type": eventType, ":message-type": "event"}
+	headerBytes := bytes.NewBuffer(nil)
+	for name, value := range headers {
+		headerBytes.WriteByte(byte(len(name)))
+		headerBytes.WriteString(name)
+		headerBytes.WriteByte(7)
+		headerBytes.WriteByte(byte(len(value) >> 8))
+		headerBytes.WriteByte(byte(len(value)))
+		headerBytes.WriteString(value)
+	}
+	totalLen := 16 + headerBytes.Len() + len(payloadBytes)
+	frame := bytes.NewBuffer(make([]byte, 0, totalLen))
+	_ = binary.Write(frame, binary.BigEndian, uint32(totalLen))
+	_ = binary.Write(frame, binary.BigEndian, uint32(headerBytes.Len()))
+	_ = binary.Write(frame, binary.BigEndian, uint32(0))
+	frame.Write(headerBytes.Bytes())
+	frame.Write(payloadBytes)
+	_ = binary.Write(frame, binary.BigEndian, uint32(0))
+	return frame.Bytes()
 }

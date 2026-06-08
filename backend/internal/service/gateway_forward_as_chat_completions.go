@@ -45,6 +45,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	originalModel := ccReq.Model
 	clientStream := ccReq.Stream
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
+	reasoningEffort := extractCCReasoningEffortFromBody(body)
 
 	// 2. Convert CC → Responses → Anthropic (chained conversion)
 	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
@@ -77,6 +78,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	anthropicBody, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
+	}
+
+	if account != nil && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+		return s.forwardKiroAsChatCompletions(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, includeUsage, reasoningEffort, parsed, startTime)
 	}
 
 	// 6. Apply Claude Code mimicry for OAuth accounts.
@@ -175,10 +180,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
-	// 13. Extract reasoning effort from CC request body
-	reasoningEffort := extractCCReasoningEffortFromBody(body)
-
-	// 14. Handle normal response
+	// 13. Handle normal response
 	// Read Anthropic SSE → convert to Responses events → convert to CC format
 	var result *ForwardResult
 	var handleErr error
@@ -189,6 +191,38 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	}
 
 	return result, handleErr
+}
+
+func (s *GatewayService) forwardKiroAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	anthropicBody []byte,
+	originalModel string,
+	mappedModel string,
+	clientStream bool,
+	includeUsage bool,
+	reasoningEffort *string,
+	parsed *ParsedRequest,
+	startTime time.Time,
+) (*ForwardResult, error) {
+	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
+	if err != nil {
+		return nil, err
+	}
+	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
+	}
+	if clientStream {
+		return s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+	}
+	return s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 }
 
 // extractCCReasoningEffortFromBody reads reasoning effort from a Chat Completions

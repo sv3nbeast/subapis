@@ -93,6 +93,21 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
+	if account != nil && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime)
+		if handleErr == nil && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
+			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
+				ID:                 result.ResponseID,
+				PreviousResponseID: responsesReq.PreviousResponseID,
+				Model:              originalModel,
+				Instructions:       responsesReq.Instructions,
+				Input:              append(json.RawMessage(nil), responsesReq.Input...),
+				Output:             result.ResponsesOutput,
+			})
+		}
+		return result, handleErr
+	}
+
 	// 6. Apply Claude Code mimicry for OAuth accounts (non-Claude-Code endpoints).
 	// OpenAI Responses 协议进来的请求永远不是 Claude Code 客户端，所以对 OAuth 账号
 	// 必须完整执行 /v1/messages 主路径上的伪装链路（system 重写 + normalize + metadata 注入），
@@ -212,6 +227,37 @@ func (s *GatewayService) ForwardAsResponses(
 	return result, handleErr
 }
 
+func (s *GatewayService) forwardKiroAsResponses(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	anthropicBody []byte,
+	originalModel string,
+	mappedModel string,
+	clientStream bool,
+	reasoningEffort *string,
+	parsed *ParsedRequest,
+	startTime time.Time,
+) (*ForwardResult, error) {
+	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
+	if err != nil {
+		return nil, err
+	}
+	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
+	}
+	if clientStream {
+		return s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	}
+	return s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+}
+
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
 // and normalizes it for usage logging.
 func ExtractResponsesReasoningEffortFromBody(body []byte) *string {
@@ -242,6 +288,24 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if src.CacheCreationInputTokens > 0 {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
 	}
+}
+
+func buildKiroParsedRequestFromAnthropicBody(body []byte, requestModel string, stream bool, original *ParsedRequest) (*ParsedRequest, error) {
+	parsed, err := ParseGatewayRequest(body, PlatformAnthropic)
+	if err != nil {
+		return nil, fmt.Errorf("parse kiro anthropic request: %w", err)
+	}
+	parsed.Stream = stream
+	if strings.TrimSpace(requestModel) != "" {
+		parsed.Model = requestModel
+	}
+	if original != nil {
+		parsed.GroupID = original.GroupID
+		parsed.Group = original.Group
+		parsed.SessionContext = original.SessionContext
+		parsed.OnUpstreamAccepted = original.OnUpstreamAccepted
+	}
+	return parsed, nil
 }
 
 // handleResponsesBufferedStreamingResponse reads all Anthropic SSE events from
