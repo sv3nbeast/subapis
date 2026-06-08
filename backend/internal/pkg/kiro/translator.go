@@ -56,6 +56,7 @@ var (
 	kiroEnvBlockPattern  = regexp.MustCompile(`(?s)<env>(.*?)</env>`)
 	kiroEnvWorkingDir    = regexp.MustCompile(`(?m)^Working directory:\s*(.+?)\s*$`)
 	kiroEnvPlatform      = regexp.MustCompile(`(?m)^Platform:\s*(.+?)\s*$`)
+	kiroClaudeVersion    = regexp.MustCompile(`\bclaude-(opus|sonnet|haiku)-(\d+)-(\d{1,2})\b`)
 	requiredToolFields   = map[string][][]string{
 		"write":              {{"file_path", "path"}, {"content"}},
 		"write_to_file":      {{"path"}, {"content"}},
@@ -84,6 +85,24 @@ var (
 		"claude-sonnet-4.6-1m": {"low", "medium", "high", "max"},
 	}
 )
+
+var kiroModelAliases = []struct {
+	Key   string
+	Value string
+}{
+	{Key: "claude-sonnet-4-20250514", Value: "claude-sonnet-4"},
+	{Key: "claude-opus-4-5-20251101", Value: "claude-opus-4.5"},
+	{Key: "claude-sonnet-4-5-20250929", Value: "claude-sonnet-4.5"},
+	{Key: "claude-haiku-4-5-20251001", Value: "claude-haiku-4.5"},
+	{Key: "claude-3-5-sonnet", Value: "claude-sonnet-4.5"},
+	{Key: "claude-3-opus", Value: "claude-sonnet-4.5"},
+	{Key: "claude-3-sonnet", Value: "claude-sonnet-4"},
+	{Key: "claude-3-haiku", Value: "claude-haiku-4.5"},
+	{Key: "gpt-4-turbo", Value: "claude-sonnet-4.5"},
+	{Key: "gpt-4o", Value: "claude-sonnet-4.5"},
+	{Key: "gpt-4", Value: "claude-sonnet-4.5"},
+	{Key: "gpt-3.5-turbo", Value: "claude-sonnet-4.5"},
+}
 
 type Usage struct {
 	InputTokens                int
@@ -283,24 +302,31 @@ type kiroSemanticEvent struct {
 }
 
 func MapModel(model string) string {
-	switch strings.TrimSpace(strings.ToLower(model)) {
-	case "claude-opus-4-8", "claude-opus-4-8-thinking", "claude-opus-4.8":
-		return "claude-opus-4.8"
-	case "claude-opus-4-7", "claude-opus-4-7-thinking", "claude-opus-4.7":
-		return "claude-opus-4.7"
-	case "claude-opus-4-6", "claude-opus-4-6-thinking", "claude-opus-4.6":
-		return "claude-opus-4.6"
-	case "claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4.6":
-		return "claude-sonnet-4.6"
-	case "claude-opus-4-5-20251101", "claude-opus-4-5-20251101-thinking", "claude-opus-4.5":
-		return "claude-opus-4.5"
-	case "claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929-thinking", "claude-sonnet-4.5":
-		return "claude-sonnet-4.5"
-	case "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001-thinking", "claude-haiku-4.5":
-		return "claude-haiku-4.5"
-	default:
+	normalized := strings.TrimSpace(strings.ToLower(model))
+	if isRejectedKiroModelVariant(normalized) {
 		return ""
 	}
+	normalized = strings.TrimSuffix(normalized, "-thinking")
+	for _, alias := range kiroModelAliases {
+		if strings.Contains(normalized, alias.Key) {
+			return alias.Value
+		}
+	}
+	if kiroClaudeVersion.MatchString(normalized) {
+		return kiroClaudeVersion.ReplaceAllString(normalized, "claude-$1-$2.$3")
+	}
+	if strings.HasPrefix(normalized, "claude-") {
+		return normalized
+	}
+	return ""
+}
+
+func isRejectedKiroModelVariant(model string) bool {
+	return strings.HasSuffix(model, "-chat") ||
+		strings.Contains(model, "-thinking-chat") ||
+		strings.HasSuffix(model, "-agentic") ||
+		strings.Contains(model, "-thinking-agentic") ||
+		model == "claude-opus-4-20250514"
 }
 
 // requiresImplicitThinkingTagStripping 判断是否需要在客户端未显式请求 thinking 时
