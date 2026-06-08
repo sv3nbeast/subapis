@@ -233,6 +233,7 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 		q.Set("profileArn", profileArn)
 	}
 	q.Set("resourceType", kiroUsageResourceType)
+	q.Set("isEmailRequired", "true")
 	reqURL.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)

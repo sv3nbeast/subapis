@@ -129,6 +129,7 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 		require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/SOCIAL", r.URL.Query().Get("profileArn"))
 		require.Equal(t, kiroUsageOrigin, r.URL.Query().Get("origin"))
 		require.Equal(t, kiroUsageResourceType, r.URL.Query().Get("resourceType"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		require.Equal(t, serverURL.Host, r.Host)
 		require.Equal(t, "Bearer kiro-access-token", r.Header.Get("Authorization"))
 		require.Equal(t, "application/json", r.Header.Get("Accept"))
@@ -262,6 +263,7 @@ func TestAccountUsageService_GetUsage_KiroBuilderIDWithoutProfileArnOmitsProfile
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Empty(t, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
@@ -308,6 +310,7 @@ func TestAccountUsageService_GetUsage_KiroEnterpriseUsesCredentialProfileArn(t *
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Equal(t, resolvedProfileArn, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
@@ -355,6 +358,7 @@ func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testin
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Equal(t, resolvedProfileArn, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
@@ -401,6 +405,7 @@ func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWit
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Empty(t, r.URL.Query().Get("profileArn"))
+		require.Equal(t, "true", r.URL.Query().Get("isEmailRequired"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
