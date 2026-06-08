@@ -245,6 +245,17 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, mappedModel, requestCtx)
 	if err != nil {
+		if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: failoverErr.StatusCode,
+				Kind:               "parse_failover",
+				Message:            sanitizeUpstreamErrorMessage(err.Error()),
+			})
+			return nil, failoverErr
+		}
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type": "error",
 			"error": gin.H{
