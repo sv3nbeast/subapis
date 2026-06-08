@@ -853,6 +853,25 @@ func TestParseNonStreamingEventStreamNormalizesAskUserQuestionInput(t *testing.T
 	require.False(t, gjson.GetBytes(result.ResponseBody, "content.0.input.questions").IsObject())
 }
 
+func TestParseNonStreamingEventStreamAcceptsKiroToolUseFieldVariants(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"tool_use_id": "toolu_variant",
+			"tool_name":   "read_file",
+			"input":       `{"path":"/tmp/a.txt"}`,
+			"done":        true,
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, "toolu_variant", gjson.GetBytes(result.ResponseBody, "content.0.id").String())
+	require.Equal(t, "read_file", gjson.GetBytes(result.ResponseBody, "content.0.name").String())
+	require.Equal(t, "/tmp/a.txt", gjson.GetBytes(result.ResponseBody, "content.0.input.path").String())
+}
+
 func TestParseNonStreamingEventStreamDropsIncompleteEmbeddedToolTail(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
@@ -1279,6 +1298,31 @@ func TestStreamEventStreamAsAnthropicNormalizesAskUserQuestionJSONString(t *test
 	}
 	require.NotEmpty(t, partialJSON)
 	require.Equal(t, "确认是否继续？", gjson.Get(partialJSON, "questions.0.question").String())
+}
+
+func TestStreamEventStreamAsAnthropicAcceptsGeneratedToolIDUpgrade(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolName": "read_file",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseID": "toolu_real",
+			"toolName":  "read_file",
+			"input":     `{"path":"/tmp/a.txt"}`,
+			"isStop":    true,
+		},
+	}))
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(out.String(), `"type":"content_block_start"`))
+	require.Contains(t, out.String(), `"id":"toolu_real"`)
+	require.Contains(t, out.String(), `"name":"read_file"`)
+	require.Contains(t, out.String(), `"partial_json":"{\"path\":\"/tmp/a.txt\"}"`)
 }
 
 func TestStreamEventStreamAsAnthropicIgnoresPingFrames(t *testing.T) {

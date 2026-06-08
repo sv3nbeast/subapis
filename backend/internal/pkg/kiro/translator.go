@@ -259,6 +259,7 @@ type toolUseState struct {
 	ToolUseID   string
 	Name        string
 	InputBuffer strings.Builder
+	GeneratedID bool
 }
 
 type eventStreamMessage struct {
@@ -609,6 +610,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	streamingToolStarted := make(map[string]bool)
 	streamingToolStopped := make(map[string]bool)
 	currentStreamingToolID := ""
+	var pendingStreamingTool *toolUseState
 	pendingAssistantText := ""
 	lastContentFragment := ""
 	pendingLeadingWhitespace := ""
@@ -784,6 +786,55 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			stopReason = "tool_use"
 		}
 		return closeStreamingTool(toolUseID)
+	}
+	processStreamingToolUseEvent := func(evt *kiroSemanticEvent) error {
+		if evt == nil {
+			return nil
+		}
+		toolUseID := evt.ToolUseID
+		name := evt.ToolName
+		if toolUseID != "" && name != "" {
+			if pendingStreamingTool == nil {
+				pendingStreamingTool = &toolUseState{ToolUseID: toolUseID, Name: name}
+			} else if pendingStreamingTool.ToolUseID != toolUseID {
+				if pendingStreamingTool.GeneratedID && pendingStreamingTool.Name == name && !streamingToolStarted[pendingStreamingTool.ToolUseID] {
+					pendingStreamingTool.ToolUseID = toolUseID
+					pendingStreamingTool.GeneratedID = false
+				} else {
+					if err := processStreamingToolStop(pendingStreamingTool.ToolUseID); err != nil {
+						return err
+					}
+					pendingStreamingTool = &toolUseState{ToolUseID: toolUseID, Name: name}
+				}
+			}
+		} else if name != "" && pendingStreamingTool == nil {
+			pendingStreamingTool = &toolUseState{ToolUseID: "toolu_" + GenerateToolUseID(), Name: name, GeneratedID: true}
+			toolUseID = pendingStreamingTool.ToolUseID
+		} else if name != "" && pendingStreamingTool != nil && pendingStreamingTool.Name != name {
+			if err := processStreamingToolStop(pendingStreamingTool.ToolUseID); err != nil {
+				return err
+			}
+			pendingStreamingTool = &toolUseState{ToolUseID: "toolu_" + GenerateToolUseID(), Name: name, GeneratedID: true}
+			toolUseID = pendingStreamingTool.ToolUseID
+		}
+		if toolUseID == "" && pendingStreamingTool != nil {
+			toolUseID = pendingStreamingTool.ToolUseID
+		}
+		if name == "" && pendingStreamingTool != nil {
+			name = pendingStreamingTool.Name
+		}
+		if evt.ToolInput != "" || evt.ToolInputMap != nil {
+			if err := processStreamingToolInput(toolUseID, name, evt.ToolInput, evt.ToolInputMap); err != nil {
+				return err
+			}
+		}
+		if evt.ToolStop {
+			if err := processStreamingToolStop(toolUseID); err != nil {
+				return err
+			}
+			pendingStreamingTool = nil
+		}
+		return nil
 	}
 	emitTextDelta := func(text string, allowWhitespace bool) error {
 		if text == "" || (!allowWhitespace && strings.TrimSpace(text) == "") {
@@ -1106,7 +1157,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			if err := flushThinkingAtBoundary(); err != nil {
 				return err
 			}
-			return processStreamingToolInput(evt.ToolUseID, evt.ToolName, evt.ToolInput, evt.ToolInputMap)
+			return processStreamingToolUseEvent(evt)
 		case kiroSemanticToolInput:
 			if err := flushThinkingAtBoundary(); err != nil {
 				return err
@@ -1165,6 +1216,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 	if err := closeOpenStreamingTool(); err != nil {
 		return nil, err
+	}
+	if pendingStreamingTool != nil && pendingStreamingTool.GeneratedID {
+		if err := processStreamingToolStop(pendingStreamingTool.ToolUseID); err != nil {
+			return nil, err
+		}
+		pendingStreamingTool = nil
 	}
 	if err := flushThinkingAtEOF(); err != nil {
 		return nil, err
@@ -3154,9 +3211,10 @@ func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {
 
 func processToolUseEvent(event map[string]any, currentTool *toolUseState, processedIDs map[string]bool) ([]KiroToolUse, *toolUseState) {
 	tu := nestedEvent(event, "toolUseEvent")
-	toolUseID := getString(tu, "toolUseId")
-	name := getString(tu, "name")
-	isStop, _ := tu["stop"].(bool)
+	toolUseID := firstKiroStringField(tu, "toolUseId", "toolUseID", "tool_use_id", "id")
+	name := firstKiroStringField(tu, "name", "toolName", "tool_name")
+	isStop := firstKiroBoolField(tu, "stop", "isStop", "done")
+	var completed []KiroToolUse
 
 	var inputFragment string
 	var inputMap map[string]any
@@ -3170,12 +3228,31 @@ func processToolUseEvent(event map[string]any, currentTool *toolUseState, proces
 	}
 
 	if toolUseID != "" && name != "" {
-		if currentTool == nil || currentTool.ToolUseID != toolUseID {
+		if currentTool == nil {
 			if processedIDs[toolUseID] {
 				return nil, currentTool
 			}
 			currentTool = &toolUseState{ToolUseID: toolUseID, Name: name}
+		} else if currentTool.ToolUseID != toolUseID {
+			if currentTool.GeneratedID && currentTool.Name == name {
+				currentTool.ToolUseID = toolUseID
+				currentTool.GeneratedID = false
+			} else {
+				if !processedIDs[currentTool.ToolUseID] {
+					processedIDs[currentTool.ToolUseID] = true
+					completed = append(completed, finalizeRawToolUse(currentTool.ToolUseID, currentTool.Name, currentTool.InputBuffer.String()))
+				}
+				currentTool = &toolUseState{ToolUseID: toolUseID, Name: name}
+			}
 		}
+	} else if name != "" && currentTool == nil {
+		currentTool = &toolUseState{ToolUseID: "toolu_" + GenerateToolUseID(), Name: name, GeneratedID: true}
+	} else if name != "" && currentTool != nil && currentTool.Name != name {
+		if !processedIDs[currentTool.ToolUseID] {
+			processedIDs[currentTool.ToolUseID] = true
+			completed = append(completed, finalizeRawToolUse(currentTool.ToolUseID, currentTool.Name, currentTool.InputBuffer.String()))
+		}
+		currentTool = &toolUseState{ToolUseID: "toolu_" + GenerateToolUseID(), Name: name, GeneratedID: true}
 	}
 	if currentTool != nil && inputFragment != "" {
 		_, _ = currentTool.InputBuffer.WriteString(inputFragment)
@@ -3186,10 +3263,11 @@ func processToolUseEvent(event map[string]any, currentTool *toolUseState, proces
 		_, _ = currentTool.InputBuffer.Write(encoded)
 	}
 	if !isStop || currentTool == nil {
-		return nil, currentTool
+		return completed, currentTool
 	}
 	processedIDs[currentTool.ToolUseID] = true
-	return []KiroToolUse{finalizeRawToolUse(currentTool.ToolUseID, currentTool.Name, currentTool.InputBuffer.String())}, nil
+	completed = append(completed, finalizeRawToolUse(currentTool.ToolUseID, currentTool.Name, currentTool.InputBuffer.String()))
+	return completed, nil
 }
 
 func extractSemanticEvents(eventType string, event map[string]any, lastContentFragment *string) []kiroSemanticEvent {
@@ -3245,13 +3323,13 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		}
 	case "toolUseEvent":
 		tu := nestedEvent(event, "toolUseEvent")
-		toolUseID := getString(tu, "toolUseId")
-		name := getString(tu, "name")
-		isStop, _ := tu["stop"].(bool)
+		toolUseID := firstKiroStringField(tu, "toolUseId", "toolUseID", "tool_use_id", "id")
+		name := firstKiroStringField(tu, "name", "toolName", "tool_name")
+		isStop := firstKiroBoolField(tu, "stop", "isStop", "done")
 		if inputRaw, ok := tu["input"]; ok {
 			switch v := inputRaw.(type) {
 			case string:
-				if toolUseID != "" && name != "" {
+				if name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
 						ToolUseID:        toolUseID,
@@ -3270,7 +3348,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 					})
 				}
 			case map[string]any:
-				if toolUseID != "" && name != "" {
+				if name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
 						ToolUseID:        toolUseID,
@@ -3882,6 +3960,24 @@ func getString(m map[string]any, key string) string {
 		return value
 	}
 	return ""
+}
+
+func firstKiroStringField(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(getString(m, key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstKiroBoolField(m map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := m[key].(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 func readStopReason(m map[string]any) string {
