@@ -58,6 +58,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
 	}
+	if msg := validateKiroRequestShape(parsed); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":  "error",
+			"error": gin.H{"type": "invalid_request_error", "message": msg},
+		})
+		return nil, fmt.Errorf("%s", msg)
+	}
 
 	originalModel := parsed.Model
 	mappedModel := originalModel
@@ -936,4 +943,88 @@ func coalesceKiroErrorMessage(statusCode int, upstreamMsg string) string {
 	default:
 		return "Upstream request failed"
 	}
+}
+
+func validateKiroRequestShape(parsed *ParsedRequest) string {
+	if parsed == nil {
+		return "messages must not be empty"
+	}
+
+	messages := parsed.Messages
+	if len(messages) == 0 && len(parsed.Body) > 0 {
+		if bodyMessages := gjson.GetBytes(parsed.Body, "messages"); bodyMessages.Exists() && bodyMessages.IsArray() {
+			var decoded []any
+			if err := json.Unmarshal([]byte(bodyMessages.Raw), &decoded); err == nil {
+				messages = decoded
+			}
+		}
+	}
+	if len(messages) == 0 {
+		return "messages must not be empty"
+	}
+
+	lastRole := ""
+	hasUserContext := false
+	for _, raw := range messages {
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := stringFromKiroRequestShapeValue(msg["role"])
+		if role == "" {
+			continue
+		}
+		lastRole = role
+		if role == "user" && kiroUserMessageHasContext(msg["content"]) {
+			hasUserContext = true
+		}
+	}
+
+	if lastRole == "assistant" {
+		return "assistant-prefill final message is not supported; last message must be user"
+	}
+	if !hasUserContext {
+		return "at least one non-empty user message is required"
+	}
+	return ""
+}
+
+func kiroUserMessageHasContext(content any) bool {
+	switch v := content.(type) {
+	case string:
+		return strings.TrimSpace(v) != ""
+	case []any:
+		for _, rawBlock := range v {
+			block, ok := rawBlock.(map[string]any)
+			if !ok {
+				continue
+			}
+			blockType := stringFromKiroRequestShapeValue(block["type"])
+			switch blockType {
+			case "text", "input_text":
+				if stringFromKiroRequestShapeValue(block["text"]) != "" {
+					return true
+				}
+			case "image", "image_url", "input_image", "file", "input_file", "tool_result":
+				return true
+			}
+		}
+	case map[string]any:
+		if stringFromKiroRequestShapeValue(v["text"]) != "" {
+			return true
+		}
+		switch stringFromKiroRequestShapeValue(v["type"]) {
+		case "image", "image_url", "input_image", "file", "input_file", "tool_result":
+			return true
+		}
+	}
+	return false
+}
+
+func stringFromKiroRequestShapeValue(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }

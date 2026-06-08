@@ -153,6 +153,68 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	require.Equal(t, http.StatusOK, rec.Code, "parse failover should not write a plain 502 before handler can retry")
 }
 
+func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstream := &kiroStreamFailoverQueuedUpstream{}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	parsed := &ParsedRequest{
+		Model: "claude-sonnet-4-6",
+		Body: []byte(`{
+			"model":"claude-sonnet-4-6",
+			"max_tokens":128,
+			"messages":[
+				{"role":"user","content":"hello"},
+				{"role":"assistant","content":"prefill"}
+			]
+		}`),
+		Messages: []any{
+			map[string]any{"role": "user", "content": "hello"},
+			map[string]any{"role": "assistant", "content": "prefill"},
+		},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+		},
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "assistant-prefill final message is not supported")
+	require.Empty(t, upstream.requests, "invalid Kiro request shape must not hit upstream")
+}
+
+func TestValidateKiroRequestShapeAllowsToolResultFinalTurn(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[
+			{"role":"user","content":"find weather"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"get_weather","input":{}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"sunny"}]}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(body, PlatformAnthropic)
+	require.NoError(t, err)
+
+	require.Empty(t, validateKiroRequestShape(parsed))
+}
+
 func newKiroEventStreamResponse(status int, body []byte) *http.Response {
 	return &http.Response{
 		StatusCode: status,
