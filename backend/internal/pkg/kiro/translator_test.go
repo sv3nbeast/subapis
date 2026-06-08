@@ -62,18 +62,47 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
-func TestBuildKiroPayloadAlwaysIgnoresClientConversationMetadata(t *testing.T) {
+func TestBuildKiroPayloadDerivesStableConversationIDAndIgnoresClientMetadata(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[{"role":"user","content":"hello","additional_kwargs":{"conversationId":"client-conv","continuationId":"client-cont"}}]
 	}`)
 
-	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	first, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	conversationID := gjson.GetBytes(result.Payload, "conversationState.conversationId").String()
-	require.NotEmpty(t, conversationID)
-	require.NotEqual(t, "client-conv", conversationID)
-	require.False(t, gjson.GetBytes(result.Payload, "conversationState.agentContinuationId").Exists())
+	second, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	firstConversationID := gjson.GetBytes(first.Payload, "conversationState.conversationId").String()
+	secondConversationID := gjson.GetBytes(second.Payload, "conversationState.conversationId").String()
+	require.NotEmpty(t, firstConversationID)
+	require.Equal(t, firstConversationID, secondConversationID)
+	require.NotEqual(t, "client-conv", firstConversationID)
+
+	firstContinuationID := gjson.GetBytes(first.Payload, "conversationState.agentContinuationId").String()
+	secondContinuationID := gjson.GetBytes(second.Payload, "conversationState.agentContinuationId").String()
+	require.NotEmpty(t, firstContinuationID)
+	require.NotEmpty(t, secondContinuationID)
+	require.NotEqual(t, "client-cont", firstContinuationID)
+	require.NotEqual(t, firstContinuationID, secondContinuationID)
+}
+
+func TestBuildKiroPayloadUsesRandomConversationIDForSyntheticAnchor(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[{"role":"assistant","content":"prefill"}]
+	}`)
+
+	first, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	second, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	firstConversationID := gjson.GetBytes(first.Payload, "conversationState.conversationId").String()
+	secondConversationID := gjson.GetBytes(second.Payload, "conversationState.conversationId").String()
+	require.NotEmpty(t, firstConversationID)
+	require.NotEmpty(t, secondConversationID)
+	require.NotEqual(t, firstConversationID, secondConversationID)
 }
 
 func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {

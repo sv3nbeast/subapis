@@ -10,7 +10,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestBuildKiroPayloadForAccountUsesStatelessConversationIDs(t *testing.T) {
+func TestBuildKiroPayloadForAccountUsesStableKiroGoConversationID(t *testing.T) {
 	svc := &GatewayService{}
 	account := &Account{ID: 40, Credentials: map[string]any{"profile_arn": "profile-a"}}
 	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello","additional_kwargs":{"conversationId":"client-conv","continuationId":"client-cont"}}]}`)
@@ -24,10 +24,14 @@ func TestBuildKiroPayloadForAccountUsesStatelessConversationIDs(t *testing.T) {
 	secondConversationID := gjson.GetBytes(second.Payload, "conversationState.conversationId").String()
 	require.NotEmpty(t, firstConversationID)
 	require.NotEmpty(t, secondConversationID)
-	require.NotEqual(t, firstConversationID, secondConversationID)
+	require.Equal(t, firstConversationID, secondConversationID)
 	require.NotEqual(t, "client-conv", firstConversationID)
-	require.False(t, gjson.GetBytes(first.Payload, "conversationState.agentContinuationId").Exists())
-	require.False(t, gjson.GetBytes(second.Payload, "conversationState.agentContinuationId").Exists())
+	firstContinuationID := gjson.GetBytes(first.Payload, "conversationState.agentContinuationId").String()
+	secondContinuationID := gjson.GetBytes(second.Payload, "conversationState.agentContinuationId").String()
+	require.NotEmpty(t, firstContinuationID)
+	require.NotEmpty(t, secondContinuationID)
+	require.NotEqual(t, "client-cont", firstContinuationID)
+	require.NotEqual(t, firstContinuationID, secondContinuationID)
 }
 
 func TestBuildKiroPayloadForAccountReplaysFullMessagesIntoHistory(t *testing.T) {

@@ -528,15 +528,16 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		}
 	}
 
-	conversationID := uuid.NewString()
+	conversationID := buildKiroConversationID(modelID, systemPrompt, firstKiroConversationAnchor(filteredMessages))
 
 	payload := KiroPayload{
 		ConversationState: KiroConversationState{
-			AgentTaskType:   "vibe",
-			ChatTriggerType: "MANUAL",
-			ConversationID:  conversationID,
-			CurrentMessage:  currentMessage,
-			History:         history,
+			AgentContinuationID: uuid.NewString(),
+			AgentTaskType:       "vibe",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      conversationID,
+			CurrentMessage:      currentMessage,
+			History:             history,
 		},
 		ProfileArn:                   profileArn,
 		AdditionalModelRequestFields: additionalModelRequestFields,
@@ -1539,6 +1540,44 @@ func normalizeOrigin(origin string) string {
 		return "AI_EDITOR"
 	default:
 		return origin
+	}
+}
+
+func firstKiroConversationAnchor(messages []gjson.Result) string {
+	for _, msg := range messages {
+		if msg.Get("role").String() != "user" {
+			continue
+		}
+		userMsg, toolResults := buildUserMessageStruct(msg, "", "", false)
+		if text := strings.TrimSpace(userMsg.Content); text != "" {
+			return text
+		}
+		if len(toolResults) > 0 {
+			continue
+		}
+	}
+	return ""
+}
+
+func buildKiroConversationID(modelID, systemPrompt, anchor string) string {
+	anchor = strings.TrimSpace(anchor)
+	if isSyntheticKiroConversationAnchor(anchor) {
+		return uuid.NewString()
+	}
+	seed := strings.Join([]string{modelID, strings.TrimSpace(systemPrompt), anchor}, "\n")
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(seed)).String()
+}
+
+func isSyntheticKiroConversationAnchor(anchor string) bool {
+	if strings.TrimSpace(anchor) == "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(anchor), " "))
+	switch normalized {
+	case ".", "begin conversation", "please analyze the attached image.", strings.ToLower(kiroMinimalFallbackContent), strings.ToLower(buildFinalContent("", nil)):
+		return true
+	default:
+		return false
 	}
 }
 
