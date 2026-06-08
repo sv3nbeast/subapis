@@ -37,15 +37,8 @@ var (
 	oidcSDKVersions      = []string{"3.980.0", "3.975.0", "3.972.0", "3.808.0", "3.738.0", "3.737.0", "3.736.0", "3.735.0"}
 	runtimeSDKVersions   = []string{"1.0.0"}
 	streamingSDKVersions = []string{"1.0.34"}
-	osTypes              = []string{"darwin", "win32"}
-	osVersions           = map[string][]string{
-		"darwin": {"24.6.0"},
-		"win32":  {"10.0.22631"},
-	}
-	nodeVersions = []string{"22.22.0"}
-	kiroVersions = []string{
-		"0.11.132", "0.11.131", "0.11.130",
-	}
+	nodeVersions         = []string{"22.22.0"}
+	kiroVersions         = []string{"0.11.107"}
 )
 
 func globalRuntimeFingerprints() *runtimeFingerprintManager {
@@ -83,43 +76,29 @@ func generateRuntimeFingerprint(accountKey, machineID string) *RuntimeFingerprin
 	seed := int64(binary.BigEndian.Uint64(hash[:8]))
 	rng := rand.New(rand.NewSource(seed))
 
-	osType := goOSToNodePlatform(runtime.GOOS)
-	if !containsString(osTypes, osType) {
-		osType = osTypes[rng.Intn(len(osTypes))]
-	}
-	osVersionPool := osVersions[osType]
-	if len(osVersionPool) == 0 {
-		osVersionPool = osVersions["darwin"]
-	}
+	osType, osVersion := defaultKiroSystemVersion()
 
 	return &RuntimeFingerprint{
 		OIDCSDKVersion:      oidcSDKVersions[rng.Intn(len(oidcSDKVersions))],
 		RuntimeSDKVersion:   runtimeSDKVersions[rng.Intn(len(runtimeSDKVersions))],
 		StreamingSDKVersion: streamingSDKVersions[rng.Intn(len(streamingSDKVersions))],
 		OSType:              osType,
-		OSVersion:           osVersionPool[rng.Intn(len(osVersionPool))],
+		OSVersion:           osVersion,
 		NodeVersion:         nodeVersions[rng.Intn(len(nodeVersions))],
 		KiroVersion:         kiroVersions[rng.Intn(len(kiroVersions))],
 		KiroHash:            machineID,
 	}
 }
 
-func goOSToNodePlatform(goos string) string {
-	switch strings.TrimSpace(goos) {
+func defaultKiroSystemVersion() (string, string) {
+	switch strings.TrimSpace(runtime.GOOS) {
 	case "windows":
-		return "win32"
+		return "win32", "10.0.22631"
+	case "darwin":
+		return "darwin", "24.6.0"
 	default:
-		return strings.TrimSpace(goos)
+		return "linux", "6.6.87"
 	}
-}
-
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
 }
 
 func BuildAccountKey(clientID, clientIDHash, refreshToken, profileArn string, accountID int64) string {
@@ -144,10 +123,8 @@ func NormalizeMachineID(machineID string) (string, bool) {
 	if len(trimmed) == 64 && isHexString(trimmed) {
 		return strings.ToLower(trimmed), true
 	}
-	withoutDashes := strings.ReplaceAll(trimmed, "-", "")
-	if len(withoutDashes) == 32 && isHexString(withoutDashes) {
-		normalized := strings.ToLower(withoutDashes)
-		return normalized + normalized, true
+	if _, err := uuid.Parse(trimmed); err == nil {
+		return strings.ToLower(trimmed), true
 	}
 	return "", false
 }

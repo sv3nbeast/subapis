@@ -30,7 +30,7 @@ func TestBuildLoginHeadersUsesProvidedMachineID(t *testing.T) {
 
 	require.Equal(t, headers1["User-Agent"], headers2["User-Agent"])
 	require.NotEqual(t, headers1["User-Agent"], headers3["User-Agent"])
-	require.Contains(t, headers1["User-Agent"], "KiroIDE-0.11.")
+	require.Contains(t, headers1["User-Agent"], "KiroIDE-0.11.107-")
 	require.Contains(t, headers1["User-Agent"], machineIDA)
 }
 
@@ -77,7 +77,7 @@ func TestNormalizeMachineID(t *testing.T) {
 
 	normalized, ok = NormalizeMachineID("2582956e-cc88-4669-b546-07adbffcb894")
 	require.True(t, ok)
-	require.Equal(t, "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894", normalized)
+	require.Equal(t, "2582956e-cc88-4669-b546-07adbffcb894", normalized)
 
 	_, ok = NormalizeMachineID("not-a-machine-id")
 	require.False(t, ok)

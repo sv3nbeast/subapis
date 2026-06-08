@@ -30,7 +30,21 @@ func TestBuildKiroAccountKeyIgnoresAccessToken(t *testing.T) {
 	require.Equal(t, buildKiroAccountKey(accountA), buildKiroAccountKey(accountB))
 }
 
-func TestBuildKiroMachineIDPrefersExplicitCredential(t *testing.T) {
+func TestBuildKiroMachineIDPrefersExplicitHexCredential(t *testing.T) {
+	account := &Account{
+		ID:       101,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"machineId":     "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894",
+			"refresh_token": "refresh-token",
+		},
+	}
+
+	require.Equal(t, "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894", buildKiroMachineID(account))
+}
+
+func TestBuildKiroMachineIDPreservesExplicitUUIDCredential(t *testing.T) {
 	account := &Account{
 		ID:       101,
 		Platform: PlatformKiro,
@@ -41,7 +55,7 @@ func TestBuildKiroMachineIDPrefersExplicitCredential(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894", buildKiroMachineID(account))
+	require.Equal(t, "2582956e-cc88-4669-b546-07adbffcb894", buildKiroMachineID(account))
 }
 
 func TestBuildKiroMachineIDDerivesFromRefreshToken(t *testing.T) {
@@ -99,6 +113,7 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", req.Header.Get("X-Amz-Target"))
 	require.Contains(t, req.Header.Get("User-Agent"), "aws-sdk-js/1.0.34")
 	require.Contains(t, req.Header.Get("User-Agent"), "md/nodejs#22.22.0")
+	require.Contains(t, req.Header.Get("User-Agent"), "KiroIDE-0.11.107-")
 	require.Contains(t, req.Header.Get("User-Agent"), buildKiroMachineID(account))
 	require.Contains(t, req.Header.Get("X-Amz-User-Agent"), buildKiroMachineID(account))
 	require.True(t, strings.Contains(req.Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34"))
