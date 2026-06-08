@@ -30,6 +30,7 @@ const (
 	kiroMaxPayloadBytes        = 900 * 1024
 	kiroMinRecentHistoryTurns  = 4
 	kiroMinimalFallbackContent = "."
+	kiroToolResultImageText    = "[Tool returned an image; the image is attached to this message.]"
 	kiroToolResultsPrefix      = "Tool results:"
 	thinkingStartTag           = "<thinking>"
 	thinkingEndTag             = "</thinking>"
@@ -2174,12 +2175,10 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 	if content.IsArray() {
 		for _, part := range content.Array() {
 			switch part.Get("type").String() {
-			case "text":
+			case "text", "input_text":
 				_, _ = contentBuilder.WriteString(part.Get("text").String())
-			case "image":
-				mediaType := part.Get("source.media_type").String()
-				data := part.Get("source.data").String()
-				image, ok := buildKiroImage(mediaType, data)
+			case "image", "image_url", "input_image", "file", "input_file":
+				image, ok := extractKiroImageFromJSONPart(part)
 				if !ok {
 					continue
 				}
@@ -2198,19 +2197,13 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 				if part.Get("is_error").Bool() {
 					status = "error"
 				}
-				textContents := []KiroTextContent{{Text: "Tool use was cancelled by the user"}}
-				resultContent := part.Get("content")
-				if resultContent.IsArray() {
-					textContents = textContents[:0]
-					for _, item := range resultContent.Array() {
-						if item.Get("type").String() == "text" {
-							textContents = append(textContents, KiroTextContent{Text: item.Get("text").String()})
-						} else if item.Type == gjson.String {
-							textContents = append(textContents, KiroTextContent{Text: item.String()})
-						}
+				textContents, resultImages := extractKiroToolResultContent(part.Get("content"))
+				for _, image := range resultImages {
+					if keepImages {
+						images = append(images, image)
+					} else {
+						omittedImageCount++
 					}
-				} else if resultContent.Type == gjson.String {
-					textContents = []KiroTextContent{{Text: resultContent.String()}}
 				}
 				toolResults = append(toolResults, KiroToolResult{
 					ToolUseID: toolUseID,
@@ -2244,18 +2237,152 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 	return userMsg, toolResults
 }
 
+func extractKiroToolResultContent(content gjson.Result) ([]KiroTextContent, []KiroImage) {
+	var textContents []KiroTextContent
+	var images []KiroImage
+
+	if content.IsArray() {
+		for _, item := range content.Array() {
+			switch {
+			case item.Get("type").String() == "text" || item.Get("type").String() == "input_text":
+				textContents = append(textContents, KiroTextContent{Text: item.Get("text").String()})
+			case item.Type == gjson.String:
+				textContents = append(textContents, KiroTextContent{Text: item.String()})
+			default:
+				if image, ok := extractKiroImageFromJSONPart(item); ok {
+					images = append(images, image)
+				}
+			}
+		}
+	} else if content.Type == gjson.String {
+		textContents = []KiroTextContent{{Text: content.String()}}
+	}
+
+	if len(textContents) == 0 {
+		if len(images) > 0 {
+			textContents = []KiroTextContent{{Text: kiroToolResultImageText}}
+		} else {
+			textContents = []KiroTextContent{{Text: "Tool use was cancelled by the user"}}
+		}
+	}
+	return textContents, images
+}
+
+func extractKiroImageFromJSONPart(part gjson.Result) (KiroImage, bool) {
+	return extractKiroImageFromJSONPartWithTypeFilter(part, true)
+}
+
+func extractKiroImageFromJSONPartWithTypeFilter(part gjson.Result, enforceBlockType bool) (KiroImage, bool) {
+	if !part.Exists() {
+		return KiroImage{}, false
+	}
+	if part.IsObject() {
+		partType := strings.TrimSpace(part.Get("type").String())
+		if enforceBlockType && partType != "" {
+			switch partType {
+			case "image", "image_url", "input_image", "file", "input_file":
+			default:
+				return KiroImage{}, false
+			}
+		}
+		if nested := part.Get("file"); nested.IsObject() {
+			if image, ok := extractKiroImageFromJSONPartWithTypeFilter(nested, false); ok {
+				return image, true
+			}
+		}
+		if nested := part.Get("source"); nested.IsObject() {
+			if image, ok := extractKiroImageFromJSONPartWithTypeFilter(nested, false); ok {
+				return image, true
+			}
+		}
+		for _, mediaField := range []string{"mime", "media_type", "mediaType", "mime_type"} {
+			mediaType := strings.TrimSpace(part.Get(mediaField).String())
+			if mediaType != "" && !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				return KiroImage{}, false
+			}
+		}
+		if imageURL := part.Get("image_url"); imageURL.Exists() {
+			switch {
+			case imageURL.Type == gjson.String:
+				if image, ok := buildKiroImageFromDataURL(imageURL.String()); ok {
+					return image, true
+				}
+			case imageURL.IsObject():
+				if image, ok := buildKiroImageFromDataURL(imageURL.Get("url").String()); ok {
+					return image, true
+				}
+			}
+		}
+		if image, ok := buildKiroImageFromDataURL(part.Get("url").String()); ok {
+			return image, true
+		}
+		if data := part.Get("data").String(); data != "" {
+			if image, ok := buildKiroImageFromDataURL(data); ok {
+				return image, true
+			}
+			return buildKiroImage(firstNonEmptyKiroImageMediaType(part), data)
+		}
+		for _, dataField := range []string{"b64_json", "image_base64"} {
+			if data := part.Get(dataField).String(); data != "" {
+				return buildKiroImage(firstNonEmptyKiroImageMediaType(part), data)
+			}
+		}
+	}
+	if part.Type == gjson.String {
+		return buildKiroImageFromDataURL(part.String())
+	}
+	return KiroImage{}, false
+}
+
+func firstNonEmptyKiroImageMediaType(part gjson.Result) string {
+	for _, field := range []string{"media_type", "mediaType", "mime_type", "mime"} {
+		if value := strings.TrimSpace(part.Get(field).String()); value != "" {
+			return value
+		}
+	}
+	return "image/png"
+}
+
 func buildKiroImage(mediaType, data string) (KiroImage, bool) {
+	mediaType = strings.TrimSpace(mediaType)
+	data = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(data, "\n", ""), "\r", ""))
+	if data == "" {
+		return KiroImage{}, false
+	}
 	format := ""
 	if idx := strings.LastIndex(mediaType, "/"); idx != -1 {
 		format = mediaType[idx+1:]
+	} else {
+		format = mediaType
 	}
-	if format == "" || data == "" {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "jpg" {
+		format = "jpeg"
+	}
+	if format == "" {
 		return KiroImage{}, false
 	}
 	return KiroImage{
 		Format: format,
 		Source: KiroImageSource{Bytes: data},
 	}, true
+}
+
+func buildKiroImageFromDataURL(raw string) (KiroImage, bool) {
+	raw = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(raw, "\n", ""), "\r", ""))
+	if raw == "" || strings.Contains(raw, "[Image") {
+		return KiroImage{}, false
+	}
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "data:image/") {
+		return KiroImage{}, false
+	}
+	metadata, data, ok := strings.Cut(raw[len("data:"):], ",")
+	if !ok {
+		return KiroImage{}, false
+	}
+	mediaType, _, _ := strings.Cut(metadata, ";")
+	return buildKiroImage(mediaType, data)
 }
 
 func buildAssistantMessageStruct(msg gjson.Result, requestCtx *KiroRequestContext) KiroAssistantResponseMessage {

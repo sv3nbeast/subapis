@@ -269,6 +269,71 @@ func TestBuildKiroPayloadKeepsImagesAtRecentHistoryBoundary(t *testing.T) {
 	require.NotContains(t, boundaryUser.Get("content").String(), "omitted from older conversation history")
 }
 
+func TestBuildKiroPayloadAcceptsImageURLContent(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"inspect this"},
+			{"type":"image_url","image_url":{"url":"` + dataURL + `"}}
+		]}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage")
+	require.Equal(t, "inspect this", current.Get("content").String())
+	require.Equal(t, "png", current.Get("images.0.format").String())
+	require.Equal(t, strings.TrimPrefix(dataURL, "data:image/png;base64,"), current.Get("images.0.source.bytes").String())
+}
+
+func TestBuildKiroPayloadAcceptsAnthropicBase64SourceImage(t *testing.T) {
+	const imageBytes = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"inspect this"},
+			{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + imageBytes + `"}}
+		]}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage")
+	require.Equal(t, "inspect this", current.Get("content").String())
+	require.Equal(t, "png", current.Get("images.0.format").String())
+	require.Equal(t, imageBytes, current.Get("images.0.source.bytes").String())
+}
+
+func TestBuildKiroPayloadAttachesToolResultImageToCurrentMessage(t *testing.T) {
+	const dataURL = "data:image/jpeg;base64,aW1hZ2UtYnl0ZXM="
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[
+			{"role":"user","content":"read screenshot"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"read_image","input":{"path":"shot.jpg"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":[
+				{"type":"image_url","image_url":{"url":"` + dataURL + `"}}
+			]}]}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	current := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage")
+	require.Equal(t, "Tool results provided.", current.Get("content").String())
+	require.Equal(t, "jpeg", current.Get("images.0.format").String())
+	require.Equal(t, "aW1hZ2UtYnl0ZXM=", current.Get("images.0.source.bytes").String())
+	require.Equal(t, kiroToolResultImageText, current.Get("userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Equal(t, "tool_1", current.Get("userInputMessageContext.toolResults.0.toolUseId").String())
+}
+
 func TestBuildKiroPayloadWebSearchUsesCachedDescription(t *testing.T) {
 	SetCachedWebSearchDescription("cached web search description")
 	t.Cleanup(func() { SetCachedWebSearchDescription("") })
