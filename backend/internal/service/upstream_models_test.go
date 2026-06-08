@@ -156,6 +156,7 @@ func TestBuildKiroUpstreamModelsRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "https://q.eu-central-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR&profileArn=arn%3Aaws%3Acodewhisperer%3Aeu-central-1%3A123456789012%3Aprofile%2FKIRO", req.URL.String())
+	require.Equal(t, req.URL.Host, req.Host)
 	require.Equal(t, "Bearer kiro-access-token", req.Header.Get("Authorization"))
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
 	require.Empty(t, req.Header.Get("x-amzn-kiro-agent-mode"))

@@ -125,6 +125,7 @@ func TestKiroProfileResolverResolvesAndCachesMissingProfileArn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableProfiles", upstream.requests[0].URL.String())
+	require.Equal(t, upstream.requests[0].URL.Host, upstream.requests[0].Host)
 	require.Equal(t, "Bearer access-token", upstream.requests[0].Header.Get("Authorization"))
 	require.Contains(t, upstream.requests[0].Header.Get("User-Agent"), "api/codewhispererruntime#1.0.0")
 	require.Contains(t, upstream.requests[0].Header.Get("X-Amz-User-Agent"), "aws-sdk-js/1.0.0")

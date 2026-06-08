@@ -203,5 +203,8 @@ func applyKiroRestHeaders(req *http.Request, account *Account, token string) {
 	req.Header.Set("User-Agent", kiropkg.BuildRestUserAgent(accountKey, machineID))
 	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRestAmzUserAgent(accountKey, machineID))
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	if req.URL != nil && req.URL.Host != "" {
+		req.Host = req.URL.Host
+	}
 	applyKiroConditionalHeaders(req, account)
 }

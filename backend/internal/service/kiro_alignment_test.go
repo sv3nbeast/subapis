@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -120,11 +121,15 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 	resetAt := time.Now().Add(10 * 24 * time.Hour).Unix()
 	bonusExpiry := time.Now().Add(7 * 24 * time.Hour).Unix()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverURL, err := url.Parse(server.URL)
+		require.NoError(t, err)
 		require.Equal(t, "/getUsageLimits", r.URL.Path)
 		require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/SOCIAL", r.URL.Query().Get("profileArn"))
 		require.Equal(t, kiroUsageOrigin, r.URL.Query().Get("origin"))
 		require.Equal(t, kiroUsageResourceType, r.URL.Query().Get("resourceType"))
+		require.Equal(t, serverURL.Host, r.Host)
 		require.Equal(t, "Bearer kiro-access-token", r.Header.Get("Authorization"))
 		require.Equal(t, "application/json", r.Header.Get("Accept"))
 		require.True(t, strings.Contains(r.Header.Get("User-Agent"), "KiroIDE-"))
