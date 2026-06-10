@@ -21,6 +21,9 @@ var defaultAnthropicModelAliases = map[string]string{
 	"claude-opus-4.8":          "claude-opus-4-8",
 	"claude-opus-4-8-thinking": "claude-opus-4-8",
 	"claude-opus-4.8-thinking": "claude-opus-4-8",
+	// Fable 5：暂不支持 thinking 变体，将 -thinking 后缀容错归一到基础模型，
+	// 避免客户端误带后缀时把未知模型名透传上游导致报错（不注入 thinking 参数）。
+	"claude-fable-5-thinking": "claude-fable-5",
 }
 
 func isAnthropicThinkingModelAlias(model string) bool {
