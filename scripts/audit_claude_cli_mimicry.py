@@ -86,18 +86,54 @@ EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS = {
     "claude-code-20250219",
     "interleaved-thinking-2025-05-14",
 }
+EXPECTED_HAIKU_BETA_TOKENS = {
+    "oauth-2025-04-20",
+    "interleaved-thinking-2025-05-14",
+}
 
 EXPECTED_COMPANION_ENDPOINTS = [
     "GET /api/claude_cli/bootstrap",
     "GET /api/claude_code_penguin_mode",
     "GET /api/claude_code_grove",
-    "GET /api/oauth/account/settings",
+    "GET /api/oauth/profile",
     "GET /v1/mcp_servers",
     "GET /mcp-registry/v0/servers",
 ]
 
+EXPECTED_COMPANION_FINGERPRINTS = {
+    "GET /api/claude_cli/bootstrap": {
+        "user-agent": "claude-code/2.1.165",
+        "anthropic-beta": "oauth-2025-04-20",
+        "query_contains": ["entrypoint=sdk-cli", "model=awsclaude4.5"],
+    },
+    "GET /api/claude_code_penguin_mode": {
+        "user-agent": "axios/1.15.2",
+        "anthropic-beta": "oauth-2025-04-20",
+    },
+    "GET /api/claude_code_grove": {
+        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "anthropic-beta": "oauth-2025-04-20",
+    },
+    "GET /api/oauth/profile": {
+        "user-agent": "axios/1.15.2",
+        "anthropic-beta": "",
+    },
+    "GET /v1/mcp_servers": {
+        "user-agent": "axios/1.15.2",
+        "anthropic-beta": "mcp-servers-2025-12-04",
+        "query_contains": ["limit=1000"],
+    },
+    "GET /mcp-registry/v0/servers": {
+        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "query_contains": ["version=latest", "limit=100", "visibility=commercial%2Cgsuite%2Centerprise%2Chealth"],
+    },
+}
+
 SEVERITY_WEIGHT = {"high": 25, "medium": 8, "low": 2}
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent.parent
+CLAUDE_CONSTANTS_PATH = REPO_ROOT / "backend/internal/pkg/claude/constants.go"
 
 
 @dataclass
@@ -425,14 +461,20 @@ def load_request(path: str, preferred_tag: str | None, label: str) -> RequestSam
     raise ValueError(f"cannot parse request input: {path}")
 
 
-def redact_header_value(key: str, value: str, show_values: bool) -> str:
-    if show_values:
-        return value
+def is_sensitive_header_key(key: str) -> bool:
     lower = key.lower().removeprefix("header.")
-    if lower in {"authorization", "x-api-key", "cookie"}:
+    return lower in {"authorization", "x-api-key", "cookie", "set-cookie", "proxy-authorization"}
+
+
+def redact_header_value(key: str, value: str, show_values: bool) -> str:
+    if is_sensitive_header_key(key):
         if value.lower().startswith("bearer "):
             return "Bearer [redacted]"
+        if value.lower().startswith("basic "):
+            return "Basic [redacted]"
         return "[redacted]"
+    if show_values:
+        return value
     if len(value) > 180:
         return value[:177] + "..."
     return value
@@ -729,15 +771,15 @@ def required_oauth_upstream_beta_tokens(sample: RequestSample) -> set[str]:
     if token_type == "oauth" or mimic == "true":
         model = str(json_get(sample.body, "model") or "").lower()
         if "haiku" in model:
-            return {"oauth-2025-04-20", "interleaved-thinking-2025-05-14"}
-        return set(EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS)
+            return official_beta_tokens(haiku=True)
+        return official_beta_tokens(haiku=False)
 
     target = sample.url or sample.path
     if "api.anthropic.com" in target and sample.header("authorization") and not sample.header("x-api-key"):
         model = str(json_get(sample.body, "model") or "").lower()
         if "haiku" in model:
-            return {"oauth-2025-04-20", "interleaved-thinking-2025-05-14"}
-        return set(EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS)
+            return official_beta_tokens(haiku=True)
+        return official_beta_tokens(haiku=False)
 
     return set()
 
@@ -1032,10 +1074,117 @@ def companion_coverage(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def official_mimic_fingerprint() -> dict[str, Any]:
+def check_companion_fingerprints(items: list[dict[str, Any]]) -> list[Finding]:
+    findings: list[Finding] = []
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        grouped.setdefault(endpoint_key(item), []).append(item)
+
+    for endpoint, expected in EXPECTED_COMPANION_FINGERPRINTS.items():
+        candidates = grouped.get(endpoint) or []
+        if not candidates:
+            continue
+        item = candidates[0]
+        headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
+        path = str(item.get("path") or "")
+
+        for header_key in ("user-agent", "anthropic-beta"):
+            want = expected.get(header_key)
+            if want is None:
+                continue
+            got = str(headers.get(header_key) or "")
+            if got != want:
+                findings.append(
+                    Finding(
+                        "medium",
+                        f"flow.companion.{endpoint}.{header_key}",
+                        "companion request fingerprint differs from official Claude Code capture",
+                        str(want),
+                        got,
+                    )
+                )
+
+        for token in expected.get("query_contains", []):
+            if token not in path:
+                findings.append(
+                    Finding(
+                        "medium",
+                        f"flow.companion.{endpoint}.query",
+                        "companion request query differs from official Claude Code capture",
+                        token,
+                        path,
+                    )
+                )
+    return findings
+
+
+def parse_go_string_const(text: str, name: str) -> str:
+    match = re.search(rf'\bconst\s+{re.escape(name)}\s*=\s*"([^"]*)"', text)
+    return match.group(1) if match else ""
+
+
+def parse_go_default_headers(text: str) -> dict[str, str]:
+    match = re.search(r"var\s+DefaultHeaders\s*=\s*map\[string\]string\s*{(?P<body>.*?)}", text, re.S)
+    if not match:
+        return {}
+    headers: dict[str, str] = {}
+    for key, value in re.findall(r'"([^"]+)"\s*:\s*"([^"]*)"', match.group("body")):
+        headers[key.lower()] = value
+    return headers
+
+
+def parse_go_beta_consts(text: str) -> dict[str, str]:
+    return {name: value for name, value in re.findall(r'\b(Beta[A-Za-z0-9_]+)\s*=\s*"([^"]*)"', text)}
+
+
+def parse_go_concat_const(text: str, name: str, values: dict[str, str]) -> str:
+    match = re.search(rf'\bconst\s+{re.escape(name)}\s*=\s*(?P<expr>[^\n]+)', text)
+    if not match:
+        return ""
+    tokens: list[str] = []
+    for part in match.group("expr").split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith('"') and part.endswith('"'):
+            tokens.append(part[1:-1])
+            continue
+        tokens.append(values.get(part, ""))
+    return "".join(tokens)
+
+
+def load_official_mimic_fingerprint_from_repo() -> dict[str, Any]:
+    try:
+        text = CLAUDE_CONSTANTS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    headers = parse_go_default_headers(text)
+    cli_version = parse_go_string_const(text, "CLICurrentVersion")
+    ua = headers.get("user-agent", "")
+    if cli_version and ua and f"claude-cli/{cli_version}" not in ua:
+        raise ValueError(f"{CLAUDE_CONSTANTS_PATH}: CLICurrentVersion does not match DefaultHeaders User-Agent")
+    if not headers:
+        return {}
+
     return {
-        "user-agent": "claude-cli/2.1.111 (external, sdk-cli)",
-        "x-stainless-package-version": "0.81.0",
+        "user-agent": headers.get("user-agent", ""),
+        "x-stainless-package-version": headers.get("x-stainless-package-version", ""),
+        "x-stainless-os": headers.get("x-stainless-os", ""),
+        "x-stainless-arch": headers.get("x-stainless-arch", ""),
+        "x-stainless-runtime": headers.get("x-stainless-runtime", ""),
+        "x-stainless-runtime-version": headers.get("x-stainless-runtime-version", ""),
+        "x-stainless-timeout": headers.get("x-stainless-timeout", ""),
+        "x-app": headers.get("x-app", ""),
+        "anthropic-dangerous-direct-browser-access": headers.get("anthropic-dangerous-direct-browser-access", ""),
+        "x-anthropic-billing-header.cc_entrypoint": "sdk-cli",
+    }
+
+
+def fallback_official_mimic_fingerprint() -> dict[str, Any]:
+    return {
+        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "x-stainless-package-version": "0.94.0",
         "x-stainless-os": "MacOS",
         "x-stainless-arch": "arm64",
         "x-stainless-runtime": "node",
@@ -1045,6 +1194,45 @@ def official_mimic_fingerprint() -> dict[str, Any]:
         "anthropic-dangerous-direct-browser-access": "true",
         "x-anthropic-billing-header.cc_entrypoint": "sdk-cli",
     }
+
+
+def official_mimic_fingerprint() -> dict[str, Any]:
+    return load_official_mimic_fingerprint_from_repo() or fallback_official_mimic_fingerprint()
+
+
+def fallback_official_beta_tokens(haiku: bool) -> set[str]:
+    if haiku:
+        return {
+            "oauth-2025-04-20",
+            "interleaved-thinking-2025-05-14",
+            "context-management-2025-06-27",
+            "prompt-caching-scope-2026-01-05",
+            "mid-conversation-system-2026-04-07",
+            "effort-2025-11-24",
+            "structured-outputs-2025-12-15",
+        }
+    return {
+        "claude-code-20250219",
+        "oauth-2025-04-20",
+        "interleaved-thinking-2025-05-14",
+        "context-management-2025-06-27",
+        "prompt-caching-scope-2026-01-05",
+        "mid-conversation-system-2026-04-07",
+        "advanced-tool-use-2025-11-20",
+        "effort-2025-11-24",
+        "extended-cache-ttl-2025-04-11",
+    }
+
+
+def official_beta_tokens(haiku: bool) -> set[str]:
+    try:
+        text = CLAUDE_CONSTANTS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return fallback_official_beta_tokens(haiku)
+    beta_consts = parse_go_beta_consts(text)
+    value = parse_go_concat_const(text, "HaikuBetaHeader" if haiku else "DefaultBetaHeader", beta_consts)
+    tokens = set(split_beta(value))
+    return tokens or fallback_official_beta_tokens(haiku)
 
 
 def extract_cache_ttls_from_summary(body_summary: dict[str, Any]) -> list[str]:
@@ -1176,9 +1364,7 @@ def flow_summary_findings(items: list[dict[str, Any]]) -> list[Finding]:
         beta = str(headers.get("anthropic-beta") or "")
         body_summary = core.get("body_summary") if isinstance(core.get("body_summary"), dict) else {}
         model = str(body_summary.get("model") or "").lower()
-        required_tokens = {"oauth-2025-04-20", "interleaved-thinking-2025-05-14"}
-        if "haiku" not in model:
-            required_tokens = set(EXPECTED_OAUTH_UPSTREAM_BETA_TOKENS)
+        required_tokens = official_beta_tokens(haiku="haiku" in model)
         for token in required_tokens:
             if token not in split_beta(beta):
                 findings.append(Finding("high", "header.anthropic-beta", f"captured core request is missing {token}", token, beta))
@@ -1192,6 +1378,7 @@ def flow_summary_findings(items: list[dict[str, Any]]) -> list[Finding]:
     coverage = companion_coverage(items)
     for endpoint in coverage["missing"]:
         findings.append(Finding("medium", "flow.companion", "expected Claude Code companion endpoint was not observed", endpoint, "missing"))
+    findings.extend(check_companion_fingerprints(items))
 
     consistency = ttl_usage_consistency(core)
     if consistency["status"] == "mismatch":
@@ -1354,7 +1541,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--real-tag", default=None, help="preferred snapshot tag for --real when input is a debug log")
     parser.add_argument("--sub2api-tag", default="UPSTREAM_FORWARD", help="preferred snapshot tag for --sub2api debug logs")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
-    parser.add_argument("--show-values", action="store_true", help="show full header values, including auth values")
+    parser.add_argument("--show-values", action="store_true", help="show full non-sensitive header values; auth and cookie values are always redacted")
     parser.add_argument("--strict", action="store_true", help="exit with code 2 when HIGH findings are present")
     parser.add_argument("--list-snapshots", metavar="FILE", help="list gateway debug snapshots in a file and exit")
     args = parser.parse_args(argv)

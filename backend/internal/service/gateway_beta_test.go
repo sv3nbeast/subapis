@@ -137,9 +137,10 @@ func TestFullClaudeCodeMimicryBetas_DoesNotDefaultRedactThinking(t *testing.T) {
 	require.Contains(t, required, claude.BetaInterleavedThinking)
 	require.Contains(t, required, claude.BetaContextManagement)
 	require.Contains(t, required, claude.BetaPromptCachingScope)
+	require.Contains(t, required, claude.BetaMidConversationSystem)
 	require.Contains(t, required, claude.BetaAdvancedToolUse)
 	require.Contains(t, required, claude.BetaEffort)
-	require.NotContains(t, required, claude.BetaExtendedCacheTTL)
+	require.Contains(t, required, claude.BetaExtendedCacheTTL)
 }
 
 func TestMergeAnthropicBetaDropping_PreservesIncomingRedactThinking(t *testing.T) {
@@ -151,20 +152,20 @@ func TestMergeAnthropicBetaDropping_PreservesIncomingRedactThinking(t *testing.T
 	require.Contains(t, got, claude.BetaRedactThinking)
 }
 
-func TestDefaultClaudeCodeBetaHeadersMatchCapturedCLI2111(t *testing.T) {
+func TestDefaultClaudeCodeBetaHeadersMatchCapturedCLI2165(t *testing.T) {
 	require.Equal(t,
-		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
 		claude.DefaultBetaHeader,
 	)
 	require.Equal(t,
-		"oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15",
+		"oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,structured-outputs-2025-12-15",
 		claude.HaikuBetaHeader,
 	)
-	require.NotContains(t, claude.DefaultBetaHeader, claude.BetaExtendedCacheTTL)
+	require.Contains(t, claude.DefaultBetaHeader, claude.BetaExtendedCacheTTL)
 	require.NotContains(t, claude.APIKeyBetaHeader, claude.BetaOAuth)
 }
 
-func TestApplyClaudeCodeMimicHeaders_OfficialCLI2111Fingerprint(t *testing.T) {
+func TestApplyClaudeCodeMimicHeaders_OfficialCLI2165Fingerprint(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
 	require.NoError(t, err)
 	req.Header.Set("User-Agent", "curl/8")
@@ -173,8 +174,8 @@ func TestApplyClaudeCodeMimicHeaders_OfficialCLI2111Fingerprint(t *testing.T) {
 
 	applyClaudeCodeMimicHeaders(req, true)
 
-	require.Equal(t, "claude-cli/2.1.111 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
-	require.Equal(t, "0.81.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, "0.94.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
 	require.Equal(t, "MacOS", getHeaderRaw(req.Header, "X-Stainless-OS"))
 	require.Equal(t, "arm64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
 	require.Equal(t, "node", getHeaderRaw(req.Header, "X-Stainless-Runtime"))
@@ -207,7 +208,7 @@ func TestBuildUpstreamRequest_MimicClaudeCodeSignsCCHWithoutGlobalSetting(t *tes
 		context.Background(),
 		nil,
 		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
-		[]byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.111.abc; cc_entrypoint=sdk-cli; cch=00000;"}],"messages":[{"role":"user","content":"hello"}]}`),
+		[]byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.165.abc; cc_entrypoint=sdk-cli; cch=00000;"}],"messages":[{"role":"user","content":"hello"}]}`),
 		"oauth-token",
 		"oauth",
 		"claude-sonnet-4-6",

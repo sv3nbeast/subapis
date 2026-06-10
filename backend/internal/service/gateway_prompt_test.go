@@ -186,7 +186,7 @@ func TestBuildBillingAttributionBlockUsesCapturedSDKEntrypoint(t *testing.T) {
 	var parsed map[string]string
 	require.NoError(t, json.Unmarshal(block, &parsed))
 	require.Equal(t, "text", parsed["type"])
-	require.Contains(t, parsed["text"], "cc_version=2.1.111.")
+	require.Contains(t, parsed["text"], "cc_version=2.1.165.")
 	require.Contains(t, parsed["text"], "cc_entrypoint=sdk-cli")
 	require.Contains(t, parsed["text"], "cch=00000")
 }
@@ -414,12 +414,14 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			err := json.Unmarshal(result, &parsed)
 			require.NoError(t, err)
 
-			// system 应为 array 格式，对齐真实 Claude Code CLI 的 2-block 形态：
-			//   [0] billing attribution block (x-anthropic-billing-header: cc_version=...;)
-			//   [1] Claude Code prompt block (带 cache_control)
+			// system 应为 array 格式，对齐本机抓到的 Claude Code 2.1.165 core-request 4-block 形态：
+			//   [0] billing attribution block
+			//   [1] Agent SDK identity block
+			//   [2] interactive agent task block（带 cache_control）
+			//   [3] code style / action caution block（带 cache_control）
 			systemArr, ok := parsed["system"].([]any)
 			require.True(t, ok, "system should be an array, got %T", parsed["system"])
-			require.Len(t, systemArr, 2, "system array should have exactly 2 blocks (billing + cc prompt)")
+			require.Len(t, systemArr, 4, "system array should have exactly 4 blocks (billing + sdk + task + style)")
 
 			billingBlock, ok := systemArr[0].(map[string]any)
 			require.True(t, ok)
@@ -429,13 +431,27 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.Contains(t, billingBlock["text"], "cc_entrypoint=sdk-cli")
 			require.Contains(t, billingBlock["text"], "cch=00000")
 
-			systemBlock, ok := systemArr[1].(map[string]any)
+			sdkBlock, ok := systemArr[1].(map[string]any)
 			require.True(t, ok)
-			require.Equal(t, "text", systemBlock["type"])
-			require.Equal(t, tt.wantSystemText, systemBlock["text"])
-			cc, ok := systemBlock["cache_control"].(map[string]any)
-			require.True(t, ok, "cc prompt block should have cache_control")
-			require.Equal(t, "ephemeral", cc["type"])
+			require.Equal(t, "text", sdkBlock["type"])
+			require.Equal(t, claudeAgentSDKSystemPrompt, sdkBlock["text"])
+			require.Nil(t, sdkBlock["cache_control"])
+
+			taskBlock, ok := systemArr[2].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "text", taskBlock["type"])
+			require.Equal(t, claudeAgentTaskSystemPrompt, taskBlock["text"])
+			taskCC, ok := taskBlock["cache_control"].(map[string]any)
+			require.True(t, ok, "task block should have cache_control")
+			require.Equal(t, "ephemeral", taskCC["type"])
+
+			styleBlock, ok := systemArr[3].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "text", styleBlock["type"])
+			require.Equal(t, claudeAgentStyleSystemPrompt, styleBlock["text"])
+			styleCC, ok := styleBlock["cache_control"].(map[string]any)
+			require.True(t, ok, "style block should have cache_control")
+			require.Equal(t, "ephemeral", styleCC["type"])
 
 			// 检查 messages
 			messages, ok := parsed["messages"].([]any)

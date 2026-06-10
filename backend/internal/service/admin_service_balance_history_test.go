@@ -37,6 +37,10 @@ func (r *balanceHistoryRedeemRepo) Update(context.Context, *RedeemCode) error {
 	panic("unexpected Update call")
 }
 
+func (r *balanceHistoryRedeemRepo) BatchUpdate(context.Context, []int64, RedeemCodeBatchUpdateFields) (int64, error) {
+	panic("unexpected BatchUpdate call")
+}
+
 func (r *balanceHistoryRedeemRepo) Delete(context.Context, int64) error {
 	panic("unexpected Delete call")
 }

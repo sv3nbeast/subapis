@@ -52,7 +52,12 @@ const (
 	// to match real Claude CLI traffic as closely as possible. When we need a visual
 	// separator between system blocks, we add "\n\n" at concatenation time.
 	claudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
-	maxCacheControlBlocks  = 4 // Anthropic API 允许的最大 cache_control 块数量
+	// Official Claude Code 2.1.165 core-request system blocks captured from the
+	// local helper. These are separate from the legacy Claude Code banner above.
+	claudeAgentSDKSystemPrompt   = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+	claudeAgentTaskSystemPrompt  = "\nYou are an interactive agent that helps users with software engineering tasks.\n\nIMPORTANT: Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.\n\n# Harness\n - Text you output outside of tool use is displayed to the user as Github-flavored markdown in a terminal.\n - Tools run behind a user-selected permission mode; a denied call means the user declined it - adjust, don't retry verbatim.\n - <system-reminder> tags in messages and tool results are injected by the harness, not the user. Hooks may intercept tool calls; treat hook output as user feedback.\n - Prefer the dedicated file/search tools over shell commands when one fits. Independent tool calls can run in parallel in one response.\n - Reference code as file_path:line_number - it's clickable."
+	claudeAgentStyleSystemPrompt = "Write code that reads like the surrounding code: match its comment density, naming, and idiom.\n\nFor actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking; approval in one context doesn't extend to the next.\nSending content to an external service publishes it; it may be cached or indexed even if later deleted. Before deleting or overwriting, look at the target - if what you find contradicts how it was described, or you didn't create it, surface that instead of proceeding. Report outcomes faithfully: if tests fail, say so with the output; if a step was skipped, say that; when something is done and verified, state it plainly without hedging."
+	maxCacheControlBlocks        = 4 // Anthropic API 允许的最大 cache_control 块数量
 
 	defaultUserGroupRateCacheTTL = 30 * time.Second
 	defaultModelsListCacheTTL    = 15 * time.Second
@@ -4864,20 +4869,24 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 		originalSystemText = strings.Join(parts, "\n\n")
 	}
 
-	// 2. 构造 system 数组，对齐真实 Claude Code CLI 的 2-block 形态：
+	// 2. 构造 system 数组，对齐本机抓到的 Claude Code 2.1.165 core-request 形态：
 	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=sdk-cli; cch=00000;）
-	//    [1] "You are Claude Code..." prompt block（带 cache_control 作为稳定缓存断点）
+	//    [1] Agent SDK identity block
+	//    [2] interactive agent task block（带 cache_control）
+	//    [3] code style / action caution block（带 cache_control）
 	//
 	//    billing block 的 cch=00000 是占位符，会被 buildUpstreamRequest 里的
 	//    signBillingHeaderCCH 替换成 xxhash64 签名。缺失 billing block 的系统 payload
 	//    是 Anthropic 判定第三方的关键信号之一（真实 CLI 每个请求都带）。
 	billingBlock, billingErr := buildBillingAttributionBlockJSON(body, claude.CLICurrentVersion)
-	ccPromptBlock, ccErr := marshalAnthropicSystemTextBlockWithTTL(claudeCodeSystemPrompt, true, cacheTTLTarget1h)
-	if billingErr != nil || ccErr != nil {
-		logger.LegacyPrintf("service.gateway", "Warning: failed to build system blocks (billing=%v, cc=%v)", billingErr, ccErr)
+	agentSDKBlock, sdkErr := marshalAnthropicSystemTextBlock(claudeAgentSDKSystemPrompt, false)
+	taskBlock, taskErr := marshalAnthropicSystemTextBlockWithTTL(claudeAgentTaskSystemPrompt, true, cacheTTLTarget1h)
+	styleBlock, styleErr := marshalAnthropicSystemTextBlockWithTTL(claudeAgentStyleSystemPrompt, true, cacheTTLTarget1h)
+	if billingErr != nil || sdkErr != nil || taskErr != nil || styleErr != nil {
+		logger.LegacyPrintf("service.gateway", "Warning: failed to build system blocks (billing=%v, sdk=%v, task=%v, style=%v)", billingErr, sdkErr, taskErr, styleErr)
 		return body
 	}
-	out, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw([][]byte{billingBlock, ccPromptBlock}))
+	out, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw([][]byte{billingBlock, agentSDKBlock, taskBlock, styleBlock}))
 	if !ok {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to set Claude Code system prompt")
 		return body

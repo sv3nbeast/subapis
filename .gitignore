@@ -121,6 +121,7 @@ CLAUDE.md
 scripts/*
 !scripts/audit_claude_cli_mimicry.py
 !scripts/deploy-prod.sh
+!scripts/mitm_claude_flow_summary.py
 !scripts/rebuild-prod-sub2api.sh
 !scripts/rollback-prod.sh
 !scripts/rollback-prod-sub2api.sh

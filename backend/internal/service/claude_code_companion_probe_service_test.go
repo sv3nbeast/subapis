@@ -75,12 +75,13 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 			Type:        AccountTypeOAuth,
 			Concurrency: 3,
 		},
-		Body:       []byte(`{"metadata":{"user_id":"user_abc#org=org_123#session_id=11111111-1111-4111-8111-111111111111"},"messages":[{"role":"user","content":"hello"}]}`),
-		Token:      "oauth-token",
-		TokenType:  "oauth",
-		ProxyURL:   "http://proxy.local:8080",
-		TLSProfile: profile,
-		SessionID:  "11111111-1111-4111-8111-111111111111",
+		Body:         []byte(`{"metadata":{"user_id":"user_abc#org=org_123#session_id=11111111-1111-4111-8111-111111111111"},"messages":[{"role":"user","content":"hello"}]}`),
+		Token:        "oauth-token",
+		TokenType:    "oauth",
+		ProxyURL:     "http://proxy.local:8080",
+		TLSProfile:   profile,
+		SessionID:    "11111111-1111-4111-8111-111111111111",
+		RequestModel: "awsclaude4.5",
 		Config: config.GatewayClaudeCodeMimicryConfig{
 			Enabled: true,
 			SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
@@ -108,14 +109,31 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 	require.Contains(t, paths, "/api/claude_cli/bootstrap")
 	require.Contains(t, paths, "/api/claude_code_penguin_mode")
 	require.Contains(t, paths, "/api/claude_code_grove")
-	require.Contains(t, paths, "/api/oauth/account/settings")
+	require.Contains(t, paths, "/api/oauth/profile")
 	require.Contains(t, paths, "/v1/mcp_servers")
 	require.Contains(t, paths, "/mcp-registry/v0/servers")
 	require.Contains(t, paths, "/v1/messages")
 
-	require.Equal(t, "claude-code/2.1.111", getHeaderRaw(requests[0].Header, "User-Agent"))
+	require.Equal(t, "claude-code/2.1.165", getHeaderRaw(requests[0].Header, "User-Agent"))
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(requests[0].Header, "authorization"))
 	require.Equal(t, "oauth-2025-04-20", getHeaderRaw(requests[0].Header, "anthropic-beta"))
+	require.Equal(t, "entrypoint=sdk-cli&model=awsclaude4.5", requests[0].URL.RawQuery)
+
+	requestByPath := map[string]*http.Request{}
+	for _, req := range requests {
+		requestByPath[req.URL.Path] = req
+	}
+	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/api/claude_code_penguin_mode"].Header, "User-Agent"))
+	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/api/oauth/profile"].Header, "User-Agent"))
+	require.Equal(t, "", getHeaderRaw(requestByPath["/api/oauth/profile"].Header, "anthropic-beta"))
+	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/v1/mcp_servers"].Header, "User-Agent"))
+	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(requestByPath["/mcp-registry/v0/servers"].Header, "User-Agent"))
+	require.Equal(t, "version=latest&limit=100&visibility=commercial%2Cgsuite%2Centerprise%2Chealth", requestByPath["/mcp-registry/v0/servers"].URL.RawQuery)
+	body, err := io.ReadAll(requestByPath["/v1/messages"].Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"model":"awsclaude4.5-haiku"`)
+	require.Contains(t, string(body), `Generate a concise, sentence-case title (3-7 words)`)
+	require.Contains(t, string(body), `Return JSON with a single \"title\" field.`)
 }
 
 func TestClaudeCodeCompanionProbeService_ThrottlesByAccountAndSession(t *testing.T) {

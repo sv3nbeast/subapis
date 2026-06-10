@@ -14,10 +14,14 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 )
 
-const (
+// WorkOS 端点定义为 var 以便单元测试注入 httptest 地址。
+var (
 	WorkOSDeviceAuthorizeURL = "https://api.workos.com/user_management/authorize/device"
 	WorkOSTokenURL           = "https://api.workos.com/user_management/authenticate"
-	WorkOSClientID           = "client_01HNM792M5G5G1A2THWPXKFMXB"
+)
+
+const (
+	WorkOSClientID = "client_01HNM792M5G5G1A2THWPXKFMXB"
 
 	sessionTTL          = 10 * time.Minute
 	sessionCleanupEvery = 32

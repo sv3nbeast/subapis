@@ -397,7 +397,7 @@ func TestAuthService_Register_ReservedSyntheticEmails(t *testing.T) {
 			repo := &userRepoStub{}
 			service := newAuthService(repo, map[string]string{
 				SettingKeyRegistrationEnabled: "true",
-			}, nil)
+			}, nil, nil)
 
 			_, _, err := service.Register(context.Background(), email, "password")
 			require.ErrorIs(t, err, ErrEmailReserved)
@@ -427,7 +427,7 @@ func TestAuthService_Register_EmailSuffixBlocked(t *testing.T) {
 	service := newAuthService(repo, map[string]string{
 		SettingKeyRegistrationEnabled:              "true",
 		SettingKeyRegistrationEmailSuffixBlacklist: `["@spam.com","@bot.net"]`,
-	}, nil)
+	}, nil, nil)
 
 	_, _, err := service.Register(context.Background(), "user@spam.com", "password")
 	require.ErrorIs(t, err, ErrEmailSuffixBlocked)
@@ -469,7 +469,7 @@ func TestAuthService_SendVerifyCode_EmailSuffixBlocked(t *testing.T) {
 	service := newAuthService(repo, map[string]string{
 		SettingKeyRegistrationEnabled:              "true",
 		SettingKeyRegistrationEmailSuffixBlacklist: `["@spam.com","@bot.net"]`,
-	}, nil)
+	}, nil, nil)
 
 	err := service.SendVerifyCode(context.Background(), "user@spam.com")
 	require.ErrorIs(t, err, ErrEmailSuffixBlocked)
@@ -646,7 +646,7 @@ func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
 }
 
 func TestAuthService_GenerateToken_UsesResolvedTokenVersion(t *testing.T) {
-	service := newAuthService(&userRepoStub{}, nil, nil)
+	service := newAuthService(&userRepoStub{}, nil, nil, nil)
 	user := &User{
 		ID:           3,
 		Email:        "resolved@test.com",
@@ -675,7 +675,7 @@ func TestAuthService_RefreshToken_UsesResolvedTokenVersionComparison(t *testing.
 		TokenVersion: 1,
 	}
 	repo := &userRepoStub{user: user}
-	service := newAuthService(repo, nil, nil)
+	service := newAuthService(repo, nil, nil, nil)
 
 	token, err := service.GenerateToken(user)
 	require.NoError(t, err)
