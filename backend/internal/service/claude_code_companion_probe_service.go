@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,9 +23,10 @@ import (
 )
 
 const (
-	claudeCodeCompanionBaseURL         = "https://api.anthropic.com"
-	claudeCodeCompanionDefaultInterval = 300 * time.Second
-	claudeCodeCompanionDefaultTimeout  = 5 * time.Second
+	claudeCodeCompanionBaseURL        = "https://api.anthropic.com"
+	claudeCodeCompanionMinInterval    = time.Hour
+	claudeCodeCompanionMaxInterval    = 5 * time.Hour
+	claudeCodeCompanionDefaultTimeout = 5 * time.Second
 )
 
 type claudeCodeCompanionContextKey struct{}
@@ -168,7 +170,9 @@ func (s *ClaudeCodeCompanionProbeService) sendOne(ctx context.Context, input Cla
 }
 
 func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sessionID string) []claudeCodeCompanionEndpoint {
+	mcpServers := claudeCodeMCPServersCompanionEndpoint()
 	endpoints := []claudeCodeCompanionEndpoint{
+		mcpServers,
 		{
 			Name:      "claude_cli_bootstrap",
 			Method:    http.MethodGet,
@@ -200,14 +204,7 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			UserAgent: "axios/1.15.2",
 			Auth:      true,
 		},
-		{
-			Name:      "mcp_servers",
-			Method:    http.MethodGet,
-			URL:       claudeCodeCompanionBaseURL + "/v1/mcp_servers?limit=1000",
-			UserAgent: "axios/1.15.2",
-			Beta:      "mcp-servers-2025-12-04",
-			Auth:      true,
-		},
+		mcpServers,
 		{
 			Name:      "mcp_registry_servers",
 			Method:    http.MethodGet,
@@ -220,6 +217,17 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 		endpoints = append(endpoints, buildClaudeCodeTitleProbeEndpoint(input, sessionID))
 	}
 	return endpoints
+}
+
+func claudeCodeMCPServersCompanionEndpoint() claudeCodeCompanionEndpoint {
+	return claudeCodeCompanionEndpoint{
+		Name:      "mcp_servers",
+		Method:    http.MethodGet,
+		URL:       claudeCodeCompanionBaseURL + "/v1/mcp_servers?limit=1000",
+		UserAgent: "axios/1.15.2",
+		Beta:      "mcp-servers-2025-12-04",
+		Auth:      true,
+	}
 }
 
 func buildClaudeCodeBootstrapURL(requestModel string) string {
@@ -284,10 +292,18 @@ func shouldSendClaudeCodeTitleProbe(mode string) bool {
 }
 
 func claudeCodeCompanionInterval(seconds int) time.Duration {
-	if seconds <= 0 {
-		return claudeCodeCompanionDefaultInterval
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
 	}
-	return time.Duration(seconds) * time.Second
+	return claudeCodeCompanionRandomInterval()
+}
+
+func claudeCodeCompanionRandomInterval() time.Duration {
+	span := claudeCodeCompanionMaxInterval - claudeCodeCompanionMinInterval
+	if span <= 0 {
+		return claudeCodeCompanionMinInterval
+	}
+	return claudeCodeCompanionMinInterval + time.Duration(rand.Int64N(int64(span)+1)) //nolint:gosec // jittered traffic shaping only
 }
 
 func claudeCodeCompanionTimeout(seconds int) time.Duration {

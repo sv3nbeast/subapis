@@ -231,12 +231,17 @@ telemetry or experiment traffic unless explicitly implemented and enabled.
 For non-Claude-CLI clients routed through Anthropic OAuth/SetupToken mimicry,
 sub2api may also send a throttled upstream companion set:
 
+- `GET /v1/mcp_servers?limit=1000`
 - `GET /api/claude_cli/bootstrap`
 - `GET /api/claude_code_penguin_mode`
 - `GET /api/claude_code_grove`
 - `GET /api/oauth/profile`
 - `GET /v1/mcp_servers?limit=1000`
 - `GET /mcp-registry/v0/servers?version=latest&limit=100&visibility=commercial%2Cgsuite%2Centerprise%2Chealth`
+
+Default throttling uses a randomized 1-5 hour TTL per `account + synthetic
+session`. Set `gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds`
+to a positive value to force a fixed interval in seconds.
 
 The audit script reports companion coverage from `--flow-summary`. Missing
 companion endpoints are medium severity because they affect behavioral parity,

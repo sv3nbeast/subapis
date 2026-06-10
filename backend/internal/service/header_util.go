@@ -9,7 +9,7 @@ import (
 // Go 的 HTTP server 解析请求时会将所有 header key 转为 Canonical 形式（如 x-app → X-App），
 // 此 map 用于在转发时恢复到真实的 wire format。
 //
-// 来源：对真实 Claude CLI (claude-cli/2.1.81) 到 api.anthropic.com 的 HTTPS 流量抓包。
+// 来源：对真实 Claude CLI 2.1.156 到 api.anthropic.com 的 HTTPS 流量抓包。
 var headerWireCasing = map[string]string{
 	// Title case
 	"accept":     "Accept",
@@ -47,25 +47,25 @@ var headerWireCasing = map[string]string{
 // 用于 debug log 按此顺序输出，便于与抓包结果直接对比。
 var headerWireOrder = []string{
 	"Accept",
-	"X-Stainless-Retry-Count",
-	"X-Stainless-Timeout",
-	"X-Stainless-Lang",
-	"X-Stainless-Package-Version",
-	"X-Stainless-OS",
-	"X-Stainless-Arch",
-	"X-Stainless-Runtime",
-	"X-Stainless-Runtime-Version",
-	"anthropic-dangerous-direct-browser-access",
-	"anthropic-version",
 	"authorization",
-	"x-app",
+	"content-type",
 	"User-Agent",
 	"X-Claude-Code-Session-Id",
-	"content-type",
+	"X-Stainless-Arch",
+	"X-Stainless-Lang",
+	"X-Stainless-OS",
+	"X-Stainless-Package-Version",
+	"X-Stainless-Retry-Count",
+	"X-Stainless-Runtime",
+	"X-Stainless-Runtime-Version",
+	"X-Stainless-Timeout",
 	"anthropic-beta",
+	"anthropic-dangerous-direct-browser-access",
+	"anthropic-version",
+	"x-app",
 	"x-client-request-id",
-	"accept-language",
-	"sec-fetch-mode",
+	"Connection",
+	"Host",
 	"accept-encoding",
 	"content-length",
 	"x-stainless-helper-method",

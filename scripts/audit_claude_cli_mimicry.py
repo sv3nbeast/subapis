@@ -92,6 +92,7 @@ EXPECTED_HAIKU_BETA_TOKENS = {
 }
 
 EXPECTED_COMPANION_ENDPOINTS = [
+    "GET /v1/mcp_servers",
     "GET /api/claude_cli/bootstrap",
     "GET /api/claude_code_penguin_mode",
     "GET /api/claude_code_grove",
@@ -1065,13 +1066,44 @@ def first_core_flow(items: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def companion_coverage(items: list[dict[str, Any]]) -> dict[str, Any]:
-    present = {endpoint_key(item) for item in items}
+    observed = [endpoint_key(item) for item in items]
     expected = list(EXPECTED_COMPANION_ENDPOINTS)
+    remaining = list(observed)
+    present: list[str] = []
+    missing: list[str] = []
+    for endpoint in expected:
+        try:
+            index = remaining.index(endpoint)
+        except ValueError:
+            missing.append(endpoint)
+            continue
+        present.append(endpoint)
+        del remaining[index]
     return {
         "expected": expected,
-        "present": [endpoint for endpoint in expected if endpoint in present],
-        "missing": [endpoint for endpoint in expected if endpoint not in present],
+        "present": present,
+        "missing": missing,
+        "observed_sequence": observed,
     }
+
+
+def companion_sequence_findings(items: list[dict[str, Any]]) -> list[Finding]:
+    expected = list(EXPECTED_COMPANION_ENDPOINTS)
+    observed = [endpoint_key(item) for item in items if endpoint_key(item) in EXPECTED_COMPANION_FINGERPRINTS]
+    if len(observed) < len(expected):
+        return []
+    for start in range(0, len(observed)-len(expected)+1):
+        if observed[start : start + len(expected)] == expected:
+            return []
+    return [
+        Finding(
+            "medium",
+            "flow.companion.order",
+            "companion request order differs from official Claude Code capture",
+            " > ".join(expected),
+            " > ".join(observed),
+        )
+    ]
 
 
 def check_companion_fingerprints(items: list[dict[str, Any]]) -> list[Finding]:
@@ -1378,6 +1410,7 @@ def flow_summary_findings(items: list[dict[str, Any]]) -> list[Finding]:
     coverage = companion_coverage(items)
     for endpoint in coverage["missing"]:
         findings.append(Finding("medium", "flow.companion", "expected Claude Code companion endpoint was not observed", endpoint, "missing"))
+    findings.extend(companion_sequence_findings(items))
     findings.extend(check_companion_fingerprints(items))
 
     consistency = ttl_usage_consistency(core)

@@ -170,7 +170,7 @@ func TestLoadDefaultClaudeCodeAuxCompatConfig(t *testing.T) {
 	require.True(t, cfg.Gateway.ClaudeCodeMimicry.Enabled)
 	require.True(t, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Enabled)
 	require.Equal(t, ClaudeCodeSyntheticCompanionModeAuxAndTitle, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode)
-	require.Equal(t, 300, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.MinIntervalSeconds)
+	require.Equal(t, 0, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.MinIntervalSeconds)
 	require.Equal(t, 5, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.TimeoutSeconds)
 	require.True(t, cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.FailOpen)
 	require.True(t, cfg.Gateway.TLSFingerprint.DefaultEnabledForAnthropicOAuth)

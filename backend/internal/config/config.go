@@ -835,7 +835,7 @@ type GatewayClaudeCodeSyntheticCompanionConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// Mode: aux_only/aux_and_title。title 会额外消耗 Haiku 上游额度。
 	Mode string `mapstructure:"mode"`
-	// MinIntervalSeconds: 同 account + synthetic session 的最小触发间隔。
+	// MinIntervalSeconds: 同 account + synthetic session 的最小触发间隔；0 表示随机 1-5 小时。
 	MinIntervalSeconds int `mapstructure:"min_interval_seconds"`
 	// TimeoutSeconds: 单个 companion 请求超时时间。
 	TimeoutSeconds int `mapstructure:"timeout_seconds"`
@@ -1846,7 +1846,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.claude_code_mimicry.enabled", true)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.enabled", true)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.mode", ClaudeCodeSyntheticCompanionModeAuxAndTitle)
-	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds", 300)
+	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds", 0)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.timeout_seconds", 5)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.fail_open", true)
 	viper.SetDefault("gateway.tls_fingerprint.default_enabled_for_anthropic_oauth", true)

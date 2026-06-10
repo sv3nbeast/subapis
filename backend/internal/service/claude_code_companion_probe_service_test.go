@@ -94,7 +94,7 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 		},
 	})
 
-	requests := waitForCompanionRequests(t, upstream, 7)
+	requests := waitForCompanionRequests(t, upstream, 8)
 	proxies, _, profiles := func() ([]string, []string, []*tlsfingerprint.Profile) {
 		_, proxies, profiles := upstream.snapshot()
 		return proxies, nil, profiles
@@ -106,18 +106,26 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 		require.Equal(t, "http://proxy.local:8080", proxies[i])
 		require.Same(t, profile, profiles[i])
 	}
-	require.Contains(t, paths, "/api/claude_cli/bootstrap")
-	require.Contains(t, paths, "/api/claude_code_penguin_mode")
-	require.Contains(t, paths, "/api/claude_code_grove")
-	require.Contains(t, paths, "/api/oauth/profile")
-	require.Contains(t, paths, "/v1/mcp_servers")
-	require.Contains(t, paths, "/mcp-registry/v0/servers")
-	require.Contains(t, paths, "/v1/messages")
+	require.Equal(t, []string{
+		"/v1/mcp_servers",
+		"/api/claude_cli/bootstrap",
+		"/api/claude_code_penguin_mode",
+		"/api/claude_code_grove",
+		"/api/oauth/profile",
+		"/v1/mcp_servers",
+		"/mcp-registry/v0/servers",
+		"/v1/messages",
+	}, paths)
 
-	require.Equal(t, "claude-code/2.1.165", getHeaderRaw(requests[0].Header, "User-Agent"))
+	require.Equal(t, "axios/1.15.2", getHeaderRaw(requests[0].Header, "User-Agent"))
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(requests[0].Header, "authorization"))
-	require.Equal(t, "oauth-2025-04-20", getHeaderRaw(requests[0].Header, "anthropic-beta"))
-	require.Equal(t, "entrypoint=sdk-cli&model=awsclaude4.5", requests[0].URL.RawQuery)
+	require.Equal(t, "mcp-servers-2025-12-04", getHeaderRaw(requests[0].Header, "anthropic-beta"))
+	require.Equal(t, "limit=1000", requests[0].URL.RawQuery)
+	require.Equal(t, "claude-code/2.1.165", getHeaderRaw(requests[1].Header, "User-Agent"))
+	require.Equal(t, "Bearer oauth-token", getHeaderRaw(requests[1].Header, "authorization"))
+	require.Equal(t, "oauth-2025-04-20", getHeaderRaw(requests[1].Header, "anthropic-beta"))
+	require.Equal(t, "entrypoint=sdk-cli&model=awsclaude4.5", requests[1].URL.RawQuery)
+	require.Equal(t, "limit=1000", requests[5].URL.RawQuery)
 
 	requestByPath := map[string]*http.Request{}
 	for _, req := range requests {
@@ -160,10 +168,10 @@ func TestClaudeCodeCompanionProbeService_ThrottlesByAccountAndSession(t *testing
 	service.MaybeTrigger(context.Background(), input)
 	service.MaybeTrigger(context.Background(), input)
 
-	_ = waitForCompanionRequests(t, upstream, 7)
+	_ = waitForCompanionRequests(t, upstream, 8)
 	time.Sleep(50 * time.Millisecond)
 	requests, _, _ := upstream.snapshot()
-	require.Len(t, requests, 7)
+	require.Len(t, requests, 8)
 }
 
 func TestClaudeCodeCompanionProbeService_ThrottlesStatelessRequestsByAccount(t *testing.T) {
@@ -195,10 +203,10 @@ func TestClaudeCodeCompanionProbeService_ThrottlesStatelessRequestsByAccount(t *
 	service.MaybeTrigger(context.Background(), input)
 	service.MaybeTrigger(context.Background(), second)
 
-	_ = waitForCompanionRequests(t, upstream, 7)
+	_ = waitForCompanionRequests(t, upstream, 8)
 	time.Sleep(50 * time.Millisecond)
 	requests, _, _ := upstream.snapshot()
-	require.Len(t, requests, 7)
+	require.Len(t, requests, 8)
 }
 
 func TestClaudeCodeCompanionProbeService_StatelessThrottleIsAccountScoped(t *testing.T) {
@@ -230,8 +238,8 @@ func TestClaudeCodeCompanionProbeService_StatelessThrottleIsAccountScoped(t *tes
 		Config:    cfg,
 	})
 
-	requests := waitForCompanionRequests(t, upstream, 14)
-	require.Len(t, requests, 14)
+	requests := waitForCompanionRequests(t, upstream, 16)
+	require.Len(t, requests, 16)
 }
 
 func TestClaudeCodeCompanionProbeService_AuxOnlyOmitsTitleProbe(t *testing.T) {
@@ -254,11 +262,20 @@ func TestClaudeCodeCompanionProbeService_AuxOnlyOmitsTitleProbe(t *testing.T) {
 		},
 	})
 
-	requests := waitForCompanionRequests(t, upstream, 6)
+	requests := waitForCompanionRequests(t, upstream, 7)
 	time.Sleep(50 * time.Millisecond)
 	requests, _, _ = upstream.snapshot()
-	require.Len(t, requests, 6)
+	require.Len(t, requests, 7)
 	for _, req := range requests {
 		require.NotEqual(t, "/v1/messages", req.URL.Path)
 	}
+}
+
+func TestClaudeCodeCompanionInterval_DefaultRandomizedBetweenOneAndFiveHours(t *testing.T) {
+	for range 100 {
+		interval := claudeCodeCompanionInterval(0)
+		require.GreaterOrEqual(t, interval, time.Hour)
+		require.LessOrEqual(t, interval, 5*time.Hour)
+	}
+	require.Equal(t, 42*time.Second, claudeCodeCompanionInterval(42))
 }

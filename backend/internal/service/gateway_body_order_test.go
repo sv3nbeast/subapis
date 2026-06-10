@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -99,6 +101,34 @@ func assertJSONTokenOrder(t *testing.T, body string, tokens ...string) {
 	}
 }
 
+func topLevelJSONKeysInOrder(t *testing.T, body []byte) []string {
+	t.Helper()
+
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	tok, err := dec.Token()
+	require.NoError(t, err)
+	require.Equal(t, json.Delim('{'), tok)
+
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		require.NoError(t, err)
+		key, ok := tok.(string)
+		require.True(t, ok)
+		keys = append(keys, key)
+
+		var raw json.RawMessage
+		require.NoError(t, dec.Decode(&raw))
+	}
+
+	tok, err = dec.Token()
+	require.NoError(t, err)
+	require.Equal(t, json.Delim('}'), tok)
+	_, err = dec.Token()
+	require.ErrorIs(t, err, io.EOF)
+	return keys
+}
+
 func TestReplaceModelInBody_PreservesTopLevelFieldOrder(t *testing.T) {
 	svc := &GatewayService{}
 	body := []byte(`{"alpha":1,"model":"claude-3-5-sonnet-latest","messages":[],"omega":2}`)
@@ -126,7 +156,26 @@ func TestNormalizeClaudeOAuthRequestBody_PreservesTopLevelFieldOrder(t *testing.
 	require.Contains(t, resultStr, `"system":"`+claudeCodeSystemPrompt+`"`)
 	require.Contains(t, resultStr, `"tools":[]`)
 	require.Contains(t, resultStr, `"metadata":{"user_id":"user-1"}`)
-	require.Contains(t, resultStr, `"max_tokens":128000`)
+	require.Contains(t, resultStr, `"max_tokens":64000`)
+}
+
+func TestNormalizeClaudeOAuthRequestBody_CapturedOpusDefaults(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-7","messages":[],"system":[],"tools":[],"metadata":{"user_id":"u"},"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"max"},"stream":true}`)
+
+	result, _ := normalizeClaudeOAuthRequestBody(body, "claude-opus-4-7", claudeOAuthNormalizeOptions{})
+
+	require.Equal(t, int64(64000), gjson.GetBytes(result, "max_tokens").Int())
+	require.False(t, gjson.GetBytes(result, "temperature").Exists())
+	require.True(t, gjson.GetBytes(result, "context_management").Exists())
+}
+
+func TestNormalizeClaudeOAuthRequestBody_CapturedHaikuDefaults(t *testing.T) {
+	body := []byte(`{"model":"claude-haiku-4-5","messages":[],"system":[],"tools":[],"metadata":{"user_id":"u"},"output_config":{"format":{"type":"json_schema"}},"stream":true}`)
+
+	result, _ := normalizeClaudeOAuthRequestBody(body, "claude-haiku-4-5", claudeOAuthNormalizeOptions{})
+
+	require.Equal(t, int64(32000), gjson.GetBytes(result, "max_tokens").Int())
+	require.Equal(t, float64(1), gjson.GetBytes(result, "temperature").Float())
 }
 
 func TestEnsureAnthropicThinkingForModelAlias(t *testing.T) {
@@ -323,6 +372,45 @@ func TestNormalizeClaudeCodeMimicryUpstreamBody_CombinesProtocolFixes(t *testing
 	require.False(t, gjson.GetBytes(result, "output_config").Exists())
 	require.Equal(t, "5m", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
 	require.False(t, gjson.GetBytes(result, "system.0.cache_control.ttl").Exists())
+}
+
+func TestNormalizeClaudeCodeMimicryUpstreamBody_OrdersCapturedOpusKeys(t *testing.T) {
+	body := []byte(`{"stream":true,"output_config":{"effort":"max"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"thinking":{"type":"adaptive","display":"summarized"},"max_tokens":64000,"metadata":{"user_id":"u"},"tools":[],"system":[],"messages":[],"model":"claude-opus-4-7","extra":1}`)
+
+	result := normalizeClaudeCodeMimicryUpstreamBody(body)
+
+	require.Equal(t, []string{
+		"model",
+		"messages",
+		"system",
+		"tools",
+		"metadata",
+		"max_tokens",
+		"thinking",
+		"context_management",
+		"output_config",
+		"stream",
+		"extra",
+	}, topLevelJSONKeysInOrder(t, result))
+}
+
+func TestNormalizeClaudeCodeMimicryUpstreamBody_OrdersCapturedHaikuKeys(t *testing.T) {
+	body := []byte(`{"stream":true,"output_config":{"format":{"type":"json_schema"}},"temperature":1,"max_tokens":32000,"metadata":{"user_id":"u"},"tools":[],"system":[],"messages":[],"model":"claude-haiku-4-5","extra":1}`)
+
+	result := normalizeClaudeCodeMimicryUpstreamBody(body)
+
+	require.Equal(t, []string{
+		"model",
+		"messages",
+		"system",
+		"tools",
+		"metadata",
+		"max_tokens",
+		"temperature",
+		"output_config",
+		"stream",
+		"extra",
+	}, topLevelJSONKeysInOrder(t, result))
 }
 
 func TestGatewayCacheTTLGlobalSetting_TargetResolution(t *testing.T) {

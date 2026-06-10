@@ -184,8 +184,63 @@ func TestApplyClaudeCodeMimicHeaders_OfficialCLI2165Fingerprint(t *testing.T) {
 	require.Equal(t, "cli", getHeaderRaw(req.Header, "X-App"))
 	require.Equal(t, "true", getHeaderRaw(req.Header, "Anthropic-Dangerous-Direct-Browser-Access"))
 	require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
-	require.Equal(t, "stream", getHeaderRaw(req.Header, "x-stainless-helper-method"))
+	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
 	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
+}
+
+func TestSortHeadersByWireOrder_MatchesCapturedCLI2156MainRequest(t *testing.T) {
+	headers := http.Header{}
+	for _, key := range []string{
+		"accept-encoding",
+		"x-client-request-id",
+		"X-Stainless-Runtime-Version",
+		"content-type",
+		"X-Stainless-Arch",
+		"anthropic-version",
+		"authorization",
+		"X-Stainless-Retry-Count",
+		"User-Agent",
+		"X-Stainless-Timeout",
+		"anthropic-beta",
+		"X-Claude-Code-Session-Id",
+		"x-app",
+		"X-Stainless-Package-Version",
+		"X-Stainless-OS",
+		"content-length",
+		"X-Stainless-Lang",
+		"Host",
+		"Accept",
+		"X-Stainless-Runtime",
+		"Connection",
+		"anthropic-dangerous-direct-browser-access",
+	} {
+		setHeaderRaw(headers, key, "v")
+	}
+
+	require.Equal(t, []string{
+		"Accept",
+		"authorization",
+		"content-type",
+		"User-Agent",
+		"X-Claude-Code-Session-Id",
+		"X-Stainless-Arch",
+		"X-Stainless-Lang",
+		"X-Stainless-OS",
+		"X-Stainless-Package-Version",
+		"X-Stainless-Retry-Count",
+		"X-Stainless-Runtime",
+		"X-Stainless-Runtime-Version",
+		"X-Stainless-Timeout",
+		"anthropic-beta",
+		"anthropic-dangerous-direct-browser-access",
+		"anthropic-version",
+		"x-app",
+		"x-client-request-id",
+		"Connection",
+		"Host",
+		"accept-encoding",
+		"content-length",
+	}, sortHeadersByWireOrder(headers))
 }
 
 func TestSyncClaudeCodeSessionHeaderFromBody_AlwaysMatchesMetadataSession(t *testing.T) {
@@ -265,6 +320,126 @@ func TestBuildUpstreamRequest_RealClaudeCodeDoesNotNormalizeForcedToolChoice(t *
 	require.Equal(t, "adaptive", gjson.GetBytes(body, "thinking.type").String())
 	require.Equal(t, "max", gjson.GetBytes(body, "output_config.effort").String())
 	require.Equal(t, "1h", gjson.GetBytes(body, "system.0.cache_control.ttl").String())
+}
+
+func TestBuildUpstreamRequest_MimicClaudeCodeOrdersCapturedOpusBody(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"stream":true,"output_config":{"effort":"max"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"thinking":{"type":"adaptive","display":"summarized"},"max_tokens":64000,"metadata":{"user_id":"u"},"tools":[],"system":[],"messages":[],"model":"claude-opus-4-7"}`),
+		"oauth-token",
+		"oauth",
+		"claude-opus-4-7",
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{
+		"model",
+		"messages",
+		"system",
+		"tools",
+		"metadata",
+		"max_tokens",
+		"thinking",
+		"context_management",
+		"output_config",
+		"stream",
+	}, topLevelJSONKeysInOrder(t, body))
+	require.Equal(t, int64(64000), gjson.GetBytes(body, "max_tokens").Int())
+	require.False(t, gjson.GetBytes(body, "temperature").Exists())
+}
+
+func TestBuildUpstreamRequest_MimicClaudeCodeHeadersMatchCapturedMainRequest(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"model":"claude-opus-4-7","messages":[],"system":[],"tools":[],"metadata":{"user_id":"{\"session_id\":\"123e4567-e89b-12d3-a456-426614174000\"}"},"max_tokens":64000,"thinking":{"type":"adaptive","display":"summarized"},"context_management":{"edits":[]},"output_config":{"effort":"max"},"stream":true}`),
+		"oauth-token",
+		"oauth",
+		"claude-opus-4-7",
+		true,
+		true,
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
+	require.Equal(t, "Bearer oauth-token", getHeaderRaw(req.Header, "authorization"))
+	require.Equal(t, "application/json", getHeaderRaw(req.Header, "content-type"))
+	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, "arm64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, "js", getHeaderRaw(req.Header, "X-Stainless-Lang"))
+	require.Equal(t, "MacOS", getHeaderRaw(req.Header, "X-Stainless-OS"))
+	require.Equal(t, "0.94.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, "0", getHeaderRaw(req.Header, "X-Stainless-Retry-Count"))
+	require.Equal(t, "node", getHeaderRaw(req.Header, "X-Stainless-Runtime"))
+	require.Equal(t, "v24.3.0", getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, "600", getHeaderRaw(req.Header, "X-Stainless-Timeout"))
+	require.Equal(t, claude.DefaultBetaHeader, getHeaderRaw(req.Header, "anthropic-beta"))
+	require.Equal(t, "true", getHeaderRaw(req.Header, "anthropic-dangerous-direct-browser-access"))
+	require.Equal(t, "2023-06-01", getHeaderRaw(req.Header, "anthropic-version"))
+	require.Equal(t, "cli", getHeaderRaw(req.Header, "x-app"))
+	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
+	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
+}
+
+func TestBuildUpstreamRequest_MimicClaudeCodeOrdersCapturedHaikuBody(t *testing.T) {
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"stream":true,"output_config":{"format":{"type":"json_schema"}},"temperature":1,"max_tokens":32000,"metadata":{"user_id":"u"},"tools":[],"system":[],"messages":[],"model":"claude-haiku-4-5"}`),
+		"oauth-token",
+		"oauth",
+		"claude-haiku-4-5",
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{
+		"model",
+		"messages",
+		"system",
+		"tools",
+		"metadata",
+		"max_tokens",
+		"temperature",
+		"output_config",
+		"stream",
+	}, topLevelJSONKeysInOrder(t, body))
+	require.Equal(t, int64(32000), gjson.GetBytes(body, "max_tokens").Int())
+	require.Equal(t, float64(1), gjson.GetBytes(body, "temperature").Float())
+}
+
+func TestBuildUpstreamRequest_RealClaudeCodePreservesBodyOrderAndParameters(t *testing.T) {
+	original := []byte(`{"stream":true,"metadata":{"user_id":"u"},"messages":[],"model":"claude-opus-4-7"}`)
+	req, err := (&GatewayService{}).buildUpstreamRequest(
+		context.Background(),
+		nil,
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		original,
+		"oauth-token",
+		"oauth",
+		"claude-opus-4-7",
+		true,
+		false,
+	)
+	require.NoError(t, err)
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, original, body)
+	require.Equal(t, []string{"stream", "metadata", "messages", "model"}, topLevelJSONKeysInOrder(t, body))
+	require.False(t, gjson.GetBytes(body, "max_tokens").Exists())
+	require.False(t, gjson.GetBytes(body, "temperature").Exists())
 }
 
 func TestDroppedBetaSet(t *testing.T) {

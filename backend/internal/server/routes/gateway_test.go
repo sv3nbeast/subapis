@@ -15,6 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func assertRouteJSONTokenOrder(t *testing.T, body string, tokens ...string) {
+	t.Helper()
+
+	last := -1
+	for _, token := range tokens {
+		pos := strings.Index(body, token)
+		require.NotEqualf(t, -1, pos, "missing token %s in body %s", token, body)
+		require.Greaterf(t, pos, last, "token %s should appear after previous tokens in body %s", token, body)
+		last = pos
+	}
+}
+
 func newGatewayRoutesTestRouter() *gin.Engine {
 	return newGatewayRoutesTestRouterForPlatform(service.PlatformOpenAI, config.ClaudeCodeAuxCompatModeRecord)
 }
@@ -70,6 +82,34 @@ func TestGatewayRoutesClaudeCodeAuxCompatRecordMode(t *testing.T) {
 			wantJSON:   map[string]any{"data": []any{}, "next_page": nil},
 		},
 		{
+			path:       "/api/claude_code/settings",
+			method:     http.MethodGet,
+			wantStatus: http.StatusOK,
+			wantJSON: map[string]any{
+				"uuid":     "d3642035-4f89-4d00-8c6d-45e3ec9cc28a",
+				"checksum": "sha256:f3bc73acb96c25445a9a56726132f88b353aa50cfff5bd5f4e59ce5f9b664120",
+				"settings": map[string]any{
+					"channelsEnabled": true,
+				},
+			},
+		},
+		{
+			path:       "/api/claude_code/policy_limits",
+			method:     http.MethodGet,
+			wantStatus: http.StatusOK,
+			wantJSON: map[string]any{
+				"restrictions": map[string]any{
+					"allow_cobalt_plinth": map[string]any{
+						"allowed": false,
+					},
+					"enforce_web_search_mcp_isolation": map[string]any{
+						"allowed": false,
+					},
+				},
+				"compliance_taints": []any{},
+			},
+		},
+		{
 			path:       "/api/claude_code_penguin_mode",
 			method:     http.MethodGet,
 			wantStatus: http.StatusOK,
@@ -84,6 +124,56 @@ func TestGatewayRoutesClaudeCodeAuxCompatRecordMode(t *testing.T) {
 				"domain_excluded":           false,
 				"notice_is_grace_period":    false,
 				"notice_reminder_frequency": float64(0),
+			},
+		},
+		{
+			path:       "/api/oauth/profile",
+			method:     http.MethodGet,
+			wantStatus: http.StatusOK,
+			wantJSON: map[string]any{
+				"account": map[string]any{
+					"uuid":           "",
+					"full_name":      "",
+					"display_name":   "",
+					"email":          "user@example.test",
+					"has_claude_max": false,
+					"has_claude_pro": false,
+					"created_at":     nil,
+				},
+				"organization": map[string]any{
+					"uuid":                            "",
+					"name":                            "user@example.test's Organization",
+					"organization_type":               "claude_pro",
+					"billing_type":                    "",
+					"rate_limit_tier":                 "default_claude_ai",
+					"seat_tier":                       nil,
+					"has_extra_usage_enabled":         false,
+					"subscription_status":             "",
+					"subscription_created_at":         nil,
+					"cc_onboarding_flags":             map[string]any{},
+					"claude_code_trial_ends_at":       nil,
+					"claude_code_trial_duration_days": nil,
+					"payment_auth_hosted_invoice_url": nil,
+				},
+				"application": map[string]any{
+					"uuid": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+					"name": "Claude Code",
+					"slug": "claude-code",
+				},
+				"enabled_plugins": []any{},
+			},
+		},
+		{
+			path:       "/api/oauth/claude_cli/roles",
+			method:     http.MethodGet,
+			wantStatus: http.StatusOK,
+			wantJSON: map[string]any{
+				"organization_uuid": "",
+				"organization_name": "user@example.test's Organization",
+				"organization_role": "user",
+				"workspace_uuid":    nil,
+				"workspace_name":    nil,
+				"workspace_role":    nil,
 			},
 		},
 		{
@@ -151,6 +241,20 @@ func TestGatewayRoutesClaudeCodeAuxCompatBootstrapAndSettingsShape(t *testing.T)
 	require.Equal(t, true, settings["enabled_web_search"])
 	require.Equal(t, "auto", settings["tool_search_mode"])
 	require.Equal(t, true, settings["grove_enabled"])
+}
+
+func TestGatewayRoutesClaudeCodeAuxCompatCapturedProfileOrder(t *testing.T) {
+	router := newGatewayRoutesTestRouterForPlatform(service.PlatformAnthropic, config.ClaudeCodeAuxCompatModeRecord)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/oauth/profile", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := w.Body.String()
+	assertRouteJSONTokenOrder(t, body, `"account"`, `"organization"`, `"application"`, `"enabled_plugins"`)
+	assertRouteJSONTokenOrder(t, body, `"uuid"`, `"full_name"`, `"display_name"`, `"email"`, `"has_claude_max"`, `"has_claude_pro"`, `"created_at"`)
+	assertRouteJSONTokenOrder(t, body, `"organization_type"`, `"billing_type"`, `"rate_limit_tier"`, `"seat_tier"`, `"has_extra_usage_enabled"`, `"subscription_status"`, `"subscription_created_at"`, `"cc_onboarding_flags"`, `"claude_code_trial_ends_at"`, `"claude_code_trial_duration_days"`, `"payment_auth_hosted_invoice_url"`)
 }
 
 func TestGatewayRoutesClaudeCodeAuxCompatOffMode(t *testing.T) {

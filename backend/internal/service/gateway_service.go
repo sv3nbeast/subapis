@@ -1229,18 +1229,22 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	}
 
 	// temperature：真实 Claude Code CLI 总是发送 temperature（默认 1，客户端可覆盖）。
-	// 之前的实现直接 delete 会导致 payload 缺字段，与真实 CLI 字节级不一致。
-	// 策略：客户端传了什么就透传；没传则补默认 1。
-	if !gjson.GetBytes(out, "temperature").Exists() {
+	// 本次抓包显示 Haiku 辅助请求携带 temperature=1；Opus 主请求不携带。
+	// 因此只在 Haiku 请求缺省时补齐，避免把主请求改成与真实 CLI 不同的参数集合。
+	if strings.Contains(strings.ToLower(modelID), "haiku") && !gjson.GetBytes(out, "temperature").Exists() {
 		if next, ok := setJSONValueBytes(out, "temperature", 1); ok {
 			out = next
 			modified = true
 		}
 	}
 
-	// max_tokens：真实 CLI 的默认值是 128000。缺失时补齐以对齐指纹。
+	// max_tokens：本次 Claude CLI 2.1.156 抓包里主请求为 64000，Haiku 辅助请求为 32000。
 	if !gjson.GetBytes(out, "max_tokens").Exists() {
-		if next, ok := setJSONValueBytes(out, "max_tokens", 128000); ok {
+		maxTokens := 64000
+		if strings.Contains(strings.ToLower(modelID), "haiku") {
+			maxTokens = 32000
+		}
+		if next, ok := setJSONValueBytes(out, "max_tokens", maxTokens); ok {
 			out = next
 			modified = true
 		}
@@ -5088,7 +5092,84 @@ func enforceCacheControlLimit(body []byte) []byte {
 func normalizeClaudeCodeMimicryUpstreamBody(body []byte) []byte {
 	body = disableThinkingIfToolChoiceForced(body)
 	body = normalizeCacheControlTTLOrder(body)
+	body = reorderClaudeCodeMimicryTopLevelKeys(body)
 	return body
+}
+
+func reorderClaudeCodeMimicryTopLevelKeys(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return body
+	}
+
+	modelID := strings.ToLower(strings.TrimSpace(root.Get("model").String()))
+	order := []string{
+		"model",
+		"messages",
+		"system",
+		"tools",
+		"metadata",
+		"max_tokens",
+		"thinking",
+		"context_management",
+		"output_config",
+		"stream",
+	}
+	if strings.Contains(modelID, "haiku") {
+		order = []string{
+			"model",
+			"messages",
+			"system",
+			"tools",
+			"metadata",
+			"max_tokens",
+			"temperature",
+			"output_config",
+			"stream",
+		}
+	}
+
+	obj := root.Map()
+	seen := make(map[string]struct{}, len(order))
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	writeKey := func(key string) {
+		value, ok := obj[key]
+		if !ok {
+			return
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		keyBytes, err := json.Marshal(key)
+		if err != nil {
+			return
+		}
+		buf.Write(keyBytes)
+		buf.WriteByte(':')
+		buf.WriteString(value.Raw)
+		seen[key] = struct{}{}
+	}
+
+	for _, key := range order {
+		writeKey(key)
+	}
+
+	root.ForEach(func(key, _ gjson.Result) bool {
+		k := key.String()
+		if _, ok := seen[k]; ok {
+			return true
+		}
+		writeKey(k)
+		return true
+	})
+	buf.WriteByte('}')
+	return buf.Bytes()
 }
 
 // disableThinkingIfToolChoiceForced keeps Anthropic requests valid when a
@@ -7644,7 +7725,7 @@ var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
 // headers when using Claude Code-scoped OAuth credentials.
-func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
+func applyClaudeCodeMimicHeaders(req *http.Request, _ bool) {
 	if req == nil {
 		return
 	}
@@ -7660,9 +7741,6 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
 	setHeaderRaw(req.Header, "Accept", "application/json")
-	if isStream {
-		setHeaderRaw(req.Header, "x-stainless-helper-method", "stream")
-	}
 	// Real Claude CLI 每个请求都会生成一个新的 UUID 放在 x-client-request-id。
 	// 上游会以此作为会话/请求指纹的一部分，缺失或重复都可能触发第三方判定。
 	if getHeaderRaw(req.Header, "x-client-request-id") == "" {

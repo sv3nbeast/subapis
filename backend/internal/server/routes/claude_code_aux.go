@@ -25,8 +25,12 @@ func registerClaudeCodeAuxCompatRoutes(
 	{
 		aux.GET("/v1/mcp_servers", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxMCPServers))
 		aux.GET("/api/claude_cli/bootstrap", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxBootstrap))
+		aux.GET("/api/claude_code/settings", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxClaudeCodeSettings))
+		aux.GET("/api/claude_code/policy_limits", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxPolicyLimits))
 		aux.GET("/api/claude_code_penguin_mode", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxPenguinMode))
 		aux.GET("/api/claude_code_grove", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxGrove))
+		aux.GET("/api/oauth/profile", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxOAuthProfile))
+		aux.GET("/api/oauth/claude_cli/roles", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxClaudeCLIRoles))
 		aux.GET("/api/oauth/account/settings", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxAccountSettings))
 		aux.GET("/mcp-registry/v0/servers", claudeCodeAuxCompatHandler(cfg, claudeCodeAuxMCPRegistry))
 	}
@@ -35,12 +39,16 @@ func registerClaudeCodeAuxCompatRoutes(
 type claudeCodeAuxEndpoint string
 
 const (
-	claudeCodeAuxMCPServers      claudeCodeAuxEndpoint = "mcp_servers"
-	claudeCodeAuxBootstrap       claudeCodeAuxEndpoint = "claude_cli_bootstrap"
-	claudeCodeAuxPenguinMode     claudeCodeAuxEndpoint = "claude_code_penguin_mode"
-	claudeCodeAuxGrove           claudeCodeAuxEndpoint = "claude_code_grove"
-	claudeCodeAuxAccountSettings claudeCodeAuxEndpoint = "oauth_account_settings"
-	claudeCodeAuxMCPRegistry     claudeCodeAuxEndpoint = "mcp_registry_servers"
+	claudeCodeAuxMCPServers         claudeCodeAuxEndpoint = "mcp_servers"
+	claudeCodeAuxBootstrap          claudeCodeAuxEndpoint = "claude_cli_bootstrap"
+	claudeCodeAuxClaudeCodeSettings claudeCodeAuxEndpoint = "claude_code_settings"
+	claudeCodeAuxPolicyLimits       claudeCodeAuxEndpoint = "claude_code_policy_limits"
+	claudeCodeAuxPenguinMode        claudeCodeAuxEndpoint = "claude_code_penguin_mode"
+	claudeCodeAuxGrove              claudeCodeAuxEndpoint = "claude_code_grove"
+	claudeCodeAuxOAuthProfile       claudeCodeAuxEndpoint = "oauth_profile"
+	claudeCodeAuxClaudeCLIRoles     claudeCodeAuxEndpoint = "oauth_claude_cli_roles"
+	claudeCodeAuxAccountSettings    claudeCodeAuxEndpoint = "oauth_account_settings"
+	claudeCodeAuxMCPRegistry        claudeCodeAuxEndpoint = "mcp_registry_servers"
 )
 
 func claudeCodeAuxCompatHandler(cfg *config.Config, endpoint claudeCodeAuxEndpoint) gin.HandlerFunc {
@@ -84,6 +92,12 @@ func writeClaudeCodeAuxCompatResponse(c *gin.Context, endpoint claudeCodeAuxEndp
 		c.JSON(http.StatusOK, gin.H{"data": []any{}, "next_page": nil})
 	case claudeCodeAuxBootstrap:
 		c.JSON(http.StatusOK, claudeCodeAuxBootstrapResponse(c))
+	case claudeCodeAuxClaudeCodeSettings:
+		c.Header("Cache-Control", "private, max-age=60")
+		c.JSON(http.StatusOK, claudeCodeAuxClaudeCodeSettingsResponse())
+	case claudeCodeAuxPolicyLimits:
+		c.Header("Cache-Control", "max-age=3600")
+		c.JSON(http.StatusOK, claudeCodeAuxPolicyLimitsResponse())
 	case claudeCodeAuxPenguinMode:
 		c.JSON(http.StatusOK, gin.H{"enabled": false, "disabled_reason": "extra_usage_disabled"})
 	case claudeCodeAuxGrove:
@@ -93,6 +107,10 @@ func writeClaudeCodeAuxCompatResponse(c *gin.Context, endpoint claudeCodeAuxEndp
 			"notice_is_grace_period":    false,
 			"notice_reminder_frequency": 0,
 		})
+	case claudeCodeAuxOAuthProfile:
+		c.JSON(http.StatusOK, claudeCodeAuxOAuthProfileResponse(c))
+	case claudeCodeAuxClaudeCLIRoles:
+		c.JSON(http.StatusOK, claudeCodeAuxClaudeCLIRolesResponse(c))
 	case claudeCodeAuxAccountSettings:
 		c.JSON(http.StatusOK, claudeCodeAuxAccountSettingsResponse())
 	case claudeCodeAuxMCPRegistry:
@@ -105,6 +123,142 @@ func writeClaudeCodeAuxCompatResponse(c *gin.Context, endpoint claudeCodeAuxEndp
 		})
 	default:
 		c.JSON(http.StatusOK, gin.H{})
+	}
+}
+
+func claudeCodeAuxClaudeCodeSettingsResponse() any {
+	type settingsPayload struct {
+		ChannelsEnabled bool `json:"channelsEnabled"`
+	}
+	type response struct {
+		UUID     string          `json:"uuid"`
+		Checksum string          `json:"checksum"`
+		Settings settingsPayload `json:"settings"`
+	}
+	return response{
+		UUID:     "d3642035-4f89-4d00-8c6d-45e3ec9cc28a",
+		Checksum: "sha256:f3bc73acb96c25445a9a56726132f88b353aa50cfff5bd5f4e59ce5f9b664120",
+		Settings: settingsPayload{
+			ChannelsEnabled: true,
+		},
+	}
+}
+
+func claudeCodeAuxPolicyLimitsResponse() any {
+	type allowedRestriction struct {
+		Allowed bool `json:"allowed"`
+	}
+	type restrictionsPayload struct {
+		AllowCobaltPlinth            allowedRestriction `json:"allow_cobalt_plinth"`
+		EnforceWebSearchMCPIsolation allowedRestriction `json:"enforce_web_search_mcp_isolation"`
+	}
+	type response struct {
+		Restrictions     restrictionsPayload `json:"restrictions"`
+		ComplianceTaints []any               `json:"compliance_taints"`
+	}
+	return response{
+		Restrictions: restrictionsPayload{
+			AllowCobaltPlinth:            allowedRestriction{Allowed: false},
+			EnforceWebSearchMCPIsolation: allowedRestriction{Allowed: false},
+		},
+		ComplianceTaints: []any{},
+	}
+}
+
+func claudeCodeAuxOAuthProfileResponse(c *gin.Context) any {
+	accountEmail := ""
+	if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.User != nil {
+		accountEmail = strings.TrimSpace(apiKey.User.Email)
+	}
+	type accountPayload struct {
+		UUID         string `json:"uuid"`
+		FullName     string `json:"full_name"`
+		DisplayName  string `json:"display_name"`
+		Email        string `json:"email"`
+		HasClaudeMax bool   `json:"has_claude_max"`
+		HasClaudePro bool   `json:"has_claude_pro"`
+		CreatedAt    any    `json:"created_at"`
+	}
+	type organizationPayload struct {
+		UUID                        string         `json:"uuid"`
+		Name                        string         `json:"name"`
+		OrganizationType            string         `json:"organization_type"`
+		BillingType                 string         `json:"billing_type"`
+		RateLimitTier               string         `json:"rate_limit_tier"`
+		SeatTier                    any            `json:"seat_tier"`
+		HasExtraUsageEnabled        bool           `json:"has_extra_usage_enabled"`
+		SubscriptionStatus          string         `json:"subscription_status"`
+		SubscriptionCreatedAt       any            `json:"subscription_created_at"`
+		CCOnboardingFlags           map[string]any `json:"cc_onboarding_flags"`
+		ClaudeCodeTrialEndsAt       any            `json:"claude_code_trial_ends_at"`
+		ClaudeCodeTrialDurationDays any            `json:"claude_code_trial_duration_days"`
+		PaymentAuthHostedInvoiceURL any            `json:"payment_auth_hosted_invoice_url"`
+	}
+	type applicationPayload struct {
+		UUID string `json:"uuid"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	type response struct {
+		Account        accountPayload      `json:"account"`
+		Organization   organizationPayload `json:"organization"`
+		Application    applicationPayload  `json:"application"`
+		EnabledPlugins []any               `json:"enabled_plugins"`
+	}
+	return response{
+		Account: accountPayload{
+			UUID:         "",
+			FullName:     "",
+			DisplayName:  "",
+			Email:        accountEmail,
+			HasClaudeMax: false,
+			HasClaudePro: false,
+			CreatedAt:    nil,
+		},
+		Organization: organizationPayload{
+			UUID:                        "",
+			Name:                        organizationNameForEmail(accountEmail),
+			OrganizationType:            "claude_pro",
+			BillingType:                 "",
+			RateLimitTier:               "default_claude_ai",
+			SeatTier:                    nil,
+			HasExtraUsageEnabled:        false,
+			SubscriptionStatus:          "",
+			SubscriptionCreatedAt:       nil,
+			CCOnboardingFlags:           map[string]any{},
+			ClaudeCodeTrialEndsAt:       nil,
+			ClaudeCodeTrialDurationDays: nil,
+			PaymentAuthHostedInvoiceURL: nil,
+		},
+		Application: applicationPayload{
+			UUID: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+			Name: "Claude Code",
+			Slug: "claude-code",
+		},
+		EnabledPlugins: []any{},
+	}
+}
+
+func claudeCodeAuxClaudeCLIRolesResponse(c *gin.Context) any {
+	accountEmail := ""
+	if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.User != nil {
+		accountEmail = strings.TrimSpace(apiKey.User.Email)
+	}
+	type response struct {
+		OrganizationUUID string `json:"organization_uuid"`
+		OrganizationName string `json:"organization_name"`
+		OrganizationRole string `json:"organization_role"`
+		WorkspaceUUID    any    `json:"workspace_uuid"`
+		WorkspaceName    any    `json:"workspace_name"`
+		WorkspaceRole    any    `json:"workspace_role"`
+	}
+	return response{
+		OrganizationUUID: "",
+		OrganizationName: organizationNameForEmail(accountEmail),
+		OrganizationRole: "user",
+		WorkspaceUUID:    nil,
+		WorkspaceName:    nil,
+		WorkspaceRole:    nil,
 	}
 }
 
@@ -129,13 +283,20 @@ func claudeCodeAuxBootstrapResponse(c *gin.Context) gin.H {
 			"account_uuid":                 "",
 			"account_email":                accountEmail,
 			"organization_uuid":            "",
-			"organization_name":            accountEmail + "'s Organization",
+			"organization_name":            organizationNameForEmail(accountEmail),
 			"organization_type":            "claude_pro",
 			"organization_rate_limit_tier": "default_claude_ai",
 			"user_rate_limit_tier":         nil,
 			"seat_tier":                    nil,
 		},
 	}
+}
+
+func organizationNameForEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	return email + "'s Organization"
 }
 
 func claudeCodeAuxAccountSettingsResponse() gin.H {
