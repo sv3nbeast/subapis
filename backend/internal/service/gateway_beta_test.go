@@ -183,7 +183,8 @@ func TestApplyClaudeCodeMimicHeaders_OfficialCLI2165Fingerprint(t *testing.T) {
 	require.Equal(t, "600", getHeaderRaw(req.Header, "X-Stainless-Timeout"))
 	require.Equal(t, "cli", getHeaderRaw(req.Header, "X-App"))
 	require.Equal(t, "true", getHeaderRaw(req.Header, "Anthropic-Dangerous-Direct-Browser-Access"))
-	require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
+	require.Equal(t, claude.DefaultAcceptHeader, getHeaderRaw(req.Header, "Accept"))
+	require.Equal(t, claude.DefaultAcceptEncodingHeader, getHeaderRaw(req.Header, "Accept-Encoding"))
 	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
 	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
 }

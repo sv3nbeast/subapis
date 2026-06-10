@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"bytes"
+	"compress/lzw"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -10,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/net/http2"
@@ -80,6 +83,59 @@ func (s *HTTPUpstreamSuite) TestNormalizeProxyURL_Canonicalizes() {
 	key2, _, err2 := normalizeProxyURL("http://proxy.local:8080/")
 	require.NoError(s.T(), err2)
 	require.Equal(s.T(), key1, key2, "expected normalized proxy keys to match")
+}
+
+func TestDecompressResponseBodySupportsZstd(t *testing.T) {
+	const plain = "claude cli compressed response"
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	require.NoError(t, err)
+	_, err = zw.Write([]byte(plain))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Encoding": []string{"zstd"},
+			"Content-Length":   []string{"999"},
+		},
+		Body: io.NopCloser(bytes.NewReader(buf.Bytes())),
+	}
+
+	decompressResponseBody(resp)
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, plain, string(got))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	require.Empty(t, resp.Header.Get("Content-Length"))
+	require.EqualValues(t, -1, resp.ContentLength)
+}
+
+func TestDecompressResponseBodySupportsCompress(t *testing.T) {
+	const plain = "claude cli legacy compress response"
+	var buf bytes.Buffer
+	lw := lzw.NewWriter(&buf, lzw.MSB, 8)
+	_, err := lw.Write([]byte(plain))
+	require.NoError(t, err)
+	require.NoError(t, lw.Close())
+
+	resp := &http.Response{
+		Header: http.Header{
+			"Content-Encoding": []string{"compress"},
+			"Content-Length":   []string{"999"},
+		},
+		Body: io.NopCloser(bytes.NewReader(buf.Bytes())),
+	}
+
+	decompressResponseBody(resp)
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, plain, string(got))
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	require.Empty(t, resp.Header.Get("Content-Length"))
+	require.EqualValues(t, -1, resp.ContentLength)
 }
 
 // TestAcquireClient_OverLimitReturnsError 测试连接池缓存上限保护

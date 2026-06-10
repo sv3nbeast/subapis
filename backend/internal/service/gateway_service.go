@@ -7397,7 +7397,10 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request) {
 		return
 	}
 	if getHeaderRaw(req.Header, "Accept") == "" {
-		setHeaderRaw(req.Header, "Accept", "application/json")
+		setHeaderRaw(req.Header, "Accept", claude.DefaultAcceptHeader)
+	}
+	if getHeaderRaw(req.Header, "Accept-Encoding") == "" {
+		setHeaderRaw(req.Header, "Accept-Encoding", claude.DefaultAcceptEncodingHeader)
 	}
 	for key, value := range claude.DefaultHeaders {
 		if value == "" {
@@ -7740,7 +7743,8 @@ func applyClaudeCodeMimicHeaders(req *http.Request, _ bool) {
 		setHeaderRaw(req.Header, resolveWireCasing(key), value)
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
-	setHeaderRaw(req.Header, "Accept", "application/json")
+	setHeaderRaw(req.Header, "Accept", claude.DefaultAcceptHeader)
+	setHeaderRaw(req.Header, "Accept-Encoding", claude.DefaultAcceptEncodingHeader)
 	// Real Claude CLI 每个请求都会生成一个新的 UUID 放在 x-client-request-id。
 	// 上游会以此作为会话/请求指纹的一部分，缺失或重复都可能触发第三方判定。
 	if getHeaderRaw(req.Header, "x-client-request-id") == "" {

@@ -11,6 +11,10 @@ package claude
 // 缺少任何"官方 Claude Code 请求才会带"的 beta，都会被降级到第三方额度，
 // 对应报错：`Third-party apps now draw from your extra usage, not your plan limits.`
 const (
+	DefaultAcceptHeader          = "application/json"
+	DefaultAcceptEncodingHeader  = "gzip, deflate, br, zstd"
+	AxiosAcceptHeader            = "application/json, text/plain, */*"
+	AxiosAcceptEncodingHeader    = "gzip, compress, deflate, br"
 	BetaOAuth                    = "oauth-2025-04-20"
 	BetaClaudeCode               = "claude-code-20250219"
 	BetaInterleavedThinking      = "interleaved-thinking-2025-05-14"

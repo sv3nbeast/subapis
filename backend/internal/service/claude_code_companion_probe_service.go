@@ -56,6 +56,8 @@ type claudeCodeCompanionEndpoint struct {
 	Beta        string
 	Body        []byte
 	ContentType string
+	Accept      string
+	Encoding    string
 	Auth        bool
 }
 
@@ -146,8 +148,16 @@ func (s *ClaudeCodeCompanionProbeService) sendOne(ctx context.Context, input Cla
 	if endpoint.ContentType != "" {
 		setHeaderRaw(req.Header, "content-type", endpoint.ContentType)
 	}
-	setHeaderRaw(req.Header, "Accept", "application/json")
-	setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br")
+	accept := endpoint.Accept
+	if accept == "" {
+		accept = claude.DefaultAcceptHeader
+	}
+	encoding := endpoint.Encoding
+	if encoding == "" {
+		encoding = claude.DefaultAcceptEncodingHeader
+	}
+	setHeaderRaw(req.Header, "Accept", accept)
+	setHeaderRaw(req.Header, "Accept-Encoding", encoding)
 	if strings.Contains(endpoint.URL, "/v1/") {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
@@ -179,6 +189,8 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			URL:       buildClaudeCodeBootstrapURL(input.RequestModel),
 			UserAgent: "claude-code/" + claude.CLICurrentVersion,
 			Beta:      claude.BetaOAuth,
+			Accept:    claude.AxiosAcceptHeader,
+			Encoding:  claude.AxiosAcceptEncodingHeader,
 			Auth:      true,
 		},
 		{
@@ -187,6 +199,8 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			URL:       claudeCodeCompanionBaseURL + "/api/claude_code_penguin_mode",
 			UserAgent: "axios/1.15.2",
 			Beta:      claude.BetaOAuth,
+			Accept:    claude.AxiosAcceptHeader,
+			Encoding:  claude.AxiosAcceptEncodingHeader,
 			Auth:      true,
 		},
 		{
@@ -195,6 +209,8 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			URL:       claudeCodeCompanionBaseURL + "/api/claude_code_grove",
 			UserAgent: claude.DefaultHeaders["User-Agent"],
 			Beta:      claude.BetaOAuth,
+			Accept:    claude.AxiosAcceptHeader,
+			Encoding:  claude.AxiosAcceptEncodingHeader,
 			Auth:      true,
 		},
 		{
@@ -202,6 +218,8 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			Method:    http.MethodGet,
 			URL:       claudeCodeCompanionBaseURL + "/api/oauth/profile",
 			UserAgent: "axios/1.15.2",
+			Accept:    claude.AxiosAcceptHeader,
+			Encoding:  claude.AxiosAcceptEncodingHeader,
 			Auth:      true,
 		},
 		mcpServers,
@@ -210,6 +228,8 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 			Method:    http.MethodGet,
 			URL:       claudeCodeCompanionBaseURL + "/mcp-registry/v0/servers?version=latest&limit=100&visibility=commercial%2Cgsuite%2Centerprise%2Chealth",
 			UserAgent: claude.DefaultHeaders["User-Agent"],
+			Accept:    claude.AxiosAcceptHeader,
+			Encoding:  claude.AxiosAcceptEncodingHeader,
 			Auth:      false,
 		},
 	}
@@ -226,6 +246,8 @@ func claudeCodeMCPServersCompanionEndpoint() claudeCodeCompanionEndpoint {
 		URL:       claudeCodeCompanionBaseURL + "/v1/mcp_servers?limit=1000",
 		UserAgent: "axios/1.15.2",
 		Beta:      "mcp-servers-2025-12-04",
+		Accept:    claude.AxiosAcceptHeader,
+		Encoding:  claude.AxiosAcceptEncodingHeader,
 		Auth:      true,
 	}
 }

@@ -147,6 +147,12 @@ No separate high-frequency `recordCodeAssistMetrics`,
 `recordTrajectoryAnalytics`, or `listExperiments` polling was observed in this
 window.
 
+Current redacted `flows.summary.json` captures are HTTP-layer summaries. They
+do not contain raw TLS ClientHello, JA3/JA4, negotiated ALPN, TCP connection
+reuse, or TLS session-resumption evidence. Treat TLS/HTTPS fingerprint claims as
+coming from separate uTLS profile capture evidence, not from the mitm summary
+files.
+
 Core `/v1/messages` fingerprint:
 
 - `User-Agent`: `claude-cli/2.1.165 (external, sdk-cli)`
@@ -167,6 +173,14 @@ Core `/v1/messages` fingerprint:
 - title probe model: `awsclaude4.5-haiku`
 - title probe system text starts with:
   `Generate a concise, sentence-case title (3-7 words)...`
+
+Auxiliary GET endpoint HTTP fingerprint:
+
+- `Accept`: `application/json, text/plain, */*`
+- `Accept-Encoding`: `gzip, compress, deflate, br`
+- Axios-style endpoints use `User-Agent: axios/1.15.2`
+- `bootstrap` uses `User-Agent: claude-code/2.1.165`
+- `grove` and `mcp-registry` use the normal Claude CLI user-agent
 
 Main Sonnet beta set:
 
