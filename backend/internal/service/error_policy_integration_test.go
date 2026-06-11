@@ -53,7 +53,7 @@ func (r *epAccountRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.
 	return nil
 }
 
-func (r *epAccountRepo) SetModelRateLimit(_ context.Context, _ int64, _ string, _ time.Time) error {
+func (r *epAccountRepo) SetModelRateLimit(_ context.Context, _ int64, _ string, _ time.Time, _ ...string) error {
 	r.modelRateLimitCalls++
 	return nil
 }

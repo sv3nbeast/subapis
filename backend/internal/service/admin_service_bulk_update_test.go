@@ -205,6 +205,61 @@ func TestAdminService_BulkUpdateAccounts_MixedChannelPreCheckBlocksOnExistingCon
 	require.Empty(t, repo.bindGroupsCalls)
 }
 
+func TestAdminService_CheckMixedChannelRisk_CoversKiroAndDroid(t *testing.T) {
+	tests := []struct {
+		name             string
+		currentPlatform  string
+		existingPlatform string
+		wantCurrent      string
+		wantOther        string
+	}{
+		{
+			name:             "kiro绑定到已有anthropic账号分组需要确认",
+			currentPlatform:  PlatformKiro,
+			existingPlatform: PlatformAnthropic,
+			wantCurrent:      "Kiro",
+			wantOther:        "Anthropic",
+		},
+		{
+			name:             "droid绑定到已有anthropic账号分组需要确认",
+			currentPlatform:  PlatformDroid,
+			existingPlatform: PlatformAnthropic,
+			wantCurrent:      "Droid",
+			wantOther:        "Anthropic",
+		},
+		{
+			name:             "anthropic绑定到已有kiro账号分组需要确认",
+			currentPlatform:  PlatformAnthropic,
+			existingPlatform: PlatformKiro,
+			wantCurrent:      "Anthropic",
+			wantOther:        "Kiro",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &accountRepoStubForBulkUpdate{
+				listByGroupData: map[int64][]Account{
+					10: {{ID: 99, Platform: tt.existingPlatform}},
+				},
+			}
+			svc := &adminServiceImpl{
+				accountRepo: repo,
+				groupRepo:   &groupRepoStubForAdmin{getByID: &Group{ID: 10, Name: "target-group"}},
+			}
+
+			err := svc.CheckMixedChannelRisk(context.Background(), 0, tt.currentPlatform, []int64{10})
+			require.Error(t, err)
+			var mixedErr *MixedChannelError
+			require.ErrorAs(t, err, &mixedErr)
+			require.Equal(t, int64(10), mixedErr.GroupID)
+			require.Equal(t, "target-group", mixedErr.GroupName)
+			require.Equal(t, tt.wantCurrent, mixedErr.CurrentPlatform)
+			require.Equal(t, tt.wantOther, mixedErr.OtherPlatform)
+		})
+	}
+}
+
 func TestAdminService_BulkUpdateAccounts_RejectsMixedPlatformModelMapping(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
 		getByIDsAccounts: []*Account{

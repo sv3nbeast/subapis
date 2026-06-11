@@ -3039,7 +3039,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	}
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
+		platforms := mixedSchedulingQueryPlatforms(platform)
 		var accounts []Account
 		var err error
 		if groupID != nil {
@@ -3058,7 +3058,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if !isAccountAllowedInMixedScheduling(&acc, platform) {
 				continue
 			}
 			filtered = append(filtered, acc)
@@ -3116,7 +3116,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 func (s *GatewayService) listSchedulableAccountsDirect(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
-		platforms := []string{platform, PlatformAntigravity}
+		platforms := mixedSchedulingQueryPlatforms(platform)
 		var accounts []Account
 		var err error
 		if groupID != nil {
@@ -3131,7 +3131,7 @@ func (s *GatewayService) listSchedulableAccountsDirect(ctx context.Context, grou
 		}
 		filtered := make([]Account, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if !isAccountAllowedInMixedScheduling(&acc, platform) {
 				continue
 			}
 			filtered = append(filtered, acc)
@@ -3192,10 +3192,7 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 		return false
 	}
 	if useMixed {
-		if account.Platform == platform {
-			return true
-		}
-		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
+		return isAccountAllowedInMixedScheduling(account, platform)
 	}
 	return account.Platform == platform
 }
@@ -4161,14 +4158,14 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
 				if _, excluded := excludedIDs[accountID]; !excluded {
 					account, err := s.getSchedulableAccount(ctx, accountID)
-					// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
+					// 检查账号分组归属和有效性：原生平台直接匹配，跨平台账号需要启用 mixed_scheduling。
 					if err == nil {
 						clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+							if isAccountAllowedInMixedScheduling(account, nativePlatform) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -4222,14 +4219,14 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if err == nil && accountID > 0 {
 			if _, excluded := excludedIDs[accountID]; !excluded {
 				account, err := s.getSchedulableAccount(ctx, accountID)
-				// 检查账号分组归属和有效性：原生平台直接匹配，antigravity 需要启用混合调度
+				// 检查账号分组归属和有效性：原生平台直接匹配，跨平台账号需要启用 mixed_scheduling。
 				if err == nil {
 					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+						if isAccountAllowedInMixedScheduling(account, nativePlatform) {
 							return account, nil
 						}
 					}
@@ -4455,15 +4452,48 @@ func isPlatformFilteredForSelection(acc *Account, platform string, allowMixedSch
 		return true
 	}
 	if allowMixedScheduling {
-		if acc.Platform == PlatformAntigravity {
-			return !acc.IsMixedSchedulingEnabled()
-		}
-		return acc.Platform != platform
+		return !isAccountAllowedInMixedScheduling(acc, platform)
 	}
 	if strings.TrimSpace(platform) == "" {
 		return false
 	}
 	return acc.Platform != platform
+}
+
+func mixedSchedulingQueryPlatforms(nativePlatform string) []string {
+	switch nativePlatform {
+	case PlatformAnthropic:
+		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid}
+	case PlatformGemini:
+		return []string{PlatformGemini, PlatformAntigravity}
+	default:
+		return []string{nativePlatform}
+	}
+}
+
+func isAccountAllowedInMixedScheduling(account *Account, nativePlatform string) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform == nativePlatform {
+		return true
+	}
+	if !account.IsMixedSchedulingEnabled() {
+		return false
+	}
+	switch nativePlatform {
+	case PlatformAnthropic:
+		switch account.Platform {
+		case PlatformAntigravity, PlatformKiro, PlatformDroid:
+			return true
+		default:
+			return false
+		}
+	case PlatformGemini:
+		return account.Platform == PlatformAntigravity
+	default:
+		return false
+	}
 }
 
 func appendSelectionFailureSampleID(samples []int64, id int64) []int64 {
