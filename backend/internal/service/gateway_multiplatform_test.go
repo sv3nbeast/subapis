@@ -1474,6 +1474,108 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 		require.Equal(t, int64(2), acc.ID, "应选择优先级最高的账户（包含启用混合调度的antigravity）")
 	})
 
+	t.Run("混合调度-Anthropic可选择启用mixed_scheduling的Kiro账户", func(t *testing.T) {
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{ID: 1, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true},
+				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(2), acc.ID)
+		require.Equal(t, PlatformKiro, acc.Platform)
+	})
+
+	t.Run("混合调度-Anthropic可选择启用mixed_scheduling的Droid账户", func(t *testing.T) {
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{ID: 1, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true},
+				{ID: 2, Platform: PlatformDroid, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(2), acc.ID)
+		require.Equal(t, PlatformDroid, acc.Platform)
+	})
+
+	t.Run("混合调度-Anthropic过滤未启用mixed_scheduling的Kiro和Droid账户", func(t *testing.T) {
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{ID: 1, Platform: PlatformAnthropic, Priority: 3, Status: StatusActive, Schedulable: true},
+				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true},
+				{ID: 3, Platform: PlatformDroid, Priority: 1, Status: StatusActive, Schedulable: true},
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(1), acc.ID)
+		require.Equal(t, PlatformAnthropic, acc.Platform)
+	})
+
+	t.Run("混合调度-Gemini不选择启用mixed_scheduling的Kiro或Droid账户", func(t *testing.T) {
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{ID: 1, Platform: PlatformGemini, Priority: 3, Status: StatusActive, Schedulable: true, Type: AccountTypeAPIKey},
+				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+				{ID: 3, Platform: PlatformDroid, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "gemini-2.5-pro", nil, PlatformGemini)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(1), acc.ID)
+		require.Equal(t, PlatformGemini, acc.Platform)
+	})
+
 	t.Run("混合调度-路由优先选择路由账号", func(t *testing.T) {
 		groupID := int64(30)
 		requestedModel := "claude-sonnet-4-5"
@@ -2079,12 +2181,98 @@ func TestAccount_IsMixedSchedulingEnabled(t *testing.T) {
 			account:  Account{Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": "true"}},
 			expected: false,
 		},
+		{
+			name:     "kiro平台-mixed_scheduling=true-返回true",
+			account:  Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": true}},
+			expected: true,
+		},
+		{
+			name:     "kiro平台-mixed_scheduling=false-返回false",
+			account:  Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": false}},
+			expected: false,
+		},
+		{
+			name:     "droid平台-mixed_scheduling=true-返回true",
+			account:  Account{Platform: PlatformDroid, Extra: map[string]any{"mixed_scheduling": true}},
+			expected: true,
+		},
+		{
+			name:     "droid平台-extra无mixed_scheduling-返回false",
+			account:  Account{Platform: PlatformDroid, Extra: map[string]any{}},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.account.IsMixedSchedulingEnabled()
 			require.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestMixedSchedulingPlatformRules(t *testing.T) {
+	require.Equal(t,
+		[]string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid},
+		mixedSchedulingQueryPlatforms(PlatformAnthropic),
+	)
+	require.Equal(t,
+		[]string{PlatformGemini, PlatformAntigravity},
+		mixedSchedulingQueryPlatforms(PlatformGemini),
+	)
+
+	tests := []struct {
+		name     string
+		account  Account
+		native   string
+		expected bool
+	}{
+		{
+			name:     "anthropic原生账号允许",
+			account:  Account{Platform: PlatformAnthropic},
+			native:   PlatformAnthropic,
+			expected: true,
+		},
+		{
+			name:     "anthropic mixed允许启用kiro",
+			account:  Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": true}},
+			native:   PlatformAnthropic,
+			expected: true,
+		},
+		{
+			name:     "anthropic mixed允许启用droid",
+			account:  Account{Platform: PlatformDroid, Extra: map[string]any{"mixed_scheduling": true}},
+			native:   PlatformAnthropic,
+			expected: true,
+		},
+		{
+			name:     "anthropic mixed过滤未启用kiro",
+			account:  Account{Platform: PlatformKiro},
+			native:   PlatformAnthropic,
+			expected: false,
+		},
+		{
+			name:     "gemini mixed允许启用antigravity",
+			account:  Account{Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": true}},
+			native:   PlatformGemini,
+			expected: true,
+		},
+		{
+			name:     "gemini mixed过滤启用kiro",
+			account:  Account{Platform: PlatformKiro, Extra: map[string]any{"mixed_scheduling": true}},
+			native:   PlatformGemini,
+			expected: false,
+		},
+		{
+			name:     "gemini mixed过滤启用droid",
+			account:  Account{Platform: PlatformDroid, Extra: map[string]any{"mixed_scheduling": true}},
+			native:   PlatformGemini,
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, isAccountAllowedInMixedScheduling(&tt.account, tt.native))
 		})
 	}
 }

@@ -3004,8 +3004,8 @@
       </div>
 
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
-        <!-- Mixed Scheduling (only for antigravity accounts) -->
-        <div v-if="form.platform === 'antigravity'" class="flex items-center gap-2">
+        <!-- Mixed Scheduling -->
+        <div v-if="supportsMixedScheduling" class="flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
             <input
               type="checkbox"
@@ -3669,7 +3669,7 @@ const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OF
 const codexCLIOnlyEnabled = ref(false)
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationEnabled = ref(false)
-const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
+const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
 const upstreamBaseUrl = ref('') // For upstream type: base URL
@@ -3722,6 +3722,16 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   if (mixedScheduling.value) extra.mixed_scheduling = true
   if (allowOverages.value) extra.allow_overages = true
   applyTLSFingerprintExtra(extra)
+  return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+const supportsMixedScheduling = computed(() =>
+  ['antigravity', 'kiro', 'droid'].includes(form.platform)
+)
+
+function buildMixedSchedulingExtra(): Record<string, unknown> | undefined {
+  const extra: Record<string, unknown> = {}
+  if (mixedScheduling.value) extra.mixed_scheduling = true
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
@@ -4241,6 +4251,9 @@ watch(
       anthropicPassthroughEnabled.value = false
       webSearchEmulationEnabled.value = false
     }
+    if (!['antigravity', 'kiro', 'droid'].includes(newPlatform)) {
+      mixedScheduling.value = false
+    }
     // Reset OAuth states
     oauth.resetState()
     openaiOAuth.resetState()
@@ -4502,7 +4515,8 @@ const splitTempUnschedKeywords = (value: string) => {
     .filter((item) => item.length > 0)
 }
 
-const needsMixedChannelCheck = (platform: AccountPlatform) => platform === 'antigravity' || platform === 'anthropic'
+const needsMixedChannelCheck = (platform: AccountPlatform) =>
+  ['antigravity', 'anthropic', 'kiro', 'droid'].includes(platform)
 
 const buildMixedChannelDetails = (resp?: CheckMixedChannelResponse) => {
   const details = resp?.details
@@ -5032,7 +5046,7 @@ const handleSubmit = async () => {
       credentials.custom_error_codes = [...selectedErrorCodes.value]
     }
 
-    await createAccountAndFinish('kiro', 'apikey', credentials)
+    await createAccountAndFinish('kiro', 'apikey', credentials, buildMixedSchedulingExtra())
     return
   }
 
@@ -5093,7 +5107,7 @@ const handleSubmit = async () => {
   }
 
   form.credentials = credentials
-  const extra = buildAnthropicExtra(buildOpenAIExtra())
+  const extra = buildAnthropicExtra(buildOpenAIExtra(buildMixedSchedulingExtra()))
 
   await doCreateAccount({
     ...form,
@@ -5794,7 +5808,7 @@ const handleKiroExchange = async (authCode: string) => {
     if (!tokenInfo) return
 
     const credentials = buildKiroCredentials(tokenInfo)
-    await createAccountAndFinish('kiro', 'oauth', credentials)
+    await createAccountAndFinish('kiro', 'oauth', credentials, buildMixedSchedulingExtra())
   } catch (error: any) {
     kiroOAuth.error.value = getKiroOAuthErrorMessage(error)
     appStore.showError(kiroOAuth.error.value)
@@ -5825,7 +5839,7 @@ const handleDroidExchange = async () => {
     if (modelMapping) {
       credentials.model_mapping = modelMapping
     }
-    await createAccountAndFinish('droid', 'oauth', credentials)
+    await createAccountAndFinish('droid', 'oauth', credentials, buildMixedSchedulingExtra())
   } catch (error: any) {
     droidOAuth.error.value = error?.message || t('admin.accounts.oauth.authFailed')
     appStore.showError(droidOAuth.error.value)
@@ -5948,7 +5962,7 @@ const handleKiroImport = async () => {
 
   try {
     const credentials = buildKiroCredentials(tokenInfo)
-    await createAccountAndFinish('kiro', 'oauth', credentials)
+    await createAccountAndFinish('kiro', 'oauth', credentials, buildMixedSchedulingExtra())
   } catch (error: any) {
     kiroOAuth.error.value = getKiroOAuthErrorMessage(error)
     appStore.showError(kiroOAuth.error.value)

@@ -3704,13 +3704,13 @@ func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) 
 	})
 }
 
-// checkMixedChannelRisk 检查分组中是否存在混合渠道（Antigravity + Anthropic）
+// checkMixedChannelRisk 检查分组中是否存在混合 Claude 渠道（Antigravity/Anthropic/Kiro/Droid）。
 // 如果存在混合，返回错误提示用户确认
 func (s *adminServiceImpl) checkMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
 	// 判断当前账号的渠道类型（基于 platform 字段，而不是 type 字段）
 	currentPlatform := getAccountPlatform(currentAccountPlatform)
 	if currentPlatform == "" {
-		// 不是 Antigravity 或 Anthropic，无需检查
+		// 不是可混合 Claude 渠道，无需检查
 		return nil
 	}
 
@@ -3729,7 +3729,7 @@ func (s *adminServiceImpl) checkMixedChannelRisk(ctx context.Context, currentAcc
 
 			otherPlatform := getAccountPlatform(account.Platform)
 			if otherPlatform == "" {
-				continue // 不是 Antigravity 或 Anthropic，跳过
+				continue // 不是可混合 Claude 渠道，跳过
 			}
 
 			// 检测混合渠道
@@ -3864,6 +3864,10 @@ func getAccountPlatform(accountPlatform string) string {
 		return "Antigravity"
 	case PlatformAnthropic, "claude":
 		return "Anthropic"
+	case PlatformKiro:
+		return "Kiro"
+	case PlatformDroid:
+		return "Droid"
 	default:
 		return ""
 	}

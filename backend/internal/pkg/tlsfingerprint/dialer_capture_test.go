@@ -89,7 +89,7 @@ func TestDialerAgainstCaptureServer(t *testing.T) {
 				SupportedVersions:   []uint16{0x0304, 0x0303},
 				KeyShareGroups:      []uint16{29},
 				PSKModes:            []uint16{1},
-				Extensions:          []uint16{0, 65037, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43},
+				Extensions:          []uint16{0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21},
 			},
 		},
 	}

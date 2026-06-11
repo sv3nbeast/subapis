@@ -2212,8 +2212,8 @@
           <Select v-model="form.status" :options="statusOptions" />
         </div>
 
-        <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
-        <div v-if="account?.platform === 'antigravity'" class="flex items-center gap-2">
+        <!-- Mixed Scheduling (read-only in edit mode) -->
+        <div v-if="supportsMixedScheduling" class="flex items-center gap-2">
           <label class="flex cursor-not-allowed items-center gap-2 opacity-60">
             <input
               type="checkbox"
@@ -2445,7 +2445,7 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(false)
-const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
+const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const antigravityWhitelistModels = ref<string[]>([])
@@ -3417,7 +3417,12 @@ function toPositiveNumber(value: unknown) {
   return Math.trunc(num)
 }
 
-const needsMixedChannelCheck = () => props.account?.platform === 'antigravity' || props.account?.platform === 'anthropic'
+const supportsMixedScheduling = computed(() =>
+  ['antigravity', 'kiro', 'droid'].includes(props.account?.platform || '')
+)
+
+const needsMixedChannelCheck = () =>
+  ['antigravity', 'anthropic', 'kiro', 'droid'].includes(props.account?.platform || '')
 
 const buildMixedChannelDetails = (resp?: CheckMixedChannelResponse) => {
   const details = resp?.details
@@ -3842,8 +3847,8 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-    // For antigravity accounts, handle mixed_scheduling and allow_overages in extra
-    if (props.account.platform === 'antigravity') {
+    // Handle mixed_scheduling for supported Claude-compatible accounts and antigravity-specific extras.
+    if (supportsMixedScheduling.value) {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (mixedScheduling.value) {
@@ -3851,21 +3856,23 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.mixed_scheduling
       }
-      if (allowOverages.value) {
-        newExtra.allow_overages = true
-      } else {
-        delete newExtra.allow_overages
-      }
-      if (tlsFingerprintEnabled.value) {
-        newExtra.enable_tls_fingerprint = true
-        if (tlsFingerprintProfileId.value) {
-          newExtra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+      if (props.account.platform === 'antigravity') {
+        if (allowOverages.value) {
+          newExtra.allow_overages = true
         } else {
+          delete newExtra.allow_overages
+        }
+        if (tlsFingerprintEnabled.value) {
+          newExtra.enable_tls_fingerprint = true
+          if (tlsFingerprintProfileId.value) {
+            newExtra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+          } else {
+            delete newExtra.tls_fingerprint_profile_id
+          }
+        } else {
+          delete newExtra.enable_tls_fingerprint
           delete newExtra.tls_fingerprint_profile_id
         }
-      } else {
-        delete newExtra.enable_tls_fingerprint
-        delete newExtra.tls_fingerprint_profile_id
       }
       updatePayload.extra = newExtra
     }

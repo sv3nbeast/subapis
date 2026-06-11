@@ -1292,10 +1292,23 @@ func (a *Account) IsOpenAITokenExpired() bool {
 	return time.Now().Add(60 * time.Second).After(*expiresAt)
 }
 
-// IsMixedSchedulingEnabled 检查 antigravity 账户是否启用混合调度
-// 启用后可参与 anthropic/gemini 分组的账户调度
+// SupportsMixedScheduling 检查账号平台是否支持通过 mixed_scheduling 加入跨平台调度。
+func (a *Account) SupportsMixedScheduling() bool {
+	if a == nil {
+		return false
+	}
+	switch a.Platform {
+	case PlatformAntigravity, PlatformKiro, PlatformDroid:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsMixedSchedulingEnabled 检查账号是否启用混合调度。
+// Antigravity 可参与 anthropic/gemini 分组调度；Kiro/Droid 仅参与 anthropic 分组调度。
 func (a *Account) IsMixedSchedulingEnabled() bool {
-	if a.Platform != PlatformAntigravity {
+	if !a.SupportsMixedScheduling() {
 		return false
 	}
 	if a.Extra == nil {
