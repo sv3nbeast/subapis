@@ -69,7 +69,7 @@ interface Props {
   modelValue: number[]
   groups: AdminGroup[]
   platform?: GroupPlatform // Optional platform filter
-  mixedScheduling?: boolean // For antigravity accounts: allow anthropic/gemini groups
+  mixedScheduling?: boolean // Allow cross-platform Claude groups for supported account platforms
   searchable?: boolean | 'auto'
 }
 
@@ -91,11 +91,14 @@ const isSearchable = computed(() => {
 const filteredGroups = computed(() => {
   let result: AdminGroup[] = props.groups
   if (props.platform) {
-    // antigravity 账户启用混合调度后，可选择 anthropic/gemini 分组
-    if (props.platform === 'antigravity' && props.mixedScheduling) {
-      result = result.filter(
-        (g) => g.platform === 'antigravity' || g.platform === 'anthropic' || g.platform === 'gemini'
-      )
+    if (props.mixedScheduling) {
+      const allowedPlatforms: GroupPlatform[] =
+        props.platform === 'antigravity'
+          ? ['antigravity', 'anthropic', 'gemini']
+          : props.platform === 'kiro' || props.platform === 'droid'
+            ? [props.platform, 'anthropic']
+            : [props.platform]
+      result = result.filter((g) => allowedPlatforms.includes(g.platform))
     } else {
       // 默认：只能选择同 platform 的分组
       result = result.filter((g) => g.platform === props.platform)
