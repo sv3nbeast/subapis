@@ -1219,6 +1219,7 @@ export default {
     perRequest: 'per request',
     apiKeyFilter: 'API Key',
     allApiKeys: 'All API Keys',
+    allModels: 'All Models',
     timeRange: 'Time Range',
     exportCsv: 'Export CSV',
     exportExcel: 'Export Excel',

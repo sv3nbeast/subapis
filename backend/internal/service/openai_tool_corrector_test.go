@@ -657,6 +657,40 @@ func TestCorrectAskUserQuestionFillsMissingQuestionField(t *testing.T) {
 	}
 }
 
+func TestCorrectAskUserQuestionFallsBackToHeaderField(t *testing.T) {
+	corrector := NewCodexToolCorrector()
+	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[{\"header\":\"何时填信息\",\"multiSelect\":false,\"options\":[{\"label\":\"支付完成后填(推荐)\",\"description\":\"用户付款后,在订单详情页出现表单,填完账号相关信息提交→通知客服。最贴合你说的‘支付完成后联系客服’场景,且避免未付款就收集信息。\"}]}]}"}}`
+
+	corrected, changed := corrector.CorrectToolCallsInSSEData(body)
+	if !changed {
+		t.Fatal("expected header-based questions to be corrected")
+	}
+
+	rawArgs := gjsonGetJSONPath(t, corrected, "function_call.arguments")
+	argsStr, ok := rawArgs.(string)
+	if !ok {
+		t.Fatalf("arguments = %T, want string", rawArgs)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+		t.Fatalf("failed to unmarshal arguments: %v", err)
+	}
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions = %#v, want single-item array", args["questions"])
+	}
+	question, ok := questions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("questions[0] = %#v, want object", questions[0])
+	}
+	if question["question"] != "何时填信息" {
+		t.Fatalf("questions[0] = %#v", questions[0])
+	}
+	if _, ok := question["options"].([]any); !ok {
+		t.Fatalf("questions[0].options = %#v, want array", question["options"])
+	}
+}
+
 func TestCorrectAskUserQuestionKeepsValidQuestionObjects(t *testing.T) {
 	corrector := NewCodexToolCorrector()
 	body := `{"function_call":{"name":"AskUserQuestion","arguments":"{\"questions\":[{\"question\":\"确认是否继续？\"}]}"}}`

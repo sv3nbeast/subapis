@@ -4,9 +4,10 @@ import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { query, getStatsByDateRange, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
+const { query, getStatsByDateRange, getDashboardModels, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
   query: vi.fn(),
   getStatsByDateRange: vi.fn(),
+  getDashboardModels: vi.fn(),
   list: vi.fn(),
   showError: vi.fn(),
   showWarning: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock('@/api', () => ({
   usageAPI: {
     query,
     getStatsByDateRange,
+    getDashboardModels,
   },
   keysAPI: {
     list,
@@ -79,6 +81,7 @@ describe('user UsageView tooltip', () => {
   beforeEach(() => {
     query.mockReset()
     getStatsByDateRange.mockReset()
+    getDashboardModels.mockReset()
     list.mockReset()
     showError.mockReset()
     showWarning.mockReset()
@@ -145,6 +148,7 @@ describe('user UsageView tooltip', () => {
       average_duration_ms: 1,
     })
     list.mockResolvedValue({ items: [] })
+    getDashboardModels.mockResolvedValue({ models: [], start_date: '2026-03-01', end_date: '2026-03-08' })
 
     const wrapper = mount(UsageView, {
       global: {
@@ -241,6 +245,7 @@ describe('user UsageView tooltip', () => {
       average_duration_ms: 1,
     })
     list.mockResolvedValue({ items: [] })
+    getDashboardModels.mockResolvedValue({ models: [], start_date: '2026-03-01', end_date: '2026-03-08' })
 
     let exportedBlob: Blob | null = null
     const originalCreateObjectURL = window.URL.createObjectURL
@@ -290,5 +295,65 @@ describe('user UsageView tooltip', () => {
     window.URL.createObjectURL = originalCreateObjectURL
     window.URL.revokeObjectURL = originalRevokeObjectURL
     clickSpy.mockRestore()
+  })
+
+  it('clears stale model filter when refreshed model options no longer include it', async () => {
+    query.mockResolvedValue({
+      items: [],
+      total: 0,
+      pages: 0,
+    })
+    getStatsByDateRange.mockResolvedValue({
+      total_requests: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_creation_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_tokens: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      total_actual_cost: 0,
+      average_duration_ms: 0,
+    })
+    list.mockResolvedValue({ items: [] })
+    getDashboardModels
+      .mockResolvedValueOnce({
+        models: [{ model: 'gpt-5.4', requests: 1, cost: 1, actual_cost: 1, tokens: 1 }],
+        start_date: '2026-03-01',
+        end_date: '2026-03-08',
+      })
+      .mockResolvedValueOnce({
+        models: [{ model: 'gpt-4.1', requests: 1, cost: 1, actual_cost: 1, tokens: 1 }],
+        start_date: '2026-03-09',
+        end_date: '2026-03-10',
+      })
+
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          TablePageLayout: TablePageLayoutStub,
+          Pagination: true,
+          EmptyState: true,
+          Select: true,
+          DateRangePicker: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    setupState.filters.model = 'gpt-5.4'
+    setupState.onDateRangeChange({
+      startDate: '2026-03-09',
+      endDate: '2026-03-10',
+      preset: null,
+    })
+    await flushPromises()
+
+    expect(setupState.filters.model).toBeUndefined()
   })
 })

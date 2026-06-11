@@ -122,6 +122,18 @@
               />
             </div>
 
+            <!-- Model Filter -->
+            <div class="min-w-[180px]">
+              <label class="input-label">{{ t('usage.model') }}</label>
+              <Select
+                v-model="filters.model"
+                :options="modelOptions"
+                searchable
+                :placeholder="t('usage.allModels')"
+                @change="applyFilters"
+              />
+            </div>
+
             <!-- Date Range Filter -->
             <div>
               <label class="input-label">{{ t('usage.timeRange') }}</label>
@@ -568,7 +580,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import Select from '@/components/common/Select.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { UsageLog, ApiKey, UsageQueryParams, UsageStatsResponse } from '@/types'
@@ -667,6 +679,7 @@ const endDate = ref(formatLocalDate(now))
 
 const filters = ref<UsageQueryParams>({
   api_key_id: undefined,
+  model: undefined,
   start_date: undefined,
   end_date: undefined
 })
@@ -674,6 +687,35 @@ const filters = ref<UsageQueryParams>({
 // Initialize filters with date range
 filters.value.start_date = startDate.value
 filters.value.end_date = endDate.value
+
+// Model filter options (loaded from current user's model usage in the range)
+const modelOptions = ref<SelectOption[]>([{ value: '', label: t('usage.allModels') }])
+
+const loadModelOptions = async () => {
+  try {
+    const res = await usageAPI.getDashboardModels({
+      start_date: startDate.value,
+      end_date: endDate.value
+    })
+    const uniqueModels = new Set<string>()
+    res.models?.forEach((s) => {
+      if (s.model) {
+        uniqueModels.add(s.model)
+      }
+    })
+    modelOptions.value = [
+      { value: '', label: t('usage.allModels') },
+      ...Array.from(uniqueModels)
+        .sort()
+        .map((m) => ({ value: m, label: m }))
+    ]
+    if (filters.value.model && !uniqueModels.has(filters.value.model)) {
+      filters.value.model = undefined
+    }
+  } catch {
+    // 忽略模型选项加载失败,页面仍可正常使用
+  }
+}
 
 // Handle date range change from DateRangePicker
 const onDateRangeChange = (range: {
@@ -683,6 +725,7 @@ const onDateRangeChange = (range: {
 }) => {
   filters.value.start_date = range.startDate
   filters.value.end_date = range.endDate
+  loadModelOptions()
   applyFilters()
 }
 
@@ -772,13 +815,17 @@ type UsageTableQueryParams = UsageQueryParams & {
   sort_order?: 'asc' | 'desc'
 }
 
-const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryParams => ({
-  page,
-  page_size: pageSize,
-  ...filters.value,
-  sort_by: sortState.sort_by,
-  sort_order: sortState.sort_order
-})
+const buildUsageQueryParams = (page: number, pageSize: number): UsageTableQueryParams => {
+  const { model, ...rest } = filters.value
+  return {
+    page,
+    page_size: pageSize,
+    ...rest,
+    ...(model ? { model } : {}),
+    sort_by: sortState.sort_by,
+    sort_order: sortState.sort_order
+  }
+}
 
 const loadUsageLogs = async () => {
   if (abortController) {
@@ -847,6 +894,7 @@ const applyFilters = () => {
 const resetFilters = () => {
   filters.value = {
     api_key_id: undefined,
+    model: undefined,
     start_date: undefined,
     end_date: undefined
   }
@@ -858,6 +906,7 @@ const resetFilters = () => {
   endDate.value = formatLocalDate(now)
   filters.value.start_date = startDate.value
   filters.value.end_date = endDate.value
+  loadModelOptions()
   pagination.page = 1
   loadUsageLogs()
   loadUsageStats()
@@ -1023,6 +1072,7 @@ const hideTokenTooltip = () => {
 
 onMounted(() => {
   loadApiKeys()
+  loadModelOptions()
   loadUsageLogs()
   loadUsageStats()
 })

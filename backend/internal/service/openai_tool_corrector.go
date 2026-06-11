@@ -426,6 +426,9 @@ func firstAskUserQuestionFallbackText(item gjson.Result, fields ...string) strin
 			return text
 		}
 	}
+	if text := strings.TrimSpace(item.Get("header").String()); text != "" {
+		return text
+	}
 	return ""
 }
 
