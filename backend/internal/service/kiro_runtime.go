@@ -376,8 +376,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		}, inputTokens, nil
 	}
 
-	resp, requestCtx, err := s.executeKiroUpstreamWithParsed(ctx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers)
+	streamCtx, releaseStreamCtx := detachStreamUpstreamContext(ctx, true)
+	resp, requestCtx, err := s.executeKiroUpstreamWithParsed(streamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers)
 	if err != nil {
+		releaseStreamCtx()
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
 			return nil, inputTokens, err
@@ -398,8 +400,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	}
 
 	go func() {
+		defer releaseStreamCtx()
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(ctx, resp.Body, pw, mappedModel, inputTokens, requestCtx)
+		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(streamCtx, resp.Body, pw, mappedModel, inputTokens, requestCtx)
 		if streamErr != nil {
 			_ = pw.CloseWithError(streamErr)
 			return

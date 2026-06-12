@@ -1662,6 +1662,10 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 		return false
 	}
 	if c.Writer.Written() {
+		contentType := strings.ToLower(c.Writer.Header().Get("Content-Type"))
+		if !streamStarted && !strings.Contains(contentType, "text/event-stream") {
+			return false
+		}
 		streamStarted = true
 	}
 	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)

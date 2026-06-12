@@ -153,6 +153,54 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	require.Equal(t, http.StatusOK, rec.Code, "parse failover should not write a plain 502 before handler can retry")
 }
 
+func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T) {
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"hello from kiro"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(body, PlatformKiro)
+	require.NoError(t, err)
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(parentCtx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, nil)
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+
+	cancelParent()
+	select {
+	case <-upstream.requests[0].Context().Done():
+		t.Fatal("kiro stream upstream request context must not be canceled by client context")
+	default:
+	}
+
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(streamBytes), "hello from kiro")
+}
+
 func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

@@ -33,9 +33,7 @@ func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testi
 	assert.Equal(t, "Upstream request failed", errorObj["message"])
 }
 
-// Writer 已写后 ensureForwardErrorResponse 必须把错误以 SSE 形式追加，
-// 而不是 silent EOF。非 /responses 路径走 legacy data:{"type":"error"} 分支。
-func TestGatewayEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) {
+func TestGatewayEnsureForwardErrorResponse_DoesNotAppendWhenFallbackAlreadyWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -45,19 +43,53 @@ func TestGatewayEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) 
 	h := &GatewayHandler{}
 	wrote := h.ensureForwardErrorResponse(c, false)
 
+	require.False(t, wrote)
+	require.Equal(t, http.StatusTeapot, w.Code)
+	assert.Equal(t, "already written", w.Body.String())
+}
+
+func TestGatewayEnsureForwardErrorResponse_AppendsSSEWhenStreamStarted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Header("Content-Type", "text/event-stream")
+	c.String(http.StatusTeapot, "already written")
+
+	h := &GatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, true)
+
 	require.True(t, wrote)
 	require.Equal(t, http.StatusTeapot, w.Code)
 	assert.Contains(t, w.Body.String(), "already written")
 	assert.Contains(t, w.Body.String(), `data: {"type":"error"`)
 }
 
-// case B 回归：Anthropic-backed /responses，Writer 已被写过时
+func TestGatewayEnsureForwardErrorResponse_AppendsSSEWhenEventStreamAlreadyWritten(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Header("Content-Type", "text/event-stream")
+	_, _ = c.Writer.WriteString(":\n\n")
+
+	h := &GatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, false)
+
+	require.True(t, wrote)
+	body := w.Body.String()
+	assert.Contains(t, body, ":\n\n")
+	assert.Contains(t, body, `data: {"type":"error"`)
+}
+
+// case B 回归：Anthropic-backed /responses，SSE Writer 已被写过时
 // ensureForwardErrorResponse 仍要发 response.failed。
-func TestGatewayEnsureForwardErrorResponse_ResponsesRouteAfterWrittenEmitsResponseFailed(t *testing.T) {
+func TestGatewayEnsureForwardErrorResponse_ResponsesRouteAfterEventStreamWrittenEmitsResponseFailed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	c.Header("Content-Type", "text/event-stream")
 	_, _ = c.Writer.WriteString(":\n\n")
 
 	h := &GatewayHandler{}
