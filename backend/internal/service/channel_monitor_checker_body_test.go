@@ -185,9 +185,9 @@ func TestRunCheckForModel_MergeMode_UserFieldsWinButDenyListProtects(t *testing.
 	if len(msgs) == 0 {
 		t.Error("messages should be protected by deny list (kept default, non-empty)")
 	}
-	// header 合并
-	if h.lastHeaders.Get("User-Agent") != "claude-cli/1.0" {
-		t.Errorf("extra User-Agent should override, got %q", h.lastHeaders.Get("User-Agent"))
+	// Anthropic User-Agent 由统一上游 UA 控制，模板不能覆盖。
+	if h.lastHeaders.Get("User-Agent") != claude.DefaultHeaders["User-Agent"] {
+		t.Errorf("extra User-Agent should not override Anthropic upstream UA, got %q", h.lastHeaders.Get("User-Agent"))
 	}
 	if h.lastHeaders.Get("x-custom") != "ok" {
 		t.Errorf("extra custom header should be present, got %q", h.lastHeaders.Get("x-custom"))

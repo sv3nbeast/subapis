@@ -10,8 +10,8 @@ func TestClaudeCodeFingerprintConstantsStayInSync(t *testing.T) {
 	if !strings.Contains(ua, "claude-cli/"+CLICurrentVersion) {
 		t.Fatalf("CLICurrentVersion %q must match DefaultHeaders User-Agent %q", CLICurrentVersion, ua)
 	}
-	if !strings.Contains(ua, "(external, sdk-cli)") {
-		t.Fatalf("User-Agent must preserve official sdk-cli entrypoint marker: %q", ua)
+	if !strings.Contains(ua, "(external, cli)") {
+		t.Fatalf("User-Agent must preserve configured cli entrypoint marker: %q", ua)
 	}
 	if DefaultHeaders["X-App"] != "cli" {
 		t.Fatalf("X-App = %q, want cli", DefaultHeaders["X-App"])

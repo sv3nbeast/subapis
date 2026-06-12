@@ -185,6 +185,22 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 	if fp.UserAgent != "" {
 		setHeaderRaw(req.Header, "User-Agent", fp.UserAgent)
 	}
+	s.applyFingerprintWithoutUserAgent(req, fp)
+}
+
+// ApplyFingerprintWithoutUserAgent 将指纹应用到请求头，但不修改 User-Agent。
+// Claude 上游 UA 由后台统一配置控制，不能被客户端指纹缓存拆成多个值。
+func (s *IdentityService) ApplyFingerprintWithoutUserAgent(req *http.Request, fp *Fingerprint) {
+	if fp == nil {
+		return
+	}
+	s.applyFingerprintWithoutUserAgent(req, fp)
+}
+
+func (s *IdentityService) applyFingerprintWithoutUserAgent(req *http.Request, fp *Fingerprint) {
+	if req == nil || fp == nil {
+		return
+	}
 
 	// 设置x-stainless-*头（保持与 claude.DefaultHeaders 一致的大小写）
 	if fp.StainlessLang != "" {

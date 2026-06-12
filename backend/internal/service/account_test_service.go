@@ -300,6 +300,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	for key, value := range claude.DefaultHeaders {
 		req.Header.Set(key, value)
 	}
+	req.Header.Set("User-Agent", defaultClaudeUpstreamUserAgent())
 
 	// Set authentication header
 	if useBearer {

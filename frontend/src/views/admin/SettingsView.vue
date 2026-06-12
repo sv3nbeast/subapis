@@ -3732,6 +3732,36 @@
                   }}
                 </p>
               </div>
+
+              <!-- Claude/Anthropic 上游 UA -->
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeUpstreamUserAgent",
+                    )
+                  }}
+                </label>
+                <input
+                  v-model="form.claude_upstream_user_agent"
+                  type="text"
+                  class="input font-mono text-sm"
+                  :placeholder="
+                    t(
+                      'admin.settings.gatewayForwarding.claudeUpstreamUserAgentPlaceholder',
+                    )
+                  "
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeUpstreamUserAgentHint",
+                    )
+                  }}
+                </p>
+              </div>
             </div>
           </div>
           <!-- Web Search Emulation -->
@@ -7108,6 +7138,7 @@ const form = reactive<SettingsForm>({
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   antigravity_user_agent_version: "",
+  claude_upstream_user_agent: "",
   proxy_auto_select_max_anthropic_accounts_per_proxy: 1,
   proxy_auto_select_max_openai_accounts_per_proxy: 1,
   proxy_auto_select_max_antigravity_accounts_per_proxy: 5,
@@ -8382,6 +8413,8 @@ async function saveSettings() {
       rewrite_message_cache_control: form.rewrite_message_cache_control,
       antigravity_user_agent_version:
         form.antigravity_user_agent_version?.trim() || "",
+      claude_upstream_user_agent:
+        form.claude_upstream_user_agent?.trim() || "",
       proxy_auto_select_max_anthropic_accounts_per_proxy:
         form.proxy_auto_select_max_anthropic_accounts_per_proxy,
       proxy_auto_select_max_openai_accounts_per_proxy:

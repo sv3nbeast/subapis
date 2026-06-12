@@ -45,6 +45,8 @@ type CheckOptions struct {
 	APIMode string
 	// ExtraHeaders 用户自定义 HTTP 头（merge 到 adapter 默认 headers，用户优先）。
 	ExtraHeaders map[string]string
+	// ClaudeUpstreamUserAgent 强制 Anthropic 监控请求使用统一上游 UA。
+	ClaudeUpstreamUserAgent string
 	// BodyOverrideMode: off | merge | replace
 	BodyOverrideMode string
 	// BodyOverride 在 merge 模式下做浅合并（key 命中黑名单时静默丢弃），
@@ -199,6 +201,7 @@ var providerAdapters = map[string]providerAdapter{
 					headers[key] = value
 				}
 			}
+			headers["User-Agent"] = defaultClaudeUpstreamUserAgent()
 			return headers
 		},
 		textPath:    "content.0.text",
@@ -306,12 +309,24 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 		return "", "", 0, err
 	}
 	headers := mergeHeaders(adapter.buildHeaders(apiKey), opts)
+	if provider == MonitorProviderAnthropic {
+		headers["User-Agent"] = claudeUpstreamUserAgentForCheck(opts)
+	}
 	full := joinURL(endpoint, adapter.buildPath(model))
 	respBytes, status, err := postRawJSON(ctx, full, body, headers)
 	if err != nil {
 		return "", "", status, err
 	}
 	return extractMonitorResponseText(adapter, respBytes), string(respBytes), status, nil
+}
+
+func claudeUpstreamUserAgentForCheck(opts *CheckOptions) string {
+	if opts != nil {
+		if ua := strings.TrimSpace(opts.ClaudeUpstreamUserAgent); ua != "" {
+			return ua
+		}
+	}
+	return defaultClaudeUpstreamUserAgent()
 }
 
 // extractOpenAIResponsesText 聚合 Responses API 的最终 assistant 文本。

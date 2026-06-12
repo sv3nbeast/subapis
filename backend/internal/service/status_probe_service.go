@@ -337,7 +337,7 @@ func (s *StatusProbeService) runProbe(ctx context.Context, m StatusProbeModelCon
 	lastErrMsg := ""
 
 	for attempt := 1; attempt <= statusProbeRetryMaxAttempts; attempt++ {
-		req, err := newStatusProbeRequest(ctx, m)
+		req, err := s.newStatusProbeRequest(ctx, m)
 		if err != nil {
 			return int(time.Since(start).Milliseconds()), err.Error()
 		}
@@ -419,6 +419,13 @@ func newStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http
 	return newMessagesStatusProbeRequest(ctx, m)
 }
 
+func (s *StatusProbeService) newStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	if isStatusProbeGeminiModel(m.Model) {
+		return newGeminiStatusProbeRequest(ctx, m)
+	}
+	return s.newMessagesStatusProbeRequest(ctx, m)
+}
+
 func newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
 	metadataUserID := FormatMetadataUserID(
 		generateClientID(),
@@ -462,6 +469,15 @@ func newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig
 	if parsed := ParseMetadataUserID(metadataUserID); parsed != nil && parsed.SessionID != "" {
 		req.Header.Set("X-Claude-Code-Session-Id", parsed.SessionID)
 	}
+	return req, nil
+}
+
+func (s *StatusProbeService) newMessagesStatusProbeRequest(ctx context.Context, m StatusProbeModelConfig) (*http.Request, error) {
+	req, err := newMessagesStatusProbeRequest(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	setHeaderRaw(req.Header, "User-Agent", claudeUpstreamUserAgentFromSettings(ctx, s.settingService))
 	return req, nil
 }
 

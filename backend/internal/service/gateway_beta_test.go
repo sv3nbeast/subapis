@@ -4,13 +4,58 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type claudeUASettingRepoStub struct {
+	values map[string]string
+}
+
+func (s *claudeUASettingRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (s *claudeUASettingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if v, ok := s.values[key]; ok {
+		return v, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (s *claudeUASettingRepoStub) Set(ctx context.Context, key, value string) error {
+	panic("unexpected Set call")
+}
+
+func (s *claudeUASettingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if v, ok := s.values[key]; ok {
+			result[key] = v
+		}
+	}
+	return result, nil
+}
+
+func (s *claudeUASettingRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (s *claudeUASettingRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (s *claudeUASettingRepoStub) Delete(ctx context.Context, key string) error {
+	panic("unexpected Delete call")
+}
 
 func TestMergeAnthropicBeta(t *testing.T) {
 	got := mergeAnthropicBeta(
@@ -165,7 +210,7 @@ func TestDefaultClaudeCodeBetaHeadersMatchCapturedCLI2165(t *testing.T) {
 	require.NotContains(t, claude.APIKeyBetaHeader, claude.BetaOAuth)
 }
 
-func TestApplyClaudeCodeMimicHeaders_OfficialCLI2165Fingerprint(t *testing.T) {
+func TestApplyClaudeCodeMimicHeaders_OfficialCLI2156Fingerprint(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
 	require.NoError(t, err)
 	req.Header.Set("User-Agent", "curl/8")
@@ -174,7 +219,7 @@ func TestApplyClaudeCodeMimicHeaders_OfficialCLI2165Fingerprint(t *testing.T) {
 
 	applyClaudeCodeMimicHeaders(req, true)
 
-	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, "claude-cli/2.1.156 (external, cli)", getHeaderRaw(req.Header, "User-Agent"))
 	require.Equal(t, "0.94.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
 	require.Equal(t, "MacOS", getHeaderRaw(req.Header, "X-Stainless-OS"))
 	require.Equal(t, "arm64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
@@ -264,7 +309,7 @@ func TestBuildUpstreamRequest_MimicClaudeCodeSignsCCHWithoutGlobalSetting(t *tes
 		context.Background(),
 		nil,
 		&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
-		[]byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.165.abc; cc_entrypoint=sdk-cli; cch=00000;"}],"messages":[{"role":"user","content":"hello"}]}`),
+		[]byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.156.abc; cc_entrypoint=sdk-cli; cch=00000;"}],"messages":[{"role":"user","content":"hello"}]}`),
 		"oauth-token",
 		"oauth",
 		"claude-sonnet-4-6",
@@ -372,7 +417,7 @@ func TestBuildUpstreamRequest_MimicClaudeCodeHeadersMatchCapturedMainRequest(t *
 	require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(req.Header, "authorization"))
 	require.Equal(t, "application/json", getHeaderRaw(req.Header, "content-type"))
-	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Equal(t, "claude-cli/2.1.156 (external, cli)", getHeaderRaw(req.Header, "User-Agent"))
 	require.Equal(t, "arm64", getHeaderRaw(req.Header, "X-Stainless-Arch"))
 	require.Equal(t, "js", getHeaderRaw(req.Header, "X-Stainless-Lang"))
 	require.Equal(t, "MacOS", getHeaderRaw(req.Header, "X-Stainless-OS"))
@@ -387,6 +432,50 @@ func TestBuildUpstreamRequest_MimicClaudeCodeHeadersMatchCapturedMainRequest(t *
 	require.Equal(t, "cli", getHeaderRaw(req.Header, "x-app"))
 	require.NotEmpty(t, getHeaderRaw(req.Header, "x-client-request-id"))
 	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
+}
+
+func TestBuildUpstreamRequest_UsesConfiguredClaudeUpstreamUserAgentOverClientAndFingerprint(t *testing.T) {
+	ctx := context.Background()
+	cache := &identityCacheStub{}
+	require.NoError(t, cache.SetFingerprint(ctx, 42, &Fingerprint{
+		UserAgent:               "fingerprint-ua/1.0",
+		ClientID:                "client-123",
+		StainlessLang:           "js",
+		StainlessPackageVersion: "0.94.0",
+		StainlessOS:             "MacOS",
+		StainlessArch:           "arm64",
+		StainlessRuntime:        "node",
+		StainlessRuntimeVersion: "v24.3.0",
+		UpdatedAt:               time.Now().Unix(),
+	}))
+
+	settingSvc := NewSettingService(&claudeUASettingRepoStub{values: map[string]string{
+		SettingKeyClaudeUpstreamUserAgent: "configured-claude-cli/9.9.9",
+	}}, &config.Config{})
+	svc := &GatewayService{
+		identityService: NewIdentityService(cache),
+		settingService:  settingSvc,
+	}
+	incoming := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	incoming.Header.Set("User-Agent", "incoming-client/8.0")
+	c := &gin.Context{Request: incoming}
+
+	req, err := svc.buildUpstreamRequest(
+		ctx,
+		c,
+		&Account{ID: 42, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+		[]byte(`{"model":"claude-opus-4-7","messages":[]}`),
+		"oauth-token",
+		"oauth",
+		"claude-opus-4-7",
+		true,
+		false,
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, "configured-claude-cli/9.9.9", getHeaderRaw(req.Header, "User-Agent"))
+	require.NotEqual(t, "incoming-client/8.0", getHeaderRaw(req.Header, "User-Agent"))
+	require.NotEqual(t, "fingerprint-ua/1.0", getHeaderRaw(req.Header, "User-Agent"))
 }
 
 func TestBuildUpstreamRequest_MimicClaudeCodeOrdersCapturedHaikuBody(t *testing.T) {

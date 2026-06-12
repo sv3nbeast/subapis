@@ -731,6 +731,36 @@
         </template>
       </div>
 
+      <div v-if="account.platform === 'kiro' && account.type === 'oauth'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.groups.kiroCache.title') }}
+        </label>
+        <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.groups.kiroCache.description') }}
+        </p>
+        <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            v-model="kiroCacheEmulationEnabled"
+            type="checkbox"
+            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          {{ t('admin.groups.kiroCache.enabled') }}
+        </label>
+        <div v-if="kiroCacheEmulationEnabled">
+          <label class="input-label">{{ t('admin.groups.kiroCache.ratio') }}</label>
+          <input
+            v-model.number="kiroCacheEmulationRatio"
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            class="input"
+            placeholder="1"
+          />
+          <p class="input-hint">{{ t('admin.groups.kiroCache.ratioHint') }}</p>
+        </div>
+      </div>
+
       <!-- Upstream fields (only for upstream type) -->
       <div v-if="account.type === 'upstream'" class="space-y-4">
         <div>
@@ -2400,6 +2430,8 @@ const baseUrlHint = computed(() => {
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 const isKiroOAuthAccount = computed(() => props.account?.platform === 'kiro' && props.account?.type === 'oauth')
+const kiroCacheEmulationEnabled = ref(false)
+const kiroCacheEmulationRatio = ref(1)
 
 // Model mapping type
 interface ModelMapping {
@@ -2777,6 +2809,28 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
     webSearchEmulationEnabled.value = extra?.web_search_emulation === true
+  }
+  if (newAccount.platform === 'kiro' && newAccount.type === 'oauth') {
+    kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
+    const rawKiroRatio = extra?.kiro_cache_emulation_ratio
+    kiroCacheEmulationRatio.value =
+      typeof rawKiroRatio === 'number' && rawKiroRatio >= 0 && rawKiroRatio <= 1
+        ? rawKiroRatio
+        : 1
+  } else {
+    kiroCacheEmulationEnabled.value = false
+    kiroCacheEmulationRatio.value = 1
+  }
+  if (newAccount.platform === 'kiro' && newAccount.type === 'oauth') {
+    kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
+    const rawKiroRatio = extra?.kiro_cache_emulation_ratio
+    kiroCacheEmulationRatio.value =
+      typeof rawKiroRatio === 'number' && rawKiroRatio >= 0 && rawKiroRatio <= 1
+        ? rawKiroRatio
+        : 1
+  } else {
+    kiroCacheEmulationEnabled.value = false
+    kiroCacheEmulationRatio.value = 1
   }
 
   // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
@@ -3980,6 +4034,20 @@ const handleSubmit = async () => {
         newExtra.web_search_emulation = true
       } else {
         delete newExtra.web_search_emulation
+      }
+      updatePayload.extra = newExtra
+    }
+
+    if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        ((props.account.extra as Record<string, unknown>) || {})
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (kiroCacheEmulationEnabled.value) {
+        newExtra.kiro_cache_emulation_enabled = true
+        newExtra.kiro_cache_emulation_ratio = kiroCacheEmulationRatio.value
+      } else {
+        delete newExtra.kiro_cache_emulation_enabled
+        delete newExtra.kiro_cache_emulation_ratio
       }
       updatePayload.extra = newExtra
     }

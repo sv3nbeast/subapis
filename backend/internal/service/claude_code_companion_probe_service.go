@@ -46,6 +46,7 @@ type ClaudeCodeCompanionProbeInput struct {
 	SessionID    string
 	Config       config.GatewayClaudeCodeMimicryConfig
 	RequestModel string
+	UserAgent    string
 }
 
 type claudeCodeCompanionEndpoint struct {
@@ -139,9 +140,7 @@ func (s *ClaudeCodeCompanionProbeService) sendOne(ctx context.Context, input Cla
 	if endpoint.Auth {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+input.Token)
 	}
-	if endpoint.UserAgent != "" {
-		setHeaderRaw(req.Header, "User-Agent", endpoint.UserAgent)
-	}
+	setHeaderRaw(req.Header, "User-Agent", claudeCodeCompanionUserAgent(input))
 	if endpoint.Beta != "" {
 		setHeaderRaw(req.Header, "anthropic-beta", endpoint.Beta)
 	}
@@ -237,6 +236,13 @@ func buildClaudeCodeCompanionEndpoints(input ClaudeCodeCompanionProbeInput, sess
 		endpoints = append(endpoints, buildClaudeCodeTitleProbeEndpoint(input, sessionID))
 	}
 	return endpoints
+}
+
+func claudeCodeCompanionUserAgent(input ClaudeCodeCompanionProbeInput) string {
+	if ua := strings.TrimSpace(input.UserAgent); ua != "" {
+		return ua
+	}
+	return claude.DefaultHeaders["User-Agent"]
 }
 
 func claudeCodeMCPServersCompanionEndpoint() claudeCodeCompanionEndpoint {

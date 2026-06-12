@@ -1071,6 +1071,8 @@ export interface CreateAccountRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   confirm_mixed_channel_risk?: boolean
+  kiro_cache_emulation_enabled?: boolean
+  kiro_cache_emulation_ratio?: number
 }
 
 export interface UpdateAccountRequest {
@@ -1090,6 +1092,8 @@ export interface UpdateAccountRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   confirm_mixed_channel_risk?: boolean
+  kiro_cache_emulation_enabled?: boolean
+  kiro_cache_emulation_ratio?: number
 }
 
 export interface CheckMixedChannelRequest {

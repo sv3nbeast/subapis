@@ -112,7 +112,7 @@ EXPECTED_COMPANION_FINGERPRINTS = {
         "anthropic-beta": "oauth-2025-04-20",
     },
     "GET /api/claude_code_grove": {
-        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "user-agent": "claude-cli/2.1.156 (external, cli)",
         "anthropic-beta": "oauth-2025-04-20",
     },
     "GET /api/oauth/profile": {
@@ -125,7 +125,7 @@ EXPECTED_COMPANION_FINGERPRINTS = {
         "query_contains": ["limit=1000"],
     },
     "GET /mcp-registry/v0/servers": {
-        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "user-agent": "claude-cli/2.1.156 (external, cli)",
         "query_contains": ["version=latest", "limit=100", "visibility=commercial%2Cgsuite%2Centerprise%2Chealth"],
     },
 }
@@ -1215,7 +1215,7 @@ def load_official_mimic_fingerprint_from_repo() -> dict[str, Any]:
 
 def fallback_official_mimic_fingerprint() -> dict[str, Any]:
     return {
-        "user-agent": "claude-cli/2.1.165 (external, sdk-cli)",
+        "user-agent": "claude-cli/2.1.156 (external, cli)",
         "x-stainless-package-version": "0.94.0",
         "x-stainless-os": "MacOS",
         "x-stainless-arch": "arm64",

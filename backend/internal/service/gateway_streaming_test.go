@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // --- parseSSEUsage 测试 ---
@@ -220,6 +222,68 @@ func TestHandleStreamingResponse_SpecialCharactersInJSON(t *testing.T) {
 	// 验证响应中包含转发的数据
 	body := rec.Body.String()
 	require.Contains(t, body, "content_block_delta", "响应应包含转发的 SSE 事件")
+}
+
+func TestHandleStreamingResponse_NormalizesAskUserQuestionInput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newMinimalGatewayService()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: pr}
+
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"))
+		_, _ = pw.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"AskUserQuestion\",\"input\":{}}}\n\n"))
+		_, _ = pw.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"questions\\\":[{\\\"header\\\":\\\"第一项\\\",\\\"options\\\":[{\\\"label\\\":\\\"继续\\\"}]},{\\\"text\\\":\\\"第二项\\\",\\\"options\\\":[{\\\"label\\\":\\\"停止\\\"}]}]}\"}}\n\n"))
+		_, _ = pw.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+		_, _ = pw.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n"))
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+	}()
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+	_ = pr.Close()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 5, result.usage.InputTokens)
+	require.Equal(t, 3, result.usage.OutputTokens)
+
+	body := rec.Body.String()
+	require.Contains(t, body, `"name":"AskUserQuestion"`)
+	require.Contains(t, body, `"question":"第一项"`)
+	require.Contains(t, body, `"question":"第二项"`)
+	require.NotContains(t, body, `"questions":[{"header":"第一项","options"`)
+}
+
+func TestNormalizeAnthropicAskUserQuestionResponseBody(t *testing.T) {
+	body := []byte(`{"id":"msg_1","type":"message","content":[{"type":"tool_use","id":"toolu_1","name":"AskUserQuestion","input":{"questions":[{"header":"第一项","options":[{"label":"继续"}]},{"title":"第二项","options":[{"label":"停止"}]}]}}],"usage":{"input_tokens":1,"output_tokens":2}}`)
+
+	normalized, changed := normalizeAnthropicAskUserQuestionResponseBody(body)
+	require.True(t, changed)
+	require.JSONEq(t, `{"questions":[{"header":"第一项","options":[{"label":"继续"}],"question":"第一项"},{"title":"第二项","options":[{"label":"停止"}],"question":"第二项"}]}`, gjson.GetBytes(normalized, "content.0.input").Raw)
+}
+
+func TestNormalizeAnthropicAskUserQuestionResponseBodyKeepsOtherTools(t *testing.T) {
+	body := []byte(`{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"questions":[{"header":"不应修改"}]}}]}`)
+
+	normalized, changed := normalizeAnthropicAskUserQuestionResponseBody(body)
+	require.False(t, changed)
+	require.Equal(t, strings.TrimSpace(string(body)), strings.TrimSpace(string(normalized)))
+}
+
+func TestNormalizeAnthropicAskUserQuestionResponseBodyWithRewrittenToolName(t *testing.T) {
+	body := []byte(`{"content":[{"type":"tool_use","id":"toolu_1","name":"ask_fake","input":{"questions":[{"header":"第一项"}]}}]}`)
+	rw := &ToolNameRewrite{
+		Reverse: map[string]string{"ask_fake": "AskUserQuestion"},
+	}
+
+	normalized, changed := normalizeAnthropicAskUserQuestionResponseBodyWithRewrite(body, rw)
+	require.True(t, changed)
+	require.Equal(t, "第一项", gjson.GetBytes(normalized, "content.0.input.questions.0.question").String())
 }
 
 // 上游中途读错误（如 HTTP/2 GOAWAY 触发的 unexpected EOF）发生在向客户端写入任何字节前：

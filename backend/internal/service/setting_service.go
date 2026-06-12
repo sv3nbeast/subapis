@@ -19,6 +19,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
 	"github.com/imroc/req/v3"
@@ -115,6 +116,12 @@ type cachedOpenAICodexUserAgent struct {
 	expiresAt int64 // unix nano
 }
 
+// cachedClaudeUpstreamUserAgent 缓存 Claude/Anthropic 上游 UA（进程内缓存，60s TTL）
+type cachedClaudeUpstreamUserAgent struct {
+	value     string
+	expiresAt int64 // unix nano
+}
+
 type cachedOpenAIQuotaAutoPauseSettings struct {
 	settings  OpsOpenAIAccountQuotaAutoPauseSettings
 	expiresAt int64
@@ -126,6 +133,9 @@ const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 const openAICodexUserAgentCacheTTL = 60 * time.Second
 const openAICodexUserAgentErrorTTL = 5 * time.Second
 const openAICodexUserAgentDBTimeout = 5 * time.Second
+const claudeUpstreamUserAgentCacheTTL = 60 * time.Second
+const claudeUpstreamUserAgentErrorTTL = 5 * time.Second
+const claudeUpstreamUserAgentDBTimeout = 5 * time.Second
 
 // cachedOpenAIAllowCodexPlugin Codex 插件放行开关缓存（进程内缓存，60s TTL）。
 type cachedOpenAIAllowCodexPlugin struct {
@@ -167,6 +177,8 @@ type SettingService struct {
 	antigravityUAVersionSF    singleflight.Group
 	openAICodexUACache        atomic.Value // *cachedOpenAICodexUserAgent
 	openAICodexUASF           singleflight.Group
+	claudeUpstreamUACache     atomic.Value // *cachedClaudeUpstreamUserAgent
+	claudeUpstreamUASF        singleflight.Group
 
 	openAIAllowCodexPluginCache atomic.Value // *cachedOpenAIAllowCodexPlugin
 	openAIAllowCodexPluginSF    singleflight.Group
@@ -1345,6 +1357,55 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 	return fallback
 }
 
+// GetClaudeUpstreamUserAgent 返回 Claude/Anthropic 上游请求使用的完整 User-Agent。
+// 后台设置优先；为空时回退到当前内置 Claude CLI UA。
+func (s *SettingService) GetClaudeUpstreamUserAgent(ctx context.Context) string {
+	fallback := claude.DefaultHeaders["User-Agent"]
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.claudeUpstreamUACache.Load().(*cachedClaudeUpstreamUserAgent); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+
+	result, _, _ := s.claudeUpstreamUASF.Do("claude_upstream_user_agent", func() (any, error) {
+		if cached, ok := s.claudeUpstreamUACache.Load().(*cachedClaudeUpstreamUserAgent); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.value, nil
+			}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claudeUpstreamUserAgentDBTimeout)
+		defer cancel()
+		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyClaudeUpstreamUserAgent)
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			slog.Warn("failed to get claude upstream user agent setting", "error", err)
+			s.claudeUpstreamUACache.Store(&cachedClaudeUpstreamUserAgent{
+				value:     fallback,
+				expiresAt: time.Now().Add(claudeUpstreamUserAgentErrorTTL).UnixNano(),
+			})
+			return fallback, nil
+		}
+		ua := strings.TrimSpace(value)
+		if ua == "" {
+			ua = fallback
+		}
+		s.claudeUpstreamUACache.Store(&cachedClaudeUpstreamUserAgent{
+			value:     ua,
+			expiresAt: time.Now().Add(claudeUpstreamUserAgentCacheTTL).UnixNano(),
+		})
+		return ua, nil
+	})
+	if ua, ok := result.(string); ok && ua != "" {
+		return ua
+	}
+	return fallback
+}
+
 // IsOpenAIAllowClaudeCodeCodexPluginEnabled 全局开关：是否额外放行 Claude Code 的 Codex 插件（默认关闭）。
 func (s *SettingService) IsOpenAIAllowClaudeCodeCodexPluginEnabled(ctx context.Context) bool {
 	if s == nil || s.settingRepo == nil {
@@ -2300,6 +2361,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingKeyRewriteMessageCacheControl] = strconv.FormatBool(settings.RewriteMessageCacheControl)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
+	updates[SettingKeyClaudeUpstreamUserAgent] = strings.TrimSpace(settings.ClaudeUpstreamUserAgent)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
 	updates[SettingKeyOpenAIAllowClaudeCodeCodexPlugin] = strconv.FormatBool(settings.OpenAIAllowClaudeCodeCodexPlugin)
 	updates[SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxAnthropicAccountsPerProxy, ProxyAutoSelectDefaultAnthropicAccountsPerProxy))
@@ -2446,6 +2508,15 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
 		value:     openAICodexUserAgent,
 		expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
+	})
+	s.claudeUpstreamUASF.Forget("claude_upstream_user_agent")
+	claudeUpstreamUserAgent := strings.TrimSpace(settings.ClaudeUpstreamUserAgent)
+	if claudeUpstreamUserAgent == "" {
+		claudeUpstreamUserAgent = claude.DefaultHeaders["User-Agent"]
+	}
+	s.claudeUpstreamUACache.Store(&cachedClaudeUpstreamUserAgent{
+		value:     claudeUpstreamUserAgent,
+		expiresAt: time.Now().Add(claudeUpstreamUserAgentCacheTTL).UnixNano(),
 	})
 	s.openAIAllowCodexPluginSF.Forget("openai_allow_codex_plugin_enabled")
 	s.openAIAllowCodexPluginCache.Store(&cachedOpenAIAllowCodexPlugin{
@@ -3231,6 +3302,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyEnableAnthropicCacheTTL1hInjection:            "false",
 		SettingKeyRewriteMessageCacheControl:                    strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
 		SettingKeyAntigravityUserAgentVersion:                   "",
+		SettingKeyClaudeUpstreamUserAgent:                       "",
 		SettingKeyOpenAICodexUserAgent:                          "",
 		SettingKeyOpenAIAllowClaudeCodeCodexPlugin:              "false",
 		SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy:   strconv.Itoa(ProxyAutoSelectDefaultAnthropicAccountsPerProxy),
@@ -3674,6 +3746,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.RewriteMessageCacheControl = s.defaultRewriteMessageCacheControl()
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
+	result.ClaudeUpstreamUserAgent = strings.TrimSpace(settings[SettingKeyClaudeUpstreamUserAgent])
 	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
 	result.OpenAIAllowClaudeCodeCodexPlugin = settings[SettingKeyOpenAIAllowClaudeCodeCodexPlugin] == "true"
 	result.ProxyAutoSelectMaxAnthropicAccountsPerProxy = parseProxyAutoSelectLimit(

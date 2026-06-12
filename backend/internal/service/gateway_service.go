@@ -5415,6 +5415,20 @@ func (s *GatewayService) shouldMimicClaudeCodeForAccount(account *Account, isCla
 	return isZeroClaudeCodeMimicryConfig(cfg)
 }
 
+func (s *GatewayService) claudeUpstreamUserAgent(ctx context.Context) string {
+	if s != nil {
+		return claudeUpstreamUserAgentFromSettings(ctx, s.settingService)
+	}
+	return defaultClaudeUpstreamUserAgent()
+}
+
+func (s *GatewayService) applyClaudeUpstreamUserAgent(ctx context.Context, req *http.Request) {
+	if req == nil {
+		return
+	}
+	setHeaderRaw(req.Header, "User-Agent", s.claudeUpstreamUserAgent(ctx))
+}
+
 func isZeroClaudeCodeMimicryConfig(cfg config.GatewayClaudeCodeMimicryConfig) bool {
 	return !cfg.Enabled &&
 		!cfg.SyntheticCompanion.Enabled &&
@@ -5439,6 +5453,7 @@ func (s *GatewayService) triggerClaudeCodeCompanionProbe(ctx context.Context, ac
 		SessionID:    sessionID,
 		Config:       s.cfg.Gateway.ClaudeCodeMimicry,
 		RequestModel: model,
+		UserAgent:    s.claudeUpstreamUserAgent(ctx),
 	})
 }
 
@@ -6365,6 +6380,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if getHeaderRaw(req.Header, "anthropic-version") == "" {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
+	s.applyClaudeUpstreamUserAgent(ctx, req)
 
 	return req, nil
 }
@@ -7214,7 +7230,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 
 	// OAuth账号：应用缓存的指纹到请求头（覆盖白名单透传的头）
 	if fingerprint != nil {
-		s.identityService.ApplyFingerprint(req, fingerprint)
+		s.identityService.ApplyFingerprintWithoutUserAgent(req, fingerprint)
 	}
 
 	// 确保必要的headers存在（保持原始大小写）
@@ -7270,6 +7286,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
+	s.applyClaudeUpstreamUserAgent(ctx, req)
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
@@ -7344,6 +7361,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicVertex(
 	if finalBeta != "" {
 		setHeaderRaw(req.Header, "anthropic-beta", finalBeta)
 	}
+	s.applyClaudeUpstreamUserAgent(ctx, req)
 
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD_VERTEX_ANTHROPIC", req.Header, vertexBody, map[string]string{
 		"url":        req.URL.String(),
@@ -8451,6 +8469,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	sawTerminalEvent := false
 
 	pendingEventLines := make([]string, 0, 4)
+	askUserQuestionStreamNormalizer := newAnthropicAskUserQuestionStreamNormalizer(toolNameRewriteFromContext(c))
 
 	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
 		if len(lines) == 0 {
@@ -8548,6 +8567,20 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		usagePatch := s.extractSSEUsagePatch(event)
 		if anthropicStreamEventIsTerminal(eventName, dataLine) {
 			sawTerminalEvent = true
+		}
+		if generatedEvents, handled, changed := askUserQuestionStreamNormalizer.handleEvent(event); handled {
+			outputBlocks := make([]string, 0, len(generatedEvents))
+			for _, generatedEvent := range generatedEvents {
+				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+					outputBlocks = append(outputBlocks, block)
+				}
+			}
+			if changed {
+				eventChanged = true
+			}
+			return outputBlocks, dataLine, usagePatch, nil
+		} else if changed {
+			eventChanged = true
 		}
 		if !eventChanged {
 			block := ""
@@ -9004,6 +9037,9 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
+	if normalizedBody, changed := normalizeAnthropicAskUserQuestionResponseBodyWithRewrite(body, toolNameRewriteFromContext(c)); changed {
+		body = normalizedBody
+	}
 
 	// 写入响应
 	c.Data(resp.StatusCode, contentType, body)
@@ -10584,7 +10620,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 	// OAuth 账号：应用指纹到请求头（受设置开关控制）
 	if ctEnableFP && ctFingerprint != nil {
-		s.identityService.ApplyFingerprint(req, ctFingerprint)
+		s.identityService.ApplyFingerprintWithoutUserAgent(req, ctFingerprint)
 	}
 
 	// 确保必要的 headers 存在（保持原始大小写）
@@ -10635,6 +10671,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		}
 	}
 
+	s.applyClaudeUpstreamUserAgent(ctx, req)
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	if c != nil && tokenType == "oauth" {

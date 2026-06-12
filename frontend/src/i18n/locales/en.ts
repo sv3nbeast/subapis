@@ -6156,6 +6156,9 @@ export default {
         antigravityUserAgentVersion: 'Antigravity UA Version',
         antigravityUserAgentVersionPlaceholder: '1.23.2',
         antigravityUserAgentVersionHint: 'Leave empty to use ANTIGRAVITY_USER_AGENT_VERSION or the built-in default 1.23.2; when set, the admin setting takes precedence.',
+        claudeUpstreamUserAgent: 'Claude/Anthropic Upstream UA',
+        claudeUpstreamUserAgentPlaceholder: 'claude-cli/2.1.156 (external, cli)',
+        claudeUpstreamUserAgentHint: 'Force this full User-Agent for every Claude/Anthropic upstream request. Leave empty to use the built-in default; client headers, fingerprint cache, and monitor templates cannot override it.',
       },
       webSearchEmulation: {
         title: 'Web Search Emulation',

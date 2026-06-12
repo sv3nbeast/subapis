@@ -183,6 +183,27 @@ func (a *Account) IsKiro() bool {
 	return a.Platform == PlatformKiro
 }
 
+func (a *Account) IsKiroCacheEmulationEnabled() bool {
+	if a == nil || !a.IsKiro() || a.Extra == nil {
+		return false
+	}
+	if enabled, ok := a.Extra["kiro_cache_emulation_enabled"].(bool); ok {
+		return enabled
+	}
+	return false
+}
+
+func (a *Account) GetKiroCacheEmulationRatio() float64 {
+	if a == nil || !a.IsKiro() || a.Extra == nil {
+		return 0
+	}
+	return normalizeKiroCacheEmulationRatio(parseExtraFloat64(a.Extra["kiro_cache_emulation_ratio"]))
+}
+
+func (a *Account) EffectiveKiroCacheEmulationEnabled() bool {
+	return a != nil && a.IsKiro() && a.IsKiroCacheEmulationEnabled() && a.GetKiroCacheEmulationRatio() > 0
+}
+
 func (a *Account) IsDroid() bool {
 	return a.Platform == PlatformDroid
 }

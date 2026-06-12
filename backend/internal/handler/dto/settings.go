@@ -182,6 +182,7 @@ type SystemSettings struct {
 	EnableAnthropicCacheTTL1hInjection            bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 	RewriteMessageCacheControl                    bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion                   string `json:"antigravity_user_agent_version"`
+	ClaudeUpstreamUserAgent                       string `json:"claude_upstream_user_agent"`
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`

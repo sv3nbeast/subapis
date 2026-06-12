@@ -178,11 +178,20 @@ func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profil
 //
 // 逻辑：
 //  1. 未启用 TLS 指纹 → 返回 nil（不伪装）
-//  2. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
-//  3. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
+//  2. Anthropic OAuth/SetupToken → 始终使用内置默认 Profile，忽略账号级 profile_id，
+//     保证 ClientHello 扩展/签名算法列表与 defaultExtensionOrder 一致，
+//     输出稳定 JA4 t13d1714h1_5b57614c22b0_43ade6aba3df
+//  3. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
+//  4. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if account == nil || !s.shouldEnableTLSFingerprint(account) {
 		return nil
+	}
+	// Anthropic OAuth/SetupToken 跳过 profile_id 查找，直接使用内置默认 profile。
+	// 账号绑定的 DB profile 可能携带自定义 Extensions/SignatureAlgorithms，
+	// 会覆盖 defaultExtensionOrder，导致 JA4 偏离 t13d1714h1_5b57614c22b0_43ade6aba3df。
+	if account.IsAnthropicOAuthOrSetupToken() {
+		return forceHTTP1WithProxyForAnthropic(account, tlsfingerprint.BuiltInDefaultProfile())
 	}
 	id := account.GetTLSFingerprintProfileID()
 	if id > 0 {

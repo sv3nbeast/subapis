@@ -1024,6 +1024,36 @@
         </div>
       </div>
 
+      <div v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.groups.kiroCache.title') }}
+        </label>
+        <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.groups.kiroCache.description') }}
+        </p>
+        <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            v-model="kiroCacheEmulationEnabled"
+            type="checkbox"
+            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          {{ t('admin.groups.kiroCache.enabled') }}
+        </label>
+        <div v-if="kiroCacheEmulationEnabled">
+          <label class="input-label">{{ t('admin.groups.kiroCache.ratio') }}</label>
+          <input
+            v-model.number="kiroCacheEmulationRatio"
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            class="input"
+            placeholder="1"
+          />
+          <p class="input-hint">{{ t('admin.groups.kiroCache.ratioHint') }}</p>
+        </div>
+      </div>
+
       <div v-if="form.platform === 'kiro' && accountCategory === 'apikey'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
@@ -3711,6 +3741,8 @@ const getKiroModelMappingKey = createStableObjectKeyResolver<ModelMapping>('crea
 const getTempUnschedRuleKey = createStableObjectKeyResolver<TempUnschedRuleForm>('create-temp-unsched-rule')
 const geminiOAuthType = ref<'code_assist' | 'google_one' | 'ai_studio'>('google_one')
 const geminiAIStudioOAuthEnabled = ref(false)
+const kiroCacheEmulationEnabled = ref(false)
+const kiroCacheEmulationRatio = ref(1)
 const openAICompactModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.compactModeAuto') },
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
@@ -3722,6 +3754,22 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   if (mixedScheduling.value) extra.mixed_scheduling = true
   if (allowOverages.value) extra.allow_overages = true
   applyTLSFingerprintExtra(extra)
+  return Object.keys(extra).length > 0 ? extra : undefined
+}
+
+function buildKiroExtra(base?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (form.platform !== 'kiro' || accountCategory.value !== 'oauth-based') {
+    return base
+  }
+
+  const extra: Record<string, unknown> = { ...(base || {}) }
+  if (kiroCacheEmulationEnabled.value) {
+    extra.kiro_cache_emulation_enabled = true
+    extra.kiro_cache_emulation_ratio = kiroCacheEmulationRatio.value
+  } else {
+    delete extra.kiro_cache_emulation_enabled
+    delete extra.kiro_cache_emulation_ratio
+  }
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
@@ -4659,6 +4707,8 @@ const resetForm = () => {
   kiroIDCRegion.value = 'us-east-1'
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
+  kiroCacheEmulationEnabled.value = false
+  kiroCacheEmulationRatio.value = 1
   fetchKiroDefaultMappings().then(mappings => {
     kiroModelMappings.value = [...mappings]
   })
@@ -4696,6 +4746,8 @@ const resetForm = () => {
   cacheTTLOverrideTarget.value = '5m'
   customBaseUrlEnabled.value = false
   customBaseUrl.value = ''
+  kiroCacheEmulationEnabled.value = false
+  kiroCacheEmulationRatio.value = 1
   allowOverages.value = false
   antigravityAccountType.value = 'oauth'
   upstreamBaseUrl.value = ''
@@ -5808,7 +5860,7 @@ const handleKiroExchange = async (authCode: string) => {
     if (!tokenInfo) return
 
     const credentials = buildKiroCredentials(tokenInfo)
-    await createAccountAndFinish('kiro', 'oauth', credentials, buildMixedSchedulingExtra())
+    await createAccountAndFinish('kiro', 'oauth', credentials, buildKiroExtra(buildMixedSchedulingExtra()))
   } catch (error: any) {
     kiroOAuth.error.value = getKiroOAuthErrorMessage(error)
     appStore.showError(kiroOAuth.error.value)
@@ -5962,7 +6014,7 @@ const handleKiroImport = async () => {
 
   try {
     const credentials = buildKiroCredentials(tokenInfo)
-    await createAccountAndFinish('kiro', 'oauth', credentials, buildMixedSchedulingExtra())
+    await createAccountAndFinish('kiro', 'oauth', credentials, buildKiroExtra(buildMixedSchedulingExtra()))
   } catch (error: any) {
     kiroOAuth.error.value = getKiroOAuthErrorMessage(error)
     appStore.showError(kiroOAuth.error.value)

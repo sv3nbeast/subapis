@@ -288,6 +288,7 @@ type ClaudeUsageFetchOptions struct {
 	AccountID   int64                   // 账号 ID（用于连接池隔离）
 	TLSProfile  *tlsfingerprint.Profile // TLS 指纹 Profile（nil 表示不启用）
 	Fingerprint *Fingerprint            // 缓存的指纹信息（User-Agent 等）
+	UserAgent   string                  // 发往 Anthropic usage 上游的统一 User-Agent
 }
 
 // ClaudeUsageFetcher fetches usage data from Anthropic OAuth API
@@ -308,6 +309,7 @@ type AccountUsageService struct {
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
 	kiroCooldownStore       KiroCooldownStore
+	settingService          *SettingService
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -336,6 +338,13 @@ func NewAccountUsageService(
 func (s *AccountUsageService) SetKiroCooldownStore(store KiroCooldownStore) *AccountUsageService {
 	if s != nil {
 		s.kiroCooldownStore = store
+	}
+	return s
+}
+
+func (s *AccountUsageService) SetSettingService(settingService *SettingService) *AccountUsageService {
+	if s != nil {
+		s.settingService = settingService
 	}
 	return s
 }
@@ -1202,12 +1211,18 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 		proxyURL = account.Proxy.URL()
 	}
 
+	var tlsProfile *tlsfingerprint.Profile
+	if s.tlsFPProfileService != nil {
+		tlsProfile = s.tlsFPProfileService.ResolveTLSProfile(account)
+	}
+
 	// 构建完整的选项
 	opts := &ClaudeUsageFetchOptions{
 		AccessToken: accessToken,
 		ProxyURL:    proxyURL,
 		AccountID:   account.ID,
-		TLSProfile:  s.tlsFPProfileService.ResolveTLSProfile(account),
+		TLSProfile:  tlsProfile,
+		UserAgent:   claudeUpstreamUserAgentFromSettings(ctx, s.settingService),
 	}
 
 	// 尝试获取缓存的 Fingerprint（包含 User-Agent 等信息）

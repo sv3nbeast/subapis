@@ -59,8 +59,9 @@ type ChannelMonitorRepository interface {
 
 // ChannelMonitorService 渠道监控管理服务。
 type ChannelMonitorService struct {
-	repo      ChannelMonitorRepository
-	encryptor SecretEncryptor
+	repo           ChannelMonitorRepository
+	encryptor      SecretEncryptor
+	settingService *SettingService
 	// scheduler 由 wire 通过 SetScheduler 注入；CRUD 后调用对应钩子即时同步任务。
 	// 测试或未注入场景下保持 nil，所有钩子调用变为 no-op。
 	scheduler MonitorScheduler
@@ -69,6 +70,13 @@ type ChannelMonitorService struct {
 // NewChannelMonitorService 创建渠道监控服务实例。
 func NewChannelMonitorService(repo ChannelMonitorRepository, encryptor SecretEncryptor) *ChannelMonitorService {
 	return &ChannelMonitorService{repo: repo, encryptor: encryptor}
+}
+
+func (s *ChannelMonitorService) SetSettingService(settingService *SettingService) *ChannelMonitorService {
+	if s != nil {
+		s.settingService = settingService
+	}
+	return s
 }
 
 // ---------- CRUD ----------
@@ -302,10 +310,11 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 
 	// 所有模型共用同一份 CheckOptions（来自监控的快照字段）。
 	opts := &CheckOptions{
-		APIMode:          m.APIMode,
-		ExtraHeaders:     m.ExtraHeaders,
-		BodyOverrideMode: m.BodyOverrideMode,
-		BodyOverride:     m.BodyOverride,
+		APIMode:                 m.APIMode,
+		ExtraHeaders:            m.ExtraHeaders,
+		ClaudeUpstreamUserAgent: claudeUpstreamUserAgentFromSettings(ctx, s.settingService),
+		BodyOverrideMode:        m.BodyOverrideMode,
+		BodyOverride:            m.BodyOverride,
 	}
 
 	var eg errgroup.Group

@@ -52,7 +52,16 @@ var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]
 
 func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
 	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
+	if account == nil || account.ID <= 0 || len(body) == 0 {
+		return nil
+	}
+	enabled := account.EffectiveKiroCacheEmulationEnabled()
+	ratio := account.GetKiroCacheEmulationRatio()
+	if !enabled && group != nil {
+		enabled = group.EffectiveKiroCacheEmulationEnabled()
+		ratio = group.EffectiveKiroCacheEmulationRatio()
+	}
+	if !enabled || ratio <= 0 {
 		return nil
 	}
 	profile, ok := buildKiroCacheProfile(body, model, inputTokens)
@@ -65,7 +74,6 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *G
 	}
 	result := globalKiroCacheTracker.compute(cacheKey, profile)
 	globalKiroCacheTracker.update(cacheKey, profile)
-	ratio := group.EffectiveKiroCacheEmulationRatio()
 	result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
 	result.CacheCreationInputTokens = scaleKiroCacheTokens(result.CacheCreationInputTokens, ratio)
 	result.CacheCreation5mInputTokens = scaleKiroCacheTokens(result.CacheCreation5mInputTokens, ratio)

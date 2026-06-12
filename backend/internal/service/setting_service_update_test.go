@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -325,6 +326,17 @@ func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T)
 	require.Equal(t, "1.23.2", repo.updates[SettingKeyAntigravityUserAgentVersion])
 }
 
+func TestSettingService_UpdateSettings_ClaudeUpstreamUserAgent(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		ClaudeUpstreamUserAgent: "  claude-cli/2.1.156 (external, cli)  ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "claude-cli/2.1.156 (external, cli)", repo.updates[SettingKeyClaudeUpstreamUserAgent])
+}
+
 func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	cfg := &config.Config{}
@@ -370,6 +382,30 @@ func TestSettingService_GetAntigravityUserAgentVersion_Precedence(t *testing.T) 
 		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
 
 		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
+	})
+}
+
+func TestSettingService_GetClaudeUpstreamUserAgent_Precedence(t *testing.T) {
+	t.Run("后台设置优先", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyClaudeUpstreamUserAgent: "custom-claude-cli/9.9.9",
+		}}, &config.Config{})
+
+		require.Equal(t, "custom-claude-cli/9.9.9", svc.GetClaudeUpstreamUserAgent(context.Background()))
+	})
+
+	t.Run("空值回退内置默认", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyClaudeUpstreamUserAgent: "",
+		}}, &config.Config{})
+
+		require.Equal(t, claude.DefaultHeaders["User-Agent"], svc.GetClaudeUpstreamUserAgent(context.Background()))
+	})
+
+	t.Run("缺失回退内置默认", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
+
+		require.Equal(t, claude.DefaultHeaders["User-Agent"], svc.GetClaudeUpstreamUserAgent(context.Background()))
 	})
 }
 

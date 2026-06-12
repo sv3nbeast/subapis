@@ -564,6 +564,7 @@ export interface SystemSettings {
   enable_anthropic_cache_ttl_1h_injection: boolean;
   rewrite_message_cache_control: boolean;
   antigravity_user_agent_version: string;
+  claude_upstream_user_agent: string;
   proxy_auto_select_max_anthropic_accounts_per_proxy: number;
   proxy_auto_select_max_openai_accounts_per_proxy: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy: number;
@@ -772,6 +773,7 @@ export interface UpdateSettingsRequest {
   enable_anthropic_cache_ttl_1h_injection?: boolean;
   rewrite_message_cache_control?: boolean;
   antigravity_user_agent_version?: string;
+  claude_upstream_user_agent?: string;
   proxy_auto_select_max_anthropic_accounts_per_proxy?: number;
   proxy_auto_select_max_openai_accounts_per_proxy?: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy?: number;

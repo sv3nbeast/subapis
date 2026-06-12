@@ -82,6 +82,7 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 		TLSProfile:   profile,
 		SessionID:    "11111111-1111-4111-8111-111111111111",
 		RequestModel: "awsclaude4.5",
+		UserAgent:    "configured-claude-cli/9.9.9",
 		Config: config.GatewayClaudeCodeMimicryConfig{
 			Enabled: true,
 			SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
@@ -117,13 +118,14 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 		"/v1/messages",
 	}, paths)
 
-	require.Equal(t, "axios/1.15.2", getHeaderRaw(requests[0].Header, "User-Agent"))
+	for _, req := range requests {
+		require.Equal(t, "configured-claude-cli/9.9.9", getHeaderRaw(req.Header, "User-Agent"))
+	}
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(requests[0].Header, "authorization"))
 	require.Equal(t, "mcp-servers-2025-12-04", getHeaderRaw(requests[0].Header, "anthropic-beta"))
 	require.Equal(t, "application/json, text/plain, */*", getHeaderRaw(requests[0].Header, "Accept"))
 	require.Equal(t, "gzip, compress, deflate, br", getHeaderRaw(requests[0].Header, "Accept-Encoding"))
 	require.Equal(t, "limit=1000", requests[0].URL.RawQuery)
-	require.Equal(t, "claude-code/2.1.165", getHeaderRaw(requests[1].Header, "User-Agent"))
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(requests[1].Header, "authorization"))
 	require.Equal(t, "oauth-2025-04-20", getHeaderRaw(requests[1].Header, "anthropic-beta"))
 	require.Equal(t, "entrypoint=sdk-cli&model=awsclaude4.5", requests[1].URL.RawQuery)
@@ -133,11 +135,7 @@ func TestClaudeCodeCompanionProbeService_SendsCapturedAuxAndTitleRequests(t *tes
 	for _, req := range requests {
 		requestByPath[req.URL.Path] = req
 	}
-	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/api/claude_code_penguin_mode"].Header, "User-Agent"))
-	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/api/oauth/profile"].Header, "User-Agent"))
 	require.Equal(t, "", getHeaderRaw(requestByPath["/api/oauth/profile"].Header, "anthropic-beta"))
-	require.Equal(t, "axios/1.15.2", getHeaderRaw(requestByPath["/v1/mcp_servers"].Header, "User-Agent"))
-	require.Equal(t, "claude-cli/2.1.165 (external, sdk-cli)", getHeaderRaw(requestByPath["/mcp-registry/v0/servers"].Header, "User-Agent"))
 	require.Equal(t, "version=latest&limit=100&visibility=commercial%2Cgsuite%2Centerprise%2Chealth", requestByPath["/mcp-registry/v0/servers"].URL.RawQuery)
 	require.Equal(t, "application/json", getHeaderRaw(requestByPath["/v1/messages"].Header, "Accept"))
 	require.Equal(t, "gzip, deflate, br, zstd", getHeaderRaw(requestByPath["/v1/messages"].Header, "Accept-Encoding"))

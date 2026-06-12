@@ -257,6 +257,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableAnthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:             settings.RewriteMessageCacheControl,
 		AntigravityUserAgentVersion:            settings.AntigravityUserAgentVersion,
+		ClaudeUpstreamUserAgent:                settings.ClaudeUpstreamUserAgent,
 		WebSearchEmulationEnabled:              settings.WebSearchEmulationEnabled,
 		PaymentVisibleMethodAlipaySource:       settings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        settings.PaymentVisibleMethodWxpaySource,
@@ -570,6 +571,7 @@ type UpdateSettingsRequest struct {
 	EnableAnthropicCacheTTL1hInjection            *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 	RewriteMessageCacheControl                    *bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion                   *string `json:"antigravity_user_agent_version"`
+	ClaudeUpstreamUserAgent                       *string `json:"claude_upstream_user_agent"`
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   *int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      *int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy *int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
@@ -1355,6 +1357,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.ClaudeUpstreamUserAgent != nil {
+		normalized := strings.TrimSpace(*req.ClaudeUpstreamUserAgent)
+		req.ClaudeUpstreamUserAgent = &normalized
+	}
 
 	// 交叉验证：如果同时设置了最低和最高版本号，最高版本号必须 >= 最低版本号
 	if req.MinClaudeCodeVersion != "" && req.MaxClaudeCodeVersion != "" {
@@ -1548,6 +1554,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.AntigravityUserAgentVersion
 			}
 			return previousSettings.AntigravityUserAgentVersion
+		}(),
+		ClaudeUpstreamUserAgent: func() string {
+			if req.ClaudeUpstreamUserAgent != nil {
+				return *req.ClaudeUpstreamUserAgent
+			}
+			return previousSettings.ClaudeUpstreamUserAgent
 		}(),
 		ProxyAutoSelectMaxAnthropicAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
 			req.ProxyAutoSelectMaxAnthropicAccountsPerProxy,
@@ -1921,6 +1933,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableAnthropicCacheTTL1hInjection:     updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:             updatedSettings.RewriteMessageCacheControl,
 		AntigravityUserAgentVersion:            updatedSettings.AntigravityUserAgentVersion,
+		ClaudeUpstreamUserAgent:                updatedSettings.ClaudeUpstreamUserAgent,
 		PaymentVisibleMethodAlipaySource:       updatedSettings.PaymentVisibleMethodAlipaySource,
 		PaymentVisibleMethodWxpaySource:        updatedSettings.PaymentVisibleMethodWxpaySource,
 		PaymentVisibleMethodAlipayEnabled:      updatedSettings.PaymentVisibleMethodAlipayEnabled,
@@ -2330,6 +2343,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AntigravityUserAgentVersion != after.AntigravityUserAgentVersion {
 		changed = append(changed, "antigravity_user_agent_version")
+	}
+	if before.ClaudeUpstreamUserAgent != after.ClaudeUpstreamUserAgent {
+		changed = append(changed, "claude_upstream_user_agent")
 	}
 	if before.ProxyAutoSelectMaxAnthropicAccountsPerProxy != after.ProxyAutoSelectMaxAnthropicAccountsPerProxy {
 		changed = append(changed, "proxy_auto_select_max_anthropic_accounts_per_proxy")

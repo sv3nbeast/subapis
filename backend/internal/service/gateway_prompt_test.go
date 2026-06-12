@@ -186,7 +186,7 @@ func TestBuildBillingAttributionBlockUsesCapturedSDKEntrypoint(t *testing.T) {
 	var parsed map[string]string
 	require.NoError(t, json.Unmarshal(block, &parsed))
 	require.Equal(t, "text", parsed["type"])
-	require.Contains(t, parsed["text"], "cc_version=2.1.165.")
+	require.Contains(t, parsed["text"], "cc_version=2.1.156.")
 	require.Contains(t, parsed["text"], "cc_entrypoint=sdk-cli")
 	require.Contains(t, parsed["text"], "cch=00000")
 }
