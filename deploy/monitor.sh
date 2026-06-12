@@ -603,6 +603,11 @@ check_api() {
     fi
     error_msg="${error_msg:0:160}"
 
+    if is_api_status_degraded "$current_status"; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DEGRADED] 模型 ${TEST_MODEL} 当前状态 ${current_status}: ${error_msg}，不发送 Bark 告警"
+      return
+    fi
+
     if [ "$api_notified" = "0" ]; then
       api_notified=1
       api_down_since_epoch=$(now_epoch)
