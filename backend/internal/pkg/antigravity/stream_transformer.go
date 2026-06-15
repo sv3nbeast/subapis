@@ -20,18 +20,20 @@ const (
 
 // StreamingProcessor 流式响应处理器
 type StreamingProcessor struct {
-	blockType         BlockType
-	blockIndex        int
-	messageStartSent  bool
-	messageStopSent   bool
-	usedTool          bool
-	pendingSignature  string
-	trailingSignature string
-	originalModel     string
-	webSearchQueries  []string
-	groundingChunks   []GeminiGroundingChunk
-	toolUseSignatures map[string]string
-	toolNameMap       map[string]string
+	blockType           BlockType
+	blockIndex          int
+	messageStartSent    bool
+	messageStopSent     bool
+	usedTool            bool
+	pendingSignature    string
+	trailingSignature   string
+	originalModel       string
+	webSearchQueries    []string
+	groundingChunks     []GeminiGroundingChunk
+	toolUseSignatures   map[string]string
+	toolNameMap         map[string]string
+	pendingXMLToolText  string
+	pendingXMLSignature string
 
 	// 累计 usage
 	inputTokens       int
@@ -141,11 +143,38 @@ func (p *StreamingProcessor) Finish() ([]byte, *ClaudeUsage) {
 	}
 
 	var result bytes.Buffer
+	if p.pendingXMLToolText != "" {
+		pending := p.pendingXMLToolText
+		p.pendingXMLToolText = ""
+		pendingSignature := p.pendingXMLSignature
+		p.pendingXMLSignature = ""
+		_, _ = result.Write(p.processPlainText(pending))
+		if pendingSignature != "" {
+			_, _ = result.Write(p.emitEmptyThinkingWithSignature(pendingSignature))
+		}
+	}
 	if !p.messageStopSent {
 		_, _ = result.Write(p.emitFinish(""))
 	}
 
 	return result.Bytes(), usage
+}
+
+func (p *StreamingProcessor) processPlainText(text string) []byte {
+	if text == "" {
+		return nil
+	}
+	var result bytes.Buffer
+	if p.blockType != BlockTypeText {
+		_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
+			"type": "text",
+			"text": "",
+		}))
+	}
+	_, _ = result.Write(p.emitDelta("text_delta", map[string]any{
+		"text": text,
+	}))
+	return result.Bytes()
 }
 
 // MessageStartSent 报告流中是否已发出过 message_start 事件（即是否收到过有效的上游数据）
@@ -311,6 +340,46 @@ func (p *StreamingProcessor) processText(text, signature string) []byte {
 		p.trailingSignature = ""
 	}
 
+	carrySignature := ""
+	if p.pendingXMLToolText != "" {
+		text = p.pendingXMLToolText + text
+		p.pendingXMLToolText = ""
+		if p.pendingXMLSignature != "" {
+			carrySignature = signature
+			signature = p.pendingXMLSignature
+		}
+		p.pendingXMLSignature = ""
+	}
+	if cleaned, calls, pending := drainEmbeddedXMLToolText(text); len(calls) > 0 || pending != "" {
+		if cleaned != "" {
+			_, _ = result.Write(p.processText(cleaned, ""))
+		}
+		for _, call := range calls {
+			callSignature := ""
+			if signature != "" {
+				callSignature = signature
+				signature = ""
+			}
+			_, _ = result.Write(p.processFunctionCall(&GeminiFunctionCall{
+				Name: call.name,
+				Args: call.input,
+			}, callSignature))
+		}
+		p.pendingXMLToolText = pending
+		if pending != "" {
+			p.pendingXMLSignature = signature
+		} else if signature != "" {
+			_, _ = result.Write(p.emitEmptyThinkingWithSignature(signature))
+		}
+		if pending == "" && carrySignature != "" {
+			_, _ = result.Write(p.emitEmptyThinkingWithSignature(carrySignature))
+		}
+		return result.Bytes()
+	}
+	if carrySignature != "" {
+		p.trailingSignature = carrySignature
+	}
+
 	// 非空 text 带签名 - 特殊处理
 	if signature != "" {
 		_, _ = result.Write(p.startBlock(BlockTypeText, map[string]any{
@@ -471,6 +540,17 @@ func (p *StreamingProcessor) emitEmptyThinkingWithSignature(signature string) []
 // emitFinish 发送结束事件
 func (p *StreamingProcessor) emitFinish(finishReason string) []byte {
 	var result bytes.Buffer
+
+	if p.pendingXMLToolText != "" {
+		pending := p.pendingXMLToolText
+		p.pendingXMLToolText = ""
+		pendingSignature := p.pendingXMLSignature
+		p.pendingXMLSignature = ""
+		_, _ = result.Write(p.processPlainText(pending))
+		if pendingSignature != "" {
+			_, _ = result.Write(p.emitEmptyThinkingWithSignature(pendingSignature))
+		}
+	}
 
 	// 关闭最后一个块
 	_, _ = result.Write(p.endBlock())

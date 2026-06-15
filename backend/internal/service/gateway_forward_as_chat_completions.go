@@ -343,6 +343,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	// Chain: Anthropic → Responses → Chat Completions
+	finalResp, _ = normalizeOpenAICompatAnthropicResponse(finalResp)
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	ccResp := apicompat.ResponsesToChatCompletions(responsesResp, originalModel)
 
@@ -394,6 +395,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	// Use Anthropic→Responses state machine, then convert Responses→CC
 	anthState := apicompat.NewAnthropicEventToResponsesState()
 	anthState.Model = originalModel
+	xmlInvokeBridge := newOpenAICompatAnthropicXMLInvokeBridge()
 	ccState := apicompat.NewResponsesEventToChatState()
 	ccState.Model = originalModel
 	ccState.IncludeUsage = includeUsage
@@ -436,6 +438,21 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return false
 	}
 
+	writeResponseEvents := func(responsesEvents []apicompat.ResponsesStreamEvent) bool {
+		for _, resEvt := range responsesEvents {
+			ccChunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
+			for _, chunk := range ccChunks {
+				if disconnected := writeChunk(chunk); disconnected {
+					return true
+				}
+			}
+		}
+		if len(responsesEvents) > 0 {
+			c.Writer.Flush()
+		}
+		return false
+	}
+
 	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent) bool {
 		if firstChunk {
 			firstChunk = false
@@ -452,18 +469,17 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
-		// Chain: Anthropic event → Responses events → CC chunks
-		responsesEvents := apicompat.AnthropicEventToResponsesEvents(event, anthState)
-		for _, resEvt := range responsesEvents {
-			ccChunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
-			for _, chunk := range ccChunks {
-				if disconnected := writeChunk(chunk); disconnected {
-					return true
-				}
-			}
+		normalizedEvents := xmlInvokeBridge.normalizeEvents([]apicompat.AnthropicStreamEvent{*event})
+		if len(normalizedEvents) == 0 {
+			return false
 		}
-		c.Writer.Flush()
-		return false
+
+		// Chain: Anthropic event → Responses events → CC chunks
+		var responsesEvents []apicompat.ResponsesStreamEvent
+		for i := range normalizedEvents {
+			responsesEvents = append(responsesEvents, apicompat.AnthropicEventToResponsesEvents(&normalizedEvents[i], anthState)...)
+		}
+		return writeResponseEvents(responsesEvents)
 	}
 
 	for scanner.Scan() {
@@ -501,12 +517,16 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	// Finalize both state machines
+	var flushedEvents []apicompat.ResponsesStreamEvent
+	for _, evt := range xmlInvokeBridge.flushPendingEvents() {
+		flushedEvents = append(flushedEvents, apicompat.AnthropicEventToResponsesEvents(&evt, anthState)...)
+	}
+	if disconnected := writeResponseEvents(flushedEvents); disconnected {
+		return resultWithUsage(), nil
+	}
 	finalResEvents := apicompat.FinalizeAnthropicResponsesStream(anthState)
-	for _, resEvt := range finalResEvents {
-		ccChunks := apicompat.ResponsesEventToChatChunks(&resEvt, ccState)
-		for _, chunk := range ccChunks {
-			writeChunk(chunk) //nolint:errcheck
-		}
+	if disconnected := writeResponseEvents(finalResEvents); disconnected {
+		return resultWithUsage(), nil
 	}
 	finalCCChunks := apicompat.FinalizeResponsesChatStream(ccState)
 	for _, chunk := range finalCCChunks {

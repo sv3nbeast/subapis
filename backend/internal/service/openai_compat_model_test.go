@@ -1674,6 +1674,104 @@ func TestForwardAsAnthropic_BufferedEventNamedTerminalWithoutUpstreamCloseReturn
 	}
 }
 
+func TestForwardAsAnthropic_BufferedConvertsRawInvokeTextToToolUse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"run pwd"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_xml","object":"response","model":"gpt-5.4","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Before <invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke> After"}]}],"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_xml_buffered"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Contains(t, bodyText, `"type":"tool_use"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"command":"pwd"`)
+	require.Equal(t, "tool_use", gjson.Get(bodyText, "stop_reason").String())
+}
+
+func TestForwardAsAnthropic_StreamingConvertsSplitRawInvokeTextToToolUse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"run pwd"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_xml_stream","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Before <invoke name=\"Bash\"><parameter name=\"command\">pw"}`,
+		"",
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"d</parameter></invoke> After"}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_xml_stream","object":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_xml_stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Contains(t, bodyText, `"type":"tool_use"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, bodyText, `"stop_reason":"tool_use"`)
+}
+
 func TestForwardAsAnthropic_DoneSentinelWithoutTerminalReturnsError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

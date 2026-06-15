@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -47,6 +48,34 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	clientDisconnected := false
+	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	writeBlocks := func(blocks []string) {
+		if clientDisconnected {
+			return
+		}
+		for _, block := range blocks {
+			if _, writeErr := fmt.Fprint(w, block); writeErr != nil {
+				clientDisconnected = true
+				logger.LegacyPrintf("service.gateway", "[Bedrock] Client disconnected during streaming, continue draining for usage: account=%d", account.ID)
+				break
+			}
+			flusher.Flush()
+		}
+	}
+	flushXMLInvokePending := func() {
+		generatedEvents := xmlInvokeStreamNormalizer.flushPendingEvents()
+		if len(generatedEvents) == 0 {
+			return
+		}
+		blocks := make([]string, 0, len(generatedEvents))
+		for _, generatedEvent := range generatedEvents {
+			if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+				blocks = append(blocks, block)
+			}
+		}
+		writeBlocks(blocks)
+	}
 
 	// Bedrock EventStream 使用 application/vnd.amazon.eventstream 二进制格式。
 	// 每个帧结构：total_length(4) + headers_length(4) + prelude_crc(4) + headers + payload + message_crc(4)
@@ -108,6 +137,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				flushXMLInvokePending()
 				if !clientDisconnected {
 					flusher.Flush()
 				}
@@ -143,22 +173,53 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
-
-			// 写入标准 SSE 格式
-			if !clientDisconnected {
-				var writeErr error
-				if eventType != "" {
-					_, writeErr = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, sseData)
-				} else {
-					_, writeErr = fmt.Fprintf(w, "data: %s\n\n", sseData)
+			var outputBlocks []string
+			var event map[string]any
+			if err := json.Unmarshal(sseData, &event); err == nil {
+				var pendingBlocks []string
+				if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventType, string(sseData)) {
+					for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
+						if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+							pendingBlocks = append(pendingBlocks, block)
+						}
+					}
 				}
-				if writeErr != nil {
-					clientDisconnected = true
-					logger.LegacyPrintf("service.gateway", "[Bedrock] Client disconnected during streaming, continue draining for usage: account=%d", account.ID)
-				} else {
-					flusher.Flush()
+				if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+					outputBlocks = make([]string, 0, len(generatedEvents))
+					for _, generatedEvent := range generatedEvents {
+						if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+							outputBlocks = append(outputBlocks, block)
+						}
+					}
+					if len(pendingBlocks) > 0 {
+						outputBlocks = append(pendingBlocks, outputBlocks...)
+					}
+				} else if changed {
+					if updated, err := json.Marshal(event); err == nil {
+						sseData = updated
+						eventType = gjson.GetBytes(sseData, "type").String()
+					}
+				}
+				if len(pendingBlocks) > 0 && outputBlocks == nil {
+					currentBlock := ""
+					if eventType != "" {
+						currentBlock = fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, sseData)
+					} else {
+						currentBlock = fmt.Sprintf("data: %s\n\n", sseData)
+					}
+					outputBlocks = append(pendingBlocks, currentBlock)
 				}
 			}
+			if outputBlocks == nil {
+				if eventType != "" {
+					outputBlocks = []string{fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, sseData)}
+				} else {
+					outputBlocks = []string{fmt.Sprintf("data: %s\n\n", sseData)}
+				}
+			}
+
+			// 写入标准 SSE 格式
+			writeBlocks(outputBlocks)
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, lastReadAt.Load())

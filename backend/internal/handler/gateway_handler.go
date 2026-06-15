@@ -32,9 +32,20 @@ import (
 	"go.uber.org/zap"
 )
 
-const gatewayCompatibilityMetricsLogInterval = 1024
+const (
+	gatewayCompatibilityMetricsLogInterval = 1024
+	gatewayPostForwardStateUpdateTimeout   = 5 * time.Second
+)
 
 var gatewayCompatibilityMetricsLogCounter atomic.Uint64
+
+func gatewayPostForwardStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, gatewayPostForwardStateUpdateTimeout)
+}
 
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
@@ -533,9 +544,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 注意：TOCTOU 竞态是已知且可接受的设计权衡，与 WindowCost 一致的 soft-limit 模式。
 			// 在高并发下可能短暂超出 RPM 限制，但不会导致请求失败。
 			if account.IsAnthropicOAuthOrSetupToken() && account.GetBaseRPM() > 0 {
-				if err := h.gatewayService.IncrementAccountRPM(c.Request.Context(), account.ID); err != nil {
+				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+				if err := h.gatewayService.IncrementAccountRPM(stateCtx, account.ID); err != nil {
 					reqLog.Warn("gateway.rpm_increment_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
+				stateCancel()
 			}
 
 			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
@@ -980,9 +993,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 注意：TOCTOU 竞态是已知且可接受的设计权衡，与 WindowCost 一致的 soft-limit 模式。
 			// 在高并发下可能短暂超出 RPM 限制，但不会导致请求失败。
 			if account.IsAnthropicOAuthOrSetupToken() && account.GetBaseRPM() > 0 {
-				if err := h.gatewayService.IncrementAccountRPM(c.Request.Context(), account.ID); err != nil {
+				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+				if err := h.gatewayService.IncrementAccountRPM(stateCtx, account.ID); err != nil {
 					reqLog.Warn("gateway.rpm_increment_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
+				stateCancel()
 			}
 
 			// 绑定粘性会话（成功转发后绑定/刷新）
@@ -992,9 +1007,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
 			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasKiro429Retries()) {
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
+				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+				if err := h.gatewayService.BindStickySession(stateCtx, currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
+				stateCancel()
 			}
 
 			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
@@ -1662,6 +1679,9 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 		return false
 	}
 	if c.Writer.Written() {
+		if service.HasGatewaySSEErrorWritten(c) {
+			return false
+		}
 		contentType := strings.ToLower(c.Writer.Header().Get("Content-Type"))
 		if !streamStarted && !strings.Contains(contentType, "text/event-stream") {
 			return false

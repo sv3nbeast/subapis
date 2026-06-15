@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -35,6 +36,9 @@ const (
 	thinkingStartTag           = "<thinking>"
 	thinkingEndTag             = "</thinking>"
 	embeddedToolCallPrefix     = "[Called "
+	embeddedInvokeStartPrefix  = "<invoke"
+	embeddedInvokeEndTag       = "</invoke>"
+	embeddedParameterEndTag    = "</parameter>"
 	minFrameSize               = 16
 	maxEventMsgSize            = 10 << 20
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
@@ -620,14 +624,37 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stripThinkingLeadingNewline := false
 	var outputTextBuf strings.Builder
 	sawKiroSemanticOutput := false
+	sawDeliverableOutput := false
+	streamOutputReleased := false
+	var bufferedStreamOutput bytes.Buffer
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n")
+		dst := w
+		if !streamOutputReleased {
+			dst = &bufferedStreamOutput
+		}
+		_, err = io.WriteString(dst, "event: "+event+"\ndata: "+string(payload)+"\n\n")
 		return err
+	}
+	releaseStreamOutput := func() error {
+		if streamOutputReleased {
+			return nil
+		}
+		if bufferedStreamOutput.Len() > 0 {
+			if _, err := io.Copy(w, &bufferedStreamOutput); err != nil {
+				return err
+			}
+		}
+		streamOutputReleased = true
+		return nil
+	}
+	markDeliverableOutput := func() error {
+		sawDeliverableOutput = true
+		return releaseStreamOutput()
 	}
 	ensureMessageStart := func() error {
 		if messageStartSent {
@@ -699,6 +726,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		if stopReason == "" {
 			stopReason = "tool_use"
+		}
+		if err := markDeliverableOutput(); err != nil {
+			return err
 		}
 		if err := ensureMessageStart(); err != nil {
 			return err
@@ -852,6 +882,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				}
 			}
 		}
+		if err := markDeliverableOutput(); err != nil {
+			return err
+		}
 		if err := ensureMessageStart(); err != nil {
 			return err
 		}
@@ -889,6 +922,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	emitToolUse := func(tool KiroToolUse) error {
 		if !shouldEmitToolUse(tool, emittedToolContents) {
 			return nil
+		}
+		if err := markDeliverableOutput(); err != nil {
+			return err
 		}
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
@@ -1240,7 +1276,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := closeThinking(); err != nil {
 		return nil, err
 	}
-	if !sawKiroSemanticOutput && usage.OutputTokens <= 0 {
+	if !sawDeliverableOutput {
+		if sawKiroSemanticOutput {
+			return nil, errors.New("empty kiro event stream: no deliverable assistant output")
+		}
 		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
 	if usage.OutputTokens == 0 {
@@ -2740,6 +2779,10 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 	cleanText, embeddedToolUses, _ := drainEmbeddedToolText(content.String())
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)
+	responseBlocks := extractThinkingBlocks(cleanText)
+	if hasThinkingBlocksOnly(responseBlocks) && !hasUsableToolUses(toolUses) {
+		return "", nil, usage, stopReason, errors.New("empty kiro event stream: no deliverable assistant output")
+	}
 
 	if usage.OutputTokens == 0 {
 		var outputBuf strings.Builder
@@ -2767,8 +2810,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 }
 
 func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {
-	var blocks []map[string]any
-	blocks = append(blocks, extractThinkingBlocks(content)...)
+	blocks := extractThinkingBlocks(content)
 	usableTools := 0
 	for _, tool := range toolUses {
 		if tool.IsTruncated {
@@ -2781,11 +2823,6 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 			"name":  restoreResponseToolName(tool.Name, requestCtx),
 			"input": tool.Input,
 		})
-	}
-	// 移除"thinking-only 强制 max_tokens"误判分支(与流式路径同步)
-	// 非流式响应若仅有 thinking 块,补一个空 text 块保证协议完整性,但不强设 stop_reason
-	if hasThinkingBlocksOnly(blocks) && usableTools == 0 {
-		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
 	}
 	if len(blocks) == 0 {
 		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
@@ -3703,6 +3740,7 @@ func toolUseContentKey(tool KiroToolUse) string {
 }
 
 func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUse, pending string) {
+	text = normalizeEmbeddedToolText(text)
 	complete, pending := splitCompleteEmbeddedToolText(text)
 	if strings.TrimSpace(complete) == "" {
 		return "", nil, pending
@@ -3711,14 +3749,20 @@ func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUs
 	return cleanText, deduplicateToolUses(toolUses), pending
 }
 
+func normalizeEmbeddedToolText(text string) string {
+	if !strings.Contains(text, "&lt;invoke") && !strings.Contains(text, "&lt;/invoke&gt;") && !strings.Contains(text, "&lt;parameter") {
+		return text
+	}
+	return xmlUnescapeString(text)
+}
+
 func splitCompleteEmbeddedToolText(text string) (complete string, pending string) {
 	searchFrom := 0
 	for {
-		idx := strings.Index(text[searchFrom:], embeddedToolCallPrefix)
-		if idx == -1 {
+		idx, ok := nextEmbeddedToolCallStart(text, searchFrom)
+		if !ok {
 			return text, ""
 		}
-		idx += searchFrom
 		_, _, end, ok := parseEmbeddedToolCallAt(text, idx)
 		if !ok {
 			return text[:idx], text[idx:]
@@ -3728,7 +3772,7 @@ func splitCompleteEmbeddedToolText(text string) (complete string, pending string
 }
 
 func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
-	if !strings.Contains(text, embeddedToolCallPrefix) {
+	if !strings.Contains(text, embeddedToolCallPrefix) && !strings.Contains(text, embeddedInvokeStartPrefix) {
 		return text, nil
 	}
 	var (
@@ -3737,12 +3781,11 @@ func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
 		index    int
 	)
 	for index < len(text) {
-		start := strings.Index(text[index:], embeddedToolCallPrefix)
-		if start == -1 {
+		start, ok := nextEmbeddedToolCallStart(text, index)
+		if !ok {
 			_, _ = builder.WriteString(text[index:])
 			break
 		}
-		start += index
 		_, _ = builder.WriteString(text[index:start])
 		tool, _, end, ok := parseEmbeddedToolCallAt(text, start)
 		if !ok {
@@ -3755,8 +3798,43 @@ func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
 	return builder.String(), toolUses
 }
 
+func nextEmbeddedToolCallStart(text string, from int) (int, bool) {
+	if from < 0 {
+		from = 0
+	}
+	if from >= len(text) {
+		return 0, false
+	}
+	calledIdx := strings.Index(text[from:], embeddedToolCallPrefix)
+	if calledIdx >= 0 {
+		calledIdx += from
+	}
+	invokeIdx := strings.Index(text[from:], embeddedInvokeStartPrefix)
+	if invokeIdx >= 0 {
+		invokeIdx += from
+	}
+	switch {
+	case calledIdx == -1 && invokeIdx == -1:
+		return 0, false
+	case calledIdx == -1:
+		return invokeIdx, true
+	case invokeIdx == -1:
+		return calledIdx, true
+	case calledIdx < invokeIdx:
+		return calledIdx, true
+	default:
+		return invokeIdx, true
+	}
+}
+
 func parseEmbeddedToolCallAt(text string, start int) (KiroToolUse, int, int, bool) {
-	if start < 0 || start >= len(text) || !strings.HasPrefix(text[start:], embeddedToolCallPrefix) {
+	if start < 0 || start >= len(text) {
+		return KiroToolUse{}, 0, 0, false
+	}
+	if strings.HasPrefix(text[start:], embeddedInvokeStartPrefix) {
+		return parseEmbeddedInvokeCallAt(text, start)
+	}
+	if !strings.HasPrefix(text[start:], embeddedToolCallPrefix) {
 		return KiroToolUse{}, 0, 0, false
 	}
 	pos := start + len(embeddedToolCallPrefix)
@@ -3791,6 +3869,127 @@ func parseEmbeddedToolCallAt(text string, start int) (KiroToolUse, int, int, boo
 	rawJSON := text[jsonStart : jsonEnd+1]
 	tool := finalizeRawToolUse("toolu_"+GenerateToolUseID(), toolName, rawJSON)
 	return tool, start, end + 1, true
+}
+
+func parseEmbeddedInvokeCallAt(text string, start int) (KiroToolUse, int, int, bool) {
+	if start < 0 || start >= len(text) || !strings.HasPrefix(text[start:], embeddedInvokeStartPrefix) {
+		return KiroToolUse{}, 0, 0, false
+	}
+	tagEnd := strings.Index(text[start:], ">")
+	if tagEnd == -1 {
+		return KiroToolUse{}, 0, 0, false
+	}
+	tagEnd += start
+	openTag := text[start : tagEnd+1]
+	toolName := parseEmbeddedInvokeName(openTag)
+	if toolName == "" {
+		return KiroToolUse{}, 0, 0, false
+	}
+	closeRel := strings.Index(text[tagEnd+1:], embeddedInvokeEndTag)
+	if closeRel == -1 {
+		return KiroToolUse{}, 0, 0, false
+	}
+	contentStart := tagEnd + 1
+	contentEnd := contentStart + closeRel
+	rawBody := text[contentStart:contentEnd]
+	input := parseEmbeddedInvokeParameters(rawBody)
+	tool := finalizeStructuredToolUse("toolu_"+GenerateToolUseID(), toolName, input)
+	return tool, start, contentEnd + len(embeddedInvokeEndTag), true
+}
+
+func parseEmbeddedInvokeName(openTag string) string {
+	return parseXMLLikeAttribute(openTag, "name")
+}
+
+func parseXMLLikeAttribute(tag, attr string) string {
+	idx := strings.Index(tag, attr)
+	for idx >= 0 {
+		if idx > 0 && isXMLNameChar(rune(tag[idx-1])) {
+			next := strings.Index(tag[idx+len(attr):], attr)
+			if next == -1 {
+				return ""
+			}
+			idx += len(attr) + next
+			continue
+		}
+		pos := idx + len(attr)
+		for pos < len(tag) && unicode.IsSpace(rune(tag[pos])) {
+			pos++
+		}
+		if pos >= len(tag) || tag[pos] != '=' {
+			next := strings.Index(tag[pos:], attr)
+			if next == -1 {
+				return ""
+			}
+			idx = pos + next
+			continue
+		}
+		pos++
+		for pos < len(tag) && unicode.IsSpace(rune(tag[pos])) {
+			pos++
+		}
+		if pos >= len(tag) {
+			return ""
+		}
+		quote := tag[pos]
+		if quote != '"' && quote != '\'' {
+			return ""
+		}
+		pos++
+		end := strings.IndexByte(tag[pos:], quote)
+		if end == -1 {
+			return ""
+		}
+		return xmlUnescapeString(tag[pos : pos+end])
+	}
+	return ""
+}
+
+func isXMLNameChar(r rune) bool {
+	return r == '_' || r == '-' || r == ':' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func parseEmbeddedInvokeParameters(body string) map[string]any {
+	input := map[string]any{}
+	searchFrom := 0
+	for {
+		startRel := strings.Index(body[searchFrom:], "<parameter")
+		if startRel == -1 {
+			break
+		}
+		start := searchFrom + startRel
+		tagEndRel := strings.Index(body[start:], ">")
+		if tagEndRel == -1 {
+			break
+		}
+		tagEnd := start + tagEndRel
+		openTag := body[start : tagEnd+1]
+		name := strings.TrimSpace(parseXMLLikeAttribute(openTag, "name"))
+		contentStart := tagEnd + 1
+		closeRel := strings.Index(body[contentStart:], embeddedParameterEndTag)
+		if closeRel == -1 {
+			break
+		}
+		contentEnd := contentStart + closeRel
+		if name != "" {
+			input[name] = xmlUnescapeString(strings.TrimSpace(body[contentStart:contentEnd]))
+		}
+		searchFrom = contentEnd + len(embeddedParameterEndTag)
+	}
+	return input
+}
+
+func xmlUnescapeString(s string) string {
+	replacer := strings.NewReplacer(
+		"&lt;", "<",
+		"&gt;", ">",
+		"&amp;", "&",
+		"&quot;", `"`,
+		"&#34;", `"`,
+		"&apos;", "'",
+		"&#39;", "'",
+	)
+	return replacer.Replace(s)
 }
 
 func findMatchingJSONBracket(text string, start int) int {

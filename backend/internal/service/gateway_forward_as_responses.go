@@ -419,6 +419,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	// Convert to Responses format
+	finalResp, _ = normalizeOpenAICompatAnthropicResponse(finalResp)
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	responsesResp.Model = originalModel // Use original model name
 
@@ -468,6 +469,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
+	xmlInvokeBridge := newOpenAICompatAnthropicXMLInvokeBridge()
 	outputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	var usage ClaudeUsage
 	var firstTokenMs *int
@@ -495,6 +497,31 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		}
 	}
 
+	writeResponseEvents := func(events []apicompat.ResponsesStreamEvent) bool {
+		for _, evt := range events {
+			outputAccumulator.ProcessEvent(&evt)
+			sse, err := apicompat.ResponsesEventToSSE(evt)
+			if err != nil {
+				logger.L().Warn("forward_as_responses stream: failed to marshal event",
+					zap.Error(err),
+					zap.String("request_id", requestID),
+				)
+				continue
+			}
+			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+			if _, err := fmt.Fprint(c.Writer, out); err != nil {
+				logger.L().Info("forward_as_responses stream: client disconnected",
+					zap.String("request_id", requestID),
+				)
+				return true
+			}
+		}
+		if len(events) > 0 {
+			c.Writer.Flush()
+		}
+		return false
+	}
+
 	// processEvent handles a single parsed Anthropic SSE event.
 	processEvent := func(event *apicompat.AnthropicStreamEvent) bool {
 		if firstChunk {
@@ -512,43 +539,30 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
+		normalizedEvents := xmlInvokeBridge.normalizeEvents([]apicompat.AnthropicStreamEvent{*event})
+		if len(normalizedEvents) == 0 {
+			return false
+		}
+
 		// Convert to Responses events
-		events := apicompat.AnthropicEventToResponsesEvents(event, state)
-		for _, evt := range events {
-			outputAccumulator.ProcessEvent(&evt)
-			sse, err := apicompat.ResponsesEventToSSE(evt)
-			if err != nil {
-				logger.L().Warn("forward_as_responses stream: failed to marshal event",
-					zap.Error(err),
-					zap.String("request_id", requestID),
-				)
-				continue
-			}
-			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
-			if _, err := fmt.Fprint(c.Writer, out); err != nil {
-				logger.L().Info("forward_as_responses stream: client disconnected",
-					zap.String("request_id", requestID),
-				)
-				return true // client disconnected
-			}
+		var events []apicompat.ResponsesStreamEvent
+		for i := range normalizedEvents {
+			events = append(events, apicompat.AnthropicEventToResponsesEvents(&normalizedEvents[i], state)...)
 		}
-		if len(events) > 0 {
-			c.Writer.Flush()
-		}
-		return false
+		return writeResponseEvents(events)
 	}
 
 	finalizeStream := func() (*ForwardResult, error) {
+		var flushedEvents []apicompat.ResponsesStreamEvent
+		for _, evt := range xmlInvokeBridge.flushPendingEvents() {
+			flushedEvents = append(flushedEvents, apicompat.AnthropicEventToResponsesEvents(&evt, state)...)
+		}
+		if disconnected := writeResponseEvents(flushedEvents); disconnected {
+			return resultWithUsage(), nil
+		}
+
 		if finalEvents := apicompat.FinalizeAnthropicResponsesStream(state); len(finalEvents) > 0 {
-			for _, evt := range finalEvents {
-				sse, err := apicompat.ResponsesEventToSSE(evt)
-				if err != nil {
-					continue
-				}
-				out := string(reverseToolNamesIfPresent(c, []byte(sse)))
-				fmt.Fprint(c.Writer, out) //nolint:errcheck
-			}
-			c.Writer.Flush()
+			_ = writeResponseEvents(finalEvents)
 		}
 		return resultWithUsage(), nil
 	}

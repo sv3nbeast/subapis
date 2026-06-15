@@ -197,6 +197,9 @@ func (a *Account) GetKiroCacheEmulationRatio() float64 {
 	if a == nil || !a.IsKiro() || a.Extra == nil {
 		return 0
 	}
+	if _, ok := a.Extra["kiro_cache_emulation_ratio"]; !ok {
+		return 1
+	}
 	return normalizeKiroCacheEmulationRatio(parseExtraFloat64(a.Extra["kiro_cache_emulation_ratio"]))
 }
 

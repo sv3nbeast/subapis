@@ -53,6 +53,7 @@ func (s *kiroStreamFailoverCooldownStore) ClearEarliestTransientCooldown(context
 type kiroStreamFailoverQueuedUpstream struct {
 	responses []*http.Response
 	requests  []*http.Request
+	errs      []error
 }
 
 func (u *kiroStreamFailoverQueuedUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -61,6 +62,11 @@ func (u *kiroStreamFailoverQueuedUpstream) Do(_ *http.Request, _ string, _ int64
 
 func (u *kiroStreamFailoverQueuedUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 	u.requests = append(u.requests, req)
+	if len(u.errs) > 0 {
+		err := u.errs[0]
+		u.errs = u.errs[1:]
+		return nil, err
+	}
 	if len(u.responses) == 0 {
 		return nil, fmt.Errorf("no mocked response")
 	}
@@ -97,13 +103,34 @@ func TestGatewayServiceKiroStreamExceptionReturnsKiro429FailoverWithoutCooldown(
 func TestGatewayServiceKiroEmptyStreamIsRetryableFailover(t *testing.T) {
 	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
 	account := &Account{ID: 1459, Platform: PlatformKiro, Type: AccountTypeOAuth}
-	err := errors.New("stream read error: empty kiro event stream: no assistant output")
+	for _, errText := range []string{
+		"stream read error: empty kiro event stream: no assistant output",
+		"stream read error: empty kiro event stream: no deliverable assistant output",
+	} {
+		failoverErr := svc.kiroStreamErrorToFailover(context.Background(), account, errors.New(errText))
+
+		require.NotNil(t, failoverErr)
+		require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+		require.True(t, failoverErr.RetryableOnSameAccount)
+	}
+}
+
+func TestGatewayServiceKiroEmptyStreamWrappedFailoverKeepsKiroClassification(t *testing.T) {
+	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
+	account := &Account{ID: 1459, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	err := &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           []byte(`{"type":"error","error":{"type":"upstream_disconnected","message":"upstream stream disconnected: upstream connection error"}}`),
+		RetryableOnSameAccount: true,
+		Cause:                  errors.New("empty kiro event stream: no deliverable assistant output"),
+	}
 
 	failoverErr := svc.kiroStreamErrorToFailover(context.Background(), account, err)
 
 	require.NotNil(t, failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "empty kiro event stream")
 }
 
 func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testing.T) {
@@ -151,6 +178,96 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	require.True(t, failoverErr.KiroRateLimited)
 	require.False(t, failoverErr.RetryableOnSameAccount)
 	require.Equal(t, http.StatusOK, rec.Code, "parse failover should not write a plain 502 before handler can retry")
+}
+
+func TestForwardKiroMessagesStreamOpenContextCanceledDoesNotWriteFallbackBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstream := &kiroStreamFailoverQueuedUpstream{errs: []error{
+		context.Canceled,
+		context.Canceled,
+		context.Canceled,
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	parsed := &ParsedRequest{
+		Model:  "claude-opus-4-8",
+		Stream: true,
+		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "context canceled")
+	require.False(t, c.Writer.Written(), "stream open failures must not pre-write JSON before handler fallback")
+	require.Empty(t, rec.Body.String())
+}
+
+func TestForwardKiroMessagesStreamOpenNetworkErrorTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstream := &kiroStreamFailoverQueuedUpstream{errs: []error{
+		io.ErrUnexpectedEOF,
+		io.ErrUnexpectedEOF,
+		io.ErrUnexpectedEOF,
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	parsed := &ParsedRequest{
+		Model:  "claude-opus-4-8",
+		Stream: true,
+		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "upstream request disconnected before response")
+	require.False(t, c.Writer.Written(), "pre-response failover must not write before handler retry")
+	require.Empty(t, rec.Body.String())
 }
 
 func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T) {

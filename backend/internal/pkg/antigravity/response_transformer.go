@@ -193,6 +193,40 @@ func (p *NonStreamingProcessor) processPart(part *GeminiPart) {
 			}
 
 			// 非空 text 带签名 - 特殊处理：先输出 text，再输出空 thinking 块
+			if cleaned, calls, pending := drainEmbeddedXMLToolText(part.Text); len(calls) > 0 {
+				if strings.TrimSpace(cleaned) != "" {
+					p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+						Type: "text",
+						Text: cleaned,
+					})
+				}
+				for i, call := range calls {
+					clientToolName := strings.TrimSpace(p.toolNameMap[call.name])
+					if clientToolName == "" {
+						clientToolName = defaultClientAntigravityToolName(call.name)
+					}
+					item := ClaudeContentItem{
+						Type:  "tool_use",
+						ID:    call.name + "-" + generateRandomID(),
+						Name:  clientToolName,
+						Input: adaptOfficialAntigravityToolInput(call.name, call.input),
+					}
+					if i == 0 && signature != "" {
+						item.Signature = signature
+						signature = ""
+					}
+					p.contentBlocks = append(p.contentBlocks, item)
+					p.hasToolCall = true
+				}
+				if pending != "" {
+					p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+						Type: "text",
+						Text: pending,
+					})
+				}
+				return
+			}
+
 			if signature != "" {
 				p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
 					Type: "text",
@@ -235,6 +269,36 @@ func (p *NonStreamingProcessor) processGrounding(grounding *GeminiGroundingMetad
 // flushText 刷新 text builder
 func (p *NonStreamingProcessor) flushText() {
 	if p.textBuilder == "" {
+		return
+	}
+
+	if cleaned, calls, pending := drainEmbeddedXMLToolText(p.textBuilder); len(calls) > 0 {
+		if strings.TrimSpace(cleaned) != "" {
+			p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+				Type: "text",
+				Text: cleaned,
+			})
+		}
+		for _, call := range calls {
+			clientToolName := strings.TrimSpace(p.toolNameMap[call.name])
+			if clientToolName == "" {
+				clientToolName = defaultClientAntigravityToolName(call.name)
+			}
+			p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+				Type:  "tool_use",
+				ID:    call.name + "-" + generateRandomID(),
+				Name:  clientToolName,
+				Input: adaptOfficialAntigravityToolInput(call.name, call.input),
+			})
+			p.hasToolCall = true
+		}
+		if pending != "" {
+			p.contentBlocks = append(p.contentBlocks, ClaudeContentItem{
+				Type: "text",
+				Text: pending,
+			})
+		}
+		p.textBuilder = ""
 		return
 	}
 

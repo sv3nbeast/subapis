@@ -117,13 +117,21 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				Kind:               "request_error",
 				Message:            safeErr,
 			})
-			c.JSON(http.StatusBadGateway, gin.H{
-				"type": "error",
-				"error": gin.H{
-					"type":    "upstream_error",
-					"message": "Upstream request failed",
-				},
-			})
+			if isRetryablePreResponseNetworkError(err) {
+				body, _ := json.Marshal(map[string]any{
+					"type": "error",
+					"error": map[string]string{
+						"type":    "upstream_disconnected",
+						"message": "upstream request disconnected before response: " + sanitizeStreamError(err),
+					},
+				})
+				return nil, &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           body,
+					RetryableOnSameAccount: true,
+					Cause:                  err,
+				}
+			}
 			return nil, fmt.Errorf("kiro upstream request failed: %s", safeErr)
 		}
 		defer func() { _ = resp.Body.Close() }()
@@ -296,7 +304,6 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 	if err == nil || account == nil {
 		return nil
 	}
-	msg := strings.ToLower(err.Error())
 
 	var exceptionErr *kiropkg.UpstreamExceptionError
 	if errors.As(err, &exceptionErr) {
@@ -328,14 +335,15 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		}
 	}
 
-	if !strings.Contains(msg, "empty kiro event stream") {
+	emptyStreamMsg := kiroEmptyEventStreamMessage(err)
+	if emptyStreamMsg == "" {
 		return nil
 	}
 	body, _ := json.Marshal(map[string]any{
 		"type": "error",
 		"error": map[string]string{
 			"type":    "upstream_error",
-			"message": sanitizeUpstreamErrorMessage(err.Error()),
+			"message": sanitizeUpstreamErrorMessage(emptyStreamMsg),
 		},
 	})
 	return &UpstreamFailoverError{
@@ -344,6 +352,16 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		RetryableOnSameAccount: true,
 		Cause:                  err,
 	}
+}
+
+func kiroEmptyEventStreamMessage(err error) string {
+	for err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "empty kiro event stream") {
+			return err.Error()
+		}
+		err = errors.Unwrap(err)
+	}
+	return ""
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {

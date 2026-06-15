@@ -1015,6 +1015,249 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_MissingTerminalEventReturnsEr
 	require.NotNil(t, result)
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_FlushesRawInvokeBeforeTerminalWithoutBlockStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-3-7-sonnet-20250219")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "<invoke")
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ConvertsInvokeSplitAcrossTextDeltas(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before <in"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"voke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "<invoke")
+	require.NotContains(t, body, "<in")
+	require.Contains(t, body, `"text":"Before "`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ConvertsEscapedInvokeSplitAcrossTextDeltas(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before &lt;in"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"voke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;/invoke&gt;"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "&lt;invoke")
+	require.NotContains(t, body, "&lt;in")
+	require.Contains(t, body, `"text":"Before "`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
+func TestGatewayService_AnthropicAPIKeyPassthrough_ConvertsRealEscapedBashInvokeSample(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	first := `&lt;invoke name="Bash"&gt;
+&lt;parameter name="command"&gt;cd /Users/sven.sun/Desktop/Tools/Strategy/AutoGetCode
+python3 - &lt;&lt;'PYEOF'
+# A. thead add channel column
+ih = "templates/index.html"
+s = open(ih, encoding="utf-8").read()
+old = '&lt;th&gt;邮箱&lt;/th&gt;&lt;th&gt;状态&lt;/th&gt;&lt;th&gt;兑换码&lt;/th&gt;'`
+	second := `
+new = '&lt;th&gt;邮箱&lt;/th&gt;&lt;th&gt;状态&lt;/th&gt;&lt;th&gt;渠道&lt;/th&gt;&lt;th&gt;凭证&lt;/th&gt;'
+print(old, new)
+PYEOF&lt;/parameter&gt;
+&lt;parameter name="description"&gt;Add channel column to table header&lt;/parameter&gt;
+&lt;/invoke&gt;`
+	firstJSON, err := json.Marshal(first)
+	require.NoError(t, err)
+	secondJSON, err := json.Marshal(second)
+	require.NoError(t, err)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":11}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + string(firstJSON) + `}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + string(secondJSON) + `}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-sonnet-4-6")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "&lt;invoke")
+	require.NotContains(t, body, `"type":"text_delta","text":"&lt;invoke`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+
+	var partialJSON string
+	for _, block := range strings.Split(body, "\n\n") {
+		payload := strings.TrimPrefix(strings.TrimSpace(block), "event: content_block_delta\ndata: ")
+		if payload == strings.TrimSpace(block) {
+			continue
+		}
+		if gjson.Get(payload, "delta.type").String() == "input_json_delta" {
+			partialJSON = gjson.Get(payload, "delta.partial_json").String()
+			break
+		}
+	}
+	require.NotEmpty(t, partialJSON)
+	require.Contains(t, gjson.Get(partialJSON, "command").String(), "python3 - <<'PYEOF'")
+	require.Contains(t, gjson.Get(partialJSON, "command").String(), "<th>渠道</th>")
+	require.Equal(t, "Add channel column to table header", gjson.Get(partialJSON, "description").String())
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

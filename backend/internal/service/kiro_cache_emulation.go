@@ -51,15 +51,13 @@ type kiroCacheTracker struct {
 var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 
 func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
-	NormalizeGroupRuntimeFields(group)
-	if account == nil || account.ID <= 0 || len(body) == 0 {
+	if account == nil || account.ID <= 0 || !account.IsKiro() || len(body) == 0 {
 		return nil
 	}
 	enabled := account.EffectiveKiroCacheEmulationEnabled()
 	ratio := account.GetKiroCacheEmulationRatio()
 	if !enabled && group != nil {
-		enabled = group.EffectiveKiroCacheEmulationEnabled()
-		ratio = group.EffectiveKiroCacheEmulationRatio()
+		enabled, ratio = kiroGroupCacheEmulationFallback(group)
 	}
 	if !enabled || ratio <= 0 {
 		return nil
@@ -86,6 +84,18 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *G
 		return nil
 	}
 	return result
+}
+
+func kiroGroupCacheEmulationFallback(group *Group) (bool, float64) {
+	if group == nil || !group.KiroCacheEmulationEnabled {
+		return false, 0
+	}
+	ratio := group.KiroCacheEmulationRatio
+	if ratio == 0 {
+		ratio = 1
+	}
+	ratio = normalizeKiroCacheEmulationRatio(ratio)
+	return ratio > 0, ratio
 }
 
 func scaleKiroCacheTokens(tokens int, ratio float64) int {

@@ -2,16 +2,61 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func buildBedrockTestFrame(eventType string, payload []byte) []byte {
+	var headersBuf bytes.Buffer
+	_ = headersBuf.WriteByte(byte(len(":event-type")))
+	_, _ = headersBuf.WriteString(":event-type")
+	_ = headersBuf.WriteByte(7)
+	_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len(eventType)))
+	_, _ = headersBuf.WriteString(eventType)
+	_ = headersBuf.WriteByte(byte(len(":message-type")))
+	_, _ = headersBuf.WriteString(":message-type")
+	_ = headersBuf.WriteByte(7)
+	_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len("event")))
+	_, _ = headersBuf.WriteString("event")
+
+	headers := headersBuf.Bytes()
+	headersLen := uint32(len(headers))
+	totalLen := uint32(12 + len(headers) + len(payload) + 4)
+
+	var preludeBuf bytes.Buffer
+	_ = binary.Write(&preludeBuf, binary.BigEndian, totalLen)
+	_ = binary.Write(&preludeBuf, binary.BigEndian, headersLen)
+	preludeBytes := preludeBuf.Bytes()
+	preludeCRC := crc32.Checksum(preludeBytes, crc32.MakeTable(crc32.IEEE))
+
+	var frame bytes.Buffer
+	_, _ = frame.Write(preludeBytes)
+	_ = binary.Write(&frame, binary.BigEndian, preludeCRC)
+	_, _ = frame.Write(headers)
+	_, _ = frame.Write(payload)
+
+	messageCRC := crc32.Checksum(frame.Bytes(), crc32.MakeTable(crc32.IEEE))
+	_ = binary.Write(&frame, binary.BigEndian, messageCRC)
+	return frame.Bytes()
+}
+
+func buildBedrockTestChunkFrame(data string) []byte {
+	payload := []byte(`{"bytes":"` + base64.StdEncoding.EncodeToString([]byte(data)) + `"}`)
+	return buildBedrockTestFrame("chunk", payload)
+}
 
 func TestExtractBedrockChunkData(t *testing.T) {
 	t.Run("valid base64 payload", func(t *testing.T) {
@@ -116,53 +161,9 @@ func TestExtractEventStreamHeaderValue(t *testing.T) {
 }
 
 func TestBedrockEventStreamDecoder(t *testing.T) {
-	crc32IeeeTab := crc32.MakeTable(crc32.IEEE)
-
-	// Build a valid EventStream frame with correct CRC32/IEEE checksums.
-	buildFrame := func(eventType string, payload []byte) []byte {
-		// Build headers
-		var headersBuf bytes.Buffer
-		// :event-type header
-		_ = headersBuf.WriteByte(byte(len(":event-type")))
-		_, _ = headersBuf.WriteString(":event-type")
-		_ = headersBuf.WriteByte(7) // string type
-		_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len(eventType)))
-		_, _ = headersBuf.WriteString(eventType)
-		// :message-type header
-		_ = headersBuf.WriteByte(byte(len(":message-type")))
-		_, _ = headersBuf.WriteString(":message-type")
-		_ = headersBuf.WriteByte(7)
-		_ = binary.Write(&headersBuf, binary.BigEndian, uint16(len("event")))
-		_, _ = headersBuf.WriteString("event")
-
-		headers := headersBuf.Bytes()
-		headersLen := uint32(len(headers))
-		// total = 12 (prelude) + headers + payload + 4 (message_crc)
-		totalLen := uint32(12 + len(headers) + len(payload) + 4)
-
-		// Prelude: total_length(4) + headers_length(4)
-		var preludeBuf bytes.Buffer
-		_ = binary.Write(&preludeBuf, binary.BigEndian, totalLen)
-		_ = binary.Write(&preludeBuf, binary.BigEndian, headersLen)
-		preludeBytes := preludeBuf.Bytes()
-		preludeCRC := crc32.Checksum(preludeBytes, crc32IeeeTab)
-
-		// Build frame: prelude + prelude_crc + headers + payload
-		var frame bytes.Buffer
-		_, _ = frame.Write(preludeBytes)
-		_ = binary.Write(&frame, binary.BigEndian, preludeCRC)
-		_, _ = frame.Write(headers)
-		_, _ = frame.Write(payload)
-
-		// Message CRC covers everything before itself
-		messageCRC := crc32.Checksum(frame.Bytes(), crc32IeeeTab)
-		_ = binary.Write(&frame, binary.BigEndian, messageCRC)
-		return frame.Bytes()
-	}
-
 	t.Run("decode chunk event", func(t *testing.T) {
 		payload := []byte(`{"bytes":"dGVzdA=="}`) // base64("test")
-		frame := buildFrame("chunk", payload)
+		frame := buildBedrockTestFrame("chunk", payload)
 
 		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
 		result, err := decoder.Decode()
@@ -173,9 +174,9 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 	t.Run("skip non-chunk events", func(t *testing.T) {
 		// Write initial-response followed by chunk
 		var buf bytes.Buffer
-		_, _ = buf.Write(buildFrame("initial-response", []byte(`{}`)))
+		_, _ = buf.Write(buildBedrockTestFrame("initial-response", []byte(`{}`)))
 		chunkPayload := []byte(`{"bytes":"aGVsbG8="}`)
-		_, _ = buf.Write(buildFrame("chunk", chunkPayload))
+		_, _ = buf.Write(buildBedrockTestFrame("chunk", chunkPayload))
 
 		decoder := newBedrockEventStreamDecoder(&buf)
 		result, err := decoder.Decode()
@@ -190,7 +191,7 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 	})
 
 	t.Run("corrupted prelude CRC", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
+		frame := buildBedrockTestFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
 		// Corrupt the prelude CRC (bytes 8-11)
 		frame[8] ^= 0xFF
 		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
@@ -200,7 +201,7 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 	})
 
 	t.Run("corrupted message CRC", func(t *testing.T) {
-		frame := buildFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
+		frame := buildBedrockTestFrame("chunk", []byte(`{"bytes":"dGVzdA=="}`))
 		// Corrupt the message CRC (last 4 bytes)
 		frame[len(frame)-1] ^= 0xFF
 		decoder := newBedrockEventStreamDecoder(bytes.NewReader(frame))
@@ -241,6 +242,83 @@ func TestBedrockEventStreamDecoder(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "prelude CRC mismatch")
 	})
+}
+
+func TestHandleBedrockStreamingResponseFlushesRawInvokeBeforeTerminalWithoutBlockStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_start","message":{"usage":{"input_tokens":5}}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>"}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_stop"}`))
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+
+	result, err := svc.handleBedrockStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-bedrock")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "<invoke")
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
+func TestHandleBedrockStreamingResponseConvertsSplitEscapedInvoke(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var stream bytes.Buffer
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_start","message":{"usage":{"input_tokens":5}}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before &lt;in"}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"voke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;/invoke&gt;"}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`))
+	_, _ = stream.Write(buildBedrockTestChunkFrame(`{"type":"message_stop"}`))
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+
+	result, err := svc.handleBedrockStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "claude-bedrock")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "&lt;invoke")
+	require.NotContains(t, body, "&lt;in")
+	require.Contains(t, body, `"text":"Before "`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
 }
 
 func TestBuildBedrockURL(t *testing.T) {

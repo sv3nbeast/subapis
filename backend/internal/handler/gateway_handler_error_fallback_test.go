@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +65,24 @@ func TestGatewayEnsureForwardErrorResponse_AppendsSSEWhenStreamStarted(t *testin
 	require.Equal(t, http.StatusTeapot, w.Code)
 	assert.Contains(t, w.Body.String(), "already written")
 	assert.Contains(t, w.Body.String(), `data: {"type":"error"`)
+}
+
+func TestGatewayEnsureForwardErrorResponse_DoesNotAppendWhenSSEErrorAlreadyWritten(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Header("Content-Type", "text/event-stream")
+	_, _ = c.Writer.WriteString("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"stream_read_error\",\"message\":\"upstream stream disconnected\"}}\n\n")
+	service.MarkGatewaySSEErrorWritten(c)
+
+	h := &GatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, true)
+
+	require.False(t, wrote)
+	body := w.Body.String()
+	assert.Equal(t, 1, strings.Count(body, "event: error"))
+	assert.NotContains(t, body, "Upstream request failed")
 }
 
 func TestGatewayEnsureForwardErrorResponse_AppendsSSEWhenEventStreamAlreadyWritten(t *testing.T) {

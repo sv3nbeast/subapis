@@ -67,7 +67,8 @@ const (
 )
 
 const (
-	claudeMimicDebugInfoKey = "claude_mimic_debug_info"
+	claudeMimicDebugInfoKey   = "claude_mimic_debug_info"
+	gatewaySSEErrorWrittenKey = "gateway_sse_error_written"
 )
 
 const (
@@ -158,6 +159,24 @@ func GatewayUserPlatformQuotaIncrStats() (mainPathErr, legacyPathErr, sentinelSe
 	return userPlatformQuotaDBIncrErrorTotal.Load(),
 		userPlatformQuotaDBIncrLegacyErrorTotal.Load(),
 		userPlatformQuotaSentinelSetCacheErrorTotal.Load()
+}
+
+func MarkGatewaySSEErrorWritten(c *gin.Context) {
+	if c != nil {
+		c.Set(gatewaySSEErrorWrittenKey, true)
+	}
+}
+
+func HasGatewaySSEErrorWritten(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	v, ok := c.Get(gatewaySSEErrorWrittenKey)
+	if !ok {
+		return false
+	}
+	written, _ := v.(bool)
+	return written
 }
 
 // GatewayUserPlatformQuotaFlusherStats 暴露 flusher 运行指标供 ops/health 面板查询。
@@ -347,6 +366,12 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 
 	metaUserID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
 	sysPreview := strings.TrimSpace(extractSystemPreviewFromBody(body))
+	tools := gjson.GetBytes(body, "tools")
+	toolsCount := 0
+	if tools.IsArray() {
+		toolsCount = len(tools.Array())
+	}
+	hasInvokeText := strings.Contains(strings.ToLower(string(body)), "<invoke")
 
 	// Truncate preview to keep logs sane.
 	if len(sysPreview) > 300 {
@@ -363,12 +388,14 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 	}
 
 	return fmt.Sprintf(
-		"url=%s account=%d(%s) tokenType=%s mimic=%t meta.user_id=%q system.preview=%q headers={%s}",
+		"url=%s account=%d(%s) tokenType=%s mimic=%t tools_count=%d has_invoke_text=%t meta.user_id=%q system.preview=%q headers={%s}",
 		req.URL.String(),
 		aid,
 		aname,
 		tokenType,
 		mimicClaudeCode,
+		toolsCount,
+		hasInvokeText,
 		metaUserID,
 		sysPreview,
 		strings.Join(h, " "),
@@ -608,6 +635,37 @@ func (e *UpstreamFailoverError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+func isRetryablePreResponseNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "proxy connect failed: 407") ||
+		strings.Contains(msg, "407 unauthorized") {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if strings.Contains(msg, "unexpected eof") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection timed out") ||
+		strings.Contains(msg, "read connect response") {
+		return true
+	}
+	return false
 }
 
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
@@ -5540,7 +5598,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// 最低缓存门槛，导致系统级缓存失效）。
 	//
 	// 对于非 Claude Code 的第三方客户端（opencode 等），仍然走完整 mimicry。
-	isClaudeCode := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
+	isClaudeCode := IsClaudeCodeClient(ctx)
 	shouldMimicClaudeCode := s.shouldMimicClaudeCodeForAccount(account, isClaudeCode)
 
 	if shouldMimicClaudeCode {
@@ -5662,6 +5720,31 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
+			}
+			if isRetryablePreResponseNetworkError(err) {
+				safeErr := sanitizeUpstreamErrorMessage(err.Error())
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: http.StatusBadGateway,
+					UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+					Kind:               "request_network_failover",
+					Message:            safeErr,
+				})
+				body, _ := json.Marshal(map[string]any{
+					"type": "error",
+					"error": map[string]string{
+						"type":    "upstream_disconnected",
+						"message": "upstream request disconnected before response: " + sanitizeStreamError(err),
+					},
+				})
+				return nil, &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           body,
+					RetryableOnSameAccount: true,
+					Cause:                  err,
+				}
 			}
 			// Ensure the client receives an error response (handlers assume Forward writes on non-failover errors).
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -6494,11 +6577,107 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	}
 	lastDataAt := time.Now()
 	partialEventOpen := false
+	downstreamPartialEventOpen := false
+	pendingEventLines := make([]string, 0, 4)
+	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	writePassthroughBlock := func(block string) {
+		if clientDisconnected {
+			return
+		}
+		restored := string(reverseToolNamesIfPresent(c, []byte(block)))
+		if _, err := io.WriteString(w, restored); err != nil {
+			clientDisconnected = true
+			logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+			return
+		}
+		flusher.Flush()
+		lastDataAt = time.Now()
+	}
+	processPassthroughSSEEvent := func(lines []string) []string {
+		if len(lines) == 0 {
+			return nil
+		}
+		eventName := ""
+		dataLine := ""
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "event:") {
+				eventName = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
+				continue
+			}
+			if dataLine == "" && strings.HasPrefix(trimmed, "data:") {
+				dataLine, _ = extractAnthropicSSEDataLine(trimmed)
+			}
+		}
+		if dataLine == "" || dataLine == "[DONE]" {
+			return []string{strings.Join(lines, "\n") + "\n\n"}
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(dataLine), &event); err != nil {
+			return []string{strings.Join(lines, "\n") + "\n\n"}
+		}
+		eventType, _ := event["type"].(string)
+		if eventName == "" {
+			eventName = eventType
+		}
+		var pendingBlocks []string
+		if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventName, dataLine) {
+			for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
+				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+					pendingBlocks = append(pendingBlocks, block)
+				}
+			}
+		}
+		if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+			blocks := make([]string, 0, len(generatedEvents))
+			for _, generatedEvent := range generatedEvents {
+				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+					blocks = append(blocks, block)
+				}
+			}
+			if len(pendingBlocks) > 0 {
+				blocks = append(pendingBlocks, blocks...)
+			}
+			return blocks
+		} else if changed {
+			if block, ok := anthropicSSEBlockFromEvent(event); ok {
+				if len(pendingBlocks) > 0 {
+					return append(pendingBlocks, block)
+				}
+				return []string{block}
+			}
+		}
+		block := ""
+		if eventName != "" {
+			block = "event: " + eventName + "\n"
+		}
+		block += "data: " + dataLine + "\n\n"
+		if len(pendingBlocks) > 0 {
+			return append(pendingBlocks, block)
+		}
+		return []string{block}
+	}
 
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				if len(pendingEventLines) > 0 {
+					for _, block := range processPassthroughSSEEvent(pendingEventLines) {
+						writePassthroughBlock(block)
+					}
+					pendingEventLines = pendingEventLines[:0]
+				}
+				for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
+					if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+						writePassthroughBlock(block)
+					}
+				}
+				if downstreamPartialEventOpen {
+					writePassthroughBlock("\n")
+					downstreamPartialEventOpen = false
+				}
 				if !clientDisconnected {
 					// 兜底补刷，确保最后一个未以空行结尾的事件也能及时送达客户端。
 					flusher.Flush()
@@ -6534,6 +6713,17 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			line := ev.line
 			if line == "" {
 				partialEventOpen = false
+				if len(pendingEventLines) > 0 {
+					for _, block := range processPassthroughSSEEvent(pendingEventLines) {
+						writePassthroughBlock(block)
+					}
+					pendingEventLines = pendingEventLines[:0]
+					downstreamPartialEventOpen = false
+				} else if downstreamPartialEventOpen {
+					writePassthroughBlock("\n")
+					downstreamPartialEventOpen = false
+				}
+				continue
 			} else {
 				partialEventOpen = true
 			}
@@ -6547,6 +6737,18 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					firstTokenMs = &ms
 				}
 				s.parseSSEUsagePassthrough(data, usage)
+				eventType := gjson.Get(data, "type").String()
+				if len(pendingEventLines) == 0 &&
+					eventType != "content_block_start" &&
+					eventType != "content_block_delta" &&
+					eventType != "content_block_stop" &&
+					eventType != "message_delta" &&
+					eventType != "message_stop" &&
+					!bodyMayContainAnthropicXMLInvoke([]byte(data)) {
+					writePassthroughBlock(line + "\n")
+					downstreamPartialEventOpen = true
+					continue
+				}
 			} else {
 				trimmed := strings.TrimSpace(line)
 				if strings.HasPrefix(trimmed, "event:") && anthropicStreamEventIsTerminal(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "") {
@@ -6554,22 +6756,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				}
 			}
 
-			if !clientDisconnected {
-				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
-				if _, err := io.WriteString(w, restored); err != nil {
-					clientDisconnected = true
-					logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-				} else if _, err := io.WriteString(w, "\n"); err != nil {
-					clientDisconnected = true
-					logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-				} else if line == "" {
-					// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
-					flusher.Flush()
-					lastDataAt = time.Now()
-				} else {
-					lastDataAt = time.Now()
-				}
-			}
+			pendingEventLines = append(pendingEventLines, line)
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
@@ -6589,7 +6776,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			if clientDisconnected {
 				continue
 			}
-			if partialEventOpen {
+			if partialEventOpen || downstreamPartialEventOpen {
 				continue
 			}
 			if time.Since(lastDataAt) < keepaliveInterval {
@@ -6748,6 +6935,10 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+		body = normalizedBody
+		usage = parseClaudeUsageFromResponseBody(body)
+	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
 }
@@ -7117,6 +7308,10 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	c.Header("Content-Type", "application/json")
 	if v := resp.Header.Get("x-amzn-requestid"); v != "" {
 		c.Header("x-request-id", v)
+	}
+	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+		body = normalizedBody
+		usage = parseClaudeUsageFromResponseBody(body)
 	}
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil
@@ -8460,6 +8655,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			// json.Marshal 不可能在已知 string-only 输入上失败，保守 fallback
 			body = []byte(fmt.Sprintf(`{"type":"error","error":{"type":%q,"message":%q}}`, reason, message))
 		}
+		MarkGatewaySSEErrorWritten(c)
 		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
 		flusher.Flush()
 	}
@@ -8469,7 +8665,36 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	sawTerminalEvent := false
 
 	pendingEventLines := make([]string, 0, 4)
+	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
 	askUserQuestionStreamNormalizer := newAnthropicAskUserQuestionStreamNormalizer(toolNameRewriteFromContext(c))
+
+	xmlInvokePendingBlocks := func() []string {
+		generatedEvents := xmlInvokeStreamNormalizer.flushPendingEvents()
+		if len(generatedEvents) == 0 {
+			return nil
+		}
+		outputBlocks := make([]string, 0, len(generatedEvents))
+		for _, generatedEvent := range generatedEvents {
+			if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+				outputBlocks = append(outputBlocks, block)
+			}
+		}
+		return outputBlocks
+	}
+	writeOutputBlocks := func(blocks []string) {
+		for _, block := range blocks {
+			if !clientDisconnected {
+				restored := reverseToolNamesIfPresent(c, []byte(block))
+				if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
+					clientDisconnected = true
+					logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+					break
+				}
+				flusher.Flush()
+				lastDataAt = time.Now()
+			}
+		}
+	}
 
 	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
 		if len(lines) == 0 {
@@ -8568,6 +8793,27 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		if anthropicStreamEventIsTerminal(eventName, dataLine) {
 			sawTerminalEvent = true
 		}
+		pendingBlocks := []string(nil)
+		if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventName, dataLine) {
+			pendingBlocks = xmlInvokePendingBlocks()
+		}
+		if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+			outputBlocks := make([]string, 0, len(generatedEvents))
+			for _, generatedEvent := range generatedEvents {
+				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+					outputBlocks = append(outputBlocks, block)
+				}
+			}
+			if changed {
+				eventChanged = true
+			}
+			if len(pendingBlocks) > 0 {
+				outputBlocks = append(pendingBlocks, outputBlocks...)
+			}
+			return outputBlocks, dataLine, usagePatch, nil
+		} else if changed {
+			eventChanged = true
+		}
 		if generatedEvents, handled, changed := askUserQuestionStreamNormalizer.handleEvent(event); handled {
 			outputBlocks := make([]string, 0, len(generatedEvents))
 			for _, generatedEvent := range generatedEvents {
@@ -8577,6 +8823,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 			if changed {
 				eventChanged = true
+			}
+			if len(pendingBlocks) > 0 {
+				outputBlocks = append(pendingBlocks, outputBlocks...)
 			}
 			return outputBlocks, dataLine, usagePatch, nil
 		} else if changed {
@@ -8588,6 +8837,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				block = "event: " + eventName + "\n"
 			}
 			block += "data: " + dataLine + "\n\n"
+			if len(pendingBlocks) > 0 {
+				return append(pendingBlocks, block), dataLine, usagePatch, nil
+			}
 			return []string{block}, dataLine, usagePatch, nil
 		}
 
@@ -8607,6 +8859,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			block = "event: " + eventName + "\n"
 		}
 		block += "data: " + string(newData) + "\n\n"
+		if len(pendingBlocks) > 0 {
+			return append(pendingBlocks, block), string(newData), usagePatch, nil
+		}
 		return []string{block}, string(newData), usagePatch, nil
 	}
 
@@ -8615,6 +8870,27 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		case ev, ok := <-events:
 			if !ok {
 				// 上游完成，返回结果
+				if len(pendingEventLines) > 0 {
+					outputBlocks, data, usagePatch, err := processSSEEvent(pendingEventLines)
+					pendingEventLines = pendingEventLines[:0]
+					if err != nil {
+						if clientDisconnected {
+							return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
+						}
+						return nil, err
+					}
+					writeOutputBlocks(outputBlocks)
+					if data != "" {
+						if firstTokenMs == nil && data != "[DONE]" {
+							ms := int(time.Since(startTime).Milliseconds())
+							firstTokenMs = &ms
+						}
+						if usagePatch != nil {
+							mergeSSEUsagePatch(usage, usagePatch)
+						}
+					}
+				}
+				writeOutputBlocks(xmlInvokePendingBlocks())
 				if !sawTerminalEvent {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
@@ -8681,25 +8957,14 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return nil, err
 				}
 
-				for _, block := range outputBlocks {
-					if !clientDisconnected {
-						restored := reverseToolNamesIfPresent(c, []byte(block))
-						if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
-							clientDisconnected = true
-							logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
-							break
-						}
-						flusher.Flush()
-						lastDataAt = time.Now()
+				writeOutputBlocks(outputBlocks)
+				if data != "" {
+					if firstTokenMs == nil && data != "[DONE]" {
+						ms := int(time.Since(startTime).Milliseconds())
+						firstTokenMs = &ms
 					}
-					if data != "" {
-						if firstTokenMs == nil && data != "[DONE]" {
-							ms := int(time.Since(startTime).Milliseconds())
-							firstTokenMs = &ms
-						}
-						if usagePatch != nil {
-							mergeSSEUsagePatch(usage, usagePatch)
-						}
+					if usagePatch != nil {
+						mergeSSEUsagePatch(usage, usagePatch)
 					}
 				}
 				continue
@@ -9037,6 +9302,12 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
+	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+		body = normalizedBody
+		if usage := parseClaudeUsageFromResponseBody(body); usage != nil {
+			response.Usage = *usage
+		}
+	}
 	if normalizedBody, changed := normalizeAnthropicAskUserQuestionResponseBodyWithRewrite(body, toolNameRewriteFromContext(c)); changed {
 		body = normalizedBody
 	}

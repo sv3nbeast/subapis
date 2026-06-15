@@ -238,6 +238,358 @@ func TestForwardAsResponses_AnthropicOpus48ThinkingAlias(t *testing.T) {
 	require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
 }
 
+func TestForwardAsResponses_BufferedConvertsRawInvokeTextToFunctionCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","input":[{"role":"user","content":[{"type":"input_text","text":"run pwd"}]}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_responses_xml_buffered"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before <invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke> After"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Equal(t, "function_call", gjson.Get(bodyText, "output.0.type").String())
+	require.Equal(t, "Bash", gjson.Get(bodyText, "output.0.name").String())
+	require.JSONEq(t, `{"command":"pwd"}`, gjson.Get(bodyText, "output.0.arguments").String())
+}
+
+func TestForwardAsResponses_StreamingConvertsSplitRawInvokeTextToFunctionCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","input":[{"role":"user","content":[{"type":"input_text","text":"run pwd"}]}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_responses_xml_stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before <invoke name=\"Bash\"><parameter name=\"command\">pw"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d</parameter></invoke> After"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Contains(t, bodyText, `"type":"function_call"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"delta":"{\"command\":\"pwd\"}"`)
+}
+
+func TestForwardAsResponses_StreamingConvertsSplitEscapedInvokeTextToFunctionCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","input":[{"role":"user","content":[{"type":"input_text","text":"run pwd"}]}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_responses_xml_stream_escaped"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before &lt;in"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"voke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;/invoke&gt; After"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "&lt;invoke")
+	require.NotContains(t, bodyText, "&lt;in")
+	require.Contains(t, bodyText, `"type":"function_call"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"delta":"{\"command\":\"pwd\"}"`)
+}
+
+func TestForwardAsChatCompletions_BufferedConvertsRawInvokeTextToToolCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"run pwd"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_xml_buffered"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml_chat","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Equal(t, "tool_calls", gjson.Get(bodyText, "choices.0.finish_reason").String())
+	require.Equal(t, "Bash", gjson.Get(bodyText, "choices.0.message.tool_calls.0.function.name").String())
+	require.JSONEq(t, `{"command":"pwd"}`, gjson.Get(bodyText, "choices.0.message.tool_calls.0.function.arguments").String())
+}
+
+func TestForwardAsChatCompletions_StreamingConvertsSplitRawInvokeTextToToolCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"run pwd"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_xml_stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml_chat_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"Bash\"><parameter name=\"command\">pw"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d</parameter></invoke>"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "<invoke")
+	require.Contains(t, bodyText, `"tool_calls"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"arguments":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, bodyText, `"finish_reason":"tool_calls"`)
+}
+
+func TestForwardAsChatCompletions_StreamingConvertsSplitEscapedInvokeTextToToolCall(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"run pwd"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_chat_xml_stream_escaped"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_xml_chat_stream","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4.6","stop_reason":"","usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Before &lt;in"}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"voke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;/invoke&gt;"}}`,
+			``,
+			`event: content_block_stop`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-apikey",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "anthropic-key"},
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  body,
+		Model: "claude-sonnet-4-6",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	bodyText := rec.Body.String()
+	require.NotContains(t, bodyText, "&lt;invoke")
+	require.NotContains(t, bodyText, "&lt;in")
+	require.Contains(t, bodyText, `"tool_calls"`)
+	require.Contains(t, bodyText, `"name":"Bash"`)
+	require.Contains(t, bodyText, `"arguments":"{\"command\":\"pwd\"}"`)
+	require.Contains(t, bodyText, `"finish_reason":"tool_calls"`)
+}
+
 func TestForwardAsChatCompletions_KiroUsesRuntimeRequestPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

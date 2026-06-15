@@ -2821,17 +2821,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     kiroCacheEmulationEnabled.value = false
     kiroCacheEmulationRatio.value = 1
   }
-  if (newAccount.platform === 'kiro' && newAccount.type === 'oauth') {
-    kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
-    const rawKiroRatio = extra?.kiro_cache_emulation_ratio
-    kiroCacheEmulationRatio.value =
-      typeof rawKiroRatio === 'number' && rawKiroRatio >= 0 && rawKiroRatio <= 1
-        ? rawKiroRatio
-        : 1
-  } else {
-    kiroCacheEmulationEnabled.value = false
-    kiroCacheEmulationRatio.value = 1
-  }
 
   // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
   if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {

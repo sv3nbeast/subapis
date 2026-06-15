@@ -39,6 +39,82 @@ func TestKiroCacheEmulationUsesSnapshotGroupWithoutRepo(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationAllowsKiroAccountInNonKiroGroup(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 35, Platform: PlatformKiro}
+	group := &Group{ID: 13, Platform: PlatformAnthropic, KiroCacheEmulationEnabled: true, KiroCacheEmulationRatio: 1}
+	body := kiroCacheRequestBody("mixed group", false)
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 2000)
+	if first == nil || first.CacheCreationInputTokens != 2000 || first.CacheReadInputTokens != 0 || first.InputTokens != 0 {
+		t.Fatalf("unexpected first usage: %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 2000)
+	if second == nil || second.CacheReadInputTokens != 2000 || second.CacheCreationInputTokens != 0 || second.InputTokens != 0 {
+		t.Fatalf("unexpected second usage: %+v", second)
+	}
+}
+
+func TestKiroCacheEmulationRejectsNonKiroAccount(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 36, Platform: PlatformAnthropic}
+	group := &Group{ID: 14, Platform: PlatformAnthropic, KiroCacheEmulationEnabled: true, KiroCacheEmulationRatio: 1}
+
+	if got := svc.buildKiroCacheEmulationUsage(account, group, kiroCacheRequestBody("non kiro", false), "claude-sonnet-4-6", 2000); got != nil {
+		t.Fatalf("non-kiro account should skip cache emulation, got %+v", got)
+	}
+}
+
+func TestKiroCacheEmulationAccountEnabledDefaultsRatioToOne(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 37, Platform: PlatformKiro, Extra: map[string]any{"kiro_cache_emulation_enabled": true}}
+
+	usage := svc.buildKiroCacheEmulationUsage(account, nil, kiroCacheRequestBody("account default ratio", false), "claude-sonnet-4-6", 2000)
+	if usage == nil || usage.CacheCreationInputTokens != 2000 || usage.InputTokens != 0 {
+		t.Fatalf("account enabled without ratio should default to full emulation, got %+v", usage)
+	}
+}
+
+func TestKiroCacheEmulationUsagePersistsToUsageLog(t *testing.T) {
+	svc := &GatewayService{}
+	result := &ForwardResult{
+		RequestID: "gateway_kiro_cache_tokens",
+		Usage: ClaudeUsage{
+			InputTokens:              100,
+			OutputTokens:             10,
+			CacheCreationInputTokens: 1200,
+			CacheReadInputTokens:     800,
+			CacheCreation5mTokens:    1200,
+		},
+		Model:    "claude-sonnet-4-6",
+		Duration: time.Second,
+	}
+	log := svc.buildRecordUsageLog(
+		nil,
+		&recordUsageCoreInput{},
+		result,
+		&APIKey{ID: 901},
+		&User{ID: 902},
+		&Account{ID: 903, Platform: PlatformKiro},
+		nil,
+		"claude-sonnet-4-6",
+		1,
+		1,
+		1,
+		BillingTypeBalance,
+		false,
+		nil,
+		&recordUsageOpts{},
+	)
+
+	if log.InputTokens != 100 || log.CacheCreationTokens != 1200 || log.CacheReadTokens != 800 || log.CacheCreation5mTokens != 1200 {
+		t.Fatalf("cache usage was not persisted to usage log: %+v", log)
+	}
+}
+
 func TestKiroCacheEmulationRatioScalesTokens(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}
