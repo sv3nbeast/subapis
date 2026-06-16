@@ -211,6 +211,34 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockStart(event map[s
 		downstreamIndex: downstreamIndex,
 		hasStart:        true,
 	}
+	initialText := askUserQuestionStringFromAny(contentBlock["text"])
+	if initialText != "" && shouldBufferAnthropicXMLInvokeText(initialText) {
+		startEvent := cloneAnthropicSSEEvent(event)
+		if startBlock, ok := startEvent["content_block"].(map[string]any); ok {
+			startBlock["text"] = ""
+		}
+		deltaEvent := map[string]any{
+			"type":  "content_block_delta",
+			"index": index,
+			"delta": map[string]any{
+				"type": "text_delta",
+				"text": initialText,
+			},
+		}
+		generated, handled, changed := n.handleContentBlockDelta(deltaEvent)
+		if handled {
+			if len(generated) > 0 && generated[0]["type"] == "content_block_stop" {
+				if n.indexShift > 0 {
+					n.indexShift--
+				}
+				return remapAnthropicSSEEventIndexes(generated[1:], -1), true, true
+			}
+			return append([]map[string]any{startEvent}, generated...), true, true
+		}
+		if changed {
+			return []map[string]any{startEvent, deltaEvent}, true, true
+		}
+	}
 	return nil, false, downstreamIndex != index
 }
 
@@ -541,6 +569,15 @@ func isAnthropicXMLInvokePreambleOnly(text string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), "call")
 }
 
+func shouldBufferAnthropicXMLInvokeText(text string) bool {
+	if text == "" {
+		return false
+	}
+	return bodyMayContainAnthropicXMLInvoke([]byte(text)) ||
+		isAnthropicXMLInvokePreambleOnly(text) ||
+		longestAnthropicXMLInvokeStartPrefixSuffix(text) > 0
+}
+
 func longestAnthropicXMLInvokeStartPrefixSuffix(text string) int {
 	longest := 0
 	for _, marker := range []string{anthropicInvokeStartTag, anthropicEscapedInvokeStart} {
@@ -763,6 +800,21 @@ func cloneAnthropicSSEEvent(event map[string]any) map[string]any {
 		return event
 	}
 	return cloned
+}
+
+func remapAnthropicSSEEventIndexes(events []map[string]any, offset int) []map[string]any {
+	if offset == 0 || len(events) == 0 {
+		return events
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		cloned := cloneAnthropicSSEEvent(event)
+		if index, ok := anthropicSSEEventIndex(cloned); ok {
+			cloned["index"] = index + offset
+		}
+		out = append(out, cloned)
+	}
+	return out
 }
 
 func generateAnthropicXMLInvokeToolID(name string) string {

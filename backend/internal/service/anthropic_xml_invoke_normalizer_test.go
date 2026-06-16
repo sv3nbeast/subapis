@@ -245,6 +245,55 @@ func TestAnthropicXMLInvokeStreamNormalizerSynthesizesMissingTextBlockStart(t *t
 	require.Equal(t, "content_block_stop", generated[2]["type"])
 }
 
+func TestAnthropicXMLInvokeStreamNormalizerConvertsInvokeInBlockStartText(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type": "text",
+			"text": "call\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>",
+		},
+	})
+
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 3)
+	require.Equal(t, "content_block_start", generated[0]["type"])
+	require.Equal(t, 0, generated[0]["index"])
+	require.Equal(t, "tool_use", generated[0]["content_block"].(map[string]any)["type"])
+	require.Equal(t, "Bash", generated[0]["content_block"].(map[string]any)["name"])
+	require.Equal(t, 0, generated[1]["index"])
+	require.Contains(t, generated[1]["delta"].(map[string]any)["partial_json"], `"command":"pwd"`)
+	require.Equal(t, "content_block_stop", generated[2]["type"])
+	require.Equal(t, 0, generated[2]["index"])
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(1),
+		"content_block": map[string]any{
+			"type": "text",
+			"text": "",
+		},
+	})
+	require.False(t, handled)
+	require.False(t, changed)
+	require.Empty(t, generated)
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(1),
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": "after",
+		},
+	})
+	require.False(t, handled)
+	require.False(t, changed)
+	require.Empty(t, generated)
+}
+
 func TestAnthropicXMLInvokeStreamNormalizerConvertsSplitEscapedInvokeToToolUse(t *testing.T) {
 	normalizer := newAnthropicXMLInvokeStreamNormalizer()
 
