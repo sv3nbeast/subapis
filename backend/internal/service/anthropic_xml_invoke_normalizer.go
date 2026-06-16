@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,13 @@ const (
 	anthropicParameterEndTag     = "</parameter>"
 	anthropicXMLToolIDRandomSize = 12
 )
+
+func shouldBridgeAnthropicXMLInvoke(ctx context.Context) bool {
+	// Real Claude Code clients already consume native Anthropic tool_use events.
+	// Converting model text like <invoke name="Read"> into a tool_use can make
+	// Claude Code execute unintended repeated tool calls.
+	return !IsClaudeCodeClient(ctx)
+}
 
 type anthropicXMLInvokeCall struct {
 	name  string

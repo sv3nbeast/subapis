@@ -6579,7 +6579,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	partialEventOpen := false
 	downstreamPartialEventOpen := false
 	pendingEventLines := make([]string, 0, 4)
-	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
+	var xmlInvokeStreamNormalizer *anthropicXMLInvokeStreamNormalizer
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		xmlInvokeStreamNormalizer = newAnthropicXMLInvokeStreamNormalizer()
+	}
 
 	writePassthroughBlock := func(block string) {
 		if clientDisconnected {
@@ -6622,30 +6625,33 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			eventName = eventType
 		}
 		var pendingBlocks []string
-		if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventName, dataLine) {
+		if xmlInvokeStreamNormalizer != nil &&
+			(eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventName, dataLine)) {
 			for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
 				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
 					pendingBlocks = append(pendingBlocks, block)
 				}
 			}
 		}
-		if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
-			blocks := make([]string, 0, len(generatedEvents))
-			for _, generatedEvent := range generatedEvents {
-				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
-					blocks = append(blocks, block)
+		if xmlInvokeStreamNormalizer != nil {
+			if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+				blocks := make([]string, 0, len(generatedEvents))
+				for _, generatedEvent := range generatedEvents {
+					if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+						blocks = append(blocks, block)
+					}
 				}
-			}
-			if len(pendingBlocks) > 0 {
-				blocks = append(pendingBlocks, blocks...)
-			}
-			return blocks
-		} else if changed {
-			if block, ok := anthropicSSEBlockFromEvent(event); ok {
 				if len(pendingBlocks) > 0 {
-					return append(pendingBlocks, block)
+					blocks = append(pendingBlocks, blocks...)
 				}
-				return []string{block}
+				return blocks
+			} else if changed {
+				if block, ok := anthropicSSEBlockFromEvent(event); ok {
+					if len(pendingBlocks) > 0 {
+						return append(pendingBlocks, block)
+					}
+					return []string{block}
+				}
 			}
 		}
 		block := ""
@@ -6669,9 +6675,11 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 					}
 					pendingEventLines = pendingEventLines[:0]
 				}
-				for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
-					if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
-						writePassthroughBlock(block)
+				if xmlInvokeStreamNormalizer != nil {
+					for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
+						if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+							writePassthroughBlock(block)
+						}
 					}
 				}
 				if downstreamPartialEventOpen {
@@ -6935,9 +6943,11 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
-	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
-		body = normalizedBody
-		usage = parseClaudeUsageFromResponseBody(body)
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+			body = normalizedBody
+			usage = parseClaudeUsageFromResponseBody(body)
+		}
 	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
@@ -7309,9 +7319,11 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	if v := resp.Header.Get("x-amzn-requestid"); v != "" {
 		c.Header("x-request-id", v)
 	}
-	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
-		body = normalizedBody
-		usage = parseClaudeUsageFromResponseBody(body)
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+			body = normalizedBody
+			usage = parseClaudeUsageFromResponseBody(body)
+		}
 	}
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil
@@ -8665,10 +8677,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	sawTerminalEvent := false
 
 	pendingEventLines := make([]string, 0, 4)
-	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
+	var xmlInvokeStreamNormalizer *anthropicXMLInvokeStreamNormalizer
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		xmlInvokeStreamNormalizer = newAnthropicXMLInvokeStreamNormalizer()
+	}
 	askUserQuestionStreamNormalizer := newAnthropicAskUserQuestionStreamNormalizer(toolNameRewriteFromContext(c))
 
 	xmlInvokePendingBlocks := func() []string {
+		if xmlInvokeStreamNormalizer == nil {
+			return nil
+		}
 		generatedEvents := xmlInvokeStreamNormalizer.flushPendingEvents()
 		if len(generatedEvents) == 0 {
 			return nil
@@ -8797,22 +8815,24 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventName, dataLine) {
 			pendingBlocks = xmlInvokePendingBlocks()
 		}
-		if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
-			outputBlocks := make([]string, 0, len(generatedEvents))
-			for _, generatedEvent := range generatedEvents {
-				if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
-					outputBlocks = append(outputBlocks, block)
+		if xmlInvokeStreamNormalizer != nil {
+			if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+				outputBlocks := make([]string, 0, len(generatedEvents))
+				for _, generatedEvent := range generatedEvents {
+					if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+						outputBlocks = append(outputBlocks, block)
+					}
 				}
-			}
-			if changed {
+				if changed {
+					eventChanged = true
+				}
+				if len(pendingBlocks) > 0 {
+					outputBlocks = append(pendingBlocks, outputBlocks...)
+				}
+				return outputBlocks, dataLine, usagePatch, nil
+			} else if changed {
 				eventChanged = true
 			}
-			if len(pendingBlocks) > 0 {
-				outputBlocks = append(pendingBlocks, outputBlocks...)
-			}
-			return outputBlocks, dataLine, usagePatch, nil
-		} else if changed {
-			eventChanged = true
 		}
 		if generatedEvents, handled, changed := askUserQuestionStreamNormalizer.handleEvent(event); handled {
 			outputBlocks := make([]string, 0, len(generatedEvents))
@@ -9302,10 +9322,12 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	body = reverseToolNamesIfPresent(c, body)
-	if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
-		body = normalizedBody
-		if usage := parseClaudeUsageFromResponseBody(body); usage != nil {
-			response.Usage = *usage
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		if normalizedBody, changed := normalizeAnthropicXMLInvokeResponseBody(body); changed {
+			body = normalizedBody
+			if usage := parseClaudeUsageFromResponseBody(body); usage != nil {
+				response.Usage = *usage
+			}
 		}
 	}
 	if normalizedBody, changed := normalizeAnthropicAskUserQuestionResponseBodyWithRewrite(body, toolNameRewriteFromContext(c)); changed {

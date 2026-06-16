@@ -193,6 +193,53 @@ func TestGatewayService_StreamingFlushesRawInvokeBeforeTerminalWithoutBlockStop(
 	require.Contains(t, body, `"stop_reason":"tool_use"`)
 }
 
+func TestGatewayService_StreamingDoesNotBridgeXMLInvokeForClaudeCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<invoke name=\"Read\"><parameter name=\"file_path\">README.md</parameter></invoke>"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	ctx := SetClaudeCodeClient(context.Background(), true)
+	result, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.Contains(t, body, `<invoke name=\"Read\">`)
+	require.NotContains(t, body, `"type":"tool_use"`)
+	require.NotContains(t, body, `"name":"Read"`)
+	require.Contains(t, body, `"stop_reason":"end_turn"`)
+}
+
 func TestGatewayService_Forward_LooseClaudeCLIHeadersDoNotSkipMimicry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

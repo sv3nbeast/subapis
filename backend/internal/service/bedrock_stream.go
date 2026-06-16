@@ -48,7 +48,10 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 	clientDisconnected := false
-	xmlInvokeStreamNormalizer := newAnthropicXMLInvokeStreamNormalizer()
+	var xmlInvokeStreamNormalizer *anthropicXMLInvokeStreamNormalizer
+	if shouldBridgeAnthropicXMLInvoke(ctx) {
+		xmlInvokeStreamNormalizer = newAnthropicXMLInvokeStreamNormalizer()
+	}
 
 	writeBlocks := func(blocks []string) {
 		if clientDisconnected {
@@ -64,6 +67,9 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 		}
 	}
 	flushXMLInvokePending := func() {
+		if xmlInvokeStreamNormalizer == nil {
+			return
+		}
 		generatedEvents := xmlInvokeStreamNormalizer.flushPendingEvents()
 		if len(generatedEvents) == 0 {
 			return
@@ -177,27 +183,30 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 			var event map[string]any
 			if err := json.Unmarshal(sseData, &event); err == nil {
 				var pendingBlocks []string
-				if eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventType, string(sseData)) {
+				if xmlInvokeStreamNormalizer != nil &&
+					(eventType == "message_delta" || eventType == "message_stop" || anthropicStreamEventIsTerminal(eventType, string(sseData))) {
 					for _, generatedEvent := range xmlInvokeStreamNormalizer.flushPendingEvents() {
 						if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
 							pendingBlocks = append(pendingBlocks, block)
 						}
 					}
 				}
-				if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
-					outputBlocks = make([]string, 0, len(generatedEvents))
-					for _, generatedEvent := range generatedEvents {
-						if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
-							outputBlocks = append(outputBlocks, block)
+				if xmlInvokeStreamNormalizer != nil {
+					if generatedEvents, handled, changed := xmlInvokeStreamNormalizer.handleEvent(event); handled {
+						outputBlocks = make([]string, 0, len(generatedEvents))
+						for _, generatedEvent := range generatedEvents {
+							if block, ok := anthropicSSEBlockFromEvent(generatedEvent); ok {
+								outputBlocks = append(outputBlocks, block)
+							}
 						}
-					}
-					if len(pendingBlocks) > 0 {
-						outputBlocks = append(pendingBlocks, outputBlocks...)
-					}
-				} else if changed {
-					if updated, err := json.Marshal(event); err == nil {
-						sseData = updated
-						eventType = gjson.GetBytes(sseData, "type").String()
+						if len(pendingBlocks) > 0 {
+							outputBlocks = append(pendingBlocks, outputBlocks...)
+						}
+					} else if changed {
+						if updated, err := json.Marshal(event); err == nil {
+							sseData = updated
+							eventType = gjson.GetBytes(sseData, "type").String()
+						}
 					}
 				}
 				if len(pendingBlocks) > 0 && outputBlocks == nil {
