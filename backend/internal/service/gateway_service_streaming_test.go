@@ -536,6 +536,53 @@ func TestGatewayService_StreamingBridgesInvokeInBlockStartTextForClaudeDesktopAg
 	require.Contains(t, body, `"stop_reason":"tool_use"`)
 }
 
+func TestGatewayService_StreamingBridgesEscapedInvokeInBlockStartTextForClaudeDesktopAgentCLI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"call\n&lt;invoke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;parameter name=&quot;description&quot;&gt;print cwd&lt;/parameter&gt;&lt;/invoke&gt;"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	ctx := SetClaudeCodeClient(context.Background(), true)
+	ctx = SetClaudeCodeUserAgent(ctx, "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)")
+	result, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "&lt;invoke")
+	require.NotContains(t, body, `"text":"call`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\",\"description\":\"print cwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
 func TestGatewayService_Forward_LooseClaudeCLIHeadersDoNotSkipMimicry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -294,6 +294,32 @@ func TestAnthropicXMLInvokeStreamNormalizerConvertsInvokeInBlockStartText(t *tes
 	require.Empty(t, generated)
 }
 
+func TestAnthropicXMLInvokeStreamNormalizerConvertsEscapedInvokeInBlockStartText(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type": "text",
+			"text": "call\n&lt;invoke name=&quot;Bash&quot;&gt;&lt;parameter name=&quot;command&quot;&gt;pwd&lt;/parameter&gt;&lt;parameter name=&quot;description&quot;&gt;print cwd&lt;/parameter&gt;&lt;/invoke&gt;",
+		},
+	})
+
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 3)
+	require.Equal(t, "content_block_start", generated[0]["type"])
+	require.Equal(t, 0, generated[0]["index"])
+	require.Equal(t, "tool_use", generated[0]["content_block"].(map[string]any)["type"])
+	require.Equal(t, "Bash", generated[0]["content_block"].(map[string]any)["name"])
+	require.Equal(t, 0, generated[1]["index"])
+	require.Contains(t, generated[1]["delta"].(map[string]any)["partial_json"], `"command":"pwd"`)
+	require.Contains(t, generated[1]["delta"].(map[string]any)["partial_json"], `"description":"print cwd"`)
+	require.Equal(t, "content_block_stop", generated[2]["type"])
+	require.Equal(t, 0, generated[2]["index"])
+}
+
 func TestAnthropicXMLInvokeStreamNormalizerConvertsSplitEscapedInvokeToToolUse(t *testing.T) {
 	normalizer := newAnthropicXMLInvokeStreamNormalizer()
 
