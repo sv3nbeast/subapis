@@ -1381,6 +1381,100 @@ func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
 	return out
 }
 
+func anthropicSystemRoleUnsupportedError(body []byte) bool {
+	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	return strings.Contains(msg, "role 'system' is not supported on this model") ||
+		strings.Contains(msg, `role "system" is not supported on this model`)
+}
+
+func migrateAnthropicInlineSystemMessages(body []byte) ([]byte, bool) {
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return body, false
+	}
+
+	systemItems := anthropicSystemItemsFromTopLevel(gjson.GetBytes(body, "system"))
+	messageItems := make([][]byte, 0, len(messages.Array()))
+	changed := false
+
+	messages.ForEach(func(_, item gjson.Result) bool {
+		if item.Get("role").String() != "system" {
+			messageItems = append(messageItems, []byte(item.Raw))
+			return true
+		}
+
+		changed = true
+		systemItems = append(systemItems, anthropicSystemItemsFromMessageContent(item.Get("content"))...)
+		return true
+	})
+
+	if !changed {
+		return body, false
+	}
+
+	out, ok := setJSONRawBytes(body, "messages", buildJSONArrayRaw(messageItems))
+	if !ok {
+		return body, false
+	}
+	if len(systemItems) == 0 {
+		if next, ok := deleteJSONPathBytes(out, "system"); ok {
+			out = next
+		}
+		return out, true
+	}
+	out, ok = setJSONRawBytes(out, "system", buildJSONArrayRaw(systemItems))
+	if !ok {
+		return body, false
+	}
+	return out, true
+}
+
+func anthropicSystemItemsFromTopLevel(system gjson.Result) [][]byte {
+	if !system.Exists() || system.Type == gjson.Null {
+		return nil
+	}
+	if system.Type == gjson.String {
+		block, err := marshalAnthropicSystemTextBlock(system.String(), false)
+		if err != nil {
+			return nil
+		}
+		return [][]byte{block}
+	}
+	if !system.IsArray() {
+		return nil
+	}
+	items := make([][]byte, 0, len(system.Array()))
+	system.ForEach(func(_, item gjson.Result) bool {
+		items = append(items, []byte(item.Raw))
+		return true
+	})
+	return items
+}
+
+func anthropicSystemItemsFromMessageContent(content gjson.Result) [][]byte {
+	if !content.Exists() || content.Type == gjson.Null {
+		return nil
+	}
+	if content.Type == gjson.String {
+		block, err := marshalAnthropicSystemTextBlock(content.String(), false)
+		if err != nil {
+			return nil
+		}
+		return [][]byte{block}
+	}
+	if !content.IsArray() {
+		return nil
+	}
+	items := make([][]byte, 0, len(content.Array()))
+	content.ForEach(func(_, part gjson.Result) bool {
+		if part.Get("type").String() == "text" {
+			items = append(items, []byte(part.Raw))
+		}
+		return true
+	})
+	return items
+}
+
 func sanitizeAnthropicCountTokensRequestBody(body []byte) []byte {
 	if len(body) == 0 {
 		return body
@@ -5773,6 +5867,89 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 			if readErr == nil {
 				_ = resp.Body.Close()
+
+				if anthropicSystemRoleUnsupportedError(respBody) {
+					migratedBody, migrated := migrateAnthropicInlineSystemMessages(body)
+					if migrated && time.Since(retryStart) < maxRetryElapsed {
+						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+							Platform:           account.Platform,
+							AccountID:          account.ID,
+							AccountName:        account.Name,
+							UpstreamStatusCode: resp.StatusCode,
+							UpstreamRequestID:  resp.Header.Get("x-request-id"),
+							UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+							Kind:               "system_role_unsupported",
+							Message:            extractUpstreamErrorMessage(respBody),
+							Detail: func() string {
+								if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+									return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+								}
+								return ""
+							}(),
+						})
+						logger.LegacyPrintf("service.gateway", "Account %d: upstream rejected inline system role, retrying with top-level system", account.ID)
+
+						retryCtx, releaseRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
+						retryReq, buildErr := s.buildUpstreamRequest(retryCtx, c, account, migratedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+						releaseRetryCtx()
+						if buildErr == nil {
+							retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+							if retryErr == nil {
+								if retryResp.StatusCode < 400 {
+									body = migratedBody
+									setOpsUpstreamRequestBody(c, body)
+									resp = retryResp
+									break
+								}
+
+								retryRespBody, retryReadErr := io.ReadAll(io.LimitReader(retryResp.Body, 2<<20))
+								_ = retryResp.Body.Close()
+								if retryReadErr == nil {
+									appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+										Platform:           account.Platform,
+										AccountID:          account.ID,
+										AccountName:        account.Name,
+										UpstreamStatusCode: retryResp.StatusCode,
+										UpstreamRequestID:  retryResp.Header.Get("x-request-id"),
+										UpstreamURL:        safeUpstreamURL(retryReq.URL.String()),
+										Kind:               "system_role_retry",
+										Message:            extractUpstreamErrorMessage(retryRespBody),
+										Detail: func() string {
+											if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+												return truncateString(string(retryRespBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+											}
+											return ""
+										}(),
+									})
+									resp = &http.Response{
+										StatusCode: retryResp.StatusCode,
+										Header:     retryResp.Header.Clone(),
+										Body:       io.NopCloser(bytes.NewReader(retryRespBody)),
+									}
+									break
+								}
+								logger.LegacyPrintf("service.gateway", "Account %d: inline system role retry response read failed: %v", account.ID, retryReadErr)
+								resp.Body = io.NopCloser(bytes.NewReader(respBody))
+								break
+							}
+							if retryResp != nil && retryResp.Body != nil {
+								_ = retryResp.Body.Close()
+							}
+							appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+								Platform:           account.Platform,
+								AccountID:          account.ID,
+								AccountName:        account.Name,
+								UpstreamStatusCode: 0,
+								UpstreamURL:        safeUpstreamURL(retryReq.URL.String()),
+								Kind:               "system_role_retry_request_error",
+								Message:            sanitizeUpstreamErrorMessage(retryErr.Error()),
+							})
+							logger.LegacyPrintf("service.gateway", "Account %d: inline system role retry failed: %v", account.ID, retryErr)
+						} else {
+							logger.LegacyPrintf("service.gateway", "Account %d: inline system role retry build failed: %v", account.ID, buildErr)
+						}
+					}
+				}
 
 				if s.shouldRectifySignatureError(ctx, account, respBody) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

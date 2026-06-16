@@ -272,6 +272,19 @@ func SetClaudeCodeClient(ctx context.Context, isClaudeCode bool) context.Context
 	return context.WithValue(ctx, ctxkey.IsClaudeCodeClient, isClaudeCode)
 }
 
+// ClaudeCodeUserAgent 从 context 中获取入站 Claude CLI User-Agent。
+func ClaudeCodeUserAgent(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxkey.ClaudeCodeUserAgent).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// SetClaudeCodeUserAgent 将入站 Claude CLI User-Agent 设置到 context 中。
+func SetClaudeCodeUserAgent(ctx context.Context, ua string) context.Context {
+	return context.WithValue(ctx, ctxkey.ClaudeCodeUserAgent, ua)
+}
+
 // ExtractVersion 从 User-Agent 中提取 Claude Code 版本号
 // 返回 "2.1.22" 形式的版本号，如果不匹配返回空字符串
 func (v *ClaudeCodeValidator) ExtractVersion(ua string) string {

@@ -210,6 +210,32 @@ func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.
 	require.Equal(t, "nested", gjson.GetBytes(result, "metadata.speed").String())
 }
 
+func TestMigrateAnthropicInlineSystemMessages_MovesSystemMessagesToTopLevel(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"base","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}}]},{"role":"assistant","content":"ok"},{"role":"system","content":"tail"}],"metadata":{"user_id":"u"}}`)
+
+	result, changed := migrateAnthropicInlineSystemMessages(body)
+
+	require.True(t, changed)
+	require.Equal(t, "base", gjson.GetBytes(result, "system.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(result, "system.0.cache_control.type").String())
+	require.Equal(t, "mid", gjson.GetBytes(result, "system.1.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(result, "system.1.cache_control.type").String())
+	require.Equal(t, "tail", gjson.GetBytes(result, "system.2.text").String())
+	require.Len(t, gjson.GetBytes(result, "messages").Array(), 2)
+	require.Equal(t, "user", gjson.GetBytes(result, "messages.0.role").String())
+	require.Equal(t, "assistant", gjson.GetBytes(result, "messages.1.role").String())
+	require.Equal(t, "u", gjson.GetBytes(result, "metadata.user_id").String())
+}
+
+func TestMigrateAnthropicInlineSystemMessages_NoOpWithoutSystemMessages(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hello"}]}`)
+
+	result, changed := migrateAnthropicInlineSystemMessages(body)
+
+	require.False(t, changed)
+	require.Equal(t, string(body), string(result))
+}
+
 func TestSanitizeAnthropicCountTokensRequestBody_DropsGenerationFields(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-7","temperature":0.2,"top_p":0.9,"top_k":40,"stream":true,"max_tokens":64000,"stop_sequences":["x"],"service_tier":"auto","metadata":{"user_id":"u"},"thinking":{"type":"enabled","budget_tokens":32000},"context_management":{"edits":[]},"messages":[{"role":"user","content":[{"type":"text","text":"keep temperature mention"}]}],"tools":[{"name":"t","input_schema":{"type":"object"}}],"speed":"fast"}`)
 

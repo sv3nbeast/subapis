@@ -13,12 +13,45 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
 type upstreamContextTestKey string
+
+type queuedAnthropicHTTPUpstreamRecorder struct {
+	bodies [][]byte
+	resps  []*http.Response
+	errs   []error
+}
+
+func (u *queuedAnthropicHTTPUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	return u.DoWithTLS(req, proxyURL, accountID, accountConcurrency, nil)
+}
+
+func (u *queuedAnthropicHTTPUpstreamRecorder) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	if req != nil && req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		u.bodies = append(u.bodies, body)
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(strings.NewReader(string(body)))
+	}
+	if len(u.errs) > 0 {
+		err := u.errs[0]
+		u.errs = u.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(u.resps) == 0 {
+		return nil, io.ErrUnexpectedEOF
+	}
+	resp := u.resps[0]
+	u.resps = u.resps[1:]
+	return resp, nil
+}
 
 func TestGatewayService_StreamingReusesScannerBufferAndStillParsesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -114,6 +147,73 @@ func TestGatewayService_Forward_PreResponseNetworkErrorTriggersFailover(t *testi
 	require.True(t, failoverErr.RetryableOnSameAccount)
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "upstream request disconnected before response")
 	require.Empty(t, rec.Body.String(), "service must not write a 502 body before handler failover can run")
+}
+
+func TestGatewayService_Forward_RetriesInlineSystemRoleAsTopLevelSystem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid instruction","cache_control":{"type":"ephemeral"}}]}]}`)
+	parsed := &ParsedRequest{
+		Body:   body,
+		Model:  "claude-opus-4-8",
+		Stream: true,
+	}
+	upstreamSSE := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
+		"",
+		`event: message_delta`,
+		`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+		"",
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	upstream := &queuedAnthropicHTTPUpstreamRecorder{
+		resps: []*http.Response{
+			{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"x-request-id": []string{"req_bad"}},
+				Body:       io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"invalid_request_error","message":"role 'system' is not supported on this model"}}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"req_ok"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+			},
+		},
+	}
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		httpUpstream:        upstream,
+		rateLimitService:    &RateLimitService{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-api-key",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-key"},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, "system", gjson.GetBytes(upstream.bodies[0], "messages.1.role").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "messages.1").Exists())
+	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.bodies[1], "system.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.bodies[1], "system.0.cache_control.type").String())
+	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
 }
 
 func TestGatewayService_StreamingReadErrorAfterOutputMarksSSEErrorWritten(t *testing.T) {

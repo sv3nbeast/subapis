@@ -27,7 +27,19 @@ func shouldBridgeAnthropicXMLInvoke(ctx context.Context) bool {
 	// Real Claude Code clients already consume native Anthropic tool_use events.
 	// Converting model text like <invoke name="Read"> into a tool_use can make
 	// Claude Code execute unintended repeated tool calls.
-	return !IsClaudeCodeClient(ctx)
+	if !IsClaudeCodeClient(ctx) {
+		return true
+	}
+	// Claude Desktop 3P / Agent SDK clients identify with claude-cli but surface
+	// XML invoke text instead of executing it unless the gateway bridges it back
+	// to Anthropic tool_use events.
+	return shouldBridgeAnthropicXMLInvokeForClaudeCodeUA(ClaudeCodeUserAgent(ctx))
+}
+
+func shouldBridgeAnthropicXMLInvokeForClaudeCodeUA(ua string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(ua))
+	return strings.Contains(normalized, "claude-desktop-3p") ||
+		strings.Contains(normalized, "agent-sdk/")
 }
 
 type anthropicXMLInvokeCall struct {

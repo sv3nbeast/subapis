@@ -32,6 +32,10 @@ const (
 	// IsClaudeCodeClient 标识当前请求是否来自 Claude Code 客户端
 	IsClaudeCodeClient Key = "ctx_is_claude_code_client"
 
+	// ClaudeCodeUserAgent stores the inbound Claude CLI user agent used for
+	// finer-grained compatibility decisions after Claude Code detection.
+	ClaudeCodeUserAgent Key = "ctx_claude_code_user_agent"
+
 	// ThinkingEnabled 标识当前请求是否开启 thinking（用于 Antigravity 最终模型名推导与模型维度限流）
 	ThinkingEnabled Key = "ctx_thinking_enabled"
 	// Group 认证后的分组信息，由 API Key 认证中间件设置

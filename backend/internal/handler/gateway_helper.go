@@ -56,6 +56,7 @@ func SetClaudeCodeClientContext(c *gin.Context, body []byte, parsedReq *service.
 
 	// 更新 request context
 	ctx := service.SetClaudeCodeClient(c.Request.Context(), isClaudeCode)
+	ctx = service.SetClaudeCodeUserAgent(ctx, ua)
 
 	// 仅在确认为 Claude Code 客户端时提取版本号写入 context
 	if isClaudeCode {

@@ -1,11 +1,23 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestShouldBridgeAnthropicXMLInvokePolicy(t *testing.T) {
+	require.True(t, shouldBridgeAnthropicXMLInvoke(context.Background()))
+
+	claudeCodeCtx := SetClaudeCodeClient(context.Background(), true)
+	require.False(t, shouldBridgeAnthropicXMLInvoke(claudeCodeCtx))
+
+	desktopAgentCtx := SetClaudeCodeClient(context.Background(), true)
+	desktopAgentCtx = SetClaudeCodeUserAgent(desktopAgentCtx, "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)")
+	require.True(t, shouldBridgeAnthropicXMLInvoke(desktopAgentCtx))
+}
 
 func TestNormalizeAnthropicXMLInvokeResponseBodyConvertsTextToToolUse(t *testing.T) {
 	body := []byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"Before <invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter><parameter name=\"description\">print cwd</parameter></invoke> After"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`)
