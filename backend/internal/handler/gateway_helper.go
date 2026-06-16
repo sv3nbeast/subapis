@@ -52,6 +52,11 @@ func SetClaudeCodeClientContext(c *gin.Context, body []byte, parsedReq *service.
 			_ = json.Unmarshal(body, &bodyMap)
 		}
 		isClaudeCode = claudeCodeValidator.Validate(c.Request, bodyMap)
+		if !isClaudeCode && service.IsClaudeCodeExternalClientUserAgent(ua) {
+			// Claude Desktop 3P / Agent SDK requests are real Claude CLI clients, but
+			// some tool-continuation probes omit the full Claude Code system/metadata.
+			isClaudeCode = true
+		}
 	}
 
 	// 更新 request context

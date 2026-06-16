@@ -37,6 +37,12 @@ func shouldBridgeAnthropicXMLInvoke(ctx context.Context) bool {
 }
 
 func shouldBridgeAnthropicXMLInvokeForClaudeCodeUA(ua string) bool {
+	return IsClaudeCodeExternalClientUserAgent(ua)
+}
+
+// IsClaudeCodeExternalClientUserAgent reports Claude CLI variants that surface
+// XML invoke text and need the gateway to bridge it back to Anthropic tool_use.
+func IsClaudeCodeExternalClientUserAgent(ua string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(ua))
 	return strings.Contains(normalized, "external, cli") ||
 		strings.Contains(normalized, "claude-desktop-3p") ||

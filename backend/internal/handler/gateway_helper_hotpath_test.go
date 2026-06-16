@@ -184,6 +184,24 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		SetClaudeCodeClientContext(c, []byte(`{"model":"x"}`), nil)
 		require.False(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
+
+	t.Run("external_cli_messages_path_invalid_body_sets_true", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/2.1.2 (external, cli)")
+
+		SetClaudeCodeClientContext(c, []byte(`{"model":"claude-haiku-4-5-20251001","stream":true}`), nil)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+		require.Equal(t, "claude-cli/2.1.2 (external, cli)", service.ClaudeCodeUserAgent(c.Request.Context()))
+	})
+
+	t.Run("desktop_agent_messages_path_invalid_body_sets_true", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)")
+
+		SetClaudeCodeClientContext(c, []byte(`{"model":"claude-opus-4-8","stream":false}`), nil)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+		require.Equal(t, "2.1.170", service.GetClaudeCodeVersion(c.Request.Context()))
+	})
 }
 
 func TestSetClaudeCodeClientContext_ReuseParsedRequestAndContextCache(t *testing.T) {
