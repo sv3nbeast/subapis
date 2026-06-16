@@ -38,7 +38,8 @@ func shouldBridgeAnthropicXMLInvoke(ctx context.Context) bool {
 
 func shouldBridgeAnthropicXMLInvokeForClaudeCodeUA(ua string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(ua))
-	return strings.Contains(normalized, "claude-desktop-3p") ||
+	return strings.Contains(normalized, "external, cli") ||
+		strings.Contains(normalized, "claude-desktop-3p") ||
 		strings.Contains(normalized, "agent-sdk/")
 }
 
