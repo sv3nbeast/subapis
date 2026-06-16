@@ -71,9 +71,10 @@ func (v *ClaudeCodeValidator) Validate(r *http.Request, body map[string]any) boo
 		return false
 	}
 
-	// Step 2: 非 messages 路径，只要 UA 匹配就通过
+	// Step 2: 非 messages 路径只要 UA 匹配就通过；count_tokens 是 Claude CLI
+	// 的辅助探测/估算请求，经常不携带完整 system/metadata，也不执行生成。
 	path := r.URL.Path
-	if !strings.Contains(path, "messages") {
+	if !strings.Contains(path, "messages") || strings.HasSuffix(path, "/count_tokens") {
 		return true
 	}
 

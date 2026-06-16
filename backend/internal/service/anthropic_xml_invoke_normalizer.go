@@ -123,21 +123,24 @@ func normalizeAnthropicXMLInvokeResponseBody(body []byte) ([]byte, bool) {
 }
 
 type anthropicXMLInvokeStreamNormalizer struct {
-	activeTextBlocks map[int]*anthropicXMLInvokeStreamTextBlock
-	pendingText      string
-	indexShift       int
-	sawToolUse       bool
+	activeTextBlocks       map[int]*anthropicXMLInvokeStreamTextBlock
+	syntheticClosedIndexes map[int]struct{}
+	pendingText            string
+	indexShift             int
+	sawToolUse             bool
 }
 
 type anthropicXMLInvokeStreamTextBlock struct {
 	upstreamIndex   int
 	downstreamIndex int
+	hasStart        bool
 	closed          bool
 }
 
 func newAnthropicXMLInvokeStreamNormalizer() *anthropicXMLInvokeStreamNormalizer {
 	return &anthropicXMLInvokeStreamNormalizer{
-		activeTextBlocks: make(map[int]*anthropicXMLInvokeStreamTextBlock),
+		activeTextBlocks:       make(map[int]*anthropicXMLInvokeStreamTextBlock),
+		syntheticClosedIndexes: make(map[int]struct{}),
 	}
 }
 
@@ -206,6 +209,7 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockStart(event map[s
 	n.activeTextBlocks[index] = &anthropicXMLInvokeStreamTextBlock{
 		upstreamIndex:   index,
 		downstreamIndex: downstreamIndex,
+		hasStart:        true,
 	}
 	return nil, false, downstreamIndex != index
 }
@@ -217,12 +221,7 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockDelta(event map[s
 	}
 	block, ok := n.activeTextBlocks[index]
 	if !ok {
-		downstreamIndex := index + n.indexShift
-		if downstreamIndex != index {
-			event["index"] = downstreamIndex
-			return nil, false, true
-		}
-		return nil, false, false
+		return n.handleSyntheticContentBlockDelta(index, event)
 	}
 	event["index"] = block.downstreamIndex
 	delta, ok := event["delta"].(map[string]any)
@@ -239,6 +238,10 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockDelta(event map[s
 	parts, pending := drainAnthropicXMLInvokeParts(combined)
 	hasCall := anthropicXMLInvokePartsContainCall(parts)
 	if !hasCall && pending == "" {
+		if isAnthropicXMLInvokePreambleOnly(combined) {
+			n.pendingText = combined
+			return nil, true, true
+		}
 		if combined == text {
 			return nil, false, block.downstreamIndex != index
 		}
@@ -265,15 +268,81 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockDelta(event map[s
 			continue
 		}
 		if !block.closed {
-			generated = append(generated, map[string]any{
-				"type":  "content_block_stop",
-				"index": block.downstreamIndex,
-			})
+			if block.hasStart {
+				generated = append(generated, map[string]any{
+					"type":  "content_block_stop",
+					"index": block.downstreamIndex,
+				})
+			}
 			block.closed = true
 		}
 		toolIndex := n.nextInsertedBlockIndex(block.upstreamIndex)
 		n.sawToolUse = true
 		generated = append(generated, anthropicXMLInvokeToolUseEvents(*part.call, toolIndex)...)
+	}
+	n.pendingText = pending
+	if len(generated) > 0 {
+		n.syntheticClosedIndexes[index] = struct{}{}
+	}
+	return generated, true, true
+}
+
+func (n *anthropicXMLInvokeStreamNormalizer) handleSyntheticContentBlockDelta(index int, event map[string]any) ([]map[string]any, bool, bool) {
+	downstreamIndex := index + n.indexShift
+	delta, ok := event["delta"].(map[string]any)
+	if !ok || delta["type"] != "text_delta" {
+		if downstreamIndex != index {
+			event["index"] = downstreamIndex
+			return nil, false, true
+		}
+		return nil, false, false
+	}
+	text := askUserQuestionStringFromAny(delta["text"])
+	if text == "" && n.pendingText == "" {
+		if downstreamIndex != index {
+			event["index"] = downstreamIndex
+			return nil, false, true
+		}
+		return nil, false, false
+	}
+
+	combined := n.pendingText + text
+	n.pendingText = ""
+	parts, pending := drainAnthropicXMLInvokeParts(combined)
+	hasCall := anthropicXMLInvokePartsContainCall(parts)
+	if !hasCall && pending == "" {
+		if isAnthropicXMLInvokePreambleOnly(combined) {
+			n.pendingText = combined
+			return nil, true, true
+		}
+		if combined == text {
+			if downstreamIndex != index {
+				event["index"] = downstreamIndex
+				return nil, false, true
+			}
+			return nil, false, false
+		}
+		event["index"] = downstreamIndex
+		delta["text"] = combined
+		return nil, false, true
+	}
+
+	generated := make([]map[string]any, 0, len(parts)*3+1)
+	nextSyntheticIndex := func() int {
+		current := index + n.indexShift
+		n.indexShift++
+		return current
+	}
+	for _, part := range parts {
+		if part.call == nil {
+			if part.text == "" {
+				continue
+			}
+			generated = append(generated, anthropicXMLInvokeTextBlockEvents(part.text, nextSyntheticIndex())...)
+			continue
+		}
+		n.sawToolUse = true
+		generated = append(generated, anthropicXMLInvokeToolUseEvents(*part.call, nextSyntheticIndex())...)
 	}
 	n.pendingText = pending
 	return generated, true, true
@@ -286,6 +355,16 @@ func (n *anthropicXMLInvokeStreamNormalizer) handleContentBlockStop(event map[st
 	}
 	block, ok := n.activeTextBlocks[index]
 	if !ok {
+		if n.pendingText != "" {
+			pending := n.pendingText
+			n.pendingText = ""
+			n.syntheticClosedIndexes[index] = struct{}{}
+			return anthropicXMLInvokeTextBlockEvents(pending, index+n.indexShift), true, true
+		}
+		if _, closed := n.syntheticClosedIndexes[index]; closed {
+			delete(n.syntheticClosedIndexes, index)
+			return nil, true, true
+		}
 		return nil, false, false
 	}
 	delete(n.activeTextBlocks, index)
@@ -403,7 +482,9 @@ func drainAnthropicXMLInvokeParts(text string) ([]anthropicXMLInvokePart, string
 		start := index + startRel
 
 		if text[index:start] != "" {
-			parts = append(parts, anthropicXMLInvokePart{text: text[index:start]})
+			if visible := stripTrailingAnthropicXMLInvokePreamble(text[index:start]); visible != "" {
+				parts = append(parts, anthropicXMLInvokePart{text: visible})
+			}
 		}
 		if escaped {
 			call, end, ok := parseEscapedAnthropicXMLInvokeAt(text, start)
@@ -435,7 +516,29 @@ func splitAnthropicXMLInvokeStartPrefix(text string) (string, string) {
 	if pendingLen == 0 {
 		return text, ""
 	}
-	return text[:len(text)-pendingLen], text[len(text)-pendingLen:]
+	return stripTrailingAnthropicXMLInvokePreamble(text[:len(text)-pendingLen]), text[len(text)-pendingLen:]
+}
+
+func stripTrailingAnthropicXMLInvokePreamble(text string) string {
+	if text == "" {
+		return ""
+	}
+	trimmedRight := strings.TrimRightFunc(text, unicode.IsSpace)
+	if !strings.EqualFold(trimmedRight, "call") {
+		lastNewline := strings.LastIndexAny(trimmedRight, "\r\n")
+		if lastNewline < 0 {
+			return text
+		}
+		if !strings.EqualFold(strings.TrimSpace(trimmedRight[lastNewline+1:]), "call") {
+			return text
+		}
+		return trimmedRight[:lastNewline+1]
+	}
+	return ""
+}
+
+func isAnthropicXMLInvokePreambleOnly(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), "call")
 }
 
 func longestAnthropicXMLInvokeStartPrefixSuffix(text string) int {

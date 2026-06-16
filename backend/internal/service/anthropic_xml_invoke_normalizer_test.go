@@ -88,6 +88,16 @@ PYEOF&lt;/parameter&gt;
 	require.Equal(t, "Add channel column to table header", calls[0].input["description"])
 }
 
+func TestDrainAnthropicXMLInvokeTextStripsCallPreamble(t *testing.T) {
+	cleaned, calls, pending := drainAnthropicXMLInvokeText("call\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>")
+
+	require.Empty(t, cleaned)
+	require.Empty(t, pending)
+	require.Len(t, calls, 1)
+	require.Equal(t, "Bash", calls[0].name)
+	require.Equal(t, "pwd", calls[0].input["command"])
+}
+
 func TestDrainAnthropicXMLInvokeTextHoldsSplitInvokePrefix(t *testing.T) {
 	parts, pending := drainAnthropicXMLInvokeParts("Before <in")
 
@@ -167,6 +177,72 @@ func TestAnthropicXMLInvokeStreamNormalizerConvertsSplitInvokeToToolUse(t *testi
 	require.True(t, handled)
 	require.True(t, changed)
 	require.Empty(t, generated)
+}
+
+func TestAnthropicXMLInvokeStreamNormalizerStripsSplitCallPreamble(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	_, _, _ = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type": "text",
+			"text": "",
+		},
+	})
+
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": "call\n",
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Empty(t, generated)
+
+	generated, handled, changed = normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": "<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>",
+		},
+	})
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 4)
+	require.Equal(t, "content_block_stop", generated[0]["type"])
+	require.Equal(t, "content_block_start", generated[1]["type"])
+	require.Equal(t, "tool_use", generated[1]["content_block"].(map[string]any)["type"])
+	require.Equal(t, "Bash", generated[1]["content_block"].(map[string]any)["name"])
+	require.Contains(t, generated[2]["delta"].(map[string]any)["partial_json"], `"command":"pwd"`)
+	require.Equal(t, "content_block_stop", generated[3]["type"])
+}
+
+func TestAnthropicXMLInvokeStreamNormalizerSynthesizesMissingTextBlockStart(t *testing.T) {
+	normalizer := newAnthropicXMLInvokeStreamNormalizer()
+
+	generated, handled, changed := normalizer.handleEvent(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{
+			"type": "text_delta",
+			"text": "call\n<invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter></invoke>",
+		},
+	})
+
+	require.True(t, handled)
+	require.True(t, changed)
+	require.Len(t, generated, 3)
+	require.Equal(t, "content_block_start", generated[0]["type"])
+	require.Equal(t, 0, generated[0]["index"])
+	require.Equal(t, "tool_use", generated[0]["content_block"].(map[string]any)["type"])
+	require.Equal(t, "Bash", generated[0]["content_block"].(map[string]any)["name"])
+	require.Contains(t, generated[1]["delta"].(map[string]any)["partial_json"], `"command":"pwd"`)
+	require.Equal(t, "content_block_stop", generated[2]["type"])
 }
 
 func TestAnthropicXMLInvokeStreamNormalizerConvertsSplitEscapedInvokeToToolUse(t *testing.T) {
