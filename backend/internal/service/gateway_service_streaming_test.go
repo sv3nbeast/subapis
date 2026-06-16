@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -580,6 +581,88 @@ func TestGatewayService_StreamingBridgesEscapedInvokeInBlockStartTextForClaudeDe
 	require.Contains(t, body, `"type":"tool_use"`)
 	require.Contains(t, body, `"name":"Bash"`)
 	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\",\"description\":\"print cwd\"}"`)
+	require.Contains(t, body, `"stop_reason":"tool_use"`)
+}
+
+func TestGatewayService_StreamingStripsIndentedCallPreambleFromRealEscapedInvoke(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	invokeText := `  call
+  &lt;invoke name="Bash"&gt;
+  &lt;parameter name="command"&gt;cd /Users/sven.sun/Desktop/Tools/Strategy/AutoGetCode
+python3 - &lt;&lt;'PYEOF'
+f = "chatgpt_login.py"
+src = open(f, encoding="utf-8").read()
+method = '''    def login_with_phone(
+        self,
+        sms_fetch_code,
+    ) -&gt; str:
+        """已注册到一半的手机号账号 用手机号+密码登录续接 抓 session。"""
+'''
+python3 -c "import ast;
+ast.parse(open('/Users/sven.sun/Desktop/Tools/Strategy/AutoGetCode/chatgpt_login.py').read()); print('syntax
+OK')"&lt;/parameter&gt;
+  &lt;parameter name="description"&gt;Add login_with_phone method&lt;/parameter&gt;
+  &lt;/invoke&gt;`
+	invokeJSON, err := json.Marshal(invokeText)
+	require.NoError(t, err)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":` + string(invokeJSON) + `}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	ctx := SetClaudeCodeClient(context.Background(), true)
+	ctx = SetClaudeCodeUserAgent(ctx, "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)")
+	result, err := svc.handleStreamingResponse(ctx, resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.NotContains(t, body, "&lt;invoke")
+	require.NotContains(t, body, `"text":"  call`)
+	require.NotContains(t, body, `"text":"call`)
+	require.Contains(t, body, `"type":"tool_use"`)
+	require.Contains(t, body, `"name":"Bash"`)
+	var partialJSON string
+	for _, block := range strings.Split(body, "\n\n") {
+		payload := strings.TrimPrefix(strings.TrimSpace(block), "event: content_block_delta\ndata: ")
+		if payload == strings.TrimSpace(block) {
+			continue
+		}
+		if gjson.Get(payload, "delta.type").String() == "input_json_delta" {
+			partialJSON = gjson.Get(payload, "delta.partial_json").String()
+			break
+		}
+	}
+	require.NotEmpty(t, partialJSON)
+	require.Contains(t, gjson.Get(partialJSON, "command").String(), "python3 - <<'PYEOF'")
+	require.Contains(t, gjson.Get(partialJSON, "command").String(), ") -> str:")
+	require.Equal(t, "Add login_with_phone method", gjson.Get(partialJSON, "description").String())
 	require.Contains(t, body, `"stop_reason":"tool_use"`)
 }
 

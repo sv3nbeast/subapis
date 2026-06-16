@@ -102,6 +102,36 @@ func TestDrainAnthropicXMLInvokeTextStripsCallPreamble(t *testing.T) {
 	require.Equal(t, "pwd", calls[0].input["command"])
 }
 
+func TestDrainAnthropicXMLInvokeTextStripsIndentedCallPreambleForRealEscapedSample(t *testing.T) {
+	sample := `  call
+  &lt;invoke name="Bash"&gt;
+  &lt;parameter name="command"&gt;cd /Users/sven.sun/Desktop/Tools/Strategy/AutoGetCode
+python3 - &lt;&lt;'PYEOF'
+f = "chatgpt_login.py"
+src = open(f, encoding="utf-8").read()
+method = '''    def login_with_phone(
+        self,
+        sms_fetch_code,
+    ) -&gt; str:
+        """已注册到一半的手机号账号 用手机号+密码登录续接 抓 session。"""
+'''
+python3 -c "import ast;
+ast.parse(open('/Users/sven.sun/Desktop/Tools/Strategy/AutoGetCode/chatgpt_login.py').read()); print('syntax
+OK')"&lt;/parameter&gt;
+  &lt;parameter name="description"&gt;Add login_with_phone method&lt;/parameter&gt;
+  &lt;/invoke&gt;`
+
+	cleaned, calls, pending := drainAnthropicXMLInvokeText(sample)
+
+	require.Empty(t, cleaned)
+	require.Empty(t, pending)
+	require.Len(t, calls, 1)
+	require.Equal(t, "Bash", calls[0].name)
+	require.Contains(t, calls[0].input["command"], "python3 - <<'PYEOF'")
+	require.Contains(t, calls[0].input["command"], ") -> str:")
+	require.Equal(t, "Add login_with_phone method", calls[0].input["description"])
+}
+
 func TestDrainAnthropicXMLInvokeTextHoldsSplitInvokePrefix(t *testing.T) {
 	parts, pending := drainAnthropicXMLInvokeParts("Before <in")
 

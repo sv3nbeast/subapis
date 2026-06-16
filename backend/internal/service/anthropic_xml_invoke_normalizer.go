@@ -558,17 +558,17 @@ func stripTrailingAnthropicXMLInvokePreamble(text string) string {
 		return ""
 	}
 	trimmedRight := strings.TrimRightFunc(text, unicode.IsSpace)
-	if !strings.EqualFold(trimmedRight, "call") {
-		lastNewline := strings.LastIndexAny(trimmedRight, "\r\n")
-		if lastNewline < 0 {
-			return text
-		}
-		if !strings.EqualFold(strings.TrimSpace(trimmedRight[lastNewline+1:]), "call") {
-			return text
-		}
-		return trimmedRight[:lastNewline+1]
+	if strings.EqualFold(strings.TrimSpace(trimmedRight), "call") {
+		return ""
 	}
-	return ""
+	lastNewline := strings.LastIndexAny(trimmedRight, "\r\n")
+	if lastNewline < 0 {
+		return text
+	}
+	if !strings.EqualFold(strings.TrimSpace(trimmedRight[lastNewline+1:]), "call") {
+		return text
+	}
+	return trimmedRight[:lastNewline+1]
 }
 
 func isAnthropicXMLInvokePreambleOnly(text string) bool {
