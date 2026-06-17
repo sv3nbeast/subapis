@@ -11,35 +11,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDetectInterceptType_MaxTokensOneHaikuRequiresClaudeCodeClient(t *testing.T) {
-	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
-
-	notClaudeCode := detectInterceptType(body, "claude-haiku-4-5", 1, false, false)
-	require.Equal(t, InterceptTypeNone, notClaudeCode)
-
-	isClaudeCode := detectInterceptType(body, "claude-haiku-4-5", 1, false, true)
-	require.Equal(t, InterceptTypeMaxTokensOneHaiku, isClaudeCode)
-}
-
-// TestDetectInterceptType_ConnectionProbeAnyModel 验证任意模型的 Claude Code
-// 探测请求（max_tokens=1, !stream）都会被拦截，覆盖 Claude Code Desktop
-// 使用非 haiku 模型进行 Test Connection 的场景。
-func TestDetectInterceptType_ConnectionProbeAnyModel(t *testing.T) {
+// TestDetectInterceptType_ConnectionProbeIsClientAgnostic 验证连通性探测请求
+// （max_tokens=1, !stream）对任意客户端、任意模型都会被拦截 mock，
+// 覆盖 claude-cli、Claude Code Desktop、Anthropic SDK 等各类 Test Connection 场景。
+func TestDetectInterceptType_ConnectionProbeIsClientAgnostic(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 
-	// Claude Code Desktop 使用 opus 模型探测 → 应被拦截
-	opusProbe := detectInterceptType(body, "claude-opus-4-8", 1, false, true)
-	require.Equal(t, InterceptTypeMaxTokensOneHaiku, opusProbe)
+	// Claude Code 客户端探测 → 拦截
+	cli := detectInterceptType(body, "claude-haiku-4-5", 1, false, true)
+	require.Equal(t, InterceptTypeMaxTokensOneHaiku, cli)
 
-	// Claude Code Desktop 使用 sonnet 模型探测 → 应被拦截
-	sonnetProbe := detectInterceptType(body, "claude-sonnet-4-5", 1, false, true)
-	require.Equal(t, InterceptTypeMaxTokensOneHaiku, sonnetProbe)
+	// 非 Claude Code 客户端（如 Claude Code Desktop）探测 → 也拦截
+	desktop := detectInterceptType(body, "claude-haiku-4-5", 1, false, false)
+	require.Equal(t, InterceptTypeMaxTokensOneHaiku, desktop)
 
-	// 非 Claude Code 客户端的 max_tokens=1 请求 → 不拦截
-	notClaudeCode := detectInterceptType(body, "claude-opus-4-8", 1, false, false)
-	require.Equal(t, InterceptTypeNone, notClaudeCode)
+	// 任意模型探测都拦截（opus / sonnet / haiku）
+	opus := detectInterceptType(body, "claude-opus-4-8", 1, false, false)
+	require.Equal(t, InterceptTypeMaxTokensOneHaiku, opus)
+	sonnet := detectInterceptType(body, "claude-sonnet-4-5", 1, false, false)
+	require.Equal(t, InterceptTypeMaxTokensOneHaiku, sonnet)
 
-	// 流式请求即使 max_tokens=1 也不拦截
+	// 流式请求即使 max_tokens=1 也不拦截（让真实流式探测通过）
 	streamReq := detectInterceptType(body, "claude-opus-4-8", 1, true, true)
 	require.Equal(t, InterceptTypeNone, streamReq)
 
@@ -59,17 +51,17 @@ func TestIsAnthropicMessagesSyncRequest(t *testing.T) {
 	require.False(t, isAnthropicMessagesSyncRequest(true))
 }
 
-// TestConnectionProbeBypassesSyncCheck 验证 Claude Code 连通性探测请求
-// （max_tokens=1, stream=false）能正确被识别且应该绕过同步请求检查。
-// 这是 Claude Code Desktop "Test Connection" 功能能正常工作的关键。
+// TestConnectionProbeBypassesSyncCheck 验证连通性探测请求
+// （max_tokens=1, stream=false）能正确被识别且会绕过同步请求拒绝检查。
+// 这是 Claude Code Desktop "Test Connection" 等各类客户端探测能正常工作的关键。
 func TestConnectionProbeBypassesSyncCheck(t *testing.T) {
 	// 探测请求特征：max_tokens=1, stream=false
 	require.True(t, isClaudeCodeConnectionProbeRequest(1, false))
 	require.True(t, isAnthropicMessagesSyncRequest(false))
 
-	// 即使同步请求会被拦截，探测请求应通过 context 标识被允许通过。
 	// 实际逻辑在 gateway_handler.go Messages() 中：
 	// if isAnthropicMessagesSyncRequest(reqStream) && !isConnectionProbe { reject }
+	// 不再要求 isClaudeCodeClient，因为后续 detectInterceptType 会无条件 mock。
 }
 
 func TestDetectInterceptType_SuggestionModeUnaffected(t *testing.T) {
