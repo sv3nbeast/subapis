@@ -458,7 +458,7 @@ func TestGatewayService_StreamingDoesNotBridgeXMLInvokeForClaudeCode(t *testing.
 	require.Contains(t, body, `"stop_reason":"end_turn"`)
 }
 
-func TestGatewayService_StreamingBridgesXMLInvokeForClaudeExternalCLI(t *testing.T) {
+func TestGatewayService_StreamingDoesNotBridgeXMLInvokeForPlainClaudeExternalCLI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &GatewayService{
 		cfg: &config.Config{
@@ -500,11 +500,11 @@ func TestGatewayService_StreamingBridgesXMLInvokeForClaudeExternalCLI(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	body := rec.Body.String()
-	require.NotContains(t, body, "<invoke")
-	require.Contains(t, body, `"type":"tool_use"`)
-	require.Contains(t, body, `"name":"Bash"`)
-	require.Contains(t, body, `"partial_json":"{\"command\":\"pwd\",\"description\":\"print cwd\"}"`)
-	require.Contains(t, body, `"stop_reason":"tool_use"`)
+	require.Contains(t, body, `<invoke name=\"Bash\">`)
+	require.NotContains(t, body, `"type":"tool_use"`)
+	require.NotContains(t, body, `"name":"Bash"`)
+	require.NotContains(t, body, `"input_json_delta"`)
+	require.Contains(t, body, `"stop_reason":"end_turn"`)
 }
 
 func TestGatewayService_StreamingStripsCallPreambleForClaudeExternalCLI(t *testing.T) {

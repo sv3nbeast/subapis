@@ -37,15 +37,26 @@ func shouldBridgeAnthropicXMLInvoke(ctx context.Context) bool {
 }
 
 func shouldBridgeAnthropicXMLInvokeForClaudeCodeUA(ua string) bool {
-	return IsClaudeCodeExternalClientUserAgent(ua)
+	return IsClaudeCodeXMLInvokeBridgeUserAgent(ua)
 }
 
-// IsClaudeCodeExternalClientUserAgent reports Claude CLI variants that surface
-// XML invoke text and need the gateway to bridge it back to Anthropic tool_use.
+// IsClaudeCodeExternalClientUserAgent reports relaxed Claude CLI variants that
+// should be treated as Claude Code clients for auth/tool-continuation purposes.
 func IsClaudeCodeExternalClientUserAgent(ua string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(ua))
 	return strings.Contains(normalized, "external, cli") ||
 		strings.Contains(normalized, "claude-desktop-3p") ||
+		strings.Contains(normalized, "agent-sdk/")
+}
+
+// IsClaudeCodeXMLInvokeBridgeUserAgent reports Claude CLI variants that surface
+// XML invoke text and need the gateway to bridge it back to Anthropic tool_use.
+// Plain "external, cli" Claude CLI clients must not be bridged: they can render
+// normal text containing "<invoke ...>" and converting that text into tool_use
+// can make the client repeatedly execute unintended Read/Bash calls.
+func IsClaudeCodeXMLInvokeBridgeUserAgent(ua string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(ua))
+	return strings.Contains(normalized, "claude-desktop-3p") ||
 		strings.Contains(normalized, "agent-sdk/")
 }
 

@@ -16,7 +16,7 @@ func TestShouldBridgeAnthropicXMLInvokePolicy(t *testing.T) {
 
 	cliCtx := SetClaudeCodeClient(context.Background(), true)
 	cliCtx = SetClaudeCodeUserAgent(cliCtx, "claude-cli/2.1.156 (external, cli)")
-	require.True(t, shouldBridgeAnthropicXMLInvoke(cliCtx))
+	require.False(t, shouldBridgeAnthropicXMLInvoke(cliCtx))
 
 	desktopAgentCtx := SetClaudeCodeClient(context.Background(), true)
 	desktopAgentCtx = SetClaudeCodeUserAgent(desktopAgentCtx, "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)")
@@ -25,6 +25,9 @@ func TestShouldBridgeAnthropicXMLInvokePolicy(t *testing.T) {
 	require.True(t, IsClaudeCodeExternalClientUserAgent("claude-cli/2.1.2 (external, cli)"))
 	require.True(t, IsClaudeCodeExternalClientUserAgent("claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)"))
 	require.False(t, IsClaudeCodeExternalClientUserAgent("claude-cli/2.1.170"))
+	require.False(t, IsClaudeCodeXMLInvokeBridgeUserAgent("claude-cli/2.1.2 (external, cli)"))
+	require.True(t, IsClaudeCodeXMLInvokeBridgeUserAgent("claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)"))
+	require.False(t, IsClaudeCodeXMLInvokeBridgeUserAgent("claude-cli/2.1.170"))
 }
 
 func TestNormalizeAnthropicXMLInvokeResponseBodyConvertsTextToToolUse(t *testing.T) {
