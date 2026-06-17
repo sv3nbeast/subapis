@@ -33,6 +33,17 @@ func SetClaudeCodeClientContext(c *gin.Context, body []byte, parsedReq *service.
 	ua := c.GetHeader("User-Agent")
 	// Fast path：非 Claude CLI UA 直接判定 false，避免热路径二次 JSON 反序列化。
 	if !claudeCodeValidator.ValidateUserAgent(ua) {
+		// 例外：Claude Code Desktop（Electron）的 Test Connection 探测请求允许通过。
+		// 仅限 max_tokens=1 + 非流式 的探测特征，避免普通对话被错误授权。
+		// 这样 claude_code_only=true 的 group 也能通过 Test Connection，
+		// 且会在拦截层被 mock，零账号配额消耗。
+		if service.IsClaudeCodeDesktopProbeUserAgent(ua) && parsedReq != nil &&
+			parsedReq.MaxTokens == 1 && !parsedReq.Stream {
+			ctx := service.SetClaudeCodeClient(c.Request.Context(), true)
+			ctx = service.SetClaudeCodeUserAgent(ctx, ua)
+			c.Request = c.Request.WithContext(ctx)
+			return
+		}
 		ctx := service.SetClaudeCodeClient(c.Request.Context(), false)
 		c.Request = c.Request.WithContext(ctx)
 		return

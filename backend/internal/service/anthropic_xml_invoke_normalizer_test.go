@@ -30,6 +30,26 @@ func TestShouldBridgeAnthropicXMLInvokePolicy(t *testing.T) {
 	require.False(t, IsClaudeCodeXMLInvokeBridgeUserAgent("claude-cli/2.1.170"))
 }
 
+func TestIsClaudeCodeDesktopProbeUserAgent(t *testing.T) {
+	// Claude Code Desktop (Electron) Mac
+	require.True(t, IsClaudeCodeDesktopProbeUserAgent(
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/1.12603.1 Chrome/148.0.7778.254 Electron/42.4.0 Safari/537.36"))
+	// 假设的 Windows / Linux 版本
+	require.True(t, IsClaudeCodeDesktopProbeUserAgent(
+		"Mozilla/5.0 (Windows NT 10.0) Claude/1.0.0 Electron/30.0.0"))
+
+	// claude-cli (官方 CLI) 不应被识别为 Desktop probe UA
+	require.False(t, IsClaudeCodeDesktopProbeUserAgent("claude-cli/2.1.170"))
+	require.False(t, IsClaudeCodeDesktopProbeUserAgent("claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)"))
+
+	// 仅 Claude/ 没有 Electron/ 不识别
+	require.False(t, IsClaudeCodeDesktopProbeUserAgent("Claude/1.0 SomeOtherApp/1.0"))
+	// 仅 Electron/ 没有 Claude/ 不识别
+	require.False(t, IsClaudeCodeDesktopProbeUserAgent("Electron/30.0 SomeOtherApp/1.0"))
+	// 普通浏览器不识别
+	require.False(t, IsClaudeCodeDesktopProbeUserAgent("Mozilla/5.0 Chrome/120.0"))
+}
+
 func TestNormalizeAnthropicXMLInvokeResponseBodyConvertsTextToToolUse(t *testing.T) {
 	body := []byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"Before <invoke name=\"Bash\"><parameter name=\"command\">pwd</parameter><parameter name=\"description\">print cwd</parameter></invoke> After"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}`)
 

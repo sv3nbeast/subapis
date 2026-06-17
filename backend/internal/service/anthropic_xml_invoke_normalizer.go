@@ -49,6 +49,19 @@ func IsClaudeCodeExternalClientUserAgent(ua string) bool {
 		strings.Contains(normalized, "agent-sdk/")
 }
 
+// IsClaudeCodeDesktopProbeUserAgent reports Claude Code Desktop (Electron) UA.
+// 典型格式:
+//
+//	Mozilla/5.0 (Macintosh; ...) AppleWebKit/... Claude/1.12603.1 Chrome/... Electron/... Safari/...
+//
+// 仅用于 Test Connection 探测识别，授权该 UA 的 max_tokens=1 探测请求
+// 被识别为 Claude Code 客户端从而能通过 claude_code_only 校验并被 mock 拦截。
+// 注意：仅 UA 匹配不直接信任为 Claude Code 客户端，须配合 probe 请求特征联合判定。
+func IsClaudeCodeDesktopProbeUserAgent(ua string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(ua))
+	return strings.Contains(normalized, "claude/") && strings.Contains(normalized, "electron/")
+}
+
 // IsClaudeCodeXMLInvokeBridgeUserAgent reports Claude CLI variants that surface
 // XML invoke text and need the gateway to bridge it back to Anthropic tool_use.
 // Plain "external, cli" Claude CLI clients must not be bridged: they can render
