@@ -102,6 +102,7 @@ func TestRunCheckForModel_AnthropicDefaultRequestPassesClaudeCodeValidation(t *t
 	systemBlock, ok := system[0].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, claudeCodeSystemPrompt, systemBlock["text"])
+	require.Equal(t, true, h.lastBody["stream"])
 
 	metadata, ok := h.lastBody["metadata"].(map[string]any)
 	require.True(t, ok)
@@ -160,6 +161,7 @@ func TestRunCheckForModel_MergeMode_UserFieldsWinButDenyListProtects(t *testing.
 			"max_tokens": float64(999),   // 应该覆盖默认 50
 			"model":      "hacked-model", // 应该被黑名单挡住，保留原 model
 			"messages":   []any{},        // 同上，被挡
+			"stream":     false,          // 同上，被挡，避免内部网关拒绝同步 /v1/messages
 		},
 		ExtraHeaders: map[string]string{
 			"User-Agent":     "claude-cli/1.0",
@@ -184,6 +186,9 @@ func TestRunCheckForModel_MergeMode_UserFieldsWinButDenyListProtects(t *testing.
 	msgs, _ := h.lastBody["messages"].([]any)
 	if len(msgs) == 0 {
 		t.Error("messages should be protected by deny list (kept default, non-empty)")
+	}
+	if h.lastBody["stream"] != true {
+		t.Errorf("stream should be protected by deny list (kept true), got %v", h.lastBody["stream"])
 	}
 	// Anthropic User-Agent 由统一上游 UA 控制，模板不能覆盖。
 	if h.lastHeaders.Get("User-Agent") != claude.DefaultHeaders["User-Agent"] {
@@ -269,6 +274,49 @@ func TestExtractAnthropicMonitorText_PrefersTextBlock(t *testing.T) {
 	if got := extractAnthropicMonitorText(body); got != "answer 7" {
 		t.Fatalf("expected text block, got %q", got)
 	}
+}
+
+func TestRunCheckForModel_AnthropicStreamingResponsePassesChallenge(t *testing.T) {
+	swapMonitorHTTPClient(t)
+	var lastBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&lastBody))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
+			``,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + allChallengeAnswers() + `"}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")))
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runCheckForModel(context.Background(), MonitorProviderAnthropic, srv.URL, "sk-fake", "claude-x", nil)
+
+	require.Equal(t, MonitorStatusOperational, res.Status, res.Message)
+	require.Equal(t, true, lastBody["stream"])
+}
+
+func TestExtractAnthropicMonitorText_ReadsSSETextDeltas(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer "}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"42"}}`,
+		``,
+	}, "\n"))
+
+	require.Equal(t, "answer 42", extractAnthropicMonitorText(body))
 }
 
 func allChallengeAnswers() string {

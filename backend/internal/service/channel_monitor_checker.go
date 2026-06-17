@@ -179,6 +179,7 @@ var providerAdapters = map[string]providerAdapter{
 				"model":      normalizeAnthropicModelIDForUpstream(model),
 				"messages":   []map[string]string{{"role": "user", "content": prompt}},
 				"max_tokens": monitorChallengeMaxTokens,
+				"stream":     true,
 				"system": []map[string]any{
 					{
 						"type": "text",
@@ -378,6 +379,13 @@ func extractMonitorResponseText(adapter providerAdapter, respBytes []byte) strin
 }
 
 func extractAnthropicMonitorText(respBytes []byte) string {
+	if text := extractAnthropicMonitorJSONText(respBytes); strings.TrimSpace(text) != "" {
+		return text
+	}
+	return extractAnthropicMonitorSSEText(respBytes)
+}
+
+func extractAnthropicMonitorJSONText(respBytes []byte) string {
 	content := gjson.GetBytes(respBytes, "content")
 	if content.IsArray() {
 		var firstText string
@@ -399,6 +407,56 @@ func extractAnthropicMonitorText(respBytes []byte) string {
 		return content.String()
 	}
 	return gjson.GetBytes(respBytes, "content.0.text").String()
+}
+
+func extractAnthropicMonitorSSEText(respBytes []byte) string {
+	var texts []string
+	var dataLines []string
+	flush := func() {
+		if len(dataLines) == 0 {
+			return
+		}
+		payload := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		dataLines = dataLines[:0]
+		if payload == "" || payload == "[DONE]" {
+			return
+		}
+		if text := extractAnthropicMonitorEventText([]byte(payload)); strings.TrimSpace(text) != "" {
+			texts = append(texts, text)
+		}
+	}
+	for _, line := range strings.Split(string(respBytes), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	flush()
+	return strings.Join(texts, "")
+}
+
+func extractAnthropicMonitorEventText(payload []byte) string {
+	if text := extractAnthropicMonitorJSONText(payload); strings.TrimSpace(text) != "" {
+		return text
+	}
+	eventType := gjson.GetBytes(payload, "type").String()
+	switch eventType {
+	case "content_block_start":
+		block := gjson.GetBytes(payload, "content_block")
+		if strings.EqualFold(strings.TrimSpace(block.Get("type").String()), "text") {
+			return block.Get("text").String()
+		}
+	case "content_block_delta":
+		delta := gjson.GetBytes(payload, "delta")
+		if delta.Get("type").String() == "" || strings.EqualFold(strings.TrimSpace(delta.Get("type").String()), "text_delta") {
+			return delta.Get("text").String()
+		}
+	}
+	return ""
 }
 
 // mergeHeaders 把用户自定义 headers 合并到 adapter 默认 headers 上。
@@ -479,7 +537,7 @@ func buildRequestBody(adapter providerAdapter, provider, apiMode, model, prompt 
 var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI + ":" + MonitorAPIModeChatCompletions: {"model": true, "messages": true, "stream": true},
 	MonitorProviderOpenAI + ":" + MonitorAPIModeResponses:       {"model": true, "instructions": true, "input": true, "stream": true},
-	MonitorProviderAnthropic:                                    {"model": true, "messages": true},
+	MonitorProviderAnthropic:                                    {"model": true, "messages": true, "stream": true},
 	MonitorProviderGemini:                                       {"contents": true},
 }
 
