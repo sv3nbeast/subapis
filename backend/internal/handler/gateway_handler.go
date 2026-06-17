@@ -180,8 +180,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 
-	// 设置 max_tokens=1 + haiku 探测请求标识到 context 中
+	// 设置 Claude Code 连通性探测请求标识到 context 中
 	// 必须在 SetClaudeCodeClientContext 之前设置，因为 ClaudeCodeValidator 需要读取此标识进行绕过判断
+	if isClaudeCodeConnectionProbeRequest(parsedReq.MaxTokens, reqStream) {
+		ctx := service.WithIsClaudeCodeConnectionProbeRequest(c.Request.Context(), true, h.metadataBridgeEnabled())
+		c.Request = c.Request.WithContext(ctx)
+	}
 	if isMaxTokensOneHaikuRequest(reqModel, parsedReq.MaxTokens, reqStream) {
 		ctx := service.WithIsMaxTokensOneHaikuRequest(c.Request.Context(), true, h.metadataBridgeEnabled())
 		c.Request = c.Request.WithContext(ctx)
@@ -201,6 +205,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	setOpsRequestContext(c, reqModel, reqStream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
+
+	if isAnthropicMessagesSyncRequest(reqStream) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
+		return
+	}
 
 	// 验证 model 必填
 	if reqModel == "" {
@@ -1003,10 +1012,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 绑定粘性会话（成功转发后绑定/刷新）
 			// - 无现有绑定（首次请求）：创建绑定
 			// - 选中账号与粘性账号一致：刷新 TTL
+			// - 原粘性账号已在本请求上游 failover 中失败：迁移到成功账号
 			// - Kiro 429 请求内切换账号后最终成功：覆盖到成功账号
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
-			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasKiro429Retries()) {
+			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries()) {
 				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
 				if err := h.gatewayService.BindStickySession(stateCtx, currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -1888,6 +1898,16 @@ func isHaikuModel(model string) bool {
 // 条件：max_tokens == 1 且 model 包含 "haiku" 且非流式请求
 func isMaxTokensOneHaikuRequest(model string, maxTokens int, isStream bool) bool {
 	return maxTokens == 1 && isHaikuModel(model) && !isStream
+}
+
+// isClaudeCodeConnectionProbeRequest 检查是否为 Claude Code 连通性探测请求。
+// Claude Code 的 test connection 可能使用非 haiku 模型，但仍是 max_tokens=1 的非流式请求。
+func isClaudeCodeConnectionProbeRequest(maxTokens int, isStream bool) bool {
+	return maxTokens == 1 && !isStream
+}
+
+func isAnthropicMessagesSyncRequest(isStream bool) bool {
+	return !isStream
 }
 
 // detectInterceptType 检测请求是否需要拦截，返回拦截类型

@@ -335,6 +335,23 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		}
 	}
 
+	var incompleteStreamErr *kiropkg.IncompleteStreamError
+	if errors.As(err, &incompleteStreamErr) {
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": sanitizeUpstreamErrorMessage(incompleteStreamErr.Error()),
+			},
+		})
+		return &UpstreamFailoverError{
+			StatusCode:             http.StatusBadGateway,
+			ResponseBody:           body,
+			RetryableOnSameAccount: true,
+			Cause:                  err,
+		}
+	}
+
 	emptyStreamMsg := kiroEmptyEventStreamMessage(err)
 	if emptyStreamMsg == "" {
 		return nil
@@ -409,6 +426,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	}
 	cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+	requestCtx.RequireTerminalEvent = true
 
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()

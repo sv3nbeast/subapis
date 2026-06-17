@@ -115,6 +115,19 @@ func TestGatewayServiceKiroEmptyStreamIsRetryableFailover(t *testing.T) {
 	}
 }
 
+func TestGatewayServiceKiroIncompleteStreamIsRetryableFailover(t *testing.T) {
+	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
+	account := &Account{ID: 1459, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	err := fmt.Errorf("stream read error: %w", &kiropkg.IncompleteStreamError{Message: "incomplete kiro event stream: missing terminal event"})
+
+	failoverErr := svc.kiroStreamErrorToFailover(context.Background(), account, err)
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "incomplete kiro event stream")
+}
+
 func TestGatewayServiceKiroEmptyStreamWrappedFailoverKeepsKiroClassification(t *testing.T) {
 	svc := &GatewayService{kiroCooldownStore: &kiroStreamFailoverCooldownStore{}}
 	account := &Account{ID: 1459, Platform: PlatformKiro, Type: AccountTypeOAuth}
@@ -276,6 +289,9 @@ func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T)
 	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
 		":event-type": "assistantResponseEvent",
 	}, []byte(`{"assistantResponseEvent":{"content":"hello from kiro"}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
 	upstream := &kiroStreamFailoverQueuedUpstream{
 		responses: []*http.Response{
 			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
@@ -316,6 +332,58 @@ func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T)
 	streamBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Contains(t, string(streamBytes), "hello from kiro")
+}
+
+func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"partial answer"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	parsed := &ParsedRequest{
+		Model:  "claude-opus-4-8",
+		Stream: true,
+		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "incomplete kiro event stream")
+	require.Empty(t, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
 }
 
 func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) {

@@ -1428,6 +1428,11 @@ func kiroEventStreamResponse(t *testing.T, text string, inputTokens, outputToken
 			},
 		},
 	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{
+			"stop_reason": "end_turn",
+		},
+	}))
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_runtime"}},

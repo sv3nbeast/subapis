@@ -21,6 +21,17 @@ func TestDetectInterceptType_MaxTokensOneHaikuRequiresClaudeCodeClient(t *testin
 	require.Equal(t, InterceptTypeMaxTokensOneHaiku, isClaudeCode)
 }
 
+func TestIsClaudeCodeConnectionProbeRequest(t *testing.T) {
+	require.True(t, isClaudeCodeConnectionProbeRequest(1, false))
+	require.False(t, isClaudeCodeConnectionProbeRequest(1, true))
+	require.False(t, isClaudeCodeConnectionProbeRequest(2, false))
+}
+
+func TestIsAnthropicMessagesSyncRequest(t *testing.T) {
+	require.True(t, isAnthropicMessagesSyncRequest(false))
+	require.False(t, isAnthropicMessagesSyncRequest(true))
+}
+
 func TestDetectInterceptType_SuggestionModeUnaffected(t *testing.T) {
 	body := []byte(`{
 		"messages":[{

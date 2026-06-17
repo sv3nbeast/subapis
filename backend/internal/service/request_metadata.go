@@ -14,15 +14,16 @@ type requestMetadataContextKey struct{}
 var requestMetadataKey = requestMetadataContextKey{}
 
 type RequestMetadata struct {
-	IsMaxTokensOneHaikuRequest *bool
-	ThinkingEnabled            *bool
-	PrefetchedStickyAccountID  *int64
-	PrefetchedStickyGroupID    *int64
-	ForcedAccountID            *int64
-	SingleAccountRetry         *bool
-	AccountSwitchCount         *int
-	AvoidEmailDomainSuffixes   []string
-	ModelCapacityRetryState    *ModelCapacityRetryState
+	IsMaxTokensOneHaikuRequest         *bool
+	IsClaudeCodeConnectionProbeRequest *bool
+	ThinkingEnabled                    *bool
+	PrefetchedStickyAccountID          *int64
+	PrefetchedStickyGroupID            *int64
+	ForcedAccountID                    *int64
+	SingleAccountRetry                 *bool
+	AccountSwitchCount                 *int
+	AvoidEmailDomainSuffixes           []string
+	ModelCapacityRetryState            *ModelCapacityRetryState
 }
 
 const defaultModelCapacityRetryTotalBudget = 8 * time.Second
@@ -77,13 +78,14 @@ func (s *ModelCapacityRetryState) Remaining() time.Duration {
 }
 
 var (
-	requestMetadataFallbackIsMaxTokensOneHaikuTotal atomic.Int64
-	requestMetadataFallbackThinkingEnabledTotal     atomic.Int64
-	requestMetadataFallbackPrefetchedStickyAccount  atomic.Int64
-	requestMetadataFallbackPrefetchedStickyGroup    atomic.Int64
-	requestMetadataFallbackForcedAccount            atomic.Int64
-	requestMetadataFallbackSingleAccountRetryTotal  atomic.Int64
-	requestMetadataFallbackAccountSwitchCountTotal  atomic.Int64
+	requestMetadataFallbackIsMaxTokensOneHaikuTotal       atomic.Int64
+	requestMetadataFallbackClaudeCodeConnectionProbeTotal atomic.Int64
+	requestMetadataFallbackThinkingEnabledTotal           atomic.Int64
+	requestMetadataFallbackPrefetchedStickyAccount        atomic.Int64
+	requestMetadataFallbackPrefetchedStickyGroup          atomic.Int64
+	requestMetadataFallbackForcedAccount                  atomic.Int64
+	requestMetadataFallbackSingleAccountRetryTotal        atomic.Int64
+	requestMetadataFallbackAccountSwitchCountTotal        atomic.Int64
 )
 
 func RequestMetadataFallbackStats() (isMaxTokensOneHaiku, thinkingEnabled, prefetchedStickyAccount, prefetchedStickyGroup, singleAccountRetry, accountSwitchCount int64) {
@@ -131,6 +133,15 @@ func WithIsMaxTokensOneHaikuRequest(ctx context.Context, value bool, bridgeOldKe
 		md.IsMaxTokensOneHaikuRequest = &v
 	}, func(base context.Context) context.Context {
 		return context.WithValue(base, ctxkey.IsMaxTokensOneHaikuRequest, value)
+	})
+}
+
+func WithIsClaudeCodeConnectionProbeRequest(ctx context.Context, value bool, bridgeOldKeys bool) context.Context {
+	return updateRequestMetadata(ctx, bridgeOldKeys, func(md *RequestMetadata) {
+		v := value
+		md.IsClaudeCodeConnectionProbeRequest = &v
+	}, func(base context.Context) context.Context {
+		return context.WithValue(base, ctxkey.IsClaudeCodeConnectionProbeRequest, value)
 	})
 }
 
@@ -208,6 +219,20 @@ func IsMaxTokensOneHaikuRequestFromContext(ctx context.Context) (bool, bool) {
 	}
 	if value, ok := ctx.Value(ctxkey.IsMaxTokensOneHaikuRequest).(bool); ok {
 		requestMetadataFallbackIsMaxTokensOneHaikuTotal.Add(1)
+		return value, true
+	}
+	return false, false
+}
+
+func IsClaudeCodeConnectionProbeRequestFromContext(ctx context.Context) (bool, bool) {
+	if md := metadataFromContext(ctx); md != nil && md.IsClaudeCodeConnectionProbeRequest != nil {
+		return *md.IsClaudeCodeConnectionProbeRequest, true
+	}
+	if ctx == nil {
+		return false, false
+	}
+	if value, ok := ctx.Value(ctxkey.IsClaudeCodeConnectionProbeRequest).(bool); ok {
+		requestMetadataFallbackClaudeCodeConnectionProbeTotal.Add(1)
 		return value, true
 	}
 	return false, false

@@ -1518,6 +1518,53 @@ func TestStreamEventStreamAsAnthropicDoesNotCreateHalfWordFromKiroDelta(t *testi
 	require.Contains(t, output, `"text":"'m starting"`)
 }
 
+func TestStreamEventStreamAsAnthropicRequiresTerminalEventWhenConfigured(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "partial answer",
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 9, KiroRequestContext{
+		RequireTerminalEvent: true,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var incompleteErr *IncompleteStreamError
+	require.ErrorAs(t, err, &incompleteErr)
+	require.Contains(t, err.Error(), "missing terminal event")
+	require.Contains(t, out.String(), "event: sub2api_internal_kiro_ping")
+	require.NotContains(t, out.String(), "partial answer")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamEventStreamAsAnthropicAcceptsTerminalEventWhenRequired(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "complete answer",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{
+			"stop_reason": "end_turn",
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 9, KiroRequestContext{
+		RequireTerminalEvent: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), "event: message_stop")
+}
+
 func TestStreamEventStreamAsAnthropicThinkingOnlyResponse(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{

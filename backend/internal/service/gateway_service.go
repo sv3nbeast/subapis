@@ -8909,6 +8909,10 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 		}
 
+		if eventName == "sub2api_internal_kiro_ping" {
+			return nil, "", nil, nil
+		}
+
 		if eventName == "error" {
 			return nil, dataLine, nil, errors.New("have error in stream")
 		}

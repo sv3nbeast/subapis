@@ -39,6 +39,7 @@ const (
 	embeddedInvokeStartPrefix  = "<invoke"
 	embeddedInvokeEndTag       = "</invoke>"
 	embeddedParameterEndTag    = "</parameter>"
+	kiroInternalPingEvent      = "sub2api_internal_kiro_ping"
 	minFrameSize               = 16
 	maxEventMsgSize            = 10 << 20
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
@@ -132,9 +133,10 @@ type ParseResult struct {
 }
 
 type KiroRequestContext struct {
-	ToolNameMap         map[string]string
-	ThinkingEnabled     bool
-	CacheEmulationUsage *Usage
+	ToolNameMap          map[string]string
+	ThinkingEnabled      bool
+	CacheEmulationUsage  *Usage
+	RequireTerminalEvent bool
 }
 
 type KiroBuildResult struct {
@@ -276,6 +278,17 @@ type eventStreamMessage struct {
 type UpstreamExceptionError struct {
 	ExceptionType string
 	Message       string
+}
+
+type IncompleteStreamError struct {
+	Message string
+}
+
+func (e *IncompleteStreamError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "incomplete kiro event stream"
+	}
+	return e.Message
 }
 
 type kiroSemanticEventType string
@@ -625,6 +638,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	var outputTextBuf strings.Builder
 	sawKiroSemanticOutput := false
 	sawDeliverableOutput := false
+	sawTerminalEvent := false
 	streamOutputReleased := false
 	var bufferedStreamOutput bytes.Buffer
 
@@ -638,6 +652,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			dst = &bufferedStreamOutput
 		}
 		_, err = io.WriteString(dst, "event: "+event+"\ndata: "+string(payload)+"\n\n")
+		return err
+	}
+	writeInternalPing := func() error {
+		if !requestCtx.RequireTerminalEvent || streamOutputReleased {
+			return nil
+		}
+		_, err := io.WriteString(w, "event: "+kiroInternalPingEvent+"\ndata: {}\n\n")
 		return err
 	}
 	releaseStreamOutput := func() error {
@@ -654,6 +675,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	markDeliverableOutput := func() error {
 		sawDeliverableOutput = true
+		if requestCtx.RequireTerminalEvent {
+			return nil
+		}
 		return releaseStreamOutput()
 	}
 	ensureMessageStart := func() error {
@@ -1240,11 +1264,19 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
+			if kiroSemanticEventIsTerminal(semanticEvents[i].SourceEventType) {
+				sawTerminalEvent = true
+			}
 			switch semanticEvents[i].Type {
 			case kiroSemanticContent, kiroSemanticReasoning, kiroSemanticAssistantTU, kiroSemanticToolUse, kiroSemanticToolInput:
 				sawKiroSemanticOutput = true
 			}
 			if err := applySemanticEvent(&semanticEvents[i]); err != nil {
+				return nil, err
+			}
+		}
+		if requestCtx.RequireTerminalEvent && !sawTerminalEvent && len(semanticEvents) > 0 {
+			if err := writeInternalPing(); err != nil {
 				return nil, err
 			}
 		}
@@ -1282,6 +1314,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
+	if requestCtx.RequireTerminalEvent && !sawTerminalEvent {
+		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing terminal event"}
+	}
 	if usage.OutputTokens == 0 {
 		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
 			usage.OutputTokens = est
@@ -1301,6 +1336,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 	}
 	if err := ensureMessageStart(); err != nil {
+		return nil, err
+	}
+	if err := releaseStreamOutput(); err != nil {
 		return nil, err
 	}
 	finalUsageMap := map[string]any{
@@ -3431,6 +3469,15 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 	}
 
 	return out
+}
+
+func kiroSemanticEventIsTerminal(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "messageStopEvent", "message_stop":
+		return true
+	default:
+		return false
+	}
 }
 
 func repairJSON(input string) string {

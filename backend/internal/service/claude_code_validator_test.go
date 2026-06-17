@@ -23,6 +23,32 @@ func TestClaudeCodeValidator_ProbeBypass(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestClaudeCodeValidator_ConnectionProbeBypass(t *testing.T) {
+	validator := NewClaudeCodeValidator()
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", nil)
+	req.Header.Set("User-Agent", "claude-cli/1.2.3 (darwin; arm64)")
+	req = req.WithContext(WithIsClaudeCodeConnectionProbeRequest(req.Context(), true, false))
+
+	ok := validator.Validate(req, map[string]any{
+		"model":      "claude-sonnet-4-6",
+		"max_tokens": 1,
+	})
+	require.True(t, ok)
+}
+
+func TestClaudeCodeValidator_ConnectionProbeBypassRequiresUA(t *testing.T) {
+	validator := NewClaudeCodeValidator()
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", nil)
+	req.Header.Set("User-Agent", "curl/8.0.0")
+	req = req.WithContext(WithIsClaudeCodeConnectionProbeRequest(req.Context(), true, false))
+
+	ok := validator.Validate(req, map[string]any{
+		"model":      "claude-sonnet-4-6",
+		"max_tokens": 1,
+	})
+	require.False(t, ok)
+}
+
 func TestClaudeCodeValidator_ProbeBypassRequiresUA(t *testing.T) {
 	validator := NewClaudeCodeValidator()
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", nil)

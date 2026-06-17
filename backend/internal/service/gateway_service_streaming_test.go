@@ -92,6 +92,53 @@ func TestGatewayService_StreamingReusesScannerBufferAndStillParsesUsage(t *testi
 	require.Equal(t, 7, result.usage.OutputTokens)
 }
 
+func TestGatewayService_StreamingDropsInternalKiroPing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := strings.Join([]string{
+		"event: sub2api_internal_kiro_ping",
+		"data: {}",
+		"",
+		"event: message_start",
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	result, err := svc.handleStreamingResponse(context.Background(), resp, c, &Account{ID: 1}, time.Now(), "model", "model", false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"text":"ok"`)
+	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
+}
+
 func TestDetachUpstreamContextIgnoresClientCancel(t *testing.T) {
 	parent, cancel := context.WithCancel(context.WithValue(context.Background(), upstreamContextTestKey("test-key"), "test-value"))
 	upstreamCtx, release := detachUpstreamContext(parent)

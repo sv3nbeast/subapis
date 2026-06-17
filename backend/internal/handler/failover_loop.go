@@ -318,6 +318,14 @@ func (s *FailoverState) HasKiro429Retries() bool {
 	return false
 }
 
+func (s *FailoverState) HasFailedAccountID(accountID int64) bool {
+	if s == nil || accountID <= 0 {
+		return false
+	}
+	_, failed := s.FailedAccountIDs[accountID]
+	return failed
+}
+
 // needForceCacheBilling 判断 failover 时是否需要强制缓存计费。
 // 粘性会话切换账号、或上游明确标记时，将 input_tokens 转为 cache_read 计费。
 func needForceCacheBilling(hasBoundSession bool, failoverErr *service.UpstreamFailoverError) bool {

@@ -237,6 +237,18 @@ func TestFailoverState_RecordAvoidEmailDomainSuffix(t *testing.T) {
 	require.Equal(t, []string{"example.com", "other.net"}, fs.AvoidEmailDomainSuffixesList())
 }
 
+func TestFailoverState_HasFailedAccountID(t *testing.T) {
+	fs := NewFailoverState(3, true)
+	require.False(t, fs.HasFailedAccountID(1519))
+	require.False(t, fs.HasFailedAccountID(0))
+
+	action := fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 1519, service.PlatformAnthropic, newTestFailoverErr(429, false, false))
+
+	require.Equal(t, FailoverContinue, action)
+	require.True(t, fs.HasFailedAccountID(1519))
+	require.False(t, fs.HasFailedAccountID(1518))
+}
+
 // ---------------------------------------------------------------------------
 // HandleFailoverError — 缓存计费 (ForceCacheBilling)
 // ---------------------------------------------------------------------------
