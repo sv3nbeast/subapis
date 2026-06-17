@@ -197,7 +197,7 @@ func TestGatewayService_Forward_PreResponseNetworkErrorTriggersFailover(t *testi
 	require.Empty(t, rec.Body.String(), "service must not write a 502 body before handler failover can run")
 }
 
-func TestGatewayService_Forward_RetriesInlineSystemRoleAsTopLevelSystem(t *testing.T) {
+func TestGatewayService_Forward_PreNormalizesInlineSystemRoleAsTopLevelSystem(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -216,6 +216,59 @@ func TestGatewayService_Forward_RetriesInlineSystemRoleAsTopLevelSystem(t *testi
 		"",
 		`event: message_delta`,
 		`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+		"",
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+	upstream := &queuedAnthropicHTTPUpstreamRecorder{
+		resps: []*http.Response{
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"req_ok"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
+			},
+		},
+	}
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+		},
+		httpUpstream:        upstream,
+		rateLimitService:    &RateLimitService{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "anthropic-api-key",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-key"},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "messages.1").Exists())
+	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.bodies[0], "system.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.bodies[0], "system.0.cache_control.type").String())
+	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
+}
+
+func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"messages":[{"role":"user","content":"hello"},{"role":"system","content":"late instruction"}]}`)
+	upstreamSSE := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
 		"",
 		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
@@ -252,15 +305,32 @@ func TestGatewayService_Forward_RetriesInlineSystemRoleAsTopLevelSystem(t *testi
 		Credentials: map[string]any{"api_key": "test-key"},
 	}
 
-	result, err := svc.Forward(context.Background(), c, account, parsed)
-
+	token, tokenType, err := svc.GetAccessToken(context.Background(), account)
 	require.NoError(t, err)
-	require.NotNil(t, result)
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, token, tokenType, "claude-opus-4-8", true, false)
+	require.NoError(t, err)
+	resp, err := upstream.DoWithTLS(req, "", account.ID, account.Concurrency, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.True(t, anthropicSystemRoleUnsupportedError(respBody))
+
+	migratedBody, migrated := migrateAnthropicInlineSystemMessages(body)
+	require.True(t, migrated)
+	retryReq, err := svc.buildUpstreamRequest(context.Background(), c, account, migratedBody, token, tokenType, "claude-opus-4-8", true, false)
+	require.NoError(t, err)
+	retryResp, err := upstream.DoWithTLS(retryReq, "", account.ID, account.Concurrency, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, retryResp.StatusCode)
+	_, _ = io.Copy(rec, retryResp.Body)
+	_ = retryResp.Body.Close()
+
 	require.Len(t, upstream.bodies, 2)
 	require.Equal(t, "system", gjson.GetBytes(upstream.bodies[0], "messages.1.role").String())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "messages.1").Exists())
-	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.bodies[1], "system.0.text").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.bodies[1], "system.0.cache_control.type").String())
+	require.Equal(t, "late instruction", gjson.GetBytes(upstream.bodies[1], "system.0.text").String())
 	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
 }
 

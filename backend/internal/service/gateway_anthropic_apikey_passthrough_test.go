@@ -1292,6 +1292,37 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_PreNormalizesInlineSystemRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":false,"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid instruction","cache_control":{"type":"ephemeral"}}]}]}`)
+	upstreamJSON := `{"id":"msg_1","type":"message","usage":{"input_tokens":3,"output_tokens":4}}`
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(upstreamJSON)),
+		},
+	}
+	svc := &GatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+	}
+
+	result, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, newAnthropicAPIKeyAccountForTest(), body, "claude-opus-4-8", "claude-opus-4-8", false, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, upstream.lastBody)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "messages.1").Exists())
+	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.lastBody, "system.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.lastBody, "system.0.cache_control.type").String())
+	require.Equal(t, upstreamJSON, rec.Body.String())
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
