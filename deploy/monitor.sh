@@ -397,6 +397,7 @@ query_channel_monitor_status() {
 
 check_api_from_channel_monitor() {
   local channel_monitor_name="" channel_monitor_model="" channel_monitor_status="" channel_monitor_message="" channel_monitor_latency_ms="" channel_monitor_checked_epoch=""
+  local channel_monitor_stale=0
 
   if ! query_channel_monitor_status; then
     if [ "$api_notified" = "0" ]; then
@@ -417,6 +418,7 @@ check_api_from_channel_monitor() {
   now_ts=$(now_epoch)
   age_seconds=$((now_ts - ${channel_monitor_checked_epoch:-0}))
   if [ -z "${channel_monitor_checked_epoch:-}" ] || [ "$channel_monitor_checked_epoch" = "0" ] || [ "$age_seconds" -gt "$CHANNEL_MONITOR_STALE_SECONDS" ]; then
+    channel_monitor_stale=1
     channel_monitor_status="unknown"
     if [ -z "$channel_monitor_message" ]; then
       channel_monitor_message="渠道监控数据过期: ${age_seconds}s"
@@ -435,6 +437,16 @@ check_api_from_channel_monitor() {
     fi
     api_notified=0
     api_down_since_epoch=0
+    return
+  fi
+
+  if [ "$channel_monitor_stale" = "1" ]; then
+    channel_monitor_message="${channel_monitor_message:0:160}"
+    local latency_suffix=""
+    if [ -n "$channel_monitor_latency_ms" ]; then
+      latency_suffix=", latency=${channel_monitor_latency_ms}ms"
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [STALE] 模型 ${TEST_MODEL} 渠道监控数据过期${latency_suffix}: ${channel_monitor_message}，不发送 Bark 告警"
     return
   fi
 
