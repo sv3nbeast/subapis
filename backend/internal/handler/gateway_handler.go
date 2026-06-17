@@ -206,7 +206,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if isAnthropicMessagesSyncRequest(reqStream) {
+	// Claude Code 连通性探测请求（max_tokens=1, !stream）允许同步通过，
+	// 否则 Claude Code Desktop 的 Test Connection 会被错误拦截。
+	// 注意：仅 Claude Code 客户端的探测请求绕过；其它客户端的同步请求继续被拒绝，
+	// 避免误用导致账号池配额被消耗。后续 detectInterceptType 会返回 mock 响应，
+	// 零账号配额消耗（前提是账号开启 intercept_warmup_requests）。
+	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
+	if isAnthropicMessagesSyncRequest(reqStream) && !(isConnectionProbe && isClaudeCodeClient) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
 		return
 	}
@@ -402,19 +408,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
-			if account.IsInterceptWarmupEnabled() {
-				interceptType := detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
-				if interceptType != InterceptTypeNone {
-					if selection.Acquired && selection.ReleaseFunc != nil {
-						selection.ReleaseFunc()
-					}
-					if reqStream {
-						sendMockInterceptStream(c, reqModel, interceptType)
-					} else {
-						sendMockInterceptResponse(c, reqModel, interceptType)
-					}
-					return
+			// 注意：Claude Code 连通性探测请求（max_tokens=1, !stream）无条件拦截，
+			// 不依赖账号 intercept_warmup_requests 开关，避免账号池配额被探测请求耗尽。
+			interceptType := InterceptTypeNone
+			if isClaudeCodeClient && isClaudeCodeConnectionProbeRequest(parsedReq.MaxTokens, reqStream) {
+				interceptType = InterceptTypeMaxTokensOneHaiku
+			} else if account.IsInterceptWarmupEnabled() {
+				interceptType = detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
+			}
+			if interceptType != InterceptTypeNone {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
 				}
+				if reqStream {
+					sendMockInterceptStream(c, reqModel, interceptType)
+				} else {
+					sendMockInterceptResponse(c, reqModel, interceptType)
+				}
+				return
 			}
 
 			// 3. 获取账号并发槽位
@@ -708,19 +719,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
-			if account.IsInterceptWarmupEnabled() {
-				interceptType := detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
-				if interceptType != InterceptTypeNone {
-					if selection.Acquired && selection.ReleaseFunc != nil {
-						selection.ReleaseFunc()
-					}
-					if reqStream {
-						sendMockInterceptStream(c, reqModel, interceptType)
-					} else {
-						sendMockInterceptResponse(c, reqModel, interceptType)
-					}
-					return
+			// 注意：Claude Code 连通性探测请求（max_tokens=1, !stream）无条件拦截，
+			// 不依赖账号 intercept_warmup_requests 开关，避免账号池配额被探测请求耗尽。
+			interceptType := InterceptTypeNone
+			if isClaudeCodeClient && isClaudeCodeConnectionProbeRequest(parsedReq.MaxTokens, reqStream) {
+				interceptType = InterceptTypeMaxTokensOneHaiku
+			} else if account.IsInterceptWarmupEnabled() {
+				interceptType = detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
+			}
+			if interceptType != InterceptTypeNone {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
 				}
+				if reqStream {
+					sendMockInterceptStream(c, reqModel, interceptType)
+				} else {
+					sendMockInterceptResponse(c, reqModel, interceptType)
+				}
+				return
 			}
 
 			// 3. 获取账号并发槽位
@@ -1918,8 +1934,10 @@ func isAnthropicMessagesSyncRequest(isStream bool) bool {
 //   - isStream: 是否为流式请求
 //   - isClaudeCodeClient: 是否已通过 Claude Code 客户端校验
 func detectInterceptType(body []byte, model string, maxTokens int, isStream bool, isClaudeCodeClient bool) InterceptType {
-	// 优先检查 max_tokens=1 + haiku 探测请求（仅非流式）
-	if isClaudeCodeClient && isMaxTokensOneHaikuRequest(model, maxTokens, isStream) {
+	// 优先检查 Claude Code 连通性探测请求（max_tokens=1, 非流式，任意模型）。
+	// 涵盖 Claude Code Desktop Test Connection 和原有 max_tokens=1 + haiku 探测。
+	// 返回 mock 响应，零账号配额消耗。
+	if isClaudeCodeClient && isClaudeCodeConnectionProbeRequest(maxTokens, isStream) {
 		return InterceptTypeMaxTokensOneHaiku
 	}
 
