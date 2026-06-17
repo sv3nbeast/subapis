@@ -5567,6 +5567,53 @@ func (s *GatewayService) shouldMimicClaudeCodeForAccount(account *Account, isCla
 	return isZeroClaudeCodeMimicryConfig(cfg)
 }
 
+// shouldInjectBreakpointsForBridge 决定是否要为 Claude Desktop 3P / Agent SDK
+// 桥接客户端补 messages + tools 缓存断点。
+//
+// 背景：claude-cli/* (claude-desktop-3p, agent-sdk/*) UA 走的是 Claude Code
+// Desktop 的 3P 自定义端点。SDK 主代理回合 enablePromptCaching=true 会自己
+// 打断点；Task 工具拉起的子代理回合 SDK 内部硬编码 enablePromptCaching=false
+// (anthropics/claude-code issue #29966)，body 里一个 cache_control 都没有。
+//
+// 这条分支只在"账号是 Anthropic OAuth/SetupToken + UA 是 bridge 变种 + 请求
+// 体确实没有任何 cache_control"三件都成立时才动手，且只补 messages+tools，
+// 不重写 system —— 避免改变缓存前缀、破坏主代理回合已有的命中。
+func (s *GatewayService) shouldInjectBreakpointsForBridge(
+	ctx context.Context, account *Account, body []byte,
+) bool {
+	if account == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return false
+	}
+	if !IsClaudeCodeXMLInvokeBridgeUserAgent(ClaudeCodeUserAgent(ctx)) {
+		return false
+	}
+	return !bodyHasAnyCacheControl(body)
+}
+
+// injectBridgeCacheBreakpoints 在 messages 和 tools 上注入缓存断点，
+// 用于补救 Agent SDK 子代理这类 body 自身无 cache_control 的请求。
+//
+// 与 mimicry 主分支的区别：
+//  1. 不调用 rewriteSystemForNonClaudeCode → system 一字不动。
+//  2. 不经过 normalizeClaudeOAuthRequestBody → 不剥/不加 billing block。
+//  3. messages 断点直接调用 addMessageCacheBreakpointsWithTTL，
+//     无需先 strip（前置已确认请求体内无 cache_control）。
+//
+// c 可为 nil；非 nil 时会把动态 tool name rewrite 映射写入 gin.Context 供
+// 响应侧逆向还原。
+func (s *GatewayService) injectBridgeCacheBreakpoints(c *gin.Context, body []byte) []byte {
+	body = addMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+	if rw := buildToolNameRewriteFromBody(body); rw != nil {
+		body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
+		if c != nil {
+			c.Set(toolNameRewriteKey, rw)
+		}
+	} else {
+		body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
+	}
+	return body
+}
+
 func (s *GatewayService) claudeUpstreamUserAgent(ctx context.Context) string {
 	if s != nil {
 		return claudeUpstreamUserAgentFromSettings(ctx, s.settingService)
@@ -5743,6 +5790,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		} else {
 			body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 		}
+	} else if s.shouldInjectBreakpointsForBridge(ctx, account, body) {
+		// Claude Desktop 3P / Agent SDK 桥接客户端的子代理回合：
+		// 请求体自身完全没有 cache_control（SDK enablePromptCaching=false），
+		// 网关补 messages+tools 断点让后续请求能命中 prompt cache，
+		// 但保持 system 原样，避免改变缓存前缀破坏主代理回合的命中。
+		body = s.injectBridgeCacheBreakpoints(c, body)
 	}
 
 	// 强制执行 cache_control 块数量限制（最多 4 个）
@@ -10673,6 +10726,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		} else {
 			body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 		}
+	} else if s.shouldInjectBreakpointsForBridge(ctx, account, body) {
+		// 与 Forward 主路径同款：bridge 客户端 + 无 cache_control 时补断点，
+		// 保证 count_tokens 与后续 /v1/messages 请求的前缀签名一致。
+		body = s.injectBridgeCacheBreakpoints(c, body)
 	}
 
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。

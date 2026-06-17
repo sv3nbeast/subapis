@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -8,6 +9,28 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+// bodyHasAnyCacheControl 判断请求体中是否已经存在任何 cache_control 块。
+//
+// 用于 Claude Desktop 3P / Agent SDK 桥接客户端的"按需补断点"判定：
+// 这类 UA 上报为 claude-cli/* 但 SDK 主代理回合会自己打断点、子代理回合
+// 完全不打。本函数让网关只在确认"客户端自己没标"时才补断点，
+// 避免破坏主代理已有的缓存前缀。
+//
+// 复用 collectCacheControlPaths 同款扫描，保证与 enforceCacheControlLimit
+// 的可见范围（system / messages.content / tools）一致。
+//
+// 入参为空或不含 "cache_control" 字面量时直接快速 false，避免无谓 gjson 扫描。
+func bodyHasAnyCacheControl(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	if !bytes.Contains(body, []byte(`"cache_control"`)) {
+		return false
+	}
+	_, messagePaths, toolPaths, systemPaths := collectCacheControlPaths(body)
+	return len(messagePaths) > 0 || len(toolPaths) > 0 || len(systemPaths) > 0
+}
 
 // stripMessageCacheControl 移除 $.messages[*].content[*].cache_control。
 // 与 Parrot _strip_message_cache_control 语义一致。

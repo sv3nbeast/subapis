@@ -277,6 +277,86 @@ func TestRewriteMessageCacheControlIfEnabled_OptInPreservesLegacyRewrite(t *test
 	require.Equal(t, "5m", gjson.GetBytes(out, "messages.3.content.0.cache_control.ttl").String())
 }
 
+func TestBodyHasAnyCacheControl(t *testing.T) {
+	t.Run("empty body", func(t *testing.T) {
+		require.False(t, bodyHasAnyCacheControl(nil))
+		require.False(t, bodyHasAnyCacheControl([]byte("")))
+	})
+	t.Run("no cache_control anywhere", func(t *testing.T) {
+		body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"name":"t1"}]}`)
+		require.False(t, bodyHasAnyCacheControl(body))
+	})
+	t.Run("message cache_control present", func(t *testing.T) {
+		body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`)
+		require.True(t, bodyHasAnyCacheControl(body))
+	})
+	t.Run("tool cache_control present", func(t *testing.T) {
+		body := []byte(`{"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}]}`)
+		require.True(t, bodyHasAnyCacheControl(body))
+	})
+	t.Run("system cache_control present", func(t *testing.T) {
+		body := []byte(`{"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}`)
+		require.True(t, bodyHasAnyCacheControl(body))
+	})
+}
+
+func TestShouldInjectBreakpointsForBridge(t *testing.T) {
+	svc := &GatewayService{}
+	oauthAcc := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	apiKeyAcc := &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}
+	bridgeUA := "claude-cli/2.1.170 (external, claude-desktop-3p, agent-sdk/0.3.170)"
+	plainCLIUA := "claude-cli/2.1.22 (external, cli)"
+	bodyNoCache := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	bodyHasCache := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}`)
+
+	t.Run("nil account → false", func(t *testing.T) {
+		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
+		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, nil, bodyNoCache))
+	})
+	t.Run("non OAuth account → false", func(t *testing.T) {
+		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
+		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, apiKeyAcc, bodyNoCache))
+	})
+	t.Run("plain CLI UA (no agent-sdk / desktop-3p) → false", func(t *testing.T) {
+		ctx := SetClaudeCodeUserAgent(context.Background(), plainCLIUA)
+		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyNoCache))
+	})
+	t.Run("bridge UA + body already has cache_control → false", func(t *testing.T) {
+		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
+		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyHasCache))
+	})
+	t.Run("bridge UA + no cache_control → true", func(t *testing.T) {
+		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
+		require.True(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyNoCache))
+	})
+}
+
+func TestInjectBridgeCacheBreakpoints_AddsMessagesAndTools(t *testing.T) {
+	svc := &GatewayService{}
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"name":"bash","input_schema":{}}]}`)
+	out := svc.injectBridgeCacheBreakpoints(nil, body)
+
+	// last message 打 1h 断点
+	require.Equal(t, "ephemeral", gjson.GetBytes(out, "messages.0.content.0.cache_control.type").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+	// tools[-1] 打 1h 断点
+	require.Equal(t, "ephemeral", gjson.GetBytes(out, "tools.0.cache_control.type").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "tools.0.cache_control.ttl").String())
+	// system 字段未被修改（本来就没有）
+	require.False(t, gjson.GetBytes(out, "system").Exists())
+}
+
+func TestInjectBridgeCacheBreakpoints_DoesNotTouchSystem(t *testing.T) {
+	svc := &GatewayService{}
+	// 客户端自带 system；bridge 注入路径不能动它（避免改变缓存前缀）。
+	body := []byte(`{"system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	out := svc.injectBridgeCacheBreakpoints(nil, body)
+
+	require.Equal(t, "You are helpful", gjson.GetBytes(out, "system.0.text").String())
+	require.False(t, gjson.GetBytes(out, "system.0.cache_control").Exists())
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+}
+
 func TestBuildToolNameRewriteFromBody_ReverseOrderedByLengthDesc(t *testing.T) {
 	// 超过阈值触发动态映射，验证 ReverseOrdered 按假名长度倒序排列
 	body := []byte(`{"tools":[
