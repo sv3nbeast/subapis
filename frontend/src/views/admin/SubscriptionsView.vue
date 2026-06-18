@@ -645,16 +645,73 @@
       @cancel="showRevokeDialog = false"
     />
 
-    <!-- Reset Quota Confirmation Dialog -->
-    <ConfirmDialog
+    <!-- Reset Quota Selection Dialog -->
+    <BaseDialog
       :show="showResetQuotaConfirm"
       :title="t('admin.subscriptions.resetQuotaTitle')"
-      :message="t('admin.subscriptions.resetQuotaConfirm', { user: resettingSubscription?.user?.email })"
-      :confirm-text="t('admin.subscriptions.resetQuota')"
-      :cancel-text="t('common.cancel')"
-      @confirm="confirmResetQuota"
-      @cancel="showResetQuotaConfirm = false"
-    />
+      width="narrow"
+      @close="closeResetQuotaDialog"
+    >
+      <div v-if="resettingSubscription" class="space-y-4">
+        <div class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700">
+          <p class="text-sm text-gray-600 dark:text-gray-400">
+            {{ t('admin.subscriptions.resetQuotaTarget') }}
+            <span class="font-medium text-gray-900 dark:text-white">{{
+              resettingSubscription.user?.email
+            }}</span>
+          </p>
+        </div>
+        <div>
+          <p class="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t('admin.subscriptions.resetQuotaSelectLabel') }}
+          </p>
+          <div class="space-y-2">
+            <label class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-dark-700">
+              <input
+                v-model="resetQuotaForm.daily"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.subscriptions.resetQuotaDaily') }}</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-dark-700">
+              <input
+                v-model="resetQuotaForm.weekly"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.subscriptions.resetQuotaWeekly') }}</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-dark-700">
+              <input
+                v-model="resetQuotaForm.monthly"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.subscriptions.resetQuotaMonthly') }}</span>
+            </label>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.subscriptions.resetQuotaHint') }}
+          </p>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button @click="closeResetQuotaDialog" type="button" class="btn btn-secondary">
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="button"
+            :disabled="resettingQuota || !hasResetQuotaSelection"
+            class="btn btn-primary"
+            @click="confirmResetQuota"
+          >
+            {{ resettingQuota ? t('admin.subscriptions.resetting') : t('admin.subscriptions.resetQuota') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
     <!-- Subscription Guide Modal -->
     <teleport to="body">
       <transition name="modal">
@@ -956,6 +1013,17 @@ const assignForm = reactive({
 const extendForm = reactive({
   days: 30
 })
+
+// 重置配额表单：默认三个窗口全选,管理员可按需勾掉(例如只重置周不动月)
+const resetQuotaForm = reactive({
+  daily: true,
+  weekly: true,
+  monthly: true
+})
+
+const hasResetQuotaSelection = computed(
+  () => resetQuotaForm.daily || resetQuotaForm.weekly || resetQuotaForm.monthly
+)
 
 // Group options for filter (all groups)
 const groupOptions = computed(() => [
@@ -1265,15 +1333,30 @@ const confirmRevoke = async () => {
 
 const handleResetQuota = (subscription: UserSubscription) => {
   resettingSubscription.value = subscription
+  // 每次打开都恢复默认全选,避免上一次取消后残留状态误导后续操作
+  resetQuotaForm.daily = true
+  resetQuotaForm.weekly = true
+  resetQuotaForm.monthly = true
   showResetQuotaConfirm.value = true
+}
+
+const closeResetQuotaDialog = () => {
+  if (resettingQuota.value) return
+  showResetQuotaConfirm.value = false
+  resettingSubscription.value = null
 }
 
 const confirmResetQuota = async () => {
   if (!resettingSubscription.value) return
   if (resettingQuota.value) return
+  if (!hasResetQuotaSelection.value) return
   resettingQuota.value = true
   try {
-    await adminAPI.subscriptions.resetQuota(resettingSubscription.value.id, { daily: true, weekly: true, monthly: true })
+    await adminAPI.subscriptions.resetQuota(resettingSubscription.value.id, {
+      daily: resetQuotaForm.daily,
+      weekly: resetQuotaForm.weekly,
+      monthly: resetQuotaForm.monthly
+    })
     appStore.showSuccess(t('admin.subscriptions.quotaResetSuccess'))
     showResetQuotaConfirm.value = false
     resettingSubscription.value = null
