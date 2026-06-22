@@ -13,10 +13,10 @@ type identityCacheStub struct {
 	fingerprint     *Fingerprint
 }
 
-func (s *identityCacheStub) GetFingerprint(_ context.Context, _ int64) (*Fingerprint, error) {
+func (s *identityCacheStub) GetFingerprint(_ context.Context, _ int64, _ UAForm) (*Fingerprint, error) {
 	return s.fingerprint, nil
 }
-func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, fp *Fingerprint) error {
+func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, _ UAForm, fp *Fingerprint) error {
 	s.fingerprint = fp
 	return nil
 }

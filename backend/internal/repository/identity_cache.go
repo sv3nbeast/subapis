@@ -18,8 +18,10 @@ const (
 )
 
 // fingerprintKey generates the Redis key for account fingerprint cache.
-func fingerprintKey(accountID int64) string {
-	return fmt.Sprintf("%s%d", fingerprintKeyPrefix, accountID)
+// key 升级为 fingerprint:<accountID>:<form>,plain CLI 与 agent-sdk 两种入站
+// UA 形式在同账号下各自独立缓存,互不污染。
+func fingerprintKey(accountID int64, form service.UAForm) string {
+	return fmt.Sprintf("%s%d:%s", fingerprintKeyPrefix, accountID, form)
 }
 
 // maskedSessionKey generates the Redis key for masked session ID cache.
@@ -35,8 +37,8 @@ func NewIdentityCache(rdb *redis.Client) service.IdentityCache {
 	return &identityCache{rdb: rdb}
 }
 
-func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*service.Fingerprint, error) {
-	key := fingerprintKey(accountID)
+func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64, form service.UAForm) (*service.Fingerprint, error) {
+	key := fingerprintKey(accountID, form)
 	val, err := c.rdb.Get(ctx, key).Result()
 	if err != nil {
 		return nil, err
@@ -48,8 +50,8 @@ func (c *identityCache) GetFingerprint(ctx context.Context, accountID int64) (*s
 	return &fp, nil
 }
 
-func (c *identityCache) SetFingerprint(ctx context.Context, accountID int64, fp *service.Fingerprint) error {
-	key := fingerprintKey(accountID)
+func (c *identityCache) SetFingerprint(ctx context.Context, accountID int64, form service.UAForm, fp *service.Fingerprint) error {
+	key := fingerprintKey(accountID, form)
 	val, err := json.Marshal(fp)
 	if err != nil {
 		return err

@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,21 +17,35 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// 预编译正则表达式（避免每次调用重新编译）
-var (
-	// 匹配 User-Agent 版本号: xxx/x.y.z
-	userAgentVersionRegex = regexp.MustCompile(`/(\d+)\.(\d+)\.(\d+)`)
+// UAForm 是网关按入站 UA 形式分桶的枚举,用于 fingerprint cache key 与
+// 上游 canonical UA / 指纹的选择。
+type UAForm string
+
+const (
+	// UAFormPlainCLI 对应 plain Claude CLI 主对话形式
+	// (如 "claude-cli/2.1.177 (external, cli)")
+	UAFormPlainCLI UAForm = "plain"
+	// UAFormAgentSDK 对应 Claude Code Task 子代理 / Agent SDK 桥接形式
+	// (如 "claude-cli/2.1.181 (external, claude-desktop-3p, agent-sdk/0.3.181)")
+	UAFormAgentSDK UAForm = "agent-sdk"
 )
 
-// 默认指纹值（当客户端未提供时使用）
-var defaultFingerprint = Fingerprint{
-	UserAgent:               claude.DefaultHeaders["User-Agent"],
-	StainlessLang:           claude.DefaultHeaders["X-Stainless-Lang"],
-	StainlessPackageVersion: claude.DefaultHeaders["X-Stainless-Package-Version"],
-	StainlessOS:             claude.DefaultHeaders["X-Stainless-OS"],
-	StainlessArch:           claude.DefaultHeaders["X-Stainless-Arch"],
-	StainlessRuntime:        claude.DefaultHeaders["X-Stainless-Runtime"],
-	StainlessRuntimeVersion: claude.DefaultHeaders["X-Stainless-Runtime-Version"],
+// ClassifyUAForm 根据入站 UA 字符串选择对应的 canonical 桶。
+// 不带 agent-sdk/ 标识的入站(plain CLI、第三方 SDK、Desktop Electron 等)
+// 一律兜底为 plain CLI 形式。
+func ClassifyUAForm(ua string) UAForm {
+	if strings.Contains(strings.ToLower(ua), "agent-sdk/") {
+		return UAFormAgentSDK
+	}
+	return UAFormPlainCLI
+}
+
+// canonicalFingerprintFor 返回指定 UA 形式的 canonical 指纹模板(不含 ClientID)。
+func canonicalFingerprintFor(form UAForm) claude.CanonicalFingerprint {
+	if form == UAFormAgentSDK {
+		return claude.AgentSDKCanonicalFingerprint
+	}
+	return claude.PlainCLICanonicalFingerprint
 }
 
 // Fingerprint represents account fingerprint data
@@ -51,8 +63,11 @@ type Fingerprint struct {
 
 // IdentityCache defines cache operations for identity service
 type IdentityCache interface {
-	GetFingerprint(ctx context.Context, accountID int64) (*Fingerprint, error)
-	SetFingerprint(ctx context.Context, accountID int64, fp *Fingerprint) error
+	// GetFingerprint 按 (accountID, form) 取指纹。form 区分 plain CLI 与 agent-sdk
+	// 两个 bucket,同账号两种入站形式互不污染。
+	GetFingerprint(ctx context.Context, accountID int64, form UAForm) (*Fingerprint, error)
+	// SetFingerprint 按 (accountID, form) 写指纹。
+	SetFingerprint(ctx context.Context, accountID int64, form UAForm, fp *Fingerprint) error
 	// GetMaskedSessionID 获取固定的会话ID（用于会话ID伪装功能）
 	// 返回的 sessionID 是一个 UUID 格式的字符串
 	// 如果不存在或已过期（15分钟无请求），返回空字符串
@@ -72,23 +87,30 @@ func NewIdentityService(cache IdentityCache) *IdentityService {
 	return &IdentityService{cache: cache}
 }
 
-// GetOrCreateFingerprint 获取或创建账号的指纹
-// 如果缓存存在，检测user-agent版本，新版本则更新
-// 如果缓存不存在，生成随机ClientID并从请求头创建指纹，然后缓存
-func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID int64, headers http.Header) (*Fingerprint, error) {
+// GetOrCreateFingerprint 获取或创建账号在指定 UA 形式下的指纹。
+// 行为升级(2026-06-22 修 4-8 死循环):
+//   - cache key 升级为 (accountID, form),plain CLI 与 agent-sdk 互不污染。
+//   - 新建指纹时不再读入站 X-Stainless-* 头,直接套用 form 对应的
+//     canonical 模板(死写 MacOS/arm64),避免首位入站客户端 OS 污染整账号。
+//   - 命中缓存时也强制把 X-Stainless-* 字段拉回 canonical(允许向后兼容
+//     旧 Windows 缓存,但下次读取会被 canonical 覆写)。
+//   - UserAgent 一律以 canonical 为准,客户端的具体版本号不影响上游 UA。
+//
+// 仅 ClientID 沿用缓存值,以保持 metadata.user_id 在该账号 + 该形式下稳定。
+func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID int64, headers http.Header, form UAForm) (*Fingerprint, error) {
+	canonical := canonicalFingerprintFor(form)
+
 	// 尝试从缓存获取指纹
-	cached, err := s.cache.GetFingerprint(ctx, accountID)
+	cached, err := s.cache.GetFingerprint(ctx, accountID, form)
 	if err == nil && cached != nil {
 		needWrite := false
 
-		// 检查客户端的user-agent是否是更新版本
-		clientUA := headers.Get("User-Agent")
-		if clientUA != "" && isNewerVersion(clientUA, cached.UserAgent) {
-			// 版本升级：merge 语义 — 仅更新请求中实际携带的字段，保留缓存值
-			// 避免缺失的头被硬编码默认值覆盖（如新 CLI 版本 + 旧 SDK 默认值的不一致）
-			mergeHeadersIntoFingerprint(cached, headers)
+		// 把缓存里的 X-Stainless-* / UserAgent 拉回 canonical。
+		// 旧缓存可能因首位入站客户端污染(如 Windows/x64)而与 canonical 不一致,
+		// 一次性覆写后续都稳定。ClientID / UpdatedAt 保留。
+		if applyCanonicalToFingerprint(cached, canonical) {
 			needWrite = true
-			logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
+			logger.LegacyPrintf("service.identity", "Normalized cached fingerprint to canonical for account %d form=%s", accountID, form)
 		} else if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
 			// 距上次写入超过24小时，续期TTL
 			needWrite = true
@@ -96,82 +118,78 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 
 		if needWrite {
 			cached.UpdatedAt = time.Now().Unix()
-			if err := s.cache.SetFingerprint(ctx, accountID, cached); err != nil {
-				logger.LegacyPrintf("service.identity", "Warning: failed to refresh fingerprint for account %d: %v", accountID, err)
+			if err := s.cache.SetFingerprint(ctx, accountID, form, cached); err != nil {
+				logger.LegacyPrintf("service.identity", "Warning: failed to refresh fingerprint for account %d form=%s: %v", accountID, form, err)
 			}
 		}
 		return cached, nil
 	}
 
-	// 缓存不存在或解析失败，创建新指纹
-	fp := s.createFingerprintFromHeaders(headers)
+	// 缓存不存在或解析失败，按 form 创建 canonical 指纹
+	fp := newFingerprintFromCanonical(canonical)
 
 	// 生成随机ClientID
 	fp.ClientID = generateClientID()
 	fp.UpdatedAt = time.Now().Unix()
 
 	// 保存到缓存（7天TTL，每24小时自动续期）
-	if err := s.cache.SetFingerprint(ctx, accountID, fp); err != nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to cache fingerprint for account %d: %v", accountID, err)
+	if err := s.cache.SetFingerprint(ctx, accountID, form, fp); err != nil {
+		logger.LegacyPrintf("service.identity", "Warning: failed to cache fingerprint for account %d form=%s: %v", accountID, form, err)
 	}
 
-	logger.LegacyPrintf("service.identity", "Created new fingerprint for account %d with client_id: %s", accountID, fp.ClientID)
+	logger.LegacyPrintf("service.identity", "Created new canonical fingerprint for account %d form=%s with client_id: %s", accountID, form, fp.ClientID)
 	return fp, nil
 }
 
-// createFingerprintFromHeaders 从请求头创建指纹
-func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fingerprint {
-	fp := &Fingerprint{}
-
-	// 获取User-Agent
-	if ua := headers.Get("User-Agent"); ua != "" {
-		fp.UserAgent = ua
-	} else {
-		fp.UserAgent = defaultFingerprint.UserAgent
-	}
-
-	// 获取x-stainless-*头，如果没有则使用默认值
-	fp.StainlessLang = getHeaderOrDefault(headers, "X-Stainless-Lang", defaultFingerprint.StainlessLang)
-	fp.StainlessPackageVersion = getHeaderOrDefault(headers, "X-Stainless-Package-Version", defaultFingerprint.StainlessPackageVersion)
-	fp.StainlessOS = getHeaderOrDefault(headers, "X-Stainless-OS", defaultFingerprint.StainlessOS)
-	fp.StainlessArch = getHeaderOrDefault(headers, "X-Stainless-Arch", defaultFingerprint.StainlessArch)
-	fp.StainlessRuntime = getHeaderOrDefault(headers, "X-Stainless-Runtime", defaultFingerprint.StainlessRuntime)
-	fp.StainlessRuntimeVersion = getHeaderOrDefault(headers, "X-Stainless-Runtime-Version", defaultFingerprint.StainlessRuntimeVersion)
-
-	return fp
-}
-
-// mergeHeadersIntoFingerprint 将请求头中实际存在的字段合并到现有指纹中（用于版本升级场景）
-// 关键语义：请求中有的字段 → 用新值覆盖；缺失的头 → 保留缓存中的已有值
-// 与 createFingerprintFromHeaders 的区别：后者用于首次创建，缺失头回退到 defaultFingerprint；
-// 本函数用于升级更新，缺失头保留缓存值，避免将已知的真实值退化为硬编码默认值
-func mergeHeadersIntoFingerprint(fp *Fingerprint, headers http.Header) {
-	// User-Agent：版本升级的触发条件，一定存在
-	if ua := headers.Get("User-Agent"); ua != "" {
-		fp.UserAgent = ua
-	}
-	// X-Stainless-* 头：仅在请求中实际携带时才更新，否则保留缓存值
-	mergeHeader(headers, "X-Stainless-Lang", &fp.StainlessLang)
-	mergeHeader(headers, "X-Stainless-Package-Version", &fp.StainlessPackageVersion)
-	mergeHeader(headers, "X-Stainless-OS", &fp.StainlessOS)
-	mergeHeader(headers, "X-Stainless-Arch", &fp.StainlessArch)
-	mergeHeader(headers, "X-Stainless-Runtime", &fp.StainlessRuntime)
-	mergeHeader(headers, "X-Stainless-Runtime-Version", &fp.StainlessRuntimeVersion)
-}
-
-// mergeHeader 如果请求头中存在该字段则更新目标值，否则保留原值
-func mergeHeader(headers http.Header, key string, target *string) {
-	if v := headers.Get(key); v != "" {
-		*target = v
+// newFingerprintFromCanonical 从 canonical 模板拷贝一份 Fingerprint(不含 ClientID/UpdatedAt)。
+func newFingerprintFromCanonical(c claude.CanonicalFingerprint) *Fingerprint {
+	return &Fingerprint{
+		UserAgent:               c.UserAgent,
+		StainlessLang:           c.StainlessLang,
+		StainlessPackageVersion: c.StainlessPackageVersion,
+		StainlessOS:             c.StainlessOS,
+		StainlessArch:           c.StainlessArch,
+		StainlessRuntime:        c.StainlessRuntime,
+		StainlessRuntimeVersion: c.StainlessRuntimeVersion,
 	}
 }
 
-// getHeaderOrDefault 获取header值，如果不存在则返回默认值
-func getHeaderOrDefault(headers http.Header, key, defaultValue string) string {
-	if v := headers.Get(key); v != "" {
-		return v
+// applyCanonicalToFingerprint 将 canonical 模板覆写到现有指纹的所有 X-Stainless-* 与
+// UserAgent 字段(ClientID / UpdatedAt 保留)。返回 true 表示至少有一个字段被改变。
+func applyCanonicalToFingerprint(fp *Fingerprint, c claude.CanonicalFingerprint) bool {
+	if fp == nil {
+		return false
 	}
-	return defaultValue
+	changed := false
+	if fp.UserAgent != c.UserAgent {
+		fp.UserAgent = c.UserAgent
+		changed = true
+	}
+	if fp.StainlessLang != c.StainlessLang {
+		fp.StainlessLang = c.StainlessLang
+		changed = true
+	}
+	if fp.StainlessPackageVersion != c.StainlessPackageVersion {
+		fp.StainlessPackageVersion = c.StainlessPackageVersion
+		changed = true
+	}
+	if fp.StainlessOS != c.StainlessOS {
+		fp.StainlessOS = c.StainlessOS
+		changed = true
+	}
+	if fp.StainlessArch != c.StainlessArch {
+		fp.StainlessArch = c.StainlessArch
+		changed = true
+	}
+	if fp.StainlessRuntime != c.StainlessRuntime {
+		fp.StainlessRuntime = c.StainlessRuntime
+		changed = true
+	}
+	if fp.StainlessRuntimeVersion != c.StainlessRuntimeVersion {
+		fp.StainlessRuntimeVersion = c.StainlessRuntimeVersion
+		changed = true
+	}
+	return changed
 }
 
 // ApplyFingerprint 将指纹应用到请求头（覆盖原有的x-stainless-*头）
@@ -400,60 +418,4 @@ func generateUUIDFromSeed(seed string) string {
 		bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
 }
 
-// parseUserAgentVersion 解析user-agent版本号
-// 例如：claude-cli/2.1.2 -> (2, 1, 2)
-func parseUserAgentVersion(ua string) (major, minor, patch int, ok bool) {
-	// 匹配 xxx/x.y.z 格式
-	matches := userAgentVersionRegex.FindStringSubmatch(ua)
-	if len(matches) != 4 {
-		return 0, 0, 0, false
-	}
-	major, _ = strconv.Atoi(matches[1])
-	minor, _ = strconv.Atoi(matches[2])
-	patch, _ = strconv.Atoi(matches[3])
-	return major, minor, patch, true
-}
 
-// extractProduct 提取 User-Agent 中 "/" 前的产品名
-// 例如：claude-cli/2.1.22 (external, cli) -> "claude-cli"
-func extractProduct(ua string) string {
-	if idx := strings.Index(ua, "/"); idx > 0 {
-		return strings.ToLower(ua[:idx])
-	}
-	return ""
-}
-
-// isNewerVersion 比较版本号，判断newUA是否比cachedUA更新
-// 要求产品名一致（防止浏览器 UA 如 Mozilla/5.0 误判为更新版本）
-func isNewerVersion(newUA, cachedUA string) bool {
-	// 校验产品名一致性
-	newProduct := extractProduct(newUA)
-	cachedProduct := extractProduct(cachedUA)
-	if newProduct == "" || cachedProduct == "" || newProduct != cachedProduct {
-		return false
-	}
-
-	newMajor, newMinor, newPatch, newOk := parseUserAgentVersion(newUA)
-	cachedMajor, cachedMinor, cachedPatch, cachedOk := parseUserAgentVersion(cachedUA)
-
-	if !newOk || !cachedOk {
-		return false
-	}
-
-	// 比较版本号
-	if newMajor > cachedMajor {
-		return true
-	}
-	if newMajor < cachedMajor {
-		return false
-	}
-
-	if newMinor > cachedMinor {
-		return true
-	}
-	if newMinor < cachedMinor {
-		return false
-	}
-
-	return newPatch > cachedPatch
-}

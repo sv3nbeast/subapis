@@ -99,7 +99,8 @@ func FullClaudeCodeMimicryBetas() []string {
 	}
 }
 
-// DefaultHeaders 是 Claude Code 客户端默认请求头。
+// DefaultHeaders 是 Claude Code 客户端默认请求头(plain CLI 主对话形式)。
+// 与 PlainCLICanonicalUserAgent / PlainCLICanonicalFingerprint 一一对应。
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with current official Claude Code CLI traffic.
 	"User-Agent":                                "claude-cli/2.1.156 (external, cli)",
@@ -113,6 +114,65 @@ var DefaultHeaders = map[string]string{
 	"X-Stainless-Timeout":                       "600",
 	"X-App":                                     "cli",
 	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+}
+
+// Canonical UA / fingerprint 按入站 UA 形式分两套:plain CLI(主对话)与
+// agent-sdk(Claude Code Task 子代理 / Agent SDK 桥接)。
+//
+// 历史背景:网关曾把所有入站 UA 一律改写为 PlainCLICanonicalUserAgent,
+// 同时 X-Stainless-* 指纹按 account.ID 缓存,首位入站客户端是 Windows 时
+// 整账号锁 Windows,后续 agent-sdk 形式的 admin 请求被强行套上
+// plain CLI UA + Windows 指纹,messages body 又含 agent-sdk 特征,身份
+// 严重不一致触发 claude-opus-4-8 退化输出(反复 count 直到 max_tokens)。
+//
+// 修复:按入站 UA 形式分两套 canonical,每套内部版本号/OS/Arch 全部死写为
+// 固定值,fingerprint cache key 升级为 fingerprint:<account.ID>:<form>。
+// agent-sdk 形式锁 admin 真实的 2.1.181 + MacOS/arm64;plain CLI 形式保留
+// 2.1.156 + MacOS/arm64(版本号不变,只把曾被 Windows 污染的指纹改回 MacOS)。
+const (
+	// PlainCLICanonicalUserAgent 是 plain Claude CLI 主对话形式的统一 UA。
+	// 版本号与 CLICurrentVersion 一致,不轻易升版避免触发上游 prompt cache 失效。
+	PlainCLICanonicalUserAgent = "claude-cli/2.1.156 (external, cli)"
+
+	// AgentSDKCanonicalUserAgent 是 Claude Code Task 子代理 / Agent SDK 桥接形式
+	// 的统一 UA,对齐 admin 真实客户端 2.1.181 + agent-sdk/0.3.181。
+	AgentSDKCanonicalUserAgent = "claude-cli/2.1.181 (external, claude-desktop-3p, agent-sdk/0.3.181)"
+)
+
+// CanonicalFingerprint 表示一套固定的 X-Stainless-* 指纹字段(不含 ClientID)。
+// 真正写入缓存时 ClientID 由 generateClientID 生成,其余字段直接拷贝该常量。
+type CanonicalFingerprint struct {
+	UserAgent               string
+	StainlessLang           string
+	StainlessPackageVersion string
+	StainlessOS             string
+	StainlessArch           string
+	StainlessRuntime        string
+	StainlessRuntimeVersion string
+}
+
+// PlainCLICanonicalFingerprint 是 plain CLI 形式的固定指纹。
+// 无论入站客户端实际是 Mac / Windows / Linux,上游一律收到该套 MacOS 指纹。
+var PlainCLICanonicalFingerprint = CanonicalFingerprint{
+	UserAgent:               PlainCLICanonicalUserAgent,
+	StainlessLang:           "js",
+	StainlessPackageVersion: "0.94.0",
+	StainlessOS:             "MacOS",
+	StainlessArch:           "arm64",
+	StainlessRuntime:        "node",
+	StainlessRuntimeVersion: "v24.3.0",
+}
+
+// AgentSDKCanonicalFingerprint 是 agent-sdk 形式的固定指纹。
+// 与 plain CLI 共享 MacOS/arm64,但 UA / 形式标识不同,以匹配 admin 真实 Mac 客户端。
+var AgentSDKCanonicalFingerprint = CanonicalFingerprint{
+	UserAgent:               AgentSDKCanonicalUserAgent,
+	StainlessLang:           "js",
+	StainlessPackageVersion: "0.94.0",
+	StainlessOS:             "MacOS",
+	StainlessArch:           "arm64",
+	StainlessRuntime:        "node",
+	StainlessRuntimeVersion: "v24.3.0",
 }
 
 // Model 表示一个 Claude 模型

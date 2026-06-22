@@ -1595,7 +1595,8 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	}
 
 	if s.identityService != nil && c != nil && c.Request != nil {
-		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header); err == nil && fp != nil {
+		uaForm := ClassifyUAForm(c.Request.Header.Get("User-Agent"))
+		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header, uaForm); err == nil && fp != nil {
 			mimicMPT := false
 			if s.settingService != nil {
 				_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
@@ -5614,11 +5615,25 @@ func (s *GatewayService) injectBridgeCacheBreakpoints(c *gin.Context, body []byt
 	return body
 }
 
+// claudeUpstreamUserAgent 计算转发给上游的 User-Agent。
+//
+// 优先级:
+//  1. 后台 settings 显式覆盖(管理员可强制全局 UA,如 channel 调试用途)。
+//  2. 否则按 ctx 中入站 UA 形式选 canonical:
+//     - agent-sdk 形式 → AgentSDKCanonicalUserAgent (2.1.181 + claude-desktop-3p + agent-sdk)
+//     - 其他兜底 → PlainCLICanonicalUserAgent (2.1.156 plain CLI)
+//
+// 此函数是修 4-8 死循环的核心:agent-sdk 入站时上游 UA 形式与 body 内的
+// agent-sdk 特征(system-reminder / Task tool / skills 等)保持一致,避免
+// 身份冲突触发上游退化输出。
 func (s *GatewayService) claudeUpstreamUserAgent(ctx context.Context) string {
-	if s != nil {
-		return claudeUpstreamUserAgentFromSettings(ctx, s.settingService)
+	if s != nil && s.settingService != nil {
+		if ua := strings.TrimSpace(s.settingService.GetClaudeUpstreamUserAgent(ctx)); ua != "" {
+			return ua
+		}
 	}
-	return defaultClaudeUpstreamUserAgent()
+	form := ClassifyUAForm(ClaudeCodeUserAgent(ctx))
+	return canonicalUpstreamUserAgentForForm(form)
 }
 
 func (s *GatewayService) applyClaudeUpstreamUserAgent(ctx context.Context, req *http.Request) {
@@ -5765,7 +5780,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			preserveBillingHeaderBlocks: systemRewritten,
 		}
 		if s.identityService != nil {
-			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+			uaForm := ClassifyUAForm(c.Request.Header.Get("User-Agent"))
+			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header, uaForm)
 			if err == nil && fp != nil {
 				// metadata 透传开启时跳过 metadata 注入
 				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
@@ -7609,7 +7625,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 	if account.IsOAuth() && s.identityService != nil {
 		// 1. 获取或创建指纹（包含随机生成的ClientID）
-		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
+		// 按入站 UA 形式分桶,避免 plain CLI 与 agent-sdk 共享同一指纹导致身份冲突
+		uaForm := ClassifyUAForm(clientHeaders.Get("User-Agent"))
+		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders, uaForm)
 		if err != nil {
 			logger.LegacyPrintf("service.gateway", "Warning: failed to get fingerprint for account %d: %v", account.ID, err)
 			// 失败时降级为透传原始headers
@@ -11133,7 +11151,8 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 	var ctFingerprint *Fingerprint
 	if account.IsOAuth() && s.identityService != nil {
-		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
+		ctUAForm := ClassifyUAForm(clientHeaders.Get("User-Agent"))
+		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders, ctUAForm)
 		if err == nil {
 			ctFingerprint = fp
 			if !ctEnableMPT {

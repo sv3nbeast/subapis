@@ -437,7 +437,7 @@ func TestBuildUpstreamRequest_MimicClaudeCodeHeadersMatchCapturedMainRequest(t *
 func TestBuildUpstreamRequest_UsesConfiguredClaudeUpstreamUserAgentOverClientAndFingerprint(t *testing.T) {
 	ctx := context.Background()
 	cache := &identityCacheStub{}
-	require.NoError(t, cache.SetFingerprint(ctx, 42, &Fingerprint{
+	require.NoError(t, cache.SetFingerprint(ctx, 42, UAFormPlainCLI, &Fingerprint{
 		UserAgent:               "fingerprint-ua/1.0",
 		ClientID:                "client-123",
 		StainlessLang:           "js",

@@ -694,7 +694,8 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	req.Header.Set("Version", openAICodexProbeVersion)
 	req.Header.Set("User-Agent", codexCLIUserAgent)
 	if s.identityCache != nil {
-		if fp, fpErr := s.identityCache.GetFingerprint(reqCtx, account.ID); fpErr == nil && fp != nil && strings.TrimSpace(fp.UserAgent) != "" {
+		// 网关自身拉 usage 不存在客户端入站,按 plain CLI 形式取指纹即可。
+		if fp, fpErr := s.identityCache.GetFingerprint(reqCtx, account.ID, UAFormPlainCLI); fpErr == nil && fp != nil && strings.TrimSpace(fp.UserAgent) != "" {
 			req.Header.Set("User-Agent", strings.TrimSpace(fp.UserAgent))
 		}
 	}
@@ -1227,7 +1228,8 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 
 	// 尝试获取缓存的 Fingerprint（包含 User-Agent 等信息）
 	if s.identityCache != nil {
-		if fp, err := s.identityCache.GetFingerprint(ctx, account.ID); err == nil && fp != nil {
+		// 网关自身拉 usage 不存在客户端入站,按 plain CLI 形式取指纹即可。
+		if fp, err := s.identityCache.GetFingerprint(ctx, account.ID, UAFormPlainCLI); err == nil && fp != nil {
 			opts.Fingerprint = fp
 		}
 	}
