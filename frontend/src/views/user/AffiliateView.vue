@@ -44,6 +44,73 @@
           </div>
         </div>
 
+        <!-- 返利档位 -->
+        <div class="card p-6">
+          <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.tier.title') }}</h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.tier.subtitle') }}</p>
+            </div>
+            <div class="mt-2 flex items-baseline gap-2 sm:mt-0">
+              <span class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.tier.currentLevel') }}</span>
+              <span class="text-2xl font-semibold text-primary-600 dark:text-primary-400">{{ t('affiliate.tier.levelLabel', { level: detail.current_tier_level }) }}</span>
+              <span class="text-base font-medium text-primary-600 dark:text-primary-400">· {{ formattedRebateRate }}%</span>
+            </div>
+          </div>
+
+          <div class="mt-5">
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-1 text-sm">
+              <span class="text-gray-600 dark:text-gray-300">
+                {{ t('affiliate.tier.gmv') }}:
+                <span class="font-semibold text-gray-900 dark:text-white">{{ formatCurrency(detail.aff_total_invitee_recharge) }}</span>
+              </span>
+              <span
+                v-if="detail.amount_to_next_tier != null && detail.next_tier_rate != null"
+                class="text-gray-500 dark:text-dark-400"
+              >
+                {{ t('affiliate.tier.toNext', { amount: formatCurrency(detail.amount_to_next_tier), rate: `${formatRate(detail.next_tier_rate)}%` }) }}
+              </span>
+              <span v-else class="font-medium text-emerald-600 dark:text-emerald-400">
+                {{ t('affiliate.tier.maxReached') }}
+              </span>
+            </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-800">
+              <div class="h-full rounded-full bg-primary-500 transition-all duration-500" :style="{ width: `${tierProgress}%` }"></div>
+            </div>
+          </div>
+
+          <div class="mt-5 overflow-x-auto">
+            <table class="w-full min-w-[360px] text-left text-sm">
+              <thead>
+                <tr class="border-b border-gray-200 text-gray-500 dark:border-dark-700 dark:text-dark-400">
+                  <th class="px-3 py-2 font-medium">{{ t('affiliate.tier.table.level') }}</th>
+                  <th class="px-3 py-2 font-medium">{{ t('affiliate.tier.table.threshold') }}</th>
+                  <th class="px-3 py-2 font-medium text-right">{{ t('affiliate.tier.table.rate') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="tier in sortedTiers"
+                  :key="tier.level"
+                  class="border-b border-gray-100 last:border-b-0 dark:border-dark-800"
+                  :class="tier.level === detail.current_tier_level ? 'bg-primary-50 dark:bg-primary-900/20' : ''"
+                >
+                  <td class="px-3 py-2.5 font-medium text-gray-900 dark:text-white">
+                    {{ t('affiliate.tier.levelLabel', { level: tier.level }) }}
+                    <span v-if="tier.level === detail.current_tier_level" class="ml-1 text-xs text-primary-600 dark:text-primary-400">
+                      ({{ t('affiliate.tier.current') }})
+                    </span>
+                  </td>
+                  <td class="px-3 py-2.5 text-gray-700 dark:text-gray-300">
+                    {{ tier.threshold > 0 ? `≥ ${formatCurrency(tier.threshold)}` : formatCurrency(0) }}
+                  </td>
+                  <td class="px-3 py-2.5 text-right font-semibold text-primary-600 dark:text-primary-400">{{ formatRate(tier.rate) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="card p-6">
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.title') }}</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.description') }}</p>
@@ -169,10 +236,30 @@ const inviteLink = computed(() => {
 
 // Rebate rate is a percentage in the range [0, 100]; backend already clamps it.
 // We trim trailing zeros (e.g. 20.00 → "20", 12.50 → "12.5") for a cleaner UI.
-const formattedRebateRate = computed(() => {
-  const v = detail.value?.effective_rebate_rate_percent ?? 0
+const formattedRebateRate = computed(() => formatRate(detail.value?.effective_rebate_rate_percent ?? 0))
+
+// 档位比例/门槛格式化：去掉多余的零（18.00 → "18"，12.50 → "12.5"）。
+function formatRate(v: number): string {
   const rounded = Math.round(v * 100) / 100
   return Number.isInteger(rounded) ? String(rounded) : rounded.toString()
+}
+
+// 档位表按 level 升序展示（后端返回为 Threshold 降序）。
+const sortedTiers = computed(() =>
+  [...(detail.value?.tiers ?? [])].sort((a, b) => a.level - b.level),
+)
+
+// 当前档到下一档的进度百分比；已达最高档时为 100。
+const tierProgress = computed(() => {
+  const d = detail.value
+  if (!d) return 0
+  if (d.amount_to_next_tier == null || d.next_tier_threshold == null) return 100
+  const cur = sortedTiers.value.find((tt) => tt.level === d.current_tier_level)
+  const curThreshold = cur?.threshold ?? 0
+  const span = d.next_tier_threshold - curThreshold
+  if (span <= 0) return 100
+  const pct = ((d.aff_total_invitee_recharge - curThreshold) / span) * 100
+  return Math.min(100, Math.max(0, pct))
 })
 
 function formatCount(value: number): string {

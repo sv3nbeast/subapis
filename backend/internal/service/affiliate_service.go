@@ -58,17 +58,18 @@ func isValidAffiliateCodeFormat(code string) bool {
 }
 
 type AffiliateSummary struct {
-	UserID               int64     `json:"user_id"`
-	AffCode              string    `json:"aff_code"`
-	AffCodeCustom        bool      `json:"aff_code_custom"`
-	AffRebateRatePercent *float64  `json:"aff_rebate_rate_percent,omitempty"`
-	InviterID            *int64    `json:"inviter_id,omitempty"`
-	AffCount             int       `json:"aff_count"`
-	AffQuota             float64   `json:"aff_quota"`
-	AffFrozenQuota       float64   `json:"aff_frozen_quota"`
-	AffHistoryQuota      float64   `json:"aff_history_quota"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	UserID                  int64     `json:"user_id"`
+	AffCode                 string    `json:"aff_code"`
+	AffCodeCustom           bool      `json:"aff_code_custom"`
+	AffRebateRatePercent    *float64  `json:"aff_rebate_rate_percent,omitempty"`
+	InviterID               *int64    `json:"inviter_id,omitempty"`
+	AffCount                int       `json:"aff_count"`
+	AffQuota                float64   `json:"aff_quota"`
+	AffFrozenQuota          float64   `json:"aff_frozen_quota"`
+	AffHistoryQuota         float64   `json:"aff_history_quota"`
+	AffTotalInviteeRecharge float64   `json:"aff_total_invitee_recharge"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 type AffiliateInvitee struct {
@@ -90,15 +91,22 @@ type AffiliateDetail struct {
 	// EffectiveRebateRatePercent 是当前用户作为邀请人时实际生效的返利比例：
 	// 优先用户自己的专属比例（aff_rebate_rate_percent），否则回退到全局比例。
 	// 用于在用户的 /affiliate 页面直观展示「分享后能拿到多少」。
-	EffectiveRebateRatePercent float64            `json:"effective_rebate_rate_percent"`
-	Invitees                   []AffiliateInvitee `json:"invitees"`
+	EffectiveRebateRatePercent float64 `json:"effective_rebate_rate_percent"`
+	// 自动返利档位进度（按累计带来的被邀请人充值额 GMV 升档，只升不降）。
+	AffTotalInviteeRecharge float64            `json:"aff_total_invitee_recharge"`
+	CurrentTierLevel        int                `json:"current_tier_level"`
+	NextTierThreshold       *float64           `json:"next_tier_threshold,omitempty"`
+	NextTierRate            *float64           `json:"next_tier_rate,omitempty"`
+	AmountToNextTier        *float64           `json:"amount_to_next_tier,omitempty"`
+	Tiers                   []AffiliateTier    `json:"tiers"`
+	Invitees                []AffiliateInvitee `json:"invitees"`
 }
 
 type AffiliateRepository interface {
 	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
 	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
 	BindInviter(ctx context.Context, userID, inviterID int64) (bool, error)
-	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error)
+	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount, baseRecharge float64, freezeHours int, sourceOrderID *int64) (bool, error)
 	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
 	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
 	TransferQuotaToBalance(ctx context.Context, userID int64) (float64, float64, error)
@@ -253,7 +261,9 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 	if err != nil {
 		return nil, err
 	}
-	return &AffiliateDetail{
+	gmv := summary.AffTotalInviteeRecharge
+	cur := currentTier(gmv)
+	detail := &AffiliateDetail{
 		UserID:                     summary.UserID,
 		AffCode:                    summary.AffCode,
 		InviterID:                  summary.InviterID,
@@ -262,8 +272,21 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		AffFrozenQuota:             summary.AffFrozenQuota,
 		AffHistoryQuota:            summary.AffHistoryQuota,
 		EffectiveRebateRatePercent: s.resolveRebateRatePercent(ctx, summary),
+		AffTotalInviteeRecharge:    gmv,
+		CurrentTierLevel:           cur.Level,
+		Tiers:                      AffiliateTiers,
 		Invitees:                   invitees,
-	}, nil
+	}
+	// 计算距下一档的差额（已是最高档时这些字段保持 nil，前端据此显示「已达最高档」）。
+	if next := nextTier(gmv); next != nil {
+		nt := next.Threshold
+		nr := next.Rate
+		amt := roundTo(next.Threshold-gmv, 8)
+		detail.NextTierThreshold = &nt
+		detail.NextTierRate = &nr
+		detail.AmountToNextTier = &amt
+	}
+	return detail, nil
 }
 
 func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, rawCode string) error {
@@ -376,7 +399,8 @@ func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, invit
 		freezeHours = s.settingService.GetAffiliateRebateFreezeHours(ctx)
 	}
 
-	applied, err := s.repo.AccrueQuota(ctx, *inviteeSummary.InviterID, inviteeUserID, rebate, freezeHours, sourceOrderID)
+	// GMV 累加用原始充值面值 baseRechargeAmount（不受单人返利上限截断影响）。
+	applied, err := s.repo.AccrueQuota(ctx, *inviteeSummary.InviterID, inviteeUserID, rebate, baseRechargeAmount, freezeHours, sourceOrderID)
 	if err != nil {
 		return 0, err
 	}
@@ -386,8 +410,9 @@ func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, invit
 	return rebate, nil
 }
 
-// resolveRebateRatePercent returns the inviter's exclusive rate when set,
-// otherwise the global setting value (clamped to [Min, Max]).
+// resolveRebateRatePercent 返回邀请人实际生效的返利比例，优先级：
+// 管理员专属比例（aff_rebate_rate_percent）> 档位比例（按累计带来充值额 GMV）> 全局默认。
+// 专属比例存在时直接用它；否则按 GMV 落入对应档位；档位逻辑不可用时回退全局默认。
 func (s *AffiliateService) resolveRebateRatePercent(ctx context.Context, inviter *AffiliateSummary) float64 {
 	if inviter != nil && inviter.AffRebateRatePercent != nil {
 		v := *inviter.AffRebateRatePercent
@@ -396,7 +421,43 @@ func (s *AffiliateService) resolveRebateRatePercent(ctx context.Context, inviter
 		}
 		return clampAffiliateRebateRate(v)
 	}
+	if inviter != nil {
+		return clampAffiliateRebateRate(tierRateForRecharge(inviter.AffTotalInviteeRecharge))
+	}
 	return s.globalRebateRatePercent(ctx)
+}
+
+// tierRateForRecharge 按累计带来充值额(GMV)返回对应档位的返利比例。
+// AffiliateTiers 已按 Threshold 降序，取第一个满足 totalRecharge >= Threshold 的档位。
+func tierRateForRecharge(totalRecharge float64) float64 {
+	for _, t := range AffiliateTiers {
+		if totalRecharge >= t.Threshold {
+			return t.Rate
+		}
+	}
+	return AffiliateTiers[len(AffiliateTiers)-1].Rate // 兜底返回最低档
+}
+
+// currentTier 返回当前 GMV 落入的档位（AffiliateTiers 降序，取首个满足 GMV>=Threshold 的）。
+func currentTier(gmv float64) AffiliateTier {
+	for _, t := range AffiliateTiers {
+		if gmv >= t.Threshold {
+			return t
+		}
+	}
+	return AffiliateTiers[len(AffiliateTiers)-1]
+}
+
+// nextTier 返回比当前 GMV 更高的最近一档；已是最高档时返回 nil。
+// AffiliateTiers 降序，故从尾部（最低档）向前遍历，首个 Threshold>gmv 即下一档。
+func nextTier(gmv float64) *AffiliateTier {
+	for i := len(AffiliateTiers) - 1; i >= 0; i-- {
+		if AffiliateTiers[i].Threshold > gmv {
+			t := AffiliateTiers[i]
+			return &t
+		}
+	}
+	return nil
 }
 
 // globalRebateRatePercent reads the system-wide rebate rate via SettingService,

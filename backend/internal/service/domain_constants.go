@@ -35,6 +35,24 @@ const (
 	AffiliateRebatePerInviteeCapDefault = 0.0   // 0 = 无上限
 )
 
+// AffiliateTier 定义按累计带来充值额(GMV)自动升级的返利档位。
+// 推广者带来的被邀请人充值面值越高，返利比例越高；GMV 单调递增，故档位只升不降。
+type AffiliateTier struct {
+	Level     int     `json:"level"`     // 档位等级（1 起）
+	Threshold float64 `json:"threshold"` // 累计带来充值额门槛（美元），达到即进入该档
+	Rate      float64 `json:"rate"`      // 返利比例（百分比）
+}
+
+// AffiliateTiers 是自动返利档位表，必须保持 Threshold 降序，
+// 以便 tierRateForRecharge 从高到低匹配第一个满足 GMV >= Threshold 的档位。
+var AffiliateTiers = []AffiliateTier{
+	{Level: 5, Threshold: 20000, Rate: 18.0},
+	{Level: 4, Threshold: 6000, Rate: 14.0},
+	{Level: 3, Threshold: 1500, Rate: 11.0},
+	{Level: 2, Threshold: 300, Rate: 8.0},
+	{Level: 1, Threshold: 0, Rate: 5.0},
+}
+
 // Platform constants
 const (
 	PlatformAnthropic   = domain.PlatformAnthropic

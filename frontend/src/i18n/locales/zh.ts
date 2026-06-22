@@ -1553,6 +1553,21 @@ export default {
       line2: '被邀请用户充值后，你可获得 {rate} 的返利额度。',
       line3: '返利额度可随时转入账户余额。',
       line4: '新产生的返利需要经过冻结期后才能提现。'
+    },
+    tier: {
+      title: '返利档位',
+      subtitle: '推广业绩越高，返利比例越高（按累计带来的充值额自动升档，只升不降）',
+      currentLevel: '当前档位',
+      levelLabel: '第 {level} 档',
+      current: '当前',
+      gmv: '累计带来充值',
+      toNext: '再带来 {amount} 升至 {rate}',
+      maxReached: '已达最高档位',
+      table: {
+        level: '档位',
+        threshold: '累计带来充值',
+        rate: '返利比例'
+      }
     }
   },
 

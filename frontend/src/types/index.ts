@@ -133,6 +133,12 @@ export interface AffiliateInvitee {
   total_rebate: number
 }
 
+export interface AffiliateRebateTier {
+  level: number
+  threshold: number
+  rate: number
+}
+
 export interface UserAffiliateDetail {
   user_id: number
   aff_code: string
@@ -143,6 +149,18 @@ export interface UserAffiliateDetail {
   aff_history_quota: number
   /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
   effective_rebate_rate_percent: number
+  /** 当前累计带来的被邀请人充值额(GMV)，驱动自动档位 */
+  aff_total_invitee_recharge: number
+  /** 当前档位等级（1 起） */
+  current_tier_level: number
+  /** 下一档门槛（已是最高档则缺省） */
+  next_tier_threshold?: number | null
+  /** 下一档返利比例 */
+  next_tier_rate?: number | null
+  /** 距下一档还差多少 GMV */
+  amount_to_next_tier?: number | null
+  /** 完整档位表（后端权威；按 level 升序展示前需自行排序） */
+  tiers: AffiliateRebateTier[]
   invitees: AffiliateInvitee[]
 }
 

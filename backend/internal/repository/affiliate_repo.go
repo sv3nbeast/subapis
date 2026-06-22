@@ -114,21 +114,22 @@ func (r *affiliateRepository) BindInviter(ctx context.Context, userID, inviterID
 	return bound, nil
 }
 
-func (r *affiliateRepository) AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error) {
+func (r *affiliateRepository) AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount, baseRecharge float64, freezeHours int, sourceOrderID *int64) (bool, error) {
 	if amount <= 0 {
 		return false, nil
 	}
 
 	var applied bool
 	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
-		// freezeHours > 0: add to frozen quota; == 0: add to available quota directly
+		// freezeHours > 0: add to frozen quota; == 0: add to available quota directly.
+		// 无论冻结与否，都把被邀请人充值面值 baseRecharge 累加进 GMV（驱动自动档位）。
 		var updateSQL string
 		if freezeHours > 0 {
-			updateSQL = "UPDATE user_affiliates SET aff_frozen_quota = aff_frozen_quota + $1, aff_history_quota = aff_history_quota + $1, updated_at = NOW() WHERE user_id = $2"
+			updateSQL = "UPDATE user_affiliates SET aff_frozen_quota = aff_frozen_quota + $1, aff_history_quota = aff_history_quota + $1, aff_total_invitee_recharge = aff_total_invitee_recharge + $2, updated_at = NOW() WHERE user_id = $3"
 		} else {
-			updateSQL = "UPDATE user_affiliates SET aff_quota = aff_quota + $1, aff_history_quota = aff_history_quota + $1, updated_at = NOW() WHERE user_id = $2"
+			updateSQL = "UPDATE user_affiliates SET aff_quota = aff_quota + $1, aff_history_quota = aff_history_quota + $1, aff_total_invitee_recharge = aff_total_invitee_recharge + $2, updated_at = NOW() WHERE user_id = $3"
 		}
-		res, err := txClient.ExecContext(txCtx, updateSQL, amount, inviterID)
+		res, err := txClient.ExecContext(txCtx, updateSQL, amount, baseRecharge, inviterID)
 		if err != nil {
 			return err
 		}
@@ -789,6 +790,7 @@ SELECT user_id,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
+       aff_total_invitee_recharge::double precision,
        created_at,
        updated_at
 FROM user_affiliates
@@ -817,6 +819,7 @@ WHERE user_id = $1`, userID)
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,
+		&out.AffTotalInviteeRecharge,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {
@@ -843,6 +846,7 @@ SELECT user_id,
        aff_quota::double precision,
        aff_frozen_quota::double precision,
        aff_history_quota::double precision,
+       aff_total_invitee_recharge::double precision,
        created_at,
        updated_at
 FROM user_affiliates
@@ -873,6 +877,7 @@ LIMIT 1`, strings.ToUpper(strings.TrimSpace(code)))
 		&out.AffQuota,
 		&out.AffFrozenQuota,
 		&out.AffHistoryQuota,
+		&out.AffTotalInviteeRecharge,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	); err != nil {

@@ -1531,6 +1531,21 @@ export default {
       line2: 'When invitees recharge, you receive {rate} of the recharge as rebate quota.',
       line3: 'Transfer rebate quota to balance at any time.',
       line4: 'Newly earned rebates may have a waiting period before they can be transferred.'
+    },
+    tier: {
+      title: 'Rebate Tier',
+      subtitle: 'Higher promotion volume earns a higher rebate rate (auto-upgrades by cumulative recharge brought in; never downgrades)',
+      currentLevel: 'Current Tier',
+      levelLabel: 'Tier {level}',
+      current: 'current',
+      gmv: 'Recharge brought in',
+      toNext: 'Bring in {amount} more to reach {rate}',
+      maxReached: 'Top tier reached',
+      table: {
+        level: 'Tier',
+        threshold: 'Recharge brought in',
+        rate: 'Rebate rate'
+      }
     }
   },
 

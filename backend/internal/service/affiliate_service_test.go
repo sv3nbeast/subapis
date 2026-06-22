@@ -11,26 +11,31 @@ import (
 )
 
 // TestResolveRebateRatePercent_PerUserOverride verifies that per-inviter
-// AffRebateRatePercent overrides the global rate, that NULL falls back to the
-// global rate, and that out-of-range exclusive rates are clamped silently.
+// AffRebateRatePercent overrides all other rates, that NULL falls back to the
+// auto tier rate (driven by AffTotalInviteeRecharge), and that out-of-range
+// exclusive rates are clamped silently.
 //
-// SettingService is left nil here so globalRebateRatePercent returns the
-// documented default (AffiliateRebateRateDefault = 20%) — this exercises the
-// fallback path without spinning up a settings stub.
+// SettingService is left nil here so globalRebateRatePercent (the ultimate
+// fallback) returns the documented default — but with tier logic active,
+// the normal path is exclusive > tier, and the global default is rarely hit.
 func TestResolveRebateRatePercent_PerUserOverride(t *testing.T) {
 	t.Parallel()
 	svc := &AffiliateService{}
 
-	// nil exclusive rate → falls back to global default (20%)
-	require.InDelta(t, AffiliateRebateRateDefault,
+	// nil exclusive rate + zero GMV → falls into tier 1 (5%)
+	require.InDelta(t, 5.0,
 		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{}), 1e-9)
 
-	// exclusive rate set → overrides global
+	// nil exclusive rate + GMV crossing tier 3 threshold → 11%
+	require.InDelta(t, 11.0,
+		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffTotalInviteeRecharge: 1500}), 1e-9)
+
+	// exclusive rate set → overrides tier
 	rate := 50.0
 	require.InDelta(t, 50.0,
-		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &rate}), 1e-9)
+		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &rate, AffTotalInviteeRecharge: 999999}), 1e-9)
 
-	// exclusive rate 0 → returns 0 (no rebate, intentional)
+	// exclusive rate 0 → returns 0 (no rebate, intentional override)
 	zero := 0.0
 	require.InDelta(t, 0.0,
 		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &zero}), 1e-9)
@@ -44,6 +49,33 @@ func TestResolveRebateRatePercent_PerUserOverride(t *testing.T) {
 	tooLow := -5.0
 	require.InDelta(t, AffiliateRebateRateMin,
 		svc.resolveRebateRatePercent(context.Background(), &AffiliateSummary{AffRebateRatePercent: &tooLow}), 1e-9)
+}
+
+// TestTierRateForRecharge_Boundaries 验证档位边界行为：
+// GMV 在阈值正上下两侧、零、超大值都应该落入正确档位。
+func TestTierRateForRecharge_Boundaries(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		gmv  float64
+		want float64
+	}{
+		{"zero → tier 1", 0, 5.0},
+		{"below tier 2 threshold", 299.99, 5.0},
+		{"exact tier 2 threshold", 300, 8.0},
+		{"between tier 2 and 3", 1499.99, 8.0},
+		{"exact tier 3 threshold", 1500, 11.0},
+		{"exact tier 4 threshold", 6000, 14.0},
+		{"exact tier 5 threshold", 20000, 18.0},
+		{"far above top tier", 1_000_000, 18.0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.InDelta(t, tc.want, tierRateForRecharge(tc.gmv), 1e-9)
+		})
+	}
 }
 
 // TestIsEnabled_NilSettingServiceReturnsDefault verifies that IsEnabled
