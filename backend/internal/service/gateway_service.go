@@ -8836,17 +8836,40 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 	var lastReadAt int64
 	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
+	// 抓包开关：仅当 SUB2API_DEBUG_GATEWAY_BODY 开启 + UA 含 agent-sdk/ + 4-8 模型时落盘，
+	// 用于离线还原死循环现场（agent-sdk path XML invoke bridge 闭环异常）。
+	captureUpstreamSSE := false
+	upstreamRequestID := ""
+	if s.debugGatewayBodyFile.Load() != nil && c != nil && c.Request != nil {
+		ua := strings.ToLower(c.Request.Header.Get("User-Agent"))
+		if strings.Contains(ua, "agent-sdk/") && strings.Contains(strings.ToLower(originalModel), "claude-opus-4-8") {
+			captureUpstreamSSE = true
+			upstreamRequestID = resp.Header.Get("x-request-id")
+			s.debugLogUpstreamSSELine(upstreamRequestID, fmt.Sprintf("==BEGIN model=%s ua=%q account=%d", originalModel, c.Request.Header.Get("User-Agent"), account.ID))
+		}
+	}
 	go func(scanBuf *sseScannerBuf64K) {
 		defer putSSEScannerBuf64K(scanBuf)
 		defer close(events)
 		for scanner.Scan() {
 			atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-			if !sendEvent(scanEvent{line: scanner.Text()}) {
+			line := scanner.Text()
+			if captureUpstreamSSE {
+				s.debugLogUpstreamSSELine(upstreamRequestID, line)
+			}
+			if !sendEvent(scanEvent{line: line}) {
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			if captureUpstreamSSE {
+				s.debugLogUpstreamSSELine(upstreamRequestID, fmt.Sprintf("==END scanner.Err=%v", err))
+			}
 			_ = sendEvent(scanEvent{err: err})
+			return
+		}
+		if captureUpstreamSSE {
+			s.debugLogUpstreamSSELine(upstreamRequestID, "==END ok")
 		}
 	}(scanBuf)
 	defer close(done)
@@ -11442,6 +11465,26 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 	}
 	s.debugGatewayBodyFile.Store(f)
 	slog.Info("gateway debug logging enabled", "path", path)
+}
+
+// debugLogUpstreamSSELine 将上游 SSE 流的一行原始内容写入与 debugLogGatewaySnapshot
+// 同一份调试日志文件。用于离线还原上游真实返回事件（content_block_delta、tool_use、
+// stop_reason 等），辅助定位 XML invoke → tool_use bridge 闭环异常。
+//
+// 调用方负责判断是否应落盘（命中条件后才调），以避免每行都进入 atomic.Load 热路径。
+// raw 不含末尾换行；helper 自行追加。
+func (s *GatewayService) debugLogUpstreamSSELine(requestID, raw string) {
+	f := s.debugGatewayBodyFile.Load()
+	if f == nil {
+		return
+	}
+	var buf strings.Builder
+	if requestID != "" {
+		fmt.Fprintf(&buf, "UPSTREAM_SSE_LINE rid=%s  %s\n", requestID, raw)
+	} else {
+		fmt.Fprintf(&buf, "UPSTREAM_SSE_LINE  %s\n", raw)
+	}
+	_, _ = f.WriteString(buf.String())
 }
 
 // debugLogGatewaySnapshot 将网关请求的完整快照（headers + body）写入独立的调试日志文件，
