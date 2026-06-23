@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,14 +26,44 @@ func (p *Proxy) IsActive() bool {
 }
 
 func (p *Proxy) URL() string {
+	scheme := p.EffectiveProtocol()
+	if scheme == "socks5" {
+		scheme = "socks5h"
+	}
+	host := normalizeProxyHost(p.Host)
+	port := p.Port
+	if (scheme == "http" && port == 80) || (scheme == "https" && port == 443) {
+		port = 0
+	}
+	urlHost := host
+	if port > 0 {
+		urlHost = net.JoinHostPort(host, strconv.Itoa(port))
+	} else if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		urlHost = "[" + host + "]"
+	}
 	u := &url.URL{
-		Scheme: p.Protocol,
-		Host:   net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),
+		Scheme: scheme,
+		Host:   urlHost,
 	}
 	if p.Username != "" && p.Password != "" {
 		u.User = url.UserPassword(p.Username, p.Password)
 	}
 	return u.String()
+}
+
+func normalizeProxyHost(host string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+}
+
+func (p *Proxy) EffectiveProtocol() string {
+	if p == nil {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(p.Protocol))
+	if scheme == "socks5" {
+		return "socks5h"
+	}
+	return scheme
 }
 
 type ProxyWithAccountCount struct {

@@ -86,7 +86,32 @@ type DataImportError struct {
 }
 
 func buildProxyKey(protocol, host string, port int, username, password string) string {
-	return fmt.Sprintf("%s|%s|%d|%s|%s", strings.TrimSpace(protocol), strings.TrimSpace(host), port, strings.TrimSpace(username), strings.TrimSpace(password))
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol == "socks5" {
+		protocol = "socks5h"
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	return fmt.Sprintf("%s|%s|%d|%s|%s", protocol, host, port, strings.TrimSpace(username), strings.TrimSpace(password))
+}
+
+func normalizeProxyKey(key string) string {
+	key = strings.TrimSpace(key)
+	parts := strings.Split(key, "|")
+	if len(parts) != 5 {
+		return key
+	}
+	protocol := strings.ToLower(strings.TrimSpace(parts[0]))
+	if protocol == "socks5" {
+		protocol = "socks5h"
+	}
+	host := strings.ToLower(strings.TrimSpace(parts[1]))
+	return fmt.Sprintf("%s|%s|%s|%s|%s",
+		protocol,
+		host,
+		strings.TrimSpace(parts[2]),
+		strings.TrimSpace(parts[3]),
+		strings.TrimSpace(parts[4]),
+	)
 }
 
 func (h *AccountHandler) ExportData(c *gin.Context) {
@@ -220,7 +245,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 	for i := range dataPayload.Proxies {
 		item := dataPayload.Proxies[i]
-		key := item.ProxyKey
+		key := normalizeProxyKey(item.ProxyKey)
 		if key == "" {
 			key = buildProxyKey(item.Protocol, item.Host, item.Port, item.Username, item.Password)
 		}
@@ -304,7 +329,8 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		var proxyID *int64
 		if item.ProxyKey != nil && *item.ProxyKey != "" {
 			var explicitProxyID int64
-			if id, ok := proxyKeyToID[*item.ProxyKey]; ok {
+			normalizedProxyKey := normalizeProxyKey(*item.ProxyKey)
+			if id, ok := proxyKeyToID[normalizedProxyKey]; ok {
 				explicitProxyID = id
 				proxyID = &id
 			} else {
@@ -312,7 +338,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 				result.Errors = append(result.Errors, DataImportError{
 					Kind:     "account",
 					Name:     item.Name,
-					ProxyKey: *item.ProxyKey,
+					ProxyKey: normalizedProxyKey,
 					Message:  "proxy_key not found",
 				})
 				continue

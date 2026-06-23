@@ -39,6 +39,26 @@ const (
 
 var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 
+func gatewayProxyLogFields(account *service.Account) []zap.Field {
+	if account == nil {
+		return []zap.Field{zap.Bool("proxy_enabled", false)}
+	}
+	if account.Proxy != nil {
+		return []zap.Field{
+			zap.Bool("proxy_enabled", true),
+			zap.Int64("proxy_id", account.Proxy.ID),
+			zap.String("proxy_protocol", account.Proxy.EffectiveProtocol()),
+		}
+	}
+	if account.ProxyID != nil {
+		return []zap.Field{
+			zap.Bool("proxy_enabled", true),
+			zap.Int64p("proxy_id", account.ProxyID),
+		}
+	}
+	return []zap.Field{zap.Bool("proxy_enabled", false)}
+}
+
 func gatewayPostForwardStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.Background()
 	if ctx != nil {
@@ -208,10 +228,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 连通性探测请求（max_tokens=1, !stream）允许同步通过，
 	// 否则各类客户端（Claude Code Desktop、第三方 SDK 等）的 Test Connection 会被错误拦截。
-	// 注意：探测请求会在 detectInterceptType 阶段被无条件 mock，不消耗账号配额；
-	// 非探测的同步请求继续被拒绝，避免误用导致账号池配额被消耗。
+	// 同理，预热/标题生成（Warmup）、SUGGESTION MODE 等会被 detectInterceptType 识别并 mock 拦截的
+	// 同步请求也应放行：它们在拦截阶段直接返回 mock 响应、不消耗账号配额，
+	// 与守卫"防止误用的普通同步请求耗配额"的本意不冲突（官方上游本无此守卫）。
+	// 注意：此处仅放行，是否真正 mock 仍由后续账号选择 + IsInterceptWarmupEnabled 决定。
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
-	if isAnthropicMessagesSyncRequest(reqStream) && !isConnectionProbe {
+	isInterceptableSync := isConnectionProbe ||
+		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone
+	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
 		return
 	}
@@ -546,16 +570,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.Bool("fallback_error_response_written", wroteFallback),
 					zap.Error(err),
 				}
-				if account.Proxy != nil {
-					forwardFailedFields = append(forwardFailedFields,
-						zap.Int64("proxy_id", account.Proxy.ID),
-						zap.String("proxy_name", account.Proxy.Name),
-						zap.String("proxy_host", account.Proxy.Host),
-						zap.Int("proxy_port", account.Proxy.Port),
-					)
-				} else if account.ProxyID != nil {
-					forwardFailedFields = append(forwardFailedFields, zap.Int64p("proxy_id", account.ProxyID))
-				}
+				forwardFailedFields = append(forwardFailedFields, gatewayProxyLogFields(account)...)
 				reqLog.Error("gateway.forward_failed", forwardFailedFields...)
 				return
 			}
@@ -708,15 +723,17 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
-			// [DEBUG-STICKY] 打印账号选择结果
-			reqLog.Info("sticky.account_selected",
+			// [DEBUG-STICKY] 打印账号选择结果。代理字段仅记录 ID/协议，避免泄露代理地址或凭据。
+			accountSelectedFields := []zap.Field{
 				zap.Int64("selected_account_id", account.ID),
 				zap.String("account_name", account.Name),
 				zap.Bool("slot_acquired", selection.Acquired),
 				zap.Bool("has_wait_plan", selection.WaitPlan != nil),
 				zap.Int64("sticky_bound_account_id", sessionBoundAccountID),
 				zap.Bool("sticky_honored", sessionBoundAccountID > 0 && sessionBoundAccountID == account.ID),
-			)
+			}
+			accountSelectedFields = append(accountSelectedFields, gatewayProxyLogFields(account)...)
+			reqLog.Info("sticky.account_selected", accountSelectedFields...)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			// 注意：连通性探测请求（max_tokens=1, !stream）无条件拦截，
@@ -1001,16 +1018,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.Bool("fallback_error_response_written", wroteFallback),
 					zap.Error(err),
 				}
-				if account.Proxy != nil {
-					forwardFailedFields = append(forwardFailedFields,
-						zap.Int64("proxy_id", account.Proxy.ID),
-						zap.String("proxy_name", account.Proxy.Name),
-						zap.String("proxy_host", account.Proxy.Host),
-						zap.Int("proxy_port", account.Proxy.Port),
-					)
-				} else if account.ProxyID != nil {
-					forwardFailedFields = append(forwardFailedFields, zap.Int64p("proxy_id", account.ProxyID))
-				}
+				forwardFailedFields = append(forwardFailedFields, gatewayProxyLogFields(account)...)
 				reqLog.Error("gateway.forward_failed", forwardFailedFields...)
 				return
 			}

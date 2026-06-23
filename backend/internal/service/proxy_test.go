@@ -23,7 +23,7 @@ func TestProxyURL(t *testing.T) {
 			want: "http://proxy.example.com:8080",
 		},
 		{
-			name: "with auth",
+			name: "socks5 with auth uses remote DNS scheme",
 			proxy: Proxy{
 				Protocol: "socks5",
 				Host:     "socks.example.com",
@@ -31,7 +31,61 @@ func TestProxyURL(t *testing.T) {
 				Username: "user",
 				Password: "pass",
 			},
-			want: "socks5://user:pass@socks.example.com:1080",
+			want: "socks5h://user:pass@socks.example.com:1080",
+		},
+		{
+			name: "uppercase socks5 normalizes to socks5h",
+			proxy: Proxy{
+				Protocol: "SOCKS5",
+				Host:     "socks.example.com",
+				Port:     1080,
+			},
+			want: "socks5h://socks.example.com:1080",
+		},
+		{
+			name: "uppercase host and http default port normalize",
+			proxy: Proxy{
+				Protocol: "HTTP",
+				Host:     "PROXY.EXAMPLE.COM",
+				Port:     80,
+			},
+			want: "http://proxy.example.com",
+		},
+		{
+			name: "uppercase host and https default port normalize",
+			proxy: Proxy{
+				Protocol: "HTTPS",
+				Host:     "PROXY.EXAMPLE.COM",
+				Port:     443,
+			},
+			want: "https://proxy.example.com",
+		},
+		{
+			name: "ipv6 host without default http port keeps brackets",
+			proxy: Proxy{
+				Protocol: "http",
+				Host:     "::1",
+				Port:     80,
+			},
+			want: "http://[::1]",
+		},
+		{
+			name: "bracketed ipv6 host with port does not double bracket",
+			proxy: Proxy{
+				Protocol: "http",
+				Host:     "[::1]",
+				Port:     8080,
+			},
+			want: "http://[::1]:8080",
+		},
+		{
+			name: "bracketed ipv6 host after default https port keeps brackets",
+			proxy: Proxy{
+				Protocol: "https",
+				Host:     "[2001:db8::1]",
+				Port:     443,
+			},
+			want: "https://[2001:db8::1]",
 		},
 		{
 			name: "username only keeps no auth for compatibility",

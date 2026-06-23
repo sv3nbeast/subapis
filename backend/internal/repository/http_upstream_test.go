@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"compress/lzw"
+	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -325,6 +326,75 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintTransport_WithProxyForceHTTP1UsesH
 	require.False(s.T(), transport.ForceAttemptHTTP2)
 	require.NotNil(s.T(), transport.TLSNextProto)
 	require.Equal(s.T(), []string{"h2", "http/1.1"}, profile.ALPNProtocols, "source profile must not be mutated")
+}
+
+func (s *HTTPUpstreamSuite) TestValidateRequestHost_DirectCallsResolvedIPValidator() {
+	s.cfg.Security.URLAllowlist = config.URLAllowlistConfig{Enabled: true, AllowPrivateHosts: false}
+	svc := s.newService()
+
+	originalValidate := validateResolvedIP
+	defer func() { validateResolvedIP = originalValidate }()
+
+	var calls int32
+	expectedErr := errors.New("blocked by dns validation")
+	validateResolvedIP = func(host string) error {
+		atomic.AddInt32(&calls, 1)
+		require.Equal(s.T(), "api.anthropic.com", host)
+		return expectedErr
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/messages", nil)
+	require.NoError(s.T(), err)
+
+	err = svc.validateRequestHost(req, nil)
+	require.ErrorIs(s.T(), err, expectedErr)
+	require.Equal(s.T(), int32(1), atomic.LoadInt32(&calls))
+}
+
+func (s *HTTPUpstreamSuite) TestValidateRequestHost_WithProxySkipsLocalResolvedIPValidator() {
+	s.cfg.Security.URLAllowlist = config.URLAllowlistConfig{Enabled: true, AllowPrivateHosts: false}
+	svc := s.newService()
+
+	originalValidate := validateResolvedIP
+	defer func() { validateResolvedIP = originalValidate }()
+
+	var calls int32
+	validateResolvedIP = func(host string) error {
+		atomic.AddInt32(&calls, 1)
+		return errors.New("must not locally resolve proxied host: " + host)
+	}
+
+	_, parsedProxy, err := normalizeProxyURL("socks5://proxy.local:1080")
+	require.NoError(s.T(), err)
+	req, err := http.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/messages", nil)
+	require.NoError(s.T(), err)
+
+	err = svc.validateRequestHost(req, parsedProxy)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), int32(0), atomic.LoadInt32(&calls))
+}
+
+func (s *HTTPUpstreamSuite) TestGetClientEntry_WithProxyDoesNotInstallResolvingRedirectChecker() {
+	s.cfg.Security.URLAllowlist = config.URLAllowlistConfig{Enabled: true, AllowPrivateHosts: false}
+	svc := s.newService()
+
+	directEntry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileDefault, false, false)
+	require.NoError(s.T(), err)
+	require.NotNil(s.T(), directEntry.client.CheckRedirect, "direct clients should keep DNS rebinding redirect validation")
+
+	proxyEntry, err := svc.getClientEntry("socks5://proxy.local:1080", 1, 1, service.HTTPUpstreamProfileDefault, false, false)
+	require.NoError(s.T(), err)
+	require.Nil(s.T(), proxyEntry.client.CheckRedirect, "proxied clients must not locally resolve redirect targets")
+}
+
+func (s *HTTPUpstreamSuite) TestGetTLSClientEntry_WithProxyDoesNotInstallResolvingRedirectChecker() {
+	s.cfg.Security.URLAllowlist = config.URLAllowlistConfig{Enabled: true, AllowPrivateHosts: false}
+	svc := s.newService()
+	profile := &tlsfingerprint.Profile{Name: "test-proxy"}
+
+	entry, err := svc.getClientEntryWithTLS("socks5://proxy.local:1080", 1, 1, profile, service.HTTPUpstreamProfileDefault, false, false)
+	require.NoError(s.T(), err)
+	require.Nil(s.T(), entry.client.CheckRedirect, "TLS fingerprint proxied clients must not locally resolve redirect targets")
 }
 
 // TestAccountConcurrencyFallbackToDefault 测试账户并发数为 0 时回退到默认配置

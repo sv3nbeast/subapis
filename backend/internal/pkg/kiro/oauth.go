@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/google/uuid"
 )
 
@@ -696,7 +697,9 @@ func newHTTPClient(rawProxyURL string) (*http.Client, error) {
 	}
 	transport := &http.Transport{}
 	if parsed != nil {
-		transport.Proxy = http.ProxyURL(parsed)
+		if err := proxyutil.ConfigureTransportProxy(transport, parsed); err != nil {
+			return nil, err
+		}
 	}
 	return &http.Client{
 		Timeout:   30 * time.Second,

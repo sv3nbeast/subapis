@@ -76,6 +76,29 @@ const (
 	cacheTTLTarget1h = "1h"
 )
 
+type accountProxyLogInfo struct {
+	Enabled  bool
+	ID       int64
+	Protocol string
+}
+
+func buildAccountProxyLogInfo(account *Account) accountProxyLogInfo {
+	if account == nil || account.ProxyID == nil {
+		return accountProxyLogInfo{}
+	}
+	info := accountProxyLogInfo{Enabled: true, ID: *account.ProxyID}
+	if account.Proxy != nil {
+		info.ID = account.Proxy.ID
+		info.Protocol = account.Proxy.EffectiveProtocol()
+	}
+	return info
+}
+
+func accountProxyLogArgs(account *Account) (bool, int64, string) {
+	info := buildAccountProxyLogInfo(account)
+	return info.Enabled, info.ID, info.Protocol
+}
+
 // ForceCacheBillingContextKey 强制缓存计费上下文键
 // 用于粘性会话切换时，将 input_tokens 转为 cache_read_input_tokens 计费
 type forceCacheBillingKeyType struct{}

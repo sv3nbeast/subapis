@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 )
 
 // WorkOS 端点定义为 var 以便单元测试注入 httptest 地址。
@@ -296,7 +297,9 @@ func newHTTPClient(rawProxyURL string) (*http.Client, error) {
 	}
 	transport := &http.Transport{}
 	if parsed != nil {
-		transport.Proxy = http.ProxyURL(parsed)
+		if err := proxyutil.ConfigureTransportProxy(transport, parsed); err != nil {
+			return nil, err
+		}
 	}
 	return &http.Client{
 		Timeout:   requestTimeout,

@@ -69,6 +69,9 @@ const (
 
 var errUpstreamClientLimitReached = errors.New("upstream client cache limit reached")
 
+// 允许测试替换 DNS 校验函数；生产默认指向真实实现。
+var validateResolvedIP = urlvalidator.ValidateResolvedIP
+
 // poolSettings 连接池配置参数
 // 封装 Transport 所需的各项连接池参数
 type poolSettings struct {
@@ -162,7 +165,11 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
 //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	if err := s.validateRequestHost(req); err != nil {
+	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateRequestHost(req, parsedProxy); err != nil {
 		return nil, err
 	}
 	profile := service.HTTPUpstreamProfileDefault
@@ -171,7 +178,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	// 获取或创建对应的客户端，并标记请求占用
-	entry, err := s.acquireClientWithProfile(proxyURL, accountID, accountConcurrency, profile)
+	entry, err := s.acquireClientWithNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -217,17 +224,22 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil && req.URL != nil {
 		targetHost = req.URL.Host
 	}
-	proxyInfo := "direct"
-	if proxyURL != "" {
-		proxyInfo = proxyURL
+	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
 	}
-	slog.Debug("tls_fingerprint_enabled", "account_id", accountID, "target", targetHost, "proxy", proxyInfo, "profile", profile.Name)
+	slog.Debug("tls_fingerprint_enabled",
+		"account_id", accountID,
+		"target", targetHost,
+		"proxy_enabled", parsedProxy != nil,
+		"proxy_protocol", proxyProtocol(parsedProxy),
+		"profile", profile.Name)
 
-	if err := s.validateRequestHost(req); err != nil {
+	if err := s.validateRequestHost(req, parsedProxy); err != nil {
 		return nil, err
 	}
 
-	entry, err := s.acquireClientWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile)
+	entry, err := s.acquireClientWithTLSNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, upstreamProfile)
 	if err != nil {
 		slog.Debug("tls_fingerprint_acquire_client_failed", "account_id", accountID, "error", err)
 		return nil, err
@@ -253,21 +265,34 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端
 func (s *httpUpstreamService) acquireClientWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
-	return s.getClientEntryWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile, true, true)
+	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return s.getClientEntryWithTLSNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, upstreamProfile, true, true)
+}
+
+func (s *httpUpstreamService) acquireClientWithTLSNormalizedProxy(proxyKey string, parsedProxy *url.URL, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
+	return s.getClientEntryWithTLSNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, upstreamProfile, true, true)
 }
 
 // getClientEntryWithTLS 获取或创建带 TLS 指纹的客户端条目
 // TLS 指纹客户端使用独立的缓存键，与普通客户端隔离
 func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
-	isolation := s.getIsolationMode()
 	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
 	if err != nil {
 		return nil, err
 	}
+	return s.getClientEntryWithTLSNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, upstreamProfile, markInFlight, enforceLimit)
+}
+
+func (s *httpUpstreamService) getClientEntryWithTLSNormalizedProxy(proxyKey string, parsedProxy *url.URL, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+	isolation := s.getIsolationMode()
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
 	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
 	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
+	cacheLogFields := []any{"account_id", accountID, "proxy_enabled", parsedProxy != nil, "proxy_protocol", proxyProtocol(parsedProxy)}
 	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
 
 	now := time.Now()
@@ -281,7 +306,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 			atomic.AddInt64(&entry.inFlight, 1)
 		}
 		s.mu.RUnlock()
-		slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+		slog.Debug("tls_fingerprint_reusing_client", cacheLogFields...)
 		return entry, nil
 	}
 	s.mu.RUnlock()
@@ -295,12 +320,13 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 				atomic.AddInt64(&entry.inFlight, 1)
 			}
 			s.mu.Unlock()
-			slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+			slog.Debug("tls_fingerprint_reusing_client", cacheLogFields...)
 			return entry, nil
 		}
 		slog.Debug("tls_fingerprint_evicting_stale_client",
 			"account_id", accountID,
-			"cache_key", cacheKey,
+			"proxy_enabled", parsedProxy != nil,
+			"proxy_protocol", proxyProtocol(parsedProxy),
 			"proxy_changed", entry.proxyKey != proxyKey,
 			"pool_changed", entry.poolKey != poolKey)
 		s.removeClientLocked(cacheKey, entry)
@@ -318,7 +344,7 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 
 	// 创建带 TLS 指纹的 Transport
-	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
+	slog.Debug("tls_fingerprint_creating_new_client", cacheLogFields...)
 	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
 	if err != nil {
 		s.mu.Unlock()
@@ -326,8 +352,8 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 
 	client := &http.Client{Transport: transport}
-	if s.shouldValidateResolvedIP() {
-		client.CheckRedirect = s.redirectChecker
+	if s.shouldValidateResolvedIP() && parsedProxy == nil {
+		client.CheckRedirect = s.directRedirectChecker
 	}
 
 	entry := &upstreamClientEntry{
@@ -357,7 +383,7 @@ func (s *httpUpstreamService) shouldValidateResolvedIP() bool {
 	return !s.cfg.Security.URLAllowlist.AllowPrivateHosts
 }
 
-func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
+func (s *httpUpstreamService) validateRequestHost(req *http.Request, parsedProxy *url.URL) error {
 	if !s.shouldValidateResolvedIP() {
 		return nil
 	}
@@ -368,17 +394,22 @@ func (s *httpUpstreamService) validateRequestHost(req *http.Request) error {
 	if host == "" {
 		return errors.New("request host is empty")
 	}
-	if err := urlvalidator.ValidateResolvedIP(host); err != nil {
+
+	// 代理请求不能在本机预解析目标域名；否则会出现请求走代理、DNS 从本机泄漏的链路不一致。
+	if parsedProxy != nil {
+		return nil
+	}
+	if err := validateResolvedIP(host); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *httpUpstreamService) redirectChecker(req *http.Request, via []*http.Request) error {
+func (s *httpUpstreamService) directRedirectChecker(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
-	return s.validateRequestHost(req)
+	return s.validateRequestHost(req, nil)
 }
 
 // acquireClient 获取或创建客户端，并标记为进行中请求
@@ -389,7 +420,15 @@ func (s *httpUpstreamService) acquireClient(proxyURL string, accountID int64, ac
 
 // acquireClientWithProfile 获取或创建客户端，并按请求 profile 选择协议策略。
 func (s *httpUpstreamService) acquireClientWithProfile(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
-	return s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true)
+	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return s.getClientEntryWithNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, true, true)
+}
+
+func (s *httpUpstreamService) acquireClientWithNormalizedProxy(proxyKey string, parsedProxy *url.URL, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
+	return s.getClientEntryWithNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, true, true)
 }
 
 // getOrCreateClient 获取或创建客户端
@@ -416,12 +455,16 @@ func (s *httpUpstreamService) getOrCreateClient(proxyURL string, accountID int64
 // enforceLimit=true 时会限制客户端数量，超限且无法淘汰时返回错误
 func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
 	// 获取隔离模式
-	isolation := s.getIsolationMode()
-	// 标准化代理 URL 并解析
 	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
 	if err != nil {
 		return nil, err
 	}
+	return s.getClientEntryWithNormalizedProxy(proxyKey, parsedProxy, accountID, accountConcurrency, profile, markInFlight, enforceLimit)
+}
+
+func (s *httpUpstreamService) getClientEntryWithNormalizedProxy(proxyKey string, parsedProxy *url.URL, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+	// 获取隔离模式
+	isolation := s.getIsolationMode()
 	// 根据请求 profile（例如 OpenAI）选择协议模式
 	protocolMode := s.resolveProtocolMode(profile, proxyKey, parsedProxy)
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
@@ -478,8 +521,8 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		return nil, fmt.Errorf("build transport: %w", err)
 	}
 	client := &http.Client{Transport: transport}
-	if s.shouldValidateResolvedIP() {
-		client.CheckRedirect = s.redirectChecker
+	if s.shouldValidateResolvedIP() && parsedProxy == nil {
+		client.CheckRedirect = s.directRedirectChecker
 	}
 	entry := &upstreamClientEntry{
 		client:       client,
@@ -873,7 +916,8 @@ func (s *httpUpstreamService) recordOpenAIHTTP2Failure(profile service.HTTPUpstr
 	activated, until := state.recordFailure(time.Now(), settings.fallbackErrorThreshold, settings.fallbackWindow, settings.fallbackTTL)
 	if activated {
 		slog.Warn("openai_http2_proxy_fallback_activated",
-			"proxy", proxyKey,
+			"proxy_enabled", proxyKey != directProxyKey,
+			"proxy_protocol", proxyProtocolFromKey(proxyKey),
 			"fallback_until", until.Format(time.RFC3339))
 	}
 }
@@ -970,27 +1014,22 @@ func normalizeProxyURL(raw string) (string, *url.URL, error) {
 	if parsed == nil {
 		return directProxyKey, nil, nil
 	}
-	// 规范化：小写 scheme/host，去除路径和查询参数
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-	parsed.Path = ""
-	parsed.RawPath = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	parsed.ForceQuery = false
-	if hostname := parsed.Hostname(); hostname != "" {
-		port := parsed.Port()
-		if (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
-			port = ""
-		}
-		hostname = strings.ToLower(hostname)
-		if port != "" {
-			parsed.Host = net.JoinHostPort(hostname, port)
-		} else {
-			parsed.Host = hostname
-		}
-	}
 	return parsed.String(), parsed, nil
+}
+
+func proxyProtocol(parsed *url.URL) string {
+	if parsed == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parsed.Scheme))
+}
+
+func proxyProtocolFromKey(proxyKey string) string {
+	parsed, err := url.Parse(strings.TrimSpace(proxyKey))
+	if err != nil || parsed == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parsed.Scheme))
 }
 
 // defaultPoolSettings 获取默认连接池配置
@@ -1156,11 +1195,11 @@ func antigravityTLSFingerprintDialTLSContext(profile *tlsfingerprint.Profile, pr
 		scheme := strings.ToLower(proxyURL.Scheme)
 		switch scheme {
 		case "socks5", "socks5h":
-			slog.Debug("tls_fingerprint_transport_socks5", "proxy", proxyURL.Host)
+			slog.Debug("tls_fingerprint_transport_socks5", "proxy_enabled", true, "proxy_protocol", scheme)
 			dialer := tlsfingerprint.NewSOCKS5ProxyDialer(profile, proxyURL)
 			return dialer.DialTLSContext(ctx, network, addr)
 		case "http", "https":
-			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
+			slog.Debug("tls_fingerprint_transport_http_connect", "proxy_enabled", true, "proxy_protocol", scheme)
 			dialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
 			return dialer.DialTLSContext(ctx, network, addr)
 		default:

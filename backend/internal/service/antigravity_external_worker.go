@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
 
@@ -155,6 +156,10 @@ func (e *antigravityExternalWorkerExecutor) do(req *http.Request, proxyURL strin
 	if req == nil {
 		return nil, fmt.Errorf("nil request")
 	}
+	normalizedProxyURL, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
 	if err := e.ensureStarted(); err != nil {
 		return nil, err
 	}
@@ -178,7 +183,7 @@ func (e *antigravityExternalWorkerExecutor) do(req *http.Request, proxyURL strin
 		TransferEncoding:             append([]string(nil), req.TransferEncoding...),
 		ContentLength:                req.ContentLength,
 		Host:                         req.Host,
-		ProxyURL:                     strings.TrimSpace(proxyURL),
+		ProxyURL:                     normalizedProxyURL,
 		ResponseHeaderTimeoutSeconds: timeoutSeconds,
 		TLSProfile:                   profile,
 	}

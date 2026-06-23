@@ -1,10 +1,17 @@
 package proxyutil
 
 import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -201,4 +208,139 @@ func TestConfigureTransportProxy_SpecialCharsInPassword(t *testing.T) {
 			assert.NotNil(t, transport.DialContext, "SOCKS5 should set DialContext")
 		})
 	}
+}
+
+func TestConfigureTransportProxy_SOCKS5HRemoteDNSHandshake(t *testing.T) {
+	capturedHost := make(chan string, 1)
+	capturedATYP := make(chan byte, 1)
+	proxyAddr := startSOCKS5CaptureServer(t, capturedHost, capturedATYP)
+
+	_, parsed, err := proxyurl.Parse("socks5://" + proxyAddr)
+	require.NoError(t, err)
+	require.Equal(t, "socks5h", parsed.Scheme)
+
+	transport := &http.Transport{}
+	require.NoError(t, ConfigureTransportProxy(transport, parsed))
+	require.NotNil(t, transport.DialContext)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := transport.DialContext(ctx, "tcp", "dns-only.invalid:443")
+	if err == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err)
+
+	require.Equal(t, byte(0x03), <-capturedATYP, "SOCKS CONNECT target must use FQDN address type")
+	require.Equal(t, "dns-only.invalid", <-capturedHost, "target host must be sent to proxy without local DNS resolution")
+}
+
+func TestConfigureTransportProxy_RawSOCKS5StillUsesRemoteDNS(t *testing.T) {
+	capturedHost := make(chan string, 1)
+	capturedATYP := make(chan byte, 1)
+	proxyAddr := startSOCKS5CaptureServer(t, capturedHost, capturedATYP)
+
+	parsed, err := url.Parse("socks5://" + proxyAddr)
+	require.NoError(t, err)
+
+	transport := &http.Transport{}
+	require.NoError(t, ConfigureTransportProxy(transport, parsed))
+	require.NotNil(t, transport.DialContext)
+	require.Equal(t, "socks5", parsed.Scheme, "ConfigureTransportProxy must not mutate caller-owned URL")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := transport.DialContext(ctx, "tcp", "dns-only.invalid:443")
+	if err == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err)
+
+	require.Equal(t, byte(0x03), <-capturedATYP, "raw socks5:// must be upgraded to remote-DNS SOCKS")
+	require.Equal(t, "dns-only.invalid", <-capturedHost, "target host must be sent to proxy without local DNS resolution")
+}
+
+func startSOCKS5CaptureServer(t *testing.T, hostCh chan<- string, atypCh chan<- byte) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		if err := handleSOCKS5Capture(conn, hostCh, atypCh); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Logf("SOCKS5 capture server error: %v", err)
+		}
+	}()
+
+	return listener.Addr().String()
+}
+
+func handleSOCKS5Capture(conn net.Conn, hostCh chan<- string, atypCh chan<- byte) error {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return err
+	}
+	methods := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return err
+	}
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return err
+	}
+
+	reqHeader := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reqHeader); err != nil {
+		return err
+	}
+	atyp := reqHeader[3]
+	atypCh <- atyp
+
+	var host string
+	switch atyp {
+	case 0x01:
+		ip := make([]byte, net.IPv4len)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+	case 0x03:
+		length := make([]byte, 1)
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return err
+		}
+		name := make([]byte, int(length[0]))
+		if _, err := io.ReadFull(conn, name); err != nil {
+			return err
+		}
+		host = string(name)
+	case 0x04:
+		ip := make([]byte, net.IPv6len)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+	}
+	port := make([]byte, 2)
+	if _, err := io.ReadFull(conn, port); err != nil {
+		return err
+	}
+	_ = binary.BigEndian.Uint16(port)
+	hostCh <- host
+
+	_, _ = conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	return nil
 }

@@ -1304,7 +1304,7 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 			t.Errorf("Accept-Encoding 不匹配: got %s", ae)
 		}
 
-		// 验证请求体与真实 Antigravity 客户端一致：只带 metadata.ideType。
+		// 验证请求体 metadata：与官方/真实 Antigravity 客户端一致，带 ideType + ideName + ideVersion。
 		var reqBody map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 			t.Fatalf("解析请求体失败: %v", err)
@@ -1316,11 +1316,11 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 		if metadata["ideType"] != "ANTIGRAVITY" {
 			t.Errorf("IDEType 不匹配: got %v, want ANTIGRAVITY", metadata["ideType"])
 		}
-		if _, ok := metadata["ideVersion"]; ok {
-			t.Errorf("不应发送 ideVersion: got %#v", metadata["ideVersion"])
+		if metadata["ideName"] != "antigravity" {
+			t.Errorf("IDEName 不匹配: got %v, want antigravity", metadata["ideName"])
 		}
-		if _, ok := metadata["ideName"]; ok {
-			t.Errorf("不应发送 ideName: got %#v", metadata["ideName"])
+		if v, _ := metadata["ideVersion"].(string); v == "" {
+			t.Errorf("IDEVersion 不应为空: got %#v", metadata["ideVersion"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")

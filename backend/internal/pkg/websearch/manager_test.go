@@ -278,4 +278,21 @@ func TestNewHTTPClient_ValidSOCKS5Proxy(t *testing.T) {
 	c, err := newHTTPClient("socks5://proxy.example.com:1080")
 	require.NoError(t, err)
 	require.NotNil(t, c)
+	transport, ok := c.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Nil(t, transport.Proxy)
+	require.NotNil(t, transport.DialContext)
+}
+
+func TestManager_GetOrCreateHTTPClient_NormalizesSOCKS5CacheKey(t *testing.T) {
+	m := NewManager(nil, nil)
+
+	first, err := m.getOrCreateHTTPClient("socks5://proxy.example.com:1080")
+	require.NoError(t, err)
+	second, err := m.getOrCreateHTTPClient("socks5h://proxy.example.com:1080")
+	require.NoError(t, err)
+
+	require.Same(t, first, second)
+	require.Len(t, m.clientCache, 1)
+	require.Contains(t, m.clientCache, "socks5h://proxy.example.com:1080")
 }

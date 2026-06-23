@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 )
 
 const (
@@ -127,21 +129,24 @@ func (w *antigravityWorkerState) bootstrapClientFor(factory antigravityBootstrap
 		factory = defaultAntigravityBootstrapClientFactory
 	}
 
-	proxyURL = strings.TrimSpace(proxyURL)
+	normalizedProxyURL, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.lastUsedAt = time.Now()
 
-	if w.bootstrapClient != nil && w.bootstrapClientProxy == proxyURL {
+	if w.bootstrapClient != nil && w.bootstrapClientProxy == normalizedProxyURL {
 		return w.bootstrapClient, nil
 	}
 
-	client, err := factory(proxyURL)
+	client, err := factory(normalizedProxyURL)
 	if err != nil {
 		return nil, err
 	}
 	w.bootstrapClient = client
-	w.bootstrapClientProxy = proxyURL
+	w.bootstrapClientProxy = normalizedProxyURL
 	return client, nil
 }
 

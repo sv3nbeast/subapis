@@ -8,6 +8,7 @@ package proxyurl
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -53,6 +54,26 @@ func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 	if !allowedSchemes[scheme] {
 		return "", nil, fmt.Errorf("unsupported proxy scheme %q (allowed: http, https, socks5, socks5h)", scheme)
 	}
+	parsed.Scheme = scheme
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.ForceQuery = false
+	if hostname := normalizeHostname(parsed.Hostname()); hostname != "" {
+		port := parsed.Port()
+		if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+			port = ""
+		}
+		if port != "" {
+			parsed.Host = net.JoinHostPort(hostname, port)
+		} else if ip := net.ParseIP(hostname); ip != nil && ip.To4() == nil {
+			parsed.Host = "[" + hostname + "]"
+		} else {
+			parsed.Host = hostname
+		}
+	}
+	trimmed = parsed.String()
 
 	// 自动升级 socks5 → socks5h，确保 DNS 由代理端解析，防止 DNS 泄漏。
 	// Go 的 golang.org/x/net/proxy 对 socks5:// 默认在客户端本地解析 DNS，
@@ -63,4 +84,8 @@ func Parse(raw string) (trimmed string, parsed *url.URL, err error) {
 	}
 
 	return trimmed, parsed, nil
+}
+
+func normalizeHostname(host string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
 }

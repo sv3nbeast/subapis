@@ -25,6 +25,25 @@ func TestCoderOpenAIWSClientDialer_ProxyHTTPClientReuse(t *testing.T) {
 	require.NotSame(t, c1, c3, "不同代理地址应分离客户端")
 }
 
+func TestCoderOpenAIWSClientDialer_SOCKS5ProxyUsesDialContextAndCanonicalCacheKey(t *testing.T) {
+	dialer := newDefaultOpenAIWSClientDialer()
+	impl, ok := dialer.(*coderOpenAIWSClientDialer)
+	require.True(t, ok)
+
+	c1, err := impl.proxyHTTPClient("socks5://proxy.example.com:1080")
+	require.NoError(t, err)
+	c2, err := impl.proxyHTTPClient("socks5h://proxy.example.com:1080")
+	require.NoError(t, err)
+	require.Same(t, c1, c2, "socks5 should canonicalize to socks5h and reuse one proxy client")
+
+	transport, ok := c1.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Nil(t, transport.Proxy)
+	require.NotNil(t, transport.DialContext)
+	require.Len(t, impl.proxyClients, 1)
+	require.Contains(t, impl.proxyClients, "socks5h://proxy.example.com:1080")
+}
+
 func TestCoderOpenAIWSClientDialer_ProxyHTTPClientInvalidURL(t *testing.T) {
 	dialer := newDefaultOpenAIWSClientDialer()
 	impl, ok := dialer.(*coderOpenAIWSClientDialer)

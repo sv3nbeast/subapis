@@ -189,8 +189,26 @@ func TestHTTPProxyDialerBasic(t *testing.T) {
 	if dialer.profile != profile {
 		t.Error("expected profile to be set")
 	}
-	if dialer.proxyURL != proxyURL {
-		t.Error("expected proxyURL to be set")
+	if dialer.proxyURL == nil {
+		t.Fatal("expected proxyURL to be set")
+	}
+	if got := dialer.proxyURL.Scheme; got != "http" {
+		t.Fatalf("expected proxyURL scheme to remain http, got %q", got)
+	}
+}
+
+func TestHTTPProxyDialerNormalizesScheme(t *testing.T) {
+	proxyURL := mustParseURL("HTTPS://proxy.example.com")
+	dialer := NewHTTPProxyDialer(&Profile{Name: "test"}, proxyURL)
+
+	if dialer.proxyURL == proxyURL {
+		t.Fatal("expected dialer to copy caller-owned proxy URL")
+	}
+	if got := dialer.proxyURL.Scheme; got != "https" {
+		t.Fatalf("dialer proxy scheme = %q, want https", got)
+	}
+	if got := proxyURL.Scheme; got != "https" {
+		t.Fatalf("caller proxy scheme = %q, want Go-parsed lowercase https", got)
 	}
 }
 
@@ -212,9 +230,164 @@ func TestSOCKS5ProxyDialerBasic(t *testing.T) {
 	if dialer.profile != profile {
 		t.Error("expected profile to be set")
 	}
-	if dialer.proxyURL != proxyURL {
-		t.Error("expected proxyURL to be set")
+	if dialer.proxyURL == nil {
+		t.Fatal("expected proxyURL to be set")
 	}
+	if got := dialer.proxyURL.Scheme; got != "socks5h" {
+		t.Fatalf("expected proxyURL scheme to normalize to socks5h, got %q", got)
+	}
+}
+
+func TestSOCKS5ProxyDialerNormalizesSOCKS5Scheme(t *testing.T) {
+	proxyURL := mustParseURL("socks5://proxy.example.com:1080")
+	dialer := NewSOCKS5ProxyDialer(&Profile{Name: "test"}, proxyURL)
+
+	if dialer.proxyURL == proxyURL {
+		t.Fatal("expected dialer to copy caller-owned proxy URL")
+	}
+	if got := dialer.proxyURL.Scheme; got != "socks5h" {
+		t.Fatalf("dialer proxy scheme = %q, want socks5h", got)
+	}
+	if got := proxyURL.Scheme; got != "socks5" {
+		t.Fatalf("caller proxy scheme mutated to %q", got)
+	}
+}
+
+func TestSOCKS5ProxyDialerSendsFQDNToProxy(t *testing.T) {
+	capturedHost := make(chan string, 1)
+	capturedATYP := make(chan byte, 1)
+	proxyAddr := startSOCKS5CaptureServer(t, capturedHost, capturedATYP)
+
+	proxyURL := mustParseURL("socks5h://" + proxyAddr)
+	dialer := NewSOCKS5ProxyDialer(&Profile{Name: "test"}, proxyURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := dialer.DialTLSContext(ctx, "tcp", "dns-only.invalid:443")
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expected TLS handshake to fail after SOCKS capture server rejects connect")
+	}
+
+	if got := <-capturedATYP; got != 0x03 {
+		t.Fatalf("SOCKS CONNECT ATYP = 0x%x, want FQDN 0x03", got)
+	}
+	if got := <-capturedHost; got != "dns-only.invalid" {
+		t.Fatalf("SOCKS CONNECT host = %q, want dns-only.invalid", got)
+	}
+}
+
+func TestSOCKS5ProxyDialerRawSOCKS5SendsFQDNToProxy(t *testing.T) {
+	capturedHost := make(chan string, 1)
+	capturedATYP := make(chan byte, 1)
+	proxyAddr := startSOCKS5CaptureServer(t, capturedHost, capturedATYP)
+
+	proxyURL := mustParseURL("socks5://" + proxyAddr)
+	dialer := NewSOCKS5ProxyDialer(&Profile{Name: "test"}, proxyURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := dialer.DialTLSContext(ctx, "tcp", "dns-only.invalid:443")
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expected TLS handshake to fail after SOCKS capture server rejects connect")
+	}
+
+	if got := <-capturedATYP; got != 0x03 {
+		t.Fatalf("SOCKS CONNECT ATYP = 0x%x, want FQDN 0x03", got)
+	}
+	if got := <-capturedHost; got != "dns-only.invalid" {
+		t.Fatalf("SOCKS CONNECT host = %q, want dns-only.invalid", got)
+	}
+}
+
+func startSOCKS5CaptureServer(t *testing.T, hostCh chan<- string, atypCh chan<- byte) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen SOCKS5 capture server: %v", err)
+	}
+
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		if err := handleSOCKS5Capture(conn, hostCh, atypCh); err != nil {
+			t.Logf("SOCKS5 capture server error: %v", err)
+		}
+	}()
+
+	return listener.Addr().String()
+}
+
+func handleSOCKS5Capture(conn net.Conn, hostCh chan<- string, atypCh chan<- byte) error {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return err
+	}
+	methods := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return err
+	}
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return err
+	}
+
+	reqHeader := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reqHeader); err != nil {
+		return err
+	}
+	atyp := reqHeader[3]
+	atypCh <- atyp
+
+	var host string
+	switch atyp {
+	case 0x01:
+		ip := make([]byte, net.IPv4len)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+	case 0x03:
+		length := make([]byte, 1)
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return err
+		}
+		name := make([]byte, int(length[0]))
+		if _, err := io.ReadFull(conn, name); err != nil {
+			return err
+		}
+		host = string(name)
+	case 0x04:
+		ip := make([]byte, net.IPv6len)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+	default:
+		host = ""
+	}
+	port := make([]byte, 2)
+	if _, err := io.ReadFull(conn, port); err != nil {
+		return err
+	}
+	_ = binary.BigEndian.Uint16(port)
+	hostCh <- host
+
+	_, _ = conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	return nil
 }
 
 // TestBuildClientHelloSpec tests ClientHello spec construction.

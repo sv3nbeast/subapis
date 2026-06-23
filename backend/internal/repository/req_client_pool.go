@@ -36,6 +36,11 @@ var sharedReqClients sync.Map
 // getSharedReqClient 获取共享的 req 客户端实例
 // 性能优化：相同配置复用同一客户端，避免重复创建
 func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
+	normalizedProxyURL, _, err := proxyurl.Parse(opts.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	opts.ProxyURL = normalizedProxyURL
 	key := buildReqClientKey(opts)
 	if cached, ok := sharedReqClients.Load(key); ok {
 		if c, ok := cached.(*req.Client); ok {
@@ -50,12 +55,8 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 	if opts.Impersonate {
 		client = client.ImpersonateChrome()
 	}
-	trimmed, _, err := proxyurl.Parse(opts.ProxyURL)
-	if err != nil {
-		return nil, err
-	}
-	if trimmed != "" {
-		client.SetProxyURL(trimmed)
+	if opts.ProxyURL != "" {
+		client.SetProxyURL(opts.ProxyURL)
 	}
 
 	actual, _ := sharedReqClients.LoadOrStore(key, client)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,12 @@ var validateResolvedIP = urlvalidator.ValidateResolvedIP
 // 性能优化：相同配置复用同一客户端，避免重复创建 Transport
 // 安全说明：代理配置失败时直接返回错误，不会回退到直连，避免 IP 关联风险
 func GetClient(opts Options) (*http.Client, error) {
+	normalizedProxyURL, parsedProxy, err := proxyurl.Parse(opts.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	opts.ProxyURL = normalizedProxyURL
+
 	key := buildClientKey(opts)
 	if cached, ok := sharedClients.Load(key); ok {
 		if client, ok := cached.(*http.Client); ok {
@@ -70,7 +77,7 @@ func GetClient(opts Options) (*http.Client, error) {
 		}
 	}
 
-	client, err := buildClient(opts)
+	client, err := buildClientWithParsedProxy(opts, parsedProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -83,13 +90,21 @@ func GetClient(opts Options) (*http.Client, error) {
 }
 
 func buildClient(opts Options) (*http.Client, error) {
-	transport, err := buildTransport(opts)
+	_, parsedProxy, err := proxyurl.Parse(opts.ProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return buildClientWithParsedProxy(opts, parsedProxy)
+}
+
+func buildClientWithParsedProxy(opts Options, parsedProxy *url.URL) (*http.Client, error) {
+	transport, err := buildTransport(opts, parsedProxy)
 	if err != nil {
 		return nil, err
 	}
 
 	var rt http.RoundTripper = transport
-	if opts.ValidateResolvedIP && !opts.AllowPrivateHosts {
+	if opts.ValidateResolvedIP && !opts.AllowPrivateHosts && parsedProxy == nil {
 		rt = newValidatedTransport(transport)
 	}
 	return &http.Client{
@@ -98,7 +113,7 @@ func buildClient(opts Options) (*http.Client, error) {
 	}, nil
 }
 
-func buildTransport(opts Options) (*http.Transport, error) {
+func buildTransport(opts Options, parsedProxy *url.URL) (*http.Transport, error) {
 	// 使用自定义值或默认值
 	maxIdleConns := opts.MaxIdleConns
 	if maxIdleConns <= 0 {
@@ -126,15 +141,11 @@ func buildTransport(opts Options) (*http.Transport, error) {
 		return nil, fmt.Errorf("insecure_skip_verify is not allowed; install a trusted certificate instead")
 	}
 
-	_, parsed, err := proxyurl.Parse(opts.ProxyURL)
-	if err != nil {
-		return nil, err
-	}
-	if parsed == nil {
+	if parsedProxy == nil {
 		return transport, nil
 	}
 
-	if err := proxyutil.ConfigureTransportProxy(transport, parsed); err != nil {
+	if err := proxyutil.ConfigureTransportProxy(transport, parsedProxy); err != nil {
 		return nil, err
 	}
 

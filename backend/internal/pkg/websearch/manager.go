@@ -9,12 +9,12 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/redis/go-redis/v9"
 )
@@ -363,21 +363,34 @@ func (m *Manager) executeSearch(ctx context.Context, cfg ProviderConfig, req Sea
 // --- HTTP client cache ---
 
 func (m *Manager) getOrCreateHTTPClient(proxyURL string) (*http.Client, error) {
+	normalizedProxyURL, err := normalizeHTTPClientProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+
 	m.clientMu.Lock()
 	defer m.clientMu.Unlock()
 
-	if c, ok := m.clientCache[proxyURL]; ok {
+	if c, ok := m.clientCache[normalizedProxyURL]; ok {
 		return c, nil
 	}
 	if len(m.clientCache) >= maxCachedClients {
 		m.clientCache = make(map[string]*http.Client)
 	}
-	c, err := newHTTPClient(proxyURL)
+	c, err := newHTTPClient(normalizedProxyURL)
 	if err != nil {
 		return nil, err
 	}
-	m.clientCache[proxyURL] = c
+	m.clientCache[normalizedProxyURL] = c
 	return c, nil
+}
+
+func normalizeHTTPClientProxyURL(proxyURL string) (string, error) {
+	normalizedProxyURL, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	return normalizedProxyURL, nil
 }
 
 // newHTTPClient creates an HTTP client with proper timeout settings.
@@ -391,11 +404,11 @@ func newHTTPClient(proxyURL string) (*http.Client, error) {
 		TLSHandshakeTimeout:   proxyTLSTimeout,
 		ResponseHeaderTimeout: searchDataTimeout,
 	}
-	if proxyURL != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
-		}
+	_, parsed, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	if parsed != nil {
 		if err := proxyutil.ConfigureTransportProxy(transport, parsed); err != nil {
 			return nil, fmt.Errorf("configure proxy: %w", err)
 		}

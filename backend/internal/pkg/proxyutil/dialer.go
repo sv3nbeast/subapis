@@ -2,11 +2,11 @@
 //
 // 支持的代理协议：
 //   - HTTP/HTTPS: 通过 Transport.Proxy 设置
-//   - SOCKS5: 通过 Transport.DialContext 设置（客户端本地解析 DNS）
-//   - SOCKS5H: 通过 Transport.DialContext 设置（代理端远程解析 DNS，推荐）
+//   - SOCKS5/SOCKS5H: 通过 Transport.DialContext 设置
 //
-// 注意：proxyurl.Parse() 会自动将 socks5:// 升级为 socks5h://，
-// 确保 DNS 也由代理端解析，防止 DNS 泄漏。
+// 注意：proxyurl.Parse() 会自动将 socks5:// 升级为 socks5h://。
+// ConfigureTransportProxy 也会防御性升级 socks5://，确保未来误用时
+// 目标域名仍随 SOCKS 握手交给代理端解析，防止 DNS 泄漏。
 package proxyutil
 
 import (
@@ -24,8 +24,7 @@ import (
 //
 // 支持的协议：
 //   - http/https: 设置 transport.Proxy
-//   - socks5: 设置 transport.DialContext（客户端本地解析 DNS）
-//   - socks5h: 设置 transport.DialContext（代理端远程解析 DNS，推荐）
+//   - socks5/socks5h: 设置 transport.DialContext
 //
 // 参数：
 //   - transport: 需要配置的 http.Transport
@@ -38,14 +37,21 @@ func ConfigureTransportProxy(transport *http.Transport, proxyURL *url.URL) error
 		return nil
 	}
 
-	scheme := strings.ToLower(proxyURL.Scheme)
+	normalizedProxyURL := *proxyURL
+	scheme := strings.ToLower(normalizedProxyURL.Scheme)
+	normalizedProxyURL.Scheme = scheme
+	if scheme == "socks5" {
+		scheme = "socks5h"
+		normalizedProxyURL.Scheme = scheme
+	}
+
 	switch scheme {
 	case "http", "https":
-		transport.Proxy = http.ProxyURL(proxyURL)
+		transport.Proxy = http.ProxyURL(&normalizedProxyURL)
 		return nil
 
-	case "socks5", "socks5h":
-		dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
+	case "socks5h":
+		dialer, err := proxy.FromURL(&normalizedProxyURL, proxy.Direct)
 		if err != nil {
 			return fmt.Errorf("create socks5 dialer: %w", err)
 		}

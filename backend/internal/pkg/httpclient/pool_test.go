@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -112,4 +113,64 @@ func TestValidatedTransport_ValidationErrorStopsRoundTrip(t *testing.T) {
 	_, err = transport.RoundTrip(req)
 	require.ErrorIs(t, err, expectedErr)
 	require.Equal(t, int32(0), atomic.LoadInt32(&baseCalls))
+}
+
+func TestBuildClient_WithProxySkipsValidatedTransport(t *testing.T) {
+	originalValidate := validateResolvedIP
+	defer func() { validateResolvedIP = originalValidate }()
+
+	var validateCalls int32
+	validateResolvedIP = func(host string) error {
+		atomic.AddInt32(&validateCalls, 1)
+		return errors.New("must not locally resolve proxied host: " + host)
+	}
+
+	client, err := buildClient(Options{
+		ProxyURL:           "socks5://proxy.local:1080",
+		ValidateResolvedIP: true,
+		AllowPrivateHosts:  false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	_, isValidated := client.Transport.(*validatedTransport)
+	require.False(t, isValidated, "proxied clients must not wrap transport with local DNS validation")
+	require.Equal(t, int32(0), atomic.LoadInt32(&validateCalls))
+}
+
+func TestGetClient_NormalizesSOCKS5ProxyCacheKey(t *testing.T) {
+	sharedClients = sync.Map{}
+	t.Cleanup(func() { sharedClients = sync.Map{} })
+
+	first, err := GetClient(Options{ProxyURL: "socks5://proxy.local:1080", Timeout: time.Second})
+	require.NoError(t, err)
+	second, err := GetClient(Options{ProxyURL: "socks5h://proxy.local:1080", Timeout: time.Second})
+	require.NoError(t, err)
+
+	require.Same(t, first, second)
+
+	var count int
+	sharedClients.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	require.Equal(t, 1, count)
+}
+
+func TestGetClient_NormalizesHTTPProxyCacheKey(t *testing.T) {
+	sharedClients = sync.Map{}
+	t.Cleanup(func() { sharedClients = sync.Map{} })
+
+	first, err := GetClient(Options{ProxyURL: "HTTP://PROXY.LOCAL:80/path?x=1#frag", Timeout: time.Second})
+	require.NoError(t, err)
+	second, err := GetClient(Options{ProxyURL: "http://proxy.local", Timeout: time.Second})
+	require.NoError(t, err)
+
+	require.Same(t, first, second)
+
+	var count int
+	sharedClients.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	require.Equal(t, 1, count)
 }

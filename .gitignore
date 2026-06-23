@@ -125,6 +125,7 @@ scripts/*
 !scripts/rebuild-prod-sub2api.sh
 !scripts/rollback-prod.sh
 !scripts/rollback-prod-sub2api.sh
+!scripts/verify-prod-proxy-dns.sh
 .code-review-state
 #openspec/
 code-reviews/

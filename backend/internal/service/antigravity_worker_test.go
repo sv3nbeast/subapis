@@ -46,6 +46,39 @@ func TestAntigravityWorkerState_BootstrapClientReusedPerAccount(t *testing.T) {
 	require.Equal(t, 2, factoryCalls)
 }
 
+func TestAntigravityWorkerState_BootstrapClientNormalizesSOCKS5Proxy(t *testing.T) {
+	worker := newAntigravityWorkerState(101)
+	var seenProxyURLs []string
+	factory := func(proxyURL string) (antigravityBootstrapClient, error) {
+		seenProxyURLs = append(seenProxyURLs, proxyURL)
+		return &antigravityBootstrapClientStub{
+			loadResp: &antigravity.LoadCodeAssistResponse{},
+		}, nil
+	}
+
+	client1, err := worker.bootstrapClientFor(factory, "socks5://proxy.example.com:1080")
+	require.NoError(t, err)
+	client2, err := worker.bootstrapClientFor(factory, "socks5h://proxy.example.com:1080")
+	require.NoError(t, err)
+
+	require.Same(t, client1, client2)
+	require.Equal(t, []string{"socks5h://proxy.example.com:1080"}, seenProxyURLs)
+	require.Equal(t, "socks5h://proxy.example.com:1080", worker.bootstrapClientProxy)
+}
+
+func TestAntigravityWorkerHTTPExecutor_NormalizesSOCKS5ProxyReuseKey(t *testing.T) {
+	executor := &antigravityWorkerHTTPExecutor{}
+	account := &Account{ID: 101, Platform: PlatformAntigravity, Concurrency: 2}
+
+	client1, err := executor.ensureClient("socks5://proxy.example.com:1080", account, nil, time.Second)
+	require.NoError(t, err)
+	client2, err := executor.ensureClient("socks5h://proxy.example.com:1080", account, nil, time.Second)
+	require.NoError(t, err)
+
+	require.Same(t, client1, client2)
+	require.Equal(t, "socks5h://proxy.example.com:1080", executor.proxyURL)
+}
+
 func TestAntigravityGatewayService_DoAntigravityUpstreamRequest_UsesWorkerTransport(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`ok`))

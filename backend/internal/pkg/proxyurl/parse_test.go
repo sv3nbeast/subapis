@@ -146,6 +146,66 @@ func TestParse_带空白的有效URL(t *testing.T) {
 	}
 }
 
+func TestParse_规范化缓存键相关字段(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "lowercase host and drop http default port",
+			raw:  "HTTP://PROXY.EXAMPLE.COM:80/path?x=1#frag",
+			want: "http://proxy.example.com",
+		},
+		{
+			name: "lowercase host and drop https default port",
+			raw:  "HTTPS://PROXY.EXAMPLE.COM:443/path?x=1#frag",
+			want: "https://proxy.example.com",
+		},
+		{
+			name: "preserve non-default port",
+			raw:  "https://PROXY.EXAMPLE.COM:8443/path?x=1#frag",
+			want: "https://proxy.example.com:8443",
+		},
+		{
+			name: "normalize socks5 host and path",
+			raw:  "socks5://PROXY.EXAMPLE.COM:1080/path?x=1#frag",
+			want: "socks5h://proxy.example.com:1080",
+		},
+		{
+			name: "preserve ipv6 bracket formatting",
+			raw:  "http://[::1]:8080/path?x=1#frag",
+			want: "http://[::1]:8080",
+		},
+		{
+			name: "preserve ipv6 brackets after dropping default http port",
+			raw:  "http://[::1]:80/path?x=1#frag",
+			want: "http://[::1]",
+		},
+		{
+			name: "preserve ipv6 brackets after dropping default https port",
+			raw:  "https://[2001:db8::1]:443/path?x=1#frag",
+			want: "https://[2001:db8::1]",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			trimmed, parsed, err := Parse(tc.raw)
+			if err != nil {
+				t.Fatalf("Parse(%q) failed: %v", tc.raw, err)
+			}
+			if trimmed != tc.want {
+				t.Fatalf("trimmed = %q, want %q", trimmed, tc.want)
+			}
+			if got := parsed.String(); got != tc.want {
+				t.Fatalf("parsed.String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParse_Scheme大小写不敏感(t *testing.T) {
 	// 大写 SOCKS5 应被接受并升级为 socks5h
 	trimmed, parsed, err := Parse("SOCKS5://proxy.example.com:1080")
@@ -159,10 +219,27 @@ func TestParse_Scheme大小写不敏感(t *testing.T) {
 		t.Errorf("大写 SOCKS5 trimmed 应升级为 socks5h://: got %q", trimmed)
 	}
 
-	// 大写 HTTP 应被接受（不变）
-	_, _, err = Parse("HTTP://proxy.example.com:8080")
+	// 大写 HTTP 应被接受并规范化为小写，避免缓存 key 分裂。
+	trimmed, parsed, err = Parse("HTTP://proxy.example.com:8080")
 	if err != nil {
 		t.Fatalf("大写 HTTP 应被接受: %v", err)
+	}
+	if parsed.Scheme != "http" {
+		t.Errorf("大写 HTTP Scheme 应规范化为 http: got %q", parsed.Scheme)
+	}
+	if trimmed != "http://proxy.example.com:8080" {
+		t.Errorf("大写 HTTP trimmed 应规范化: got %q", trimmed)
+	}
+
+	trimmed, parsed, err = Parse("HTTPS://proxy.example.com:8443")
+	if err != nil {
+		t.Fatalf("大写 HTTPS 应被接受: %v", err)
+	}
+	if parsed.Scheme != "https" {
+		t.Errorf("大写 HTTPS Scheme 应规范化为 https: got %q", parsed.Scheme)
+	}
+	if trimmed != "https://proxy.example.com:8443" {
+		t.Errorf("大写 HTTPS trimmed 应规范化: got %q", trimmed)
 	}
 }
 

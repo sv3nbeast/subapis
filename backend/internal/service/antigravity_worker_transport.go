@@ -51,7 +51,10 @@ func (e *antigravityWorkerHTTPExecutor) ensureClient(proxyURL string, account *A
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	proxyURL = strings.TrimSpace(proxyURL)
+	normalizedProxyURL, _, err := proxyurl.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
 	tlsProfileKey := antigravityWorkerTLSProfileKey(profile)
 	concurrency := 1
 	if account != nil && account.Concurrency > 0 {
@@ -62,14 +65,14 @@ func (e *antigravityWorkerHTTPExecutor) ensureClient(proxyURL string, account *A
 	}
 
 	if e.client != nil &&
-		e.proxyURL == proxyURL &&
+		e.proxyURL == normalizedProxyURL &&
 		e.tlsProfileKey == tlsProfileKey &&
 		e.concurrency == concurrency &&
 		e.responseHeaderTimeout == responseHeaderTimeout {
 		return e.client, nil
 	}
 
-	client, err := buildAntigravityWorkerHTTPClient(proxyURL, concurrency, profile, responseHeaderTimeout)
+	client, err := buildAntigravityWorkerHTTPClient(normalizedProxyURL, concurrency, profile, responseHeaderTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +80,7 @@ func (e *antigravityWorkerHTTPExecutor) ensureClient(proxyURL string, account *A
 		e.client.CloseIdleConnections()
 	}
 	e.client = client
-	e.proxyURL = proxyURL
+	e.proxyURL = normalizedProxyURL
 	e.tlsProfileKey = tlsProfileKey
 	e.concurrency = concurrency
 	e.responseHeaderTimeout = responseHeaderTimeout
