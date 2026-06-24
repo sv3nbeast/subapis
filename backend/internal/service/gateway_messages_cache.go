@@ -116,6 +116,59 @@ func addMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
 	return body
 }
 
+// addBridgeMessageCacheBreakpointsWithTTL 是 Claude Desktop 3P / Agent SDK 桥接
+// 客户端专用的 messages 断点策略：**只打一个靠前的稳定锚点**，不打"最后一条
+// message"那个会随对话漂移的增量断点。
+//
+// 为什么和 addMessageCacheBreakpointsWithTTL 不同：抓包证实这类客户端自身只在
+// "最后一条 message"打一个断点，且该断点在「最后一条」「倒数第二条」之间逐轮
+// 跳动（distFromEnd 在 0/1 间变化）。由于没有靠前的稳定锚点，末尾断点一漂移、
+// 本次声明的缓存写入边界就与上次对不上，cache_read 直接跌回 system-only、整段
+// 重建。网关 strip 掉客户端那个漂移断点后，由本函数重打一个固定落在"倒数第二个
+// role=user message"的锚点：即使锚点 index 随对话增长而后移，其之前的 messages
+// 前缀逐字节不变，按 Anthropic 最长公共前缀语义即可稳定命中锚点边界，不再跌回
+// system。
+//
+// 断点预算：bridge 路径下 system 已带 2 个断点（客户端，本函数不碰）+ 本函数 1
+// 个 messages 锚点 + tools[-1] 1 个 = 4，恰好不超 maxCacheControlBlocks，
+// 不会触发 enforceCacheControlLimit 把最靠前的锚点裁掉。
+//
+// messages < 4 时退化为打最后一条（短对话谈不上漂移），与 addMessageCacheBreakpoints
+// 的退化行为一致。
+//
+// 调用前应先 stripMessageCacheControl 清掉客户端的漂移断点，保证幂等与稳定。
+func addBridgeMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
+	if ttl == "" {
+		ttl = claude.DefaultCacheControlTTL
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return body
+	}
+	arr := messages.Array()
+	if len(arr) == 0 {
+		return body
+	}
+
+	if len(arr) < 4 {
+		return injectCacheControlOnLastContentBlockWithTTL(body, len(arr)-1, &arr[len(arr)-1], ttl)
+	}
+
+	userCount := 0
+	for i := len(arr) - 1; i >= 0; i-- {
+		if arr[i].Get("role").String() != "user" {
+			continue
+		}
+		userCount++
+		if userCount == 2 {
+			return injectCacheControlOnLastContentBlockWithTTL(body, i, &arr[i], ttl)
+		}
+	}
+
+	// 兜底：messages ≥ 4 但找不到两个 user（极少见），退化为最后一条。
+	return injectCacheControlOnLastContentBlockWithTTL(body, len(arr)-1, &arr[len(arr)-1], ttl)
+}
+
 // rewriteMessageCacheControlIfEnabled 按系统设置决定是否执行旧版 messages 缓存断点改写。
 func (s *GatewayService) rewriteMessageCacheControlIfEnabled(ctx context.Context, body []byte) []byte {
 	return s.rewriteMessageCacheControlIfEnabledWithTTL(ctx, body, claude.DefaultCacheControlTTL)

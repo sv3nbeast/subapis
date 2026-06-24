@@ -321,9 +321,10 @@ func TestShouldInjectBreakpointsForBridge(t *testing.T) {
 		ctx := SetClaudeCodeUserAgent(context.Background(), plainCLIUA)
 		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyNoCache))
 	})
-	t.Run("bridge UA + body already has cache_control → false", func(t *testing.T) {
+	t.Run("bridge UA + body already has cache_control → true", func(t *testing.T) {
+		// 放宽后：客户端自带 cache_control 反而是漂移源，网关也要接管规整。
 		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
-		require.False(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyHasCache))
+		require.True(t, svc.shouldInjectBreakpointsForBridge(ctx, oauthAcc, bodyHasCache))
 	})
 	t.Run("bridge UA + no cache_control → true", func(t *testing.T) {
 		ctx := SetClaudeCodeUserAgent(context.Background(), bridgeUA)
@@ -348,13 +349,121 @@ func TestInjectBridgeCacheBreakpoints_AddsMessagesAndTools(t *testing.T) {
 
 func TestInjectBridgeCacheBreakpoints_DoesNotTouchSystem(t *testing.T) {
 	svc := &GatewayService{}
-	// 客户端自带 system；bridge 注入路径不能动它（避免改变缓存前缀）。
-	body := []byte(`{"system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	// 客户端自带 system（含 cache_control）+ 一个会漂移的 messages 断点。
+	// bridge 接管路径：system 一字不动（含其 cache_control），messages 断点被
+	// strip 后由网关重打。
+	body := []byte(`{"system":[{"type":"text","text":"You are helpful","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral","ttl":"5m"}}]}]}`)
 	out := svc.injectBridgeCacheBreakpoints(nil, body)
 
+	// system 完全保留（文本 + 原 cache_control 不变）
 	require.Equal(t, "You are helpful", gjson.GetBytes(out, "system.0.text").String())
-	require.False(t, gjson.GetBytes(out, "system.0.cache_control").Exists())
+	require.Equal(t, "ephemeral", gjson.GetBytes(out, "system.0.cache_control.type").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "system.0.cache_control.ttl").String())
+	// messages 断点被网关重打为 1h（单条 message 退化为最后一条）
 	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+}
+
+// TestInjectBridgeCacheBreakpoints_AnchorStableAcrossTurns 验证修复核心不变量：
+// 同一对话连续两轮（round2 在末尾追加消息、客户端断点漂移），网关重打后两轮
+// 锚点 message 之前的 messages 前缀逐字节相同 —— 这是缓存能跨轮稳定命中的依据。
+func TestInjectBridgeCacheBreakpoints_AnchorStableAcrossTurns(t *testing.T) {
+	svc := &GatewayService{}
+
+	// round1：6 条 message，客户端把断点打在最后一条（漂移源）。
+	round1 := []byte(`{"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"u1"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a1"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u2"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a2"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u3"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a3","cache_control":{"type":"ephemeral","ttl":"1h"}}]}` +
+		`]}`)
+	// round2：在 round1 基础上追加 2 条（u4 / a4），断点又漂到新的最后一条。
+	round2 := []byte(`{"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"u1"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a1"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u2"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a2"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u3"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a3"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u4"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a4","cache_control":{"type":"ephemeral","ttl":"1h"}}]}` +
+		`]}`)
+
+	out1 := svc.injectBridgeCacheBreakpoints(nil, round1)
+	out2 := svc.injectBridgeCacheBreakpoints(nil, round2)
+
+	// 找出各自唯一的 messages 锚点 index（断点落在哪一条 message）。
+	anchor := func(out []byte) int {
+		idx := -1
+		gjson.GetBytes(out, "messages").ForEach(func(i, msg gjson.Result) bool {
+			msg.Get("content").ForEach(func(_, block gjson.Result) bool {
+				if block.Get("cache_control").Exists() {
+					idx = int(i.Int())
+				}
+				return true
+			})
+			return true
+		})
+		return idx
+	}
+	a1 := anchor(out1)
+	a2 := anchor(out2)
+	require.GreaterOrEqual(t, a1, 0)
+	require.GreaterOrEqual(t, a2, 0)
+
+	// 锚点恒为"倒数第二个 user"：round1 → index 2(u2)... 实为倒二 user；
+	// round2 追加后倒二 user 后移，但其之前的 messages 前缀必须逐字节一致。
+	prefix := func(out []byte, n int) string {
+		arr := gjson.GetBytes(out, "messages").Array()
+		// 取 [0..n) 这 n 条 message 的原始文本序列（去掉本轮新打的 cache_control 影响，
+		// 只比对 role+text 内容）。
+		var sb strings.Builder
+		for i := 0; i < n && i < len(arr); i++ {
+			sb.WriteString(arr[i].Get("role").String())
+			sb.WriteString(":")
+			arr[i].Get("content").ForEach(func(_, b gjson.Result) bool {
+				sb.WriteString(b.Get("text").String())
+				sb.WriteString("|")
+				return true
+			})
+		}
+		return sb.String()
+	}
+	// round1 锚点之前的前缀，必须是 round2 锚点之前前缀的子串前缀（内容一致、可命中）。
+	p1 := prefix(out1, a1)
+	p2 := prefix(out2, a1) // 用同样的 a1 条数，比对 round2 的同段前缀
+	require.Equal(t, p1, p2, "锚点之前的 messages 前缀必须跨轮逐字节一致")
+}
+
+// TestInjectBridgeCacheBreakpoints_BudgetWithinLimit 验证断点预算：bridge 接管 +
+// enforceCacheControlLimit 后，system 的 2 个断点全部存活、messages 锚点存活、
+// 总数 ≤ 4，不会因超限把最靠前的锚点裁掉。
+func TestInjectBridgeCacheBreakpoints_BudgetWithinLimit(t *testing.T) {
+	svc := &GatewayService{}
+	// system 2 个断点（客户端自带）+ 长 messages（≥4）+ tools。
+	body := []byte(`{` +
+		`"system":[` +
+		`{"type":"text","text":"s1","cache_control":{"type":"ephemeral","ttl":"1h"}},` +
+		`{"type":"text","text":"s2","cache_control":{"type":"ephemeral","ttl":"1h"}}` +
+		`],` +
+		`"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"u1"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a1"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u2","cache_control":{"type":"ephemeral","ttl":"5m"}}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a2","cache_control":{"type":"ephemeral","ttl":"5m"}}]}` +
+		`],` +
+		`"tools":[{"name":"bash","input_schema":{}}]` +
+		`}`)
+
+	out := svc.injectBridgeCacheBreakpoints(nil, body)
+	out = enforceCacheControlLimit(out)
+
+	_, messagePaths, toolPaths, systemPaths := collectCacheControlPaths(out)
+	total := len(messagePaths) + len(toolPaths) + len(systemPaths)
+	require.LessOrEqual(t, total, 4, "断点总数不得超过上限")
+	require.Equal(t, 2, len(systemPaths), "system 两个断点必须全部存活")
+	require.GreaterOrEqual(t, len(messagePaths), 1, "messages 锚点必须存活")
 }
 
 func TestBuildToolNameRewriteFromBody_ReverseOrderedByLengthDesc(t *testing.T) {

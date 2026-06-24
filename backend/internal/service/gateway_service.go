@@ -5592,41 +5592,43 @@ func (s *GatewayService) shouldMimicClaudeCodeForAccount(account *Account, isCla
 }
 
 // shouldInjectBreakpointsForBridge 决定是否要为 Claude Desktop 3P / Agent SDK
-// 桥接客户端补 messages + tools 缓存断点。
+// 桥接客户端接管 messages + tools 缓存断点。
 //
 // 背景：claude-cli/* (claude-desktop-3p, agent-sdk/*) UA 走的是 Claude Code
-// Desktop 的 3P 自定义端点。SDK 主代理回合 enablePromptCaching=true 会自己
-// 打断点；Task 工具拉起的子代理回合 SDK 内部硬编码 enablePromptCaching=false
-// (anthropics/claude-code issue #29966)，body 里一个 cache_control 都没有。
+// Desktop 的 3P 自定义端点。抓包证实这类客户端在 messages 上只打一个断点、且该
+// 断点在「最后一条」「倒数第二条」之间逐轮漂移，导致缓存写入边界跨轮失配、
+// cache_read 暴跌回 system-only、整段重建。SDK 主代理回合自带 cache_control、
+// 子代理回合（issue #29966）则一个都不带，两类回合的断点布局都不稳定。
 //
-// 这条分支只在"账号是 Anthropic OAuth/SetupToken + UA 是 bridge 变种 + 请求
-// 体确实没有任何 cache_control"三件都成立时才动手，且只补 messages+tools，
-// 不重写 system —— 避免改变缓存前缀、破坏主代理回合已有的命中。
+// 因此这条分支只要"账号是 Anthropic OAuth/SetupToken + UA 是 bridge 变种"就接管
+// messages 断点（不再要求请求体无 cache_control —— 客户端带了反而是漂移源），由
+// injectBridgeCacheBreakpoints 统一 strip + 重打稳定锚点。system 一字不动，保留
+// 客户端的 system 断点（一直稳定命中）和防第三方检测的设计意图。
 func (s *GatewayService) shouldInjectBreakpointsForBridge(
 	ctx context.Context, account *Account, body []byte,
 ) bool {
 	if account == nil || !account.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}
-	if !IsClaudeCodeXMLInvokeBridgeUserAgent(ClaudeCodeUserAgent(ctx)) {
-		return false
-	}
-	return !bodyHasAnyCacheControl(body)
+	return IsClaudeCodeXMLInvokeBridgeUserAgent(ClaudeCodeUserAgent(ctx))
 }
 
-// injectBridgeCacheBreakpoints 在 messages 和 tools 上注入缓存断点，
-// 用于补救 Agent SDK 子代理这类 body 自身无 cache_control 的请求。
+// injectBridgeCacheBreakpoints 接管 bridge 客户端的 messages 缓存断点：先 strip
+// 掉客户端那个会漂移的 messages 断点，再由网关重打一个固定落在"倒数第二个
+// role=user message"的稳定锚点，消除跨轮失配导致的整段重建。
 //
 // 与 mimicry 主分支的区别：
-//  1. 不调用 rewriteSystemForNonClaudeCode → system 一字不动。
+//  1. 不调用 rewriteSystemForNonClaudeCode → system 一字不动（保留客户端 system
+//     断点，stripMessageCacheControl 也只删 messages、天然不碰 system/tools）。
 //  2. 不经过 normalizeClaudeOAuthRequestBody → 不剥/不加 billing block。
-//  3. messages 断点直接调用 addMessageCacheBreakpointsWithTTL，
-//     无需先 strip（前置已确认请求体内无 cache_control）。
+//  3. messages 只打 1 个稳定锚点（addBridgeMessageCacheBreakpointsWithTTL），
+//     使断点预算 system 2 + messages 1 + tools 1 = 4，恰好不超上限、不触发裁剪。
 //
 // c 可为 nil；非 nil 时会把动态 tool name rewrite 映射写入 gin.Context 供
 // 响应侧逆向还原。
 func (s *GatewayService) injectBridgeCacheBreakpoints(c *gin.Context, body []byte) []byte {
-	body = addMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+	body = stripMessageCacheControl(body)
+	body = addBridgeMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
 	if rw := buildToolNameRewriteFromBody(body); rw != nil {
 		body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
 		if c != nil {
@@ -10791,9 +10793,12 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 		}
 	} else if s.shouldInjectBreakpointsForBridge(ctx, account, body) {
-		// 与 Forward 主路径同款：bridge 客户端 + 无 cache_control 时补断点，
-		// 保证 count_tokens 与后续 /v1/messages 请求的前缀签名一致。
+		// 与 Forward 主路径同款：bridge 客户端接管 messages 断点（strip 漂移断点 +
+		// 重打稳定锚点），保证 count_tokens 与后续 /v1/messages 请求的前缀签名一致。
 		body = s.injectBridgeCacheBreakpoints(c, body)
+		// 与 Forward 主路径对齐：bridge 分支后同样做断点上限兜底，确保 count_tokens
+		// 与 messages 请求经历相同的裁剪、前缀签名一致。
+		body = enforceCacheControlLimit(body)
 	}
 
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
