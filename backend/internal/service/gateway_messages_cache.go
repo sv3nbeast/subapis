@@ -117,24 +117,26 @@ func addMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
 }
 
 // addBridgeMessageCacheBreakpointsWithTTL 是 Claude Desktop 3P / Agent SDK 桥接
-// 客户端专用的 messages 断点策略：**只打一个靠前的稳定锚点**，不打"最后一条
-// message"那个会随对话漂移的增量断点。
+// 客户端专用的 messages 断点策略：打 2 个断点 —— 一个靠前的 stable 锚点 + 一个
+// 末尾的 trailing 锚点，对齐 Anthropic 官方对长对话的 "stable + closer breakpoint"
+// 推荐。
 //
-// 为什么和 addMessageCacheBreakpointsWithTTL 不同：抓包证实这类客户端自身只在
-// "最后一条 message"打一个断点，且该断点在「最后一条」「倒数第二条」之间逐轮
-// 跳动（distFromEnd 在 0/1 间变化）。由于没有靠前的稳定锚点，末尾断点一漂移、
-// 本次声明的缓存写入边界就与上次对不上，cache_read 直接跌回 system-only、整段
-// 重建。网关 strip 掉客户端那个漂移断点后，由本函数重打一个固定落在"倒数第二个
-// role=user message"的锚点：即使锚点 index 随对话增长而后移，其之前的 messages
-// 前缀逐字节不变，按 Anthropic 最长公共前缀语义即可稳定命中锚点边界，不再跌回
-// system。
+// 为什么需要两个（v1 只打一个漂移锚点，没修好）：
+//   - Anthropic 缓存读取时从断点向后回溯**最多 20 个 content block** 找已写入的
+//     缓存条目。opus-4-8 的 agentic 单轮常新增 >20 个 tool_use/tool_result block，
+//     单个 trailing 断点的 20-block 窗口够不到上一轮写入位置 → 整段重建。
+//   - stable 锚点固定落在**第一个 role=user message**（即 system-reminder 所在、
+//     Claude Code 设计上跨轮冻结的 messages[0]）。其累积前缀（tools+system+该条）
+//     逐字节恒定，一旦写入后续每轮必命中 → cache_read 下限钉死在早期历史量级，
+//     根除暴跌回 system-only(38843)。
+//   - trailing 锚点落在最后一条 message，缓存本轮全量增量，供下一轮回溯命中。
 //
-// 断点预算：bridge 路径下 system 已带 2 个断点（客户端，本函数不碰）+ 本函数 1
-// 个 messages 锚点 + tools[-1] 1 个 = 4，恰好不超 maxCacheControlBlocks，
-// 不会触发 enforceCacheControlLimit 把最靠前的锚点裁掉。
+// 断点预算：bridge 路径下 system 已带 2 个断点（客户端，inject 流程不碰）+ 本函数
+// 2 个 messages 锚点 + tools 0 个 = 4。**必须**配合 injectBridgeCacheBreakpoints 去掉
+// tools 断点，否则 2+2+1=5 超限触发裁剪。
 //
-// messages < 4 时退化为打最后一条（短对话谈不上漂移），与 addMessageCacheBreakpoints
-// 的退化行为一致。
+// 退化：messages < 2 / 找不到 user 时只打末尾；stable 与 trailing 同一条时
+// injectCacheControlOnLastContentBlockWithTTL 幂等（已有 ttl 不覆盖），自然只剩 1 个。
 //
 // 调用前应先 stripMessageCacheControl 清掉客户端的漂移断点，保证幂等与稳定。
 func addBridgeMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
@@ -150,23 +152,25 @@ func addBridgeMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
 		return body
 	}
 
-	if len(arr) < 4 {
-		return injectCacheControlOnLastContentBlockWithTTL(body, len(arr)-1, &arr[len(arr)-1], ttl)
-	}
+	// trailing 锚点：最后一条 message。
+	trailingIdx := len(arr) - 1
 
-	userCount := 0
-	for i := len(arr) - 1; i >= 0; i-- {
-		if arr[i].Get("role").String() != "user" {
-			continue
-		}
-		userCount++
-		if userCount == 2 {
-			return injectCacheControlOnLastContentBlockWithTTL(body, i, &arr[i], ttl)
+	// stable 锚点：第一个 role=user message（绝对位置跨轮不变，通常即 messages[0]）。
+	stableIdx := -1
+	for i := 0; i < len(arr); i++ {
+		if arr[i].Get("role").String() == "user" {
+			stableIdx = i
+			break
 		}
 	}
 
-	// 兜底：messages ≥ 4 但找不到两个 user（极少见），退化为最后一条。
-	return injectCacheControlOnLastContentBlockWithTTL(body, len(arr)-1, &arr[len(arr)-1], ttl)
+	// 先打 stable（靠前），再打 trailing（末尾）。两者不同条时互不影响；
+	// 同一条时后者因已有 ttl 被 injectCacheControlOnLastContentBlockWithTTL 跳过。
+	if stableIdx >= 0 && stableIdx != trailingIdx {
+		body = injectCacheControlOnLastContentBlockWithTTL(body, stableIdx, &arr[stableIdx], ttl)
+	}
+	body = injectCacheControlOnLastContentBlockWithTTL(body, trailingIdx, &arr[trailingIdx], ttl)
+	return body
 }
 
 // rewriteMessageCacheControlIfEnabled 按系统设置决定是否执行旧版 messages 缓存断点改写。

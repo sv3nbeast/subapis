@@ -5259,10 +5259,11 @@ func enforceCacheControlLimit(body []byte) []byte {
 		remaining--
 	}
 
-	for _, path := range messagePaths {
-		if remaining <= 0 {
-			break
-		}
+	// messages 断点：保护首尾两个锚点（bridge 的 stable@第一个user + trailing@末尾），
+	// 只删中段。首尾是缓存命中的关键锚点，删掉会直接导致整段重建；中段断点删掉
+	// 最多损失一点中间增量命中。messagePaths 按 message index 升序。
+	for idx := 1; idx < len(messagePaths)-1 && remaining > 0; idx++ {
+		path := messagePaths[idx]
 		if !gjson.GetBytes(out, path).Exists() {
 			continue
 		}
@@ -5614,28 +5615,29 @@ func (s *GatewayService) shouldInjectBreakpointsForBridge(
 }
 
 // injectBridgeCacheBreakpoints 接管 bridge 客户端的 messages 缓存断点：先 strip
-// 掉客户端那个会漂移的 messages 断点，再由网关重打一个固定落在"倒数第二个
-// role=user message"的稳定锚点，消除跨轮失配导致的整段重建。
+// 掉客户端那个会漂移的 messages 断点，再由网关重打 2 个稳定断点（stable@第一个
+// user + trailing@末尾），消除跨轮前缀失配 / 20-block 窗口够不到导致的整段重建。
 //
 // 与 mimicry 主分支的区别：
 //  1. 不调用 rewriteSystemForNonClaudeCode → system 一字不动（保留客户端 system
 //     断点，stripMessageCacheControl 也只删 messages、天然不碰 system/tools）。
 //  2. 不经过 normalizeClaudeOAuthRequestBody → 不剥/不加 billing block。
-//  3. messages 只打 1 个稳定锚点（addBridgeMessageCacheBreakpointsWithTTL），
-//     使断点预算 system 2 + messages 1 + tools 1 = 4，恰好不超上限、不触发裁剪。
+//  3. messages 打 2 个断点（addBridgeMessageCacheBreakpointsWithTTL），tools 只改名
+//     不打断点，使断点预算 system 2 + messages 2 + tools 0 = 4，恰好不超上限。
 //
 // c 可为 nil；非 nil 时会把动态 tool name rewrite 映射写入 gin.Context 供
 // 响应侧逆向还原。
 func (s *GatewayService) injectBridgeCacheBreakpoints(c *gin.Context, body []byte) []byte {
 	body = stripMessageCacheControl(body)
 	body = addBridgeMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+	// 仅做工具名混淆改写，**不打 tools 断点**：bridge 的 4 个断点额度全部给
+	// system(2,客户端) + messages(2,stable+trailing),tools 段已被 system 断点的
+	// 累积前缀覆盖,再给 tools 单独打断点对 messages 命中零帮助、且会撑到 5 个超限。
 	if rw := buildToolNameRewriteFromBody(body); rw != nil {
-		body = applyToolNameRewriteToBodyWithTTL(body, rw, cacheTTLTarget1h)
+		body = renameToolsInBody(body, rw)
 		if c != nil {
 			c.Set(toolNameRewriteKey, rw)
 		}
-	} else {
-		body = applyToolsLastCacheBreakpointWithTTL(body, cacheTTLTarget1h)
 	}
 	return body
 }

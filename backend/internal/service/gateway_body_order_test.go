@@ -315,6 +315,25 @@ func TestEnforceCacheControlLimit_CountsToolsAndPreservesMessageAnchorsFirst(t *
 	require.False(t, gjson.GetBytes(result, "tools.0.cache_control").Exists())
 }
 
+// TestEnforceCacheControlLimit_PreservesBridgeMessageAnchors 验证超限裁剪时
+// 保护 messages 首尾锚点(bridge 的 stable@首 + trailing@尾),只删中段。
+func TestEnforceCacheControlLimit_PreservesBridgeMessageAnchors(t *testing.T) {
+	// 5 个 messages 断点(分布在 5 条 message),无 system/tools 断点 → 超限 1。
+	body := []byte(`{"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"m0","cache_control":{"type":"ephemeral"}}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"m1","cache_control":{"type":"ephemeral"}}]},` +
+		`{"role":"user","content":[{"type":"text","text":"m2","cache_control":{"type":"ephemeral"}}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"m3","cache_control":{"type":"ephemeral"}}]},` +
+		`{"role":"user","content":[{"type":"text","text":"m4","cache_control":{"type":"ephemeral"}}]}` +
+		`]}`)
+
+	result := enforceCacheControlLimit(body)
+
+	require.True(t, gjson.GetBytes(result, "messages.0.content.0.cache_control").Exists(), "首锚点存活")
+	require.True(t, gjson.GetBytes(result, "messages.4.content.0.cache_control").Exists(), "尾锚点存活")
+	require.Equal(t, 4, strings.Count(string(result), `"cache_control"`))
+}
+
 func TestInjectAnthropicCacheControlTTL1h_OnlyUpdatesExistingEphemeralCacheControl(t *testing.T) {
 	body := []byte(`{"alpha":1,"cache_control":{"type":"ephemeral"},"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"5m"}},{"type":"text","text":"plain"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}},{"type":"text","text":"non","cache_control":{"type":"persistent","ttl":"5m"}}]}],"tools":[{"name":"a","input_schema":{},"cache_control":{"type":"ephemeral"}}],"omega":2}`)
 

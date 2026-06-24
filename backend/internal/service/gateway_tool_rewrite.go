@@ -227,6 +227,25 @@ func applyToolNameRewriteToBodyWithTTL(body []byte, rw *ToolNameRewrite, ttl str
 		return body
 	}
 
+	body = renameToolsInBody(body, rw)
+
+	body = applyToolsLastCacheBreakpointWithTTL(body, ttl)
+	return body
+}
+
+// renameToolsInBody 仅做工具名混淆改写（tools[].name / tool_choice.name /
+// messages 历史里的 tool_use.name、tool_reference.tool_name、tool_result 内嵌
+// tool_reference），**不注入任何 cache_control 断点**。
+//
+// 拆出此函数是为了让 bridge 路径能"改名但不打 tools 断点"——bridge 的断点预算
+// 全部留给 messages（stable + trailing），tools 段由 system 断点的累积前缀覆盖。
+//
+// rw 为 nil 或无映射时 no-op。
+func renameToolsInBody(body []byte, rw *ToolNameRewrite) []byte {
+	if rw == nil || len(rw.Forward) == 0 {
+		return body
+	}
+
 	tools := gjson.GetBytes(body, "tools")
 	if tools.IsArray() {
 		idx := -1
@@ -323,7 +342,6 @@ func applyToolNameRewriteToBodyWithTTL(body []byte, rw *ToolNameRewrite, ttl str
 		})
 	}
 
-	body = applyToolsLastCacheBreakpointWithTTL(body, ttl)
 	return body
 }
 
