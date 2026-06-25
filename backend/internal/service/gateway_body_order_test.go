@@ -227,6 +227,46 @@ func TestMigrateAnthropicInlineSystemMessages_MovesSystemMessagesToTopLevel(t *t
 	require.Equal(t, "u", gjson.GetBytes(result, "metadata.user_id").String())
 }
 
+// TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration 复现并锁定
+// 生产 16:07:12 现场:客户端尾部带一条 role=system 的 system-reminder。bridge 必须把
+// trailing 断点打在最后一条**非 system** 消息上,否则后段 migrateAnthropicInlineSystemMessages
+// 会把该 reminder(连同 trailing 断点)上提进 system,导致真正的会话尾巴失去缓存断点。
+func TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"You are Claude Code","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"first user turn"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"ok"}]},` +
+		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"huge tail payload"}]},` +
+		`{"role":"system","content":"The task tools haven't been used recently."}` +
+		`]}`)
+
+	withBP := addBridgeMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+
+	// trailing 必须落在最后一条非 system 消息(index 2, tool_result),而不是尾部 reminder(index 3)。
+	require.Equal(t, "1h", gjson.GetBytes(withBP, "messages.2.content.0.cache_control.ttl").String(),
+		"trailing breakpoint must be on the last non-system message")
+	require.False(t, gjson.GetBytes(withBP, "messages.3.content.0.cache_control").Exists(),
+		"trailing role=system reminder must NOT receive the trailing breakpoint")
+
+	// 经过 inline-system migration 后,trailing 断点仍在真正的会话尾巴上。
+	migrated, changed := migrateAnthropicInlineSystemMessages(withBP)
+	require.True(t, changed)
+	msgs := gjson.GetBytes(migrated, "messages").Array()
+	require.Len(t, msgs, 3, "the role=system reminder should be hoisted out of messages")
+	// migration 后末条(index 2)即原 tool_result,trailing 断点应仍在其上。
+	require.Equal(t, "tool_result", gjson.GetBytes(migrated, "messages.2.content.0.type").String())
+	require.Equal(t, "1h", gjson.GetBytes(migrated, "messages.2.content.0.cache_control.ttl").String(),
+		"trailing breakpoint must survive migration on the real conversation tail")
+
+	// migration 不应在 system 里引入网关注入的额外断点(只保留客户端原有的 1 个)。
+	sysBP := 0
+	for _, blk := range gjson.GetBytes(migrated, "system").Array() {
+		if blk.Get("cache_control").Exists() {
+			sysBP++
+		}
+	}
+	require.Equal(t, 1, sysBP, "no stray gateway breakpoint should land in system")
+}
+
 func TestMigrateAnthropicInlineSystemMessages_NoOpWithoutSystemMessages(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hello"}]}`)
 

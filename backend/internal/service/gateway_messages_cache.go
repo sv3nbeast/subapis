@@ -152,8 +152,22 @@ func addBridgeMessageCacheBreakpointsWithTTL(body []byte, ttl string) []byte {
 		return body
 	}
 
-	// trailing 锚点：最后一条 message。
+	// trailing 锚点：最后一条**非 role=system** message。
+	//
+	// 为什么排除 role=system：Claude Code 会在 messages 尾部注入 role=system 的
+	// system-reminder（如 "The task tools haven't been used recently..."）。转发流程
+	// 后段的 migrateAnthropicInlineSystemMessages 会把所有 role=system 消息（连同此处
+	// 刚打上的 cache_control）从 messages 上提进 system 数组。若 trailing 落在这种尾部
+	// 提醒上，断点就被"搬走"成 system 断点，真正的会话尾巴失去 trailing 覆盖，整段尾部
+	// 内容退化为未缓存的原始输入（实测单轮 input_tokens 暴涨至 70 万+）。落在最后一条
+	// 非 system 消息上即可：migration 不动非 system 消息，断点随内容存活。
 	trailingIdx := len(arr) - 1
+	for i := len(arr) - 1; i >= 0; i-- {
+		if arr[i].Get("role").String() != "system" {
+			trailingIdx = i
+			break
+		}
+	}
 
 	// stable 锚点：第一个 role=user message（绝对位置跨轮不变，通常即 messages[0]）。
 	stableIdx := -1
