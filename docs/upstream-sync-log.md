@@ -1744,3 +1744,45 @@ d8792e1c Fix plain Claude CLI XML invoke bridging
 b903ad9d Pre-normalize Anthropic inline system messages
 4264cad4 Fix non-stream gateway failover handling
 cea740bf Strip indented Claude CLI invoke preambles
+
+## 2026-06-26 01:46:52 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `5ceb7712c49dc3c8af5d921f2a2afefe278f8a40`
+- 官方提交: `ce6af413577a6d012e334baad5069a02a80d48b6`
+- 合并基线: `ce6af413577a6d012e334baad5069a02a80d48b6`
+- 官方领先数量: `0`
+- 本地领先数量: `358`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+5ceb7712 Merge official origin/main (ce6af413) into fork
+5860d101 增加upstream sync conflict ledger
+2f6d1ed8 Anchor bridge trailing breakpoint 到 last non-system message
+07553d10 增加user-scoped full round-trip gateway debug capture
+8f446c0f Normalize cache_control TTL order 时 bridge upstream path
+1e36c114 Fix bridge cache rebuild 与 stable+trailing breakpoints
+9ff38854 稳定 bridge cache breakpoint 到 stop opus-4-8 self-rebuild
+f310048b 加固 account proxy DNS handling
+4f831a2a 增加auto-upgrading affiliate rebate tiers by invitee GMV
+52d2c38a Bucket upstream fingerprint by inbound UA form 到 fix 4-8 dead loop
+7b28c692 Capture upstream SSE 针对 agent-sdk + opus 4-8 debugging
+955a9c6e Let admins pick which usage windows the reset-quota action clears
+51222b70 Inject cache breakpoints 针对 Agent SDK bridge clients
+60bfded8 Allow Claude Code Desktop probe 到 pass claude_code_only check
+62263380 Intercept connection probes from any client UA
+15d8344c Allow Claude Code connection probe 与 intercept it 到 protect quota
+d8792e1c Fix plain Claude CLI XML invoke bridging
+767da9e0 Suppress stale channel monitor alerts
+43634d52 Fix Anthropic channel monitor streaming checks
+b903ad9d Pre-normalize Anthropic inline system messages
