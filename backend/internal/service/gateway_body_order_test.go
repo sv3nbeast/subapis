@@ -416,6 +416,7 @@ func TestNormalizeClaudeCodeMimicryUpstreamBody_CombinesProtocolFixes(t *testing
 	require.False(t, gjson.GetBytes(result, "thinking").Exists())
 	require.False(t, gjson.GetBytes(result, "output_config").Exists())
 	require.Equal(t, "5m", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
+	// tools.0 是 5m,排在前;system.0 的 1h 在后 → 被降级(删 ttl)以满足单调不增。
 	require.False(t, gjson.GetBytes(result, "system.0.cache_control.ttl").Exists())
 }
 

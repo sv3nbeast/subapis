@@ -441,6 +441,38 @@ func TestInjectBridgeCacheBreakpoints_StableAnchorAbsolutelyStableAcrossTurns(t 
 // TestInjectBridgeCacheBreakpoints_BudgetWithinLimit 验证断点预算：bridge 接管 +
 // enforceCacheControlLimit 后，system 的 2 个断点全部存活、messages 锚点存活、
 // 总数 ≤ 4，不会因超限把最靠前的锚点裁掉。
+// TestInjectBridgeCacheBreakpoints_TTLOrderSafeAfterNormalize 回归:client system
+// 是 5m、网关给 messages 打 1h 时,经公共的 normalizeCacheControlTTLOrder 后,
+// messages 的 1h 必须被降级,避免上游报 "1h must not come after 5m" 400。
+func TestInjectBridgeCacheBreakpoints_TTLOrderSafeAfterNormalize(t *testing.T) {
+	svc := &GatewayService{}
+	// 客户端 system 带 5m(裸 ephemeral 或显式 5m 同理)+ 6 条 messages。
+	body := []byte(`{` +
+		`"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"5m"}}],` +
+		`"messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"u1"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a1"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u2"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a2"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"u3"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"a3"}]}` +
+		`]}`)
+
+	out := svc.injectBridgeCacheBreakpoints(nil, body)
+	// inject 后 messages 应是 1h(stable@0 + trailing@5)
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.5.content.0.cache_control.ttl").String())
+
+	// 经公共归一化后:system 5m 在前 → messages 的 1h 被降级(删 ttl),不再违规。
+	out = normalizeCacheControlTTLOrder(out)
+	require.Equal(t, "5m", gjson.GetBytes(out, "system.0.cache_control.ttl").String(), "system 5m 保留")
+	require.False(t, gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").Exists(), "messages stable 1h 应被降级")
+	require.False(t, gjson.GetBytes(out, "messages.5.content.0.cache_control.ttl").Exists(), "messages trailing 1h 应被降级")
+	// 断点本身仍在(只是 ttl 降为默认 5m),数量不变
+	require.True(t, gjson.GetBytes(out, "messages.0.content.0.cache_control").Exists())
+	require.True(t, gjson.GetBytes(out, "messages.5.content.0.cache_control").Exists())
+}
+
 func TestInjectBridgeCacheBreakpoints_BudgetWithinLimit(t *testing.T) {
 	svc := &GatewayService{}
 	// system 2 个断点（客户端自带）+ 长 messages（≥4）+ tools。

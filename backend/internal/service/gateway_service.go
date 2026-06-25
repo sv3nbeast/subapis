@@ -5863,6 +5863,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	if shouldMimicClaudeCode {
 		body = normalizeClaudeCodeMimicryUpstreamBody(body)
+	} else {
+		// 非 mimicry 的 OAuth 路径(尤其 bridge:给 messages 打 1h 但 system/tools 可能
+		// 是客户端的 5m/default)单独做 cache_control ttl 顺序归一化,避免 1h 排在 5m
+		// 之后被上游 400。mimicry 路径已在 normalizeClaudeCodeMimicryUpstreamBody 内做。
+		body = normalizeCacheControlTTLOrder(body)
 	}
 
 	// 获取凭证
@@ -10828,6 +10833,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if shouldMimicClaudeCode {
 		body = enforceCacheControlLimit(body)
 		body = normalizeClaudeCodeMimicryUpstreamBody(body)
+	} else {
+		// 非 mimicry 的 OAuth 路径(尤其 bridge)单独做 cache_control ttl 顺序归一化,
+		// 保证 count_tokens 与 /v1/messages 一致、且不因 1h 排在 5m 后被上游 400。
+		body = normalizeCacheControlTTLOrder(body)
 	}
 
 	// 获取凭证
