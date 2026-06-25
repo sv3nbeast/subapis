@@ -745,6 +745,7 @@ type GatewayService struct {
 	channelService             *ChannelService
 	resolver                   *ModelPricingResolver
 	debugGatewayBodyFile       atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
+	debugGatewayBodyUserID     atomic.Int64            // >0 scopes SUB2API_DEBUG_GATEWAY_BODY capture to one user
 	tlsFPProfileService        *TLSFingerprintProfileService
 	balanceNotifyService       *BalanceNotifyService
 	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
@@ -835,6 +836,7 @@ func NewGatewayService(
 	)
 	svc.debugModelRouting.Store(parseDebugEnvBool(os.Getenv("SUB2API_DEBUG_MODEL_ROUTING")))
 	svc.debugClaudeMimic.Store(parseDebugEnvBool(os.Getenv("SUB2API_DEBUG_CLAUDE_MIMIC")))
+	svc.debugGatewayBodyUserID.Store(parseDebugGatewayUserID(os.Getenv(debugGatewayBodyUserEnv)))
 	if path := strings.TrimSpace(os.Getenv(debugGatewayBodyEnv)); path != "" {
 		svc.initDebugGatewayBodyFile(path)
 	}
@@ -5768,12 +5770,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	originalModel := reqModel
 
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
-	if c != nil {
+	if c != nil && s.debugBodyCaptureEnabled(c) {
 		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
 			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
 			"account_type": string(account.Type),
 			"model":        reqModel,
 			"stream":       strconv.FormatBool(reqStream),
+			"user_id":      strconv.FormatInt(s.ginUserIDForDebug(c), 10),
 		})
 	}
 
@@ -7786,14 +7789,17 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
-	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
-		"url":                 req.URL.String(),
-		"token_type":          tokenType,
-		"mimic_claude_code":   strconv.FormatBool(mimicClaudeCode),
-		"fingerprint_applied": strconv.FormatBool(fingerprint != nil),
-		"enable_fp":           strconv.FormatBool(enableFP),
-		"enable_mpt":          strconv.FormatBool(enableMPT),
-	})
+	if s.debugBodyCaptureEnabled(c) {
+		s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
+			"url":                 req.URL.String(),
+			"token_type":          tokenType,
+			"mimic_claude_code":   strconv.FormatBool(mimicClaudeCode),
+			"fingerprint_applied": strconv.FormatBool(fingerprint != nil),
+			"enable_fp":           strconv.FormatBool(enableFP),
+			"enable_mpt":          strconv.FormatBool(enableMPT),
+			"user_id":             strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+		})
+	}
 
 	// Always capture a compact fingerprint line for later error diagnostics.
 	// We only print it when needed (or when the explicit debug flag is enabled).
@@ -8886,14 +8892,23 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 	var lastReadAt int64
 	atomic.StoreInt64(&lastReadAt, time.Now().UnixNano())
-	// 抓包开关：仅当 SUB2API_DEBUG_GATEWAY_BODY 开启 + UA 含 agent-sdk/ + 4-8 模型时落盘，
-	// 用于离线还原死循环现场（agent-sdk path XML invoke bridge 闭环异常）。
+	// 抓包开关：
+	//  - 用户门控（SUB2API_DEBUG_GATEWAY_USER_ID 命中）：全 UA 落盘上下行 SSE，
+	//    用于分析缓存重建等需要完整上下游对照的现象。
+	//  - 旧门控（未设用户目标 + UA 含 agent-sdk/ + 4-8 模型）：仅落上行 SSE，
+	//    保留 agent-sdk 死循环现场抓取能力。
 	captureUpstreamSSE := false
+	captureClientSSE := false
 	upstreamRequestID := ""
 	if s.debugGatewayBodyFile.Load() != nil && c != nil && c.Request != nil {
+		userMatch := s.debugCaptureEnabledForUser(c)
 		ua := strings.ToLower(c.Request.Header.Get("User-Agent"))
-		if strings.Contains(ua, "agent-sdk/") && strings.Contains(strings.ToLower(originalModel), "claude-opus-4-8") {
+		legacyMatch := s.debugGatewayBodyUserID.Load() == 0 &&
+			strings.Contains(ua, "agent-sdk/") &&
+			strings.Contains(strings.ToLower(originalModel), "claude-opus-4-8")
+		if userMatch || legacyMatch {
 			captureUpstreamSSE = true
+			captureClientSSE = userMatch
 			upstreamRequestID = resp.Header.Get("x-request-id")
 			s.debugLogUpstreamSSELine(upstreamRequestID, fmt.Sprintf("==BEGIN model=%s ua=%q account=%d", originalModel, c.Request.Header.Get("User-Agent"), account.ID))
 		}
@@ -9015,6 +9030,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		for _, block := range blocks {
 			if !clientDisconnected {
 				restored := reverseToolNamesIfPresent(c, []byte(block))
+				if captureClientSSE {
+					s.debugLogClientSSELine(upstreamRequestID, string(restored))
+				}
 				if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
 					clientDisconnected = true
 					logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
@@ -9582,6 +9600,15 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		return nil, err
 	}
 
+	// === DEBUG: 上游原始返回（非流式），变换前 ===
+	if s.debugCaptureEnabledForUser(c) {
+		s.debugLogGatewaySnapshot("UPSTREAM_RESPONSE", resp.Header, body, map[string]string{
+			"status":  strconv.Itoa(resp.StatusCode),
+			"account": fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"user_id": strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+		})
+	}
+
 	// 解析usage
 	var response struct {
 		Usage ClaudeUsage `json:"usage"`
@@ -9648,6 +9675,14 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 	if normalizedBody, changed := normalizeAnthropicAskUserQuestionResponseBodyWithRewrite(body, toolNameRewriteFromContext(c)); changed {
 		body = normalizedBody
+	}
+
+	// === DEBUG: 返回客户端的最终响应（非流式），所有变换后 ===
+	if s.debugCaptureEnabledForUser(c) {
+		s.debugLogGatewaySnapshot("CLIENT_RESPONSE", c.Writer.Header(), body, map[string]string{
+			"status":  strconv.Itoa(resp.StatusCode),
+			"user_id": strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+		})
 	}
 
 	// 写入响应
