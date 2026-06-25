@@ -139,6 +139,11 @@ docs/*
 !docs/CLAUDE_CLI_MIMICRY_AUDIT.md
 !docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
 !docs/upstream-sync-conflict-ledger.md
+!docs/PAYMENT.md
+!docs/PAYMENT_CN.md
+!docs/ADMIN_PAYMENT_INTEGRATION_API.md
+!docs/legal/
+!docs/legal/*.md
 .serena/
 .codex/
 .superpowers/

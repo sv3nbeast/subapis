@@ -11,7 +11,19 @@ import (
 // enables Anthropic platform groups to accept OpenAI Responses API requests
 // by converting them to the native /v1/messages format before forwarding upstream.
 func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, error) {
-	system, messages, err := convertResponsesInputToAnthropic(req.Input)
+	return responsesToAnthropicRequestWithPairing(req, true)
+}
+
+// ResponsesToAnthropicRequestForKiroContinuation 用于 Kiro previous_response_id 延续：
+// 本轮 input 里的 function_call_output (tool_result) 对应的 function_call (tool_use)
+// 在历史里，跨轮配对在历史 prepend (MergeAnthropicMessagesForKiro) 后才成立。因此本轮
+// 转换必须保留"孤立"tool_result，不能被 normalizeAnthropicToolPairing 当 orphan 丢弃。
+func ResponsesToAnthropicRequestForKiroContinuation(req *ResponsesRequest) (*AnthropicRequest, error) {
+	return responsesToAnthropicRequestWithPairing(req, false)
+}
+
+func responsesToAnthropicRequestWithPairing(req *ResponsesRequest, repairPairing bool) (*AnthropicRequest, error) {
+	system, messages, err := convertResponsesInputToAnthropicWithPairing(req.Input, repairPairing)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +83,11 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 // by the Kiro compatibility history expander. It intentionally returns only the
 // input-derived system/messages and leaves request-level fields to callers.
 func ResponsesInputToAnthropicForKiro(inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
-	return convertResponsesInputToAnthropic(inputRaw)
+	// Kiro 历史展开器逐轮转换：本轮 input 里的 function_call_output (tool_result)
+	// 往往对应上一轮历史里的 function_call (tool_use)，跨轮配对在后续
+	// MergeAnthropicMessagesForKiro 拼接历史后才成立。因此这里必须保留"孤立"的
+	// tool_result，不能在单轮就被 normalizeAnthropicToolPairing 当 orphan 丢弃。
+	return convertResponsesInputToAnthropicWithPairing(inputRaw, false)
 }
 
 // defaultThinkingBudget returns a sensible thinking budget based on effort level.
@@ -108,6 +124,14 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // a Responses API input array. Returns the system as raw JSON (for Anthropic's
 // polymorphic system field) and a list of Anthropic messages.
 func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+	return convertResponsesInputToAnthropicWithPairing(inputRaw, true)
+}
+
+// convertResponsesInputToAnthropicWithPairing 是核心实现。repairPairing=true 时执行
+// normalizeAnthropicToolPairing（丢弃本轮孤立 tool_result，满足 Anthropic 单请求
+// tool_use/tool_result 配对约束）；Kiro 历史展开走 false，保留孤立 tool_result 供
+// 跨轮历史合并。
+func convertResponsesInputToAnthropicWithPairing(inputRaw json.RawMessage, repairPairing bool) (json.RawMessage, []AnthropicMessage, error) {
 	trimmed := strings.TrimSpace(string(inputRaw))
 	if trimmed == "" || trimmed == "null" {
 		return nil, nil, nil
@@ -285,8 +309,16 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 	}
 	flushPendingUser()
 
-	// Merge consecutive same-role messages (Anthropic requires alternating roles)
+	// Repair tool_use/tool_result pairing, then merge consecutive same-role
+	// messages (Anthropic requires alternating roles). The first merge groups
+	// parallel calls (and their results) so the pairing pass sees them together;
+	// the pairing pass may re-split a user turn (e.g. when an injected message
+	// sat between a call and its output), so a second merge restores alternation.
 	messages = mergeConsecutiveMessages(messages)
+	if repairPairing {
+		messages = normalizeAnthropicToolPairing(messages)
+		messages = mergeConsecutiveMessages(messages)
+	}
 
 	return system, messages, nil
 }
@@ -351,6 +383,123 @@ func responsesItemImageSource(item ResponsesInputItem) *AnthropicImageSource {
 		}
 	}
 	return nil
+}
+
+// normalizeAnthropicToolPairing rebuilds the message sequence so it satisfies
+// Anthropic's tool_use/tool_result invariants, which the naive item-by-item
+// conversion violates whenever the Responses history interleaves anything
+// between a function_call and its function_call_output:
+//
+//   - every tool_result block must have a matching tool_use in the immediately
+//     preceding assistant message ("tool_result ... must have a corresponding
+//     tool_use block in the previous message");
+//   - every tool_use block must be answered by a tool_result in the immediately
+//     following user message (Anthropic rejects unanswered tool_use ids);
+//   - user/assistant turns must alternate.
+//
+// codex (Responses, store:false) re-sends the whole history each turn and
+// frequently injects items between a call and its output — a developer/approval
+// notice, or a sibling parallel call whose output never arrived. The unrepaired
+// converter emits each function_call as its own assistant message and each
+// output as its own user message, so any such interleaving breaks
+// tool_use↔tool_result adjacency and yields an upstream 400.
+//
+// The repair indexes every tool_result by its tool_use id, then for each
+// assistant message carrying tool_use blocks keeps only the answered ones
+// (dropping unanswered/dangling calls — and the assistant message entirely if it
+// has no other content) and emits the matching tool_result blocks, in call
+// order, as the very next user message. Standalone tool_result blocks are
+// dropped from their original position (re-emitted adjacent to their call);
+// orphan tool_results with no announcing tool_use are dropped. Non-tool content
+// passes through in place. This mirrors normalizeChatMessages on the
+// Responses→Chat path.
+func normalizeAnthropicToolPairing(messages []AnthropicMessage) []AnthropicMessage {
+	// Index every tool_result block by its tool_use id (last wins on dup).
+	results := make(map[string]AnthropicContentBlock)
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		for _, b := range parseContentBlocks(m.Content) {
+			if b.Type == "tool_result" && b.ToolUseID != "" {
+				results[b.ToolUseID] = b
+			}
+		}
+	}
+
+	out := make([]AnthropicMessage, 0, len(messages))
+	for _, m := range messages {
+		blocks := parseContentBlocks(m.Content)
+		switch m.Role {
+		case "assistant":
+			var toolUses, others []AnthropicContentBlock
+			for _, b := range blocks {
+				if b.Type == "tool_use" {
+					toolUses = append(toolUses, b)
+				} else {
+					others = append(others, b)
+				}
+			}
+			if len(toolUses) == 0 {
+				out = append(out, m)
+				continue
+			}
+			kept := make([]AnthropicContentBlock, 0, len(toolUses))
+			for _, tu := range toolUses {
+				if _, ok := results[tu.ID]; ok {
+					kept = append(kept, tu)
+				}
+			}
+			if len(kept) == 0 {
+				// No answered calls: keep any non-tool content, else drop.
+				if len(others) > 0 {
+					out = append(out, anthropicMessageFromBlocks("assistant", others))
+				}
+				continue
+			}
+			asstBlocks := make([]AnthropicContentBlock, 0, len(others)+len(kept))
+			asstBlocks = append(asstBlocks, others...)
+			asstBlocks = append(asstBlocks, kept...)
+			out = append(out, anthropicMessageFromBlocks("assistant", asstBlocks))
+
+			resBlocks := make([]AnthropicContentBlock, 0, len(kept))
+			for _, tu := range kept {
+				resBlocks = append(resBlocks, results[tu.ID])
+			}
+			out = append(out, anthropicMessageFromBlocks("user", resBlocks))
+
+		case "user":
+			var nonResult []AnthropicContentBlock
+			hasResult := false
+			for _, b := range blocks {
+				if b.Type == "tool_result" {
+					hasResult = true
+					continue
+				}
+				nonResult = append(nonResult, b)
+			}
+			if !hasResult {
+				out = append(out, m)
+				continue
+			}
+			// The tool_result blocks are re-emitted next to their call; keep any
+			// other content of this user turn in place, drop it if there is none.
+			if len(nonResult) > 0 {
+				out = append(out, anthropicMessageFromBlocks("user", nonResult))
+			}
+
+		default:
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// anthropicMessageFromBlocks builds an AnthropicMessage whose content is the
+// marshaled block array.
+func anthropicMessageFromBlocks(role string, blocks []AnthropicContentBlock) AnthropicMessage {
+	content, _ := json.Marshal(blocks)
+	return AnthropicMessage{Role: role, Content: content}
 }
 
 // extractTextFromContent extracts text from a content field that may be a

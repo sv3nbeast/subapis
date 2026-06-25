@@ -3,6 +3,8 @@ package dto
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 // CustomMenuItem represents a user-configured custom menu entry.
@@ -186,6 +188,11 @@ type SystemSettings struct {
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
+	EnableClaudeOAuthSystemPromptInjection        bool   `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                       string `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks                 string `json:"claude_oauth_system_prompt_blocks"`
+	OpenAICodexUserAgent                          string `json:"openai_codex_user_agent"`
+	OpenAIAllowClaudeCodeCodexPlugin              bool   `json:"openai_allow_claude_code_codex_plugin"`
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool `json:"web_search_emulation_enabled"`
@@ -241,11 +248,21 @@ type SystemSettings struct {
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
+	// cyber 会话屏蔽开关 + TTL
+	CyberSessionBlockEnabled    bool `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds int  `json:"cyber_session_block_ttl_seconds"`
+
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
 	// OpenAI fast/flex policy
 	OpenAIFastPolicySettings *OpenAIFastPolicySettings `json:"openai_fast_policy_settings,omitempty"`
+
+	// 系统全局默认平台配额（key = platform，nil/缺省 = 不限制）
+	DefaultPlatformQuotas map[string]*service.DefaultPlatformQuotaSetting `json:"default_platform_quotas,omitempty"`
+
+	// 允许终端用户在用量页查看自己的失败请求
+	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
 }
 
 type DefaultSubscriptionSetting struct {
@@ -312,6 +329,8 @@ type PublicSettings struct {
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
 	RiskControlEnabled bool `json:"risk_control_enabled"`
+
+	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
 }
 
 type LoginAgreementDocument struct {

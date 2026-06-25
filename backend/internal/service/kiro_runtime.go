@@ -71,7 +71,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if next := account.GetMappedModel(originalModel); next != "" {
 		mappedModel = next
 	}
-	body := parsed.Body
+	body := parsed.Body.Bytes()
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
@@ -83,7 +83,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		zap.Bool("has_profile_arn", strings.TrimSpace(account.GetCredential("profile_arn")) != ""),
 	)
 
-	if s.shouldEmulateWebSearch(ctx, account, body) {
+	if s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, body) {
 		parsedForEmulation, err := parsed.CloneForBody(body)
 		if err != nil {
 			return nil, err
@@ -989,9 +989,10 @@ func validateKiroRequestShape(parsed *ParsedRequest) string {
 		return "messages must not be empty"
 	}
 
-	messages := parsed.Messages
-	if len(messages) == 0 && len(parsed.Body) > 0 {
-		if bodyMessages := gjson.GetBytes(parsed.Body, "messages"); bodyMessages.Exists() && bodyMessages.IsArray() {
+	var messages []any
+	_ = parsed.DecodeMessages(&messages)
+	if len(messages) == 0 && parsed.Body.Len() > 0 {
+		if bodyMessages := gjson.GetBytes(parsed.Body.Bytes(), "messages"); bodyMessages.Exists() && bodyMessages.IsArray() {
 			var decoded []any
 			if err := json.Unmarshal([]byte(bodyMessages.Raw), &decoded); err == nil {
 				messages = decoded

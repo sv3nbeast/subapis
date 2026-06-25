@@ -24,6 +24,13 @@ func (r *authRegressionUserRepo) GetByID(_ context.Context, id int64) (*User, er
 	}
 	return r.user, nil
 }
+
+func (r *authRegressionUserRepo) GetByIDIncludeDeleted(_ context.Context, id int64) (*User, error) {
+	if r.user == nil || r.user.ID != id {
+		return nil, ErrUserNotFound
+	}
+	return r.user, nil
+}
 func (r *authRegressionUserRepo) GetByEmail(_ context.Context, email string) (*User, error) {
 	if r.user == nil || r.user.Email != email {
 		return nil, ErrUserNotFound

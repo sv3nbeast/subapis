@@ -14,10 +14,15 @@ func estimateAnthropicCountTokens(parsed *ParsedRequest) int {
 	}
 
 	total := 0
-	total += estimateTokensForAny(parsed.System)
+	if sys, ok := parsed.SystemValue(); ok {
+		total += estimateTokensForAny(sys)
+	}
 
-	for _, message := range parsed.Messages {
-		total += estimateTokensForAny(extractMessageContentForTokenEstimate(message))
+	var messages []any
+	if err := parsed.DecodeMessages(&messages); err == nil {
+		for _, message := range messages {
+			total += estimateTokensForAny(extractMessageContentForTokenEstimate(message))
+		}
 	}
 
 	if total < 0 {

@@ -146,6 +146,8 @@ type SystemSettings struct {
 	DefaultConcurrency           int
 	DefaultBalance               float64
 	RiskControlEnabled           bool
+	CyberSessionBlockEnabled     bool
+	CyberSessionBlockTTLSeconds  int
 	AffiliateEnabled             bool
 	AffiliateRebateRate          float64
 	AffiliateRebateFreezeHours   int
@@ -205,6 +207,9 @@ type SystemSettings struct {
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    // Anthropic 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    // OpenAI 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    // Antigravity 账号创建自动选代理时的同平台容量（默认 5）
+	EnableClaudeOAuthSystemPromptInjection        bool   // 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
+	ClaudeOAuthSystemPrompt                       string // Claude OAuth mimic 路径注入的通用扩展 system prompt；空值使用内置默认
+	ClaudeOAuthSystemPromptBlocks                 string // Claude OAuth mimic 路径注入的 system blocks JSON 配置；空值使用内置默认
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟
@@ -229,6 +234,9 @@ type SystemSettings struct {
 	// Account quota notification
 	AccountQuotaNotifyEnabled bool
 	AccountQuotaNotifyEmails  []NotifyEmailEntry
+
+	// 允许终端用户在用量页查看自己的失败请求
+	AllowUserViewErrorRequests bool
 }
 
 type DefaultSubscriptionSetting struct {
@@ -302,6 +310,9 @@ type PublicSettings struct {
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
+
+	// 允许终端用户在用量页查看自己的失败请求
+	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
 }
 
 type LoginAgreementDocument struct {

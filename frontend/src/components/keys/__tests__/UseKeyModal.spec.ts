@@ -124,12 +124,15 @@ describe('UseKeyModal', () => {
   })
 
   it('includes Claude Code default model in anthropic settings config', () => {
+  it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
         apiKey: 'sk-test',
         baseUrl: 'https://example.com',
         platform: 'anthropic'
+        baseUrl: 'https://example.com/v1',
+        platform: 'antigravity'
       },
       global: {
         stubs: {
@@ -155,5 +158,25 @@ describe('UseKeyModal', () => {
     expect(settingsConfig).toBeDefined()
     expect(settingsConfig).toContain('//, "model": "claude-opus-4-7" // 修改这里的模型名可指定使用模型，默认claude-opus-4-6')
     expect(settingsConfig).not.toContain('CLAUDE_CODE_EFFORT_LEVEL')
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const claudeConfig = wrapper.findAll('pre code')
+      .map((code) => code.text())
+      .find((content) => content.includes('"antigravity-claude"'))
+
+    expect(claudeConfig).toBeDefined()
+    const parsed = JSON.parse(claudeConfig!)
+    const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
+
+    expect(fable.name).toBe('Claude Fable 5')
+    expect(fable.limit).toEqual({ context: 1048576, output: 128000 })
+    expect(fable.options.thinking).toEqual({ type: 'adaptive' })
+    expect(fable.options.thinking).not.toHaveProperty('budgetTokens')
   })
 })

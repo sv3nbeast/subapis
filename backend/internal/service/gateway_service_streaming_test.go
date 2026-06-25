@@ -159,7 +159,7 @@ func TestGatewayService_Forward_PreResponseNetworkErrorTriggersFailover(t *testi
 
 	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed := &ParsedRequest{
-		Body:   body,
+		Body:   NewRequestBodyRef(body),
 		Model:  "claude-sonnet-4-6",
 		Stream: true,
 	}
@@ -206,7 +206,7 @@ func TestGatewayService_Forward_PreNormalizesInlineSystemRoleAsTopLevelSystem(t 
 
 	body := []byte(`{"model":"claude-opus-4-8","stream":true,"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid instruction","cache_control":{"type":"ephemeral"}}]}]}`)
 	parsed := &ParsedRequest{
-		Body:   body,
+		Body:   NewRequestBodyRef(body),
 		Model:  "claude-opus-4-8",
 		Stream: true,
 	}
@@ -307,7 +307,7 @@ func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T
 
 	token, tokenType, err := svc.GetAccessToken(context.Background(), account)
 	require.NoError(t, err)
-	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, token, tokenType, "claude-opus-4-8", true, false)
+	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, body, token, tokenType, "claude-opus-4-8", true, false)
 	require.NoError(t, err)
 	resp, err := upstream.DoWithTLS(req, "", account.ID, account.Concurrency, nil)
 	require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T
 
 	migratedBody, migrated := migrateAnthropicInlineSystemMessages(body)
 	require.True(t, migrated)
-	retryReq, err := svc.buildUpstreamRequest(context.Background(), c, account, migratedBody, token, tokenType, "claude-opus-4-8", true, false)
+	retryReq, _, err := svc.buildUpstreamRequest(context.Background(), c, account, migratedBody, token, tokenType, "claude-opus-4-8", true, false)
 	require.NoError(t, err)
 	retryResp, err := upstream.DoWithTLS(retryReq, "", account.ID, account.Concurrency, nil)
 	require.NoError(t, err)
@@ -794,12 +794,10 @@ func TestGatewayService_Forward_LooseClaudeCLIHeadersDoNotSkipMimicry(t *testing
 	metadataUserID := `{"device_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","account_uuid":"550e8400-e29b-41d4-a716-446655440000","session_id":"123e4567-e89b-12d3-a456-426614174000"}`
 	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"metadata":{"user_id":` + strconv.Quote(metadataUserID) + `},"system":"custom tool instructions","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"bash","description":"run shell","input_schema":{"type":"object","properties":{"command":{"type":"string"}}}}]}`)
 	parsed := &ParsedRequest{
-		Body:           body,
+		Body:           NewRequestBodyRef(body),
 		Model:          "claude-sonnet-4-6",
 		Stream:         true,
 		MetadataUserID: metadataUserID,
-		System:         "custom tool instructions",
-		HasSystem:      true,
 	}
 	upstreamSSE := strings.Join([]string{
 		`event: message_start`,

@@ -72,7 +72,7 @@ func TestForwardDroidMessages_UsesFactoryAnthropicEndpointAndInjectsSystem(t *te
 	svc := &GatewayService{httpUpstream: upstream}
 
 	parsed := &ParsedRequest{
-		Body:   []byte(`{"model":"claude-3-5-haiku-latest","stream":false,"messages":[{"role":"user","content":"hi"}]}`),
+		Body:   NewRequestBodyRef([]byte(`{"model":"claude-3-5-haiku-latest","stream":false,"messages":[{"role":"user","content":"hi"}]}`)),
 		Model:  "claude-3-5-haiku-latest",
 		Stream: false,
 	}

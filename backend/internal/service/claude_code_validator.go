@@ -47,6 +47,18 @@ var claudeCodeSystemPrompts = []string{
 	"You are an interactive CLI tool that helps users",
 }
 
+const (
+	// claudeCodeBillingHeaderPrefix 是 Claude Code 在 system 数组首块注入的计费归因块前缀。
+	// 该块存在于所有真实 Claude Code CLI 请求中（含安全监视器等无身份 prose 的子请求），
+	// 格式固定、不随提示词改版漂移，是比身份 prose 更稳定的客户端标识。
+	// 生成见 gateway_billing_block.go；同类识别见 pkg/apicompat/anthropic_to_responses.go。
+	claudeCodeBillingHeaderPrefix = "x-anthropic-billing-header"
+	// claudeCodeEntrypointMarker 标识计费块携带入口归因字段。不绑定具体入口值
+	// （cli / claude-vscode / jetbrains / sdk 等都是真实入口）：入口值会随新增 IDE 漂移，
+	// 且伪造者同样可填任意值、不构成防伪边界，故仅要求该字段存在即可。
+	claudeCodeEntrypointMarker = "cc_entrypoint="
+)
+
 // NewClaudeCodeValidator 创建验证器实例
 func NewClaudeCodeValidator() *ClaudeCodeValidator {
 	return &ClaudeCodeValidator{}
@@ -58,6 +70,8 @@ func NewClaudeCodeValidator() *ClaudeCodeValidator {
 //	Step 1: User-Agent 检查 (必需) - 必须是 claude-cli/x.x.x
 //	Step 2: 对于非 messages 路径，只要 UA 匹配就通过
 //	Step 3: 检查 Claude Code 连通性探测请求绕过（UA 已验证）
+//	Step 2: 对于非 messages 路径和 /messages/count_tokens，只要 UA 匹配就通过
+//	Step 3: 检查 max_tokens=1 + haiku 探测请求绕过（UA 已验证）
 //	Step 4: 对于 messages 路径，进行严格验证：
 //	        - System prompt 相似度检查
 //	        - X-App header 检查
@@ -73,6 +87,7 @@ func (v *ClaudeCodeValidator) Validate(r *http.Request, body map[string]any) boo
 
 	// Step 2: 非 messages 路径只要 UA 匹配就通过；count_tokens 是 Claude CLI
 	// 的辅助探测/估算请求，经常不携带完整 system/metadata，也不执行生成。
+	// Step 2: 非 messages 路径只要 UA 匹配就通过
 	path := r.URL.Path
 	if !strings.Contains(path, "messages") || strings.HasSuffix(path, "/count_tokens") {
 		return true
@@ -84,6 +99,13 @@ func (v *ClaudeCodeValidator) Validate(r *http.Request, body map[string]any) boo
 		return true // 绕过 system prompt 检查，UA 已在 Step 1 验证
 	}
 	// 兼容旧的 haiku 探测标识。
+	// count_tokens 是 Claude Code 官方辅助请求，通常不携带完整 messages system prompt。
+	if isMessagesCountTokensPath(path) {
+		return true
+	}
+
+	// Step 3: 检查 max_tokens=1 + haiku 探测请求绕过
+	// 这类请求用于 Claude Code 验证 API 连通性，不携带 system prompt
 	if isMaxTokensOneHaiku, ok := IsMaxTokensOneHaikuRequestFromContext(r.Context()); ok && isMaxTokensOneHaiku {
 		return true // 绕过 system prompt 检查，UA 已在 Step 1 验证
 	}
@@ -133,6 +155,10 @@ func (v *ClaudeCodeValidator) Validate(r *http.Request, body map[string]any) boo
 	return true
 }
 
+func isMessagesCountTokensPath(path string) bool {
+	return strings.HasSuffix(path, "/messages/count_tokens")
+}
+
 // hasClaudeCodeSystemPrompt 检查请求是否包含 Claude Code 系统提示词
 // 使用字符串相似度匹配（Dice coefficient）
 func (v *ClaudeCodeValidator) hasClaudeCodeSystemPrompt(body map[string]any) bool {
@@ -161,6 +187,13 @@ func (v *ClaudeCodeValidator) hasClaudeCodeSystemPrompt(body map[string]any) boo
 		text, ok := entryMap["text"].(string)
 		if !ok || text == "" {
 			continue
+		}
+
+		// 计费归因块识别（WHY 见 claudeCodeBillingHeaderPrefix 注释）。先于 Dice 检查，
+		// 大小写敏感：该块由 gateway_billing_block.go 固定小写生成。
+		if strings.HasPrefix(text, claudeCodeBillingHeaderPrefix) &&
+			strings.Contains(text, claudeCodeEntrypointMarker) {
+			return true
 		}
 
 		// 计算与所有模板的最佳相似度

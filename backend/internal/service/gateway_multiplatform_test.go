@@ -180,6 +180,9 @@ func (m *mockAccountRepoForPlatform) ClearModelRateLimits(ctx context.Context, i
 func (m *mockAccountRepoForPlatform) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
 	return nil
 }
+func (m *mockAccountRepoForPlatform) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
+	return nil
+}
 func (m *mockAccountRepoForPlatform) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	return nil
 }
@@ -192,6 +195,10 @@ func (m *mockAccountRepoForPlatform) IncrementQuotaUsed(ctx context.Context, id 
 }
 
 func (m *mockAccountRepoForPlatform) ResetQuotaUsed(ctx context.Context, id int64) error {
+	return nil
+}
+
+func (m *mockAccountRepoForPlatform) RevertProxyFallback(ctx context.Context, accountID int64) error {
 	return nil
 }
 
@@ -1479,6 +1486,48 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 			accounts: []Account{
 				{ID: 1, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true},
 				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+	t.Run("混合调度-Gemini家族限流后跳过Antigravity账户", func(t *testing.T) {
+		resetAt := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{
+					ID:          1,
+					Platform:    PlatformAntigravity,
+					Priority:    1,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra: map[string]any{
+						"mixed_scheduling": true,
+						modelRateLimitsKey: map[string]any{
+							antigravityGeminiModelRateLimitKey: map[string]any{
+								"rate_limit_reset_at": resetAt,
+							},
+						},
+					},
+				},
+				{
+					ID:          2,
+					Platform:    PlatformAntigravity,
+					Priority:    1,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra: map[string]any{
+						"mixed_scheduling": true,
+						modelRateLimitsKey: map[string]any{
+							antigravityGeminiModelRateLimitKey: map[string]any{
+								"rate_limit_reset_at": resetAt,
+							},
+						},
+					},
+				},
+				{
+					ID:          3,
+					Platform:    PlatformAntigravity,
+					Priority:    2,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra:       map[string]any{"mixed_scheduling": true},
+				},
 			},
 			accountsByID: map[int64]*Account{},
 		}
@@ -1530,6 +1579,32 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 				{ID: 1, Platform: PlatformAnthropic, Priority: 3, Status: StatusActive, Schedulable: true},
 				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true},
 				{ID: 3, Platform: PlatformDroid, Priority: 1, Status: StatusActive, Schedulable: true},
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "gemini-3-pro-preview", nil, PlatformGemini)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(3), acc.ID)
+	})
+
+	t.Run("混合调度-Gemini家族限流不影响Claude调度", func(t *testing.T) {
+		resetAt := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
+		repo := &mockAccountRepoForPlatform{
+			accounts: []Account{
+				{
+					ID:          1,
+					Platform:    PlatformAntigravity,
+					Priority:    1,
+					Status:      StatusActive,
+					Schedulable: true,
+					Extra: map[string]any{
+						"mixed_scheduling": true,
+						modelRateLimitsKey: map[string]any{
+							antigravityGeminiModelRateLimitKey: map[string]any{
+								"rate_limit_reset_at": resetAt,
+							},
+						},
+					},
+				},
+				{ID: 2, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true},
 			},
 			accountsByID: map[int64]*Account{},
 		}

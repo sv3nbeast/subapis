@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestIsClaudeCodeClient(t *testing.T) {
@@ -177,18 +178,6 @@ func TestSystemIncludesClaudeCodePrompt(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
-}
-
-func TestBuildBillingAttributionBlockUsesCapturedSDKEntrypoint(t *testing.T) {
-	block, err := buildBillingAttributionBlockJSON([]byte(`{"messages":[{"role":"user","content":"hello world from cli"}]}`), claude.CLICurrentVersion)
-	require.NoError(t, err)
-
-	var parsed map[string]string
-	require.NoError(t, json.Unmarshal(block, &parsed))
-	require.Equal(t, "text", parsed["type"])
-	require.Contains(t, parsed["text"], "cc_version=2.1.156.")
-	require.Contains(t, parsed["text"], "cc_entrypoint=sdk-cli")
-	require.Contains(t, parsed["text"], "cch=00000")
 }
 
 func TestInjectClaudeCodePrompt(t *testing.T) {
@@ -414,44 +403,37 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			err := json.Unmarshal(result, &parsed)
 			require.NoError(t, err)
 
-			// system 应为 array 格式，对齐本机抓到的 Claude Code 2.1.165 core-request 4-block 形态：
-			//   [0] billing attribution block
-			//   [1] Agent SDK identity block
-			//   [2] interactive agent task block（带 cache_control）
-			//   [3] code style / action caution block（带 cache_control）
+			// system 应为 array 格式，对齐真实 Claude Code CLI 的 3-block 形态：
+			//   [0] billing attribution block (x-anthropic-billing-header: cc_version=...;)
+			//   [1] Claude Code 身份前缀 block (不带 cache_control)
+			//   [2] 工具无关的通用提示词扩充 block (带 cache_control，作为缓存断点)
 			systemArr, ok := parsed["system"].([]any)
 			require.True(t, ok, "system should be an array, got %T", parsed["system"])
-			require.Len(t, systemArr, 4, "system array should have exactly 4 blocks (billing + sdk + task + style)")
+			require.Len(t, systemArr, 3, "system array should have exactly 3 blocks (billing + cc prompt + expansion)")
 
 			billingBlock, ok := systemArr[0].(map[string]any)
 			require.True(t, ok)
 			require.Equal(t, "text", billingBlock["type"])
 			require.Contains(t, billingBlock["text"], "x-anthropic-billing-header:")
 			require.Contains(t, billingBlock["text"], "cc_version=")
-			require.Contains(t, billingBlock["text"], "cc_entrypoint=sdk-cli")
-			require.Contains(t, billingBlock["text"], "cch=00000")
+			require.Contains(t, billingBlock["text"], "cc_entrypoint=cli")
+			// 新版 CLI 已取消 cch=... 签名字段，注入的 billing block 不应再带 cch。
+			require.NotContains(t, billingBlock["text"], "cch=")
 
-			sdkBlock, ok := systemArr[1].(map[string]any)
+			systemBlock, ok := systemArr[1].(map[string]any)
 			require.True(t, ok)
-			require.Equal(t, "text", sdkBlock["type"])
-			require.Equal(t, claudeAgentSDKSystemPrompt, sdkBlock["text"])
-			require.Nil(t, sdkBlock["cache_control"])
+			require.Equal(t, "text", systemBlock["type"])
+			require.Equal(t, tt.wantSystemText, systemBlock["text"])
+			_, hasCC := systemBlock["cache_control"]
+			require.False(t, hasCC, "身份前缀 block 不应带 cache_control（断点落在扩充块）")
 
-			taskBlock, ok := systemArr[2].(map[string]any)
+			expansionBlock, ok := systemArr[2].(map[string]any)
 			require.True(t, ok)
-			require.Equal(t, "text", taskBlock["type"])
-			require.Equal(t, claudeAgentTaskSystemPrompt, taskBlock["text"])
-			taskCC, ok := taskBlock["cache_control"].(map[string]any)
-			require.True(t, ok, "task block should have cache_control")
-			require.Equal(t, "ephemeral", taskCC["type"])
-
-			styleBlock, ok := systemArr[3].(map[string]any)
-			require.True(t, ok)
-			require.Equal(t, "text", styleBlock["type"])
-			require.Equal(t, claudeAgentStyleSystemPrompt, styleBlock["text"])
-			styleCC, ok := styleBlock["cache_control"].(map[string]any)
-			require.True(t, ok, "style block should have cache_control")
-			require.Equal(t, "ephemeral", styleCC["type"])
+			require.Equal(t, "text", expansionBlock["type"])
+			require.Equal(t, claudeCodeSystemPromptExpansion, expansionBlock["text"])
+			cc, ok := expansionBlock["cache_control"].(map[string]any)
+			require.True(t, ok, "expansion block should have cache_control")
+			require.Equal(t, "ephemeral", cc["type"])
 
 			// 检查 messages
 			messages, ok := parsed["messages"].([]any)
@@ -485,4 +467,43 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRewriteSystemForNonClaudeCodeWithPrompt_UsesCustomExpansionPrompt(t *testing.T) {
+	body := []byte(`{"model":"claude-3","system":"Project instructions","messages":[{"role":"user","content":"hello"}]}`)
+	customPrompt := "Custom Claude OAuth expansion prompt"
+
+	result := rewriteSystemForNonClaudeCodeWithPrompt(body, "Project instructions", customPrompt)
+
+	system := gjson.GetBytes(result, "system")
+	require.True(t, system.IsArray())
+	require.Len(t, system.Array(), 3)
+	require.Equal(t, customPrompt, system.Array()[2].Get("text").String())
+	require.Equal(t, "ephemeral", system.Array()[2].Get("cache_control.type").String())
+}
+
+func TestRewriteSystemForNonClaudeCodeWithPromptBlocks_UsesConfiguredBlocks(t *testing.T) {
+	body := []byte(`{"model":"claude-3","system":"Project instructions","messages":[{"role":"user","content":"hello"}]}`)
+	blocks := `{
+		"blocks": [
+			{"type":"text","text":"prefix {cc_version}.{fp}","cache_control":true},
+			{"enabled":false,"type":"text","text":"disabled"},
+			{"type":"text","text":"{claude_code_system_prompt}"},
+			{"type":"text","text":"tail","cache_control":{"type":"ephemeral","ttl":"1h"}}
+		]
+	}`
+
+	result := rewriteSystemForNonClaudeCodeWithPromptBlocks(body, "Project instructions", "", blocks)
+
+	system := gjson.GetBytes(result, "system")
+	require.True(t, system.IsArray())
+	arr := system.Array()
+	require.Len(t, arr, 3)
+	require.Contains(t, arr[0].Get("text").String(), "prefix "+claude.CLICurrentVersion+".")
+	require.Equal(t, "ephemeral", arr[0].Get("cache_control.type").String())
+	require.Equal(t, claude.DefaultCacheControlTTL, arr[0].Get("cache_control.ttl").String())
+	require.Equal(t, claudeCodeSystemPrompt, arr[1].Get("text").String())
+	require.False(t, arr[1].Get("cache_control").Exists())
+	require.Equal(t, "tail", arr[2].Get("text").String())
+	require.Equal(t, "1h", arr[2].Get("cache_control.ttl").String())
 }

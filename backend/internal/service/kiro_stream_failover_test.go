@@ -178,7 +178,7 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	}
 	parsed := &ParsedRequest{
 		Model: "claude-sonnet-4-6",
-		Body:  []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+		Body:  NewRequestBodyRef([]byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
 	}
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
@@ -224,7 +224,7 @@ func TestForwardKiroMessagesStreamOpenContextCanceledDoesNotWriteFallbackBody(t 
 	parsed := &ParsedRequest{
 		Model:  "claude-opus-4-8",
 		Stream: true,
-		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+		Body:   NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
 	}
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
@@ -267,7 +267,7 @@ func TestForwardKiroMessagesStreamOpenNetworkErrorTriggersFailover(t *testing.T)
 	parsed := &ParsedRequest{
 		Model:  "claude-opus-4-8",
 		Stream: true,
-		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+		Body:   NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
 	}
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
@@ -315,7 +315,7 @@ func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T)
 		},
 	}
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	parsed, err := ParseGatewayRequest(body, PlatformKiro)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
 
 	resp, _, err := svc.openKiroAnthropicStreamResponse(parentCtx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, nil)
@@ -369,7 +369,7 @@ func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testin
 	parsed := &ParsedRequest{
 		Model:  "claude-opus-4-8",
 		Stream: true,
-		Body:   []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`),
+		Body:   NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
 	}
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
@@ -400,18 +400,14 @@ func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) 
 	}
 	parsed := &ParsedRequest{
 		Model: "claude-sonnet-4-6",
-		Body: []byte(`{
+		Body: NewRequestBodyRef([]byte(`{
 			"model":"claude-sonnet-4-6",
 			"max_tokens":128,
 			"messages":[
 				{"role":"user","content":"hello"},
 				{"role":"assistant","content":"prefill"}
 			]
-		}`),
-		Messages: []any{
-			map[string]any{"role": "user", "content": "hello"},
-			map[string]any{"role": "assistant", "content": "prefill"},
-		},
+		}`)),
 	}
 	account := &Account{
 		ID:          42,
@@ -442,7 +438,7 @@ func TestValidateKiroRequestShapeAllowsToolResultFinalTurn(t *testing.T) {
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"sunny"}]}
 		]
 	}`)
-	parsed, err := ParseGatewayRequest(body, PlatformAnthropic)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 	require.NoError(t, err)
 
 	require.Empty(t, validateKiroRequestShape(parsed))

@@ -52,7 +52,8 @@ func getWebSearchManager() *websearch.Manager {
 // Judgment chain: manager exists → only web_search tool → global enabled → account enabled.
 // Note: channel-level control is enforced via the account's extra field; the channel toggle
 // in the admin UI sets the account's flag for all accounts in that channel's groups.
-func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, body []byte) bool {
+func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, groupID *int64, body []byte) bool {
+	_ = groupID
 	if getWebSearchManager() == nil {
 		return false
 	}
@@ -138,7 +139,7 @@ func (s *GatewayService) handleWebSearchEmulation(
 		parsed.OnUpstreamAccepted()
 	}
 
-	query := extractSearchQueryFromBody(parsed.Body)
+	query := extractSearchQueryFromBody(parsed.Body.Bytes())
 	if query == "" {
 		return nil, fmt.Errorf("web search emulation: no query found in messages")
 	}

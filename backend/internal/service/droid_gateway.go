@@ -46,7 +46,7 @@ func (s *GatewayService) forwardDroidMessages(ctx context.Context, c *gin.Contex
 	if parsed == nil {
 		return nil, fmt.Errorf("droid forward: missing parsed request")
 	}
-	body := s.prepareDroidRequestBody(parsed.Body, droidEndpointAnthropic, parsed.Model)
+	body := s.prepareDroidRequestBody(parsed.Body.Bytes(), droidEndpointAnthropic, parsed.Model)
 	return s.forwardDroid(ctx, c, account, droidForwardInput{
 		Endpoint:      droidEndpointAnthropic,
 		Body:          body,

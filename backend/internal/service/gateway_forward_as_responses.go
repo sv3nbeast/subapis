@@ -52,7 +52,15 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 
 	// 2. Convert Responses → Anthropic
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	// Kiro previous_response_id 延续场景：本轮 input 的 tool_result 对应历史里的 tool_use，
+	// 必须保留孤立 tool_result 待历史 prepend 后配对，故走不丢 orphan 的变体。
+	var anthropicReq *apicompat.AnthropicRequest
+	var err error
+	if account != nil && account.Platform == PlatformKiro && strings.TrimSpace(responsesReq.PreviousResponseID) != "" {
+		anthropicReq, err = apicompat.ResponsesToAnthropicRequestForKiroContinuation(&responsesReq)
+	} else {
+		anthropicReq, err = apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -77,6 +85,7 @@ func (s *GatewayService) ForwardAsResponses(
 	// 4. Model mapping
 	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body)
 	mappedModel := resolveAnthropicUpstreamModel(account, originalModel).Model
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 	anthropicReq.Model = mappedModel
 	applyAnthropicThinkingAliasToRequest(anthropicReq, originalModel)
 
@@ -140,7 +149,7 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 10. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+	upstreamReq, _, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -174,7 +183,7 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		respBody, _ := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -291,7 +300,7 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 }
 
 func buildKiroParsedRequestFromAnthropicBody(body []byte, requestModel string, stream bool, original *ParsedRequest) (*ParsedRequest, error) {
-	parsed, err := ParseGatewayRequest(body, PlatformAnthropic)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
 	if err != nil {
 		return nil, fmt.Errorf("parse kiro anthropic request: %w", err)
 	}
@@ -426,6 +435,12 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	// 非流式响应必须是 application/json。上游被强制流式后会返回
+	// Content-Type: text/event-stream，经 WriteFilteredHeaders 透传后会污染
+	// 响应头；而 c.Data/c.JSON 走 Gin 的 writeContentType（仅当头不存在时才设置），
+	// 无法覆盖已存在的 SSE 头。这里显式 Set 强制改回 JSON，避免下游中间层
+	// （如 new-api）按 Content-Type 误判为流式。
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if respBytes, err := json.Marshal(responsesResp); err == nil {
 		respBytes = reverseToolNamesIfPresent(c, respBytes)
 		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
@@ -622,6 +637,7 @@ func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
 
 // writeResponsesError writes an error response in OpenAI Responses API format.
 func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
+	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
 			"code":    code,
