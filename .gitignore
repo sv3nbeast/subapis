@@ -138,6 +138,7 @@ vite.config.js
 docs/*
 !docs/CLAUDE_CLI_MIMICRY_AUDIT.md
 !docs/ANTIGRAVITY_429_QUOTA_EXHAUSTED.md
+!docs/upstream-sync-conflict-ledger.md
 .serena/
 .codex/
 .superpowers/
