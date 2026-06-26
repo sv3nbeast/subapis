@@ -255,7 +255,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		BackendModeEnabled:                     settings.BackendModeEnabled,
 		EnableFingerprintUnification:           settings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:              settings.EnableMetadataPassthrough,
-		EnableCCHSigning:                       settings.EnableCCHSigning,
 		EnableClaudeOAuthSystemPromptInjection: settings.EnableClaudeOAuthSystemPromptInjection,
 		ClaudeOAuthSystemPrompt:                settings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:          settings.ClaudeOAuthSystemPromptBlocks,
@@ -574,7 +573,6 @@ type UpdateSettingsRequest struct {
 	// Gateway forwarding behavior
 	EnableFingerprintUnification                  *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough                     *bool   `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                              *bool   `json:"enable_cch_signing"`
 	EnableAnthropicCacheTTL1hInjection            *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
 	RewriteMessageCacheControl                    *bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion                   *string `json:"antigravity_user_agent_version"`
@@ -1573,12 +1571,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableMetadataPassthrough
 		}(),
-		EnableCCHSigning: func() bool {
-			if req.EnableCCHSigning != nil {
-				return *req.EnableCCHSigning
-			}
-			return previousSettings.EnableCCHSigning
-		}(),
 		EnableClaudeOAuthSystemPromptInjection: func() bool {
 			if req.EnableClaudeOAuthSystemPromptInjection != nil {
 				return *req.EnableClaudeOAuthSystemPromptInjection
@@ -2001,7 +1993,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		BackendModeEnabled:                     updatedSettings.BackendModeEnabled,
 		EnableFingerprintUnification:           updatedSettings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:              updatedSettings.EnableMetadataPassthrough,
-		EnableCCHSigning:                       updatedSettings.EnableCCHSigning,
 		EnableClaudeOAuthSystemPromptInjection: updatedSettings.EnableClaudeOAuthSystemPromptInjection,
 		ClaudeOAuthSystemPrompt:                updatedSettings.ClaudeOAuthSystemPrompt,
 		ClaudeOAuthSystemPromptBlocks:          updatedSettings.ClaudeOAuthSystemPromptBlocks,
@@ -2409,9 +2400,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableMetadataPassthrough != after.EnableMetadataPassthrough {
 		changed = append(changed, "enable_metadata_passthrough")
-	}
-	if before.EnableCCHSigning != after.EnableCCHSigning {
-		changed = append(changed, "enable_cch_signing")
 	}
 	if before.EnableClaudeOAuthSystemPromptInjection != after.EnableClaudeOAuthSystemPromptInjection {
 		changed = append(changed, "enable_claude_oauth_system_prompt_injection")

@@ -3586,21 +3586,6 @@
                 <Toggle v-model="form.enable_metadata_passthrough" />
               </div>
 
-              <!-- CCH Signing -->
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.cchSigning") }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.cchSigningHint") }}
-                  </p>
-                </div>
-                <Toggle v-model="form.enable_cch_signing" />
-              </div>
-
               <!-- Claude OAuth System Prompt Injection -->
               <div class="flex items-center justify-between">
                 <div>
@@ -7793,7 +7778,6 @@ const form = reactive<SettingsForm>({
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
-  enable_cch_signing: false,
   enable_claude_oauth_system_prompt_injection: true,
   claude_oauth_system_prompt: "",
   claude_oauth_system_prompt_blocks: defaultClaudeOAuthSystemPromptBlocks,
@@ -9086,7 +9070,6 @@ async function saveSettings() {
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
-      enable_cch_signing: form.enable_cch_signing,
       enable_claude_oauth_system_prompt_injection:
         form.enable_claude_oauth_system_prompt_injection,
       claude_oauth_system_prompt: form.claude_oauth_system_prompt?.trim()

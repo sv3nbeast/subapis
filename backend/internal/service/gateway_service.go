@@ -1756,7 +1756,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header, uaForm); err == nil && fp != nil {
 			mimicMPT := false
 			if s.settingService != nil {
-				_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
+				_, mimicMPT = s.settingService.GetGatewayForwardingSettings(ctx)
 			}
 			if !mimicMPT {
 				if uid := s.buildOAuthMetadataUserIDFromBody(ctx, account, fp, body); uid != "" {
@@ -6207,7 +6207,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header, uaForm)
 			if err == nil && fp != nil {
 				// metadata 透传开启时跳过 metadata 注入
-				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
+				_, mimicMPT := s.settingService.GetGatewayForwardingSettings(ctx)
 				if !mimicMPT {
 					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
 						normalizeOpts.injectMetadata = true
@@ -8167,7 +8167,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	var fingerprint *Fingerprint
 	enableFP, enableMPT := true, false
 	if s.settingService != nil {
-		enableFP, enableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
+		enableFP, enableMPT = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
 	if account.IsOAuth() && s.identityService != nil {
 		// 1. 获取或创建指纹（包含随机生成的ClientID）
@@ -11842,7 +11842,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 如果启用了会话ID伪装，会在重写后替换 session 部分为固定值
 	ctEnableFP, ctEnableMPT := true, false
 	if s.settingService != nil {
-		ctEnableFP, ctEnableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
+		ctEnableFP, ctEnableMPT = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
 	var ctFingerprint *Fingerprint
 	if account.IsOAuth() && s.identityService != nil {

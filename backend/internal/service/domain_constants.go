@@ -458,8 +458,6 @@ const (
 
 	// SettingKeyStatusProbeConfig stores JSON config for service status probe monitoring.
 	SettingKeyStatusProbeConfig = "status_probe_config"
-	// SettingKeyEnableCCHSigning 是否对 billing header 中的 cch 进行 xxHash64 签名（默认 false）
-	SettingKeyEnableCCHSigning = "enable_cch_signing"
 	// SettingKeyEnableClaudeOAuthSystemPromptInjection 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	SettingKeyEnableClaudeOAuthSystemPromptInjection = "enable_claude_oauth_system_prompt_injection"
 	// SettingKeyAllowUserViewErrorRequests 允许终端用户在用量页查看自己的失败请求（默认 false）
