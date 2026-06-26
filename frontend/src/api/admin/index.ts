@@ -19,6 +19,7 @@ import geminiAPI from './gemini'
 import antigravityAPI from './antigravity'
 import kiroAPI from './kiro'
 import droidAPI from './droid'
+import grokAPI from './grok'
 import userAttributesAPI from './userAttributes'
 import opsAPI from './ops'
 import errorPassthroughAPI from './errorPassthrough'
@@ -55,6 +56,7 @@ export const adminAPI = {
   antigravity: antigravityAPI,
   kiro: kiroAPI,
   droid: droidAPI,
+  grok: grokAPI,
   userAttributes: userAttributesAPI,
   ops: opsAPI,
   errorPassthrough: errorPassthroughAPI,
@@ -89,6 +91,7 @@ export {
   antigravityAPI,
   kiroAPI,
   droidAPI,
+  grokAPI,
   userAttributesAPI,
   opsAPI,
   errorPassthroughAPI,

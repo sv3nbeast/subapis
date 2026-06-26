@@ -24,6 +24,7 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformKiro        = "kiro"
 	PlatformDroid       = "droid"
+	PlatformGrok        = "grok"
 )
 
 // Account type constants

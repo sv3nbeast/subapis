@@ -492,6 +492,8 @@ const platformOptions = [
   { value: 'antigravity', label: 'Antigravity' },
   { value: 'kiro', label: 'Kiro' },
   { value: 'droid', label: 'Droid' }
+,
+  { value: 'grok', label: 'Grok' }
 ]
 
 // Load rules when dialog opens

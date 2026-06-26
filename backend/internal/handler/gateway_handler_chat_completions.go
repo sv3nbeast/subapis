@@ -160,7 +160,15 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 					h.chatCompletionsErrorResponse(c, cls.StatusCode, cls.ErrorType, cls.Message)
 					return
 				}
-				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts: "+err.Error())
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, openAICompatibleRequestPlatform(apiKey))
+				if !cls.ModelNotFound {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+				}
+				message := cls.Message
+				if !cls.ModelNotFound {
+					message = "No available accounts: " + err.Error()
+				}
+				h.chatCompletionsErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
 			}
 			action := fs.HandleSelectionExhausted(c.Request.Context())

@@ -20,11 +20,9 @@
                   ? 'from-blue-500 to-blue-600'
                   : isAntigravity
                     ? 'from-purple-500 to-purple-600'
-                    : isKiro
-                      ? 'from-amber-500 to-amber-600'
-                      : isDroid
-                        ? 'from-cyan-500 to-cyan-600'
-                        : 'from-orange-500 to-orange-600'
+                    : isGrok
+                      ? 'from-slate-600 to-cyan-600'
+                      : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -41,11 +39,9 @@
                     ? t('admin.accounts.geminiAccount')
                     : isAntigravity
                       ? t('admin.accounts.antigravityAccount')
-                      : isKiro
-                        ? 'Kiro'
-                        : isDroid
-                          ? 'Droid'
-                          : t('admin.accounts.claudeCodeAccount')
+                      : isGrok
+                        ? t('admin.accounts.grokAccount')
+                        : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -136,7 +132,7 @@
         :show-cookie-option="isAnthropic"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
-        :platform="currentOAuthPlatform"
+        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : 'anthropic'"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
@@ -200,10 +196,8 @@ import {
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
-import { useKiroOAuth } from '@/composables/useKiroOAuth'
-import { useDroidOAuth } from '@/composables/useDroidOAuth'
-import type { Account, AccountPlatform } from '@/types'
-import { buildReauthAccountUpdatePayload } from '@/components/account/reauthPayload'
+import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
@@ -213,10 +207,6 @@ import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.
 interface OAuthFlowExposed {
   authCode: string
   oauthState: string
-  oauthCallbackPath?: string
-  oauthLoginOption?: string
-  oauthIssuerURL?: string
-  oauthIDCRegion?: string
   projectId: string
   sessionKey: string
   inputMethod: AuthInputMethod
@@ -242,8 +232,7 @@ const claudeOAuth = useAccountOAuth()
 const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
-const kiroOAuth = useKiroOAuth()
-const droidOAuth = useDroidOAuth()
+const grokOAuth = useGrokOAuth()
 
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
@@ -258,70 +247,48 @@ const isOpenAILike = computed(() => isOpenAI.value)
 const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
-const isKiro = computed(() => props.account?.platform === 'kiro')
-const isDroid = computed(() => props.account?.platform === 'droid')
-const currentOAuthPlatform = computed<AccountPlatform>(() => {
-  if (isOpenAI.value) return 'openai'
-  if (isGemini.value) return 'gemini'
-  if (isAntigravity.value) return 'antigravity'
-  if (isKiro.value) return 'kiro'
-  if (isDroid.value) return 'droid'
-  return 'anthropic'
-})
-const isKiroIDCAccount = computed(() => {
-  if (!isKiro.value) return false
-  const creds = (props.account?.credentials || {}) as Record<string, unknown>
-  const authMethod = String(creds.auth_method || '').trim().toLowerCase()
-  return authMethod === 'idc' || authMethod === 'builder-id'
-})
+const isGrok = computed(() => props.account?.platform === 'grok')
 
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.authUrl.value
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
-  if (isKiro.value) return kiroOAuth.authUrl.value
-  if (isDroid.value) return droidOAuth.authUrl.value
+  if (isGrok.value) return grokOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentSessionId = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.sessionId.value
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
-  if (isKiro.value) return kiroOAuth.sessionId.value
-  if (isDroid.value) return droidOAuth.sessionId.value
+  if (isGrok.value) return grokOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.loading.value
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
-  if (isKiro.value) return kiroOAuth.loading.value
-  if (isDroid.value) return droidOAuth.loading.value
+  if (isGrok.value) return grokOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.error.value
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
-  if (isKiro.value) return kiroOAuth.error.value
-  if (isDroid.value) return droidOAuth.error.value
+  if (isGrok.value) return grokOAuth.error.value
   return claudeOAuth.error.value
 })
 
 // Computed
 const isManualInputMethod = computed(() => {
-  // OpenAI/Gemini/Antigravity/Kiro always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || isKiro.value || isDroid.value || oauthFlowRef.value?.inputMethod === 'manual'
+  // OpenAI/Gemini/Antigravity always use manual input (no cookie auth option)
+  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
 const canExchangeCode = computed(() => {
   const authCode = oauthFlowRef.value?.authCode || ''
   const sessionId = currentSessionId.value
   const loading = currentLoading.value
-  if (isKiro.value && isKiroIDCAccount.value) {
-    return sessionId && !loading
-  }
   return authCode.trim() && sessionId && !loading
 })
 
@@ -360,8 +327,7 @@ const resetState = () => {
   openaiOAuth.resetState()
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
-  kiroOAuth.resetState()
-  droidOAuth.resetState()
+  grokOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -381,20 +347,8 @@ const handleGenerateUrl = async () => {
     await geminiOAuth.generateAuthUrl(props.account.proxy_id, projectId, geminiOAuthType.value, tierId)
   } else if (isAntigravity.value) {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
-  } else if (isKiro.value) {
-    const creds = (props.account.credentials || {}) as Record<string, unknown>
-    if (isKiroIDCAccount.value) {
-      await kiroOAuth.generateIDCAuthUrl({
-        proxyId: props.account.proxy_id,
-        startUrl: typeof creds.start_url === 'string' ? creds.start_url : undefined,
-        region: typeof creds.region === 'string' ? creds.region : undefined
-      })
-    } else {
-      const provider = String(creds.provider || '').toLowerCase() === 'github' ? 'Github' : 'Google'
-      await kiroOAuth.generateAuthUrl(props.account.proxy_id, provider)
-    }
-  } else if (isDroid.value) {
-    await droidOAuth.generateAuthUrl(props.account.proxy_id)
+  } else if (isGrok.value) {
+    await grokOAuth.generateAuthUrl(props.account.proxy_id)
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
@@ -404,7 +358,7 @@ const handleExchangeCode = async () => {
   if (!props.account) return
 
   const authCode = oauthFlowRef.value?.authCode || ''
-  if (!authCode.trim() && !(isKiro.value && isKiroIDCAccount.value)) return
+  if (!authCode.trim()) return
 
   if (isOpenAILike.value) {
     // OpenAI OAuth flow
@@ -431,15 +385,11 @@ const handleExchangeCode = async () => {
     const extra = oauthClient.buildExtraInfo(tokenInfo)
 
     try {
-      // Update account with new credentials
-      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
-        type: 'oauth', // OpenAI OAuth is always 'oauth' type
+      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+        type: 'oauth',
         credentials,
         extra
-      }))
-
-      // Clear error status after successful re-authorization
-      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
+      })
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized', updatedAccount)
@@ -467,14 +417,12 @@ const handleExchangeCode = async () => {
     if (!tokenInfo) return
 
     const credentials = geminiOAuth.buildCredentials(tokenInfo)
-    const extra = geminiOAuth.buildExtraInfo(tokenInfo)
 
     try {
-      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
+      await adminAPI.accounts.update(props.account.id, {
         type: 'oauth',
-        credentials,
-        extra
-      }))
+        credentials
+      })
       const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized', updatedAccount)
@@ -503,10 +451,10 @@ const handleExchangeCode = async () => {
     const credentials = antigravityOAuth.buildCredentials(tokenInfo)
 
     try {
-      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
+      await adminAPI.accounts.update(props.account.id, {
         type: 'oauth',
         credentials
-      }))
+      })
       const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized', updatedAccount)
@@ -515,102 +463,38 @@ const handleExchangeCode = async () => {
       antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(antigravityOAuth.error.value)
     }
-  } else if (isKiro.value) {
-    const sessionId = kiroOAuth.sessionId.value
+  } else if (isGrok.value) {
+    const sessionId = grokOAuth.sessionId.value
     if (!sessionId) return
 
-    const loginOption = (oauthFlowRef.value?.oauthLoginOption || '').trim().toLowerCase()
-    if (loginOption === 'awsidc') {
-      const stateFromInput = oauthFlowRef.value?.oauthState || ''
-      const stateToUse = stateFromInput || kiroOAuth.state.value
-      if (!stateToUse || stateToUse !== kiroOAuth.state.value) {
-        kiroOAuth.error.value = t('admin.accounts.oauth.kiro.stateMismatch')
-        appStore.showError(kiroOAuth.error.value)
-        return
-      }
-
-      const issuerURL = (oauthFlowRef.value?.oauthIssuerURL || '').trim()
-      const idcRegion = (oauthFlowRef.value?.oauthIDCRegion || '').trim()
-      if (!issuerURL) {
-        kiroOAuth.error.value = t('admin.accounts.oauth.kiro.missingIDCContinuation')
-        appStore.showError(kiroOAuth.error.value)
-        return
-      }
-
-      const generated = await kiroOAuth.generateIDCAuthUrl({
-        proxyId: props.account.proxy_id,
-        startUrl: issuerURL,
-        region: idcRegion || undefined
-      })
-      if (generated) {
-        oauthFlowRef.value?.reset()
-        appStore.showInfo(t('admin.accounts.oauth.kiro.idcContinuationReady'), 6000)
-      }
-      return
-    }
-
     const stateFromInput = oauthFlowRef.value?.oauthState || ''
-    const stateToUse = stateFromInput || kiroOAuth.state.value
-    if (!stateToUse) {
-      kiroOAuth.error.value = t('admin.accounts.oauth.kiro.missingState')
-      appStore.showError(kiroOAuth.error.value)
-      return
-    }
+    const stateToUse = stateFromInput || grokOAuth.state.value
+    if (!stateToUse) return
 
-    const tokenInfo = await kiroOAuth.exchangeAuthCode({
+    const tokenInfo = await grokOAuth.exchangeAuthCode({
       code: authCode.trim(),
       sessionId,
       state: stateToUse,
-      callbackPath: oauthFlowRef.value?.oauthCallbackPath || '',
-      loginOption: oauthFlowRef.value?.oauthLoginOption || '',
       proxyId: props.account.proxy_id
     })
     if (!tokenInfo) return
 
-    const credentials = kiroOAuth.buildCredentials(tokenInfo)
+    const credentials = grokOAuth.buildCredentials(tokenInfo)
+    const extra = grokOAuth.buildExtraInfo(tokenInfo)
 
     try {
       const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
         type: 'oauth',
-        credentials
+        credentials,
+        extra
       })
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized', updatedAccount)
       handleClose()
     } catch (error: any) {
-      kiroOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
-      appStore.showError(kiroOAuth.error.value)
-    }
-  } else if (isDroid.value) {
-    const sessionId = droidOAuth.sessionId.value
-    if (!sessionId) return
-
-    const tokenInfo = await droidOAuth.exchangeAuthCode({
-      sessionId,
-      proxyId: props.account.proxy_id
-    })
-    if (!tokenInfo) {
-      if (droidOAuth.pending.value && droidOAuth.error.value) {
-        appStore.showInfo(droidOAuth.error.value, 4000)
-      }
-      return
-    }
-
-    const credentials = droidOAuth.buildCredentials(tokenInfo)
-
-    try {
-      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
-        type: 'oauth',
-        credentials
-      })
-      await adminAPI.accounts.clearError(props.account.id)
-      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized', updatedAccount)
-      handleClose()
-    } catch (error: any) {
-      droidOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
-      appStore.showError(droidOAuth.error.value)
+      grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(grokOAuth.error.value)
     }
   } else {
     // Claude OAuth flow
@@ -635,15 +519,11 @@ const handleExchangeCode = async () => {
 
       const extra = claudeOAuth.buildExtraInfo(tokenInfo)
 
-      // Update account with new credentials and type
-      await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
-        type: addMethod.value, // Update type based on selected method
-        credentials: tokenInfo,
+      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+        type: addMethod.value as 'oauth' | 'setup-token',
+        credentials: tokenInfo as unknown as Record<string, unknown>,
         extra
-      }))
-
-      // Clear error status after successful re-authorization
-      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
+      })
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized', updatedAccount)
@@ -678,15 +558,11 @@ const handleCookieAuth = async (sessionKey: string) => {
 
     const extra = claudeOAuth.buildExtraInfo(tokenInfo)
 
-    // Update account with new credentials and type
-    await adminAPI.accounts.update(props.account.id, buildReauthAccountUpdatePayload(props.account, {
-      type: addMethod.value, // Update type based on selected method
-      credentials: tokenInfo,
+    const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+      type: addMethod.value as 'oauth' | 'setup-token',
+      credentials: tokenInfo as unknown as Record<string, unknown>,
       extra
-    }))
-
-    // Clear error status after successful re-authorization
-    const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
+    })
 
     appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
     emit('reauthorized', updatedAccount)

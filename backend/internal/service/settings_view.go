@@ -202,13 +202,18 @@ type SystemSettings struct {
 	AntigravityUserAgentVersion                   string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
 	ClaudeUpstreamUserAgent                       string // Claude/Anthropic 上游完整 User-Agent；空值使用内置默认
 	OpenAICodexUserAgent                          string // OpenAI Codex 上游完整 User-Agent；空值使用内置默认
-	OpenAIAllowClaudeCodeCodexPlugin              bool   // 全局开关：是否额外放行 Claude Code 的 Codex 插件（默认 false）
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    // Anthropic 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    // OpenAI 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    // Antigravity 账号创建自动选代理时的同平台容量（默认 5）
 	EnableClaudeOAuthSystemPromptInjection        bool   // 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	ClaudeOAuthSystemPrompt                       string // Claude OAuth mimic 路径注入的通用扩展 system prompt；空值使用内置默认
 	ClaudeOAuthSystemPromptBlocks                 string // Claude OAuth mimic 路径注入的 system blocks JSON 配置；空值使用内置默认
+	MinCodexVersion                               string // codex_cli_only 最低 Codex 引擎版本；空=不检查
+	MaxCodexVersion                               string // codex_cli_only 最高 Codex 引擎版本；空=不检查
+	CodexCLIOnlyBlacklist                         string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）
+	CodexCLIOnlyWhitelist                         string // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
+	CodexCLIOnlyAllowAppServerClients             bool   // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
+	CodexCLIOnlyEngineFingerprintSignals          string // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟

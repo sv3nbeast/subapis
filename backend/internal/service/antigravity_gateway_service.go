@@ -109,6 +109,9 @@ var antigravityLegacyWakeupBaseURLs = []string{
 }
 
 const antigravityLegacyWakeupSystemPrompt = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+const antigravityProjectIDFallbackCredentialKey = "antigravity_project_id"
+
+var errAntigravityProjectIDRequired = errors.New("该 standard-tier Antigravity 账号需配置 project_id")
 
 // AntigravityAccountSwitchError 账号切换信号
 // 当账号限流时间超过阈值时，通知上层切换账号
@@ -1257,6 +1260,22 @@ func (s *AntigravityGatewayService) getMappedModel(account *Account, requestedMo
 	return mapAntigravityModel(account, requestedModel)
 }
 
+func resolveAntigravityProjectID(account *Account) (string, error) {
+	if account == nil {
+		return "", errAntigravityProjectIDRequired
+	}
+	if projectID := strings.TrimSpace(account.GetCredential("project_id")); projectID != "" {
+		return projectID, nil
+	}
+	if projectID := strings.TrimSpace(account.GetCredential(antigravityProjectIDFallbackCredentialKey)); projectID != "" {
+		return projectID, nil
+	}
+	if projectID := strings.TrimSpace(account.GetExtraString(antigravityProjectIDFallbackCredentialKey)); projectID != "" {
+		return projectID, nil
+	}
+	return "", errAntigravityProjectIDRequired
+}
+
 // applyThinkingModelSuffix 根据 thinking 配置调整模型名
 // 当映射结果是 claude-sonnet-4-5 且请求开启了 thinking 时，改为 claude-sonnet-4-5-thinking
 func applyThinkingModelSuffix(mappedModel string, thinkingEnabled bool) string {
@@ -1805,6 +1824,10 @@ func (s *AntigravityGatewayService) wrapV1InternalRequestWithIdentity(projectID,
 	var request any
 	if err := json.Unmarshal(originalBody, &request); err != nil {
 		return nil, fmt.Errorf("解析请求体失败: %w", err)
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errAntigravityProjectIDRequired
 	}
 
 	if requestMap, ok := request.(map[string]any); ok {

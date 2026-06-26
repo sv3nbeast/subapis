@@ -1786,3 +1786,125 @@ d8792e1c Fix plain Claude CLI XML invoke bridging
 767da9e0 Suppress stale channel monitor alerts
 43634d52 Fix Anthropic channel monitor streaming checks
 b903ad9d Pre-normalize Anthropic inline system messages
+
+## 2026-06-26 19:39:03 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `492144be8296941511987b581246329b107360d7`
+- 官方提交: `c275422251e72750bebe53e41fcf59db7f83fe6b`
+- 合并基线: `ce6af413577a6d012e334baad5069a02a80d48b6`
+- 官方领先数量: `67`
+- 本地领先数量: `362`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+c2754222 杂项：将VERSION同步到 0.1.139 [skip ci]
+9a0fbcc8 杂项：更新sponsors
+df99b941 合并拉取请求 #3495（来源：DaydreamCoding/feat/codex-detect-cli-only-engine-fingerprint）
+819fda34 新增（codex-detect）：codex_cli_only 检测加固 + 引擎指纹统一信号列表 + 账号级 app-server
+f93a6c50 修复：repair CI build & 静态检查 regressions 时 main
+a8cfafa0 合并拉取请求 #3489（来源：wucm667/fix/responses-anthropic-custom-tool-schema）
+d57106a5 合并拉取请求 #3490（来源：wucm667/feat/admin-cli-jwt-auth-fallback）
+2fc4fef8 合并拉取请求 #3310（来源：heathermhuang/codex/grok-subscription-support）
+fcd3bc12 修复：return 404 model_not_found instead of 503 when no account supports the model
+44f502ba 修复：address grok review feedback
+ac6e36f9 新增（cli）：sub2api-admin 支持 SUB2API_JWT 认证回退
+40c82527 修复（apicompat）：规范化 custom 工具 schema
+5f022663 合并拉取请求 #3487（来源：lyen1688/fix/openai-response-failed-sanitize）
+8a7269f5 修复：sanitize verbose OpenAI response failed events
+683a8d80 合并拉取请求 #3421（来源：syx0310/fork/openai-codex-pat-auth-upstream）
+54ef446c 合并拉取请求 #3469（来源：wucm667/fix/responses-passthrough-duplicate-function-args）
+720db898 测试：加固 grok quota readiness
+2a804958 文档：clarify grok public route scope
+8a87a658 测试：cover grok readiness paths
+939905b8 修复：refine grok quota pause behavior
+
+### 本地领先
+
+492144be 移除dead CCH signing config (前端 toggle + backend setting chain)
+04ec256e Fix Claude prompt-cache rebuilds: rewrite inline role:system 到 role:user 中的 place
+a663f3b4 Fix usage stats SQL/Scan column mismatch from official merge
+4cbd3b78 更新upstream sync ledger after promote
+5ceb7712 Merge official origin/main (ce6af413) into fork
+5860d101 增加upstream sync conflict ledger
+2f6d1ed8 Anchor bridge trailing breakpoint 到 last non-system message
+07553d10 增加user-scoped full round-trip gateway debug capture
+8f446c0f Normalize cache_control TTL order 时 bridge upstream path
+1e36c114 Fix bridge cache rebuild 与 stable+trailing breakpoints
+9ff38854 稳定 bridge cache breakpoint 到 stop opus-4-8 self-rebuild
+f310048b 加固 account proxy DNS handling
+4f831a2a 增加auto-upgrading affiliate rebate tiers by invitee GMV
+52d2c38a Bucket upstream fingerprint by inbound UA form 到 fix 4-8 dead loop
+7b28c692 Capture upstream SSE 针对 agent-sdk + opus 4-8 debugging
+955a9c6e Let admins pick which usage windows the reset-quota action clears
+51222b70 Inject cache breakpoints 针对 Agent SDK bridge clients
+60bfded8 Allow Claude Code Desktop probe 到 pass claude_code_only check
+62263380 Intercept connection probes from any client UA
+15d8344c Allow Claude Code connection probe 与 intercept it 到 protect quota
+
+## 2026-06-26 19:41:39 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `492144be8296941511987b581246329b107360d7`
+- 官方提交: `c275422251e72750bebe53e41fcf59db7f83fe6b`
+- 合并基线: `ce6af413577a6d012e334baad5069a02a80d48b6`
+- 官方领先数量: `67`
+- 本地领先数量: `362`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+c2754222 杂项：将VERSION同步到 0.1.139 [skip ci]
+9a0fbcc8 杂项：更新sponsors
+df99b941 合并拉取请求 #3495（来源：DaydreamCoding/feat/codex-detect-cli-only-engine-fingerprint）
+819fda34 新增（codex-detect）：codex_cli_only 检测加固 + 引擎指纹统一信号列表 + 账号级 app-server
+f93a6c50 修复：repair CI build & 静态检查 regressions 时 main
+a8cfafa0 合并拉取请求 #3489（来源：wucm667/fix/responses-anthropic-custom-tool-schema）
+d57106a5 合并拉取请求 #3490（来源：wucm667/feat/admin-cli-jwt-auth-fallback）
+2fc4fef8 合并拉取请求 #3310（来源：heathermhuang/codex/grok-subscription-support）
+fcd3bc12 修复：return 404 model_not_found instead of 503 when no account supports the model
+44f502ba 修复：address grok review feedback
+ac6e36f9 新增（cli）：sub2api-admin 支持 SUB2API_JWT 认证回退
+40c82527 修复（apicompat）：规范化 custom 工具 schema
+5f022663 合并拉取请求 #3487（来源：lyen1688/fix/openai-response-failed-sanitize）
+8a7269f5 修复：sanitize verbose OpenAI response failed events
+683a8d80 合并拉取请求 #3421（来源：syx0310/fork/openai-codex-pat-auth-upstream）
+54ef446c 合并拉取请求 #3469（来源：wucm667/fix/responses-passthrough-duplicate-function-args）
+720db898 测试：加固 grok quota readiness
+2a804958 文档：clarify grok public route scope
+8a87a658 测试：cover grok readiness paths
+939905b8 修复：refine grok quota pause behavior
+
+### 本地领先
+
+492144be 移除dead CCH signing config (前端 toggle + backend setting chain)
+04ec256e Fix Claude prompt-cache rebuilds: rewrite inline role:system 到 role:user 中的 place
+a663f3b4 Fix usage stats SQL/Scan column mismatch from official merge
+4cbd3b78 更新upstream sync ledger after promote
+5ceb7712 Merge official origin/main (ce6af413) into fork
+5860d101 增加upstream sync conflict ledger
+2f6d1ed8 Anchor bridge trailing breakpoint 到 last non-system message
+07553d10 增加user-scoped full round-trip gateway debug capture
+8f446c0f Normalize cache_control TTL order 时 bridge upstream path
+1e36c114 Fix bridge cache rebuild 与 stable+trailing breakpoints
+9ff38854 稳定 bridge cache breakpoint 到 stop opus-4-8 self-rebuild
+f310048b 加固 account proxy DNS handling
+4f831a2a 增加auto-upgrading affiliate rebate tiers by invitee GMV
+52d2c38a Bucket upstream fingerprint by inbound UA form 到 fix 4-8 dead loop
+7b28c692 Capture upstream SSE 针对 agent-sdk + opus 4-8 debugging
+955a9c6e Let admins pick which usage windows the reset-quota action clears
+51222b70 Inject cache breakpoints 针对 Agent SDK bridge clients
+60bfded8 Allow Claude Code Desktop probe 到 pass claude_code_only check
+62263380 Intercept connection probes from any client UA
+15d8344c Allow Claude Code connection probe 与 intercept it 到 protect quota

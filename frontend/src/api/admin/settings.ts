@@ -31,7 +31,8 @@ export type DefaultPlatformQuotaPlatform =
   | "gemini"
   | "antigravity"
   | "kiro"
-  | "droid";
+  | "droid"
+  | "grok";
 export type DefaultPlatformQuotaWindow = "daily" | "weekly" | "monthly";
 export type DefaultPlatformQuotaValue = number | null;
 export type DefaultPlatformQuotaSetting = Record<
@@ -93,6 +94,7 @@ export const DEFAULT_PLATFORM_QUOTA_PLATFORMS: DefaultPlatformQuotaPlatform[] = 
   "antigravity",
   "kiro",
   "droid",
+  "grok",
 ];
 export const DEFAULT_PLATFORM_QUOTA_WINDOWS: DefaultPlatformQuotaWindow[] = [
   "daily",
@@ -570,6 +572,14 @@ export interface SystemSettings {
   proxy_auto_select_max_anthropic_accounts_per_proxy: number;
   proxy_auto_select_max_openai_accounts_per_proxy: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy: number;
+  openai_codex_user_agent: string;
+  // codex_cli_only 加固
+  min_codex_version: string;
+  max_codex_version: string;
+  codex_cli_only_blacklist: string;
+  codex_cli_only_whitelist: string;
+  codex_cli_only_allow_app_server_clients: boolean;
+  codex_cli_only_engine_fingerprint_signals: string;
   web_search_emulation_enabled?: boolean;
 
   // Payment configuration
@@ -789,6 +799,14 @@ export interface UpdateSettingsRequest {
   proxy_auto_select_max_anthropic_accounts_per_proxy?: number;
   proxy_auto_select_max_openai_accounts_per_proxy?: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy?: number;
+  openai_codex_user_agent?: string;
+  // codex_cli_only 加固
+  min_codex_version?: string;
+  max_codex_version?: string;
+  codex_cli_only_blacklist?: string;
+  codex_cli_only_whitelist?: string;
+  codex_cli_only_allow_app_server_clients?: boolean;
+  codex_cli_only_engine_fingerprint_signals?: string;
   // Payment configuration
   payment_enabled?: boolean;
   risk_control_enabled?: boolean;
