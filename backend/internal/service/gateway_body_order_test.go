@@ -210,27 +210,50 @@ func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.
 	require.Equal(t, "nested", gjson.GetBytes(result, "metadata.speed").String())
 }
 
-func TestMigrateAnthropicInlineSystemMessages_MovesSystemMessagesToTopLevel(t *testing.T) {
+func TestMigrateAnthropicInlineSystemMessages_RewritesInlineSystemRoleToUser(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"base","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}}]},{"role":"assistant","content":"ok"},{"role":"system","content":"tail"}],"metadata":{"user_id":"u"}}`)
 
 	result, changed := migrateAnthropicInlineSystemMessages(body)
 
 	require.True(t, changed)
+	// 顶层 system 不被触碰：仍只有客户端原有的 1 块，前缀稳定。
+	require.Len(t, gjson.GetBytes(result, "system").Array(), 1)
 	require.Equal(t, "base", gjson.GetBytes(result, "system.0.text").String())
 	require.Equal(t, "ephemeral", gjson.GetBytes(result, "system.0.cache_control.type").String())
-	require.Equal(t, "mid", gjson.GetBytes(result, "system.1.text").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(result, "system.1.cache_control.type").String())
-	require.Equal(t, "tail", gjson.GetBytes(result, "system.2.text").String())
-	require.Len(t, gjson.GetBytes(result, "messages").Array(), 2)
+	// messages 长度不变；两条 role=system 就地改成 role=user，content（含 image block
+	// 与 cache_control）原样保留。
+	require.Len(t, gjson.GetBytes(result, "messages").Array(), 4)
 	require.Equal(t, "user", gjson.GetBytes(result, "messages.0.role").String())
-	require.Equal(t, "assistant", gjson.GetBytes(result, "messages.1.role").String())
+	require.Equal(t, "user", gjson.GetBytes(result, "messages.1.role").String())
+	require.Equal(t, "mid", gjson.GetBytes(result, "messages.1.content.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(result, "messages.1.content.0.cache_control.type").String())
+	require.Equal(t, "image", gjson.GetBytes(result, "messages.1.content.1.type").String())
+	require.Equal(t, "assistant", gjson.GetBytes(result, "messages.2.role").String())
+	require.Equal(t, "user", gjson.GetBytes(result, "messages.3.role").String())
+	require.Equal(t, "tail", gjson.GetBytes(result, "messages.3.content").String())
 	require.Equal(t, "u", gjson.GetBytes(result, "metadata.user_id").String())
 }
 
-// TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration 复现并锁定
-// 生产 16:07:12 现场:客户端尾部带一条 role=system 的 system-reminder。bridge 必须把
-// trailing 断点打在最后一条**非 system** 消息上,否则后段 migrateAnthropicInlineSystemMessages
-// 会把该 reminder(连同 trailing 断点)上提进 system,导致真正的会话尾巴失去缓存断点。
+func TestMigrateAnthropicInlineSystemMessages_DropsEmptyContentSystem(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"},{"role":"system","content":""},{"role":"system","content":[]},{"role":"user","content":"bye"}]}`)
+
+	result, changed := migrateAnthropicInlineSystemMessages(body)
+
+	require.True(t, changed)
+	// 两条空 content 的 system 消息被删除，避免产生空 user 触发上游 400。
+	msgs := gjson.GetBytes(result, "messages").Array()
+	require.Len(t, msgs, 2)
+	require.Equal(t, "user", gjson.GetBytes(result, "messages.0.role").String())
+	require.Equal(t, "hi", gjson.GetBytes(result, "messages.0.content").String())
+	require.Equal(t, "user", gjson.GetBytes(result, "messages.1.role").String())
+	require.Equal(t, "bye", gjson.GetBytes(result, "messages.1.content").String())
+}
+
+// TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration 锁定:客户端尾部带
+// 一条 role=system 的 system-reminder 时,bridge 必须把 trailing 断点打在最后一条**非
+// system** 消息上(尾部 reminder 每轮内容多变,是不稳定锚点位置)。migration 随后把该
+// reminder 就地改成 role=user 留原位(不上提到 system),trailing 断点随真正的会话尾巴存活,
+// 且顶层 system 前缀保持稳定。
 func TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"You are Claude Code","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[` +
 		`{"role":"user","content":[{"type":"text","text":"first user turn"}]},` +
@@ -247,24 +270,29 @@ func TestAddBridgeCacheBreakpoints_TrailingSurvivesInlineSystemMigration(t *test
 	require.False(t, gjson.GetBytes(withBP, "messages.3.content.0.cache_control").Exists(),
 		"trailing role=system reminder must NOT receive the trailing breakpoint")
 
-	// 经过 inline-system migration 后,trailing 断点仍在真正的会话尾巴上。
+	// 经过 inline-system migration 后,reminder 就地变 role=user 留原位(不被上提),
+	// messages 长度不减,trailing 断点仍在真正的会话尾巴上。
 	migrated, changed := migrateAnthropicInlineSystemMessages(withBP)
 	require.True(t, changed)
 	msgs := gjson.GetBytes(migrated, "messages").Array()
-	require.Len(t, msgs, 3, "the role=system reminder should be hoisted out of messages")
-	// migration 后末条(index 2)即原 tool_result,trailing 断点应仍在其上。
+	require.Len(t, msgs, 4, "the role=system reminder is rewritten to role=user in place, not hoisted")
+	// 原 tool_result(index 2)上的 trailing 断点保留。
 	require.Equal(t, "tool_result", gjson.GetBytes(migrated, "messages.2.content.0.type").String())
 	require.Equal(t, "1h", gjson.GetBytes(migrated, "messages.2.content.0.cache_control.ttl").String(),
 		"trailing breakpoint must survive migration on the real conversation tail")
+	// 尾部 reminder 已变成 role=user 留在 index 3。
+	require.Equal(t, "user", gjson.GetBytes(migrated, "messages.3.role").String(),
+		"trailing role=system reminder must be rewritten to role=user in place")
 
-	// migration 不应在 system 里引入网关注入的额外断点(只保留客户端原有的 1 个)。
+	// migration 完全不触碰 system:仍只有客户端原有的 1 个断点,前缀稳定。
 	sysBP := 0
 	for _, blk := range gjson.GetBytes(migrated, "system").Array() {
 		if blk.Get("cache_control").Exists() {
 			sysBP++
 		}
 	}
-	require.Equal(t, 1, sysBP, "no stray gateway breakpoint should land in system")
+	require.Equal(t, 1, sysBP, "migration must not touch system; only the client's original breakpoint remains")
+	require.Len(t, gjson.GetBytes(migrated, "system").Array(), 1, "system array must not grow")
 }
 
 func TestMigrateAnthropicInlineSystemMessages_NoOpWithoutSystemMessages(t *testing.T) {

@@ -56,7 +56,7 @@ const (
 	claudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
 	// Official Claude Code 2.1.165 core-request system blocks captured from the
 	// local helper. These are separate from the legacy Claude Code banner above.
-	claudeAgentSDKSystemPrompt   = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+	claudeAgentSDKSystemPrompt      = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 	claudeCodeSystemPromptExpansion = `You are an interactive agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
 
 IMPORTANT: Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.
@@ -705,6 +705,7 @@ func isRetryablePreResponseNetworkError(err error) bool {
 	}
 	return false
 }
+
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。
 // RawData 是该事件 data: 行的原始 JSON 字符串
 // （Anthropic 标准结构 {"type":"error","error":{"type":"...","message":"..."}}）。
@@ -1543,92 +1544,88 @@ func anthropicSystemRoleUnsupportedError(body []byte) bool {
 		strings.Contains(msg, `role "system" is not supported on this model`)
 }
 
+// migrateAnthropicInlineSystemMessages 规范化 messages 数组里的 inline role:"system"
+// 消息（Claude Code 客户端在对话中途注入的 plan-mode / task-reminder 等）。
+//
+// Anthropic Messages API 不接受非法位置的 role:"system"（实测 opus-4-8 返回 400
+// "role 'system' must follow a 'user' message or an 'assistant' message ending in a
+// server tool result"），因此必须规范化。
+//
+// 历史实现把这些 system 内容**上提追加到顶层 system 数组末尾**——但 system 是
+// prompt-cache 的最前缀，每注入一条 reminder 就让 system 多一块，导致 bridge 的
+// stable 缓存锚点（其累积前缀包含整个 system）跨轮失配、整段历史缓存重建回地板。
+//
+// 现实现改为**就地把 role:"system" 改成 role:"user"，content 原样保留，留在 messages
+// 原位**：role:"user" 对上游合法（实测 200，连续多个 user 亦接受），且完全不触碰顶层
+// system → 前缀永久稳定，stable 锚点缓存大段保留。content 为空的 system 消息直接删除
+// （等价历史丢弃语义），避免产生空 user 消息触发上游 400。
+//
+// 用 sjson 原位改单字段而非整体重建 messages 数组：非 system 消息字节完全不动，被改条
+// 目也只变 role 值，最大化前缀字节稳定性。
 func migrateAnthropicInlineSystemMessages(body []byte) ([]byte, bool) {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
 		return body, false
 	}
 
-	systemItems := anthropicSystemItemsFromTopLevel(gjson.GetBytes(body, "system"))
-	messageItems := make([][]byte, 0, len(messages.Array()))
-	changed := false
-
+	type sysAction struct {
+		idx   int
+		empty bool // true=空 content，删除；false=改 role 为 user
+	}
+	var actions []sysAction
+	idx := 0
 	messages.ForEach(func(_, item gjson.Result) bool {
-		if item.Get("role").String() != "system" {
-			messageItems = append(messageItems, []byte(item.Raw))
-			return true
+		if item.Get("role").String() == "system" {
+			actions = append(actions, sysAction{idx: idx, empty: anthropicMessageContentIsEmpty(item.Get("content"))})
 		}
-
-		changed = true
-		systemItems = append(systemItems, anthropicSystemItemsFromMessageContent(item.Get("content"))...)
+		idx++
 		return true
 	})
-
-	if !changed {
+	if len(actions) == 0 {
 		return body, false
 	}
 
-	out, ok := setJSONRawBytes(body, "messages", buildJSONArrayRaw(messageItems))
-	if !ok {
-		return body, false
-	}
-	if len(systemItems) == 0 {
-		if next, ok := deleteJSONPathBytes(out, "system"); ok {
-			out = next
+	out := body
+	// 先就地改 role（索引不变）。
+	for _, a := range actions {
+		if a.empty {
+			continue
 		}
-		return out, true
+		next, err := sjson.SetBytes(out, fmt.Sprintf("messages.%d.role", a.idx), "user")
+		if err != nil {
+			return body, false
+		}
+		out = next
 	}
-	out, ok = setJSONRawBytes(out, "system", buildJSONArrayRaw(systemItems))
-	if !ok {
-		return body, false
+	// 再删空 content 条目（从后往前，避免索引漂移）。
+	for i := len(actions) - 1; i >= 0; i-- {
+		if !actions[i].empty {
+			continue
+		}
+		next, ok := deleteJSONPathBytes(out, fmt.Sprintf("messages.%d", actions[i].idx))
+		if !ok {
+			return body, false
+		}
+		out = next
 	}
 	return out, true
 }
 
-func anthropicSystemItemsFromTopLevel(system gjson.Result) [][]byte {
-	if !system.Exists() || system.Type == gjson.Null {
-		return nil
-	}
-	if system.Type == gjson.String {
-		block, err := marshalAnthropicSystemTextBlock(system.String(), false)
-		if err != nil {
-			return nil
-		}
-		return [][]byte{block}
-	}
-	if !system.IsArray() {
-		return nil
-	}
-	items := make([][]byte, 0, len(system.Array()))
-	system.ForEach(func(_, item gjson.Result) bool {
-		items = append(items, []byte(item.Raw))
-		return true
-	})
-	return items
-}
-
-func anthropicSystemItemsFromMessageContent(content gjson.Result) [][]byte {
+// anthropicMessageContentIsEmpty 判断 message.content 是否为空（缺失/null、空字符串、
+// 空数组）。非空数组即使不含 text block（如纯 image）也视为非空——保留全部内容，修复
+// 历史实现只上提 text block、静默丢弃 image 等块的 bug。
+func anthropicMessageContentIsEmpty(content gjson.Result) bool {
 	if !content.Exists() || content.Type == gjson.Null {
-		return nil
-	}
-	if content.Type == gjson.String {
-		block, err := marshalAnthropicSystemTextBlock(content.String(), false)
-		if err != nil {
-			return nil
-		}
-		return [][]byte{block}
-	}
-	if !content.IsArray() {
-		return nil
-	}
-	items := make([][]byte, 0, len(content.Array()))
-	content.ForEach(func(_, part gjson.Result) bool {
-		if part.Get("type").String() == "text" {
-			items = append(items, []byte(part.Raw))
-		}
 		return true
-	})
-	return items
+	}
+	switch {
+	case content.Type == gjson.String:
+		return strings.TrimSpace(content.String()) == ""
+	case content.IsArray():
+		return len(content.Array()) == 0
+	default:
+		return false
+	}
 }
 
 func sanitizeAnthropicCountTokensRequestBody(body []byte) []byte {
@@ -12319,4 +12316,3 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	}
 	return "", false
 }
-

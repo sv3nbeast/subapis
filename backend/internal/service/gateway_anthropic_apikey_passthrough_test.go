@@ -1353,7 +1353,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_NonStreamingSuc
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_PreNormalizesInlineSystemRole(t *testing.T) {
+func TestGatewayService_AnthropicAPIKeyPassthrough_RewritesInlineSystemRoleToUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1378,9 +1378,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_PreNormalizesInlineSystemRole
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, upstream.lastBody)
-	require.False(t, gjson.GetBytes(upstream.lastBody, "messages.1").Exists())
-	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.lastBody, "system.0.text").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.lastBody, "system.0.cache_control.type").String())
+	// inline role=system 就地转 role=user 留原位，content + cache_control 原样，无顶层 system。
+	require.Equal(t, "user", gjson.GetBytes(upstream.lastBody, "messages.1.role").String())
+	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.lastBody, "messages.1.content.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.lastBody, "messages.1.content.0.cache_control.type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "system").Exists())
 	require.Equal(t, upstreamJSON, rec.Body.String())
 }
 

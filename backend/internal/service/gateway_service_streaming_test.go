@@ -197,7 +197,7 @@ func TestGatewayService_Forward_PreResponseNetworkErrorTriggersFailover(t *testi
 	require.Empty(t, rec.Body.String(), "service must not write a 502 body before handler failover can run")
 }
 
-func TestGatewayService_Forward_PreNormalizesInlineSystemRoleAsTopLevelSystem(t *testing.T) {
+func TestGatewayService_Forward_RewritesInlineSystemRoleToUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -252,13 +252,19 @@ func TestGatewayService_Forward_PreNormalizesInlineSystemRoleAsTopLevelSystem(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 1)
-	require.False(t, gjson.GetBytes(upstream.bodies[0], "messages.1").Exists())
-	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.bodies[0], "system.0.text").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.bodies[0], "system.0.cache_control.type").String())
+	// inline role=system 就地改成 role=user 留原位，content + cache_control 原样保留；
+	// 顶层 system 不被引入（原请求无 system）。
+	require.Equal(t, "user", gjson.GetBytes(upstream.bodies[0], "messages.1.role").String())
+	require.Equal(t, "mid instruction", gjson.GetBytes(upstream.bodies[0], "messages.1.content.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.bodies[0], "messages.1.content.0.cache_control.type").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "system").Exists())
 	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
 }
 
-func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T) {
+// TestGatewayService_Forward_RewritesStringContentInlineSystemRoleToUser 验证末尾带
+// string-content role=system 的请求经 Forward 一次性转成 role=user 留原位、只发一次请求
+// （生产已无 400-retry 流程：migration 前置规范化，上游永远收不到非法 role=system）。
+func TestGatewayService_Forward_RewritesStringContentInlineSystemRoleToUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -266,6 +272,11 @@ func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
 	body := []byte(`{"model":"claude-opus-4-8","stream":true,"messages":[{"role":"user","content":"hello"},{"role":"system","content":"late instruction"}]}`)
+	parsed := &ParsedRequest{
+		Body:   NewRequestBodyRef(body),
+		Model:  "claude-opus-4-8",
+		Stream: true,
+	}
 	upstreamSSE := strings.Join([]string{
 		`event: message_start`,
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
@@ -276,11 +287,6 @@ func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T
 	}, "\n")
 	upstream := &queuedAnthropicHTTPUpstreamRecorder{
 		resps: []*http.Response{
-			{
-				StatusCode: http.StatusBadRequest,
-				Header:     http.Header{"x-request-id": []string{"req_bad"}},
-				Body:       io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"invalid_request_error","message":"role 'system' is not supported on this model"}}`)),
-			},
 			{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"req_ok"}},
@@ -305,32 +311,15 @@ func TestGatewayService_Forward_InlineSystemRetryFallbackStillWorks(t *testing.T
 		Credentials: map[string]any{"api_key": "test-key"},
 	}
 
-	token, tokenType, err := svc.GetAccessToken(context.Background(), account)
-	require.NoError(t, err)
-	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, body, token, tokenType, "claude-opus-4-8", true, false)
-	require.NoError(t, err)
-	resp, err := upstream.DoWithTLS(req, "", account.ID, account.Concurrency, nil)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.True(t, anthropicSystemRoleUnsupportedError(respBody))
+	result, err := svc.Forward(context.Background(), c, account, parsed)
 
-	migratedBody, migrated := migrateAnthropicInlineSystemMessages(body)
-	require.True(t, migrated)
-	retryReq, _, err := svc.buildUpstreamRequest(context.Background(), c, account, migratedBody, token, tokenType, "claude-opus-4-8", true, false)
 	require.NoError(t, err)
-	retryResp, err := upstream.DoWithTLS(retryReq, "", account.ID, account.Concurrency, nil)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, retryResp.StatusCode)
-	_, _ = io.Copy(rec, retryResp.Body)
-	_ = retryResp.Body.Close()
-
-	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, "system", gjson.GetBytes(upstream.bodies[0], "messages.1.role").String())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "messages.1").Exists())
-	require.Equal(t, "late instruction", gjson.GetBytes(upstream.bodies[1], "system.0.text").String())
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1, "single request, no 400 retry needed")
+	// 末尾 string-content role=system 就地转 role=user，content 原样，无顶层 system。
+	require.Equal(t, "user", gjson.GetBytes(upstream.bodies[0], "messages.1.role").String())
+	require.Equal(t, "late instruction", gjson.GetBytes(upstream.bodies[0], "messages.1.content").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "system").Exists())
 	require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
 }
 
