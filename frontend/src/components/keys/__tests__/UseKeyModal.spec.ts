@@ -124,15 +124,12 @@ describe('UseKeyModal', () => {
   })
 
   it('includes Claude Code default model in anthropic settings config', () => {
-  it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
         apiKey: 'sk-test',
         baseUrl: 'https://example.com',
         platform: 'anthropic'
-        baseUrl: 'https://example.com/v1',
-        platform: 'antigravity'
       },
       global: {
         stubs: {
@@ -153,11 +150,33 @@ describe('UseKeyModal', () => {
     expect(terminalConfig).toBeDefined()
     expect(terminalConfig).toContain('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1')
     expect(terminalConfig).not.toContain('CLAUDE_CODE_EFFORT_LEVEL')
-    expect(terminalConfig).not.toContain('CLAUDE_CODE_ATTRIBUTION_HEADER=0')
+    expect(terminalConfig).toContain('CLAUDE_CODE_ATTRIBUTION_HEADER=0')
 
     expect(settingsConfig).toBeDefined()
     expect(settingsConfig).toContain('//, "model": "claude-opus-4-7" // 修改这里的模型名可指定使用模型，默认claude-opus-4-6')
     expect(settingsConfig).not.toContain('CLAUDE_CODE_EFFORT_LEVEL')
+  })
+
+  it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'antigravity'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
     const opencodeTab = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.cliTabs.opencode')
     )

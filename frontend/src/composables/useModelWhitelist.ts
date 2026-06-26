@@ -54,11 +54,11 @@ const geminiModels = [
 // 基于官方 API 返回的模型列表，只支持 Claude 4.5+ 和 Gemini 2.5+
 const antigravityModels = [
   // Claude 4.5+ 系列
+  'claude-fable-5',
   'claude-opus-4-7',
   'claude-opus-4-7-thinking',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
-  'claude-opus-4-7',
   'claude-opus-4-5-thinking',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5',

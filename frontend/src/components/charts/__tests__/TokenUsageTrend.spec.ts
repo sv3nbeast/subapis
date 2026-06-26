@@ -6,6 +6,13 @@ import TokenUsageTrend from '../TokenUsageTrend.vue'
 const messages: Record<string, string> = {
   'admin.dashboard.tokenUsageTrend': 'Token Usage Trend',
   'admin.dashboard.noDataAvailable': 'No data available',
+  'usage.in': 'Input',
+  'usage.out': 'Output',
+  'usage.cacheWrite': 'Cache Creation',
+  'usage.cacheRead': 'Cache Read',
+  'usage.inputCacheReadRatio': 'Cache Hit Rate',
+  'usage.actualCost': 'Actual',
+  'usage.standardCost': 'Standard',
 }
 
 vi.mock('vue-i18n', async () => {
