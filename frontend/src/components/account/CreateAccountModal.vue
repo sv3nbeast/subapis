@@ -3976,15 +3976,38 @@ watch(
   }
 )
 
-// 平台或代理列表变化时重新统计并自动挑选代理
+// 新建 Claude(anthropic OAuth)账号时自动开启 RPM 限制与 TLS 指纹的默认值
+const DEFAULT_ANTHROPIC_BASE_RPM = 15
+const DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE = 'serialize'
+
+const shouldApplyAnthropicCreateDefaults = computed(() =>
+  form.platform === 'anthropic' && accountCategory.value === 'oauth-based'
+)
+
+const applyAnthropicCreateDefaults = () => {
+  if (!shouldApplyAnthropicCreateDefaults.value) {
+    return
+  }
+  rpmLimitEnabled.value = true
+  baseRpm.value = DEFAULT_ANTHROPIC_BASE_RPM
+  userMsgQueueMode.value = DEFAULT_ANTHROPIC_USER_MSG_QUEUE_MODE
+  tlsFingerprintEnabled.value = true
+  tlsFingerprintProfileId.value = null
+}
+
+// 平台/分类/代理列表变化时:为 Claude 账号套用创建默认值，并重新统计自动挑选代理
 watch(
-  [() => props.show, () => form.platform, () => props.proxies],
+  [() => props.show, () => form.platform, accountCategory, () => props.proxies],
   ([show]) => {
     if (!show) {
       return
     }
+    if (shouldApplyAnthropicCreateDefaults.value) {
+      applyAnthropicCreateDefaults()
+    }
     void loadProxyPlatformCounts()
-  }
+  },
+  { immediate: true }
 )
 
 // Sync form.type based on accountCategory, addMethod, and platform-specific type
