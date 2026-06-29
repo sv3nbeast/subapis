@@ -3650,6 +3650,137 @@ const umqModeOptions = computed(() => [
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
+
+// 代理自动分配：新建账号时按平台容量自动挑选负载最轻的可用代理，避免账号无代理直连上游。
+type ProxyAutoSelectPlatform = Extract<AccountPlatform, 'anthropic' | 'openai' | 'antigravity'>
+const DEFAULT_PROXY_AUTO_SELECT_LIMITS: Record<ProxyAutoSelectPlatform, number> = {
+  anthropic: 1,
+  openai: 1,
+  antigravity: 5
+}
+const autoSelectedProxyId = ref<number | null>(null)
+const proxyPlatformCounts = ref<Record<number, number>>({})
+const proxyAutoSelectLimits = reactive<Record<ProxyAutoSelectPlatform, number>>({
+  ...DEFAULT_PROXY_AUTO_SELECT_LIMITS
+})
+let proxyAutoSelectRun = 0
+
+const autoProxyPlatform = computed<ProxyAutoSelectPlatform | null>(() => {
+  if (form.platform === 'anthropic' || form.platform === 'openai' || form.platform === 'antigravity') {
+    return form.platform
+  }
+  return null
+})
+
+const normalizeProxyAutoSelectLimit = (value: unknown, fallback: number) => {
+  const numericValue = Math.floor(Number(value))
+  if (!Number.isFinite(numericValue)) {
+    return fallback
+  }
+  return Math.min(100, Math.max(1, numericValue))
+}
+
+const loadProxyAutoSelectLimits = async () => {
+  try {
+    const settings = await adminAPI.settings.getSettings()
+    proxyAutoSelectLimits.anthropic = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_anthropic_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.anthropic
+    )
+    proxyAutoSelectLimits.openai = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_openai_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.openai
+    )
+    proxyAutoSelectLimits.antigravity = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_antigravity_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
+    )
+  } catch {
+    proxyAutoSelectLimits.anthropic = DEFAULT_PROXY_AUTO_SELECT_LIMITS.anthropic
+    proxyAutoSelectLimits.openai = DEFAULT_PROXY_AUTO_SELECT_LIMITS.openai
+    proxyAutoSelectLimits.antigravity = DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
+  }
+}
+
+const clearProxyAutoSelection = () => {
+  if (form.proxy_id === autoSelectedProxyId.value) {
+    form.proxy_id = null
+  }
+  autoSelectedProxyId.value = null
+}
+
+const loadProxyPlatformCounts = async () => {
+  const platform = autoProxyPlatform.value
+  if (!props.show || !platform) {
+    proxyPlatformCounts.value = {}
+    clearProxyAutoSelection()
+    return
+  }
+  if (props.proxies.length === 0) {
+    proxyPlatformCounts.value = {}
+    autoSelectProxy()
+    return
+  }
+
+  const runId = ++proxyAutoSelectRun
+  try {
+    const entries = await Promise.all(
+      props.proxies
+        .filter((proxy) => proxy.status === 'active')
+        .map(async (proxy) => {
+          if (proxy.account_count === 0) {
+            return [proxy.id, 0] as const
+          }
+          try {
+            const accounts = await adminAPI.proxies.getProxyAccounts(proxy.id)
+            const count = accounts.filter((account) => account.platform === platform).length
+            return [proxy.id, count] as const
+          } catch {
+            return [proxy.id, Number.POSITIVE_INFINITY] as const
+          }
+        })
+    )
+    if (runId !== proxyAutoSelectRun || autoProxyPlatform.value !== platform) {
+      return
+    }
+    proxyPlatformCounts.value = Object.fromEntries(entries)
+    autoSelectProxy()
+  } catch {
+    if (runId === proxyAutoSelectRun) {
+      proxyPlatformCounts.value = {}
+    }
+  }
+}
+
+const autoSelectProxy = () => {
+  const platform = autoProxyPlatform.value
+  if (!props.show || !platform) {
+    clearProxyAutoSelection()
+    return
+  }
+  if (form.proxy_id && form.proxy_id !== autoSelectedProxyId.value) {
+    return
+  }
+
+  const maxAccountsPerProxy = proxyAutoSelectLimits[platform] ?? DEFAULT_PROXY_AUTO_SELECT_LIMITS[platform]
+  const candidates = props.proxies
+    .filter((proxy) => proxy.status === 'active')
+    .map((proxy) => ({
+      proxy,
+      platformCount: proxyPlatformCounts.value[proxy.id] ?? Number.POSITIVE_INFINITY,
+      totalCount: proxy.account_count ?? 0
+    }))
+    .filter((item) => item.platformCount < maxAccountsPerProxy)
+    .sort((a, b) =>
+      a.platformCount - b.platformCount ||
+      a.totalCount - b.totalCount ||
+      a.proxy.id - b.proxy.id
+    )
+
+  const selected = candidates[0]?.proxy.id ?? null
+  autoSelectedProxyId.value = selected
+  form.proxy_id = selected
+}
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -3823,6 +3954,8 @@ watch(
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
         .catch(() => { tlsFingerprintProfiles.value = [] })
+      // 打开弹窗时按设置加载每代理账号上限并自动挑选代理
+      void loadProxyAutoSelectLimits().then(() => loadProxyPlatformCounts())
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       // Antigravity: 默认使用映射模式并填充默认映射
@@ -3840,6 +3973,17 @@ watch(
     } else {
       resetForm()
     }
+  }
+)
+
+// 平台或代理列表变化时重新统计并自动挑选代理
+watch(
+  [() => props.show, () => form.platform, () => props.proxies],
+  ([show]) => {
+    if (!show) {
+      return
+    }
+    void loadProxyPlatformCounts()
   }
 )
 
@@ -4355,6 +4499,9 @@ const resetForm = () => {
   userMsgQueueMode.value = ''
   tlsFingerprintEnabled.value = false
   tlsFingerprintProfileId.value = null
+  proxyAutoSelectRun++
+  proxyPlatformCounts.value = {}
+  autoSelectedProxyId.value = null
   sessionIdMaskingEnabled.value = false
   cacheTTLOverrideEnabled.value = false
   cacheTTLOverrideTarget.value = '5m'
