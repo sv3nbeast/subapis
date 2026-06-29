@@ -22,7 +22,11 @@
                     ? 'from-purple-500 to-purple-600'
                     : isGrok
                       ? 'from-slate-600 to-cyan-600'
-                      : 'from-orange-500 to-orange-600'
+                      : isKiro
+                        ? 'from-amber-500 to-amber-600'
+                        : isDroid
+                          ? 'from-cyan-500 to-cyan-600'
+                          : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -41,7 +45,11 @@
                       ? t('admin.accounts.antigravityAccount')
                       : isGrok
                         ? t('admin.accounts.grokAccount')
-                        : t('admin.accounts.claudeCodeAccount')
+                        : isKiro
+                          ? 'Kiro'
+                          : isDroid
+                            ? 'Droid'
+                            : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -132,7 +140,7 @@
         :show-cookie-option="isAnthropic"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
-        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : 'anthropic'"
+        :platform="currentOAuthPlatform"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
@@ -197,7 +205,9 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
-import type { Account } from '@/types'
+import { useKiroOAuth } from '@/composables/useKiroOAuth'
+import { useDroidOAuth } from '@/composables/useDroidOAuth'
+import type { Account, AccountPlatform } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
@@ -207,6 +217,10 @@ import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.
 interface OAuthFlowExposed {
   authCode: string
   oauthState: string
+  oauthCallbackPath?: string
+  oauthLoginOption?: string
+  oauthIssuerURL?: string
+  oauthIDCRegion?: string
   projectId: string
   sessionKey: string
   inputMethod: AuthInputMethod
@@ -233,6 +247,8 @@ const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
 const grokOAuth = useGrokOAuth()
+const kiroOAuth = useKiroOAuth()
+const droidOAuth = useDroidOAuth()
 
 // Refs
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
@@ -248,6 +264,23 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isGrok = computed(() => props.account?.platform === 'grok')
+const isKiro = computed(() => props.account?.platform === 'kiro')
+const isDroid = computed(() => props.account?.platform === 'droid')
+const currentOAuthPlatform = computed<AccountPlatform>(() => {
+  if (isOpenAI.value) return 'openai'
+  if (isGemini.value) return 'gemini'
+  if (isAntigravity.value) return 'antigravity'
+  if (isGrok.value) return 'grok'
+  if (isKiro.value) return 'kiro'
+  if (isDroid.value) return 'droid'
+  return 'anthropic'
+})
+const isKiroIDCAccount = computed(() => {
+  if (!isKiro.value) return false
+  const creds = (props.account?.credentials || {}) as Record<string, unknown>
+  const authMethod = String(creds.auth_method || '').trim().toLowerCase()
+  return authMethod === 'idc' || authMethod === 'builder-id'
+})
 
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
@@ -255,6 +288,8 @@ const currentAuthUrl = computed(() => {
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
   if (isGrok.value) return grokOAuth.authUrl.value
+  if (isKiro.value) return kiroOAuth.authUrl.value
+  if (isDroid.value) return droidOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
 const currentSessionId = computed(() => {
@@ -262,6 +297,8 @@ const currentSessionId = computed(() => {
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
   if (isGrok.value) return grokOAuth.sessionId.value
+  if (isKiro.value) return kiroOAuth.sessionId.value
+  if (isDroid.value) return droidOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
 const currentLoading = computed(() => {
@@ -269,6 +306,8 @@ const currentLoading = computed(() => {
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
   if (isGrok.value) return grokOAuth.loading.value
+  if (isKiro.value) return kiroOAuth.loading.value
+  if (isDroid.value) return droidOAuth.loading.value
   return claudeOAuth.loading.value
 })
 const currentError = computed(() => {
@@ -276,19 +315,24 @@ const currentError = computed(() => {
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
   if (isGrok.value) return grokOAuth.error.value
+  if (isKiro.value) return kiroOAuth.error.value
+  if (isDroid.value) return droidOAuth.error.value
   return claudeOAuth.error.value
 })
 
 // Computed
 const isManualInputMethod = computed(() => {
-  // OpenAI/Gemini/Antigravity always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
+  // OpenAI/Gemini/Antigravity/Grok/Kiro/Droid always use manual input (no cookie auth option)
+  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || isKiro.value || isDroid.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
 const canExchangeCode = computed(() => {
   const authCode = oauthFlowRef.value?.authCode || ''
   const sessionId = currentSessionId.value
   const loading = currentLoading.value
+  if (isKiro.value && isKiroIDCAccount.value) {
+    return sessionId && !loading
+  }
   return authCode.trim() && sessionId && !loading
 })
 
@@ -328,6 +372,8 @@ const resetState = () => {
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
   grokOAuth.resetState()
+  kiroOAuth.resetState()
+  droidOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
 
@@ -349,6 +395,20 @@ const handleGenerateUrl = async () => {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
   } else if (isGrok.value) {
     await grokOAuth.generateAuthUrl(props.account.proxy_id)
+  } else if (isKiro.value) {
+    const creds = (props.account.credentials || {}) as Record<string, unknown>
+    if (isKiroIDCAccount.value) {
+      await kiroOAuth.generateIDCAuthUrl({
+        proxyId: props.account.proxy_id,
+        startUrl: typeof creds.start_url === 'string' ? creds.start_url : undefined,
+        region: typeof creds.region === 'string' ? creds.region : undefined
+      })
+    } else {
+      const provider = String(creds.provider || '').toLowerCase() === 'github' ? 'Github' : 'Google'
+      await kiroOAuth.generateAuthUrl(props.account.proxy_id, provider)
+    }
+  } else if (isDroid.value) {
+    await droidOAuth.generateAuthUrl(props.account.proxy_id)
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
@@ -358,7 +418,7 @@ const handleExchangeCode = async () => {
   if (!props.account) return
 
   const authCode = oauthFlowRef.value?.authCode || ''
-  if (!authCode.trim()) return
+  if (!authCode.trim() && !(isKiro.value && isKiroIDCAccount.value)) return
 
   if (isOpenAILike.value) {
     // OpenAI OAuth flow
@@ -495,6 +555,101 @@ const handleExchangeCode = async () => {
     } catch (error: any) {
       grokOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(grokOAuth.error.value)
+    }
+  } else if (isKiro.value) {
+    const sessionId = kiroOAuth.sessionId.value
+    if (!sessionId) return
+
+    const loginOption = (oauthFlowRef.value?.oauthLoginOption || '').trim().toLowerCase()
+    if (loginOption === 'awsidc') {
+      const stateFromInput = oauthFlowRef.value?.oauthState || ''
+      const stateToUse = stateFromInput || kiroOAuth.state.value
+      if (!stateToUse || stateToUse !== kiroOAuth.state.value) {
+        kiroOAuth.error.value = t('admin.accounts.oauth.kiro.stateMismatch')
+        appStore.showError(kiroOAuth.error.value)
+        return
+      }
+
+      const issuerURL = (oauthFlowRef.value?.oauthIssuerURL || '').trim()
+      const idcRegion = (oauthFlowRef.value?.oauthIDCRegion || '').trim()
+      if (!issuerURL) {
+        kiroOAuth.error.value = t('admin.accounts.oauth.kiro.missingIDCContinuation')
+        appStore.showError(kiroOAuth.error.value)
+        return
+      }
+
+      const generated = await kiroOAuth.generateIDCAuthUrl({
+        proxyId: props.account.proxy_id,
+        startUrl: issuerURL,
+        region: idcRegion || undefined
+      })
+      if (generated) {
+        oauthFlowRef.value?.reset()
+        appStore.showInfo(t('admin.accounts.oauth.kiro.idcContinuationReady'), 6000)
+      }
+      return
+    }
+
+    const stateFromInput = oauthFlowRef.value?.oauthState || ''
+    const stateToUse = stateFromInput || kiroOAuth.state.value
+    if (!stateToUse) {
+      kiroOAuth.error.value = t('admin.accounts.oauth.kiro.missingState')
+      appStore.showError(kiroOAuth.error.value)
+      return
+    }
+
+    const tokenInfo = await kiroOAuth.exchangeAuthCode({
+      code: authCode.trim(),
+      sessionId,
+      state: stateToUse,
+      callbackPath: oauthFlowRef.value?.oauthCallbackPath || '',
+      loginOption: oauthFlowRef.value?.oauthLoginOption || '',
+      proxyId: props.account.proxy_id
+    })
+    if (!tokenInfo) return
+
+    const credentials = kiroOAuth.buildCredentials(tokenInfo)
+
+    try {
+      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+        type: 'oauth',
+        credentials
+      })
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized', updatedAccount)
+      handleClose()
+    } catch (error: any) {
+      kiroOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(kiroOAuth.error.value)
+    }
+  } else if (isDroid.value) {
+    const sessionId = droidOAuth.sessionId.value
+    if (!sessionId) return
+
+    const tokenInfo = await droidOAuth.exchangeAuthCode({
+      sessionId,
+      proxyId: props.account.proxy_id
+    })
+    if (!tokenInfo) {
+      if (droidOAuth.pending.value && droidOAuth.error.value) {
+        appStore.showInfo(droidOAuth.error.value, 4000)
+      }
+      return
+    }
+    const credentials = droidOAuth.buildCredentials(tokenInfo)
+
+    try {
+      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+        type: 'oauth',
+        credentials
+      })
+      await adminAPI.accounts.clearError(props.account.id)
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized', updatedAccount)
+      handleClose()
+    } catch (error: any) {
+      droidOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(droidOAuth.error.value)
     }
   } else {
     // Claude OAuth flow

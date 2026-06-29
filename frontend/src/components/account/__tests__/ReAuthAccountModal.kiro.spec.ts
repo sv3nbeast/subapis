@@ -227,9 +227,7 @@ describe.each([
     clearErrorMock.mockResolvedValue(makeKiroIDCAccount())
   })
 
-  // TODO(upstream-sync): 官方 admin/account/ReAuthAccountModal 改用 grok 分支，未引入 Kiro IDC
-  // 无粘贴码重认证 UI。待评估生产是否有活跃 Kiro IDC 账号后再移植本地 kiro 重认证流程。
-  it.skip('uses the Kiro OAuth copy and completes IDC reauthorization without a pasted code', async () => {
+  it('uses the Kiro OAuth copy and completes IDC reauthorization without a pasted code', async () => {
     const wrapper = mountModal(component)
 
     const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
