@@ -462,6 +462,7 @@ func isClaudeCodeCredentialScopeError(msg string) bool {
 var (
 	sseDataRe            = regexp.MustCompile(`^data:\s*`)
 	claudeCliUserAgentRe = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`)
+	claudeCodeDateLineRe = regexp.MustCompile(`Today['’ʼʹ]s date is ([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})\.`)
 
 	// claudeCodePromptPrefixes 用于检测 Claude Code 系统提示词的前缀列表
 	// 支持多种变体：标准版、Agent SDK 版、Explore Agent 版、Compact 版等
@@ -1536,6 +1537,73 @@ func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
 		}
 	}
 	return out
+}
+
+func normalizeClaudeCodeDateWatermarkText(text string) (string, bool) {
+	if text == "" || !strings.Contains(text, "Today") || !strings.Contains(text, "date is") {
+		return text, false
+	}
+	normalized := claudeCodeDateLineRe.ReplaceAllString(text, "Today's date is $1-$2-$3.")
+	return normalized, normalized != text
+}
+
+// normalizeClaudeCodeDateWatermarkInAnthropicSystem removes Claude Code's
+// prompt-layer date watermark from the top-level Anthropic system prompt only.
+func normalizeClaudeCodeDateWatermarkInAnthropicSystem(body []byte) ([]byte, bool) {
+	if len(body) == 0 || !bytes.Contains(body, []byte("Today")) || !bytes.Contains(body, []byte("date is")) {
+		return body, false
+	}
+
+	system := gjson.GetBytes(body, "system")
+	if !system.Exists() {
+		return body, false
+	}
+
+	if system.Type == gjson.String {
+		normalized, changed := normalizeClaudeCodeDateWatermarkText(system.String())
+		if !changed {
+			return body, false
+		}
+		next, err := sjson.SetBytes(body, "system", normalized)
+		if err != nil {
+			return body, false
+		}
+		return next, true
+	}
+
+	if !system.IsArray() {
+		return body, false
+	}
+
+	out := body
+	changed := false
+	failed := false
+	idx := 0
+	system.ForEach(func(_, item gjson.Result) bool {
+		text := item.Get("text")
+		if text.Type != gjson.String {
+			idx++
+			return true
+		}
+		normalized, textChanged := normalizeClaudeCodeDateWatermarkText(text.String())
+		if !textChanged {
+			idx++
+			return true
+		}
+		next, err := sjson.SetBytes(out, fmt.Sprintf("system.%d.text", idx), normalized)
+		if err != nil {
+			failed = true
+			return false
+		}
+		out = next
+		changed = true
+		idx++
+		return true
+	})
+	if failed {
+		return body, false
+	}
+	return out, changed
 }
 
 func anthropicSystemRoleUnsupportedError(body []byte) bool {
@@ -6085,6 +6153,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(parsed.Body.Bytes()); changed {
+		if err := parsed.ReplaceBody(normalizedBody); err != nil {
+			return nil, fmt.Errorf("normalize claude code date watermark: %w", err)
+		}
+	}
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
@@ -6937,6 +7010,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 	if c != nil {
 		c.Set("anthropic_passthrough", true)
+	}
+	if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(input.Body); changed {
+		input.Body = normalizedBody
 	}
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	input.Body = StripEmptyTextBlocks(input.Body)
@@ -11425,6 +11501,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if parsed == nil {
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
+	}
+	if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(parsed.Body.Bytes()); changed {
+		if err := parsed.ReplaceBody(normalizedBody); err != nil {
+			return fmt.Errorf("normalize claude code date watermark: %w", err)
+		}
 	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {

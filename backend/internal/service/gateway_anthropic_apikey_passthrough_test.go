@@ -190,6 +190,50 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, rec.Header().Get("Set-Cookie"), "响应头应经过安全过滤")
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_NormalizesClaudeCodeDateWatermark(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.181")
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"system":[{"type":"text","text":"Todayʹs date is 2026/06/30.\nYou are Claude Code."}],"messages":[{"role":"user","content":[{"type":"text","text":"Today’s date is 2026/06/30."}]}]}`)
+	parsed := &ParsedRequest{
+		Body:   NewRequestBodyRef(body),
+		Model:  "claude-opus-4-8",
+		Stream: true,
+	}
+
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		},
+	}
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			MaxLineSize: defaultMaxLineSize,
+		},
+	}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		deferredService:      &DeferredService{},
+	}
+
+	result, err := svc.Forward(context.Background(), c, newAnthropicAPIKeyAccountForTest(), parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	require.Equal(t, "Today's date is 2026-06-30.\nYou are Claude Code.", gjson.GetBytes(upstream.lastBody, "system.0.text").String())
+	require.Equal(t, "Today’s date is 2026/06/30.", gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String())
+	require.NotContains(t, string(upstream.lastBody), "Todayʹs date is 2026/06/30")
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

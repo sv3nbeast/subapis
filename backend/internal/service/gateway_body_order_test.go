@@ -210,6 +210,37 @@ func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.
 	require.Equal(t, "nested", gjson.GetBytes(result, "metadata.speed").String())
 }
 
+func TestNormalizeClaudeCodeDateWatermarkInAnthropicSystem_String(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","system":"Today’s date is 2026/06/30.\nKeep this line.","messages":[{"role":"user","content":[{"type":"text","text":"Todayʹs date is 2026/06/30."}]}]}`)
+
+	result, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(body)
+
+	require.True(t, changed)
+	require.Equal(t, "Today's date is 2026-06-30.\nKeep this line.", gjson.GetBytes(result, "system").String())
+	require.Equal(t, "Todayʹs date is 2026/06/30.", gjson.GetBytes(result, "messages.0.content.0.text").String())
+}
+
+func TestNormalizeClaudeCodeDateWatermarkInAnthropicSystem_TextBlocks(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"Todayʼs date is 2026/06/30."},{"type":"text","text":"Todayʹs date is 2026-06-30."},{"type":"text","text":"Today's date is 2026-06-30."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}}],"messages":[]}`)
+
+	result, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(body)
+
+	require.True(t, changed)
+	require.Equal(t, "Today's date is 2026-06-30.", gjson.GetBytes(result, "system.0.text").String())
+	require.Equal(t, "Today's date is 2026-06-30.", gjson.GetBytes(result, "system.1.text").String())
+	require.Equal(t, "Today's date is 2026-06-30.", gjson.GetBytes(result, "system.2.text").String())
+	require.Equal(t, "image", gjson.GetBytes(result, "system.3.type").String())
+}
+
+func TestNormalizeClaudeCodeDateWatermarkInAnthropicSystem_NoOpOutsideSystem(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[{"type":"text","text":"Today’s date is 2026/06/30."}]}]}`)
+
+	result, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(body)
+
+	require.False(t, changed)
+	require.Equal(t, string(body), string(result))
+}
+
 func TestMigrateAnthropicInlineSystemMessages_RewritesInlineSystemRoleToUser(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"base","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}}]},{"role":"assistant","content":"ok"},{"role":"system","content":"tail"}],"metadata":{"user_id":"u"}}`)
 
