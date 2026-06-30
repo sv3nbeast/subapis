@@ -6156,6 +6156,25 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	reqStream := parsed.Stream
 	originalModel := reqModel
 
+	// 非流式客户端请求的处理策略：
+	//   - 默认（账号支持非流式，如官方 Anthropic api）：直接非流式透传。真实 Claude Code 的
+	//     auto 模式安全分类请求本就是非流式，透传无检测风险，也最保真最简单。
+	//   - 仅当账号被显式标记 force_stream_upstream（上游只支持流式，如某些只收 SSE 的中转）：
+	//     强制 stream=true 调上游、复用流式路径的完整性 / failover 保护，
+	//     再由 handleBufferedAnthropicStreamingResponse 聚合回非流式 JSON 返回客户端。
+	clientStream := reqStream
+	forceStreamAggregate := !clientStream && account != nil && account.IsForcedStreamUpstream()
+	if forceStreamAggregate {
+		reqStream = true
+		streamBody, setErr := sjson.SetBytes(body, "stream", true)
+		if setErr != nil {
+			return nil, fmt.Errorf("force upstream stream: %w", setErr)
+		}
+		if err := replaceBody(streamBody); err != nil {
+			return nil, err
+		}
+	}
+
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
 	if c != nil && s.debugBodyCaptureEnabled(c) {
 		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
@@ -6790,10 +6809,22 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var firstTokenMs *int
 	var clientDisconnect bool
 	if reqStream {
-		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
-		if err != nil {
+		var streamErr error
+		if forceStreamAggregate {
+			// 账号上游只支持流式：聚合上游 SSE 为完整 JSON 后以 application/json 返回。
+			usage, streamErr = s.handleBufferedAnthropicStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel)
+		} else {
+			streamResult, handleErr := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
+			streamErr = handleErr
+			if handleErr == nil {
+				usage = streamResult.usage
+				firstTokenMs = streamResult.firstTokenMs
+				clientDisconnect = streamResult.clientDisconnect
+			}
+		}
+		if streamErr != nil {
 			var sseErr *sseStreamErrorEventError
-			if errors.As(err, &sseErr) {
+			if errors.As(streamErr, &sseErr) {
 				// 上游 HTTP 200 + SSE 流体内出现 event:error 帧。
 				// 保留 StatusCode=403 以兼容既有 failover/客户端响应语义，
 				// 但补全 ResponseBody 与 ops 上下文，让运维日志能反映上游真实错误。
@@ -6834,11 +6865,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					ResponseBody: body,
 				}
 			}
-			return nil, err
+			return nil, streamErr
 		}
-		usage = streamResult.usage
-		firstTokenMs = streamResult.firstTokenMs
-		clientDisconnect = streamResult.clientDisconnect
 	} else {
 		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
 		if err != nil {
@@ -6851,7 +6879,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
 		UpstreamModel:    mappedModel,
-		Stream:           reqStream,
+		Stream:           clientStream,
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,

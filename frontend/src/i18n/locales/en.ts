@@ -4073,6 +4073,10 @@ export default {
           label: 'Session ID Masking',
           hint: 'When enabled, fixes the session ID in metadata.user_id for 15 minutes, making upstream think requests come from the same session'
         },
+        forceStreamUpstream: {
+          label: 'Force Stream Upstream',
+          hint: 'Enable only when this account\'s upstream supports streaming only (e.g. SSE-only relays): non-stream client requests are forced to stream upstream, then aggregated back into a non-stream JSON response. Off by default — accounts that support non-stream (e.g. official Anthropic) pass through directly'
+        },
         cacheTTLOverride: {
           label: 'Cache TTL Override',
           hint: 'Force all cache creation tokens to be billed as the selected TTL tier (5m or 1h)',

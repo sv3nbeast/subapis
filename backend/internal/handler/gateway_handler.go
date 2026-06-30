@@ -228,19 +228,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	// 连通性探测请求（max_tokens=1, !stream）允许同步通过，
-	// 否则各类客户端（Claude Code Desktop、第三方 SDK 等）的 Test Connection 会被错误拦截。
-	// 同理，预热/标题生成（Warmup）、SUGGESTION MODE 等会被 detectInterceptType 识别并 mock 拦截的
-	// 同步请求也应放行：它们在拦截阶段直接返回 mock 响应、不消耗账号配额，
-	// 与守卫"防止误用的普通同步请求耗配额"的本意不冲突（官方上游本无此守卫）。
-	// 注意：此处仅放行，是否真正 mock 仍由后续账号选择 + IsInterceptWarmupEnabled 决定。
-	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
-	isInterceptableSync := isConnectionProbe ||
-		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone
-	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
-		return
-	}
+	// 非流式 /v1/messages 不再被守卫拒绝（旧守卫会 400 拒绝 Claude Code auto 模式的
+	// 非流式安全分类请求，导致 CLI 报 "<model> is temporarily unavailable"）。
+	// 非流式请求由后续 Forward 阶段处理：内部强制转流式上游、聚合为完整 JSON 后以非流式返回，
+	// 使 Kiro 等"仅流式上游"渠道也复用流式路径的 RequireTerminalEvent 完整性 + failover 保护。
+	// 连通性探测 / Warmup 仍由后续 detectInterceptType + 账号选择阶段做 mock 拦截。
 
 	// 验证 model 必填
 	if reqModel == "" {
@@ -2020,10 +2012,6 @@ func isMaxTokensOneHaikuRequest(model string, maxTokens int) bool {
 // Claude Code 的 test connection 可能使用非 haiku 模型，但仍是 max_tokens=1 的非流式请求。
 func isClaudeCodeConnectionProbeRequest(maxTokens int, isStream bool) bool {
 	return maxTokens == 1 && !isStream
-}
-
-func isAnthropicMessagesSyncRequest(isStream bool) bool {
-	return !isStream
 }
 
 // detectInterceptType 检测请求是否需要拦截，返回拦截类型

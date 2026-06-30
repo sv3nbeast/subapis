@@ -4274,6 +4274,10 @@ export default {
           label: '会话 ID 伪装',
           hint: '启用后将在 15 分钟内固定 metadata.user_id 中的 session ID，使上游认为请求来自同一会话'
         },
+        forceStreamUpstream: {
+          label: '强制流式上游',
+          hint: '仅当该账号上游只支持流式（如某些只收 SSE 的中转）时开启：客户端的非流式请求会被强制转流式调上游、再聚合回非流式 JSON 返回。默认关闭——支持非流式的账号（如官方 Anthropic）直接透传'
+        },
         cacheTTLOverride: {
           label: '缓存 TTL 强制替换',
           hint: '将所有缓存创建 token 强制按指定的 TTL 类型（5分钟或1小时）计费',

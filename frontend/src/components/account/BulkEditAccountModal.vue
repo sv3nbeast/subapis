@@ -82,6 +82,54 @@
         </div>
       </div>
 
+      <!-- Force Stream Upstream -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-force-stream-upstream-label"
+              class="input-label mb-0"
+              for="bulk-edit-force-stream-upstream-enabled"
+            >
+              {{ t('admin.accounts.quotaControl.forceStreamUpstream.label') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.quotaControl.forceStreamUpstream.hint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableForceStreamUpstream"
+            id="bulk-edit-force-stream-upstream-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-force-stream-upstream-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-force-stream-upstream-body"
+          :class="!enableForceStreamUpstream && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-force-stream-upstream-label"
+        >
+          <button
+            id="bulk-edit-force-stream-upstream-toggle"
+            type="button"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              forceStreamUpstreamValue ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="forceStreamUpstreamValue = !forceStreamUpstreamValue"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                forceStreamUpstreamValue ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- Base URL (API Key only) -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1276,6 +1324,8 @@ const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
+const enableForceStreamUpstream = ref(false)
+const forceStreamUpstreamValue = ref(true)
 
 // State - field values
 const submitting = ref(false)
@@ -1501,6 +1551,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
+  if (enableForceStreamUpstream.value) {
+    const extra = ensureExtra()
+    extra.force_stream_upstream = forceStreamUpstreamValue.value
+  }
+
   if (
     enableModelRestriction.value &&
     !isOpenAIModelRestrictionDisabled.value &&
@@ -1677,6 +1732,7 @@ const handleSubmit = async () => {
     enableOpenAICompactMode.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
+    enableForceStreamUpstream.value ||
     userMsgQueueMode.value !== null
 
   if (!hasAnyFieldEnabled) {
@@ -1780,9 +1836,11 @@ watch(
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
+      enableForceStreamUpstream.value = false
 
       // Reset all values
       baseUrl.value = ''
+      forceStreamUpstreamValue.value = true
       openaiPassthroughEnabled.value = false
       modelRestrictionMode.value = 'whitelist'
       allowedModels.value = []

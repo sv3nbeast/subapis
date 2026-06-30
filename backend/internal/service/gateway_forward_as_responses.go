@@ -461,6 +461,161 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}, nil
 }
 
+// handleBufferedAnthropicStreamingResponse 读取上游 Anthropic SSE 流，聚合成一个完整的
+// Anthropic Message，并以单个 application/json 响应写回客户端。
+//
+// 用途：客户端请求非流式（stream=false），但网关对上游强制 stream=true 时使用——
+// 这样可与真实 Claude Code（始终流式）保持一致以规避检测，并让请求复用流式路径的
+// 完整性 / failover 保护，最后再把结果聚合回非流式 JSON 返回给客户端。
+//
+// 错误语义与 handleStreamingResponse 对齐：流体内出现 `event: error` 时返回
+// *sseStreamErrorEventError，交由调用方走既有 failover 处理；流中断/无响应时返回
+// 可重试的 *UpstreamFailoverError。
+func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	startTime time.Time,
+	originalModel string,
+	mappedModel string,
+) (*ClaudeUsage, error) {
+	_ = ctx
+	_ = account
+	_ = mappedModel
+	requestID := resp.Header.Get("x-request-id")
+
+	scanner := bufio.NewScanner(resp.Body)
+	maxLineSize := defaultMaxLineSize
+	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+		maxLineSize = s.cfg.Gateway.MaxLineSize
+	}
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+
+	var finalResp *apicompat.AnthropicResponse
+	var usage ClaudeUsage
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "event: ") {
+			continue
+		}
+		eventType := strings.TrimPrefix(line, "event: ")
+
+		if !scanner.Scan() {
+			break
+		}
+		dataLine := scanner.Text()
+		if !strings.HasPrefix(dataLine, "data: ") {
+			continue
+		}
+		payload := dataLine[6:]
+
+		// 上游 HTTP 200 + SSE 流体内的 error 帧：返回与 handleStreamingResponse 一致的
+		// 错误，交由调用方走既有 failover 处理（保留非流式请求的 failover 能力）。
+		if eventType == "error" {
+			return nil, &sseStreamErrorEventError{RawData: payload}
+		}
+
+		var event apicompat.AnthropicStreamEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			logger.L().Warn("buffered anthropic stream: failed to parse event",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+				zap.String("event_type", eventType),
+			)
+			continue
+		}
+
+		// message_start 携带初始响应结构
+		if event.Type == "message_start" && event.Message != nil {
+			finalResp = event.Message
+			mergeAnthropicUsage(&usage, event.Message.Usage)
+		}
+		// message_delta 携带最终 usage 与 stop_reason
+		if event.Type == "message_delta" {
+			if event.Usage != nil {
+				mergeAnthropicUsage(&usage, *event.Usage)
+			}
+			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
+				finalResp.StopReason = event.Delta.StopReason
+			}
+		}
+		// 累积 content block
+		if event.Type == "content_block_start" && event.ContentBlock != nil && finalResp != nil {
+			finalResp.Content = append(finalResp.Content, *event.ContentBlock)
+		}
+		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
+			idx := *event.Index
+			if idx >= 0 && idx < len(finalResp.Content) {
+				switch event.Delta.Type {
+				case "text_delta":
+					finalResp.Content[idx].Text += event.Delta.Text
+				case "thinking_delta":
+					finalResp.Content[idx].Thinking += event.Delta.Thinking
+				case "input_json_delta":
+					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.L().Warn("buffered anthropic stream: read error",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
+		}
+		// 流读取中断且未拿到完整响应：触发同账号重试（与流式路径完整性保护一致）。
+		if finalResp == nil {
+			return nil, &UpstreamFailoverError{
+				StatusCode:             http.StatusBadGateway,
+				RetryableOnSameAccount: true,
+				Cause:                  err,
+			}
+		}
+	}
+
+	if finalResp == nil {
+		return nil, &UpstreamFailoverError{
+			StatusCode:             http.StatusBadGateway,
+			RetryableOnSameAccount: true,
+			Cause:                  fmt.Errorf("upstream stream ended without a response"),
+		}
+	}
+
+	// 用累积的 usage 覆盖最终响应
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+		finalResp.Usage = apicompat.AnthropicUsage{
+			InputTokens:              usage.InputTokens,
+			OutputTokens:             usage.OutputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+		}
+	}
+
+	// 客户端应看到它请求的原始模型名
+	if originalModel != "" {
+		finalResp.Model = originalModel
+	}
+
+	if s.responseHeaderFilter != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
+	// 上游被强制流式后会返回 text/event-stream，这里显式改回 JSON，避免下游中间层
+	// 按 Content-Type 误判为流式。
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if respBytes, err := json.Marshal(finalResp); err == nil {
+		respBytes = reverseToolNamesIfPresent(c, respBytes)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+	} else {
+		c.JSON(http.StatusOK, finalResp)
+	}
+
+	return &usage, nil
+}
+
 // handleResponsesStreamingResponse reads Anthropic SSE events from upstream,
 // converts each to Responses SSE events, and writes them to the client.
 func (s *GatewayService) handleResponsesStreamingResponse(

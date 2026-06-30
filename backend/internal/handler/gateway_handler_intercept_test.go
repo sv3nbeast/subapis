@@ -46,24 +46,6 @@ func TestIsClaudeCodeConnectionProbeRequest(t *testing.T) {
 	require.False(t, isClaudeCodeConnectionProbeRequest(2, false))
 }
 
-func TestIsAnthropicMessagesSyncRequest(t *testing.T) {
-	require.True(t, isAnthropicMessagesSyncRequest(false))
-	require.False(t, isAnthropicMessagesSyncRequest(true))
-}
-
-// TestConnectionProbeBypassesSyncCheck 验证连通性探测请求
-// （max_tokens=1, stream=false）能正确被识别且会绕过同步请求拒绝检查。
-// 这是 Claude Code Desktop "Test Connection" 等各类客户端探测能正常工作的关键。
-func TestConnectionProbeBypassesSyncCheck(t *testing.T) {
-	// 探测请求特征：max_tokens=1, stream=false
-	require.True(t, isClaudeCodeConnectionProbeRequest(1, false))
-	require.True(t, isAnthropicMessagesSyncRequest(false))
-
-	// 实际逻辑在 gateway_handler.go Messages() 中：
-	// if isAnthropicMessagesSyncRequest(reqStream) && !isConnectionProbe { reject }
-	// 不再要求 isClaudeCodeClient，因为后续 detectInterceptType 会无条件 mock。
-}
-
 func TestDetectInterceptType_SuggestionModeUnaffected(t *testing.T) {
 	body := []byte(`{
 		"messages":[{

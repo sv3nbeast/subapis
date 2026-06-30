@@ -211,6 +211,19 @@ func (a *Account) IsKiroCacheEmulationEnabled() bool {
 	return false
 }
 
+// IsForcedStreamUpstream 表示该账号的上游只支持流式（如某些只收 SSE 的中转渠道）。
+// 为 true 时，非流式客户端请求会被强制转流式上游、再聚合回非流式 JSON 返回；
+// 默认 false：支持非流式的账号（如官方 Anthropic api）直接非流式透传，最保真也最简单。
+func (a *Account) IsForcedStreamUpstream() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	if enabled, ok := a.Extra["force_stream_upstream"].(bool); ok {
+		return enabled
+	}
+	return false
+}
+
 func (a *Account) GetKiroCacheEmulationRatio() float64 {
 	if a == nil || !a.IsKiro() || a.Extra == nil {
 		return 0

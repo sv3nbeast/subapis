@@ -843,6 +843,25 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
 }
 
+// anthropicMinimalSSEResponse 是一个最小的合法 Anthropic 流式响应，用于模拟上游。
+// 非流式客户端请求经 Forward 会被强制转流式上游，故 OAuth 路径的 mock 需返回 SSE，
+// 再由 handleBufferedAnthropicStreamingResponse 聚合回非流式 JSON。
+const anthropicMinimalSSEResponse = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","content":[],"usage":{"input_tokens":12,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
 func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -998,6 +1017,77 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 	require.Equal(t, "Original system prompt", system.String())
 	require.NotContains(t, string(upstream.lastBody), "x-anthropic-billing-header:")
 	require.NotContains(t, string(upstream.lastBody), "[System Instructions]")
+}
+
+// TestGatewayService_AnthropicOAuth_NonStreamClientAggregatesForcedUpstreamStream 验证：
+// 客户端发非流式 /v1/messages 时，网关对上游强制 stream=true，再把上游 SSE 聚合成
+// 完整 JSON 以非流式返回客户端（用于支持 Claude Code auto 模式的非流式安全分类请求，
+// 同时与真实 Claude Code 始终流式保持一致）。
+func TestGatewayService_AnthropicOAuth_NonStreamClientAggregatesForcedUpstreamStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	// 客户端请求非流式（无 stream 字段）
+	body := []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	require.False(t, parsed.Stream, "客户端请求应为非流式")
+
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"text/event-stream"},
+				"x-request-id": []string{"rid-oauth-nonstream-agg"},
+			},
+			Body: io.NopCloser(strings.NewReader(anthropicMinimalSSEResponse)),
+		},
+	}
+
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		deferredService:      &DeferredService{},
+	}
+
+	account := &Account{
+		ID:          303,
+		Name:        "anthropic-oauth-nonstream-agg",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive,
+		Schedulable: true,
+		// 标记该账号上游只支持流式 → 非流式客户端请求会被强制转流式 + 聚合。
+		Extra: map[string]any{"force_stream_upstream": true},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// 1) 上游请求应被强制 stream=true
+	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool(), "上游请求应被强制 stream=true")
+
+	// 2) 客户端应收到聚合后的非流式 JSON
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+	require.Equal(t, "ok", gjson.GetBytes(rec.Body.Bytes(), "content.0.text").String())
+	require.Equal(t, "end_turn", gjson.GetBytes(rec.Body.Bytes(), "stop_reason").String())
+	require.Equal(t, int64(7), gjson.GetBytes(rec.Body.Bytes(), "usage.output_tokens").Int())
+
+	// 3) 响应体不应是 SSE 流
+	require.NotContains(t, rec.Body.String(), "event: message_start")
+
+	// 4) ForwardResult.Stream 反映客户端语义（非流式）
+	require.False(t, result.Stream)
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {
