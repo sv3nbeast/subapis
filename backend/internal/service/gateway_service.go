@@ -1547,57 +1547,105 @@ func normalizeClaudeCodeDateWatermarkText(text string) (string, bool) {
 	return normalized, normalized != text
 }
 
+func isClaudeCodeCurrentDateSystemReminder(text string) bool {
+	return strings.Contains(text, "<system-reminder>") &&
+		strings.Contains(text, "# currentDate")
+}
+
 // normalizeClaudeCodeDateWatermarkInAnthropicSystem removes Claude Code's
-// prompt-layer date watermark from the top-level Anthropic system prompt only.
+// prompt-layer date watermark from system-owned prompt text only.
 func normalizeClaudeCodeDateWatermarkInAnthropicSystem(body []byte) ([]byte, bool) {
 	if len(body) == 0 || !bytes.Contains(body, []byte("Today")) || !bytes.Contains(body, []byte("date is")) {
-		return body, false
-	}
-
-	system := gjson.GetBytes(body, "system")
-	if !system.Exists() {
-		return body, false
-	}
-
-	if system.Type == gjson.String {
-		normalized, changed := normalizeClaudeCodeDateWatermarkText(system.String())
-		if !changed {
-			return body, false
-		}
-		next, err := sjson.SetBytes(body, "system", normalized)
-		if err != nil {
-			return body, false
-		}
-		return next, true
-	}
-
-	if !system.IsArray() {
 		return body, false
 	}
 
 	out := body
 	changed := false
 	failed := false
-	idx := 0
-	system.ForEach(func(_, item gjson.Result) bool {
-		text := item.Get("text")
-		if text.Type != gjson.String {
-			idx++
+
+	system := gjson.GetBytes(body, "system")
+	if system.Exists() {
+		if system.Type == gjson.String {
+			normalized, textChanged := normalizeClaudeCodeDateWatermarkText(system.String())
+			if textChanged {
+				next, err := sjson.SetBytes(out, "system", normalized)
+				if err != nil {
+					return body, false
+				}
+				out = next
+				changed = true
+			}
+		} else if system.IsArray() {
+			idx := 0
+			system.ForEach(func(_, item gjson.Result) bool {
+				text := item.Get("text")
+				if text.Type != gjson.String {
+					idx++
+					return true
+				}
+				normalized, textChanged := normalizeClaudeCodeDateWatermarkText(text.String())
+				if !textChanged {
+					idx++
+					return true
+				}
+				next, err := sjson.SetBytes(out, fmt.Sprintf("system.%d.text", idx), normalized)
+				if err != nil {
+					failed = true
+					return false
+				}
+				out = next
+				changed = true
+				idx++
+				return true
+			})
+			if failed {
+				return body, false
+			}
+		}
+	}
+
+	messages := gjson.GetBytes(out, "messages")
+	if !messages.IsArray() {
+		return out, changed
+	}
+	messageIdx := 0
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		content := msg.Get("content")
+		if !content.IsArray() {
+			messageIdx++
 			return true
 		}
-		normalized, textChanged := normalizeClaudeCodeDateWatermarkText(text.String())
-		if !textChanged {
-			idx++
+		contentIdx := 0
+		content.ForEach(func(_, block gjson.Result) bool {
+			text := block.Get("text")
+			if text.Type != gjson.String {
+				contentIdx++
+				return true
+			}
+			raw := text.String()
+			if !isClaudeCodeCurrentDateSystemReminder(raw) {
+				contentIdx++
+				return true
+			}
+			normalized, textChanged := normalizeClaudeCodeDateWatermarkText(raw)
+			if !textChanged {
+				contentIdx++
+				return true
+			}
+			next, err := sjson.SetBytes(out, fmt.Sprintf("messages.%d.content.%d.text", messageIdx, contentIdx), normalized)
+			if err != nil {
+				failed = true
+				return false
+			}
+			out = next
+			changed = true
+			contentIdx++
 			return true
-		}
-		next, err := sjson.SetBytes(out, fmt.Sprintf("system.%d.text", idx), normalized)
-		if err != nil {
-			failed = true
+		})
+		if failed {
 			return false
 		}
-		out = next
-		changed = true
-		idx++
+		messageIdx++
 		return true
 	})
 	if failed {

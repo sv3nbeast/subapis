@@ -198,7 +198,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_NormalizesClaudeCodeDateWater
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	c.Request.Header.Set("User-Agent", "claude-cli/2.1.181")
 
-	body := []byte(`{"model":"claude-opus-4-8","stream":true,"system":[{"type":"text","text":"Todayʹs date is 2026/06/30.\nYou are Claude Code."}],"messages":[{"role":"user","content":[{"type":"text","text":"Today’s date is 2026/06/30."}]}]}`)
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"system":[{"type":"text","text":"Todayʹs date is 2026/06/30.\nYou are Claude Code."}],"messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>\n# currentDate\nToday's date is 2026/07/01.\n</system-reminder>"},{"type":"text","text":"Today’s date is 2026/06/30."}]}]}`)
 	parsed := &ParsedRequest{
 		Body:   NewRequestBodyRef(body),
 		Model:  "claude-opus-4-8",
@@ -230,8 +230,10 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_NormalizesClaudeCodeDateWater
 	require.NotNil(t, result)
 
 	require.Equal(t, "Today's date is 2026-06-30.\nYou are Claude Code.", gjson.GetBytes(upstream.lastBody, "system.0.text").String())
-	require.Equal(t, "Today’s date is 2026/06/30.", gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String())
+	require.Equal(t, "<system-reminder>\n# currentDate\nToday's date is 2026-07-01.\n</system-reminder>", gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String())
+	require.Equal(t, "Today’s date is 2026/06/30.", gjson.GetBytes(upstream.lastBody, "messages.0.content.1.text").String())
 	require.NotContains(t, string(upstream.lastBody), "Todayʹs date is 2026/06/30")
+	require.NotContains(t, string(upstream.lastBody), "Today's date is 2026/07/01")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBody(t *testing.T) {

@@ -241,6 +241,16 @@ func TestNormalizeClaudeCodeDateWatermarkInAnthropicSystem_NoOpOutsideSystem(t *
 	require.Equal(t, string(body), string(result))
 }
 
+func TestNormalizeClaudeCodeDateWatermarkInAnthropicSystem_MessageSystemReminderCurrentDate(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>\n# currentDate\nToday's date is 2026/07/01.\n</system-reminder>"},{"type":"text","text":"Today’s date is 2026/07/01."}]}]}`)
+
+	result, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(body)
+
+	require.True(t, changed)
+	require.Equal(t, "<system-reminder>\n# currentDate\nToday's date is 2026-07-01.\n</system-reminder>", gjson.GetBytes(result, "messages.0.content.0.text").String())
+	require.Equal(t, "Today’s date is 2026/07/01.", gjson.GetBytes(result, "messages.0.content.1.text").String())
+}
+
 func TestMigrateAnthropicInlineSystemMessages_RewritesInlineSystemRoleToUser(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-8","system":[{"type":"text","text":"base","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"},{"role":"system","content":[{"type":"text","text":"mid","cache_control":{"type":"ephemeral"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}}]},{"role":"assistant","content":"ok"},{"role":"system","content":"tail"}],"metadata":{"user_id":"u"}}`)
 
