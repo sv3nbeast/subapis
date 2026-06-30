@@ -477,6 +477,10 @@ type RateLimit429CooldownSettings struct {
 	Enabled bool `json:"enabled"`
 	// CooldownSeconds 默认回避时长（秒）
 	CooldownSeconds int `json:"cooldown_seconds"`
+	// PropagateOrgPeers 是否把 no-reset 429 兜底限流连坐到同 org_uuid 的其它
+	// Anthropic 账号(并按 org 维度累计退避)。默认 false:实测同组织多账号的 5h
+	// 额度窗口是独立的,连坐会误伤本可用的兄弟账号,故默认仅限流命中账号本身。
+	PropagateOrgPeers bool `json:"propagate_org_peers"`
 }
 
 // DefaultOverloadCooldownSettings 返回默认的过载冷却配置（启用，10分钟）
@@ -490,8 +494,9 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 // DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5秒）
 func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
 	return &RateLimit429CooldownSettings{
-		Enabled:         true,
-		CooldownSeconds: 5,
+		Enabled:           true,
+		CooldownSeconds:   5,
+		PropagateOrgPeers: false,
 	}
 }
 

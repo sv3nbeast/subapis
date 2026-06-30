@@ -1051,16 +1051,17 @@ func isAnthropicRateLimitErrorBody(body []byte) bool {
 
 func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context, account *Account) {
 	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+	propagateOrg := s.shouldPropagateOrgPeers(ctx)
 	if enabled {
-		if adaptiveCooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now()); cooldown < adaptiveCooldown {
+		if adaptiveCooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now(), propagateOrg); cooldown < adaptiveCooldown {
 			cooldown = adaptiveCooldown
 		}
 	}
 	s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", cooldown, enabled)
 }
 
-func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now time.Time) time.Duration {
-	key := anthropicNoReset429BackoffKey(account)
+func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now time.Time, propagateOrg bool) time.Duration {
+	key := anthropicNoReset429BackoffKey(account, propagateOrg)
 
 	s.anthropicNoReset429Mu.Lock()
 	defer s.anthropicNoReset429Mu.Unlock()
@@ -1094,12 +1095,15 @@ func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now
 	}
 }
 
-func anthropicNoReset429BackoffKey(account *Account) string {
+func anthropicNoReset429BackoffKey(account *Account, propagateOrg bool) string {
 	if account == nil {
 		return "account:0"
 	}
-	if orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid")); orgUUID != "" {
-		return "org:" + orgUUID
+	// 仅在显式开启 org 连坐时按 org 维度累计退避;默认按账号,避免兄弟账号互相拖累退避时长。
+	if propagateOrg {
+		if orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid")); orgUUID != "" {
+			return "org:" + orgUUID
+		}
 	}
 	return fmt.Sprintf("account:%d", account.ID)
 }
@@ -1127,8 +1131,24 @@ func (s *RateLimitService) setRateLimitedWithAnthropicOrgPeers(ctx context.Conte
 		return err
 	}
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
-	s.rateLimitAnthropicOrgPeers(ctx, account, resetAt, reason)
+	// 默认不连坐:实测同 org_uuid 的兄弟账号 5h 额度窗口独立,连坐会误伤本可用的账号。
+	// 仅当显式开启 PropagateOrgPeers 才把限流传播到同 org 账号。
+	if s.shouldPropagateOrgPeers(ctx) {
+		s.rateLimitAnthropicOrgPeers(ctx, account, resetAt, reason)
+	}
 	return nil
+}
+
+// shouldPropagateOrgPeers 读取 429 兜底设置中的 PropagateOrgPeers 开关(默认 false)。
+func (s *RateLimitService) shouldPropagateOrgPeers(ctx context.Context) bool {
+	if s.settingService == nil {
+		return false
+	}
+	settings, err := s.settingService.GetRateLimit429CooldownSettings(ctx)
+	if err != nil || settings == nil {
+		return false
+	}
+	return settings.PropagateOrgPeers
 }
 
 func (s *RateLimitService) rateLimitAnthropicOrgPeers(ctx context.Context, account *Account, resetAt time.Time, reason string) {

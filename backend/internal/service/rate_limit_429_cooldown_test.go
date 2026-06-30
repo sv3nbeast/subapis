@@ -180,7 +180,8 @@ func TestHandle429_AnthropicRateLimitWithoutResetBacksOffWithinWindow(t *testing
 func TestHandle429_AnthropicRateLimitWithoutResetBackoffIsSharedByOrg(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{}
 	settingRepo := newMockSettingRepo()
-	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 5})
+	// org 维度退避仅在开启 PropagateOrgPeers 时生效。
+	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 5, PropagateOrgPeers: true})
 	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
 
 	settingSvc := NewSettingService(settingRepo, &config.Config{})
@@ -219,7 +220,7 @@ func TestHandle429_AnthropicRateLimitWithoutResetKeepsLargerConfiguredCooldown(t
 	require.True(t, !accountRepo.rateLimitResets[45].Before(before.Add(60*time.Second)) && !accountRepo.rateLimitResets[45].After(after.Add(60*time.Second)))
 }
 
-func TestHandle429_AnthropicRateLimitWithoutResetCoolsSameOrgPeers(t *testing.T) {
+func TestHandle429_AnthropicRateLimitWithoutResetCoolsSameOrgPeersWhenOptedIn(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{
 		extraMatches: []Account{
 			{ID: 45, Platform: PlatformAnthropic, Extra: map[string]any{"org_uuid": "org-1"}},
@@ -227,13 +228,41 @@ func TestHandle429_AnthropicRateLimitWithoutResetCoolsSameOrgPeers(t *testing.T)
 			{ID: 47, Platform: PlatformOpenAI, Extra: map[string]any{"org_uuid": "org-1"}},
 		},
 	}
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 5, PropagateOrgPeers: true})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+	settingSvc := NewSettingService(settingRepo, &config.Config{})
 	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(settingSvc)
 
 	account := &Account{ID: 45, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Extra: map[string]any{"org_uuid": "org-1"}}
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Error"}}`))
 
+	// 开启 PropagateOrgPeers 后:同 org 的 Anthropic 兄弟账号(46)被一并限流,OpenAI(47)不受影响。
 	require.Equal(t, []int64{45, 46}, accountRepo.rateLimitIDs)
 	require.WithinDuration(t, accountRepo.rateLimitResets[45], accountRepo.rateLimitResets[46], time.Second)
+}
+
+func TestHandle429_AnthropicRateLimitWithoutResetDefaultDoesNotCoolOrgPeers(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{
+		extraMatches: []Account{
+			{ID: 45, Platform: PlatformAnthropic, Extra: map[string]any{"org_uuid": "org-1"}},
+			{ID: 46, Platform: PlatformAnthropic, Extra: map[string]any{"org_uuid": "org-1"}},
+		},
+	}
+	// 默认设置(PropagateOrgPeers=false):同 org 兄弟账号额度独立,不应被连坐。
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 5})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+	settingSvc := NewSettingService(settingRepo, &config.Config{})
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(settingSvc)
+
+	account := &Account{ID: 45, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Extra: map[string]any{"org_uuid": "org-1"}}
+	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Error"}}`))
+
+	// 仅命中账号(45)被限流,兄弟账号(46)不受连坐。
+	require.Equal(t, []int64{45}, accountRepo.rateLimitIDs)
 }
 
 func TestHandle429_AnthropicAmbiguousWithoutResetSkipsFallback(t *testing.T) {
