@@ -6156,14 +6156,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	reqStream := parsed.Stream
 	originalModel := reqModel
 
-	// 非流式客户端请求的处理策略：
-	//   - 默认（账号支持非流式，如官方 Anthropic api）：直接非流式透传。真实 Claude Code 的
-	//     auto 模式安全分类请求本就是非流式，透传无检测风险，也最保真最简单。
-	//   - 仅当账号被显式标记 force_stream_upstream（上游只支持流式，如某些只收 SSE 的中转）：
-	//     强制 stream=true 调上游、复用流式路径的完整性 / failover 保护，
-	//     再由 handleBufferedAnthropicStreamingResponse 聚合回非流式 JSON 返回客户端。
+	// 非流式客户端请求一律内部强制转流式上游、再聚合回非流式 JSON 返回（不再透传）。
+	// 实测:用 OAuth/Claude-Code 伪装把非流式请求直接透传到 Anthropic 会被大量 429
+	//（真实 Claude Code 永远流式,非流式属异常流量),进而把有额度的账号误判进限流;
+	// 改为内部强制 stream=true 调上游可避免——流式请求几乎不触发 429。
+	// 复用 handleBufferedAnthropicStreamingResponse 的 SSE 聚合,客户端仍拿到非流式 JSON。
 	clientStream := reqStream
-	forceStreamAggregate := !clientStream && account != nil && account.IsForcedStreamUpstream()
+	forceStreamAggregate := !clientStream
 	if forceStreamAggregate {
 		reqStream = true
 		streamBody, setErr := sjson.SetBytes(body, "stream", true)

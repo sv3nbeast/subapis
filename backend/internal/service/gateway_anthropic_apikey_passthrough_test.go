@@ -895,7 +895,7 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 						"Content-Type": []string{"application/json"},
 						"x-request-id": []string{"rid-oauth-preserve"},
 					},
-					Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+					Body: io.NopCloser(strings.NewReader(anthropicMinimalSSEResponse)),
 				},
 			}
 
@@ -974,7 +974,7 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 				"Content-Type": []string{"application/json"},
 				"x-request-id": []string{"rid-oauth-no-system-injection"},
 			},
-			Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+			Body: io.NopCloser(strings.NewReader(anthropicMinimalSSEResponse)),
 		},
 	}
 
