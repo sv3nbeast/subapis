@@ -32,6 +32,7 @@ export const claudeModels = [
   'claude-opus-4-8',
   'claude-opus-4-8-thinking',
   'claude-fable-5',
+  'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-haiku-4-6',
   'claude-2.1', 'claude-2.0', 'claude-instant-1.2'
@@ -84,6 +85,7 @@ const antigravityModels = [
 ]
 
 const kiroModels = [
+  'claude-sonnet-5',
   'claude-opus-4-8',
   'claude-opus-4-8-thinking',
   'claude-opus-4-7',
@@ -271,6 +273,7 @@ export const allModels = allModelsList.map(m => ({ value: m, label: m }))
 
 const anthropicPresetMappings = [
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Sonnet 4', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-20250514', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
   { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-5-20250929', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
@@ -352,6 +355,7 @@ const antigravityPresetMappings = [
 ]
 
 const kiroPresetMappings = [
+  { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.8 Thinking', from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4.7', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },

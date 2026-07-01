@@ -277,6 +277,7 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "claude opus 4.7 dot separator", model: "claude-opus-4.7", expectedInput: 5e-6},
 		{name: "claude opus 4.5 alt separator", model: "claude-opus-4-5-20260101", expectedInput: 5e-6},
 		{name: "claude fable 5", model: "claude-fable-5", expectedInput: 1e-5},
+		{name: "claude sonnet 5", model: "claude-sonnet-5", expectedInput: 2e-6},
 		{name: "claude generic model fallback sonnet", model: "claude-foo-bar", expectedInput: 3e-6},
 		{name: "gemini explicit fallback", model: "gemini-3-1-pro", expectedInput: 2e-6},
 		{name: "gemini unknown no fallback", model: "gemini-2.0-pro", expectNilPricing: true},

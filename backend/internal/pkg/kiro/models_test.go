@@ -13,6 +13,7 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 	}
 
 	require.Equal(t, []string{
+		"claude-sonnet-5",
 		"claude-opus-4-8",
 		"claude-opus-4-8-thinking",
 		"claude-opus-4-7",
@@ -30,6 +31,7 @@ func TestDefaultModels_MatchesKiroReferenceModels(t *testing.T) {
 	}, ids)
 
 	require.Contains(t, ids, "claude-sonnet-4-6")
+	require.Contains(t, ids, "claude-sonnet-5")
 	require.Contains(t, ids, "claude-opus-4-7")
 	require.Contains(t, ids, "claude-opus-4-8")
 	require.Contains(t, ids, "claude-haiku-4-5-20251001-thinking")

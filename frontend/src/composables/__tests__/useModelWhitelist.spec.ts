@@ -45,6 +45,12 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
   })
 
+  it('Claude 和 Kiro 模型列表包含 Sonnet 5，Antigravity 不默认暴露', () => {
+    expect(getModelsByPlatform('claude')).toContain('claude-sonnet-5')
+    expect(getModelsByPlatform('kiro')).toContain('claude-sonnet-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5')
+  })
+
   it('gemini 模型列表包含原生生图模型', () => {
     const models = getModelsByPlatform('gemini')
 

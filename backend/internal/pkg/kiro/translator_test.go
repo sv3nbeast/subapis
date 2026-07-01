@@ -479,6 +479,23 @@ func TestBuildKiroPayloadOptionsForwardCLIWireFields(t *testing.T) {
 	require.Less(t, strings.Index(wire, `"envState"`), strings.Index(wire, `"tools"`))
 }
 
+func TestBuildKiroPayloadOptionsSupportsSonnet5NativeEffort(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-5",
+		"output_config":{"effort":"max"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-5", "", nil, KiroPayloadOptions{
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "claude-sonnet-5", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+}
+
 func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffort(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-8",
@@ -2161,6 +2178,7 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"gpt-4o":                              "claude-sonnet-4.5",
 		"gpt-4":                               "claude-sonnet-4.5",
 		"gpt-3.5-turbo":                       "claude-sonnet-4.5",
+		"claude-sonnet-5":                     "claude-sonnet-5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",
 		"claude-sonnet-4.6":                   "claude-sonnet-4.6",

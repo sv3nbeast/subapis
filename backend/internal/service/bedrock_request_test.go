@@ -176,6 +176,8 @@ func TestIsBedrockClaude45OrNewer(t *testing.T) {
 		{"us.anthropic.claude-opus-4-6-v1", true},
 		{"us.anthropic.claude-opus-4-8-v1", true},
 		{"anthropic.claude-fable-5", true},
+		{"anthropic.claude-sonnet-5", true},
+		{"us.anthropic.claude-sonnet-5", true},
 		{"us.anthropic.claude-sonnet-4-6", true},
 		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", true},
 		{"us.anthropic.claude-opus-4-5-20251101-v1:0", true},
@@ -541,6 +543,20 @@ func TestResolveBedrockModelID(t *testing.T) {
 		assert.Equal(t, "eu.anthropic.claude-opus-4-8-v1", modelID)
 	})
 
+	t.Run("default sonnet 5 alias is enabled for Bedrock", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeBedrock,
+			Credentials: map[string]any{
+				"aws_region": "us-east-1",
+			},
+		}
+
+		modelID, ok := ResolveBedrockModelID(account, "claude-sonnet-5")
+		require.True(t, ok)
+		assert.Equal(t, "anthropic.claude-sonnet-5", modelID)
+	})
+
 	t.Run("explicit opus 4.8 mapping uses regional Bedrock model id", func(t *testing.T) {
 		account := &Account{
 			Platform: PlatformAnthropic,
@@ -794,6 +810,19 @@ func TestSanitizeBedrockThinking(t *testing.T) {
 		result := sanitizeBedrockThinking([]byte(input), "claude-fable-5")
 		assert.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
 		assert.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+	})
+
+	t.Run("Sonnet 5 将 enabled 转换为 adaptive 并移除预算", func(t *testing.T) {
+		input := `{"thinking":{"type":"enabled","budget_tokens":10000},"messages":[]}`
+		result := sanitizeBedrockThinking([]byte(input), "anthropic.claude-sonnet-5")
+		assert.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+		assert.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+	})
+
+	t.Run("Sonnet 5 将 disabled 转换为 adaptive", func(t *testing.T) {
+		input := `{"thinking":{"type":"disabled"},"messages":[]}`
+		result := sanitizeBedrockThinking([]byte(input), "anthropic.claude-sonnet-5")
+		assert.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
 	})
 
 	t.Run("opus 4.7 converts enabled to adaptive", func(t *testing.T) {
