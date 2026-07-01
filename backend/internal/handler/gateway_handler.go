@@ -236,10 +236,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 注意：此处仅放行，是否真正 mock 仍由后续账号选择 + IsInterceptWarmupEnabled 决定。
 	// 【止血回滚 2026-06-30】非流式默认透传/聚合会导致非流式请求打上游被大量 429、
 	// 污染健康账号(0m/反复进限流);先恢复守卫拒绝非流式,定因(B)后再决定是否重开聚合。
+	// 【定因抓包临时放行】当 SUB2API_DEBUG_GATEWAY_BODY 抓包开启且命中目标用户
+	// (SUB2API_DEBUG_GATEWAY_USER_ID)时,放行该用户的非流式请求走 Forward(强制
+	// stream=true 聚合),以抓取上游真实请求+响应定位 429 根因;抓包一关守卫即全量恢复。
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
 	isInterceptableSync := isConnectionProbe ||
 		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone
-	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync {
+	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync && !h.gatewayService.AllowSyncForDebugCapture(c) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
 		return
 	}

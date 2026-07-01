@@ -75,6 +75,15 @@ func (s *GatewayService) debugCaptureEnabledForUser(c *gin.Context) bool {
 	return s.ginUserIDForDebug(c) == target
 }
 
+// AllowSyncForDebugCapture 报告是否应为「抓包定因」临时放行同步(非流式)/v1/messages 请求。
+// 仅当 SUB2API_DEBUG_GATEWAY_BODY 抓包已开启且请求用户命中 SUB2API_DEBUG_GATEWAY_USER_ID
+// 时返回 true——让目标用户的非流式请求越过止血守卫、走到 Forward(强制 stream=true 聚合),
+// 以便抓取上游真实请求体+响应,定位非流式被上游 429 的根因(格式 vs stream 标志)。
+// 抓包一旦关闭(BODY 置空)本方法即返回 false,守卫全量恢复,不留后门。
+func (s *GatewayService) AllowSyncForDebugCapture(c *gin.Context) bool {
+	return s.debugCaptureEnabledForUser(c)
+}
+
 // debugLogClientSSELine 把一条下行（网关→客户端）SSE 块写入同一份调试日志，
 // 与 debugLogUpstreamSSELine（上行）对称，便于离线 diff 上下游事件变换。
 func (s *GatewayService) debugLogClientSSELine(requestID, raw string) {
