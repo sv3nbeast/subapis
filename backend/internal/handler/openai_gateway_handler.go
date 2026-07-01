@@ -116,6 +116,16 @@ func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
 	return service.PlatformOpenAI
 }
 
+func allowOpenAICompatibleMessagesDispatch(apiKey *service.APIKey) bool {
+	if apiKey == nil || apiKey.Group == nil {
+		return true
+	}
+	if apiKey.Group.Platform == service.PlatformGrok {
+		return true
+	}
+	return apiKey.Group.AllowMessagesDispatch
+}
+
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
@@ -533,7 +543,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			if account.Type == service.AccountTypeOAuth {
+			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
+			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
@@ -547,6 +558,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
@@ -563,6 +575,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
+				QuotaPlatform:      quotaPlatform,
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				CyberBlocked:       cyberBlocked,
 			}); err != nil {
@@ -692,7 +705,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	)
 
 	// 检查分组是否允许 /v1/messages 调度
-	if apiKey.Group != nil && !apiKey.Group.AllowMessagesDispatch {
+	if !allowOpenAICompatibleMessagesDispatch(apiKey) {
 		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error",
 			"This group does not allow /v1/messages dispatch")
 		return
@@ -975,6 +988,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 		h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
@@ -990,6 +1004,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
+				QuotaPlatform:      quotaPlatform,
 				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
 				CyberBlocked:       cyberBlocked,
 			}); err != nil {
@@ -1420,6 +1435,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(apiKey)
+	requiredTransport := service.OpenAIUpstreamTransportResponsesWebsocketV2
+	if requestPlatform == service.PlatformGrok {
+		requiredTransport = service.OpenAIUpstreamTransportHTTPSSE
+	}
 	if err := h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai.websocket_billing_eligibility_check_failed", zap.Error(err))
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
@@ -1445,7 +1464,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			sessionHash,
 			reqModel,
 			failedAccountIDs,
-			service.OpenAIUpstreamTransportResponsesWebsocketV2,
+			requiredTransport,
 			service.OpenAIEndpointCapabilityChatCompletions,
 			false,
 			requestPlatform,
@@ -1603,12 +1622,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if result == nil {
 					return
 				}
-				if account.Type == service.AccountTypeOAuth {
+				// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
+				if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
@@ -1623,6 +1644,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						IPAddress:          clientIP,
 						RequestPayloadHash: requestPayloadHash,
 						APIKeyService:      h.apiKeyService,
+						QuotaPlatform:      quotaPlatform,
 						ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
 						CyberBlocked:       cyberBlocked,
 					}); err != nil {

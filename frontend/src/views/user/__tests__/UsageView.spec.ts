@@ -1,14 +1,26 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { query, getStatsByDateRange, getDashboardModels, list, showError, showWarning, showSuccess, showInfo } = vi.hoisted(() => ({
+const {
+  query,
+  getStats,
+  getDashboardModels,
+  getDashboardSnapshotV2,
+  list,
+  getAvailable,
+  showError,
+  showWarning,
+  showSuccess,
+  showInfo,
+} = vi.hoisted(() => ({
   query: vi.fn(),
-  getStatsByDateRange: vi.fn(),
+  getStats: vi.fn(),
   getDashboardModels: vi.fn(),
+  getDashboardSnapshotV2: vi.fn(),
   list: vi.fn(),
+  getAvailable: vi.fn(),
   showError: vi.fn(),
   showWarning: vi.fn(),
   showSuccess: vi.fn(),
@@ -16,50 +28,77 @@ const { query, getStatsByDateRange, getDashboardModels, list, showError, showWar
 }))
 
 const messages: Record<string, string> = {
-  'usage.costDetails': 'Cost Breakdown',
-  'admin.usage.inputCost': 'Input Cost',
-  'admin.usage.outputCost': 'Output Cost',
-  'admin.usage.cacheCreationCost': 'Cache Creation Cost',
-  'admin.usage.cacheReadCost': 'Cache Read Cost',
-  'usage.inputTokenPrice': 'Input price',
-  'usage.outputTokenPrice': 'Output price',
-  'usage.perMillionTokens': '/ 1M tokens',
-  'usage.serviceTier': 'Service tier',
-  'usage.serviceTierPriority': 'Fast',
-  'usage.serviceTierFlex': 'Flex',
-  'usage.serviceTierStandard': 'Standard',
-  'usage.rate': 'Rate',
-  'usage.original': 'Original',
-  'usage.billed': 'Billed',
+  'admin.dashboard.timeRange': 'Time range',
+  'admin.dashboard.granularity': 'Granularity',
+  'admin.dashboard.day': 'Day',
+  'admin.dashboard.hour': 'Hour',
+  'admin.users.columnSettings': 'Columns',
+  'admin.usage.group': 'Group',
+  'admin.usage.billingType': 'Billing type',
+  'admin.usage.billingMode': 'Billing Mode',
+  'admin.usage.allTypes': 'All types',
+  'admin.usage.allBillingTypes': 'All billing types',
+  'admin.usage.billingTypeBalance': 'Balance',
+  'admin.usage.billingTypeSubscription': 'Subscription',
+  'admin.usage.allBillingModes': 'All billing modes',
+  'admin.usage.billingModeToken': 'Token',
+  'admin.usage.billingModePerRequest': 'Per request',
+  'admin.usage.billingModeImage': 'Image',
+  'admin.usage.allGroups': 'All groups',
+  'admin.usage.allModels': 'All models',
+  'admin.usage.inputTokens': 'Input Tokens',
+  'admin.usage.outputTokens': 'Output Tokens',
+  'admin.usage.cacheReadTokens': 'Cache Read Tokens',
+  'admin.usage.cacheCreationTokens': 'Cache Creation Tokens',
+  'admin.usage.ipAddress': 'IP Address',
   'usage.allApiKeys': 'All API Keys',
   'usage.apiKeyFilter': 'API Key',
   'usage.model': 'Model',
   'usage.reasoningEffort': 'Reasoning Effort',
+  'usage.inboundEndpoint': 'Inbound Endpoint',
   'usage.type': 'Type',
-  'usage.tokens': 'Tokens',
-  'usage.cost': 'Cost',
+  'usage.ws': 'WS',
+  'usage.stream': 'Stream',
+  'usage.sync': 'Sync',
+  'usage.rate': 'Rate Multiplier',
+  'usage.userBilled': 'Billed Cost',
+  'usage.original': 'Original Cost',
   'usage.firstToken': 'First Token',
   'usage.duration': 'Duration',
-  'usage.time': 'Time',
-  'usage.userAgent': 'User Agent',
-  'usage.inputCacheReadRatio': 'Input Cache Hit Rate',
-  'usage.cacheReadTokens': 'Read {tokens}',
-  'usage.cacheWriteTokens': 'Write {tokens}',
+  'usage.exporting': 'Exporting',
+  'usage.exportCsv': 'Export CSV',
+  'usage.failedToLoad': 'Failed to load',
+  'usage.noDataToExport': 'No data',
+  'usage.preparingExport': 'Preparing export',
+  'usage.exportSuccess': 'Export success',
+  'usage.exportFailed': 'Export failed',
+  'common.refresh': 'Refresh',
+  'common.reset': 'Reset',
 }
 
 vi.mock('@/api', () => ({
   usageAPI: {
     query,
-    getStatsByDateRange,
+    getStats,
     getDashboardModels,
+    getDashboardSnapshotV2,
   },
   keysAPI: {
     list,
   },
+  userGroupsAPI: {
+    getAvailable,
+  },
 }))
 
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showError, showWarning, showSuccess, showInfo }),
+  useAppStore: () => ({
+    cachedPublicSettings: { allow_user_view_error_requests: false },
+    showError,
+    showWarning,
+    showSuccess,
+    showInfo,
+  }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -72,288 +111,209 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-const AppLayoutStub = { template: '<div><slot /></div>' }
-const TablePageLayoutStub = {
-  template: '<div><slot name="actions" /><slot name="filters" /><slot /></div>',
+const simpleStub = { template: '<div><slot /></div>' }
+const chartStub = { template: '<div />' }
+
+const usageLog = {
+  id: 1,
+  request_id: 'req-user-export',
+  actual_cost: 0.092883,
+  total_cost: 0.092883,
+  rate_multiplier: 1,
+  service_tier: 'priority',
+  input_cost: 0.020285,
+  output_cost: 0.00303,
+  cache_creation_cost: 0.000001,
+  cache_read_cost: 0.069568,
+  input_tokens: 4057,
+  output_tokens: 101,
+  cache_creation_tokens: 4,
+  cache_read_tokens: 278272,
+  cache_creation_5m_tokens: 0,
+  cache_creation_1h_tokens: 0,
+  image_count: 0,
+  image_size: null,
+  first_token_ms: 12,
+  duration_ms: 345,
+  created_at: '2026-03-08T00:00:00Z',
+  model: 'gpt-5.4',
+  reasoning_effort: null,
+  ip_address: '203.0.113.10',
+  api_key: { name: 'demo-key' },
+  billing_mode: 'token',
+  request_type: 'sync',
+  stream: false,
 }
 
-describe('user UsageView tooltip', () => {
+function mountUsageView() {
+  return mount(UsageView, {
+    global: {
+      stubs: {
+        AppLayout: simpleStub,
+        Pagination: true,
+        Select: true,
+        DateRangePicker: true,
+        Icon: true,
+        UsageStatsCards: chartStub,
+        UsageTable: chartStub,
+        ModelDistributionChart: chartStub,
+        GroupDistributionChart: chartStub,
+        EndpointDistributionChart: chartStub,
+        TokenUsageTrend: chartStub,
+      },
+    },
+  })
+}
+
+function stubCsvExport() {
+  let csvContent = ''
+  const OriginalBlob = globalThis.Blob
+  vi.stubGlobal('Blob', vi.fn((parts: BlobPart[], options?: BlobPropertyBag) => {
+    csvContent = parts.map((part) => String(part)).join('')
+    return new OriginalBlob(parts, options)
+  }))
+  const originalCreateObjectURL = window.URL.createObjectURL
+  const originalRevokeObjectURL = window.URL.revokeObjectURL
+  window.URL.createObjectURL = vi.fn(() => 'blob:usage-export') as typeof window.URL.createObjectURL
+  window.URL.revokeObjectURL = vi.fn(() => {}) as typeof window.URL.revokeObjectURL
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  return {
+    get csvContent() {
+      return csvContent
+    },
+    restore() {
+      window.URL.createObjectURL = originalCreateObjectURL
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+      vi.unstubAllGlobals()
+      clickSpy.mockRestore()
+    },
+    clickSpy,
+  }
+}
+
+describe('user UsageView', () => {
   beforeEach(() => {
     query.mockReset()
-    getStatsByDateRange.mockReset()
+    getStats.mockReset()
     getDashboardModels.mockReset()
+    getDashboardSnapshotV2.mockReset()
     list.mockReset()
+    getAvailable.mockReset()
     showError.mockReset()
     showWarning.mockReset()
     showSuccess.mockReset()
     showInfo.mockReset()
 
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      x: 0,
-      y: 0,
-      top: 20,
-      left: 20,
-      right: 120,
-      bottom: 40,
-      width: 100,
-      height: 20,
-      toJSON: () => ({}),
-    } as DOMRect)
-
-    ;(globalThis as any).ResizeObserver = class {
-      observe() {}
-      disconnect() {}
-    }
+    query.mockResolvedValue({ items: [usageLog], total: 1, pages: 1 })
+    getStats.mockResolvedValue({
+      total_requests: 1,
+      total_input_tokens: 10,
+      total_output_tokens: 20,
+      total_cache_tokens: 0,
+      total_tokens: 30,
+      total_cost: 0.1,
+      total_actual_cost: 0.08,
+      average_duration_ms: 12,
+      endpoints: [],
+      upstream_endpoints: [],
+      endpoint_paths: [],
+    })
+    getDashboardModels.mockResolvedValue({
+      models: [{ model: 'gpt-5.4', requests: 1, input_tokens: 10, output_tokens: 20, cache_creation_tokens: 0, cache_read_tokens: 0, total_tokens: 30, cost: 0.1, actual_cost: 0.08 }],
+      start_date: '2026-03-08',
+      end_date: '2026-03-08',
+    })
+    getDashboardSnapshotV2.mockResolvedValue({
+      generated_at: '2026-03-08T00:00:00Z',
+      start_date: '2026-03-08',
+      end_date: '2026-03-08',
+      granularity: 'hour',
+      trend: [],
+      groups: [],
+    })
+    list.mockResolvedValue({ items: [{ id: 1, name: 'demo-key' }] })
+    getAvailable.mockResolvedValue([{ id: 1, name: 'default' }])
   })
 
-  it('shows fast service tier and unit prices in user tooltip', async () => {
+  it('loads logs, stats, model stats, and snapshot on first render', async () => {
+    mountUsageView()
+    await flushPromises()
+
+    expect(query).toHaveBeenCalled()
+    expect(getStats).toHaveBeenCalled()
+    expect(getDashboardModels).toHaveBeenCalled()
+    expect(getDashboardSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
+      include_trend: true,
+      include_model_stats: false,
+      include_group_stats: true,
+    }))
+    expect(list).toHaveBeenCalledWith(1, 100)
+    expect(getAvailable).toHaveBeenCalled()
+  })
+
+  it('exports csv with current filters and without admin-only fields', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    query.mockClear()
+    const csv = stubCsvExport()
+
+    await (wrapper.vm as any).exportToCSV()
+
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({
+      page_size: 100,
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    }))
+    expect(csv.clickSpy).toHaveBeenCalled()
+    expect(showSuccess).toHaveBeenCalled()
+    expect(csv.csvContent).toContain('IP Address')
+    expect(csv.csvContent).toContain('203.0.113.10')
+    expect(csv.csvContent).toContain('Billed Cost')
+    expect(csv.csvContent).toContain('Original Cost')
+    expect(csv.csvContent).not.toContain('Upstream Endpoint')
+    expect(csv.csvContent).not.toContain('account_cost')
+    expect(csv.csvContent).not.toContain('account_rate_multiplier')
+
+    csv.restore()
+  })
+
+  it('exports historical image rows with image billing mode derived from image_count', async () => {
     query.mockResolvedValue({
       items: [
         {
-          request_id: 'req-user-1',
-          actual_cost: 0.092883,
-          total_cost: 0.092883,
-          rate_multiplier: 1,
-          service_tier: 'priority',
-          input_cost: 0.020285,
-          output_cost: 0.00303,
+          ...usageLog,
+          request_id: 'req-user-export-legacy-image',
+          actual_cost: 0.2,
+          total_cost: 0.2,
+          input_cost: 0,
+          output_cost: 0,
           cache_creation_cost: 0,
-          cache_read_cost: 0.069568,
-          input_tokens: 4057,
-          output_tokens: 101,
+          cache_read_cost: 0,
+          input_tokens: 0,
+          output_tokens: 0,
           cache_creation_tokens: 0,
-          cache_read_tokens: 278272,
-          cache_creation_5m_tokens: 0,
-          cache_creation_1h_tokens: 0,
-          image_count: 0,
-          image_size: null,
-          first_token_ms: null,
-          duration_ms: 1,
-          created_at: '2026-03-08T00:00:00Z',
+          cache_read_tokens: 0,
+          image_count: 1,
+          model: 'gpt-image-2',
+          billing_mode: null,
+          ip_address: null,
         },
       ],
       total: 1,
       pages: 1,
     })
-    getStatsByDateRange.mockResolvedValue({
-      total_requests: 1,
-      total_input_tokens: 20,
-      total_output_tokens: 5,
-      total_cache_creation_tokens: 10,
-      total_cache_read_tokens: 270,
-      total_cache_tokens: 280,
-      total_tokens: 100,
-      total_cost: 0.1,
-      total_actual_cost: 0.1,
-      average_duration_ms: 1,
-    })
-    list.mockResolvedValue({ items: [] })
-    getDashboardModels.mockResolvedValue({ models: [], start_date: '2026-03-01', end_date: '2026-03-08' })
 
-    const wrapper = mount(UsageView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          TablePageLayout: TablePageLayoutStub,
-          Pagination: true,
-          EmptyState: true,
-          Select: true,
-          DateRangePicker: true,
-          Icon: true,
-          Teleport: true,
-        },
-      },
-    })
-
+    const wrapper = mountUsageView()
     await flushPromises()
-    await nextTick()
+    query.mockClear()
+    const csv = stubCsvExport()
 
-    const setupState = (wrapper.vm as any).$?.setupState
-    setupState.tooltipData = {
-      request_id: 'req-user-1',
-      actual_cost: 0.092883,
-      total_cost: 0.092883,
-      rate_multiplier: 1,
-      service_tier: 'priority',
-      input_cost: 0.020285,
-      output_cost: 0.00303,
-      cache_creation_cost: 0,
-      cache_read_cost: 0.069568,
-      input_tokens: 4057,
-      output_tokens: 101,
-    }
-    setupState.tooltipVisible = true
-    await nextTick()
+    await (wrapper.vm as any).exportToCSV()
 
-    const text = wrapper.text()
-    expect(text).toContain('Input Cache Hit Rate')
-    expect(text).toContain('90.00%')
-    expect(text).toContain('Service tier')
-    expect(text).toContain('Fast')
-    expect(text).toContain('Rate')
-    expect(text).toContain('1.00x')
-    expect(text).toContain('Billed')
-    expect(text).toContain('$0.092883')
-    expect(text).toContain('$5.0000 / 1M tokens')
-    expect(text).toContain('$30.0000 / 1M tokens')
-  })
+    expect(csv.csvContent).toContain('Billing Mode')
+    expect(csv.csvContent).toContain('Image')
+    expect(csv.csvContent).not.toContain(',Token,0,0,0,0,')
 
-  it('exports csv with input and output unit price columns', async () => {
-    const exportedLogs = [
-      {
-        request_id: 'req-user-export',
-        actual_cost: 0.092883,
-        total_cost: 0.092883,
-        rate_multiplier: 1,
-        service_tier: 'priority',
-        input_cost: 0.020285,
-        output_cost: 0.00303,
-        cache_creation_cost: 0.000001,
-        cache_read_cost: 0.069568,
-        input_tokens: 4057,
-        output_tokens: 101,
-        cache_creation_tokens: 4,
-        cache_read_tokens: 278272,
-        cache_creation_5m_tokens: 0,
-        cache_creation_1h_tokens: 0,
-        image_count: 0,
-        image_size: null,
-        first_token_ms: 12,
-        duration_ms: 345,
-        created_at: '2026-03-08T00:00:00Z',
-        model: 'gpt-5.4',
-        reasoning_effort: null,
-        api_key: { name: 'demo-key' },
-      },
-    ]
-
-    query.mockResolvedValue({
-      items: exportedLogs,
-      total: 1,
-      pages: 1,
-    })
-    getStatsByDateRange.mockResolvedValue({
-      total_requests: 1,
-      total_input_tokens: 20,
-      total_output_tokens: 5,
-      total_cache_creation_tokens: 10,
-      total_cache_read_tokens: 270,
-      total_cache_tokens: 280,
-      total_tokens: 100,
-      total_cost: 0.1,
-      total_actual_cost: 0.1,
-      average_duration_ms: 1,
-    })
-    list.mockResolvedValue({ items: [] })
-    getDashboardModels.mockResolvedValue({ models: [], start_date: '2026-03-01', end_date: '2026-03-08' })
-
-    let exportedBlob: Blob | null = null
-    const originalCreateObjectURL = window.URL.createObjectURL
-    const originalRevokeObjectURL = window.URL.revokeObjectURL
-    window.URL.createObjectURL = vi.fn((blob: Blob | MediaSource) => {
-      exportedBlob = blob as Blob
-      return 'blob:usage-export'
-    }) as typeof window.URL.createObjectURL
-    window.URL.revokeObjectURL = vi.fn(() => {}) as typeof window.URL.revokeObjectURL
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-
-    const wrapper = mount(UsageView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          TablePageLayout: TablePageLayoutStub,
-          Pagination: true,
-          EmptyState: true,
-          Select: true,
-          DateRangePicker: true,
-          Icon: true,
-          Teleport: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    const setupState = (wrapper.vm as any).$?.setupState
-    await setupState.exportToCSV()
-
-    expect(exportedBlob).not.toBeNull()
-    const hasSortedExportQuery = query.mock.calls.some((call) => {
-      const params = call[0] as Record<string, unknown> | undefined
-      const config = call[1]
-      return (
-        params?.page_size === 100 &&
-        params?.sort_by === 'created_at' &&
-        params?.sort_order === 'desc' &&
-        config === undefined
-      )
-    })
-    expect(hasSortedExportQuery).toBe(true)
-    expect(clickSpy).toHaveBeenCalled()
-    expect(showSuccess).toHaveBeenCalled()
-
-    window.URL.createObjectURL = originalCreateObjectURL
-    window.URL.revokeObjectURL = originalRevokeObjectURL
-    clickSpy.mockRestore()
-  })
-
-  it('clears stale model filter when refreshed model options no longer include it', async () => {
-    query.mockResolvedValue({
-      items: [],
-      total: 0,
-      pages: 0,
-    })
-    getStatsByDateRange.mockResolvedValue({
-      total_requests: 0,
-      total_input_tokens: 0,
-      total_output_tokens: 0,
-      total_cache_creation_tokens: 0,
-      total_cache_read_tokens: 0,
-      total_cache_tokens: 0,
-      total_tokens: 0,
-      total_cost: 0,
-      total_actual_cost: 0,
-      average_duration_ms: 0,
-    })
-    list.mockResolvedValue({ items: [] })
-    getDashboardModels
-      .mockResolvedValueOnce({
-        models: [{ model: 'gpt-5.4', requests: 1, cost: 1, actual_cost: 1, tokens: 1 }],
-        start_date: '2026-03-01',
-        end_date: '2026-03-08',
-      })
-      .mockResolvedValueOnce({
-        models: [{ model: 'gpt-4.1', requests: 1, cost: 1, actual_cost: 1, tokens: 1 }],
-        start_date: '2026-03-09',
-        end_date: '2026-03-10',
-      })
-
-    const wrapper = mount(UsageView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          TablePageLayout: TablePageLayoutStub,
-          Pagination: true,
-          EmptyState: true,
-          Select: true,
-          DateRangePicker: true,
-          Icon: true,
-          Teleport: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    const setupState = (wrapper.vm as any).$?.setupState
-    setupState.filters.model = 'gpt-5.4'
-    setupState.onDateRangeChange({
-      startDate: '2026-03-09',
-      endDate: '2026-03-10',
-      preset: null,
-    })
-    await flushPromises()
-
-    expect(setupState.filters.model).toBeUndefined()
+    csv.restore()
   })
 })

@@ -21,7 +21,7 @@
                   : isAntigravity
                     ? 'from-purple-500 to-purple-600'
                     : isGrok
-                      ? 'from-slate-600 to-cyan-600'
+                      ? 'from-zinc-700 to-zinc-900'
                       : isKiro
                         ? 'from-amber-500 to-amber-600'
                         : isDroid
@@ -118,7 +118,7 @@
             <span class="text-xs text-gray-500 dark:text-gray-400">
               {{
                 geminiOAuthType === 'google_one'
-                  ? '个人账号'
+                  ? t('admin.accounts.gemini.oauthType.googleOneDesc')
                   : geminiOAuthType === 'code_assist'
                     ? t('admin.accounts.gemini.oauthType.builtInDesc')
                     : t('admin.accounts.gemini.oauthType.customDesc')

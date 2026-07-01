@@ -260,6 +260,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ClaudeOAuthSystemPromptBlocks:          settings.ClaudeOAuthSystemPromptBlocks,
 		EnableAnthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:             settings.RewriteMessageCacheControl,
+		EnableClientDatelineNormalization:      settings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:            settings.AntigravityUserAgentVersion,
 		ClaudeUpstreamUserAgent:                settings.ClaudeUpstreamUserAgent,
 		MinCodexVersion:                        settings.MinCodexVersion,
@@ -579,7 +580,9 @@ type UpdateSettingsRequest struct {
 	// Gateway forwarding behavior
 	EnableFingerprintUnification                  *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough                     *bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                              *bool   `json:"enable_cch_signing"`
 	EnableAnthropicCacheTTL1hInjection            *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
+	EnableClientDatelineNormalization             *bool   `json:"enable_client_dateline_normalization"`
 	RewriteMessageCacheControl                    *bool   `json:"rewrite_message_cache_control"`
 	AntigravityUserAgentVersion                   *string `json:"antigravity_user_agent_version"`
 	ClaudeUpstreamUserAgent                       *string `json:"claude_upstream_user_agent"`
@@ -1640,6 +1643,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RewriteMessageCacheControl
 		}(),
+		EnableClientDatelineNormalization: func() bool {
+			if req.EnableClientDatelineNormalization != nil {
+				return *req.EnableClientDatelineNormalization
+			}
+			return previousSettings.EnableClientDatelineNormalization
+		}(),
 		AntigravityUserAgentVersion: func() string {
 			if req.AntigravityUserAgentVersion != nil {
 				return *req.AntigravityUserAgentVersion
@@ -2048,6 +2057,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ClaudeOAuthSystemPromptBlocks:          updatedSettings.ClaudeOAuthSystemPromptBlocks,
 		EnableAnthropicCacheTTL1hInjection:     updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:             updatedSettings.RewriteMessageCacheControl,
+		EnableClientDatelineNormalization:      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:            updatedSettings.AntigravityUserAgentVersion,
 		ClaudeUpstreamUserAgent:                updatedSettings.ClaudeUpstreamUserAgent,
 		MinCodexVersion:                        updatedSettings.MinCodexVersion,
@@ -2489,6 +2499,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.RewriteMessageCacheControl != after.RewriteMessageCacheControl {
 		changed = append(changed, "rewrite_message_cache_control")
+	}
+	if before.EnableClientDatelineNormalization != after.EnableClientDatelineNormalization {
+		changed = append(changed, "enable_client_dateline_normalization")
 	}
 	if before.AntigravityUserAgentVersion != after.AntigravityUserAgentVersion {
 		changed = append(changed, "antigravity_user_agent_version")
@@ -3547,6 +3560,23 @@ func (h *SettingHandler) TestWebSearchEmulation(c *gin.Context) {
 	response.Success(c, result)
 }
 
+// slotOf returns the *float64 for the given window from a DefaultPlatformQuotaSetting.
+func slotOf(s *service.DefaultPlatformQuotaSetting, win string) *float64 {
+	if s == nil {
+		return nil
+	}
+	switch win {
+	case "daily":
+		return s.DailyLimitUSD
+	case "weekly":
+		return s.WeeklyLimitUSD
+	case "monthly":
+		return s.MonthlyLimitUSD
+	}
+	return nil
+}
+
+// equalPlatformQuotaSettings reports whether two platform-quota maps are identical across all allowed slots.
 func equalPlatformQuotaSettings(before, after map[string]*service.DefaultPlatformQuotaSetting) bool {
 	for _, platform := range service.AllowedQuotaPlatforms {
 		b := before[platform]
@@ -3572,19 +3602,4 @@ func equalNullableFloat(a, b *float64) bool {
 		return false
 	}
 	return *a == *b
-}
-
-func slotOf(s *service.DefaultPlatformQuotaSetting, win string) *float64 {
-	if s == nil {
-		return nil
-	}
-	switch win {
-	case "daily":
-		return s.DailyLimitUSD
-	case "weekly":
-		return s.WeeklyLimitUSD
-	case "monthly":
-		return s.MonthlyLimitUSD
-	}
-	return nil
 }

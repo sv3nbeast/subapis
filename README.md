@@ -23,7 +23,6 @@
 
 维护地址：**[https://subapis.com/](https://subapis.com)**
 
-<<<<<<< HEAD
 ## 项目概述
 
 Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的 API 配额。用户通过平台生成的 API Key 调用上游 AI 服务，平台负责鉴权、计费、负载均衡和请求转发。
@@ -40,9 +39,6 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 - **外部系统集成** - 支持通过 iframe 嵌入外部系统（如支付、工单等），扩展管理后台功能
 
 ## ❤️ 赞助商
-=======
-## ❤️ Sponsors
->>>>>>> origin/main
 
 > [想出现在这里？](mailto:support@pincc.ai)
 
@@ -106,11 +102,6 @@ Register now via <a href="https://pateway.ai/?ch=1tsfr51">this link</a> to recei
 </td>
 </tr>
 
-<<<<<<< HEAD
-</table>
-
-## 生态项目
-=======
 <tr>
 <td width="180"><a href="https://unity2.ai/register?source=sub2api"><img src="assets/partners/logos/unity2.png" alt="unity2" width="150"></a></td>
 <td>Thanks to Unity2 for sponsoring this project! <a href="https://unity2.ai/register?source=sub2api">Unity2</a> is a high-performance AI model API relay for individuals, teams, and enterprises, handling 30B+ tokens/day with 5000 RPM concurrency. One API Key works across Claude Code, Codex, OpenAI models, IDE plugins, and Agent workflows, with balance billing, bundled subscriptions, enterprise invoicing, and 1-on-1 support. <a href="https://unity2.ai/register?source=sub2api">Register</a> to claim $2 in balance, plus $10 more by joining the official group — up to $12 in free credit.
@@ -168,26 +159,19 @@ Register now via <a href="https://pateway.ai/?ch=1tsfr51">this link</a> to recei
 </td>
 </tr>
 
+<tr>
+<td width="180"><a href="https://anpin.ai"><img src="assets/partners/logos/anpin.jpg" alt="anpin" width="150"></a></td>
+<td>Thanks to <a href="https://anpin.ai">anpin.ai</a> for sponsoring this project! anpin.ai is a premium AI relay service platform dedicated to advancing AI accessibility. With an advanced technical architecture and globally distributed deployment, it provides users with a direct high-speed channel to the world's top-tier large language models.<br>
+Self-built primary account pool: 1-3s ultra-fast response, supports channel-partner distribution<br>
+Extreme stability: multi-line intelligent routing + redundant backup system, ensuring year-round high-availability operation;<br>
+Model authenticity: no content intervention or secondary filtering — experience the purest, most powerful native model capabilities.<br>
+1:1 top-up, enterprise-grade service with invoicing available. Anpin AI is not just a relay — it's your secure, reliable, and efficient bridge to the frontier world of intelligence.
+</td>
+</tr>
+
 </table>
 
-## Overview
-
-Sub2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding.
-
-## Features
-
-- **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
-- **API Key Distribution** - Generate and manage API Keys for users
-- **Precise Billing** - Token-level usage tracking and cost calculation
-- **Smart Scheduling** - Intelligent account selection with sticky sessions
-- **Concurrency Control** - Per-user and per-account concurrency limits
-- **Rate Limiting** - Configurable request and token rate limits
-- **Built-in Payment System** - Supports EasyPay, Alipay, WeChat Pay, and Stripe for user self-service top-up, no separate payment service needed ([Configuration Guide](docs/PAYMENT.md))
-- **Admin Dashboard** - Web interface for monitoring and management
-- **External System Integration** - Embed external systems (e.g. ticketing) via iframe to extend the admin dashboard
-
-## Ecosystem
->>>>>>> origin/main
+## 生态项目
 
 围绕 Sub2API 的社区扩展与集成项目：
 
@@ -501,7 +485,8 @@ pnpm run build
 
 # 4. 编译后端（嵌入前端）
 cd ../backend
-go build -tags embed -o sub2api ./cmd/server
+VERSION="$(./scripts/resolve-version.sh)"
+go build -tags embed -ldflags="-X main.Version=${VERSION}" -o sub2api ./cmd/server
 
 # 5. 创建配置文件
 cp ../deploy/config.example.yaml ./config.yaml
@@ -631,6 +616,25 @@ Invalid base URL: invalid url scheme: http
 - 强制仅允许 TLS 出站
 - 在反向代理层移除敏感响应头
 
+#### ⚠️ Important: Creating the Admin Account
+
+The initial admin account is **only created via the setup wizard** (served at `http://<host>:8080` on first run). The `default.admin_email` / `default.admin_password` fields in `config.yaml` are **not used** to create it — they exist in the template for historical reasons.
+
+Because step 5 above pre-creates `config.yaml`, the setup wizard will be **skipped on first run**: the server detects an existing config and boots straight into normal mode with an empty `users` table, so the first login attempt fails with `invalid email or password`.
+
+**Two ways to create the admin account:**
+
+1. **Recommended — let the wizard generate `config.yaml`:** Skip step 5 (do not run the `cp`). Start `./sub2api` directly; the setup wizard at `http://localhost:8080` walks you through database, Redis, and admin account setup, then writes `config.yaml` for you.
+
+2. **If you already created `config.yaml`:** Temporarily move it aside so the wizard can trigger on first run, then restore it afterwards:
+   ```bash
+   mv config.yaml config.yaml.bak
+   ./sub2api        # wizard runs at http://localhost:8080 and writes a fresh config.yaml
+   # stop the server (Ctrl+C) once the wizard completes, then restore your config:
+   mv config.yaml.bak config.yaml
+   ./sub2api        # restart in normal mode and log in with the admin you just created
+   ```
+
 ```bash
 # 6. 运行应用
 ./sub2api
@@ -693,9 +697,6 @@ go generate ./cmd/server
 
 ---
 
-<<<<<<< HEAD
-## Antigravity 使用说明
-=======
 ## Grok / xAI OAuth Support
 
 Sub2API supports Grok subscription accounts through xAI OAuth and forwards OpenAI-compatible Responses traffic to xAI.
@@ -704,9 +705,12 @@ Sub2API supports Grok subscription accounts through xAI OAuth and forwards OpenA
 
 - Platform name: `grok`
 - Account type: OAuth subscription accounts
-- Public gateway target: `/v1/responses` and `/responses`, forwarded to `${XAI_BASE_URL:-https://api.x.ai/v1}/responses`
+- Public Responses targets: `/v1/responses`, `/responses`, and `/backend-api/codex/responses`, forwarded to `${XAI_BASE_URL:-https://api.x.ai/v1}/responses`
+- Public Claude-compatible target: `/v1/messages`, converted to xAI Responses and returned as Anthropic Messages output for Claude CLI style clients
+- Public Chat Completions targets: `/v1/chat/completions` and `/chat/completions`, forwarded to `${XAI_BASE_URL:-https://api.x.ai/v1}/chat/completions`
+- Codex CLI style Responses WebSocket ingress is accepted on the Responses targets and bridged to xAI HTTP/SSE Responses upstream
 - Initial models: `grok-4.3`, `grok-build-0.1`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, and `grok-4.20-multi-agent-0309`
-- Out of scope for this provider: public Grok Chat Completions routes, image, video, TTS, transcription, browser automation, cookies, and Grok web scraping
+- Out of scope for this provider: image, video, TTS, transcription, browser automation, cookies, and Grok web scraping
 
 ### OAuth Configuration
 
@@ -740,8 +744,7 @@ xAI quota is passive. Sub2API does not invent subscription quota values; it reco
 
 ---
 
-## Antigravity Support
->>>>>>> origin/main
+## Antigravity 使用说明
 
 Sub2API 支持 [Antigravity](https://antigravity.so/) 账户，授权后可通过专用端点访问 Claude 和 Gemini 模型。
 

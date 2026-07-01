@@ -89,11 +89,13 @@ const backendModeDBTimeout = 5 * time.Second
 type cachedGatewayForwardingSettings struct {
 	fingerprintUnification           bool
 	metadataPassthrough              bool
+	cchSigning                       bool
 	claudeOAuthSystemPromptInjection bool
 	claudeOAuthSystemPrompt          string
 	claudeOAuthSystemPromptBlocks    string
 	anthropicCacheTTL1hInjection     bool
 	rewriteMessageCacheControl       bool
+	clientDatelineNormalization      bool
 	expiresAt                        int64 // unix nano
 }
 
@@ -2669,6 +2671,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Gateway forwarding behavior
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
+	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
 	updates[SettingKeyEnableClaudeOAuthSystemPromptInjection] = strconv.FormatBool(settings.EnableClaudeOAuthSystemPromptInjection)
 	updates[SettingKeyClaudeOAuthSystemPrompt] = settings.ClaudeOAuthSystemPrompt
 	if err := ValidateClaudeOAuthSystemPromptBlocksConfig(settings.ClaudeOAuthSystemPromptBlocks); err != nil {
@@ -2677,6 +2680,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyClaudeOAuthSystemPromptBlocks] = settings.ClaudeOAuthSystemPromptBlocks
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingKeyRewriteMessageCacheControl] = strconv.FormatBool(settings.RewriteMessageCacheControl)
+	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
 	updates[SettingKeyClaudeUpstreamUserAgent] = strings.TrimSpace(settings.ClaudeUpstreamUserAgent)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
@@ -2811,11 +2815,13 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,
+		cchSigning:                       settings.EnableCCHSigning,
 		claudeOAuthSystemPromptInjection: settings.EnableClaudeOAuthSystemPromptInjection,
 		claudeOAuthSystemPrompt:          settings.ClaudeOAuthSystemPrompt,
 		claudeOAuthSystemPromptBlocks:    settings.ClaudeOAuthSystemPromptBlocks,
 		anthropicCacheTTL1hInjection:     settings.EnableAnthropicCacheTTL1hInjection,
 		rewriteMessageCacheControl:       settings.RewriteMessageCacheControl,
+		clientDatelineNormalization:      settings.EnableClientDatelineNormalization,
 		expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 	})
 	s.antigravityUAVersionSF.Forget("antigravity_user_agent_version")
@@ -3027,8 +3033,9 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 }
 
 type gatewayForwardingSettingsResult struct {
-	fp, mp, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
-	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                           string
+	fp, mp, cch, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
+	clientDatelineNormalization                                                           bool
+	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                string
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
@@ -3037,11 +3044,13 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			return gatewayForwardingSettingsResult{
 				fp:                               cached.fingerprintUnification,
 				mp:                               cached.metadataPassthrough,
+				cch:                              cached.cchSigning,
 				claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
 				claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 				rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
+				clientDatelineNormalization:      cached.clientDatelineNormalization,
 			}
 		}
 	}
@@ -3051,11 +3060,13 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				return gatewayForwardingSettingsResult{
 					fp:                               cached.fingerprintUnification,
 					mp:                               cached.metadataPassthrough,
+					cch:                              cached.cchSigning,
 					claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
 					claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
 					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 					rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
+					clientDatelineNormalization:      cached.clientDatelineNormalization,
 				}, nil
 			}
 		}
@@ -3064,29 +3075,34 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
+			SettingKeyEnableCCHSigning,
 			SettingKeyEnableClaudeOAuthSystemPromptInjection,
 			SettingKeyClaudeOAuthSystemPrompt,
 			SettingKeyClaudeOAuthSystemPromptBlocks,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 			SettingKeyRewriteMessageCacheControl,
+			SettingKeyEnableClientDatelineNormalization,
 		})
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 				fingerprintUnification:           true,
 				metadataPassthrough:              false,
+				cchSigning:                       false,
 				claudeOAuthSystemPromptInjection: true,
 				anthropicCacheTTL1hInjection:     false,
 				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
+				clientDatelineNormalization:      true,
 				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl()}, nil
+			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
 		}
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
 			fp = v == "true"
 		}
 		mp := values[SettingKeyEnableMetadataPassthrough] == "true"
+		cch := values[SettingKeyEnableCCHSigning] == "true"
 		systemPromptInjection := true
 		if v, ok := values[SettingKeyEnableClaudeOAuthSystemPromptInjection]; ok && v != "" {
 			systemPromptInjection = v == "true"
@@ -3098,30 +3114,38 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if v, ok := values[SettingKeyRewriteMessageCacheControl]; ok && v != "" {
 			rewriteMessageCacheControl = v == "true"
 		}
+		clientDatelineNormalization := true
+		if v, ok := values[SettingKeyEnableClientDatelineNormalization]; ok && v != "" {
+			clientDatelineNormalization = v == "true"
+		}
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 			fingerprintUnification:           fp,
 			metadataPassthrough:              mp,
+			cchSigning:                       cch,
 			claudeOAuthSystemPromptInjection: systemPromptInjection,
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
 			anthropicCacheTTL1hInjection:     cacheTTL1h,
 			rewriteMessageCacheControl:       rewriteMessageCacheControl,
+			clientDatelineNormalization:      clientDatelineNormalization,
 			expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
 		return gatewayForwardingSettingsResult{
 			fp:                               fp,
 			mp:                               mp,
+			cch:                              cch,
 			claudeOAuthSystemPromptInjection: systemPromptInjection,
 			claudeOAuthSystemPrompt:          systemPrompt,
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
 			cacheTTL1h:                       cacheTTL1h,
 			rewriteMessageCacheControl:       rewriteMessageCacheControl,
+			clientDatelineNormalization:      clientDatelineNormalization,
 		}, nil
 	})
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true}
+	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -3140,6 +3164,12 @@ func (s *SettingService) IsAnthropicCacheTTL1hInjectionEnabled(ctx context.Conte
 // IsRewriteMessageCacheControlEnabled 检查是否启用 messages cache_control 改写。
 func (s *SettingService) IsRewriteMessageCacheControlEnabled(ctx context.Context) bool {
 	return s.getGatewayForwardingSettingsCached(ctx).rewriteMessageCacheControl
+}
+
+// IsClientDatelineNormalizationEnabled 检查是否启用 Anthropic OAuth/SetupToken 请求体
+// 的客户端 dateline 归一化。默认开启。
+func (s *SettingService) IsClientDatelineNormalizationEnabled(ctx context.Context) bool {
+	return s.getGatewayForwardingSettingsCached(ctx).clientDatelineNormalization
 }
 
 // GetClaudeOAuthSystemPromptInjectionSettings returns the Claude OAuth mimic
@@ -3674,8 +3704,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// 分组隔离（默认不允许未分组 Key 调度）
 		SettingKeyAllowUngroupedKeyScheduling:                   "false",
+		SettingKeyEnableCCHSigning:                              "false",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:            "false",
 		SettingKeyRewriteMessageCacheControl:                    strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
+		SettingKeyEnableClientDatelineNormalization:             "true",
 		SettingKeyAntigravityUserAgentVersion:                   "",
 		SettingKeyClaudeUpstreamUserAgent:                       "",
 		SettingKeyOpenAICodexUserAgent:                          "",
@@ -4123,6 +4155,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.EnableFingerprintUnification = true // default: enabled (current behavior)
 	}
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
+	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
 	if v, ok := settings[SettingKeyEnableClaudeOAuthSystemPromptInjection]; ok && v != "" {
 		result.EnableClaudeOAuthSystemPromptInjection = v == "true"
 	} else {
@@ -4135,6 +4168,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.RewriteMessageCacheControl = v == "true"
 	} else {
 		result.RewriteMessageCacheControl = s.defaultRewriteMessageCacheControl()
+	}
+	if v, ok := settings[SettingKeyEnableClientDatelineNormalization]; ok && v != "" {
+		result.EnableClientDatelineNormalization = v == "true"
+	} else {
+		result.EnableClientDatelineNormalization = true
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
 	result.ClaudeUpstreamUserAgent = strings.TrimSpace(settings[SettingKeyClaudeUpstreamUserAgent])

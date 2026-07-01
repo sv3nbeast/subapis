@@ -108,7 +108,9 @@
                       ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
                       : value === 'kiro'
                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                        : value === 'grok'
+                          ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
+                          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
               ]"
             >
               <PlatformIcon :platform="value" size="xs" />
@@ -1257,20 +1259,20 @@
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4 space-y-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            账号过滤控制
+            {{ t("admin.groups.accountFilters.title") }}
           </h4>
 
           <!-- require_oauth_only toggle -->
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许 OAuth 账号</label
+                >{{ t("admin.groups.accountFilters.oauthOnly") }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   createForm.require_oauth_only
-                    ? "已启用 — 排除 API Key 类型账号"
-                    : "未启用"
+                    ? t("admin.groups.accountFilters.oauthOnlyEnabled")
+                    : t("admin.groups.accountFilters.disabled")
                 }}
               </p>
             </div>
@@ -1301,13 +1303,13 @@
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许隐私保护已设置的账号</label
+                >{{ t("admin.groups.accountFilters.privacySetOnly") }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   createForm.require_privacy_set
-                    ? "已启用 — Privacy 未设置的账号将被排除"
-                    : "未启用"
+                    ? t("admin.groups.accountFilters.privacySetOnlyEnabled")
+                    : t("admin.groups.accountFilters.disabled")
                 }}
               </p>
             </div>
@@ -2520,20 +2522,20 @@
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4 space-y-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            账号过滤控制
+            {{ t("admin.groups.accountFilters.title") }}
           </h4>
 
           <!-- require_oauth_only toggle -->
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许 OAuth 账号</label
+                >{{ t("admin.groups.accountFilters.oauthOnly") }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   editForm.require_oauth_only
-                    ? "已启用 — 排除 API Key 类型账号"
-                    : "未启用"
+                    ? t("admin.groups.accountFilters.oauthOnlyEnabled")
+                    : t("admin.groups.accountFilters.disabled")
                 }}
               </p>
             </div>
@@ -2564,13 +2566,13 @@
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许隐私保护已设置的账号</label
+                >{{ t("admin.groups.accountFilters.privacySetOnly") }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   editForm.require_privacy_set
-                    ? "已启用 — Privacy 未设置的账号将被排除"
-                    : "未启用"
+                    ? t("admin.groups.accountFilters.privacySetOnlyEnabled")
+                    : t("admin.groups.accountFilters.disabled")
                 }}
               </p>
             </div>
@@ -2994,7 +2996,9 @@
                         ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                         : group.platform === 'antigravity'
                           ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                          : group.platform === 'grok'
+                            ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
+                            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
                   ]"
                 >
                   {{ t("admin.groups.platforms." + group.platform) }}
@@ -3275,7 +3279,7 @@ const copyAccountsGroupOptions = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${g.account_count || 0} 个账号)`,
+    label: `${g.name} (${t("admin.groups.accountsCount", { count: g.account_count || 0 })})`,
   }));
 });
 
@@ -3290,7 +3294,7 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${g.account_count || 0} 个账号)`,
+    label: `${g.name} (${t("admin.groups.accountsCount", { count: g.account_count || 0 })})`,
   }));
 });
 

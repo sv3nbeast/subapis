@@ -1516,8 +1516,11 @@
         </div>
       </div>
 
-      <div>
-        <label class="input-label">{{ t('admin.accounts.proxy') }}</label>
+      <div v-if="!isSparkShadow">
+        <div class="mb-1 flex items-center gap-2">
+          <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
+          <ProxyAdBanner />
+        </div>
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
@@ -1665,6 +1668,62 @@
           <div class="w-52">
             <Select v-model="openaiResponsesWebSocketV2Mode" :options="openAIWSModeOptions" />
           </div>
+        </div>
+      </div>
+
+      <!-- OpenAI APIKey Responses API support mode -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.responsesMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.responsesModeDesc') }}
+            </p>
+          </div>
+          <div class="w-56">
+            <Select
+              v-model="openAIResponsesMode"
+              :options="openAIResponsesModeOptions"
+              :disabled="!openAITextGenerationCapabilityEnabled"
+              data-testid="openai-responses-mode-select"
+            />
+          </div>
+        </div>
+        <div
+          v-if="openAITextGenerationCapabilityEnabled"
+          class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300"
+        >
+          <span class="font-medium">{{ t(openAIResponsesStatusKey) }}</span>
+        </div>
+        <div
+          v-else
+          class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+          data-testid="openai-responses-mode-not-applicable"
+        >
+          {{ t('admin.accounts.openai.responsesModeTextDisabledHint') }}
+        </div>
+        <div>
+          <label class="input-label mb-2 block">{{ t('admin.accounts.openai.endpointCapabilities') }}</label>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label
+              v-for="option in openAIEndpointCapabilityOptions"
+              :key="option.value"
+              class="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-dark-600"
+            >
+              <input
+                type="checkbox"
+                class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
+                :data-testid="`openai-endpoint-capability-${option.value}`"
+                :checked="openAIEndpointCapabilities.includes(option.value)"
+                @change="toggleOpenAIEndpointCapability(option.value, $event)"
+              />
+              <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
+            </label>
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.openai.endpointCapabilitiesDesc') }}</p>
         </div>
       </div>
 
@@ -1894,6 +1953,84 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <div
+        v-if="account?.platform === 'openai'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
+      >
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="input-label mb-0">{{ t('admin.accounts.autoPause5hDisabled') }}</label>
+            <button
+              type="button"
+              @click="autoPause5hDisabled = !autoPause5hDisabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                autoPause5hDisabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+              data-testid="auto-pause-5h-disabled"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  autoPause5hDisabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.autoPauseDisabledHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.autoPause5hThreshold') }}</label>
+          <input
+            v-model.number="autoPause5hThreshold"
+            type="number"
+            min="0"
+            max="100"
+            step="0.1"
+            class="input"
+            :disabled="autoPause5hDisabled"
+            data-testid="auto-pause-5h-threshold"
+          />
+          <p class="input-hint">{{ t('admin.accounts.autoPauseThresholdHint') }}</p>
+        </div>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="input-label mb-0">{{ t('admin.accounts.autoPause7dDisabled') }}</label>
+            <button
+              type="button"
+              @click="autoPause7dDisabled = !autoPause7dDisabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                autoPause7dDisabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+              data-testid="auto-pause-7d-disabled"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  autoPause7dDisabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.autoPauseDisabledHint') }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.autoPause7dThreshold') }}</label>
+          <input
+            v-model.number="autoPause7dThreshold"
+            type="number"
+            min="0"
+            max="100"
+            step="0.1"
+            class="input"
+            :disabled="autoPause7dDisabled"
+            data-testid="auto-pause-7d-threshold"
+          />
+          <p class="input-hint">{{ t('admin.accounts.autoPauseThresholdHint') }}</p>
         </div>
       </div>
 
@@ -2438,7 +2575,15 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
-import type { Account, Proxy, AdminGroup, CheckMixedChannelResponse, OpenAICompactMode } from '@/types'
+import type {
+  Account,
+  Proxy,
+  AdminGroup,
+  CheckMixedChannelResponse,
+  OpenAICompactMode,
+  OpenAIResponsesMode,
+  OpenAIEndpointCapability
+} from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -2487,6 +2632,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+
+// Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
+// 故隐藏代理选择器。
+const isSparkShadow = computed(() => props.account?.parent_account_id != null)
 
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
@@ -2548,6 +2697,10 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(false)
+const autoPause5hThreshold = ref<number | null>(null)
+const autoPause7dThreshold = ref<number | null>(null)
+const autoPause5hDisabled = ref(false)
+const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityProjectId = ref('')
@@ -2599,6 +2752,8 @@ const customBaseUrl = ref('')
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
+const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
+const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
@@ -2691,9 +2846,116 @@ const openAICompactModeOptions = computed(() => [
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
   { value: 'force_off', label: t('admin.accounts.openai.compactModeForceOff') }
 ])
+const openAIResponsesModeOptions = computed(() => [
+  { value: 'auto', label: t('admin.accounts.openai.responsesModeAuto') },
+  { value: 'force_responses', label: t('admin.accounts.openai.responsesModeForceResponses') },
+  { value: 'force_chat_completions', label: t('admin.accounts.openai.responsesModeForceChatCompletions') }
+])
+const openAITextEndpointCapabilityLabel = computed(() => {
+  if (openAIResponsesMode.value === 'force_responses') {
+    return t('admin.accounts.openai.capabilityResponses')
+  }
+  if (openAIResponsesMode.value === 'force_chat_completions') {
+    return t('admin.accounts.openai.capabilityChatCompletions')
+  }
+  const extra = props.account?.extra as Record<string, unknown> | undefined
+  if (extra?.openai_responses_supported === true) {
+    return t('admin.accounts.openai.capabilityResponsesAuto')
+  }
+  if (extra?.openai_responses_supported === false) {
+    return t('admin.accounts.openai.capabilityChatCompletionsAuto')
+  }
+  return t('admin.accounts.openai.capabilityTextAuto')
+})
+const openAIEndpointCapabilityOptions = computed<{ value: OpenAIEndpointCapability; label: string }[]>(() => [
+  { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+])
+const openAITextGenerationCapabilityEnabled = computed(() =>
+  openAIEndpointCapabilities.value.includes('chat_completions')
+)
+
+const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings']
+  const selected = allowed.filter((value) => values.includes(value))
+  return selected.length > 0 ? selected : allowed
+}
+
+const readOpenAIEndpointCapabilities = (credentials?: Record<string, unknown>): OpenAIEndpointCapability[] => {
+  const raw = credentials?.openai_capabilities
+  if (Array.isArray(raw)) {
+    return normalizeOpenAIEndpointCapabilities(
+      raw.filter((value): value is OpenAIEndpointCapability =>
+        value === 'chat_completions' || value === 'embeddings'
+      )
+    )
+  }
+  if (raw !== null && typeof raw === 'object') {
+    const capabilityMap = raw as Record<string, unknown>
+    return normalizeOpenAIEndpointCapabilities(
+      openAIEndpointCapabilityOptions.value
+        .map((option) => option.value)
+        .filter((value) => capabilityMap[value] === true)
+    )
+  }
+  return ['chat_completions', 'embeddings']
+}
+
+const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, event?: Event) => {
+  if (openAIEndpointCapabilities.value.includes(capability)) {
+    if (openAIEndpointCapabilities.value.length <= 1) {
+      const input = event?.target as HTMLInputElement | null
+      if (input) input.checked = true
+      return
+    }
+    openAIEndpointCapabilities.value = openAIEndpointCapabilities.value.filter(
+      (value) => value !== capability
+    )
+    if (!openAITextGenerationCapabilityEnabled.value) {
+      openAIResponsesMode.value = 'auto'
+    }
+    return
+  }
+  openAIEndpointCapabilities.value = normalizeOpenAIEndpointCapabilities([
+    ...openAIEndpointCapabilities.value,
+    capability
+  ])
+}
+
+const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
+  const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
+  if (capabilities.length === 2) {
+    delete credentials.openai_capabilities
+    return
+  }
+  credentials.openai_capabilities = capabilities
+}
+
+const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
+  if (mode === 'force_responses' || mode === 'force_chat_completions') {
+    return mode
+  }
+  return 'auto'
+}
 const isOpenAIModelRestrictionDisabled = computed(() =>
   props.account?.platform === 'openai' && openaiPassthroughEnabled.value
 )
+const openAIResponsesStatusKey = computed(() => {
+  if (openAIResponsesMode.value === 'force_responses') {
+    return 'admin.accounts.openai.responsesStatusForcedResponses'
+  }
+  if (openAIResponsesMode.value === 'force_chat_completions') {
+    return 'admin.accounts.openai.responsesStatusForcedChatCompletions'
+  }
+  const extra = props.account?.extra as Record<string, unknown> | undefined
+  if (extra?.openai_responses_supported === true) {
+    return 'admin.accounts.openai.responsesStatusAutoSupported'
+  }
+  if (extra?.openai_responses_supported === false) {
+    return 'admin.accounts.openai.responsesStatusAutoUnsupported'
+  }
+  return 'admin.accounts.openai.responsesStatusAutoUnknown'
+})
 const openAICompactStatusKey = computed(() => {
   const extra = props.account?.extra as Record<string, unknown> | undefined
   if (!props.account || props.account.platform !== 'openai') return ''
@@ -2801,6 +3063,37 @@ const normalizePoolModeRetryCount = (value: number) => {
   return normalized
 }
 
+const buildModelRestrictionMapping = () => {
+  const whitelistMapping = buildModelMappingObject('whitelist', allowedModels.value, [])
+  const explicitMapping = buildModelMappingObject('mapping', [], modelMappings.value)
+  const combined = {
+    ...(whitelistMapping || {}),
+    ...(explicitMapping || {})
+  }
+  return Object.keys(combined).length > 0 ? combined : null
+}
+
+const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
+  const shouldApplyModelMapping = !openaiPassthroughEnabled.value
+
+  if (shouldApplyModelMapping) {
+    const modelMapping = buildModelRestrictionMapping()
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    } else {
+      delete credentials.model_mapping
+    }
+  } else if (!credentials.model_mapping) {
+    delete credentials.model_mapping
+  }
+
+  const compactModelMapping = buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
+  if (compactModelMapping) {
+    credentials.compact_model_mapping = compactModelMapping
+  } else {
+    delete credentials.compact_model_mapping
+  }
+}
 const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
@@ -2843,10 +3136,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   const extra = newAccount.extra as Record<string, unknown> | undefined
   mixedScheduling.value = extra?.mixed_scheduling === true
   allowOverages.value = extra?.allow_overages === true
+  autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
+  autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
+  autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
+  autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/API Key)
   openaiPassthroughEnabled.value = false
   openAICompactMode.value = 'auto'
+  openAIResponsesMode.value = 'auto'
+  openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -2858,6 +3157,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
+    const accountCredentials = newAccount.credentials as Record<string, unknown> | undefined
+    if (newAccount.type === 'apikey') {
+      openAIResponsesMode.value = normalizeOpenAIResponsesMode(extra?.openai_responses_mode)
+      openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(accountCredentials)
+      if (!openAITextGenerationCapabilityEnabled.value) {
+        openAIResponsesMode.value = 'auto'
+      }
+    }
     const codexImageGenerationBridgeValue = typeof extra?.codex_image_generation_bridge === 'boolean'
       ? extra.codex_image_generation_bridge
       : extra?.codex_image_generation_bridge_enabled
@@ -2883,8 +3190,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
     }
-    const credentials = newAccount.credentials as Record<string, unknown> | undefined
-    const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
+    const compactMappings = accountCredentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
       openAICompactModelMappings.value = Object.entries(compactMappings).map(([from, to]) => ({ from, to }))
     }
@@ -3738,6 +4044,7 @@ const handleSubmit = async () => {
         newCredentials.model_mapping = currentCredentials.model_mapping
       }
       if (props.account.platform === 'openai') {
+        applyOpenAIEndpointCapabilities(newCredentials)
         const compactModelMapping = buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
         if (compactModelMapping) {
           newCredentials.compact_model_mapping = compactModelMapping
@@ -3887,57 +4194,40 @@ const handleSubmit = async () => {
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
       if (!applyTempUnschedConfig(newCredentials)) {
         return
-	      }
-
-	      updatePayload.credentials = newCredentials
-		    }
-
-	    // OpenAI OAuth: persist model mapping to credentials
-	    if (props.account.platform === 'openai' && props.account.type === 'oauth') {
-	      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-	        ((props.account.credentials as Record<string, unknown>) || {})
-	      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-	      const shouldApplyModelMapping = !openaiPassthroughEnabled.value
-
-      if (shouldApplyModelMapping) {
-        const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
-        if (modelMapping) {
-          newCredentials.model_mapping = modelMapping
-        } else {
-          delete newCredentials.model_mapping
-        }
-      } else if (currentCredentials.model_mapping) {
-        // 透传模式保留现有映射
-        newCredentials.model_mapping = currentCredentials.model_mapping
       }
-      const compactModelMapping = buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
-      if (compactModelMapping) {
-        newCredentials.compact_model_mapping = compactModelMapping
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // OpenAI OAuth: persist model mapping to credentials
+    if (props.account.platform === 'openai' && props.account.type === 'oauth') {
+      const currentCredentials = isSparkShadow.value
+        ? {}
+        : (updatePayload.credentials as Record<string, unknown>) ||
+          ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      applyOpenAIModelMappingCredentials(newCredentials)
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // Kiro OAuth: persist model mapping to credentials
+    if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
       } else {
-        delete newCredentials.compact_model_mapping
-	      }
+        delete newCredentials.model_mapping
+      }
 
-	      updatePayload.credentials = newCredentials
-	    }
+      updatePayload.credentials = newCredentials
+    }
 
-	    // Kiro OAuth: persist model mapping to credentials
-	    if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
-	      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-	        ((props.account.credentials as Record<string, unknown>) || {})
-	      const newCredentials: Record<string, unknown> = { ...currentCredentials }
-
-	      const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
-	      if (modelMapping) {
-	        newCredentials.model_mapping = modelMapping
-	      } else {
-	        delete newCredentials.model_mapping
-	      }
-
-	      updatePayload.credentials = newCredentials
-	    }
-
-	    // Anthropic OAuth/SetupToken: persist model mapping to credentials.
-    // For these account types, mappings only rewrite the upstream model; they do not restrict scheduling.
+    // Anthropic OAuth/SetupToken: mappings only rewrite the upstream model; they do not restrict scheduling.
     if (
       props.account.platform === 'anthropic' &&
       (props.account.type === 'oauth' || props.account.type === 'setup-token')
@@ -4165,6 +4455,13 @@ const handleSubmit = async () => {
       } else {
         newExtra.openai_compact_mode = openAICompactMode.value
       }
+      if (props.account.type === 'apikey') {
+        if (!openAITextGenerationCapabilityEnabled.value || openAIResponsesMode.value === 'auto') {
+          delete newExtra.openai_responses_mode
+        } else {
+          newExtra.openai_responses_mode = openAIResponsesMode.value
+        }
+      }
 
       delete newExtra.codex_image_generation_bridge_enabled
       if (codexImageGenerationBridgeMode.value === 'inherit') {
@@ -4269,6 +4566,28 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.quota_notify_total_enabled
         delete newExtra.quota_notify_total_threshold
+      }
+      if (props.account.platform === 'openai') {
+        if (autoPause5hThreshold.value != null && autoPause5hThreshold.value > 0) {
+          newExtra.auto_pause_5h_threshold = autoPause5hThreshold.value / 100
+        } else {
+          delete newExtra.auto_pause_5h_threshold
+        }
+        if (autoPause7dThreshold.value != null && autoPause7dThreshold.value > 0) {
+          newExtra.auto_pause_7d_threshold = autoPause7dThreshold.value / 100
+        } else {
+          delete newExtra.auto_pause_7d_threshold
+        }
+        if (autoPause5hDisabled.value) {
+          newExtra.auto_pause_5h_disabled = true
+        } else {
+          delete newExtra.auto_pause_5h_disabled
+        }
+        if (autoPause7dDisabled.value) {
+          newExtra.auto_pause_7d_disabled = true
+        } else {
+          delete newExtra.auto_pause_7d_disabled
+        }
       }
       updatePayload.extra = newExtra
     }
