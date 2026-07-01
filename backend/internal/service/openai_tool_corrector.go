@@ -2,12 +2,15 @@ package service
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -39,6 +42,41 @@ var codexToolNameMapping = map[string]string{
 	"webFetch":  "webfetch",
 }
 
+var openCodeToolNameSet = map[string]struct{}{
+	"bash":      {},
+	"edit":      {},
+	"glob":      {},
+	"grep":      {},
+	"list":      {},
+	"patch":     {},
+	"read":      {},
+	"todoread":  {},
+	"todowrite": {},
+	"webfetch":  {},
+	"write":     {},
+}
+
+var codexNativeToolNameSet = map[string]struct{}{
+	"apply_patch":  {},
+	"applyPatch":   {},
+	"execute_bash": {},
+	"executeBash":  {},
+	"exec_bash":    {},
+	"execBash":     {},
+	"list_files":   {},
+	"listFiles":    {},
+	"read_file":    {},
+	"readFile":     {},
+	"read_plan":    {},
+	"readPlan":     {},
+	"search_files": {},
+	"searchFiles":  {},
+	"update_plan":  {},
+	"updatePlan":   {},
+	"write_file":   {},
+	"writeFile":    {},
+}
+
 // ToolCorrectionStats 记录工具修正的统计信息（导出用于 JSON 序列化）
 type ToolCorrectionStats struct {
 	TotalCorrected    int            `json:"total_corrected"`
@@ -58,6 +96,70 @@ func NewCodexToolCorrector() *CodexToolCorrector {
 			CorrectionsByTool: make(map[string]int),
 		},
 	}
+}
+
+func shouldCorrectCodexToolCallsForClient(c *gin.Context, requestBody []byte, fallback bool) bool {
+	if c != nil && openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) {
+		return false
+	}
+	if decision, ok := shouldCorrectCodexToolCallsFromBody(requestBody); ok {
+		return decision
+	}
+	return fallback
+}
+
+func shouldCorrectCodexToolCallsFromBody(requestBody []byte) (bool, bool) {
+	if len(bytes.TrimSpace(requestBody)) == 0 || !bytes.Contains(requestBody, []byte(`"tools"`)) || !gjson.ValidBytes(requestBody) {
+		return false, false
+	}
+	return shouldCorrectCodexToolCallsFromToolsResult(gjson.GetBytes(requestBody, "tools"))
+}
+
+func shouldCorrectCodexToolCallsFromMap(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	rawTools, ok := reqBody["tools"]
+	if !ok || rawTools == nil {
+		return false
+	}
+	b, err := json.Marshal(rawTools)
+	if err != nil {
+		return false
+	}
+	decision, known := shouldCorrectCodexToolCallsFromToolsResult(gjson.ParseBytes(b))
+	return known && decision
+}
+
+func shouldCorrectCodexToolCallsFromToolsResult(tools gjson.Result) (bool, bool) {
+	if !tools.Exists() || !tools.IsArray() {
+		return false, false
+	}
+	hasOpenCodeTool := false
+	hasNativeTool := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		name := strings.TrimSpace(tool.Get("name").String())
+		if name == "" {
+			name = strings.TrimSpace(tool.Get("function.name").String())
+		}
+		if name == "" {
+			return true
+		}
+		if _, ok := openCodeToolNameSet[name]; ok {
+			hasOpenCodeTool = true
+		}
+		if _, ok := codexNativeToolNameSet[name]; ok {
+			hasNativeTool = true
+		}
+		return true
+	})
+	if hasNativeTool {
+		return false, true
+	}
+	if hasOpenCodeTool {
+		return true, true
+	}
+	return false, false
 }
 
 // CorrectToolCallsInSSEData 修正 SSE 数据中的工具调用
