@@ -1908,3 +1908,64 @@ f310048b 加固 account proxy DNS handling
 60bfded8 Allow Claude Code Desktop probe 到 pass claude_code_only check
 62263380 Intercept connection probes from any client UA
 15d8344c Allow Claude Code connection probe 与 intercept it 到 protect quota
+
+## 2026-07-01 21:21:42 +0800
+
+- 模式: `ai`
+- 目标分支: `codex/official-sync-base-20260701-211851`
+- 官方引用: `origin/main`
+- 本地提交: `8563b1bbd6a5dd4a52f42e11c87b4b3944d49053`
+- 官方提交: `7dc7cfce1db5d31599815ff29acf6847ead0f0b7`
+- 合并基线: `c275422251e72750bebe53e41fcf59db7f83fe6b`
+- 官方领先数量: `91`
+- 本地领先数量: `375`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+7dc7cfce 杂项：将VERSION同步到 0.1.142 [skip ci]
+98be187d 杂项：更新sponsors
+60da9ba1 修复（前端）：refine grok icon, palette 与 i18n
+5eb9da9c 合并拉取请求 #3593（来源：heathermhuang/codex/grok-media-routing）
+aac3261c 修复：convert grok image edit uploads
+f77cf6b4 Revert "feat: add LLM media tester"
+8c2d9b9a 杂项（openai）：移除gpt-5.3-codex from OpenAI default model list
+c9fb221a 修复：satisfy grok media 静态检查
+0a9146c3 合并拉取请求 #3586（来源：deqiying/codex/fix-subscription-revoke-soft-delete）
+42e471f5 修复：加固 grok media routing
+a34d4967 新增：增加LLM media tester
+d679ee3c 合并拉取请求 #3596（来源：JRBaggins/fix/tag-version-resolution）
+fd004bdd 修复（account-repo）：Clone query before Count 到 prevent 状态 pollution
+de64b026 修复：resolve build 版本 from release tag
+3812e627 合并拉取请求 #3546（来源：nslogx/fix/platform-quota-five-platforms）
+9817d5d5 合并拉取请求 #3598（来源：DaydreamCoding/feat/openai-spark-shadow-account）
+96c9166b 修复（usage）：用户使用记录默认显示推理强度列
+bdf7ead1 新增（spark-shadow）：OpenAI Spark 链接型影子账号
+c3e86060 修复：include official grok media model ids
+2fe756e4 修复：recognize grok media models
+
+### 本地领先
+
+8563b1bb 支持 Claude Sonnet 5
+c1dd977d Debug-capture: bypass sync guard 针对 the captured user only
+d160966d Normalize Claude Code current date reminders
+e19cf128 Normalize Claude Code date watermark
+9e6a8ff7 Stop-bleed: restore guard rejecting non-stream /v1/messages
+18fc3c6e Always stream-aggregate non-stream /v1/messages (fix 429 account poisoning)
+912837b8 Make Anthropic org_uuid rate-limit propagation opt-中的 (default off)
+7603a46d 增加per-account non-stream→stream aggregation 针对 /v1/messages
+70da4896 恢复kiro/droid account create + reauth UI dropped 中的 67-commit sync
+3597ab78 恢复Claude account create 默认值 (RPM limit + TLS fingerprint) dropped 中的 sync
+b083879e 恢复proxy auto-assignment dropped 中的 67-commit official sync
+6a590e5d Fix 前端 测试: restore 2 merge-dropped official components + align specs
+6bc48b28 Sync upstream official 67 commits (ce6af413 -> c2754222)
+492144be 移除dead CCH signing config (前端 toggle + backend setting chain)
+04ec256e Fix Claude prompt-cache rebuilds: rewrite inline role:system 到 role:user 中的 place
+a663f3b4 Fix usage stats SQL/Scan column mismatch from official merge
+4cbd3b78 更新upstream sync ledger after promote
+5ceb7712 Merge official origin/main (ce6af413) into fork
+5860d101 增加upstream sync conflict ledger
+2f6d1ed8 Anchor bridge trailing breakpoint 到 last non-system message
