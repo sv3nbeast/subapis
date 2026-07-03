@@ -272,19 +272,21 @@ func (s *KiroOAuthService) GenerateIDCAuthURL(ctx context.Context, input *KiroGe
 
 func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshTokenInput) (*KiroTokenInfo, error) {
 	proxyURL, _ := s.resolveProxyURL(ctx, input.ProxyID)
-	authMethod := strings.ToLower(strings.TrimSpace(input.AuthMethod))
-	if authMethod == "" {
-		authMethod = "social"
-	}
 	if strings.TrimSpace(input.RefreshToken) == "" {
 		return nil, fmt.Errorf("kiro refresh_token is empty; reauthorize Kiro account")
 	}
+	authMethod := resolveKiroRefreshAuthMethod(input.AuthMethod, input.ClientID, input.ClientSecret)
 
 	var token *kiropkg.TokenData
 	var err error
 	switch authMethod {
 	case "idc":
-		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, input.ClientID, input.ClientSecret, input.RefreshToken, input.Region, input.StartURL)
+		clientID := strings.TrimSpace(input.ClientID)
+		clientSecret := strings.TrimSpace(input.ClientSecret)
+		if clientID == "" || clientSecret == "" {
+			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
+		}
+		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, input.ClientID, input.ClientSecret, input.RefreshToken, input.Region, input.StartURL, input.Provider)
 	default:
 		token, err = kiropkg.RefreshSocialToken(ctx, proxyURL, input.RefreshToken, input.Provider)
 	}
@@ -307,6 +309,17 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 		token.Region = input.Region
 	}
 	return toKiroTokenInfo(token), nil
+}
+
+func resolveKiroRefreshAuthMethod(authMethod, clientID, clientSecret string) string {
+	method := strings.ToLower(strings.TrimSpace(authMethod))
+	if method != "" {
+		return method
+	}
+	if strings.TrimSpace(clientID) != "" && strings.TrimSpace(clientSecret) != "" {
+		return "idc"
+	}
+	return "social"
 }
 
 func (s *KiroOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*KiroTokenInfo, error) {

@@ -141,7 +141,7 @@ func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaul
 	require.NotContains(t, string(body), `"profileArn":`)
 }
 
-func TestAccountTestService_KiroResolvesMissingProfileArnBeforeProbe(t *testing.T) {
+func TestAccountTestService_KiroQProbeDoesNotResolveMissingProfileArn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 	originalSleep := kiroRetrySleep
@@ -165,7 +165,6 @@ func TestAccountTestService_KiroResolvesMissingProfileArnBeforeProbe(t *testing.
 	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{8: account}}
 	upstream := &queuedHTTPUpstream{
 		responses: []*http.Response{
-			newJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED"}]}`),
 			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
 		},
 	}
@@ -178,18 +177,13 @@ func TestAccountTestService_KiroResolvesMissingProfileArnBeforeProbe(t *testing.
 
 	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-6", "", AccountTestModeDefault)
 	require.Error(t, err)
-	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.requests, 1)
 
-	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
-	require.Equal(t, "/ListAvailableProfiles", upstream.requests[0].URL.Path)
-	require.Equal(t, "Bearer kiro-access-token", upstream.requests[0].Header.Get("Authorization"))
-	require.Equal(t, upstream.requests[0].URL.Host, upstream.requests[0].Host)
-
-	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
-	body, readErr := io.ReadAll(upstream.requests[1].Body)
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	body, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
-	require.Contains(t, string(body), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED"`)
-	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED", account.GetCredential("profile_arn"))
+	require.NotContains(t, string(body), `"profileArn":`)
+	require.Empty(t, account.GetCredential("profile_arn"))
 }
 
 func TestAccountTestService_KiroInvalidModelErrorPassthrough(t *testing.T) {
@@ -260,7 +254,7 @@ func TestAccountTestService_KiroInvalidModelDoesNotRefreshProfileArnOrRetry(t *t
 
 	firstBody, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
-	require.Contains(t, string(firstBody), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE"`)
+	require.NotContains(t, string(firstBody), `"profileArn":`)
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE", account.GetCredential("profile_arn"))
 }
 
@@ -326,7 +320,7 @@ func TestBuildKiroPayloadForAccount_KiroBuilderIDWithoutProfileArnOmitsProfileAr
 	require.NotContains(t, string(kiroPayload), `"profileArn":`)
 }
 
-func TestBuildKiroPayloadForAccount_KiroBuilderIDUsesCredentialProfileArn(t *testing.T) {
+func TestBuildKiroPayloadForAccount_KiroBuilderIDWithCachedProfileArnOmitsForQMode(t *testing.T) {
 	account := &Account{
 		ID:       33,
 		Name:     "kiro-builder-id-cached",
@@ -349,7 +343,7 @@ func TestBuildKiroPayloadForAccount_KiroBuilderIDUsesCredentialProfileArn(t *tes
 	buildResult, err := (&GatewayService{}).buildKiroPayloadForAccount(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "kiro-access-token", "claude-sonnet-4-6", nil)
 	require.NoError(t, err)
 	kiroPayload := buildResult.Payload
-	require.Contains(t, string(kiroPayload), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/CACHED"`)
+	require.NotContains(t, string(kiroPayload), `"profileArn"`)
 }
 
 func TestBuildKiroPayloadForAccount_KiroEnterpriseIDCOmitsMissingProfileArn(t *testing.T) {

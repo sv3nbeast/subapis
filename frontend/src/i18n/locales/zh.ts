@@ -19,8 +19,7 @@ export default {
       titleLine1: '统一模型接口网关',
       titleLine2: '接入全球',
       titleHighlight: 'AI 能力',
-      description:
-        '通过统一域名、密钥体系与安全策略接入多方模型服务，让调用链路更清晰，扩展更从容，运营更可控。',
+      description: '通过统一域名、密钥体系与安全策略接入多方模型服务，让调用链路更清晰，扩展更从容，运营更可控。',
       baseUrlLabel: '替换基础 URL 即可接入',
       stats: {
         channels: '核心通道',
@@ -51,8 +50,7 @@ export default {
     value: {
       eyebrow: '核心价值',
       title: '让团队稳定使用 AI 服务，更快落地产品创新',
-      description:
-        '从统一接入、成本可视化到全局调度，SubAPIs 为 AI 应用提供面向生产环境的 API 运营基础设施。',
+      description: '从统一接入、成本可视化到全局调度，SubAPIs 为 AI 应用提供面向生产环境的 API 运营基础设施。',
       cards: {
         gateway: {
           title: '统一入口，快速集成',
@@ -194,8 +192,7 @@ export default {
     // CTA 区块
     cta: {
       title: '将 AI 服务能力稳定落地到业务流程',
-      description:
-        '立即接入 SubAPIs，统一管理访问策略、服务质量和调用成本，为产品提供稳定、可扩展的 AI API 基础设施。',
+      description: '立即接入 SubAPIs，统一管理访问策略、服务质量和调用成本，为产品提供稳定、可扩展的 AI API 基础设施。',
       button: '立即开始',
       guideButton: '查看教程'
     },
@@ -234,13 +231,19 @@ export default {
     quickStart: {
       eyebrow: '快速开始',
       title: '快速开始',
-      description: '先完成账号、余额、密钥和环境配置，再进行一次最小请求验证。后续教程会继续说明分组、CLI、进阶用法和常见问题。'
+      description:
+        '先完成账号、余额、密钥和环境配置，再进行一次最小请求验证。后续教程会继续说明分组、CLI、进阶用法和常见问题。'
     },
     steps: {
       register: {
         title: '注册账号',
         description: '进入注册页创建 SubAPIs 账号，建议使用长期可接收通知的邮箱，便于接收安全和账单提醒。',
-        items: ['填写邮箱与密码', '完成邮箱验证或授权登录', '确认登录后可以进入控制台', '如有邀请码或活动码，按页面提示填写']
+        items: [
+          '填写邮箱与密码',
+          '完成邮箱验证或授权登录',
+          '确认登录后可以进入控制台',
+          '如有邀请码或活动码，按页面提示填写'
+        ]
       },
       login: {
         title: '登录控制台',
@@ -260,7 +263,12 @@ export default {
       environment: {
         title: '配置 Base URL',
         description: '把 SDK 或 CLI 的官方地址替换为 SubAPIs 的基础地址，密钥使用你在控制台创建的 API Key。',
-        items: ['OpenAI 兼容接口使用 /v1', 'Claude 消息接口使用 /v1/messages', 'Gemini 使用 v1beta 路径', 'Antigravity 使用专用路径']
+        items: [
+          'OpenAI 兼容接口使用 /v1',
+          'Claude 消息接口使用 /v1/messages',
+          'Gemini 使用 v1beta 路径',
+          'Antigravity 使用专用路径'
+        ]
       },
       firstCall: {
         title: '发起首次请求',
@@ -271,36 +279,59 @@ export default {
     examples: {
       eyebrow: '调用示例',
       title: '按接口类型选择对应路径',
-      description: 'SubAPIs 展示当前核心支持通道的入口。具体可用模型以控制台分组和渠道配置为准，不在首页或教程页夸大模型覆盖范围。'
+      description:
+        'SubAPIs 展示当前核心支持通道的入口。具体可用模型以控制台分组和渠道配置为准，不在首页或教程页夸大模型覆盖范围。'
     },
     sections: {
       models: {
         eyebrow: '模型分组',
         title: '模型、分组与额度说明',
-        description: '参考模型广场和令牌分组的教程结构，改写为 SubAPIs 的使用方式：先看可用通道，再按分组控制 API Key 能力边界。',
+        description:
+          '参考模型广场和令牌分组的教程结构，改写为 SubAPIs 的使用方式：先看可用通道，再按分组控制 API Key 能力边界。',
         articles: {
           market: {
             title: '模型广场与可用通道',
             description: '模型广场用于查看当前账号或分组可调用的模型、通道状态、倍率和价格信息。',
-            items: ['先确认分组可见的模型列表', '查看每个模型的倍率和计费单位', '区分已支持通道与按需扩展通道', '生产前用测试 Key 验证一次调用'],
+            items: [
+              '先确认分组可见的模型列表',
+              '查看每个模型的倍率和计费单位',
+              '区分已支持通道与按需扩展通道',
+              '生产前用测试 Key 验证一次调用'
+            ],
             note: '教程页只列 SubAPIs 当前核心通道，具体可用范围以控制台为准。'
           },
           groups: {
             title: '令牌分组介绍',
-            description: 'API Key 的分组决定它能访问哪些模型、额度和治理策略。分组选错时，常见表现是模型不可用或调用被拒绝。',
-            items: ['为不同业务创建不同分组', '按分组配置模型权限和倍率', '给测试、生产环境使用不同 Key', '变更分组后重新验证 CLI 配置'],
+            description:
+              'API Key 的分组决定它能访问哪些模型、额度和治理策略。分组选错时，常见表现是模型不可用或调用被拒绝。',
+            items: [
+              '为不同业务创建不同分组',
+              '按分组配置模型权限和倍率',
+              '给测试、生产环境使用不同 Key',
+              '变更分组后重新验证 CLI 配置'
+            ],
             note: '如果提示模型不存在，优先检查 Key 所属分组。'
           },
           pricing: {
             title: '额度、倍率与账单',
             description: '充值后仍建议关注倍率和实际消耗。不同通道、模型和缓存命中会影响最终账单。',
-            items: ['在钱包中确认余额或套餐额度', '在用量页查看请求和 Token 消耗', '核对缓存读取和缓存创建费用', '给高频业务设置额度上限'],
+            items: [
+              '在钱包中确认余额或套餐额度',
+              '在用量页查看请求和 Token 消耗',
+              '核对缓存读取和缓存创建费用',
+              '给高频业务设置额度上限'
+            ],
             note: '生产接入前先小流量压测，避免倍率配置不符合预期。'
           },
           routing: {
             title: '路由与服务状态',
             description: 'SubAPIs 的运营重点是把调用路径、状态和异常收敛到同一控制台，便于排查和降级。',
-            items: ['查看服务状态确认通道健康度', '观察延迟、错误和可用性趋势', '对关键业务设置更保守的限流', '异常时优先看请求日志和状态页'],
+            items: [
+              '查看服务状态确认通道健康度',
+              '观察延迟、错误和可用性趋势',
+              '对关键业务设置更保守的限流',
+              '异常时优先看请求日志和状态页'
+            ],
             note: '不要只看 SDK 报错，控制台日志通常能更快定位是权限、余额、模型还是上游问题。'
           }
         }
@@ -308,48 +339,85 @@ export default {
       cli: {
         eyebrow: 'CLI 工具',
         title: 'CLI 配置教程',
-        description: '覆盖环境检查、Claude Code、Codex、Gemini 和 CC-Switch 类工具的配置思路。具体命令以你实际安装的工具版本为准。',
+        description:
+          '覆盖环境检查、Claude Code、Codex、Gemini 和 CC-Switch 类工具的配置思路。具体命令以你实际安装的工具版本为准。',
         articles: {
           env: {
             title: '环境检查（通用步骤）',
             description: '配置任何 CLI 前，先确认网络、环境变量、Node/Python 运行时和 API Key 是否可用。',
-            items: ['确认能访问 SubAPIs 基础域名', '确认 API Key 未复制多余空格', '确认 Base URL 与接口类型匹配', '先用 cURL 验证再配置复杂工具'],
+            items: [
+              '确认能访问 SubAPIs 基础域名',
+              '确认 API Key 未复制多余空格',
+              '确认 Base URL 与接口类型匹配',
+              '先用 cURL 验证再配置复杂工具'
+            ],
             note: '如果 cURL 都失败，先不要排查 CLI，优先看 Key、余额、分组和网络。'
           },
           claude: {
             title: 'Claude Code 配置',
-            description: 'Claude 类工具通常需要 Anthropic 风格的密钥和基础地址。Base URL 使用 SubAPIs 域名，消息接口走 /v1/messages。',
-            items: ['使用 SubAPIs 创建的 API Key', '设置 ANTHROPIC_BASE_URL 为基础域名', '确认分组允许 Claude 通道', '首次请求用简单消息验证'],
+            description:
+              'Claude 类工具通常需要 Anthropic 风格的密钥和基础地址。Base URL 使用 SubAPIs 域名，消息接口走 /v1/messages。',
+            items: [
+              '使用 SubAPIs 创建的 API Key',
+              '设置 ANTHROPIC_BASE_URL 为基础域名',
+              '确认分组允许 Claude 通道',
+              '首次请求用简单消息验证'
+            ],
             note: '不同 Claude 工具读取环境变量的名称可能不同，优先以工具自身文档为准。'
           },
           codex: {
             title: 'Codex / OpenAI 兼容配置',
             description: 'OpenAI 兼容工具一般使用 /v1 作为基础路径，并通过 Bearer API Key 调用聊天或 Responses 接口。',
-            items: ['设置 OPENAI_API_KEY', '设置 OPENAI_BASE_URL 为 SubAPIs /v1', '选择分组可用的 GPT 或兼容模型', '调用失败时检查模型名和权限'],
+            items: [
+              '设置 OPENAI_API_KEY',
+              '设置 OPENAI_BASE_URL 为 SubAPIs /v1',
+              '选择分组可用的 GPT 或兼容模型',
+              '调用失败时检查模型名和权限'
+            ],
             note: '不要把 Claude 路径和 OpenAI /v1 路径混用。'
           },
           gemini: {
             title: 'Gemini CLI 配置',
             description: 'Gemini 相关工具通常走 v1beta 风格路径。请确认你的分组确实开放 Gemini 通道。',
-            items: ['确认 Gemini 通道已支持并可用', 'Base URL 使用 /v1beta', '模型名以控制台可用列表为准', '先跑最小 prompt 验证返回'],
+            items: [
+              '确认 Gemini 通道已支持并可用',
+              'Base URL 使用 /v1beta',
+              '模型名以控制台可用列表为准',
+              '先跑最小 prompt 验证返回'
+            ],
             note: 'Gemini 工具的环境变量命名差异较大，教程页只提供 SubAPIs 路径边界。'
           },
           ccSwitch: {
             title: 'CC-Switch 类工具使用',
             description: '如果使用统一切换工具管理 Claude、Codex、Gemini，请把每个 Provider 的 Base URL 分开配置。',
-            items: ['Claude Provider 使用基础域名', 'OpenAI Provider 使用 /v1', 'Gemini Provider 使用 /v1beta', '每个 Provider 单独测试连通性'],
+            items: [
+              'Claude Provider 使用基础域名',
+              'OpenAI Provider 使用 /v1',
+              'Gemini Provider 使用 /v1beta',
+              '每个 Provider 单独测试连通性'
+            ],
             note: '切换工具只负责本地配置管理，实际可用模型仍由 SubAPIs 分组决定。'
           },
           ccSwitchCli: {
             title: 'CC-Switch-CLI 使用',
             description: '命令行切换工具适合在多项目、多 Provider 间快速切换配置，但仍要保证每个配置项使用正确路径。',
-            items: ['把 SubAPIs Key 写入对应 Provider', '按 Provider 分别设置 Base URL', '切换后立即执行最小请求', '不要把测试配置覆盖生产配置'],
+            items: [
+              '把 SubAPIs Key 写入对应 Provider',
+              '按 Provider 分别设置 Base URL',
+              '切换后立即执行最小请求',
+              '不要把测试配置覆盖生产配置'
+            ],
             note: '如果 CLI 自动生成配置，请检查它是否把 /v1 或 /v1beta 重复拼接。'
           },
           cache: {
             title: '缓存命中与排查',
             description: '缓存命中率较高时，需要区分业务复用、上游缓存、工具侧重复请求和异常重试。',
-            items: ['查看用量页的缓存创建和读取', '对比相同 prompt 的请求时间', '检查 CLI 是否重复发送上下文', '必要时用独立 Key 进行隔离测试'],
+            items: [
+              '查看用量页的缓存创建和读取',
+              '对比相同 prompt 的请求时间',
+              '检查 CLI 是否重复发送上下文',
+              '必要时用独立 Key 进行隔离测试'
+            ],
             note: '缓存命中高不一定是 bug，先结合调度日志和请求明细判断。'
           }
         }
@@ -362,37 +430,67 @@ export default {
           desktop: {
             title: 'Claude Desktop 场景',
             description: '桌面客户端或本地 MCP 场景接入时，优先确保本地代理、Base URL 和 API Key 不被其他配置覆盖。',
-            items: ['确认客户端支持自定义 Base URL', '使用独立 API Key 便于追踪', '不要把生产 Key 写入共享配置', '出现异常先还原最小配置'],
+            items: [
+              '确认客户端支持自定义 Base URL',
+              '使用独立 API Key 便于追踪',
+              '不要把生产 Key 写入共享配置',
+              '出现异常先还原最小配置'
+            ],
             note: '桌面工具差异较大，SubAPIs 只定义网关侧地址和密钥。'
           },
           gateway: {
             title: '从官方地址迁移到 SubAPIs',
             description: '迁移时不要一次性替换所有业务。建议先灰度小流量，确认费用、延迟和错误率。',
-            items: ['先替换测试环境 Base URL', '确认模型名在分组中存在', '对比官方地址和 SubAPIs 返回', '逐步扩大到生产流量'],
+            items: [
+              '先替换测试环境 Base URL',
+              '确认模型名在分组中存在',
+              '对比官方地址和 SubAPIs 返回',
+              '逐步扩大到生产流量'
+            ],
             note: '迁移的核心是可回滚，保留原配置可以降低上线风险。'
           },
           compatibleClaude: {
             title: '兼容模型接入 Claude Code',
             description: '如果某些兼容模型需要通过 Claude Code 类工具使用，优先确认工具、接口格式和模型能力是否匹配。',
-            items: ['确认模型支持目标工具需要的消息格式', '使用独立分组隔离实验配置', '先验证纯文本请求再接入项目', '不把实验模型直接用于生产自动化'],
+            items: [
+              '确认模型支持目标工具需要的消息格式',
+              '使用独立分组隔离实验配置',
+              '先验证纯文本请求再接入项目',
+              '不把实验模型直接用于生产自动化'
+            ],
             note: '兼容接入是高级用法，失败时先回到官方接口形态验证。'
           },
           image: {
             title: '绘图与多模态模型',
             description: '绘图或图片能力需要单独确认通道、模型、计费模式和客户端是否支持，不应默认等同于文本模型。',
-            items: ['确认分组开启图片或多模态能力', '查看图片计费单位和倍率', '测试上传、生成和返回格式', '生产前限制单次图片数量和尺寸'],
+            items: [
+              '确认分组开启图片或多模态能力',
+              '查看图片计费单位和倍率',
+              '测试上传、生成和返回格式',
+              '生产前限制单次图片数量和尺寸'
+            ],
             note: '教程页只说明配置边界，实际可用模型以控制台为准。'
           },
           risk: {
             title: '权限、限流与风控',
             description: '通过分组、额度、过期时间、模型白名单和 IP 限制降低 Key 泄露或误用风险。',
-            items: ['生产 Key 设置更严格额度', '高风险业务开启模型限制', '按团队或项目拆分 Key', '发现异常立即轮换密钥'],
+            items: [
+              '生产 Key 设置更严格额度',
+              '高风险业务开启模型限制',
+              '按团队或项目拆分 Key',
+              '发现异常立即轮换密钥'
+            ],
             note: '不要把一个无限额 Key 同时用于测试、生产和个人工具。'
           },
           monitoring: {
             title: '监控与故障排查',
             description: '上线后关注请求趋势、错误率、余额消耗和服务状态，避免问题只在用户侧暴露。',
-            items: ['定期查看状态页和用量页', '异常时按时间范围检索日志', '关注余额不足和限流错误', '记录关键业务的模型与分组配置'],
+            items: [
+              '定期查看状态页和用量页',
+              '异常时按时间范围检索日志',
+              '关注余额不足和限流错误',
+              '记录关键业务的模型与分组配置'
+            ],
             note: '排查顺序建议：Key 权限 -> 余额 -> 模型名 -> Base URL -> 上游状态。'
           }
         }
@@ -411,7 +509,12 @@ export default {
           auth: {
             title: '401 或认证失败怎么办？',
             description: '认证失败通常与 Key 格式、复制错误、环境变量覆盖或请求头缺失有关。',
-            items: ['检查 Authorization Bearer 格式', '确认 Key 没有多余换行', '确认 CLI 读取的是最新环境变量', '必要时重新创建测试 Key'],
+            items: [
+              '检查 Authorization Bearer 格式',
+              '确认 Key 没有多余换行',
+              '确认 CLI 读取的是最新环境变量',
+              '必要时重新创建测试 Key'
+            ],
             note: '浏览器、终端和 IDE 插件可能读取不同环境变量。'
           },
           billing: {
@@ -423,7 +526,12 @@ export default {
           latency: {
             title: '延迟高或请求卡住怎么办？',
             description: '延迟可能来自上游、网络、模型排队、工具重试或上下文过大。',
-            items: ['查看服务状态页延迟趋势', '缩小 prompt 测试最小请求', '检查是否触发限流或重试', '记录请求时间点便于查日志'],
+            items: [
+              '查看服务状态页延迟趋势',
+              '缩小 prompt 测试最小请求',
+              '检查是否触发限流或重试',
+              '记录请求时间点便于查日志'
+            ],
             note: '如果能提供具体 API Key 和时间点，调度日志会更容易定位。'
           }
         }
@@ -436,13 +544,23 @@ export default {
           terms: {
             title: '服务条款',
             description: '说明服务使用、客户内容、费用、暂停、终止和责任限制等基础规则。',
-            items: ['接入前阅读服务条款', '确认组织授权和使用边界', '了解费用和退款规则', '保存关键条款链接便于团队查看'],
+            items: [
+              '接入前阅读服务条款',
+              '确认组织授权和使用边界',
+              '了解费用和退款规则',
+              '保存关键条款链接便于团队查看'
+            ],
             note: '条款内容以后台配置的正式版本为准。'
           },
           aup: {
             title: '使用政策（AUP）',
             description: '说明禁止用途、高风险场景要求和面向用户披露义务。',
-            items: ['禁止违法、欺诈、滥用和高危用途', '高风险场景需要人工审核', '面向用户聊天机器人需要披露 AI', '服务未成年人需遵守额外要求'],
+            items: [
+              '禁止违法、欺诈、滥用和高危用途',
+              '高风险场景需要人工审核',
+              '面向用户聊天机器人需要披露 AI',
+              '服务未成年人需遵守额外要求'
+            ],
             note: '如果业务场景接近高风险用途，先做人工审核和披露设计。'
           },
           regions: {
@@ -454,7 +572,12 @@ export default {
           serviceTerms: {
             title: '服务特定条款',
             description: '说明团队版、企业版、Beta、微调、云托管、开发合作计划等服务补充条款。',
-            items: ['团队或企业场景需告知用户', 'Beta 服务不适合生产依赖', '微调材料属于客户内容', '云托管服务还受云平台政策约束'],
+            items: [
+              '团队或企业场景需告知用户',
+              'Beta 服务不适合生产依赖',
+              '微调材料属于客户内容',
+              '云托管服务还受云平台政策约束'
+            ],
             note: '服务特定条款优先适用于对应服务。'
           }
         }
@@ -540,7 +663,7 @@ export default {
     enterApiKey: '请输入 API Key',
     querySuccess: '查询成功',
     queryFailed: '查询失败',
-    queryFailedRetry: '查询失败，请稍后重试',
+    queryFailedRetry: '查询失败，请稍后重试'
   },
 
   // Setup Wizard
@@ -686,7 +809,7 @@ export default {
       title: '自动刷新',
       enable: '启用自动刷新',
       countdown: '自动刷新: {seconds}s',
-      seconds: '{n} 秒',
+      seconds: '{n} 秒'
     },
     view: '查看',
     settings: '设置',
@@ -716,11 +839,13 @@ export default {
     riskNotice: '本确认用于以清晰、显著、可留痕的方式提示自部署实例的合规义务与运营风险。',
     version: '协议版本',
     openDocument: '在 GitHub 查看协议文件',
-    documentSource: '协议正文来自本项目仓库中的 Markdown 文件。修改协议内容时必须同步递增协议版本；已确认的旧版本将失效，控制台使用者须重新确认。',
+    documentSource:
+      '协议正文来自本项目仓库中的 Markdown 文件。修改协议内容时必须同步递增协议版本；已确认的旧版本将失效，控制台使用者须重新确认。',
     inputLabel: '请逐字输入以下确认短语',
     inputPlaceholder: '输入确认短语以继续',
     inputMismatch: '确认短语不匹配，请逐字输入提示内容。',
-    legalNote: '本确认用于明确自部署实例与开源项目、著作权人、贡献者及维护者之间的非关联关系和责任边界；部署、运营或控制相关实例的主体应独立承担其适用义务。',
+    legalNote:
+      '本确认用于明确自部署实例与开源项目、著作权人、贡献者及维护者之间的非关联关系和责任边界；部署、运营或控制相关实例的主体应独立承担其适用义务。',
     logout: '退出登录',
     accept: '确认并继续',
     accepted: '合规确认已记录',
@@ -790,7 +915,7 @@ export default {
     sora: 'Sora 创作',
     serviceStatus: '服务状态',
     riskControl: '风控中心',
-    payment: '支付',
+    payment: '支付'
   },
 
   // Auth
@@ -820,7 +945,7 @@ export default {
     passwordMinLength: '密码至少需要 6 个字符',
     loginFailed: '登录失败，请检查您的凭据后重试。',
     errors: {
-      USER_NOT_ACTIVE: '账号已被禁用',
+      USER_NOT_ACTIVE: '账号已被禁用'
     },
     registrationFailed: '注册失败，请重试。',
     emailSuffixNotAllowed: '该邮箱域名不在允许注册范围内。',
@@ -921,7 +1046,7 @@ export default {
       invalidCallbackHint: '当前页面缺少有效的授权结果，请返回登录页重新发起快捷登录。',
       code: '授权码',
       state: '状态',
-      fullUrl: '完整URL',
+      fullUrl: '完整URL'
     },
     oauthFlow: {
       profileDetailsTitle: '{providerName} 资料',
@@ -983,8 +1108,7 @@ export default {
     sendingResetLink: '发送中...',
     sendResetLinkFailed: '发送重置链接失败，请重试。',
     resetEmailSent: '重置链接已发送',
-    resetEmailSentHint:
-      '如果该邮箱已注册，您将很快收到密码重置链接。请检查您的收件箱和垃圾邮件文件夹。',
+    resetEmailSentHint: '如果该邮箱已注册，您将很快收到密码重置链接。请检查您的收件箱和垃圾邮件文件夹。',
     backToLogin: '返回登录',
     rememberedPassword: '想起密码了？',
     // 重置密码
@@ -1080,7 +1204,7 @@ export default {
       copied: '已复制',
       copiedHint: '已复制到剪贴板',
       clickToCopy: '点击可复制此端点',
-      speedTest: '测速',
+      speedTest: '测速'
     },
     allGroups: '全部分组',
     allStatus: '全部状态',
@@ -1134,14 +1258,12 @@ export default {
       copied: '已复制',
       note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。',
       noGroupTitle: '请先分配分组',
-      noGroupDescription:
-        '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
+      noGroupDescription: '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
       openai: {
         description: '将以下配置文件添加到 Codex CLI 配置目录中。',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',
         note: '请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。',
-        noteWindows:
-          '按 Win+R，输入 %userprofile%\\.codex 打开配置目录。如目录不存在，请先手动创建。'
+        noteWindows: '按 Win+R，输入 %userprofile%\\.codex 打开配置目录。如目录不存在，请先手动创建。'
       },
       cliTabs: {
         claudeCode: 'Claude Code',
@@ -1160,12 +1282,10 @@ export default {
           '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。'
       },
       claudeCode: {
-        settingsHint:
-          'Claude Code 设置。需要切换模型时，只修改 model 这一行的模型名即可，当前默认：{model}。'
+        settingsHint: 'Claude Code 设置。需要切换模型时，只修改 model 这一行的模型名即可，当前默认：{model}。'
       },
       gemini: {
-        description:
-          '将以下环境变量添加到您的终端配置文件或直接在终端中运行，以配置 Gemini CLI 访问。',
+        description: '将以下环境变量添加到您的终端配置文件或直接在终端中运行，以配置 Gemini CLI 访问。',
         modelComment: '如果你有 Gemini 3 权限可以填：gemini-3-pro-preview',
         note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。'
       },
@@ -1189,8 +1309,7 @@ export default {
     ipBlacklistPlaceholder: '1.2.3.4\n5.6.0.0/16',
     ipBlacklistHint: '每行一个 IP 或 CIDR，这些 IP 将被禁止使用此密钥',
     ipRestrictionEnabled: '已配置 IP 限制',
-    ccSwitchNotInstalled:
-      'CC-Switch 未安装或协议处理程序未注册。请先安装 CC-Switch 或手动复制 API 密钥。',
+    ccSwitchNotInstalled: 'CC-Switch 未安装或协议处理程序未注册。请先安装 CC-Switch 或手动复制 API 密钥。',
     ccsClientSelect: {
       title: '选择客户端',
       description: '请选择您要导入到 CC-Switch 的客户端类型：',
@@ -1221,7 +1340,8 @@ export default {
     rateLimitUsage: '速率限制用量',
     resetRateLimitUsage: '重置速率限制用量',
     resetRateLimitTitle: '确认重置速率限制',
-    resetRateLimitConfirmMessage: '确定要重置密钥 "{name}" 的速率限制用量吗？所有时间窗口的已用额度将归零。此操作不可撤销。',
+    resetRateLimitConfirmMessage:
+      '确定要重置密钥 "{name}" 的速率限制用量吗？所有时间窗口的已用额度将归零。此操作不可撤销。',
     rateLimitResetSuccess: '速率限制已重置',
     failedToResetRateLimit: '重置速率限制失败',
     resetNow: '即将重置',
@@ -1357,23 +1477,38 @@ export default {
     userAgent: 'User-Agent',
     tabs: { usage: '用量明细', errors: '错误请求' },
     errors: {
-      time: '时间', model: '模型', endpoint: '端点', status: '状态码',
-      category: '分类', platform: '平台', message: '错误信息',
-      keyName: 'Key 名称', keyDeleted: '已删除', allKeys: '全部 Key',
-      modelPlaceholder: '搜索模型', allCategories: '全部分类',
-      empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
+      time: '时间',
+      model: '模型',
+      endpoint: '端点',
+      status: '状态码',
+      category: '分类',
+      platform: '平台',
+      message: '错误信息',
+      keyName: 'Key 名称',
+      keyDeleted: '已删除',
+      allKeys: '全部 Key',
+      modelPlaceholder: '搜索模型',
+      allCategories: '全部分类',
+      empty: '暂无错误请求',
+      failedToLoad: '加载错误请求失败',
       categories: {
-        auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
-        invalid_request: '参数错误', service_unavailable: '服务暂时不可用',
-        upstream: '上游错误', internal: '平台错误', other: '其他', cyber: '安全策略',
+        auth: '认证失败',
+        rate_limit: '限流',
+        quota: '余额/订阅',
+        invalid_request: '参数错误',
+        service_unavailable: '服务暂时不可用',
+        upstream: '上游错误',
+        internal: '平台错误',
+        other: '其他',
+        cyber: '安全策略'
       },
       detail: {
         title: '错误请求详情',
         responseBody: '上游响应内容',
         upstreamStatus: '上游状态码',
-        loadFailed: '加载详情失败，请稍后重试',
-      },
-    },
+        loadFailed: '加载详情失败，请稍后重试'
+      }
+    }
   },
 
   // Shared keys for channel monitor (admin + user views)
@@ -1566,7 +1701,7 @@ export default {
     streamError: '流式响应异常',
     yesterday: '昨天',
     resizeSessions: '拖拽调整会话列表宽度',
-    resizeContext: '拖拽调整上下文面板宽度',
+    resizeContext: '拖拽调整上下文面板宽度'
   },
 
   affiliate: {
@@ -1721,7 +1856,7 @@ export default {
       readFailed: '读取所选图片失败',
       saveSuccess: '头像已更新',
       deleteSuccess: '头像已移除',
-      emptyDeleteHint: '当前没有可删除的头像',
+      emptyDeleteHint: '当前没有可删除的头像'
     },
     authBindings: {
       title: '绑定登录方式',
@@ -1744,24 +1879,24 @@ export default {
       hideEmailFormAction: '收起邮箱表单',
       status: {
         bound: '已绑定',
-        notBound: '未绑定',
+        notBound: '未绑定'
       },
       providers: {
         email: '邮箱',
         linuxdo: 'LinuxDo',
         dingtalk: '钉钉',
         oidc: '{providerName}',
-        wechat: '微信',
+        wechat: '微信'
       },
       source: {
         avatar: '头像来自 {providerName}',
-        username: '用户名来自 {providerName}',
+        username: '用户名来自 {providerName}'
       },
       notes: {
         emailManagedFromProfile: '主账号邮箱在资料表单中管理',
         canUnbind: '您可以解绑该登录方式',
-        bindAnotherBeforeUnbind: '解绑前请先绑定另一种登录方式',
-      },
+        bindAnotherBeforeUnbind: '解绑前请先绑定另一种登录方式'
+      }
     },
     // TOTP 2FA
     totp: {
@@ -1831,7 +1966,7 @@ export default {
       removeEmail: '移除',
       removeSuccess: '邮箱已移除',
       maxEmailsReached: '已达到额外提醒邮箱上限',
-      unverified: '未验证',
+      unverified: '未验证'
     }
   },
 
@@ -2020,7 +2155,7 @@ export default {
         backupRunning: '备份进行中...',
         backupFailed: '备份失败',
         restoreRunning: '恢复进行中...',
-        restoreFailed: '恢复失败',
+        restoreFailed: '恢复失败'
       },
       columns: {
         status: '状态',
@@ -2040,7 +2175,7 @@ export default {
       progress: {
         pending: '准备中',
         dumping: '导出数据库',
-        uploading: '上传中',
+        uploading: '上传中'
       },
       trigger: {
         manual: '手动',
@@ -2059,7 +2194,8 @@ export default {
       },
       r2Guide: {
         title: 'Cloudflare R2 配置教程',
-        intro: 'Cloudflare R2 提供 S3 兼容的对象存储，免费额度为 10GB 存储 + 每月 100 万次 A 类请求，非常适合数据库备份。',
+        intro:
+          'Cloudflare R2 提供 S3 兼容的对象存储，免费额度为 10GB 存储 + 每月 100 万次 A 类请求，非常适合数据库备份。',
         step1: {
           title: '创建 R2 存储桶',
           line1: '登录 Cloudflare Dashboard (dash.cloudflare.com)，左侧菜单选择「R2 对象存储」',
@@ -2715,7 +2851,7 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
-        kiro: 'Kiro',
+        kiro: 'Kiro'
       },
       saving: '保存中...',
       noGroups: '暂无分组',
@@ -2797,14 +2933,14 @@ export default {
         allowImageGeneration: '允许当前分组生图',
         independentMultiplier: '生图倍率独立',
         imageMultiplier: '生图独立倍率',
-        modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
+        modeHint:
+          '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
         finalPricePreview: '最终单张价格预览',
         notConfigured: '未配置'
       },
       claudeCode: {
         title: 'Claude Code 客户端限制',
-        tooltip:
-          '启用后，此分组仅允许 Claude Code 官方客户端访问。非 Claude Code 请求将被拒绝或降级到指定分组。',
+        tooltip: '启用后，此分组仅允许 Claude Code 官方客户端访问。非 Claude Code 请求将被拒绝或降级到指定分组。',
         enabled: '仅限 Claude Code',
         disabled: '允许所有客户端',
         fallbackGroup: '降级分组',
@@ -2824,7 +2960,8 @@ export default {
         haikuModel: 'Haiku 映射模型',
         haikuModelPlaceholder: '例如: gpt-5.4-mini',
         exactMappingTitle: '精确模型覆盖',
-        exactMappingHint: '精确 Claude 模型覆盖优先级高于系列默认映射，可将某个具体 Claude 模型单独映射到不同的目标模型。',
+        exactMappingHint:
+          '精确 Claude 模型覆盖优先级高于系列默认映射，可将某个具体 Claude 模型单独映射到不同的目标模型。',
         noExactMappings: '暂无精确模型覆盖规则',
         addExactMapping: '添加精确映射',
         claudeModel: 'Claude 模型',
@@ -2839,8 +2976,16 @@ export default {
         noFallback: '不兜底'
       },
       kiroCache: {
-        title: 'Kiro 模拟缓存',
-        description: '仅对当前 Kiro 分组模拟 Anthropic Prompt Cache 用量。',
+        title: 'Kiro 会话与模拟缓存',
+        description: '仅对当前 Kiro 分组生效。自动粘性会让多轮对话固定路由到同一账号。',
+        endpointMode: 'Endpoint 模式',
+        endpointQ: 'AWS Q 默认回退',
+        endpointKRS: 'Kiro Runtime Service',
+        endpointAuto: '自动：AWS Q 后切 KRS',
+        endpointModeHint: '账号显式配置 preferred_endpoint 或 kiro_endpoint_mode 时优先使用账号配置。',
+        autoSticky: '启用自动粘性会话',
+        stickyTTL: '粘性 TTL（秒）',
+        stickyTTLHint: '范围 60 到 86400。默认 3600 秒。',
         enabled: '启用模拟缓存',
         ratio: '缓存比例',
         ratioHint: '范围 0 到 1，例如 0.5 表示只生效一半模拟缓存 token。'
@@ -2855,8 +3000,7 @@ export default {
       },
       modelRouting: {
         title: '模型路由配置',
-        tooltip:
-          '配置特定模型请求优先路由到指定账号。支持通配符匹配，如 claude-opus-* 匹配所有 opus 模型。',
+        tooltip: '配置特定模型请求优先路由到指定账号。支持通配符匹配，如 claude-opus-* 匹配所有 opus 模型。',
         enabled: '已启用',
         disabled: '已禁用',
         disabledHint: '启用后，配置的路由规则才会生效',
@@ -2876,7 +3020,8 @@ export default {
       },
       mcpXml: {
         title: 'MCP XML 协议注入',
-        tooltip: '启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。',
+        tooltip:
+          '启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。',
         enabled: '已启用',
         disabled: '已禁用'
       },
@@ -3050,7 +3195,8 @@ export default {
         webSearchEmulationHint: '⚠️ 开启后该渠道下所有 Anthropic 分组的账号将自动拦截 web_search 请求，请谨慎操作',
         webSearchEmulationGlobalDisabled: '请先在系统设置 → 网关 → Web Search 模拟中启用全局开关',
         codexImageGenerationBridge: 'Codex 图片生成桥接',
-        codexImageGenerationBridgeHint: '开启后，OpenAI 分组的 Codex /responses 文本请求可能会被自动注入 image_generation 工具。仅在路由账号支持图片生成时开启。',
+        codexImageGenerationBridgeHint:
+          '开启后，OpenAI 分组的 Codex /responses 文本请求可能会被自动注入 image_generation 工具。仅在路由账号支持图片生成时开启。',
         basicSettings: '基础设置',
         addPlatform: '添加平台',
         noPlatforms: '点击"添加平台"开始配置渠道',
@@ -3196,7 +3342,8 @@ export default {
       autoBan: '自动封禁用户',
       autoBanHint: '命中次数达到阈值后将禁用用户账号、刷新认证缓存并发送封禁通知邮件。',
       cyberPolicyExcludeBan: 'cyber_policy 不计入封号次数',
-      cyberPolicyExcludeBanHint: '开启后，cyber_policy 拦截不再计入自动封号的违规次数：当次不判定封号，历史累计亦排除。风控日志与通知邮件照常。',
+      cyberPolicyExcludeBanHint:
+        '开启后，cyber_policy 拦截不再计入自动封号的违规次数：当次不判定封号，历史累计亦排除。风控日志与通知邮件照常。',
       violationNotCounted: '未计入封号',
       banThreshold: '封禁触发次数',
       violationWindowHours: '累计窗口（小时）',
@@ -3238,7 +3385,8 @@ export default {
       preBlockAPIKeyLoad: '前置拦截 Key 负载',
       preBlockAPIKeyLoadHint: '同步前置拦截直接轮询可用审核 Key。',
       preBlockAPIKeyLoadEmpty: '暂无 API Key 负载数据',
-      preBlockAPIKeyLoadSummary: '同步并发 {active} / 可用 Key {available}，累计 {total} 次，worker：{workerActive} / {workerTotal}',
+      preBlockAPIKeyLoadSummary:
+        '同步并发 {active} / 可用 Key {available}，累计 {total} 次，worker：{workerActive} / {workerTotal}',
       preBlockAPIKeyTotals: '总计 {total} / 成功 {success} / 异常 {errors}',
       preBlockKeyActiveShort: '活跃',
       preBlockKeyTotalShort: '总计',
@@ -3255,7 +3403,7 @@ export default {
         response: '命中通知',
         riskThresholds: '风险阈值',
         keywords: '关键词',
-        retention: '日志保留',
+        retention: '日志保留'
       },
       keywordModeKeywordAndApi: '关键词 + API 审核',
       keywordModeKeywordAndApiDesc: '先按关键词拦截，再对剩余请求进行 API 审核。',
@@ -3310,14 +3458,14 @@ export default {
         apiKey: 'API Key',
         groupScope: '审计范围',
         logs: '审核记录',
-        currentFilter: '当前筛选结果',
+        currentFilter: '当前筛选结果'
       },
       filters: {
         search: '按用户/Key/摘要搜索',
         from: '开始时间',
         to: '结束时间',
         allGroups: '全部分组',
-        allEndpoints: '全部端点',
+        allEndpoints: '全部端点'
       },
       table: {
         time: '时间',
@@ -3329,21 +3477,21 @@ export default {
         highest: '最高分',
         actionMeta: '处置',
         latency: '上游耗时',
-        input: '输入摘要',
+        input: '输入摘要'
       },
       result: {
         all: '全部结果',
         hit: '命中',
         blocked: '已拦截',
         pass: '未命中',
-        error: '异常',
+        error: '异常'
       },
       action: {
         keywordBlock: '关键词拦截',
         block: '拦截',
         cyberPolicy: '网络安全策略',
-        error: '异常',
-      },
+        error: '异常'
+      }
     },
 
     // Channel Monitor
@@ -3418,7 +3566,8 @@ export default {
         section: '高级（可选）',
         sectionHint: '自定义请求头和请求体，用于突破上游的客户端识别限制（如仅允许 Claude Code 客户端）。',
         headers: '自定义请求头',
-        headersPlaceholder: 'User-Agent: claude-cli/1.0.83 (external, cli)\nx-app: cli\nanthropic-beta: claude-code-20250219',
+        headersPlaceholder:
+          'User-Agent: claude-cli/1.0.83 (external, cli)\nx-app: cli\nanthropic-beta: claude-code-20250219',
         headerNamePlaceholder: 'Header 名',
         headerValuePlaceholder: 'Value',
         headerAddRow: '添加 Header',
@@ -3430,8 +3579,10 @@ export default {
         bodyModeMerge: '合并',
         bodyModeReplace: '覆盖',
         bodyModeHintOff: '使用 adapter 默认请求体（带 challenge 数学题校验）。',
-        bodyModeHintMerge: '与默认请求体浅合并，用户字段优先；但 model / messages / contents 会被保护不允许覆盖（动这些字段请用「覆盖」模式）。',
-        bodyModeHintReplace: '完全用下方 JSON 作为请求体。注意：此模式下跳过 challenge 校验，改为 HTTP 2xx + 响应文本非空即视为可用。',
+        bodyModeHintMerge:
+          '与默认请求体浅合并，用户字段优先；但 model / messages / contents 会被保护不允许覆盖（动这些字段请用「覆盖」模式）。',
+        bodyModeHintReplace:
+          '完全用下方 JSON 作为请求体。注意：此模式下跳过 challenge 校验，改为 HTTP 2xx + 响应文本非空即视为可用。',
         bodyJson: 'Body JSON',
         bodyJsonFormat: '格式化',
         bodyJsonHint: '失焦时自动解析校验。留空等价于没有覆盖。',
@@ -3457,7 +3608,8 @@ export default {
         applyTooltip: '把当前模板配置覆盖到所有关联的监控上',
         applyTitle: '应用模板',
         applyConfirm: '确认应用',
-        applyConfirmMessage: '将把模板「{name}」的当前配置覆盖到 {n} 个关联监控。监控本地已编辑的自定义修改会被丢弃，是否继续？',
+        applyConfirmMessage:
+          '将把模板「{name}」的当前配置覆盖到 {n} 个关联监控。监控本地已编辑的自定义修改会被丢弃，是否继续？',
         applySuccess: '已应用到 {n} 个监控',
         applyPickerTitle: '应用模板「{name}」',
         applyPickerHint: '勾选要覆盖请求头/请求体的监控（默认全选）。监控本地已编辑的自定义修改会被丢弃。',
@@ -3629,13 +3781,13 @@ export default {
       dataImportParseFailed: '数据解析失败',
       dataImportFailed: '数据导入失败',
       dataImportResult: '导入结果',
-      dataImportResultSummary: '代理创建 {proxy_created}，复用 {proxy_reused}，失败 {proxy_failed}；账号创建 {account_created}，失败 {account_failed}',
+      dataImportResultSummary:
+        '代理创建 {proxy_created}，复用 {proxy_reused}，失败 {proxy_failed}；账号创建 {account_created}，失败 {account_failed}',
       dataImportErrors: '失败详情',
       dataImportSuccess: '导入完成：账号 {account_created}，失败 {account_failed}',
       dataImportCompletedWithErrors: '导入完成但有错误：账号失败 {account_failed}，代理失败 {proxy_failed}',
       syncFromCrsTitle: '从 CRS 同步账号',
-      syncFromCrsDesc:
-        '将 claude-relay-service（CRS）中的账号同步到当前系统（不会在浏览器侧直接请求 CRS）。',
+      syncFromCrsDesc: '将 claude-relay-service（CRS）中的账号同步到当前系统（不会在浏览器侧直接请求 CRS）。',
       crsVersionRequirement: '⚠️ 注意：CRS 版本必须 ≥ v1.1.240 才支持此功能',
       crsBaseUrl: 'CRS 服务地址',
       crsBaseUrlPlaceholder: '例如：http://127.0.0.1:3000',
@@ -3710,7 +3862,8 @@ export default {
         expiresAt: '过期时间',
         actions: '操作'
       },
-      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
+      usageWindowsHint:
+        '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
       allPrivacyModes: '全部Privacy状态',
       privacyUnset: '未设置',
       privacyTrainingOff: '已关闭训练数据共享',
@@ -3749,13 +3902,14 @@ export default {
           normal: '配额正常',
           dailyShort: '日',
           weeklyShort: '周'
-        },
+        }
       },
       clearRateLimit: '清除速率限制',
       resetQuota: '重置配额',
       quotaLimit: '配额限制',
       quotaLimitPlaceholder: '0 表示不限制',
-      quotaLimitHint: '设置日/周/总使用额度（美元），任一维度达到限额后账号暂停调度。Anthropic API Key 账号还可配置客户端亲和。修改限额不会重置已用额度。',
+      quotaLimitHint:
+        '设置日/周/总使用额度（美元），任一维度达到限额后账号暂停调度。Anthropic API Key 账号还可配置客户端亲和。修改限额不会重置已用额度。',
       quotaLimitToggle: '启用配额限制',
       quotaLimitToggleHint: '开启后，当账号用量达到设定额度时自动暂停调度',
       quotaDailyLimit: '日限额',
@@ -3779,7 +3933,7 @@ export default {
         thursday: '周四',
         friday: '周五',
         saturday: '周六',
-        sunday: '周日',
+        sunday: '周日'
       },
       quotaLimitAmount: '总限额',
       quotaLimitAmountHint: '累计消费上限，不会自动重置。',
@@ -3787,7 +3941,7 @@ export default {
         alert: '告警阈值',
         enabled: '启用告警',
         threshold: '告警金额',
-        thresholdPlaceholder: '输入告警金额',
+        thresholdPlaceholder: '输入告警金额'
       },
       testConnection: '测试连接',
       imageTestMode: '图片测试模式',
@@ -3815,7 +3969,7 @@ export default {
         anthropic: 'Anthropic',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
-        grok: 'Grok',
+        grok: 'Grok'
       },
       types: {
         oauth: 'OAuth',
@@ -3827,7 +3981,8 @@ export default {
         grokOauth: 'Grok OAuth',
         antigravityApikey: '通过 Base URL + API Key 连接',
         kiroOauth: 'Kiro OAuth / AWS IDC',
-        kiroApikey: '通过 Base URL + API Key 连接',
+        kiroApikey: '官方 Kiro API Key',
+        kiroApikeyRelay: '外部 Anthropic 兼容中转',
         upstream: '对接上游',
         upstreamDesc: '通过 Base URL + API Key 连接上游',
         api_key: 'API Key',
@@ -3957,8 +4112,7 @@ export default {
         personal: '个人版',
         unlimited: '无限制'
       },
-      ineligibleWarning:
-        '该账号无 Antigravity 使用权限，但仍能进行 API 转发。继续使用请自行承担风险。',
+      ineligibleWarning: '该账号无 Antigravity 使用权限，但仍能进行 API 转发。继续使用请自行承担风险。',
       forbidden: '已封禁',
       forbiddenValidation: '需要验证',
       forbiddenViolation: '违规封禁',
@@ -4029,7 +4183,8 @@ export default {
         failed: '批量更新失败',
         noSelection: '请选择要编辑的账号',
         noFieldsSelected: '请至少选择一个要更新的字段',
-        mixedPlatformWarning: '所选账号跨越多个平台（{platforms}）。显示的模型映射预设为合并结果——请确保映射对每个平台都适用。',
+        mixedPlatformWarning:
+          '所选账号跨越多个平台（{platforms}）。显示的模型映射预设为合并结果——请确保映射对每个平台都适用。',
         mixedPlatformModelRestrictionDisabled: '混合平台批量编辑时已禁用模型白名单/映射修改，请按平台分别操作。'
       },
       bulkDeleteTitle: '批量删除账号',
@@ -4067,8 +4222,10 @@ export default {
       bedrockDesc: 'SigV4 / API Key',
       vertexLabel: 'Vertex',
       vertexDesc: 'Service Account',
-      vertexAnthropicHint: '使用 Google Cloud Service Account JSON 通过 Vertex AI 调用 Anthropic Claude。建议配置模型映射，将客户端 Claude 模型名映射到 Vertex 模型 ID。',
-      vertexGeminiHint: '使用 Google Cloud Service Account JSON 访问 Vertex AI Gemini。建议将 Vertex 账号放入独立分组，避免和 AI Studio/Gemini OAuth 同模型混调。',
+      vertexAnthropicHint:
+        '使用 Google Cloud Service Account JSON 通过 Vertex AI 调用 Anthropic Claude。建议配置模型映射，将客户端 Claude 模型名映射到 Vertex 模型 ID。',
+      vertexGeminiHint:
+        '使用 Google Cloud Service Account JSON 访问 Vertex AI Gemini。建议将 Vertex 账号放入独立分组，避免和 AI Studio/Gemini OAuth 同模型混调。',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: '已读取 Service Account JSON',
       vertexSaJsonDrop: '拖入 Service Account JSON',
@@ -4113,8 +4270,7 @@ export default {
         wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
         wsModePassthroughHint: 'passthrough 模式不使用 WS 连接池。',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
-        oauthResponsesWebsocketsV2Desc:
-          '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
+        oauthResponsesWebsocketsV2Desc: '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
         apiKeyResponsesWebsocketsV2: 'API Key WebSocket Mode',
         apiKeyResponsesWebsocketsV2Desc:
           '仅对 OpenAI API Key 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
@@ -4122,9 +4278,11 @@ export default {
         codexCLIOnly: '仅允许 Codex 官方客户端',
         codexCLIOnlyDesc: '仅对 OpenAI OAuth 生效。开启后仅允许 Codex 官方客户端家族访问；关闭后完全绕过并保持原逻辑。',
         codexCLIOnlyAllowClaudeCode: '允许 Claude Code 兼容请求',
-        codexCLIOnlyAllowClaudeCodeDesc: '开启后，Codex 官方客户端限制模式下也允许符合 Claude Code 兼容入口的请求通过。',
+        codexCLIOnlyAllowClaudeCodeDesc:
+          '开启后，Codex 官方客户端限制模式下也允许符合 Claude Code 兼容入口的请求通过。',
         codexCLIOnlyAppServer: '允许 Codex app-server 客户端',
-        codexCLIOnlyAppServerDesc: '仅在上方开关开启时生效。开启后本账号额外放行内嵌 Codex 引擎、经 app-server 协议接入的第三方客户端（如 Claude Code 的 codex 插件），仍需通过全局引擎指纹门；与全局 app-server 开关取 OR（任一开即放行）。',
+        codexCLIOnlyAppServerDesc:
+          '仅在上方开关开启时生效。开启后本账号额外放行内嵌 Codex 引擎、经 app-server 协议接入的第三方客户端（如 Claude Code 的 codex 插件），仍需通过全局引擎指纹门；与全局 app-server 开关取 OR（任一开即放行）。',
         codexImageGenerationBridge: 'Codex 图片生成桥接',
         codexImageGenerationBridgeDesc:
           '账号级策略优先于渠道和全局配置。仅控制 Codex 走 /responses 文本端点时是否注入 image_generation 工具；不影响独立图片生成接口。',
@@ -4144,8 +4302,7 @@ export default {
         compactModeForceOn: '强制开启',
         compactModeForceOff: '强制关闭',
         compactModelMapping: 'Compact 专属模型映射',
-        compactModelMappingDesc:
-          '仅在 /responses/compact 请求中生效。当上游 compact 端点需要特殊 compact 模型时使用。',
+        compactModelMappingDesc: '仅在 /responses/compact 请求中生效。当上游 compact 端点需要特殊 compact 模型时使用。',
         compactSupported: '支持 Compact',
         compactUnsupported: '不支持 Compact',
         compactAuto: 'Compact Auto',
@@ -4154,7 +4311,7 @@ export default {
         testMode: '测试模式',
         testModeDefault: '常规请求',
         testModeCompact: 'Compact 探测',
-        modelRestrictionDisabledByPassthrough: '已开启自动透传：模型白名单/映射不会生效。',
+        modelRestrictionDisabledByPassthrough: '已开启自动透传：模型白名单/映射不会生效。'
       },
       grok: {
         baseUrlHint: 'Grok OAuth 账号会转发到官方 xAI API Base URL。',
@@ -4166,7 +4323,7 @@ export default {
           '仅对 Anthropic API Key 生效。开启后，messages/count_tokens 请求将透传上游并仅替换认证，保留计费/并发/审计及必要安全过滤；关闭即可回滚到现有兼容链路。',
         webSearchEmulation: 'Web Search 模拟',
         webSearchEmulationDesc:
-          '为该 API Key 账号启用 web search 模拟。客户端发送纯 web_search 请求时，由网关调用第三方搜索 API 并构造响应返回。',
+          '为该 API Key 账号启用 web search 模拟。客户端发送纯 web_search 请求时，由网关调用第三方搜索 API 并构造响应返回。'
       },
       modelRestriction: '模型限制（可选）',
       modelWhitelist: '模型白名单',
@@ -4261,7 +4418,7 @@ export default {
           userMsgQueueHint: '对用户消息施加发送限制，避免触发上游 RPM 限制',
           umqModeOff: '关闭',
           umqModeThrottle: '软性限速',
-          umqModeSerialize: '串行队列',
+          umqModeSerialize: '串行队列'
         },
         tlsFingerprint: {
           label: 'TLS 指纹模拟',
@@ -4287,7 +4444,7 @@ export default {
         customBaseUrl: {
           label: '自定义转发地址',
           hint: '启用后将请求转发到自定义中继服务，代理地址将作为 URL 参数传递给中继服务',
-          urlHint: '中继服务地址（如 https://relay.example.com）',
+          urlHint: '中继服务地址（如 https://relay.example.com）'
         },
         clientAffinity: {
           label: '客户端亲和调度',
@@ -4318,6 +4475,8 @@ export default {
       priorityHint: '优先级越小的账号优先使用',
       billingRateMultiplier: '账号计费倍率',
       billingRateMultiplierHint: '0 表示不计费，仅影响账号计费',
+      kiroCreditUnitPriceUsd: '每积分单价',
+      kiroCreditUnitPriceUsdHint: '仅用于 Kiro 今日统计的 Credits 金额估算，0 表示不显示估算金额',
       expiresAt: '过期时间',
       expiresAtHint: '留空表示不过期',
       higherPriorityFirst: '数值越小优先级越高',
@@ -4327,8 +4486,7 @@ export default {
         '！！注意！！ Antigravity Claude 和 Anthropic Claude 无法在同个上下文中使用，如果你同时有 Anthropic 账号和 Antigravity 账号，开启此选项会导致经常 400 报错。开启后，请用分组功能做好 Antigravity 账号和 Anthropic 账号的隔离。一定要弄明白再开启！！',
       aiCreditsBalance: 'AI Credits',
       allowOverages: '允许超量请求 (AI Credits)',
-      allowOveragesTooltip:
-        '仅在免费配额被明确判定为耗尽后才会使用 AI Credits。普通并发 429 限流不会切换到超量请求。',
+      allowOveragesTooltip: '仅在免费配额被明确判定为耗尽后才会使用 AI Credits。普通并发 429 限流不会切换到超量请求。',
       creating: '创建中...',
       updating: '更新中...',
       accountCreated: '账号创建成功',
@@ -4337,7 +4495,8 @@ export default {
       failedToUpdate: '更新账号失败',
       pleaseSelectStatus: '请选择有效的账号状态',
       mixedChannelWarningTitle: '混合渠道警告',
-      mixedChannelWarning: '警告：分组 "{groupName}" 中同时包含 {currentPlatform} 和 {otherPlatform} 账号。混合使用不同渠道可能导致 thinking block 签名验证问题，会自动回退到非 thinking 模式。确定要继续吗？',
+      mixedChannelWarning:
+        '警告：分组 "{groupName}" 中同时包含 {currentPlatform} 和 {otherPlatform} 账号。混合使用不同渠道可能导致 thinking block 签名验证问题，会自动回退到非 thinking 模式。确定要继续吗？',
       pleaseEnterAccountName: '请输入账号名称',
       pleaseEnterApiKey: '请输入 API Key',
       bedrockAccessKeyId: 'AWS Access Key ID',
@@ -4346,7 +4505,8 @@ export default {
       bedrockRegion: 'AWS Region',
       bedrockRegionHint: '例如 us-east-1, us-west-2, eu-west-1',
       bedrockForceGlobal: '强制使用 Global 跨区域推理',
-      bedrockForceGlobalHint: '启用后模型 ID 使用 global. 前缀（如 global.anthropic.claude-...），请求可路由到全球任意支持的区域，获得更高可用性',
+      bedrockForceGlobalHint:
+        '启用后模型 ID 使用 global. 前缀（如 global.anthropic.claude-...），请求可路由到全球任意支持的区域，获得更高可用性',
       bedrockAccessKeyIdRequired: '请输入 AWS Access Key ID',
       bedrockSecretAccessKeyRequired: '请输入 AWS Secret Access Key',
       bedrockRegionRequired: '请选择 AWS Region',
@@ -4372,8 +4532,13 @@ export default {
         pleaseEnterApiKey: '请输入上游 API Key'
       },
       kiro: {
-        baseUrlHint: '上游 Kiro 兼容服务地址。',
-        apiKeyHint: 'Kiro 控制台或兼容上游服务提供的 API Key。'
+        baseUrlHint: '官方 Kiro API Key 直连请留空；仅外部 Anthropic 兼容中转需要填写。',
+        apiKeyHint: 'Kiro 控制台或兼容上游服务提供的 API Key。',
+        relayBaseUrlHint:
+          '外部 Anthropic 兼容上游地址（如 https://your-relay.example.com），将请求 {base_url}/v1/messages',
+        relayApiKeyHint: '外部中转服务使用的 API Key。',
+        relayPriorityHint:
+          '外部中转账号会作为兜底账号使用。除非明确希望优先选中，否则请保持比官方 Kiro 账号更低的优先级。'
       },
       droid: {
         baseUrlHint: 'Factory.ai Droid 兼容服务地址。',
@@ -4389,8 +4554,7 @@ export default {
         sessionKey: 'sessionKey',
         keysCount: '{count} 个密钥',
         batchCreateAccounts: '将批量创建 {count} 个账号',
-        sessionKeyPlaceholder:
-          '每行一个 sessionKey，例如：\nsk-ant-sid01-xxxxx...\nsk-ant-sid01-yyyyy...',
+        sessionKeyPlaceholder: '每行一个 sessionKey，例如：\nsk-ant-sid01-xxxxx...\nsk-ant-sid01-yyyyy...',
         sessionKeyPlaceholderSingle: 'sk-ant-sid01-xxxxx...',
         howToGetSessionKey: '如何获取 sessionKey',
         step1: '在浏览器中登录 claude.ai',
@@ -4454,8 +4618,7 @@ export default {
           importantNotice:
             '重要提示：授权后页面可能会加载较长时间，请耐心等待。当浏览器地址栏变为 http://localhost... 开头时，表示授权已完成。',
           step3EnterCode: '输入授权链接或 Code',
-          authCodeDesc:
-            '授权完成后，当页面地址变为 http://localhost:xxx/auth/callback?code=... 时：',
+          authCodeDesc: '授权完成后，当页面地址变为 http://localhost:xxx/auth/callback?code=... 时：',
           authCode: '授权链接或 Code',
           authCodePlaceholder:
             '方式1：复制完整的链接\n(http://localhost:xxx/auth/callback?code=...)\n方式2：仅复制 code 参数的值',
@@ -4478,7 +4641,8 @@ export default {
           codexSessionDesc: '粘贴 Codex JSON 或 accessToken，按第一步配置创建账号。',
           codexSessionInputLabel: 'Codex JSON 或 accessToken',
           codexSessionPlaceholder: '支持多行，每行一个 token 或 JSON',
-          codexSessionHint: 'sessionToken 不会作为 refresh_token 保存；未包含 refresh_token 时会按 accessToken 过期时间设置账号过期，无法解析且第一步未设置过期时间时会拒绝导入。',
+          codexSessionHint:
+            'sessionToken 不会作为 refresh_token 保存；未包含 refresh_token 时会按 accessToken 过期时间设置账号过期，无法解析且第一步未设置过期时间时会拒绝导入。',
           codexSessionImportAndCreate: '导入并创建账号',
           codexSessionEmpty: '请输入 Codex JSON 或 accessToken',
           codexSessionImportFailed: 'Codex 账号导入失败',
@@ -4501,7 +4665,8 @@ export default {
           openSessionUrl: '打开获取链接',
           copySessionUrl: '复制链接',
           copyAuthUrl: '复制授权链接',
-          sessionUrlHint: '该链接通常可获取 AT。若返回中无 sessionToken，请从浏览器 Cookie 复制 __Secure-next-auth.session-token 作为 ST。',
+          sessionUrlHint:
+            '该链接通常可获取 AT。若返回中无 sessionToken，请从浏览器 Cookie 复制 __Secure-next-auth.session-token 作为 ST。',
           parsedSessionTokensLabel: '解析出的 ST',
           parsedSessionTokensEmpty: '未解析到 ST，请检查输入内容',
           parsedAccessTokensLabel: '解析出的 AT',
@@ -4543,14 +4708,12 @@ export default {
           generateAuthUrl: '生成授权链接',
           projectIdLabel: 'Project ID（可选）',
           projectIdPlaceholder: '例如：my-gcp-project 或 cloud-ai-companion-xxxxx',
-          projectIdHint:
-            '留空则在兑换授权码后自动探测；若自动探测失败，可填写后重新生成授权链接再授权。',
+          projectIdHint: '留空则在兑换授权码后自动探测；若自动探测失败，可填写后重新生成授权链接再授权。',
           howToGetProjectId: '如何获取',
           step2OpenUrl: '在浏览器中打开链接并完成授权',
           openUrlDesc: '请在新标签页中打开授权链接，登录您的 Google 账户并授权。',
           step3EnterCode: '输入回调链接或 Code',
-          authCodeDesc:
-            '授权完成后，复制浏览器跳转后的回调链接（推荐）或仅复制 code，粘贴到下方即可。',
+          authCodeDesc: '授权完成后，复制浏览器跳转后的回调链接（推荐）或仅复制 code，粘贴到下方即可。',
           authCode: '回调链接或 Code',
           authCodePlaceholder: '方式1（推荐）：粘贴回调链接\n方式2：仅粘贴 code 参数的值',
           authCodeHint: '系统会自动从链接中解析 code/state。',
@@ -4591,8 +4754,7 @@ export default {
           importantNotice:
             '重要提示：授权后页面可能会加载较长时间，请耐心等待。当浏览器地址栏变为 http://localhost... 开头时，表示授权已完成。',
           step3EnterCode: '输入授权链接或 Code',
-          authCodeDesc:
-            '授权完成后，当页面地址变为 http://localhost:xxx/auth/callback?code=... 时：',
+          authCodeDesc: '授权完成后，当页面地址变为 http://localhost:xxx/auth/callback?code=... 时：',
           authCode: '授权链接或 Code',
           authCodePlaceholder:
             '方式1：复制完整的链接\n(http://localhost:xxx/auth/callback?code=...)\n方式2：仅复制 code 参数的值',
@@ -4603,7 +4765,8 @@ export default {
           // Refresh Token auth
           refreshTokenAuth: '手动输入 RT',
           refreshTokenInputLabel: 'Refresh Token',
-          refreshTokenDesc: '输入您已有的 Antigravity Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。',
+          refreshTokenDesc:
+            '输入您已有的 Antigravity Refresh Token，支持批量输入（每行一个），系统将自动验证并创建账号。',
           refreshTokenPlaceholder: '粘贴您的 Antigravity Refresh Token...\n支持多个，每行一个',
           validating: '验证中...',
           validateAndCreate: '验证并创建账号',
@@ -4618,9 +4781,11 @@ export default {
           step2OpenUrl: '在浏览器中打开链接并完成授权',
           openUrlDesc: '请在新标签页打开授权链接并完成登录。AWS IDC 模式完成登录后，回到本页面直接点击完成授权。',
           step3EnterCode: '完成授权',
-          authCodeDesc: '普通 Kiro 登录可粘贴回调链接或 code。AWS IDC 模式无需粘贴 code，完成浏览器授权后直接点击完成授权。',
+          authCodeDesc:
+            '普通 Kiro 登录可粘贴回调链接或 code。AWS IDC 模式无需粘贴 code，完成浏览器授权后直接点击完成授权。',
           authCode: '回调链接或 Code',
-          authCodePlaceholder: '普通 Kiro 登录：粘贴完整回调链接或 code\nAWS IDC：留空，完成浏览器授权后直接点击完成授权',
+          authCodePlaceholder:
+            '普通 Kiro 登录：粘贴完整回调链接或 code\nAWS IDC：留空，完成浏览器授权后直接点击完成授权',
           authCodeHint: '普通登录会自动解析 code/state；AWS IDC 使用设备授权，无需复制本地回调链接。',
           authModeTitle: '授权模式',
           oauthTitle: 'Kiro 登录',
@@ -4842,6 +5007,8 @@ export default {
         cost: '费用',
         requests: '请求',
         tokens: 'Token',
+        kiroCredits: '消费Credits',
+        approxCost: '约{amount}',
         highestCostDay: '最高费用日',
         highestRequestDay: '最高请求日',
         date: '日期',
@@ -4892,12 +5059,16 @@ export default {
       cronTooltipExampleHourly: '0 * * * *：每小时整点运行一次',
       cronTooltipExampleDaily: '0 9 * * *：每天 09:00 运行一次',
       cronTooltipExampleWeekly: '0 9 * * 1：每周一 09:00 运行一次',
-      cronTooltipRange: '推荐填写范围：使用标准 5 字段 cron；如果只是健康检查，建议从每 30 分钟、每 1 小时或每天固定时间开始，不建议一开始就设置过高频率。',
+      cronTooltipRange:
+        '推荐填写范围：使用标准 5 字段 cron；如果只是健康检查，建议从每 30 分钟、每 1 小时或每天固定时间开始，不建议一开始就设置过高频率。',
       maxResultsTooltipTitle: '最大结果数说明：',
       maxResultsTooltipMeaning: '用于限制单个计划最多保留多少条历史测试结果，避免结果列表无限增长。',
-      maxResultsTooltipBody: '系统只会保留最近的测试结果；当保存数量超过这个值时，更早的历史记录会自动清理，避免列表过长和存储持续增长。',
-      maxResultsTooltipExample: '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
-      maxResultsTooltipRange: '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
+      maxResultsTooltipBody:
+        '系统只会保留最近的测试结果；当保存数量超过这个值时，更早的历史记录会自动清理，避免列表过长和存储持续增长。',
+      maxResultsTooltipExample:
+        '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
+      maxResultsTooltipRange:
+        '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
       autoRecover: '自动恢复',
       autoRecoverHelp: '测试成功后自动恢复异常状态的账号'
     },
@@ -4978,7 +5149,7 @@ export default {
         http: 'HTTP',
         https: 'HTTPS',
         socks5: 'SOCKS5',
-        socks5h: 'SOCKS5H (远程 DNS)',
+        socks5h: 'SOCKS5H (远程 DNS)'
       },
       name: '名称',
       protocol: '协议',
@@ -5048,7 +5219,8 @@ export default {
       proxyTestFailed: '代理测试失败',
       qualityCheckDone: '质量检测完成：评分 {score}（{grade}）',
       qualityCheckFailed: '代理质量检测失败',
-      batchQualityDone: '批量质量检测完成，共检测 {count} 个；优质 {healthy} 个，告警 {warn} 个，挑战 {challenge} 个，异常 {failed} 个',
+      batchQualityDone:
+        '批量质量检测完成，共检测 {count} 个；优质 {healthy} 个，告警 {warn} 个，挑战 {challenge} 个，异常 {failed} 个',
       batchQualityFailed: '批量质量检测失败',
       batchQualityEmpty: '暂无可检测质量的代理',
       qualityReportTitle: '代理质量检测报告',
@@ -5095,7 +5267,7 @@ export default {
       fallbackNone: '不回退',
       fallbackProxy: '指定备用代理',
       fallbackDirect: '回退直连',
-      backupProxy: '备用代理',
+      backupProxy: '备用代理'
     },
     // Redeem Codes Management
     redeem: {
@@ -6155,12 +6327,13 @@ export default {
         ignoreCountTokensErrors: '忽略 count_tokens 错误',
         ignoreCountTokensErrorsHint: '启用后，count_tokens 请求的错误将不会写入错误日志。',
         ignoreContextCanceled: '忽略客户端断连错误',
-        ignoreContextCanceledHint:
-          '启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志。',
+        ignoreContextCanceledHint: '启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志。',
         ignoreNoAvailableAccounts: '忽略无可用账号错误',
-        ignoreNoAvailableAccountsHint: '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
+        ignoreNoAvailableAccountsHint:
+          '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
         ignoreInvalidApiKeyErrors: '忽略无效 API Key 错误',
-        ignoreInvalidApiKeyErrorsHint: '启用后，无效或缺失 API Key 的错误（INVALID_API_KEY、API_KEY_REQUIRED）将不会写入错误日志。',
+        ignoreInvalidApiKeyErrorsHint:
+          '启用后，无效或缺失 API Key 的错误（INVALID_API_KEY、API_KEY_REQUIRED）将不会写入错误日志。',
         ignoreInsufficientBalanceErrors: '忽略余额不足错误',
         ignoreInsufficientBalanceErrorsHint: '启用后，账号余额不足（Insufficient balance）的错误将不会写入错误日志。',
         autoRefresh: '自动刷新',
@@ -6274,7 +6447,7 @@ export default {
         payment: '支付配置',
         email: '邮件设置',
         backup: '数据备份',
-        data: 'Sora 存储',
+        data: 'Sora 存储'
       },
       features: {
         channelMonitor: {
@@ -6284,20 +6457,20 @@ export default {
           enabled: '启用渠道监控',
           enabledHint: '关闭后后台不再执行定时检测，已有数据保留。',
           defaultInterval: '默认检测间隔（秒）',
-          defaultIntervalHint: '新建渠道监控时表单的默认值，可被单个渠道覆盖。范围 15 – 3600 秒。',
+          defaultIntervalHint: '新建渠道监控时表单的默认值，可被单个渠道覆盖。范围 15 – 3600 秒。'
         },
         availableChannels: {
           title: '可用渠道',
           description: '向已登录用户展示他们能访问的渠道、模型和定价聚合视图。默认关闭。',
           configureLink: '前往 渠道管理 > 渠道定价 配置模型价格',
           enabled: '启用可用渠道',
-          enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。',
+          enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。'
         },
         webChat: {
           title: '网页对话',
           description: '为不会配置 CLI 的用户提供控制台内文本流式对话。默认关闭，开启后会按分组自动创建隐藏托管密钥。',
           enabled: '启用网页对话',
-          enabledHint: '关闭后用户端侧边栏入口隐藏，接口拒绝访问，已创建的隐藏密钥不会暴露给普通用户。',
+          enabledHint: '关闭后用户端侧边栏入口隐藏，接口拒绝访问，已创建的隐藏密钥不会暴露给普通用户。'
         },
         riskControl: {
           title: '风控中心',
@@ -6306,14 +6479,16 @@ export default {
           enabled: '启用风控中心',
           enabledHint: '关闭后管理员侧边栏入口隐藏，网关内容审计不会执行。',
           cyberSessionBlock: 'cyber 会话自动屏蔽',
-          cyberSessionBlockHint: '开启后,被上游网络安全策略(cyber_policy)拦截的会话将在 TTL 内被本地屏蔽,不再发往上游。仅屏蔽该会话,不影响同 Key 其他会话。',
-          cyberSessionBlockTTL: '屏蔽时长(秒)',
+          cyberSessionBlockHint:
+            '开启后,被上游网络安全策略(cyber_policy)拦截的会话将在 TTL 内被本地屏蔽,不再发往上游。仅屏蔽该会话,不影响同 Key 其他会话。',
+          cyberSessionBlockTTL: '屏蔽时长(秒)'
         },
         affiliate: {
           title: '邀请返利',
           description: '老用户邀请新用户注册，新用户充值后老用户按比例获得返利额度。默认关闭。',
           enabled: '启用邀请返利',
-          enabledHint: '关闭后用户菜单中的邀请页面入口隐藏、注册时忽略邀请码、新充值不再产生返利。已有返利额度仍可转入余额。',
+          enabledHint:
+            '关闭后用户菜单中的邀请页面入口隐藏、注册时忽略邀请码、新充值不再产生返利。已有返利额度仍可转入余额。',
           rebateRate: '全局返利比例',
           rebateRateHint: '充值后返给邀请人的默认比例（0-100%，例如填写 10 表示返利 10%）。',
           freezeHours: '返利冻结期（小时）',
@@ -6332,15 +6507,16 @@ export default {
             customBadge: '自定义',
             useGlobal: '沿用全局',
             resetTitle: '重置该用户的专属配置',
-            resetMessage: '确认将 {email} 的专属配置全部重置为默认？\n• 专属返利比例将清除（沿用全局）\n• 邀请码将重新生成为系统随机码（已分发的旧邀请链接将失效）',
+            resetMessage:
+              '确认将 {email} 的专属配置全部重置为默认？\n• 专属返利比例将清除（沿用全局）\n• 邀请码将重新生成为系统随机码（已分发的旧邀请链接将失效）',
             totalLabel: '共 {total} 条',
             col: {
               email: '邮箱',
               username: '用户名',
               code: '邀请码',
               rate: '专属比例',
-              actions: '操作',
-            },
+              actions: '操作'
+            }
           },
           modal: {
             addTitle: '添加专属用户',
@@ -6355,15 +6531,15 @@ export default {
             ratePlaceholder: '例如 30',
             rateHint: '0-100%；留空（编辑模式下）表示清除专属比例并沿用全局。',
             errorBadRate: '请输入 0-100 之间的比例',
-            errorEmpty: '至少填写一项：专属邀请码或专属返利比例',
+            errorEmpty: '至少填写一项：专属邀请码或专属返利比例'
           },
           batchModal: {
             title: '批量设置专属比例（已选 {count} 个用户）',
             hint: '为所选用户统一设置专属返利比例。',
             placeholder: '例如 30',
-            clearHint: '留空提交将清除所选用户的专属比例。',
-          },
-        },
+            clearHint: '留空提交将清除所选用户的专属比例。'
+          }
+        }
       },
       emailTabDisabledTitle: '邮箱验证未启用',
       emailTabDisabledHint: '请在「安全与认证」选项卡中启用邮箱验证后，再配置 SMTP 设置。',
@@ -6382,8 +6558,7 @@ export default {
         emailVerification: '邮箱验证',
         emailVerificationHint: '新用户注册时需要验证邮箱',
         emailSuffixWhitelist: '邮箱域名白名单',
-        emailSuffixWhitelistHint:
-          "仅允许使用指定域名的邮箱注册账号（例如 {'@'}qq.com, {'@'}gmail.com）",
+        emailSuffixWhitelistHint: "仅允许使用指定域名的邮箱注册账号（例如 {'@'}qq.com, {'@'}gmail.com）",
         emailSuffixWhitelistPlaceholder: 'example.com',
         emailSuffixWhitelistInputHint: '留空则不限制',
         emailSuffixBlacklist: '邮箱域名黑名单',
@@ -6402,8 +6577,7 @@ export default {
         frontendUrlHint: '用于生成邮件中的密码重置链接，例如 https://example.com',
         totp: '双因素认证 (2FA)',
         totpHint: '允许用户使用 Google Authenticator 等应用进行二次验证',
-        totpKeyNotConfigured:
-          '请先在环境变量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密钥。'
+        totpKeyNotConfigured: '请先在环境变量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密钥。'
       },
       turnstile: {
         title: 'Cloudflare Turnstile',
@@ -6523,23 +6697,27 @@ export default {
         title: '网关调度设置',
         description: '控制 API Key 的调度行为',
         allowUngroupedKey: '允许未分组 Key 调度',
-        allowUngroupedKeyHint: '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。'
+        allowUngroupedKeyHint:
+          '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。'
       },
       gatewayForwarding: {
         title: '请求转发行为',
         description: '控制请求转发到上游 OAuth 账号时的行为',
         fingerprintUnification: '指纹统一化',
-        fingerprintUnificationHint: '统一共享同一 OAuth 账号的用户的 X-Stainless-* 请求头。关闭后透传客户端原始请求头。',
+        fingerprintUnificationHint:
+          '统一共享同一 OAuth 账号的用户的 X-Stainless-* 请求头。关闭后透传客户端原始请求头。',
         metadataPassthrough: 'Metadata 透传',
         metadataPassthroughHint: '透传客户端原始 metadata.user_id，不进行重写。可能提高上游缓存命中率。',
         claudeOAuthSystemPromptInjection: 'Claude OAuth System 注入',
-        claudeOAuthSystemPromptInjectionHint: '为非 Claude Code 客户端的 Claude OAuth 请求注入 Claude Code 形态的 system blocks。默认开启。',
+        claudeOAuthSystemPromptInjectionHint:
+          '为非 Claude Code 客户端的 Claude OAuth 请求注入 Claude Code 形态的 system blocks。默认开启。',
         claudeOAuthSystemPrompt: 'Claude OAuth 扩展提示词',
         claudeOAuthSystemPromptPlaceholder: '留空时使用内置 Claude Code 扩展提示词。',
         claudeOAuthSystemPromptHint: '兼容旧配置：仅控制第三个注入的 system block。',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
         claudeOAuthSystemPromptBlocksPlaceholder: '留空时使用内置 3 个 blocks。支持数组或 {"blocks": [...]}。',
-        claudeOAuthSystemPromptBlocksHint: '每个 block 会保存为带 enabled、type、text、可选 cache_control 的 JSON。{billing_header} 会按请求动态生成；Claude Code 身份提示词和扩展提示词可直接编辑，也可用预设恢复默认值。',
+        claudeOAuthSystemPromptBlocksHint:
+          '每个 block 会保存为带 enabled、type、text、可选 cache_control 的 JSON。{billing_header} 会按请求动态生成；Claude Code 身份提示词和扩展提示词可直接编辑，也可用预设恢复默认值。',
         systemBlockTitle: 'System Block {index}',
         systemBlockPreset: '预设',
         systemBlockPresetBilling: 'Billing Header',
@@ -6557,23 +6735,29 @@ export default {
         cacheTTL5m: '5 分钟',
         cacheTTL1h: '1 小时',
         anthropicCacheTTL1hInjection: 'Anthropic 缓存 TTL 注入',
-        anthropicCacheTTL1hInjectionHint: '开启后，对 Anthropic OAuth/Setup Token 请求体中已有的 ephemeral 缓存块强制写入 1h；响应 usage 默认按 5m 回写计费，账号级 TTL 计费设置优先。',
+        anthropicCacheTTL1hInjectionHint:
+          '开启后，对 Anthropic OAuth/Setup Token 请求体中已有的 ephemeral 缓存块强制写入 1h；响应 usage 默认按 5m 回写计费，账号级 TTL 计费设置优先。',
         proxyAutoSelectCapacity: '代理自动选择容量',
         proxyAutoSelectCapacityHint: '添加账号时仅统计同平台账号数量，其他平台账号不占用当前平台的代理/IP 容量。',
         proxyAutoSelectAnthropic: 'Anthropic / IP',
         proxyAutoSelectOpenAI: 'OpenAI / IP',
         proxyAutoSelectAntigravity: 'Antigravity / IP',
         rewriteMessageCacheControl: '改写消息缓存断点',
-        rewriteMessageCacheControlHint: '默认关闭，保留客户端在 messages 内容块中的 cache_control。开启后会清除客户端断点并注入代理断点，适合不自行管理缓存策略的客户端。',
+        rewriteMessageCacheControlHint:
+          '默认关闭，保留客户端在 messages 内容块中的 cache_control。开启后会清除客户端断点并注入代理断点，适合不自行管理缓存策略的客户端。',
         antigravityUserAgentVersion: 'Antigravity UA 版本',
         antigravityUserAgentVersionPlaceholder: '1.23.2',
-        antigravityUserAgentVersionHint: '留空时使用 ANTIGRAVITY_USER_AGENT_VERSION 或内置默认值 1.23.2；填写后后台设置优先。',
+        antigravityUserAgentVersionHint:
+          '留空时使用 ANTIGRAVITY_USER_AGENT_VERSION 或内置默认值 1.23.2；填写后后台设置优先。',
         claudeUpstreamUserAgent: 'Claude/Anthropic 上游 UA',
         claudeUpstreamUserAgentPlaceholder: 'claude-cli/2.1.156 (external, cli)',
-        claudeUpstreamUserAgentHint: '强制所有 Claude/Anthropic 上游请求使用此完整 User-Agent。留空时使用内置默认值；客户端传入、指纹缓存和监控模板均不能覆盖。',
+        claudeUpstreamUserAgentHint:
+          '强制所有 Claude/Anthropic 上游请求使用此完整 User-Agent。留空时使用内置默认值；客户端传入、指纹缓存和监控模板均不能覆盖。',
         openaiCodexUserAgent: 'OpenAI Codex UA',
-        openaiCodexUserAgentPlaceholder: 'codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)',
-        openaiCodexUserAgentHint: '用于规避 OpenAI 上游 Cloudflare 对浏览器 UA 的访问质询。仅在检测到客户端 User-Agent 为浏览器（Mozilla/...）时生效，其他客户端原样透传。留空使用内置默认值。',
+        openaiCodexUserAgentPlaceholder:
+          'codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)',
+        openaiCodexUserAgentHint:
+          '用于规避 OpenAI 上游 Cloudflare 对浏览器 UA 的访问质询。仅在检测到客户端 User-Agent 为浏览器（Mozilla/...）时生效，其他客户端原样透传。留空使用内置默认值。',
         codexHardeningTitle: 'Codex 设置',
         codexClientRestrictionTitle: 'Codex 客户端限制',
         codexHardeningDesc:
@@ -6582,8 +6766,7 @@ export default {
         minCodexVersionPlaceholder: '例如 0.142.0',
         maxCodexVersion: '最高 Codex 版本',
         maxCodexVersionPlaceholder: '例如 0.200.0',
-        codexVersionHint:
-          '仅对官方客户端生效，校验其版本是否落在 [最低, 最高] 区间。留空表示该侧不限制。',
+        codexVersionHint: '仅对官方客户端生效，校验其版本是否落在 [最低, 最高] 区间。留空表示该侧不限制。',
         codexFingerprintSignals: 'Codex 引擎指纹信号',
         codexFingerprintSignalsDesc:
           '定义引擎指纹信号：勾「必须」的信号需全部命中（AND），每条 / 分隔的变体取或（OR）；一条都不勾即不校验。默认只勾 x-codex- 前缀。类型：头精确 / 头前缀 / body 路径。',
@@ -6592,7 +6775,8 @@ export default {
         codexFpTypeBodyPath: 'body 路径',
         codexFpMatchPlaceholder: '匹配，变体用 / 分隔（如 session-id / session_id 或 x-codex-）',
         codexFpRequired: '必须',
-        codexFingerprintNoRequiredWarn: '未勾选任何「必须」信号——引擎指纹门当前不生效，等于放行所有通过身份/版本的候选。如需启用校验，请至少勾选一条信号。',
+        codexFingerprintNoRequiredWarn:
+          '未勾选任何「必须」信号——引擎指纹门当前不生效，等于放行所有通过身份/版本的候选。如需启用校验，请至少勾选一条信号。',
         codexAllowAppServer: 'Codex app-server',
         codexAllowAppServerDesc:
           '放行内嵌 Codex 引擎、经 app-server 协议接入的第三方客户端（如 Claude Code 的 codex 插件）。默认关闭；开启后此类客户端通过引擎指纹门（下方信号列表）即放行，关闭则仅放行官方客户端与白名单。',
@@ -6608,7 +6792,7 @@ export default {
         codexOriginatorPlaceholder: 'originator（精确，如 opencode）',
         codexUaContainsPlaceholder: 'User-Agent 包含标记，逗号分隔（如 opencode/）',
         codexAddRow: '添加一条',
-        codexRemoveRow: '删除',
+        codexRemoveRow: '删除'
       },
       webSearchEmulation: {
         title: 'Web Search 模拟',
@@ -6650,14 +6834,13 @@ export default {
         daily: '每日',
         weekly: '每周',
         monthly: '每月',
-        noProviders: '未配置搜索服务商',
+        noProviders: '未配置搜索服务商'
       },
       site: {
         title: '站点设置',
         description: '自定义站点品牌',
         backendMode: 'Backend 模式',
-        backendModeDescription:
-          '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
+        backendModeDescription: '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
         siteNamePlaceholder: 'SubAPIs',
@@ -6677,7 +6860,7 @@ export default {
           endpointUrlPlaceholder: 'https://api2.example.com',
           descriptionLabel: '介绍',
           descriptionPlaceholder: '如：支持 OpenAI 格式请求',
-          add: '添加端点',
+          add: '添加端点'
         },
         contactInfo: '客服联系方式',
         contactInfoPlaceholder: '例如：QQ: 123456789',
@@ -6795,7 +6978,8 @@ export default {
         field_certSerial: '证书序列号',
         field_h5AppName: 'H5 应用名称',
         field_h5AppUrl: 'H5 应用地址',
-        wxpayConfigHint: '微信支付通常只需要填写 App ID。公众号 App ID、H5 应用名称、H5 应用地址仅在公众号支付或 H5 场景有特殊要求时再填写。',
+        wxpayConfigHint:
+          '微信支付通常只需要填写 App ID。公众号 App ID、H5 应用名称、H5 应用地址仅在公众号支付或 H5 场景有特殊要求时再填写。',
         wxpayAdvancedOptions: '微信支付高级可选项',
         field_secretKey: '密钥',
         field_clientId: 'Client ID',
@@ -6805,17 +6989,24 @@ export default {
         field_countryCode: '国家/地区代码',
         field_currency: '支付币种',
         field_accountId: 'Airwallex 账户 ID',
-        field_airwallexApiBaseHint: '必须和 API Key 所属环境一致：沙箱/测试密钥使用 https://api-demo.airwallex.com/api/v1，生产密钥使用 https://api.airwallex.com/api/v1。环境混用会返回 credentials_invalid / Access Denied。',
-        field_paymentCurrencyHint: '默认 CNY。Stripe 和 Airwallex 可按账户支持从下拉项选择 HKD、USD 等币种；微信、支付宝、易支付仍按 CNY。',
-        field_accountIdHint: '不涉及多账户、组织级密钥或连接账户收款时可以不填；单账户 Scoped API Key 会默认使用所选账户。',
+        field_airwallexApiBaseHint:
+          '必须和 API Key 所属环境一致：沙箱/测试密钥使用 https://api-demo.airwallex.com/api/v1，生产密钥使用 https://api.airwallex.com/api/v1。环境混用会返回 credentials_invalid / Access Denied。',
+        field_paymentCurrencyHint:
+          '默认 CNY。Stripe 和 Airwallex 可按账户支持从下拉项选择 HKD、USD 等币种；微信、支付宝、易支付仍按 CNY。',
+        field_accountIdHint:
+          '不涉及多账户、组织级密钥或连接账户收款时可以不填；单账户 Scoped API Key 会默认使用所选账户。',
         field_cid: '支付渠道 ID',
         field_cidAlipay: '支付宝渠道 ID',
         field_cidWxpay: '微信渠道 ID',
         stripeWebhookHint: '请在 Stripe Dashboard 中将以下地址配置为 Webhook 端点：',
-        stripeWebhookApiVersionHint: 'Webhook 端点的 API 版本请与当前集成的 Stripe SDK 对齐，建议选择 {version}；版本不一致可能导致回调事件解析失败。',
-        airwallexWebhookHint: '请在 Airwallex 后台将以下地址配置为 Webhook 端点；事件至少选择 Payment Intent -> Succeeded（payment_intent.succeeded），建议同时选择 Payment Intent -> Cancelled（payment_intent.cancelled）；API version 选择账户默认或最新稳定版本。',
-        airwallexGuideSummary: '创建 Airwallex Scoped API 密钥时，建议只在账户级权限中为 Payment Acceptance 勾选读取和写入。',
-        airwallexGuideNote: '不需要勾选 Spend、Payouts、Transfers、Funds Splits、POS 终端等与在线收款无关的权限。Webhook 事件至少选择 payment_intent.succeeded，建议同时选择 payment_intent.cancelled；API version 选择账户默认或最新稳定版本。',
+        stripeWebhookApiVersionHint:
+          'Webhook 端点的 API 版本请与当前集成的 Stripe SDK 对齐，建议选择 {version}；版本不一致可能导致回调事件解析失败。',
+        airwallexWebhookHint:
+          '请在 Airwallex 后台将以下地址配置为 Webhook 端点；事件至少选择 Payment Intent -> Succeeded（payment_intent.succeeded），建议同时选择 Payment Intent -> Cancelled（payment_intent.cancelled）；API version 选择账户默认或最新稳定版本。',
+        airwallexGuideSummary:
+          '创建 Airwallex Scoped API 密钥时，建议只在账户级权限中为 Payment Acceptance 勾选读取和写入。',
+        airwallexGuideNote:
+          '不需要勾选 Spend、Payouts、Transfers、Funds Splits、POS 终端等与在线收款无关的权限。Webhook 事件至少选择 payment_intent.succeeded，建议同时选择 payment_intent.cancelled；API version 选择账户默认或最新稳定版本。',
         limitsTitle: '限额配置',
         limitSingleMin: '单笔最低',
         limitSingleMax: '单笔最高',
@@ -6874,7 +7065,7 @@ export default {
         supportedTypes: '支持的支付方式',
         supportedTypesHint: '逗号分隔，如 alipay,wxpay',
         refundEnabled: '允许退款',
-        allowUserRefund: '允许用户退款',
+        allowUserRefund: '允许用户退款'
       },
       soraClient: {
         title: 'Sora 客户端',
@@ -6901,7 +7092,7 @@ export default {
         add: '添加菜单项',
         remove: '删除',
         moveUp: '上移',
-        moveDown: '下移',
+        moveDown: '下移'
       },
       balanceNotify: {
         title: '余额不足提醒',
@@ -6911,7 +7102,7 @@ export default {
         thresholdHint: '用户未自定义时使用此值',
         rechargeUrl: '充值链接',
         rechargeUrlHint: '可选，邮件中会附带该充值页面链接',
-        thresholdPlaceholder: '输入金额',
+        thresholdPlaceholder: '输入金额'
       },
       quotaNotify: {
         title: '账号限额通知',
@@ -6920,7 +7111,7 @@ export default {
         emails: '通知邮箱',
         emailsHint: '留空则不发送通知',
         addEmail: '添加邮箱',
-        emailPlaceholder: '输入邮箱地址',
+        emailPlaceholder: '输入邮箱地址'
       },
       emailTemplates: {
         title: '邮件模板',
@@ -7165,8 +7356,7 @@ export default {
         thinkingBudget: 'Thinking Budget 整流',
         thinkingBudgetHint: '当上游返回 budget_tokens 约束错误（≥1024）时，自动将 budget 设为 32000 并重试',
         apikeySignature: 'API Key 签名整流',
-        apikeySignatureHint:
-          '当 API Key 账号的上游返回签名相关错误时，自动去除签名并重试（内置规则始终生效）',
+        apikeySignatureHint: '当 API Key 账号的上游返回签名相关错误时，自动去除签名并重试（内置规则始终生效）',
         apikeyPatterns: '自定义匹配关键词',
         apikeyPatternsHint:
           '额外的关键词，匹配响应体中的内容（不区分大小写）。内置规则始终生效，此处用于补充额外匹配。',
@@ -7207,7 +7397,8 @@ export default {
       },
       openaiFastPolicy: {
         title: 'OpenAI Fast/Flex 策略',
-        description: '基于请求体 service_tier 字段拦截/过滤/透传 OpenAI fast(priority) 与 flex 请求；仅作用于 OpenAI 网关。',
+        description:
+          '基于请求体 service_tier 字段拦截/过滤/透传 OpenAI fast(priority) 与 flex 请求；仅作用于 OpenAI 网关。',
         empty: '尚未配置任何规则。点击下方按钮新增。',
         ruleHeader: '规则 #{index}',
         removeRule: '删除规则',
@@ -7307,11 +7498,12 @@ export default {
       },
       usageRecords: {
         title: '使用记录',
-        description: '与终端用户可见的用量及失败请求记录相关的设置。',
+        description: '与终端用户可见的用量及失败请求记录相关的设置。'
       },
       user_error_view: {
         label: '允许用户查看自己的错误请求',
-        description: '开启后，用户可在用量页查看自己失败请求的精简信息（不含内部/上游错误细节）。需运维监控开启才有数据。',
+        description:
+          '开启后，用户可在用量页查看自己失败请求的精简信息（不含内部/上游错误细节）。需运维监控开启才有数据。'
       },
       saveSettings: '保存设置',
       saving: '保存中...',
@@ -7517,7 +7709,7 @@ export default {
     notFoundTitle: '页面不存在',
     notFoundDesc: '该自定义页面不存在或已被删除。',
     notConfiguredTitle: '页面链接未配置',
-    notConfiguredDesc: '该自定义页面的 URL 未正确配置。',
+    notConfiguredDesc: '该自定义页面的 URL 未正确配置。'
   },
 
   legalDocument: {
@@ -7770,7 +7962,7 @@ export default {
       card: '银行卡',
       link: 'Link',
       alipay_direct: '支付宝（直连）',
-      wxpay_direct: '微信支付（直连）',
+      wxpay_direct: '微信支付（直连）'
     },
     status: {
       pending: '待支付',
@@ -7784,7 +7976,7 @@ export default {
       refunding: '退款中',
       refunded: '已退款',
       partially_refunded: '部分退款',
-      refund_failed: '退款失败',
+      refund_failed: '退款失败'
     },
     qr: {
       scanToPay: '请扫码支付',
@@ -7802,7 +7994,7 @@ export default {
       cancelled: '订单已取消',
       cancelledDesc: '您已取消本次支付',
       waitingPayment: '等待支付...',
-      cancelOrder: '取消订单',
+      cancelOrder: '取消订单'
     },
     orders: {
       title: '我的订单',
@@ -7822,7 +8014,7 @@ export default {
       userId: '用户 ID',
       orderType: '订单类型',
       actions: '操作',
-      requestRefund: '申请退款',
+      requestRefund: '申请退款'
     },
     invoice: {
       apply: '申请发票',
@@ -7851,8 +8043,8 @@ export default {
         PROCESSING: '开票中',
         ISSUED: '已开票',
         FAILED: '开票失败',
-        CANCELLED: '已取消',
-      },
+        CANCELLED: '已取消'
+      }
     },
     result: {
       processing: '支付处理中',
@@ -7861,7 +8053,7 @@ export default {
       subscriptionSuccess: '订阅成功',
       failed: '支付失败',
       backToRecharge: '返回充值',
-      viewOrders: '查看订单',
+      viewOrders: '查看订单'
     },
     currentBalance: '当前余额',
     rechargeAccount: '充值账户',
@@ -7920,7 +8112,7 @@ export default {
       WXPAY_CONFIG_MISSING_KEY: '微信支付配置缺少必填项：{key}',
       WXPAY_CONFIG_INVALID_KEY_LENGTH: '微信支付 {key} 长度错误，应为 {expected} 字节（实际 {actual}）',
       WXPAY_CONFIG_INVALID_KEY: '微信支付 {key} 格式错误，请确认复制了完整的 PEM 内容',
-      PENDING_ORDERS: '该服务商有未完成的订单，请等待订单完成后再操作',
+      PENDING_ORDERS: '该服务商有未完成的订单，请等待订单完成后再操作'
     },
     airwallexPay: 'Airwallex 支付',
     stripePay: '立即支付',
@@ -7929,7 +8121,7 @@ export default {
       redirecting: '正在跳转到支付页面...',
       loadingQr: '正在获取微信支付二维码...',
       timeout: '等待支付凭证超时，请重试',
-      qrFailed: '未能获取微信支付二维码',
+      qrFailed: '未能获取微信支付二维码'
     },
     subscribeNow: '立即开通',
     renewNow: '续费',
@@ -7942,7 +8134,7 @@ export default {
       monthlyLimit: '月限额',
       quota: '配额',
       unlimited: '无限制',
-      models: '模型',
+      models: '模型'
     },
     days: '天',
     months: '个月',
@@ -7956,7 +8148,7 @@ export default {
         overview: '概览',
         orders: '订单管理',
         channels: '支付渠道',
-        plans: '订阅套餐',
+        plans: '订阅套餐'
       },
       todayRevenue: '今日收入',
       totalRevenue: '总收入',
@@ -8110,8 +8302,8 @@ export default {
       providerSsqyuuid: '税控企业 UUID',
       providerEncrypted: '启用加密接口',
       providerEncryptedHint: '当前后端默认走未加密 toEnService；加密接口需后续补 SM4',
-      invoiceRemark: '发票备注',
-    },
+      invoiceRemark: '发票备注'
+    }
   },
 
   status: {
@@ -8145,7 +8337,7 @@ export default {
     daysAgoRelative: '天前',
     noData: '无数据',
     successful: '次成功',
-    failCount: '次异常',
+    failCount: '次异常'
   },
 
   adminStatus: {
@@ -8177,7 +8369,6 @@ export default {
     save: '保存服务状态配置',
     saved: '服务状态配置已保存',
     loadFailed: '加载服务状态配置失败',
-    saveFailed: '保存服务状态配置失败',
-  },
-
+    saveFailed: '保存服务状态配置失败'
+  }
 }

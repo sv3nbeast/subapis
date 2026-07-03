@@ -200,6 +200,11 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldDefaultMappedModel,
 				group.FieldMessagesDispatchModelConfig,
 				group.FieldModelsListConfig,
+				group.FieldKiroCacheEmulationEnabled,
+				group.FieldKiroAutoStickyEnabled,
+				group.FieldKiroStickySessionTTLSeconds,
+				group.FieldKiroCacheEmulationRatio,
+				group.FieldKiroEndpointMode,
 				group.FieldRpmLimit,
 			)
 		}).
@@ -934,7 +939,10 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		MessagesDispatchModelConfig:     g.MessagesDispatchModelConfig,
 		ModelsListConfig:                g.ModelsListConfig,
 		KiroCacheEmulationEnabled:       g.KiroCacheEmulationEnabled,
+		KiroAutoStickyEnabled:           g.KiroAutoStickyEnabled,
+		KiroStickySessionTTLSeconds:     g.KiroStickySessionTTLSeconds,
 		KiroCacheEmulationRatio:         g.KiroCacheEmulationRatio,
+		KiroEndpointMode:                g.KiroEndpointMode,
 		RPMLimit:                        g.RpmLimit,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,

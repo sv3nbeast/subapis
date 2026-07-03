@@ -1,9 +1,12 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -228,6 +231,17 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 }
 
 func (h *AccountHandler) ImportData(c *gin.Context) {
+	if body, err := c.GetRawData(); err == nil {
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		if isUnsupportedAccountDataFormat(body) {
+			response.BadRequest(c, "unsupported data format")
+			return
+		}
+	} else {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
 	var req DataImportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -789,6 +803,17 @@ func validateDataHeader(payload DataPayload) error {
 		return errors.New("accounts is required")
 	}
 	return nil
+}
+
+func isUnsupportedAccountDataFormat(body []byte) bool {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	data := bytes.TrimSpace(envelope.Data)
+	return len(data) > 0 && data[0] == '['
 }
 
 func validateDataProxy(item DataProxy) error {

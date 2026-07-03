@@ -263,6 +263,7 @@ func TestExchangeIDCAuthCodeUnwrapsJWTPlaintextCode(t *testing.T) {
 
 	token, err := ExchangeIDCAuthCode(context.Background(), "", "client-id", "client-secret", wrappedCode, "verifier", "http://127.0.0.1:9876/oauth/callback", "us-east-1", BuilderIDStartURL)
 	require.NoError(t, err)
+	require.Equal(t, ProviderBuilderId, token.Provider)
 	require.Equal(t, "kiro@example.com", token.Email)
 }
 
@@ -289,7 +290,40 @@ func TestRefreshIDCTokenPreservesProfileArn(t *testing.T) {
 	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", BuilderIDStartURL)
 	require.NoError(t, err)
 	require.Equal(t, profileArn, token.ProfileArn)
+	require.Equal(t, ProviderBuilderId, token.Provider)
 	require.Equal(t, "kiro@example.com", token.Email)
+}
+
+func TestRefreshIDCTokenPreservesEnterpriseProviderWithoutStartURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accessToken":"access-token","refreshToken":"refresh-token","expiresIn":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"kiro@example.com"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	previous := oidcEndpointOverride
+	oidcEndpointOverride = server.URL
+	t.Cleanup(func() { oidcEndpointOverride = previous })
+
+	token, err := RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", "", ProviderEnterprise)
+	require.NoError(t, err)
+	require.Equal(t, ProviderEnterprise, token.Provider)
+
+	token, err = RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", "")
+	require.NoError(t, err)
+	require.Equal(t, ProviderBuilderId, token.Provider)
+
+	token, err = RefreshIDCToken(context.Background(), "", "client-id", "client-secret", "refresh-token", "us-east-1", "https://d-9066029b12.awsapps.com/start/", "AWS")
+	require.NoError(t, err)
+	require.Equal(t, ProviderEnterprise, token.Provider)
 }
 
 func TestRefreshIDCTokenAcceptsSnakeCaseTokenResponse(t *testing.T) {

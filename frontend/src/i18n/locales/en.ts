@@ -68,7 +68,8 @@ export default {
         },
         security: {
           title: 'Enterprise permissions and controls',
-          description: 'Use model access, group isolation, rate limits, and service switches to protect production usage.'
+          description:
+            'Use model access, group isolation, rate limits, and service switches to protect production usage.'
         }
       }
     },
@@ -78,7 +79,8 @@ export default {
       steps: {
         access: {
           title: 'Connect services',
-          description: 'Configure service channels, access keys, and base policies in the console for your applications.'
+          description:
+            'Configure service channels, access keys, and base policies in the console for your applications.'
         },
         policy: {
           title: 'Set governance policies',
@@ -136,7 +138,8 @@ export default {
     },
     providers: {
       title: 'Supported Core Channels',
-      description: 'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
+      description:
+        'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
       supported: 'Supported',
       custom: 'On demand',
       claude: 'Claude',
@@ -147,7 +150,8 @@ export default {
     channels: {
       eyebrow: 'Service Channels',
       title: 'Focused on currently supported AI service channels',
-      description: 'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
+      description:
+        'Stabilize, observe, and bill the channels available today, then extend as real business needs grow.',
       supported: 'Supported',
       custom: 'On demand',
       items: {
@@ -187,7 +191,8 @@ export default {
     statusPreview: {
       eyebrow: 'Service Status',
       title: 'Track channel health and service quality at a glance',
-      description: 'Review core channel availability, latency trends, and failure states so integration and production risk stay visible.',
+      description:
+        'Review core channel availability, latency trends, and failure states so integration and production risk stay visible.',
       button: 'View service status',
       guideLink: 'Read integration guide'
     },
@@ -216,7 +221,8 @@ export default {
     hero: {
       eyebrow: 'SubAPIs Quick Start',
       title: 'Go from account setup to first request in one guide',
-      description: 'Follow the flow from registration, balance setup, API key creation, Base URL configuration, and your first request to integrate SubAPIs into an app or CLI.',
+      description:
+        'Follow the flow from registration, balance setup, API key creation, Base URL configuration, and your first request to integrate SubAPIs into an app or CLI.',
       primaryCta: 'Create Account',
       secondaryCta: 'View Steps',
       baseUrlLabel: 'Base URL',
@@ -234,73 +240,135 @@ export default {
     quickStart: {
       eyebrow: 'Quick Start',
       title: 'Quick Start',
-      description: 'Complete account, balance, API key, and environment setup first, then validate with one minimal request. The sections below cover groups, CLI tools, advanced usage, and common failures.'
+      description:
+        'Complete account, balance, API key, and environment setup first, then validate with one minimal request. The sections below cover groups, CLI tools, advanced usage, and common failures.'
     },
     steps: {
       register: {
         title: 'Create an account',
-        description: 'Create a SubAPIs account with an email you can keep using for security and billing notifications.',
-        items: ['Enter your email and password', 'Complete email verification or OAuth login', 'Confirm you can enter the console', 'Apply an invite or promo code if available']
+        description:
+          'Create a SubAPIs account with an email you can keep using for security and billing notifications.',
+        items: [
+          'Enter your email and password',
+          'Complete email verification or OAuth login',
+          'Confirm you can enter the console',
+          'Apply an invite or promo code if available'
+        ]
       },
       login: {
         title: 'Open the console',
         description: 'After login, review wallet, API keys, available channels, usage analytics, and service status.',
-        items: ['Confirm the account state in the header', 'Check wallet balance and recharge entry', 'Open API Key management', 'Review current service health']
+        items: [
+          'Confirm the account state in the header',
+          'Check wallet balance and recharge entry',
+          'Open API Key management',
+          'Review current service health'
+        ]
       },
       billing: {
         title: 'Add balance or choose a plan',
-        description: 'Prepare balance or quota based on expected usage. Start with a small test before production integration.',
-        items: ['Open wallet or plans', 'Choose an amount or plan', 'Wait for payment result sync', 'Confirm the balance update in billing']
+        description:
+          'Prepare balance or quota based on expected usage. Start with a small test before production integration.',
+        items: [
+          'Open wallet or plans',
+          'Choose an amount or plan',
+          'Wait for payment result sync',
+          'Confirm the balance update in billing'
+        ]
       },
       token: {
         title: 'Create an API key',
-        description: 'Create an API key for requests, then configure group, quota, model access, and security controls for your use case.',
-        items: ['Create a new API key', 'Select the proper user group', 'Set quota and expiry when needed', 'Store the secret safely']
+        description:
+          'Create an API key for requests, then configure group, quota, model access, and security controls for your use case.',
+        items: [
+          'Create a new API key',
+          'Select the proper user group',
+          'Set quota and expiry when needed',
+          'Store the secret safely'
+        ]
       },
       environment: {
         title: 'Configure the Base URL',
-        description: 'Replace the official SDK or CLI endpoint with the SubAPIs base URL and use the API key created in the console.',
-        items: ['OpenAI-compatible APIs use /v1', 'Claude messages use /v1/messages', 'Gemini uses the v1beta path', 'Antigravity uses its dedicated path']
+        description:
+          'Replace the official SDK or CLI endpoint with the SubAPIs base URL and use the API key created in the console.',
+        items: [
+          'OpenAI-compatible APIs use /v1',
+          'Claude messages use /v1/messages',
+          'Gemini uses the v1beta path',
+          'Antigravity uses its dedicated path'
+        ]
       },
       firstCall: {
         title: 'Send the first request',
-        description: 'Start with a simple chat request, verify connectivity, then observe usage and errors before production rollout.',
-        items: ['Run a test request first', 'Confirm response and billing records', 'Tune model and quotas for the workload', 'Enable monitoring and alerts for production']
+        description:
+          'Start with a simple chat request, verify connectivity, then observe usage and errors before production rollout.',
+        items: [
+          'Run a test request first',
+          'Confirm response and billing records',
+          'Tune model and quotas for the workload',
+          'Enable monitoring and alerts for production'
+        ]
       }
     },
     examples: {
       eyebrow: 'Examples',
       title: 'Choose the endpoint for each interface',
-      description: 'SubAPIs shows the current core channel entry points. Actual model availability depends on console groups and channel configuration, without overstating coverage on the public pages.'
+      description:
+        'SubAPIs shows the current core channel entry points. Actual model availability depends on console groups and channel configuration, without overstating coverage on the public pages.'
     },
     sections: {
       models: {
         eyebrow: 'Model Groups',
         title: 'Models, groups, and quota',
-        description: 'This adapts the model marketplace and token group tutorial pattern for SubAPIs: check available channels first, then use groups to control the capability boundary of each API key.',
+        description:
+          'This adapts the model marketplace and token group tutorial pattern for SubAPIs: check available channels first, then use groups to control the capability boundary of each API key.',
         articles: {
           market: {
             title: 'Model marketplace and channels',
-            description: 'Use the marketplace to review models, channel status, rates, and pricing available to the current account or group.',
-            items: ['Confirm the model list visible to the group', 'Review rate and billing units for each model', 'Separate supported channels from on-demand channels', 'Validate one request with a test key before production'],
+            description:
+              'Use the marketplace to review models, channel status, rates, and pricing available to the current account or group.',
+            items: [
+              'Confirm the model list visible to the group',
+              'Review rate and billing units for each model',
+              'Separate supported channels from on-demand channels',
+              'Validate one request with a test key before production'
+            ],
             note: 'The docs list current core SubAPIs channels only and do not advertise broad model coverage.'
           },
           groups: {
             title: 'Token group overview',
-            description: 'The API key group decides which models, quotas, and policies are available. A wrong group commonly appears as model unavailable or request denied.',
-            items: ['Create separate groups for different workloads', 'Configure model access and rates by group', 'Use different keys for test and production', 'Revalidate CLI config after group changes'],
+            description:
+              'The API key group decides which models, quotas, and policies are available. A wrong group commonly appears as model unavailable or request denied.',
+            items: [
+              'Create separate groups for different workloads',
+              'Configure model access and rates by group',
+              'Use different keys for test and production',
+              'Revalidate CLI config after group changes'
+            ],
             note: 'If a model is reported missing, check the key group first.'
           },
           pricing: {
             title: 'Quota, rates, and billing',
-            description: 'After adding balance, still review model rates and actual spend. Channels, models, and cache hits can all affect final billing.',
-            items: ['Confirm wallet balance or plan quota', 'Check requests and token usage in analytics', 'Review cache creation and cache read costs', 'Set quotas for high-frequency workloads'],
+            description:
+              'After adding balance, still review model rates and actual spend. Channels, models, and cache hits can all affect final billing.',
+            items: [
+              'Confirm wallet balance or plan quota',
+              'Check requests and token usage in analytics',
+              'Review cache creation and cache read costs',
+              'Set quotas for high-frequency workloads'
+            ],
             note: 'Run a small production-like test before full rollout to validate rates.'
           },
           routing: {
             title: 'Routing and service status',
-            description: 'SubAPIs focuses on keeping request paths, status, and errors visible in one operations surface.',
-            items: ['Use service status to check channel health', 'Observe latency, error, and availability trends', 'Use stricter limits for critical workloads', 'Check request logs and status first during incidents'],
+            description:
+              'SubAPIs focuses on keeping request paths, status, and errors visible in one operations surface.',
+            items: [
+              'Use service status to check channel health',
+              'Observe latency, error, and availability trends',
+              'Use stricter limits for critical workloads',
+              'Check request logs and status first during incidents'
+            ],
             note: 'Do not rely only on SDK errors; console logs usually reveal permission, balance, model, or upstream causes faster.'
           }
         }
@@ -308,48 +376,91 @@ export default {
       cli: {
         eyebrow: 'CLI Tools',
         title: 'CLI configuration guides',
-        description: 'Covers environment checks and configuration patterns for Claude Code, Codex, Gemini, and CC-Switch-like tools. Exact commands depend on the installed tool version.',
+        description:
+          'Covers environment checks and configuration patterns for Claude Code, Codex, Gemini, and CC-Switch-like tools. Exact commands depend on the installed tool version.',
         articles: {
           env: {
             title: 'Environment check',
-            description: 'Before configuring any CLI, confirm network access, environment variables, runtime, and API key validity.',
-            items: ['Confirm SubAPIs base domain is reachable', 'Confirm the API key has no extra spaces', 'Match the Base URL to the interface type', 'Validate with cURL before configuring complex tools'],
+            description:
+              'Before configuring any CLI, confirm network access, environment variables, runtime, and API key validity.',
+            items: [
+              'Confirm SubAPIs base domain is reachable',
+              'Confirm the API key has no extra spaces',
+              'Match the Base URL to the interface type',
+              'Validate with cURL before configuring complex tools'
+            ],
             note: 'If cURL fails, debug key, balance, group, and network before debugging the CLI.'
           },
           claude: {
             title: 'Claude Code configuration',
-            description: 'Claude-style tools usually need Anthropic-compatible key and base URL settings. Use the SubAPIs domain, with messages through /v1/messages.',
-            items: ['Use an API key created in SubAPIs', 'Set ANTHROPIC_BASE_URL to the base domain', 'Confirm the group allows Claude channels', 'Validate with a simple message first'],
+            description:
+              'Claude-style tools usually need Anthropic-compatible key and base URL settings. Use the SubAPIs domain, with messages through /v1/messages.',
+            items: [
+              'Use an API key created in SubAPIs',
+              'Set ANTHROPIC_BASE_URL to the base domain',
+              'Confirm the group allows Claude channels',
+              'Validate with a simple message first'
+            ],
             note: 'Claude tools may use different environment variable names; follow the tool documentation when they differ.'
           },
           codex: {
             title: 'Codex / OpenAI-compatible setup',
-            description: 'OpenAI-compatible tools usually use /v1 as the base path and call chat or Responses APIs with a Bearer key.',
-            items: ['Set OPENAI_API_KEY', 'Set OPENAI_BASE_URL to SubAPIs /v1', 'Pick a GPT or compatible model available to the group', 'Check model name and permissions when calls fail'],
+            description:
+              'OpenAI-compatible tools usually use /v1 as the base path and call chat or Responses APIs with a Bearer key.',
+            items: [
+              'Set OPENAI_API_KEY',
+              'Set OPENAI_BASE_URL to SubAPIs /v1',
+              'Pick a GPT or compatible model available to the group',
+              'Check model name and permissions when calls fail'
+            ],
             note: 'Do not mix Claude paths with OpenAI /v1 paths.'
           },
           gemini: {
             title: 'Gemini CLI setup',
-            description: 'Gemini-related tools commonly use v1beta-style paths. Confirm your group has Gemini channel access.',
-            items: ['Confirm Gemini channel is supported and available', 'Use /v1beta for the Base URL', 'Use model names from the console list', 'Run a minimal prompt first'],
+            description:
+              'Gemini-related tools commonly use v1beta-style paths. Confirm your group has Gemini channel access.',
+            items: [
+              'Confirm Gemini channel is supported and available',
+              'Use /v1beta for the Base URL',
+              'Use model names from the console list',
+              'Run a minimal prompt first'
+            ],
             note: 'Gemini tools differ in environment variable names; this page defines only the SubAPIs endpoint boundary.'
           },
           ccSwitch: {
             title: 'CC-Switch-like tools',
-            description: 'When a switching tool manages Claude, Codex, and Gemini providers, configure each provider Base URL separately.',
-            items: ['Claude provider uses the base domain', 'OpenAI provider uses /v1', 'Gemini provider uses /v1beta', 'Test each provider independently'],
+            description:
+              'When a switching tool manages Claude, Codex, and Gemini providers, configure each provider Base URL separately.',
+            items: [
+              'Claude provider uses the base domain',
+              'OpenAI provider uses /v1',
+              'Gemini provider uses /v1beta',
+              'Test each provider independently'
+            ],
             note: 'Switching tools manage local config only; actual model access is still controlled by SubAPIs groups.'
           },
           ccSwitchCli: {
             title: 'CC-Switch-CLI usage',
-            description: 'Command-line switching tools are useful across projects and providers, but every provider still needs the correct endpoint path.',
-            items: ['Put the SubAPIs key into the matching provider', 'Set Base URL separately per provider', 'Run a minimal request after switching', 'Do not overwrite production config with test config'],
+            description:
+              'Command-line switching tools are useful across projects and providers, but every provider still needs the correct endpoint path.',
+            items: [
+              'Put the SubAPIs key into the matching provider',
+              'Set Base URL separately per provider',
+              'Run a minimal request after switching',
+              'Do not overwrite production config with test config'
+            ],
             note: 'If the CLI generates config automatically, check whether /v1 or /v1beta was duplicated.'
           },
           cache: {
             title: 'Cache hit troubleshooting',
-            description: 'High cache hit rates can come from business reuse, upstream cache, repeated CLI requests, or retry behavior.',
-            items: ['Check cache creation and read usage', 'Compare repeated prompt timing', 'Inspect whether the CLI repeats context', 'Use a separate key for isolated tests'],
+            description:
+              'High cache hit rates can come from business reuse, upstream cache, repeated CLI requests, or retry behavior.',
+            items: [
+              'Check cache creation and read usage',
+              'Compare repeated prompt timing',
+              'Inspect whether the CLI repeats context',
+              'Use a separate key for isolated tests'
+            ],
             note: 'High cache hits are not automatically a bug; judge with scheduling logs and request details.'
           }
         }
@@ -361,38 +472,74 @@ export default {
         articles: {
           desktop: {
             title: 'Claude Desktop scenarios',
-            description: 'For desktop clients or local MCP scenarios, make sure local proxies, Base URL, and API key settings are not overridden elsewhere.',
-            items: ['Confirm the client supports custom Base URL', 'Use a dedicated key for traceability', 'Do not write production keys into shared config', 'Reduce to a minimal config when debugging'],
+            description:
+              'For desktop clients or local MCP scenarios, make sure local proxies, Base URL, and API key settings are not overridden elsewhere.',
+            items: [
+              'Confirm the client supports custom Base URL',
+              'Use a dedicated key for traceability',
+              'Do not write production keys into shared config',
+              'Reduce to a minimal config when debugging'
+            ],
             note: 'Desktop tools vary widely; SubAPIs defines only gateway endpoint and key behavior.'
           },
           gateway: {
             title: 'Migrating from official endpoints',
-            description: 'Do not replace every workload at once. Start with small test traffic and verify cost, latency, and error behavior.',
-            items: ['Replace the test environment Base URL first', 'Confirm model names exist in the group', 'Compare official endpoint and SubAPIs responses', 'Expand gradually to production traffic'],
+            description:
+              'Do not replace every workload at once. Start with small test traffic and verify cost, latency, and error behavior.',
+            items: [
+              'Replace the test environment Base URL first',
+              'Confirm model names exist in the group',
+              'Compare official endpoint and SubAPIs responses',
+              'Expand gradually to production traffic'
+            ],
             note: 'Migration should be reversible. Keep the original config to reduce rollout risk.'
           },
           compatibleClaude: {
             title: 'Compatible models in Claude Code',
-            description: 'When compatible models need to be used through Claude Code-like tools, first confirm the tool, request format, and model capability match.',
-            items: ['Confirm the model supports the required message format', 'Use a separate group for experimental configs', 'Validate plain text requests before project use', 'Do not use experimental models directly in production automation'],
+            description:
+              'When compatible models need to be used through Claude Code-like tools, first confirm the tool, request format, and model capability match.',
+            items: [
+              'Confirm the model supports the required message format',
+              'Use a separate group for experimental configs',
+              'Validate plain text requests before project use',
+              'Do not use experimental models directly in production automation'
+            ],
             note: 'Compatible access is advanced usage. When it fails, validate with the official interface shape first.'
           },
           image: {
             title: 'Image and multimodal models',
-            description: 'Image or multimodal capability requires separate confirmation of channel, model, billing mode, and client support.',
-            items: ['Confirm the group enables image or multimodal capability', 'Review image billing units and rates', 'Test upload, generation, and response format', 'Limit image count and size before production'],
+            description:
+              'Image or multimodal capability requires separate confirmation of channel, model, billing mode, and client support.',
+            items: [
+              'Confirm the group enables image or multimodal capability',
+              'Review image billing units and rates',
+              'Test upload, generation, and response format',
+              'Limit image count and size before production'
+            ],
             note: 'This guide defines configuration boundaries only; actual availability depends on the console.'
           },
           risk: {
             title: 'Permissions, limits, and controls',
-            description: 'Use groups, quotas, expiry, model allowlists, and IP restrictions to reduce key leakage or misuse risk.',
-            items: ['Use stricter quotas for production keys', 'Enable model limits for high-risk workloads', 'Split keys by team or project', 'Rotate keys immediately on abnormal usage'],
+            description:
+              'Use groups, quotas, expiry, model allowlists, and IP restrictions to reduce key leakage or misuse risk.',
+            items: [
+              'Use stricter quotas for production keys',
+              'Enable model limits for high-risk workloads',
+              'Split keys by team or project',
+              'Rotate keys immediately on abnormal usage'
+            ],
             note: 'Do not use one unlimited key for test, production, and personal tools.'
           },
           monitoring: {
             title: 'Monitoring and incident diagnosis',
-            description: 'After launch, monitor request trends, errors, balance spend, and service status so issues are visible before users report them.',
-            items: ['Review status and usage pages regularly', 'Search logs by time range during incidents', 'Watch balance and rate-limit failures', 'Record key model and group settings'],
+            description:
+              'After launch, monitor request trends, errors, balance spend, and service status so issues are visible before users report them.',
+            items: [
+              'Review status and usage pages regularly',
+              'Search logs by time range during incidents',
+              'Watch balance and rate-limit failures',
+              'Record key model and group settings'
+            ],
             note: 'Suggested order: key permission -> balance -> model name -> Base URL -> upstream status.'
           }
         }
@@ -405,25 +552,48 @@ export default {
           noModel: {
             title: 'What if the model does not exist?',
             description: 'Most cases are caused by model name, token group, or channel permission mismatch.',
-            items: ['Confirm the exact model name', 'Check the API key group', 'Confirm the channel is enabled', 'Compare with the marketplace availability list'],
+            items: [
+              'Confirm the exact model name',
+              'Check the API key group',
+              'Confirm the channel is enabled',
+              'Compare with the marketplace availability list'
+            ],
             note: 'Do not only edit the client model name; confirm the console really exposes that model.'
           },
           auth: {
             title: 'What if 401 or auth fails?',
-            description: 'Auth failures usually come from key format, copy mistakes, environment overrides, or missing request headers.',
-            items: ['Check Authorization Bearer format', 'Confirm the key has no extra newline', 'Confirm the CLI reads the latest environment variables', 'Create a new test key when needed'],
+            description:
+              'Auth failures usually come from key format, copy mistakes, environment overrides, or missing request headers.',
+            items: [
+              'Check Authorization Bearer format',
+              'Confirm the key has no extra newline',
+              'Confirm the CLI reads the latest environment variables',
+              'Create a new test key when needed'
+            ],
             note: 'Browser, terminal, and IDE plugins may read different environments.'
           },
           billing: {
             title: 'Why can I not call after payment?',
-            description: 'Balance is only one requirement. Also verify plan, group, channel status, and model permissions.',
-            items: ['Confirm payment result has synced', 'Check wallet balance update', 'Confirm the key is not expired or over quota', 'Check channel and model access'],
+            description:
+              'Balance is only one requirement. Also verify plan, group, channel status, and model permissions.',
+            items: [
+              'Confirm payment result has synced',
+              'Check wallet balance update',
+              'Confirm the key is not expired or over quota',
+              'Check channel and model access'
+            ],
             note: 'If recharge is closed or payment sync is delayed, check order status first.'
           },
           latency: {
             title: 'What if requests are slow or stuck?',
-            description: 'Latency may come from upstream services, network, model queueing, tool retries, or large context.',
-            items: ['Review latency trends on service status', 'Test with a minimal prompt', 'Check rate limit or retry behavior', 'Record the exact request time for log lookup'],
+            description:
+              'Latency may come from upstream services, network, model queueing, tool retries, or large context.',
+            items: [
+              'Review latency trends on service status',
+              'Test with a minimal prompt',
+              'Check rate limit or retry behavior',
+              'Record the exact request time for log lookup'
+            ],
             note: 'With a specific API key and timestamp, scheduling logs are much easier to inspect.'
           }
         }
@@ -431,30 +601,54 @@ export default {
       policies: {
         eyebrow: 'Policies',
         title: 'Terms and policies',
-        description: 'Expose login terms and usage boundaries in the docs so users can review compliance before integration.',
+        description:
+          'Expose login terms and usage boundaries in the docs so users can review compliance before integration.',
         articles: {
           terms: {
             title: 'Terms of Service',
-            description: 'Covers service use, customer content, fees, suspension, termination, and liability boundaries.',
-            items: ['Read terms before integration', 'Confirm organizational authority and use boundaries', 'Understand fees and refund rules', 'Keep links available for your team'],
+            description:
+              'Covers service use, customer content, fees, suspension, termination, and liability boundaries.',
+            items: [
+              'Read terms before integration',
+              'Confirm organizational authority and use boundaries',
+              'Understand fees and refund rules',
+              'Keep links available for your team'
+            ],
             note: 'Formal terms are controlled by the configured legal document page.'
           },
           aup: {
             title: 'Usage Policy (AUP)',
             description: 'Defines prohibited uses, high-risk use case requirements, and user disclosure obligations.',
-            items: ['Illegal, fraudulent, abusive, and high-risk misuse is prohibited', 'High-risk scenarios need human review', 'Consumer-facing chatbots require AI disclosure', 'Products serving minors need extra safeguards'],
+            items: [
+              'Illegal, fraudulent, abusive, and high-risk misuse is prohibited',
+              'High-risk scenarios need human review',
+              'Consumer-facing chatbots require AI disclosure',
+              'Products serving minors need extra safeguards'
+            ],
             note: 'If your use case is near a high-risk domain, design human review and disclosure first.'
           },
           regions: {
             title: 'Supported regions',
-            description: 'Lists countries and regions where commercial API access and services are currently supported.',
-            items: ['Confirm the customer region is supported', 'Watch sanctions and export restrictions', 'Contact support for unlisted regions', 'Some services may have extra restrictions'],
+            description:
+              'Lists countries and regions where commercial API access and services are currently supported.',
+            items: [
+              'Confirm the customer region is supported',
+              'Watch sanctions and export restrictions',
+              'Contact support for unlisted regions',
+              'Some services may have extra restrictions'
+            ],
             note: 'Region availability may change; rely on the formal supported regions page.'
           },
           serviceTerms: {
             title: 'Service-specific terms',
-            description: 'Covers supplemental terms for team, enterprise, beta, fine-tuning, cloud-hosted, and development partner services.',
-            items: ['Team or enterprise users must be notified', 'Beta services are not for production reliance', 'Fine-tuning materials are customer content', 'Cloud-hosted services also follow cloud platform policies'],
+            description:
+              'Covers supplemental terms for team, enterprise, beta, fine-tuning, cloud-hosted, and development partner services.',
+            items: [
+              'Team or enterprise users must be notified',
+              'Beta services are not for production reliance',
+              'Fine-tuning materials are customer content',
+              'Cloud-hosted services also follow cloud platform policies'
+            ],
             note: 'Service-specific terms control for the applicable service.'
           }
         }
@@ -463,7 +657,8 @@ export default {
     bottom: {
       eyebrow: 'Ready to integrate',
       title: 'Validate with a test request before production',
-      description: 'Use a separate API key for integration testing, then confirm model access, balance, rate limits, and logs before switching production traffic.',
+      description:
+        'Use a separate API key for integration testing, then confirm model access, balance, rate limits, and logs before switching production traffic.',
       button: 'Start Registration'
     }
   },
@@ -540,7 +735,7 @@ export default {
     enterApiKey: 'Please enter an API Key',
     querySuccess: 'Query successful',
     queryFailed: 'Query failed',
-    queryFailedRetry: 'Query failed, please try again later',
+    queryFailedRetry: 'Query failed, please try again later'
   },
 
   // Setup Wizard
@@ -685,7 +880,7 @@ export default {
       title: 'Auto Refresh',
       enable: 'Enable auto refresh',
       countdown: 'Auto refresh: {seconds}s',
-      seconds: '{n} seconds',
+      seconds: '{n} seconds'
     },
     view: 'View',
     settings: 'Settings',
@@ -711,15 +906,19 @@ export default {
 
   adminCompliance: {
     title: 'Deployment and Operation Compliance Acknowledgment',
-    blockingNotice: 'Deployment and operation compliance acknowledgment is required before continuing to use the console.',
-    riskNotice: 'This acknowledgment provides clear, conspicuous, and reproducible notice of compliance obligations and operation risks for self-hosted instances.',
+    blockingNotice:
+      'Deployment and operation compliance acknowledgment is required before continuing to use the console.',
+    riskNotice:
+      'This acknowledgment provides clear, conspicuous, and reproducible notice of compliance obligations and operation risks for self-hosted instances.',
     version: 'Document Version',
     openDocument: 'Open the GitHub document',
-    documentSource: 'The agreement text comes from Markdown files in this project repository. When the agreement content changes, the document version must be incremented; acknowledgments of older versions become invalid and console users must acknowledge again.',
+    documentSource:
+      'The agreement text comes from Markdown files in this project repository. When the agreement content changes, the document version must be incremented; acknowledgments of older versions become invalid and console users must acknowledge again.',
     inputLabel: 'Type the following confirmation phrase exactly',
     inputPlaceholder: 'Type the confirmation phrase to continue',
     inputMismatch: 'The confirmation phrase does not match. Type the displayed text exactly.',
-    legalNote: 'This acknowledgment defines the no-affiliation relationship and responsibility boundary between self-hosted instances and the open-source project, copyright holders, contributors, and maintainers. The party that deploys, operates, or controls the relevant instance remains independently responsible for its applicable obligations.',
+    legalNote:
+      'This acknowledgment defines the no-affiliation relationship and responsibility boundary between self-hosted instances and the open-source project, copyright holders, contributors, and maintainers. The party that deploys, operates, or controls the relevant instance remains independently responsible for its applicable obligations.',
     logout: 'Log out',
     accept: 'Acknowledge and Continue',
     accepted: 'Compliance acknowledgment recorded',
@@ -788,7 +987,7 @@ export default {
     docs: 'Docs',
     sora: 'Sora Studio',
     serviceStatus: 'Service Status',
-    riskControl: 'Risk Control',
+    riskControl: 'Risk Control'
   },
 
   // Auth
@@ -818,12 +1017,11 @@ export default {
     passwordMinLength: 'Password must be at least 6 characters',
     loginFailed: 'Login failed. Please check your credentials and try again.',
     errors: {
-      USER_NOT_ACTIVE: 'Account has been disabled.',
+      USER_NOT_ACTIVE: 'Account has been disabled.'
     },
     registrationFailed: 'Registration failed. Please try again.',
     emailSuffixNotAllowed: 'This email domain is not allowed for registration.',
-    emailSuffixNotAllowedWithAllowed:
-      'This email domain is not allowed. Allowed domains: {suffixes}',
+    emailSuffixNotAllowedWithAllowed: 'This email domain is not allowed. Allowed domains: {suffixes}',
     loginSuccess: 'Login successful! Welcome back.',
     accountCreatedSuccess: 'Account created successfully! Welcome to {siteName}.',
     reloginRequired: 'Session expired. Please log in again.',
@@ -876,7 +1074,8 @@ export default {
       callbackHint: 'If you are not redirected automatically, go back to the login page and try again.',
       callbackMissingToken: 'Missing login token, please try again.',
       backToLogin: 'Back to Login',
-      invitationRequired: 'This Linux.do account is not yet registered. The site requires an invitation code — please enter one to complete registration.',
+      invitationRequired:
+        'This Linux.do account is not yet registered. The site requires an invitation code — please enter one to complete registration.',
       invalidPendingToken: 'The registration token has expired. Please sign in with Linux.do again.',
       completeRegistration: 'Complete Registration',
       completing: 'Completing registration…',
@@ -903,10 +1102,11 @@ export default {
       callbackTitle: 'OAuth Callback',
       callbackHint: 'Copy the code and state back to the admin authorization flow when needed.',
       invalidCallbackTitle: 'Invalid sign-in callback',
-      invalidCallbackHint: 'This page does not contain a valid authorization result. Return to the login page and start quick sign-in again.',
+      invalidCallbackHint:
+        'This page does not contain a valid authorization result. Return to the login page and start quick sign-in again.',
       code: 'Code',
       state: 'State',
-      fullUrl: 'Full URL',
+      fullUrl: 'Full URL'
     },
     oauthFlow: {
       profileDetailsTitle: '{providerName} Profile',
@@ -940,7 +1140,8 @@ export default {
     wechatPayment: {
       callbackTitle: 'Completing WeChat payment',
       callbackProcessing: 'Confirming payment result, please wait...',
-      callbackMissingResumeToken: 'Missing payment callback information. Please return to the payment page and try again.',
+      callbackMissingResumeToken:
+        'Missing payment callback information. Please return to the payment page and try again.',
       backToPayment: 'Back to payment'
     },
     dingtalk: {
@@ -949,12 +1150,14 @@ export default {
       callbackProcessing: 'Completing DingTalk sign-in, please wait...',
       callbackHint: 'If you are not redirected automatically, go back to the login page and try again.',
       callbackMissingToken: 'Missing DingTalk sign-in token, please try again.',
-      invitationRequired: 'This DingTalk account is not registered yet. Enter an invitation code to complete registration.',
+      invitationRequired:
+        'This DingTalk account is not registered yet. Enter an invitation code to complete registration.',
       completeRegistration: 'Complete Registration',
       completing: 'Completing registration...',
       completeRegistrationFailed: 'Registration failed. Please check the invitation code and try again.',
       createAccountTitle: 'Create DingTalk Account',
-      registrationDisabledRedirectToBind: 'Registration is disabled. Sign in to an existing account and bind DingTalk instead.',
+      registrationDisabledRedirectToBind:
+        'Registration is disabled. Sign in to an existing account and bind DingTalk instead.',
       signIn: 'Continue with DingTalk',
       emailCompletionPageTitle: 'DingTalk Email Completion'
     },
@@ -967,7 +1170,8 @@ export default {
     sendingResetLink: 'Sending...',
     sendResetLinkFailed: 'Failed to send reset link. Please try again.',
     resetEmailSent: 'Reset Link Sent',
-    resetEmailSentHint: 'If an account exists with this email, you will receive a password reset link shortly. Please check your inbox and spam folder.',
+    resetEmailSentHint:
+      'If an account exists with this email, you will receive a password reset link shortly. Please check your inbox and spam folder.',
     backToLogin: 'Back to Login',
     rememberedPassword: 'Remembered your password?',
     // Reset password
@@ -1063,7 +1267,7 @@ export default {
       copied: 'Copied',
       copiedHint: 'Copied to clipboard',
       clickToCopy: 'Click to copy this endpoint',
-      speedTest: 'Speed Test',
+      speedTest: 'Speed Test'
     },
     allGroups: 'All Groups',
     allStatus: 'All Status',
@@ -1118,41 +1322,46 @@ export default {
       copied: 'Copied',
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       noGroupTitle: 'Please assign a group first',
-      noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
+      noGroupDescription:
+        'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
       openai: {
         description: 'Add the following configuration files to your Codex CLI config directory.',
         configTomlHint: 'Make sure the following content is at the beginning of the config.toml file',
         note: 'Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it.',
-        noteWindows: 'Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.',
+        noteWindows:
+          'Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.'
       },
       cliTabs: {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
-        opencode: 'OpenCode',
+        opencode: 'OpenCode'
       },
       antigravity: {
-        description: 'Configure API access for Antigravity group. Select the configuration method based on your client.',
+        description:
+          'Configure API access for Antigravity group. Select the configuration method based on your client.',
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
-        claudeNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
-        geminiNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
+        claudeNote:
+          'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
+        geminiNote:
+          'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.'
       },
       claudeCode: {
-        settingsHint:
-          'Claude Code settings. To switch models, edit only the model line. Current default: {model}.',
+        settingsHint: 'Claude Code settings. To switch models, edit only the model line. Current default: {model}.'
       },
       gemini: {
-        description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
+        description:
+          'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
         modelComment: 'If you have Gemini 3 access, you can use: gemini-3-pro-preview',
-        note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
+        note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.'
       },
       opencode: {
         title: 'OpenCode Example',
         subtitle: 'opencode.json',
-        hint: 'Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.',
-      },
+        hint: 'Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.'
+      }
     },
     customKeyLabel: 'Custom Key',
     customKeyPlaceholder: 'Enter your custom key (min 16 chars)',
@@ -1168,14 +1377,15 @@ export default {
     ipBlacklistPlaceholder: '1.2.3.4\n5.6.0.0/16',
     ipBlacklistHint: 'One IP or CIDR per line. These IPs will be blocked from using this key.',
     ipRestrictionEnabled: 'IP restriction enabled',
-    ccSwitchNotInstalled: 'CC-Switch is not installed or the protocol handler is not registered. Please install CC-Switch first or manually copy the API key.',
+    ccSwitchNotInstalled:
+      'CC-Switch is not installed or the protocol handler is not registered. Please install CC-Switch first or manually copy the API key.',
     ccsClientSelect: {
       title: 'Select Client',
       description: 'Please select the client type to import to CC-Switch:',
       claudeCode: 'Claude Code',
       claudeCodeDesc: 'Import as Claude Code configuration',
       geminiCli: 'Gemini CLI',
-      geminiCliDesc: 'Import as Gemini CLI configuration',
+      geminiCliDesc: 'Import as Gemini CLI configuration'
     },
     // Quota and expiration
     quotaLimit: 'Quota Limit',
@@ -1186,7 +1396,8 @@ export default {
     reset: 'Reset',
     resetQuotaUsed: 'Reset used quota to 0',
     resetQuotaTitle: 'Confirm Reset Quota',
-    resetQuotaConfirmMessage: 'Are you sure you want to reset the used quota (${used}) for key "{name}" to 0? This action cannot be undone.',
+    resetQuotaConfirmMessage:
+      'Are you sure you want to reset the used quota (${used}) for key "{name}" to 0? This action cannot be undone.',
     quotaResetSuccess: 'Quota reset successfully',
     failedToResetQuota: 'Failed to reset quota',
     rateLimitColumn: 'Rate Limit',
@@ -1199,7 +1410,8 @@ export default {
     rateLimitUsage: 'Rate Limit Usage',
     resetRateLimitUsage: 'Reset Rate Limit Usage',
     resetRateLimitTitle: 'Confirm Reset Rate Limit',
-    resetRateLimitConfirmMessage: 'Are you sure you want to reset the rate limit usage for key "{name}"? All time window usage will be reset to zero. This action cannot be undone.',
+    resetRateLimitConfirmMessage:
+      'Are you sure you want to reset the rate limit usage for key "{name}"? All time window usage will be reset to zero. This action cannot be undone.',
     rateLimitResetSuccess: 'Rate limit usage reset successfully',
     failedToResetRateLimit: 'Failed to reset rate limit usage',
     resetNow: 'Resetting soon',
@@ -1216,8 +1428,8 @@ export default {
       active: 'Active',
       inactive: 'Inactive',
       quota_exhausted: 'Quota Exhausted',
-      expired: 'Expired',
-    },
+      expired: 'Expired'
+    }
   },
 
   // Usage
@@ -1335,23 +1547,38 @@ export default {
     userAgent: 'User-Agent',
     tabs: { usage: 'Usage', errors: 'Error Requests' },
     errors: {
-      time: 'Time', model: 'Model', endpoint: 'Endpoint', status: 'Status',
-      category: 'Category', platform: 'Platform', message: 'Message',
-      keyName: 'Key Name', keyDeleted: 'Deleted', allKeys: 'All keys',
-      modelPlaceholder: 'Search model', allCategories: 'All categories',
-      empty: 'No error requests', failedToLoad: 'Failed to load error requests',
+      time: 'Time',
+      model: 'Model',
+      endpoint: 'Endpoint',
+      status: 'Status',
+      category: 'Category',
+      platform: 'Platform',
+      message: 'Message',
+      keyName: 'Key Name',
+      keyDeleted: 'Deleted',
+      allKeys: 'All keys',
+      modelPlaceholder: 'Search model',
+      allCategories: 'All categories',
+      empty: 'No error requests',
+      failedToLoad: 'Failed to load error requests',
       categories: {
-        auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
-        invalid_request: 'Invalid request', service_unavailable: 'Service unavailable',
-        upstream: 'Upstream error', internal: 'Platform error', other: 'Other', cyber: 'Cyber policy',
+        auth: 'Auth failed',
+        rate_limit: 'Rate limited',
+        quota: 'Balance/Subscription',
+        invalid_request: 'Invalid request',
+        service_unavailable: 'Service unavailable',
+        upstream: 'Upstream error',
+        internal: 'Platform error',
+        other: 'Other',
+        cyber: 'Cyber policy'
       },
       detail: {
         title: 'Error Request Detail',
         responseBody: 'Response Body',
         upstreamStatus: 'Upstream Status',
-        loadFailed: 'Failed to load detail, please try again',
-      },
-    },
+        loadFailed: 'Failed to load detail, please try again'
+      }
+    }
   },
 
   // Shared keys for channel monitor (admin + user views)
@@ -1514,11 +1741,13 @@ export default {
     newChat: 'New Chat',
     noSessions: 'No sessions yet',
     disabledTitle: 'Web Chat is not available',
-    disabledDescription: 'An administrator can enable this in system settings. It is disabled by default to avoid automatic exposure.',
+    disabledDescription:
+      'An administrator can enable this in system settings. It is disabled by default to avoid automatic exposure.',
     noGroupsTitle: 'No available groups',
     noGroupsDescription: 'This account has no group or model available for web chat.',
     emptyTitle: 'Select or create a chat',
-    emptyDescription: 'Choose a group and model, then send. Existing chats can switch target model before the next message.',
+    emptyDescription:
+      'Choose a group and model, then send. Existing chats can switch target model before the next message.',
     selectGroup: 'Select group',
     group: 'Group',
     model: 'Model',
@@ -1544,7 +1773,7 @@ export default {
     streamError: 'Streaming response error',
     yesterday: 'Yesterday',
     resizeSessions: 'Drag to resize the session list',
-    resizeContext: 'Drag to resize the context panel',
+    resizeContext: 'Drag to resize the context panel'
   },
 
   affiliate: {
@@ -1594,7 +1823,8 @@ export default {
     },
     tier: {
       title: 'Rebate Tier',
-      subtitle: 'Higher promotion volume earns a higher rebate rate (auto-upgrades by cumulative recharge brought in; never downgrades)',
+      subtitle:
+        'Higher promotion volume earns a higher rebate rate (auto-upgrades by cumulative recharge brought in; never downgrades)',
       currentLevel: 'Current Tier',
       levelLabel: 'Tier {level}',
       current: 'current',
@@ -1699,7 +1929,7 @@ export default {
       readFailed: 'Failed to read the selected image',
       saveSuccess: 'Avatar updated',
       deleteSuccess: 'Avatar removed',
-      emptyDeleteHint: 'There is no avatar to remove',
+      emptyDeleteHint: 'There is no avatar to remove'
     },
     authBindings: {
       title: 'Connected Sign-In Methods',
@@ -1722,24 +1952,24 @@ export default {
       hideEmailFormAction: 'Hide Email Form',
       status: {
         bound: 'Bound',
-        notBound: 'Not Bound',
+        notBound: 'Not Bound'
       },
       providers: {
         email: 'Email',
         linuxdo: 'LinuxDo',
         dingtalk: 'DingTalk',
         oidc: '{providerName}',
-        wechat: 'WeChat',
+        wechat: 'WeChat'
       },
       source: {
         avatar: 'Avatar from {providerName}',
-        username: 'Username from {providerName}',
+        username: 'Username from {providerName}'
       },
       notes: {
         emailManagedFromProfile: 'Primary account email is managed from the profile form',
         canUnbind: 'You can unbind this sign-in method',
-        bindAnotherBeforeUnbind: 'Bind another sign-in method before unbinding',
-      },
+        bindAnotherBeforeUnbind: 'Bind another sign-in method before unbinding'
+      }
     },
     // TOTP 2FA
     totp: {
@@ -1763,7 +1993,8 @@ export default {
       verifyFailed: 'Invalid code, please try again',
       enableSuccess: 'Two-factor authentication enabled',
       disableTitle: 'Disable Two-Factor Authentication',
-      disableWarning: 'After disabling, you will no longer need a verification code to log in. This may reduce your account security.',
+      disableWarning:
+        'After disabling, you will no longer need a verification code to log in. This may reduce your account security.',
       enterPassword: 'Enter your current password to confirm',
       confirmDisable: 'Confirm Disable',
       disableSuccess: 'Two-factor authentication disabled',
@@ -1809,7 +2040,7 @@ export default {
       removeEmail: 'Remove',
       removeSuccess: 'Email removed',
       maxEmailsReached: 'You have reached the maximum number of alert emails',
-      unverified: 'Unverified',
+      unverified: 'Unverified'
     }
   },
 
@@ -1975,7 +2206,7 @@ export default {
         backupRunning: 'Backup in progress...',
         backupFailed: 'Backup failed',
         restoreRunning: 'Restore in progress...',
-        restoreFailed: 'Restore failed',
+        restoreFailed: 'Restore failed'
       },
       columns: {
         status: 'Status',
@@ -1995,7 +2226,7 @@ export default {
       progress: {
         pending: 'Preparing',
         dumping: 'Dumping database',
-        uploading: 'Uploading',
+        uploading: 'Uploading'
       },
       trigger: {
         manual: 'Manual',
@@ -2014,10 +2245,12 @@ export default {
       },
       r2Guide: {
         title: 'Cloudflare R2 Setup Guide',
-        intro: 'Cloudflare R2 provides S3-compatible object storage with a free tier of 10GB storage + 1M Class A requests/month, ideal for database backups.',
+        intro:
+          'Cloudflare R2 provides S3-compatible object storage with a free tier of 10GB storage + 1M Class A requests/month, ideal for database backups.',
         step1: {
           title: 'Create an R2 Bucket',
-          line1: 'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
+          line1:
+            'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
           line2: 'Click "Create bucket", enter a name (e.g. subapis-backups), choose a region',
           line3: 'Click create to finish'
         },
@@ -2041,7 +2274,8 @@ export default {
           fromStep2: 'Value from Step 2',
           unchecked: 'Unchecked'
         },
-        freeTier: 'R2 Free Tier: 10GB storage + 1M Class A requests + 10M Class B requests per month — more than enough for database backups.'
+        freeTier:
+          'R2 Free Tier: 10GB storage + 1M Class A requests + 10M Class B requests per month — more than enough for database backups.'
       }
     },
 
@@ -2308,7 +2542,8 @@ export default {
       form: {
         rpmLimit: 'Requests Per Minute (RPM)',
         rpmLimitPlaceholder: '0 = unlimited',
-        rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.'
+        rpmLimitHint:
+          'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.'
       },
       columns: {
         user: 'User',
@@ -2377,8 +2612,7 @@ export default {
       insufficientBalance: 'Insufficient balance',
       deleteConfirm: "Are you sure you want to delete '{email}'? This action cannot be undone.",
       setAllowedGroups: 'Set Allowed Groups',
-      allowedGroupsHint:
-        'Select which standard groups this user can use. Subscription groups are managed separately.',
+      allowedGroupsHint: 'Select which standard groups this user can use. Subscription groups are managed separately.',
       noStandardGroups: 'No standard groups available',
       allowAllGroups: 'Allow All Groups',
       allowAllGroupsHint: 'User can use any non-exclusive group',
@@ -2398,7 +2632,8 @@ export default {
       replaceGroup: 'Replace Group',
       clickToReplace: 'Click to replace',
       replaceGroupTitle: 'Replace Exclusive Group',
-      replaceGroupHint: 'Select a new group to replace "{old}". Keys will be migrated and permissions updated automatically.',
+      replaceGroupHint:
+        'Select a new group to replace "{old}". Keys will be migrated and permissions updated automatically.',
       replaceGroupConfirm: 'Confirm Replace',
       replaceGroupSuccess: 'Group replaced successfully, {count} key(s) migrated',
       selectNewGroup: 'Select target group',
@@ -2409,10 +2644,8 @@ export default {
       withdrawAmount: 'Withdraw Amount',
       withdrawAll: 'All',
       currentBalance: 'Current Balance',
-      depositNotesPlaceholder:
-        'e.g., New user registration bonus, promotional credit, compensation, etc.',
-      withdrawNotesPlaceholder:
-        'e.g., Service issue refund, incorrect charge reversal, account closure refund, etc.',
+      depositNotesPlaceholder: 'e.g., New user registration bonus, promotional credit, compensation, etc.',
+      withdrawNotesPlaceholder: 'e.g., Service issue refund, incorrect charge reversal, account closure refund, etc.',
       notesOptional: 'Notes are optional but helpful for record keeping',
       amountHint: 'Please enter a positive amount',
       newBalance: 'New Balance',
@@ -2455,7 +2688,8 @@ export default {
         title: 'User Platform Quota',
         subtitle: 'Set daily, weekly, and monthly platform quotas for {email}.',
         hint: 'Leave blank for unlimited. Usage is shown as daily / weekly / monthly windows.',
-        subscriptionWarning: 'This user has an active subscription. Confirm platform quotas do not conflict with subscription quota policy.',
+        subscriptionWarning:
+          'This user has an active subscription. Confirm platform quotas do not conflict with subscription quota policy.',
         columns: {
           platform: 'Platform',
           daily: 'Daily Limit',
@@ -2494,7 +2728,8 @@ export default {
         addAttribute: 'Add Attribute',
         editAttribute: 'Edit Attribute',
         deleteAttribute: 'Delete Attribute',
-        deleteConfirm: "Are you sure you want to delete attribute '{name}'? All user values for this attribute will be deleted.",
+        deleteConfirm:
+          "Are you sure you want to delete attribute '{name}'? All user values for this attribute will be deleted.",
         noAttributes: 'No custom attributes',
         noAttributesHint: 'Click the button above to add custom attributes',
         key: 'Attribute Key',
@@ -2602,7 +2837,8 @@ export default {
         exclusive: 'Exclusive Group',
         rpmLimit: 'Requests Per Minute (RPM)',
         rpmLimitPlaceholder: '0 = unlimited',
-        rpmLimitHint: 'Max requests per minute for each user in this group; 0 = unlimited. Once set, it takes over per-user rate limiting in this group (overrides the user-level rpm_limit fallback).'
+        rpmLimitHint:
+          'Max requests per minute for each user in this group; 0 = unlimited. Once set, it takes over per-user rate limiting in this group (overrides the user-level rpm_limit fallback).'
       },
       enterGroupName: 'Enter group name',
       optionalDescription: 'Optional description',
@@ -2612,9 +2848,11 @@ export default {
       exclusiveHint: 'Exclusive group, manually assign to specific users',
       exclusiveTooltip: {
         title: 'What is an exclusive group?',
-        description: 'When enabled, users cannot see this group when creating API Keys. Only after an admin manually assigns a user to this group can they use it.',
+        description:
+          'When enabled, users cannot see this group when creating API Keys. Only after an admin manually assigns a user to this group can they use it.',
         example: 'Use case:',
-        exampleContent: 'Public group rate is 0.8. Create an exclusive group with 0.7 rate, manually assign VIP users to give them better pricing.'
+        exampleContent:
+          'Public group rate is 0.8. Create an exclusive group with 0.7 rate, manually assign VIP users to give them better pricing.'
       },
       noGroupsYet: 'No groups yet',
       createFirstGroup: 'Create your first group to organize API keys.',
@@ -2647,7 +2885,8 @@ export default {
       rateDeleted: 'Rate multiplier removed',
       rateAdded: 'Rate multiplier added',
       clearAll: 'Clear All',
-      confirmClearAll: 'Are you sure you want to clear all rate multiplier settings for this group? This cannot be undone.',
+      confirmClearAll:
+        'Are you sure you want to clear all rate multiplier settings for this group? This cannot be undone.',
       rateCleared: 'All rate multipliers cleared',
       batchAdjust: 'Batch Adjust Rates',
       multiplierFactor: 'Factor',
@@ -2665,7 +2904,7 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         kiro: 'Kiro',
-        grok: 'Grok',
+        grok: 'Grok'
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -2674,8 +2913,7 @@ export default {
       subscription: {
         title: 'Subscription Settings',
         type: 'Billing Type',
-        typeHint:
-          'Standard billing deducts from user balance. Subscription mode uses quota limits instead.',
+        typeHint: 'Standard billing deducts from user balance. Subscription mode uses quota limits instead.',
         typeNotEditable: 'Billing type cannot be changed after group creation.',
         standard: 'Standard (Balance)',
         subscription: 'Subscription (Quota)',
@@ -2692,13 +2930,15 @@ export default {
         allowImageGeneration: 'Allow image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
-        modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
+        modeHint:
+          'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
       },
       claudeCode: {
         title: 'Claude Code Client Restriction',
-        tooltip: 'When enabled, this group only allows official Claude Code clients. Non-Claude Code requests will be rejected or fallback to the specified group.',
+        tooltip:
+          'When enabled, this group only allows official Claude Code clients. Non-Claude Code requests will be rejected or fallback to the specified group.',
         enabled: 'Claude Code Only',
         disabled: 'Allow All Clients',
         fallbackGroup: 'Fallback Group',
@@ -2708,9 +2948,11 @@ export default {
       openaiMessages: {
         title: 'OpenAI Messages Dispatch',
         allowDispatch: 'Allow /v1/messages dispatch',
-        allowDispatchHint: 'When enabled, API keys in this OpenAI group can dispatch requests through /v1/messages endpoint',
+        allowDispatchHint:
+          'When enabled, API keys in this OpenAI group can dispatch requests through /v1/messages endpoint',
         familyMappingTitle: 'Family Default Mapping',
-        familyMappingHint: 'Requests that match the Opus, Sonnet, or Haiku families will prefer the target model configured here.',
+        familyMappingHint:
+          'Requests that match the Opus, Sonnet, or Haiku families will prefer the target model configured here.',
         opusModel: 'Opus Target Model',
         opusModelPlaceholder: 'e.g., gpt-5.4',
         sonnetModel: 'Sonnet Target Model',
@@ -2718,7 +2960,8 @@ export default {
         haikuModel: 'Haiku Target Model',
         haikuModelPlaceholder: 'e.g., gpt-5.4-mini',
         exactMappingTitle: 'Exact Model Overrides',
-        exactMappingHint: 'Exact Claude model overrides take priority over the family defaults and can route a specific Claude model to a different target model.',
+        exactMappingHint:
+          'Exact Claude model overrides take priority over the family defaults and can route a specific Claude model to a different target model.',
         noExactMappings: 'No exact model overrides yet',
         addExactMapping: 'Add Exact Mapping',
         claudeModel: 'Claude Model',
@@ -2733,23 +2976,35 @@ export default {
         noFallback: 'No Fallback'
       },
       kiroCache: {
-        title: 'Kiro Cache Emulation',
-        description: 'Simulate Anthropic prompt cache usage for this Kiro group only.',
+        title: 'Kiro Sessions and Cache Emulation',
+        description:
+          'Only applies to this Kiro group. Automatic sticky sessions keep multi-turn conversations on the same account.',
+        endpointMode: 'Endpoint mode',
+        endpointQ: 'AWS Q default fallback',
+        endpointKRS: 'Kiro Runtime Service',
+        endpointAuto: 'Auto: AWS Q then KRS',
+        endpointModeHint: 'Account-level preferred_endpoint or kiro_endpoint_mode takes priority when set.',
+        autoSticky: 'Enable automatic sticky sessions',
+        stickyTTL: 'Sticky TTL (seconds)',
+        stickyTTLHint: '60 to 86400. Default is 3600 seconds.',
         enabled: 'Enable cache emulation',
         ratio: 'Cache ratio',
         ratioHint: '0 to 1. For example, 0.5 applies half of the simulated cache tokens.'
       },
       copyAccounts: {
         title: 'Copy Accounts from Groups',
-        tooltip: 'Select one or more groups of the same platform. After creation, all accounts from these groups will be automatically bound to the new group (deduplicated).',
-        tooltipEdit: 'Select one or more groups of the same platform. After saving, current group accounts will be replaced with accounts from these groups (deduplicated).',
+        tooltip:
+          'Select one or more groups of the same platform. After creation, all accounts from these groups will be automatically bound to the new group (deduplicated).',
+        tooltipEdit:
+          'Select one or more groups of the same platform. After saving, current group accounts will be replaced with accounts from these groups (deduplicated).',
         selectPlaceholder: 'Select groups to copy accounts from...',
         hint: 'Multiple groups can be selected, accounts will be deduplicated',
         hintEdit: '⚠️ Warning: This will replace all existing account bindings'
       },
       modelRouting: {
         title: 'Model Routing',
-        tooltip: 'Configure specific model requests to be routed to designated accounts. Supports wildcard matching, e.g., claude-opus-* matches all opus models.',
+        tooltip:
+          'Configure specific model requests to be routed to designated accounts. Supports wildcard matching, e.g., claude-opus-* matches all opus models.',
         enabled: 'Enabled',
         disabled: 'Disabled',
         disabledHint: 'Routing rules will only take effect when enabled',
@@ -2769,7 +3024,8 @@ export default {
       },
       mcpXml: {
         title: 'MCP XML Protocol Injection',
-        tooltip: 'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
+        tooltip:
+          'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
         enabled: 'Enabled',
         disabled: 'Disabled'
       },
@@ -2862,9 +3118,12 @@ export default {
       duplicateModels: 'Model "{0}" appears in multiple pricing entries',
       modelConflict: "Model patterns '{model1}' and '{model2}' conflict: overlapping match range",
       mappingConflict: "Mapping source patterns '{model1}' and '{model2}' conflict: overlapping match range",
-      noGroupsSelected: '{platform} platform has no groups selected. Select at least one group or disable this platform.',
-      emptyModelsInPricing: '{platform} platform has pricing entries without models. Add models or remove those entries.',
-      accountStatsRuleMissingTarget: '{platform} platform account stats rules require at least one group or account ID.',
+      noGroupsSelected:
+        '{platform} platform has no groups selected. Select at least one group or disable this platform.',
+      emptyModelsInPricing:
+        '{platform} platform has pricing entries without models. Add models or remove those entries.',
+      accountStatsRuleMissingTarget:
+        '{platform} platform account stats rules require at least one group or account ID.',
       accountStatsRuleMissingPricing: '{platform} platform account stats rules require model pricing.',
       deleteConfirm: 'Are you sure you want to delete channel "{name}"? This cannot be undone.',
       columns: {
@@ -2935,15 +3194,19 @@ export default {
         restrictModels: 'Restrict Models',
         restrictModelsHint: 'When enabled, only models in the pricing list are allowed. Others will be rejected.',
         displayOnly: 'Display only',
-        displayOnlyHint: 'Show this channel and pricing to users without affecting routing, model restrictions, or billing.',
+        displayOnlyHint:
+          'Show this channel and pricing to users without affecting routing, model restrictions, or billing.',
         defaultPerRequestPrice: 'Default per-request price (fallback when no tier matches)',
         defaultImagePrice: 'Default image price (fallback when no tier matches)',
         platformConfig: 'Platform Configuration',
         webSearchEmulation: 'Web Search Emulation',
-        webSearchEmulationHint: '⚠️ When enabled, all accounts in this channel\'s Anthropic groups will intercept web_search requests. Use with caution.',
-        webSearchEmulationGlobalDisabled: 'Please enable the global switch first in Settings → Gateway → Web Search Emulation',
+        webSearchEmulationHint:
+          "⚠️ When enabled, all accounts in this channel's Anthropic groups will intercept web_search requests. Use with caution.",
+        webSearchEmulationGlobalDisabled:
+          'Please enable the global switch first in Settings → Gateway → Web Search Emulation',
         codexImageGenerationBridge: 'Codex Image Generation Bridge',
-        codexImageGenerationBridgeHint: 'When enabled, Codex /responses text requests in OpenAI groups may be automatically given the image_generation tool. Keep off unless the routed accounts support image generation.',
+        codexImageGenerationBridgeHint:
+          'When enabled, Codex /responses text requests in OpenAI groups may be automatically given the image_generation tool. Keep off unless the routed accounts support image generation.',
         basicSettings: 'Basic Settings',
         addPlatform: 'Add Platform',
         noPlatforms: 'Click "Add Platform" to start configuring the channel',
@@ -2951,7 +3214,8 @@ export default {
         pricingEntry: 'Pricing Entry',
         noModels: 'No models added',
         applyPricingToAccountStats: 'Apply request pricing to account stats',
-        applyPricingToAccountStatsHint: 'Only changes admin account cost statistics. User billing and balance deduction stay unchanged.',
+        applyPricingToAccountStatsHint:
+          'Only changes admin account cost statistics. User billing and balance deduction stay unchanged.',
         accountStatsPricing: 'Account Stats Pricing',
         accountStatsPricingHint: 'Custom rules only affect admin account cost statistics, not user billing.',
         noAccountStatsPricingRules: 'No account stats pricing rules.',
@@ -2986,9 +3250,11 @@ export default {
       enabledHint: 'When off, gateway requests are not moderated even if the menu is enabled.',
       mode: 'Global Mode',
       modePreBlock: 'Pre-Block',
-      modePreBlockDesc: 'Synchronously reviews the latest user input before every request and rejects hits immediately.',
+      modePreBlockDesc:
+        'Synchronously reviews the latest user input before every request and rejects hits immediately.',
       modeObserve: 'Observe Only',
-      modeObserveDesc: 'Requests pass through while the latest user input is queued for async review; hits are recorded, notified, and counted.',
+      modeObserveDesc:
+        'Requests pass through while the latest user input is queued for async review; hits are recorded, notified, and counted.',
       modeOff: 'Off',
       modeOffDesc: 'Content moderation is disabled and no audit records are written.',
       baseUrl: 'OpenAI Base URL',
@@ -3026,7 +3292,8 @@ export default {
       apiKeyTestDone: 'Key test completed for {count} keys',
       apiKeyTestFailed: 'Failed to test OpenAI API Keys',
       apiKeyHealth: 'Key Availability',
-      apiKeyFreezeRule: '400 does not freeze; 401/403 freeze for 10 minutes; 429/529 freeze for 1 minute; other HTTP errors freeze for 10 seconds.',
+      apiKeyFreezeRule:
+        '400 does not freeze; 401/403 freeze for 10 minutes; 429/529 freeze for 1 minute; other HTTP errors freeze for 10 seconds.',
       apiKeyRows: '{count} keys',
       apiKeyRowsCollapsed: '{count} keys hidden',
       apiKeyRowsExpanded: 'Showing all {count} keys',
@@ -3068,13 +3335,16 @@ export default {
       recordNonHits: 'Record Non-Hits',
       recordNonHitsHint: 'When enabled, sampled non-hit request summaries are redacted before storage.',
       preHashCheck: 'Enable Pre-Hash Check',
-      preHashCheckHint: 'Hashes from async hits are blocked before moderation; this does not send email or increment ban counters.',
+      preHashCheckHint:
+        'Hashes from async hits are blocked before moderation; this does not send email or increment ban counters.',
       flaggedHashCount: 'Current hash collection size: {count}',
-      flaggedHashHint: 'Hashes are stored permanently in Redis; paste a full 64-character hash to remove a false block, or clear all stored hashes.',
+      flaggedHashHint:
+        'Hashes are stored permanently in Redis; paste a full 64-character hash to remove a false block, or clear all stored hashes.',
       flaggedHashPlaceholder: 'Paste full 64-character input hash',
       deleteFlaggedHash: 'Delete hash',
       clearFlaggedHashes: 'Clear all',
-      clearFlaggedHashesConfirm: 'Clear all risk input hashes? This does not delete audit records, but removes all historical hash blocks.',
+      clearFlaggedHashesConfirm:
+        'Clear all risk input hashes? This does not delete audit records, but removes all historical hash blocks.',
       flaggedHashDeleted: 'Risk hash deleted',
       flaggedHashNotFound: 'Risk hash not found',
       flaggedHashDeleteFailed: 'Failed to delete risk hash',
@@ -3089,7 +3359,8 @@ export default {
       autoBan: 'Auto Ban User',
       autoBanHint: 'Disable the user, invalidate auth cache, and send a ban notice after the hit threshold is reached.',
       cyberPolicyExcludeBan: 'Exclude Cyber Policy Hits from Ban Count',
-      cyberPolicyExcludeBanHint: 'When enabled, cyber_policy hits no longer count toward auto-ban violations: no ban judgment on the hit itself, and history rows are excluded from the rolling count. Logs and notice emails are unaffected.',
+      cyberPolicyExcludeBanHint:
+        'When enabled, cyber_policy hits no longer count toward auto-ban violations: no ban judgment on the hit itself, and history rows are excluded from the rolling count. Logs and notice emails are unaffected.',
       violationNotCounted: 'Not counted',
       banThreshold: 'Ban Threshold',
       violationWindowHours: 'Count Window (hours)',
@@ -3115,7 +3386,8 @@ export default {
       noGroups: 'No groups available',
       emptyLogs: 'No audit records',
       workerStatus: 'Worker Runtime',
-      workerStatusHint: 'Queue and worker pool status for async audit tasks and pre-block record tasks, excluding synchronous pre-block checks.',
+      workerStatusHint:
+        'Queue and worker pool status for async audit tasks and pre-block record tasks, excluding synchronous pre-block checks.',
       workerPool: 'Worker Pool',
       workerPoolMeta: '{active} processing, {idle} idle and ready, {total} total',
       queueUsage: 'Queue Usage',
@@ -3131,7 +3403,8 @@ export default {
       preBlockAPIKeyLoad: 'Pre-block API Key Load',
       preBlockAPIKeyLoadHint: 'Synchronous pre-block checks round-robin usable audit keys directly.',
       preBlockAPIKeyLoadEmpty: 'No API key load data',
-      preBlockAPIKeyLoadSummary: 'Sync active {active} / usable keys {available}, {total} total, worker: {workerActive} / {workerTotal}',
+      preBlockAPIKeyLoadSummary:
+        'Sync active {active} / usable keys {available}, {total} total, worker: {workerActive} / {workerTotal}',
       preBlockAPIKeyTotals: 'Total {total} / success {success} / errors {errors}',
       preBlockKeyActiveShort: 'Active',
       preBlockKeyTotalShort: 'Total',
@@ -3148,7 +3421,7 @@ export default {
         response: 'Hit Notice',
         riskThresholds: 'Risk Thresholds',
         keywords: 'Keywords',
-        retention: 'Retention',
+        retention: 'Retention'
       },
       keywordModeKeywordAndApi: 'Keywords + API moderation',
       keywordModeKeywordAndApiDesc: 'Block by local keywords first, then moderate remaining requests through the API.',
@@ -3203,14 +3476,14 @@ export default {
         apiKey: 'API Key',
         groupScope: 'Scope',
         logs: 'Audit Records',
-        currentFilter: 'Current filter',
+        currentFilter: 'Current filter'
       },
       filters: {
         search: 'Search user/key/summary',
         from: 'From',
         to: 'To',
         allGroups: 'All Groups',
-        allEndpoints: 'All Endpoints',
+        allEndpoints: 'All Endpoints'
       },
       table: {
         time: 'Time',
@@ -3222,21 +3495,21 @@ export default {
         highest: 'Highest',
         actionMeta: 'Action',
         latency: 'Latency',
-        input: 'Input Summary',
+        input: 'Input Summary'
       },
       result: {
         all: 'All Results',
         hit: 'Hit',
         blocked: 'Blocked',
         pass: 'Pass',
-        error: 'Error',
+        error: 'Error'
       },
       action: {
         keywordBlock: 'Keyword Block',
         block: 'Blocked',
         cyberPolicy: 'Cyber policy',
-        error: 'Error',
-      },
+        error: 'Error'
+      }
     },
 
     // Channel Monitor
@@ -3295,7 +3568,8 @@ export default {
         intervalSeconds: 'Interval (seconds)',
         intervalSecondsHint: 'Range: 15 - 3600 seconds',
         jitterSeconds: 'Random Jitter (± seconds)',
-        jitterSecondsHint: 'Each check fires at interval ± a random offset within this value; 0 means fixed interval. Interval minus jitter must be ≥ 15s',
+        jitterSecondsHint:
+          'Each check fires at interval ± a random offset within this value; 0 means fixed interval. Interval minus jitter must be ≥ 15s',
         enabled: 'Enable monitor',
         apiMode: 'API Mode',
         apiModeChatCompletions: 'Chat Completions',
@@ -3309,22 +3583,27 @@ export default {
       createFirstMonitor: 'Create your first monitor to track channel availability',
       advanced: {
         section: 'Advanced (optional)',
-        sectionHint: 'Customize request headers and body to bypass upstream client-detection (e.g. "only Claude Code clients allowed").',
+        sectionHint:
+          'Customize request headers and body to bypass upstream client-detection (e.g. "only Claude Code clients allowed").',
         headers: 'Custom request headers',
-        headersPlaceholder: 'User-Agent: claude-cli/1.0.83 (external, cli)\nx-app: cli\nanthropic-beta: claude-code-20250219',
+        headersPlaceholder:
+          'User-Agent: claude-cli/1.0.83 (external, cli)\nx-app: cli\nanthropic-beta: claude-code-20250219',
         headerNamePlaceholder: 'Header name',
         headerValuePlaceholder: 'Value',
         headerAddRow: 'Add header',
         headerNameInvalid: 'Header name cannot contain whitespace or colon: {name}',
-        headersHint: 'Merged on top of adapter defaults (user wins). Hop-by-hop headers (Host / Content-Length / ...) are ignored.',
+        headersHint:
+          'Merged on top of adapter defaults (user wins). Hop-by-hop headers (Host / Content-Length / ...) are ignored.',
         headersParseError: 'Cannot parse line: {line}',
         bodyMode: 'Body handling',
         bodyModeOff: 'Default',
         bodyModeMerge: 'Merge',
         bodyModeReplace: 'Replace',
         bodyModeHintOff: 'Use the adapter default body (includes challenge validation).',
-        bodyModeHintMerge: 'Shallow-merge with the default body; user fields win but model / messages / contents are protected (use Replace to change those).',
-        bodyModeHintReplace: 'Use the JSON below as the complete body. Challenge validation is skipped; HTTP 2xx + non-empty response text is treated as operational.',
+        bodyModeHintMerge:
+          'Shallow-merge with the default body; user fields win but model / messages / contents are protected (use Replace to change those).',
+        bodyModeHintReplace:
+          'Use the JSON below as the complete body. Challenge validation is skipped; HTTP 2xx + non-empty response text is treated as operational.',
         bodyJson: 'Body JSON',
         bodyJsonFormat: 'Format',
         bodyJsonHint: 'Parsed on blur. Empty means no override.',
@@ -3335,7 +3614,8 @@ export default {
         label: 'Request template',
         none: 'No template',
         placeholder: 'Pick a template (filtered by current provider)',
-        applyHint: 'Picking a template copies its headers and body to this monitor (snapshot). Later template edits are not auto-synced.'
+        applyHint:
+          'Picking a template copies its headers and body to this monitor (snapshot). Later template edits are not auto-synced.'
       },
       template: {
         manageButton: 'Templates',
@@ -3350,15 +3630,18 @@ export default {
         applyTooltip: 'Overwrite snapshot fields on associated monitors',
         applyTitle: 'Apply template',
         applyConfirm: 'Apply',
-        applyConfirmMessage: 'Overwrite {n} associated monitor(s) with the current configuration of "{name}"? Any local customizations on those monitors will be discarded.',
+        applyConfirmMessage:
+          'Overwrite {n} associated monitor(s) with the current configuration of "{name}"? Any local customizations on those monitors will be discarded.',
         applySuccess: 'Applied to {n} monitor(s)',
         applyPickerTitle: 'Apply template "{name}"',
-        applyPickerHint: 'Select which monitors to overwrite (all selected by default). Any local customizations will be discarded.',
+        applyPickerHint:
+          'Select which monitors to overwrite (all selected by default). Any local customizations will be discarded.',
         applyPickerEmpty: 'No monitors are currently associated to this template',
         applyPickerConfirm: 'Apply to {n} monitor(s)',
         selectNone: 'Select none',
         selectedCount: 'Selected {n} / {total}',
-        deleteConfirm: 'Delete template "{name}"? {n} associated monitor(s) will be disassociated but keep their current snapshot and continue running.',
+        deleteConfirm:
+          'Delete template "{name}"? {n} associated monitor(s) will be disassociated but keep their current snapshot and continue running.',
         associatedCount: '{n} associated monitor(s)',
         headersSummary: '{n} custom header(s)',
         form: {
@@ -3428,13 +3711,15 @@ export default {
       resetQuota: 'Reset Quota',
       resetting: 'Resetting...',
       resetQuotaTitle: 'Reset Usage Quota',
-      resetQuotaConfirm: "Reset the daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
+      resetQuotaConfirm:
+        "Reset the daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
       resetQuotaTarget: 'Subscription user:',
       resetQuotaSelectLabel: 'Select windows to reset:',
       resetQuotaDaily: 'Daily (zero daily_usage_usd)',
       resetQuotaWeekly: 'Weekly (zero weekly_usage_usd)',
       resetQuotaMonthly: 'Monthly (zero monthly_usage_usd)',
-      resetQuotaHint: 'Only the selected windows are zeroed and restarted. Others are untouched — e.g. ticking only "Weekly" leaves the monthly accumulator intact.',
+      resetQuotaHint:
+        'Only the selected windows are zeroed and restarted. Others are untouched — e.g. ticking only "Weekly" leaves the monthly accumulator intact.',
       quotaResetSuccess: 'Quota reset successfully',
       failedToResetQuota: 'Failed to reset quota',
       noSubscriptionsYet: 'No subscriptions yet',
@@ -3451,11 +3736,11 @@ export default {
       pleaseSelectUser: 'Please select a user',
       pleaseSelectGroup: 'Please select a group',
       validityDaysRequired: 'Please enter a valid number of days (at least 1)',
-      revokeConfirm:
-        "Are you sure you want to revoke the subscription for '{user}'? This action cannot be undone.",
+      revokeConfirm: "Are you sure you want to revoke the subscription for '{user}'? This action cannot be undone.",
       guide: {
         title: 'Subscription Management Guide',
-        subtitle: 'Subscription mode lets you assign time-based usage quotas to users, with daily/weekly/monthly limits. Follow these steps to get started.',
+        subtitle:
+          'Subscription mode lets you assign time-based usage quotas to users, with daily/weekly/monthly limits. Follow these steps to get started.',
         showGuide: 'Usage Guide',
         step1: {
           title: 'Create a Subscription Group',
@@ -3509,13 +3794,15 @@ export default {
       toolActions: 'Tools',
       viewColumns: 'Columns',
       selectedCount: '{count} selected',
-      dataExportConfirmMessage: 'The exported data contains sensitive account and proxy information. Store it securely.',
+      dataExportConfirmMessage:
+        'The exported data contains sensitive account and proxy information. Store it securely.',
       dataExportConfirm: 'Confirm Export',
       dataExported: 'Data exported successfully',
       dataExportFailed: 'Failed to export data',
       dataImportTitle: 'Import Data',
       dataImportHint: 'Upload the exported JSON file to import accounts and proxies.',
-      dataImportWarning: 'Import will create new accounts/proxies; groups must be bound manually. Ensure existing data does not conflict.',
+      dataImportWarning:
+        'Import will create new accounts/proxies; groups must be bound manually. Ensure existing data does not conflict.',
       dataImportFile: 'Data file',
       dataImportButton: 'Start Import',
       dataImporting: 'Importing...',
@@ -3523,10 +3810,12 @@ export default {
       dataImportParseFailed: 'Failed to parse data file',
       dataImportFailed: 'Data import failed',
       dataImportResult: 'Import Result',
-      dataImportResultSummary: 'Proxies created {proxy_created}, reused {proxy_reused}, failed {proxy_failed}; Accounts created {account_created}, failed {account_failed}',
+      dataImportResultSummary:
+        'Proxies created {proxy_created}, reused {proxy_reused}, failed {proxy_failed}; Accounts created {account_created}, failed {account_failed}',
       dataImportErrors: 'Error Details',
       dataImportSuccess: 'Import completed: accounts {account_created}, failed {account_failed}',
-      dataImportCompletedWithErrors: 'Import completed with errors: account failed {account_failed}, proxy failed {proxy_failed}',
+      dataImportCompletedWithErrors:
+        'Import completed with errors: account failed {account_failed}, proxy failed {proxy_failed}',
       syncFromCrsTitle: 'Sync Accounts from CRS',
       syncFromCrsDesc:
         'Sync accounts from claude-relay-service (CRS) into this system (CRS is called server-to-server).',
@@ -3585,7 +3874,7 @@ export default {
         claude: 'Claude',
         openai: 'OpenAI',
         gemini: 'Gemini',
-        antigravity: 'Antigravity',
+        antigravity: 'Antigravity'
       },
       types: {
         oauth: 'OAuth',
@@ -3597,7 +3886,8 @@ export default {
         grokOauth: 'Grok OAuth',
         antigravityApikey: 'Connect via Base URL + API Key',
         kiroOauth: 'Kiro OAuth / AWS IDC',
-        kiroApikey: 'Connect via Base URL + API Key',
+        kiroApikey: 'Official Kiro API Key',
+        kiroApikeyRelay: 'External Anthropic-compatible relay',
         upstream: 'Upstream',
         upstreamDesc: 'Connect via Base URL + API Key'
       },
@@ -3651,7 +3941,8 @@ export default {
         expiresAt: 'Expires At',
         actions: 'Actions'
       },
-      usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
+      usageWindowsHint:
+        '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',
       privacyTrainingOff: 'Training data sharing disabled',
@@ -3691,7 +3982,7 @@ export default {
           normal: 'Quota normal',
           dailyShort: 'D',
           weeklyShort: 'W'
-        },
+        }
       },
       tempUnschedulable: {
         title: 'Temp Unschedulable',
@@ -3740,7 +4031,8 @@ export default {
       resetQuota: 'Reset Quota',
       quotaLimit: 'Quota Limit',
       quotaLimitPlaceholder: '0 means unlimited',
-      quotaLimitHint: 'Set daily/weekly/total spending limits (USD). Anthropic API key accounts can also configure client affinity. Changing limits won\'t reset usage.',
+      quotaLimitHint:
+        "Set daily/weekly/total spending limits (USD). Anthropic API key accounts can also configure client affinity. Changing limits won't reset usage.",
       quotaLimitToggle: 'Enable Quota Limit',
       quotaLimitToggleHint: 'When enabled, account will be paused when usage reaches the set limit',
       quotaDailyLimit: 'Daily Limit',
@@ -3764,7 +4056,7 @@ export default {
         thursday: 'Thursday',
         friday: 'Friday',
         saturday: 'Saturday',
-        sunday: 'Sunday',
+        sunday: 'Sunday'
       },
       quotaLimitAmount: 'Total Limit',
       quotaLimitAmountHint: 'Cumulative spending limit. Does not auto-reset.',
@@ -3772,7 +4064,7 @@ export default {
         alert: 'Alert Threshold',
         enabled: 'Enable Alert',
         threshold: 'Alert Amount',
-        thresholdPlaceholder: 'Enter alert amount',
+        thresholdPlaceholder: 'Enter alert amount'
       },
       testConnection: 'Test Connection',
       imageTestMode: 'Image test mode',
@@ -3821,8 +4113,10 @@ export default {
         failed: 'Bulk update failed',
         noSelection: 'Please select accounts to edit',
         noFieldsSelected: 'Select at least one field to update',
-        mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
-        mixedPlatformModelRestrictionDisabled: 'Model whitelist/mapping changes are disabled for mixed-platform bulk edits. Edit each platform separately.'
+        mixedPlatformWarning:
+          'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
+        mixedPlatformModelRestrictionDisabled:
+          'Model whitelist/mapping changes are disabled for mixed-platform bulk edits. Edit each platform separately.'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',
       bulkDeleteConfirm: 'Delete the selected {count} account(s)? This action cannot be undone.',
@@ -3857,18 +4151,23 @@ export default {
       bedrockDesc: 'SigV4 / API Key',
       vertexLabel: 'Vertex',
       vertexDesc: 'Service Account',
-      vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure model mapping to map client Claude model names to Vertex model IDs.',
-      vertexGeminiHint: 'Use a Google Cloud Service Account JSON to access Vertex AI Gemini. It is recommended to place Vertex accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
+      vertexAnthropicHint:
+        'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure model mapping to map client Claude model names to Vertex model IDs.',
+      vertexGeminiHint:
+        'Use a Google Cloud Service Account JSON to access Vertex AI Gemini. It is recommended to place Vertex accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: 'Service Account JSON loaded',
       vertexSaJsonDrop: 'Drop Service Account JSON here',
       vertexSaJsonKeyHidden: 'Key content is not displayed in the form.',
       vertexSaJsonDropHint: 'Drag a .json file here, or click the button to select one.',
       vertexSaJsonSelectBtn: 'Select JSON',
-      vertexSaJsonUploadHint: 'After uploading or dropping a JSON file, the project_id will be auto-extracted. Key content is only used for account creation.',
-      vertexSaJsonEditHint: 'Service Account JSON is not shown on the edit page; to change the JSON, delete the account and recreate it.',
+      vertexSaJsonUploadHint:
+        'After uploading or dropping a JSON file, the project_id will be auto-extracted. Key content is only used for account creation.',
+      vertexSaJsonEditHint:
+        'Service Account JSON is not shown on the edit page; to change the JSON, delete the account and recreate it.',
       vertexProjectIdPlaceholder: 'Auto-extracted from JSON',
-      vertexLocationHint: 'Available locations vary by Vertex model. Select the default endpoint location for this account.',
+      vertexLocationHint:
+        'Available locations vary by Vertex model. Select the default endpoint location for this account.',
       vertexLocationRequired: 'Please enter a Vertex location',
       vertexSaJsonMissingFields: 'Service Account JSON is missing project_id, client_email, or private_key',
       vertexSaJsonMissingProjectId: 'Service Account JSON is missing project_id',
@@ -3949,11 +4248,13 @@ export default {
         testMode: 'Test mode',
         testModeDefault: 'Default request',
         testModeCompact: 'Compact probe',
-        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
+        modelRestrictionDisabledByPassthrough:
+          'Automatic passthrough is enabled: model whitelist/mapping will not take effect.'
       },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
-        apiKeyHint: 'Grok subscription support uses OAuth refresh tokens; API keys are out of scope for this account type.'
+        apiKeyHint:
+          'Grok subscription support uses OAuth refresh tokens; API keys are out of scope for this account type.'
       },
       anthropic: {
         apiKeyPassthrough: 'Auto passthrough (auth only)',
@@ -3961,7 +4262,7 @@ export default {
           'Only applies to Anthropic API Key accounts. When enabled, messages/count_tokens are forwarded in passthrough mode with auth replacement only, while billing/concurrency/audit and safety filtering are preserved. Disable to roll back immediately.',
         webSearchEmulation: 'Web Search Emulation',
         webSearchEmulationDesc:
-          'Enable web search emulation for this API Key account. When a pure web_search request is detected, the gateway calls a third-party search API and constructs the response locally.',
+          'Enable web search emulation for this API Key account. When a pure web_search request is detected, the gateway calls a third-party search API and constructs the response locally.'
       },
       modelRestriction: 'Model Restriction (Optional)',
       modelWhitelist: 'Model Whitelist',
@@ -3993,7 +4294,7 @@ export default {
       modelExists: 'Model already exists',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
-      poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
+      poolModeHint: "Enable when upstream is an account pool; errors won't mark local account status",
       poolModeInfo:
         'When enabled, upstream 429/403/401 errors will auto-retry without marking the account as rate-limited or errored. Suitable for upstream pointing to another SubAPIs instance.',
       poolModeRetryCount: 'Same-Account Retries',
@@ -4001,8 +4302,7 @@ export default {
         'Only applies in pool mode. Use 0 to disable in-place retry. Default {default}, maximum {max}.',
       customErrorCodes: 'Custom Error Codes',
       customErrorCodesHint: 'Only stop scheduling for selected error codes',
-      customErrorCodesWarning:
-        'Only selected error codes will stop scheduling. Other errors will return 500.',
+      customErrorCodesWarning: 'Only selected error codes will stop scheduling. Other errors will return 500.',
       customErrorCodes429Warning:
         '429 already has built-in rate limit handling. Adding it to custom error codes will disable the account instead of temporary rate limiting. Are you sure?',
       customErrorCodes529Warning:
@@ -4055,19 +4355,21 @@ export default {
           strategyHint: 'Tiered: gradually restrict when exceeded; Sticky Exempt: existing sessions unrestricted',
           stickyBuffer: 'Sticky Buffer',
           stickyBufferPlaceholder: 'Default: 20% of base RPM',
-          stickyBufferHint: 'Extra requests allowed for sticky sessions after exceeding base RPM. Leave empty to use default (20% of base RPM, min 1)',
+          stickyBufferHint:
+            'Extra requests allowed for sticky sessions after exceeding base RPM. Leave empty to use default (20% of base RPM, min 1)',
           userMsgQueue: 'User Message Rate Control',
           userMsgQueueHint: 'Rate-limit user messages to avoid triggering upstream RPM limits',
           umqModeOff: 'Off',
           umqModeThrottle: 'Throttle',
-          umqModeSerialize: 'Serialize',
+          umqModeSerialize: 'Serialize'
         },
         tlsFingerprint: {
           label: 'TLS Fingerprint Simulation',
           hint: 'Simulate Node.js/Claude Code client TLS fingerprint',
           defaultProfile: 'Built-in Default',
           randomProfile: 'Random',
-          antigravityAutoHint: 'For Antigravity, leaving the profile empty uses an account-scoped built-in random TLS fingerprint.'
+          antigravityAutoHint:
+            'For Antigravity, leaving the profile empty uses an account-scoped built-in random TLS fingerprint.'
         },
         sessionIdMasking: {
           label: 'Session ID Masking',
@@ -4075,7 +4377,7 @@ export default {
         },
         forceStreamUpstream: {
           label: 'Force Stream Upstream',
-          hint: 'Enable only when this account\'s upstream supports streaming only (e.g. SSE-only relays): non-stream client requests are forced to stream upstream, then aggregated back into a non-stream JSON response. Off by default — accounts that support non-stream (e.g. official Anthropic) pass through directly'
+          hint: "Enable only when this account's upstream supports streaming only (e.g. SSE-only relays): non-stream client requests are forced to stream upstream, then aggregated back into a non-stream JSON response. Off by default — accounts that support non-stream (e.g. official Anthropic) pass through directly"
         },
         cacheTTLOverride: {
           label: 'Cache TTL Override',
@@ -4086,7 +4388,7 @@ export default {
         customBaseUrl: {
           label: 'Custom Relay URL',
           hint: 'Forward requests to a custom relay service. Proxy URL will be passed as a query parameter.',
-          urlHint: 'Relay service URL (e.g., https://relay.example.com)',
+          urlHint: 'Relay service URL (e.g., https://relay.example.com)'
         },
         clientAffinity: {
           label: 'Client Affinity Scheduling',
@@ -4096,7 +4398,8 @@ export default {
       affinityNoClients: 'No affinity clients',
       affinityClients: '{count} affinity clients:',
       affinitySection: 'Client Affinity',
-      affinitySectionHint: 'Control how clients are distributed across accounts. Configure zone thresholds to balance load.',
+      affinitySectionHint:
+        'Control how clients are distributed across accounts. Configure zone thresholds to balance load.',
       affinityToggle: 'Enable Client Affinity',
       affinityToggleHint: 'New sessions prefer accounts previously used by this client',
       affinityBase: 'Base Limit (Green Zone)',
@@ -4117,6 +4420,8 @@ export default {
       priorityHint: 'Lower value accounts are used first',
       billingRateMultiplier: 'Billing Rate Multiplier',
       billingRateMultiplierHint: '0 = free, affects account billing only',
+      kiroCreditUnitPriceUsd: 'Credit Unit Price',
+      kiroCreditUnitPriceUsdHint: 'Used only to estimate Kiro Credits cost in today stats. 0 hides the estimate.',
       expiresAt: 'Expires At',
       expiresAtHint: 'Leave empty for no expiration',
       higherPriorityFirst: 'Lower value means higher priority',
@@ -4136,7 +4441,8 @@ export default {
       failedToUpdate: 'Failed to update account',
       pleaseSelectStatus: 'Please select a valid account status',
       mixedChannelWarningTitle: 'Mixed Channel Warning',
-      mixedChannelWarning: 'Warning: Group "{groupName}" contains both {currentPlatform} and {otherPlatform} accounts. Mixing different channels may cause thinking block signature validation issues, which will fallback to non-thinking mode. Are you sure you want to continue?',
+      mixedChannelWarning:
+        'Warning: Group "{groupName}" contains both {currentPlatform} and {otherPlatform} accounts. Mixing different channels may cause thinking block signature validation issues, which will fallback to non-thinking mode. Are you sure you want to continue?',
       pleaseEnterAccountName: 'Please enter account name',
       pleaseEnterApiKey: 'Please enter API Key',
       bedrockAccessKeyId: 'AWS Access Key ID',
@@ -4145,7 +4451,8 @@ export default {
       bedrockRegion: 'AWS Region',
       bedrockRegionHint: 'e.g. us-east-1, us-west-2, eu-west-1',
       bedrockForceGlobal: 'Force Global cross-region inference',
-      bedrockForceGlobalHint: 'When enabled, model IDs use the global. prefix (e.g. global.anthropic.claude-...), routing requests to any supported region worldwide for higher availability',
+      bedrockForceGlobalHint:
+        'When enabled, model IDs use the global. prefix (e.g. global.anthropic.claude-...), routing requests to any supported region worldwide for higher availability',
       bedrockAccessKeyIdRequired: 'Please enter AWS Access Key ID',
       bedrockSecretAccessKeyRequired: 'Please enter AWS Secret Access Key',
       bedrockRegionRequired: 'Please select AWS Region',
@@ -4171,8 +4478,14 @@ export default {
         pleaseEnterApiKey: 'Please enter upstream API Key'
       },
       kiro: {
-        baseUrlHint: 'The address of the upstream Kiro-compatible service.',
-        apiKeyHint: 'Kiro API Key from Kiro Console or your compatible upstream service.'
+        baseUrlHint:
+          'Leave empty for official Kiro API Key direct mode. Set only for an external Anthropic-compatible relay.',
+        apiKeyHint: 'Kiro API Key from Kiro Console or your compatible upstream service.',
+        relayBaseUrlHint:
+          'External Anthropic-compatible upstream URL (e.g. https://your-relay.example.com); requests go to {base_url}/v1/messages',
+        relayApiKeyHint: 'API Key for the external relay.',
+        relayPriorityHint:
+          'External relay accounts are treated as fallback accounts. Keep their priority lower than official Kiro accounts unless you explicitly want them selected first.'
       },
       droid: {
         baseUrlHint: 'The address of the Factory.ai Droid-compatible service.',
@@ -4189,8 +4502,7 @@ export default {
         sessionKey: 'sessionKey',
         keysCount: '{count} keys',
         batchCreateAccounts: 'Will batch create {count} accounts',
-        sessionKeyPlaceholder:
-          'One sessionKey per line, e.g.:\nsk-ant-sid01-xxxxx...\nsk-ant-sid01-yyyyy...',
+        sessionKeyPlaceholder: 'One sessionKey per line, e.g.:\nsk-ant-sid01-xxxxx...\nsk-ant-sid01-yyyyy...',
         sessionKeyPlaceholderSingle: 'sk-ant-sid01-xxxxx...',
         howToGetSessionKey: 'How to get sessionKey',
         step1: 'Login to claude.ai in your browser',
@@ -4208,8 +4520,7 @@ export default {
         generating: 'Generating...',
         regenerate: 'Regenerate',
         step2OpenUrl: 'Open the URL in your browser and complete authorization',
-        openUrlDesc:
-          'Open the authorization URL in a new tab, log in to your Claude account and authorize.',
+        openUrlDesc: 'Open the authorization URL in a new tab, log in to your Claude account and authorize.',
         proxyWarning:
           'Note: If you configured a proxy, make sure your browser uses the same proxy to access the authorization page.',
         step3EnterCode: 'Enter the Authorization Code',
@@ -4235,12 +4546,15 @@ export default {
           step1GenerateUrl: 'Generate the device authorization info below',
           generateAuthUrl: 'Generate Auth Info',
           step2OpenUrl: 'Open the verification URL and finish authorization',
-          openUrlDesc: 'Open the verification URL in your browser, sign in to your Factory.ai / Droid account, and approve access.',
+          openUrlDesc:
+            'Open the verification URL in your browser, sign in to your Factory.ai / Droid account, and approve access.',
           step3EnterCode: 'Click complete after browser authorization finishes',
-          authCodeDesc: 'Droid uses device authorization. No callback URL or pasted code is required. After the browser flow finishes, return here and click "Complete Authorization".',
+          authCodeDesc:
+            'Droid uses device authorization. No callback URL or pasted code is required. After the browser flow finishes, return here and click "Complete Authorization".',
           authCode: 'Device Authorization',
           authCodePlaceholder: 'No authorization code is required',
-          authCodeHint: 'After completing authorization in the browser, return here and click "Complete Authorization".',
+          authCodeHint:
+            'After completing authorization in the browser, return here and click "Complete Authorization".',
           completeAuth: 'Complete Authorization',
           validating: 'Checking...',
           authFailed: 'Droid authorization failed',
@@ -4253,8 +4567,7 @@ export default {
           step1GenerateUrl: 'Click the button below to generate the authorization URL',
           generateAuthUrl: 'Generate Auth URL',
           step2OpenUrl: 'Open the URL in your browser and complete authorization',
-          openUrlDesc:
-            'Open the authorization URL in a new tab, log in to your OpenAI account and authorize.',
+          openUrlDesc: 'Open the authorization URL in a new tab, log in to your OpenAI account and authorize.',
           importantNotice:
             'Important: The page may take a while to load after authorization. Please wait patiently. When the browser address bar changes to http://localhost..., the authorization is complete.',
           step3EnterCode: 'Enter Authorization URL or Code',
@@ -4263,8 +4576,7 @@ export default {
           authCode: 'Authorization URL or Code',
           authCodePlaceholder:
             'Option 1: Copy the complete URL\n(http://localhost:xxx/auth/callback?code=...)\nOption 2: Copy only the code parameter value',
-          authCodeHint:
-            'You can copy the entire URL or just the code parameter value, the system will auto-detect',
+          authCodeHint: 'You can copy the entire URL or just the code parameter value, the system will auto-detect',
           failedToGenerateUrl: 'Failed to generate OpenAI auth URL',
           failedToExchangeCode: 'Failed to exchange OpenAI auth code',
           failedToValidateRT: 'Failed to validate refresh token',
@@ -4277,28 +4589,34 @@ export default {
           mobileRefreshTokenAuth: 'Manual Mobile RT Input',
           accessTokenAuth: 'Manual AT Input',
           refreshTokenInputLabel: 'Refresh Token',
-          refreshTokenDesc: 'Enter your existing OpenAI Refresh Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.',
+          refreshTokenDesc:
+            'Enter your existing OpenAI Refresh Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.',
           refreshTokenPlaceholder: 'Paste your OpenAI Refresh Token...\nSupports multiple, one per line',
           codexSessionAuth: 'Codex JSON / AT Batch Input',
           codexSessionDesc: 'Paste Codex JSON or an accessToken. Accounts use the step 1 settings.',
           codexSessionInputLabel: 'Codex JSON or accessToken',
           codexSessionPlaceholder: 'Multiple lines supported, one token or JSON per line',
-          codexSessionHint: 'sessionToken will not be saved as refresh_token. Without refresh_token, the account expires with the accessToken expiry; import is rejected if the expiry cannot be parsed and step 1 has no expiration.',
+          codexSessionHint:
+            'sessionToken will not be saved as refresh_token. Without refresh_token, the account expires with the accessToken expiry; import is rejected if the expiry cannot be parsed and step 1 has no expiration.',
           codexSessionImportAndCreate: 'Import & Create Account',
           codexSessionEmpty: 'Please enter Codex JSON or accessToken',
           codexSessionImportFailed: 'Failed to import Codex account',
           codexSessionImportSuccess: 'Import completed: created {created}, updated {updated}, skipped {skipped}',
-          codexSessionImportPartial: 'Partial success: created {created}, updated {updated}, skipped {skipped}, failed {failed}',
+          codexSessionImportPartial:
+            'Partial success: created {created}, updated {updated}, skipped {skipped}, failed {failed}',
           codexPatAuth: 'Codex Personal Access Token',
-          codexPatDesc: 'Enter a Codex at- personal access token. The system validates it with OpenAI whoami before creating the account.',
+          codexPatDesc:
+            'Enter a Codex at- personal access token. The system validates it with OpenAI whoami before creating the account.',
           codexPatInputLabel: 'Codex PAT',
           codexPatPlaceholder: 'at-...',
-          codexPatHint: 'This is a separate auth mode. It does not save refresh_token or write an OAuth access_token expiration.',
+          codexPatHint:
+            'This is a separate auth mode. It does not save refresh_token or write an OAuth access_token expiration.',
           codexPatImportAndCreate: 'Validate & Create Codex PAT Account',
           codexPatEmpty: 'Please enter a Codex personal access token',
           codexPatImportFailed: 'Failed to create Codex PAT account',
           sessionTokenAuth: 'Manual ST Input',
-          sessionTokenDesc: 'Enter your existing Session Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.',
+          sessionTokenDesc:
+            'Enter your existing Session Token(s). Supports batch input (one per line). The system will automatically validate and create accounts.',
           sessionTokenPlaceholder: 'Paste your Session Token...\nSupports multiple, one per line',
           sessionTokenRawLabel: 'Raw Input',
           sessionTokenRawPlaceholder: 'Paste /api/auth/session raw payload or Session Token...',
@@ -4306,7 +4624,8 @@ export default {
           openSessionUrl: 'Open Fetch URL',
           copySessionUrl: 'Copy URL',
           copyAuthUrl: 'Copy authorization URL',
-          sessionUrlHint: 'This URL usually returns AT. If sessionToken is absent, copy __Secure-next-auth.session-token from browser cookies as ST.',
+          sessionUrlHint:
+            'This URL usually returns AT. If sessionToken is absent, copy __Secure-next-auth.session-token from browser cookies as ST.',
           parsedSessionTokensLabel: 'Parsed ST',
           parsedSessionTokensEmpty: 'No ST parsed. Please check your input.',
           parsedAccessTokensLabel: 'Parsed AT',
@@ -4322,7 +4641,8 @@ export default {
           generateAuthUrl: 'Generate Auth URL',
           step2OpenUrl: 'Open the URL in your browser and complete authorization',
           openUrlDesc: 'Open the authorization URL in a new tab, sign in to xAI, and authorize API access.',
-          importantNotice: 'When the browser reaches the local callback URL, copy the full URL or the code query parameter back here.',
+          importantNotice:
+            'When the browser reaches the local callback URL, copy the full URL or the code query parameter back here.',
           step3EnterCode: 'Enter Authorization URL or Code',
           authCodeDesc: 'After authorization, paste the callback URL, query string, or authorization code:',
           authCode: 'Authorization URL or Code',
@@ -4338,57 +4658,54 @@ export default {
           missingExchangeParams: 'Missing authorization code, state, or OAuth session',
           failedToExchangeCode: 'Failed to exchange Grok authorization code',
           failedToValidateRT: 'Failed to validate Grok refresh token',
-          oauthOnlyHint: 'Initial Grok support is OAuth subscription-backed Responses API text and reasoning traffic only.'
+          oauthOnlyHint:
+            'Initial Grok support is OAuth subscription-backed Responses API text and reasoning traffic only.'
         },
         // Gemini specific
-	        gemini: {
-	          title: 'Gemini Account Authorization',
-	          followSteps: 'Follow these steps to authorize your Gemini account:',
-	          step1GenerateUrl: 'Generate the authorization URL',
-	          generateAuthUrl: 'Generate Auth URL',
-	          projectIdLabel: 'Project ID (optional)',
-	          projectIdPlaceholder: 'e.g. my-gcp-project or cloud-ai-companion-xxxxx',
-	          projectIdHint:
-	            'Leave empty to auto-detect after code exchange. If auto-detection fails, fill it in and re-generate the auth URL to try again.',
-	          howToGetProjectId: 'How to get',
-	          step2OpenUrl: 'Open the URL in your browser and complete authorization',
-	          openUrlDesc:
-	            'Open the authorization URL in a new tab, log in to your Google account and authorize.',
-	          step3EnterCode: 'Enter Authorization URL or Code',
-	          authCodeDesc:
-	            'After authorization, copy the callback URL (recommended) or just the code and paste it below.',
-	          authCode: 'Callback URL or Code',
-	          authCodePlaceholder:
-	            'Option 1 (recommended): Paste the callback URL\nOption 2: Paste only the code value',
-	          authCodeHint: 'The system will auto-extract code/state from the URL.',
+        gemini: {
+          title: 'Gemini Account Authorization',
+          followSteps: 'Follow these steps to authorize your Gemini account:',
+          step1GenerateUrl: 'Generate the authorization URL',
+          generateAuthUrl: 'Generate Auth URL',
+          projectIdLabel: 'Project ID (optional)',
+          projectIdPlaceholder: 'e.g. my-gcp-project or cloud-ai-companion-xxxxx',
+          projectIdHint:
+            'Leave empty to auto-detect after code exchange. If auto-detection fails, fill it in and re-generate the auth URL to try again.',
+          howToGetProjectId: 'How to get',
+          step2OpenUrl: 'Open the URL in your browser and complete authorization',
+          openUrlDesc: 'Open the authorization URL in a new tab, log in to your Google account and authorize.',
+          step3EnterCode: 'Enter Authorization URL or Code',
+          authCodeDesc: 'After authorization, copy the callback URL (recommended) or just the code and paste it below.',
+          authCode: 'Callback URL or Code',
+          authCodePlaceholder: 'Option 1 (recommended): Paste the callback URL\nOption 2: Paste only the code value',
+          authCodeHint: 'The system will auto-extract code/state from the URL.',
           redirectUri: 'Redirect URI',
-          redirectUriHint:
-            'This must be configured in your Google OAuth client and must match exactly.',
-          confirmRedirectUri:
-            'I have configured this Redirect URI in the Google OAuth client (must match exactly)',
-	          invalidRedirectUri: 'Redirect URI must be a valid http(s) URL',
-	          redirectUriNotConfirmed: 'Please confirm the Redirect URI is configured correctly',
-	          missingRedirectUri: 'Missing redirect URI',
-	          failedToGenerateUrl: 'Failed to generate Gemini auth URL',
-	          missingExchangeParams: 'Missing auth code, session ID, or state',
-	          failedToExchangeCode: 'Failed to exchange Gemini auth code',
-	          missingProjectId: 'GCP Project ID retrieval failed: Your Google account is not linked to an active GCP project. Please activate GCP and bind a credit card in Google Cloud Console, or manually enter the Project ID during authorization.',
-	          modelPassthrough: 'Gemini Model Passthrough',
-	          modelPassthroughDesc:
-	            'All model requests are forwarded directly to the Gemini API without model restrictions or mappings.',
-	          stateWarningTitle: 'Note',
-	          stateWarningDesc: 'Recommended: paste the full callback URL (includes code & state).',
-	          oauthTypeLabel: 'OAuth Type',
+          redirectUriHint: 'This must be configured in your Google OAuth client and must match exactly.',
+          confirmRedirectUri: 'I have configured this Redirect URI in the Google OAuth client (must match exactly)',
+          invalidRedirectUri: 'Redirect URI must be a valid http(s) URL',
+          redirectUriNotConfirmed: 'Please confirm the Redirect URI is configured correctly',
+          missingRedirectUri: 'Missing redirect URI',
+          failedToGenerateUrl: 'Failed to generate Gemini auth URL',
+          missingExchangeParams: 'Missing auth code, session ID, or state',
+          failedToExchangeCode: 'Failed to exchange Gemini auth code',
+          missingProjectId:
+            'GCP Project ID retrieval failed: Your Google account is not linked to an active GCP project. Please activate GCP and bind a credit card in Google Cloud Console, or manually enter the Project ID during authorization.',
+          modelPassthrough: 'Gemini Model Passthrough',
+          modelPassthroughDesc:
+            'All model requests are forwarded directly to the Gemini API without model restrictions or mappings.',
+          stateWarningTitle: 'Note',
+          stateWarningDesc: 'Recommended: paste the full callback URL (includes code & state).',
+          oauthTypeLabel: 'OAuth Type',
           needsProjectId: 'Built-in OAuth (Code Assist)',
           needsProjectIdDesc: 'Requires GCP project and Project ID',
           noProjectIdNeeded: 'Custom OAuth (AI Studio)',
           noProjectIdNeededDesc: 'Requires admin-configured OAuth client',
-	          aiStudioNotConfiguredShort: 'Not configured',
-	          aiStudioNotConfiguredTip:
-	            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback (Consent screen scopes must include https://www.googleapis.com/auth/generative-language.retriever)',
-	          aiStudioNotConfigured:
-	            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback'
-	        },
+          aiStudioNotConfiguredShort: 'Not configured',
+          aiStudioNotConfiguredTip:
+            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback (Consent screen scopes must include https://www.googleapis.com/auth/generative-language.retriever)',
+          aiStudioNotConfigured:
+            'AI Studio OAuth is not configured: set GEMINI_OAUTH_CLIENT_ID / GEMINI_OAUTH_CLIENT_SECRET and add Redirect URI: http://localhost:1455/auth/callback'
+        },
         // Antigravity specific
         antigravity: {
           title: 'Antigravity Account Authorization',
@@ -4400,37 +4717,41 @@ export default {
           importantNotice:
             'Important: The page may take a while to load after authorization. Please wait patiently. When the browser address bar shows http://localhost..., authorization is complete.',
           step3EnterCode: 'Enter Authorization URL or Code',
-          authCodeDesc:
-            'After authorization, when the page URL becomes http://localhost:xxx/auth/callback?code=...:',
+          authCodeDesc: 'After authorization, when the page URL becomes http://localhost:xxx/auth/callback?code=...:',
           authCode: 'Authorization URL or Code',
           authCodePlaceholder:
             'Option 1: Copy the complete URL\n(http://localhost:xxx/auth/callback?code=...)\nOption 2: Copy only the code parameter value',
-                    authCodeHint: 'You can copy the entire URL or just the code parameter value, the system will auto-detect',
-                    failedToGenerateUrl: 'Failed to generate Antigravity auth URL',
-                    missingExchangeParams: 'Missing code, session ID, or state',
-                    failedToExchangeCode: 'Failed to exchange Antigravity auth code',
-                    // Refresh Token auth
-                    refreshTokenAuth: 'Manual RT',
-                    refreshTokenInputLabel: 'Refresh Token',
-                    refreshTokenDesc: 'Enter your existing Antigravity Refresh Token. Supports batch input (one per line). The system will automatically validate and create accounts.',
-                    refreshTokenPlaceholder: 'Paste your Antigravity Refresh Token...\nSupports multiple tokens, one per line',
-                    validating: 'Validating...',
-                    validateAndCreate: 'Validate & Create',
-                    pleaseEnterRefreshToken: 'Please enter Refresh Token',
-                    failedToValidateRT: 'Failed to validate Refresh Token'
-                  },
+          authCodeHint: 'You can copy the entire URL or just the code parameter value, the system will auto-detect',
+          failedToGenerateUrl: 'Failed to generate Antigravity auth URL',
+          missingExchangeParams: 'Missing code, session ID, or state',
+          failedToExchangeCode: 'Failed to exchange Antigravity auth code',
+          // Refresh Token auth
+          refreshTokenAuth: 'Manual RT',
+          refreshTokenInputLabel: 'Refresh Token',
+          refreshTokenDesc:
+            'Enter your existing Antigravity Refresh Token. Supports batch input (one per line). The system will automatically validate and create accounts.',
+          refreshTokenPlaceholder: 'Paste your Antigravity Refresh Token...\nSupports multiple tokens, one per line',
+          validating: 'Validating...',
+          validateAndCreate: 'Validate & Create',
+          pleaseEnterRefreshToken: 'Please enter Refresh Token',
+          failedToValidateRT: 'Failed to validate Refresh Token'
+        },
         kiro: {
           title: 'Kiro Account Authorization',
           followSteps: 'Follow these steps to authorize your Kiro account:',
           step1GenerateUrl: 'Generate the authorization URL',
           generateAuthUrl: 'Generate Auth URL',
           step2OpenUrl: 'Open the URL in your browser and complete authorization',
-          openUrlDesc: 'Open the authorization URL in a new tab and finish sign-in. In AWS IDC mode, return here and click Complete Authorization after the browser authorization succeeds.',
+          openUrlDesc:
+            'Open the authorization URL in a new tab and finish sign-in. In AWS IDC mode, return here and click Complete Authorization after the browser authorization succeeds.',
           step3EnterCode: 'Complete Authorization',
-          authCodeDesc: 'For normal Kiro sign-in, paste the callback URL or code. In AWS IDC mode, leave this empty and click Complete Authorization after browser authorization succeeds.',
+          authCodeDesc:
+            'For normal Kiro sign-in, paste the callback URL or code. In AWS IDC mode, leave this empty and click Complete Authorization after browser authorization succeeds.',
           authCode: 'Callback URL or Code',
-          authCodePlaceholder: 'Normal Kiro sign-in: paste callback URL or code\nAWS IDC: leave empty, authorize in browser, then click Complete Authorization',
-          authCodeHint: 'Normal sign-in auto-extracts code/state. AWS IDC uses device authorization and does not need a local callback URL.',
+          authCodePlaceholder:
+            'Normal Kiro sign-in: paste callback URL or code\nAWS IDC: leave empty, authorize in browser, then click Complete Authorization',
+          authCodeHint:
+            'Normal sign-in auto-extracts code/state. AWS IDC uses device authorization and does not need a local callback URL.',
           authModeTitle: 'Authorization Mode',
           oauthTitle: 'Kiro Sign-in',
           oauthSubtitle: 'Google/GitHub sign-in; may continue to AWS IDC',
@@ -4453,12 +4774,16 @@ export default {
           tokenJsonHint: 'Paste exported token JSON containing accessToken and refreshToken.',
           deviceRegistrationLabel: 'Device Registration JSON',
           deviceRegistrationHint: 'Optional. Paste clientId/clientSecret registration JSON when needed for refresh.',
-          missingState: 'The callback is missing state. Paste the full callback URL, or regenerate the authorization URL and retry.',
-          stateMismatch: 'The callback state does not match the current authorization session. Use the latest generated authorization URL and paste the latest callback URL.',
-          missingIDCContinuation: 'This Kiro callback is missing issuer_url; regenerate the authorization URL and retry.',
-          idcContinuationReady: 'Switched to AWS IDC device authorization. Open the newly generated authorization URL, finish sign-in, then click Complete Authorization.'
+          missingState:
+            'The callback is missing state. Paste the full callback URL, or regenerate the authorization URL and retry.',
+          stateMismatch:
+            'The callback state does not match the current authorization session. Use the latest generated authorization URL and paste the latest callback URL.',
+          missingIDCContinuation:
+            'This Kiro callback is missing issuer_url; regenerate the authorization URL and retry.',
+          idcContinuationReady:
+            'Switched to AWS IDC device authorization. Open the newly generated authorization URL, finish sign-in, then click Complete Authorization.'
         }
-                },      // Gemini specific (platform-wide)
+      }, // Gemini specific (platform-wide)
       gemini: {
         helpButton: 'Help',
         helpDialog: {
@@ -4494,8 +4819,7 @@ export default {
           oauthDesc: 'Authorize with your Google account and choose an OAuth type.',
           apiKeyTitle: 'API Key (AI Studio)',
           apiKeyDesc: 'Fastest setup. Use an AIza API key.',
-          apiKeyNote:
-            'Best for light testing. Free tier has strict rate limits and data may be used for training.',
+          apiKeyNote: 'Best for light testing. Free tier has strict rate limits and data may be used for training.',
           apiKeyLink: 'Get API Key',
           quotaLink: 'Quota guide'
         },
@@ -4630,9 +4954,11 @@ export default {
       testPrompt: 'Prompt: "hi"',
       antigravityProbeLabel: 'Probe: "." (max_tokens=1)',
       geminiImagePromptLabel: 'Image prompt',
-      geminiImagePromptPlaceholder: 'Example: Generate an orange cat astronaut sticker in pixel-art style on a solid background.',
+      geminiImagePromptPlaceholder:
+        'Example: Generate an orange cat astronaut sticker in pixel-art style on a solid background.',
       geminiImagePromptDefault: 'Generate a cute orange cat astronaut sticker on a clean pastel background.',
-      geminiImageTestHint: 'When a Gemini image model is selected, this test sends a real image-generation request and previews the returned image below.',
+      geminiImageTestHint:
+        'When a Gemini image model is selected, this test sends a real image-generation request and previews the returned image below.',
       geminiImageTestMode: 'Mode: Gemini image generation test',
       geminiImagePreview: 'Generated images:',
       geminiImageReceived: 'Received test image #{count}',
@@ -4654,6 +4980,8 @@ export default {
         cost: 'Cost',
         requests: 'Requests',
         tokens: 'Tokens',
+        kiroCredits: 'Credits Used',
+        approxCost: 'approx. {amount}',
         highestCostDay: 'Highest Cost Day',
         highestRequestDay: 'Highest Request Day',
         date: 'Date',
@@ -4711,7 +5039,8 @@ export default {
         noCreditsAvailable: 'No reset credits available',
         resetSuccess: 'Reset {windows} window(s)',
         confirmTitle: 'Confirm Weekly Limit Reset',
-        confirmMessage: 'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
+        confirmMessage:
+          'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
       },
       tier: {
         free: 'Free',
@@ -4763,17 +5092,23 @@ export default {
       schedule: 'Schedule',
       cronHelp: 'Standard 5-field cron expression (e.g., */30 * * * *)',
       cronTooltipTitle: 'Cron expression examples:',
-      cronTooltipMeaning: 'Defines when the test runs automatically. The 5 fields are: minute, hour, day, month, and weekday.',
+      cronTooltipMeaning:
+        'Defines when the test runs automatically. The 5 fields are: minute, hour, day, month, and weekday.',
       cronTooltipExampleEvery30Min: '*/30 * * * *: run every 30 minutes',
       cronTooltipExampleHourly: '0 * * * *: run at the start of every hour',
       cronTooltipExampleDaily: '0 9 * * *: run every day at 09:00',
       cronTooltipExampleWeekly: '0 9 * * 1: run every Monday at 09:00',
-      cronTooltipRange: 'Recommended range: use standard 5-field cron. For health checks, start with a moderate frequency such as every 30 minutes, every hour, or once a day instead of running too often.',
+      cronTooltipRange:
+        'Recommended range: use standard 5-field cron. For health checks, start with a moderate frequency such as every 30 minutes, every hour, or once a day instead of running too often.',
       maxResultsTooltipTitle: 'What Max Results means:',
-      maxResultsTooltipMeaning: 'Sets how many historical test results are kept for a single plan so the result list does not grow without limit.',
-      maxResultsTooltipBody: 'Only the newest test results are kept. Once the number of saved results exceeds this value, older records are pruned automatically so the history list and storage stay under control.',
-      maxResultsTooltipExample: 'For example, 100 means keeping at most the latest 100 test results. When the 101st result is saved, the oldest one is removed.',
-      maxResultsTooltipRange: 'Recommended range: usually 20 to 200. Use 20-50 when you only care about recent health status, or 100-200 if you want a longer trend history.',
+      maxResultsTooltipMeaning:
+        'Sets how many historical test results are kept for a single plan so the result list does not grow without limit.',
+      maxResultsTooltipBody:
+        'Only the newest test results are kept. Once the number of saved results exceeds this value, older records are pruned automatically so the history list and storage stay under control.',
+      maxResultsTooltipExample:
+        'For example, 100 means keeping at most the latest 100 test results. When the 101st result is saved, the oldest one is removed.',
+      maxResultsTooltipRange:
+        'Recommended range: usually 20 to 200. Use 20-50 when you only care about recent health status, or 100-200 if you want a longer trend history.',
       autoRecover: 'Auto Recover',
       autoRecoverHelp: 'Automatically recover account from error/rate-limited state on successful test'
     },
@@ -4792,7 +5127,8 @@ export default {
       dataExportSelected: 'Export Selected',
       dataImportTitle: 'Import Proxies',
       dataImportHint: 'Upload the exported proxy JSON file to import proxies in bulk.',
-      dataImportWarning: 'Import will create or reuse proxies, keep their status, and trigger latency checks after completion.',
+      dataImportWarning:
+        'Import will create or reuse proxies, keep their status, and trigger latency checks after completion.',
       dataImportFile: 'Data File',
       dataImportButton: 'Start Import',
       dataImporting: 'Importing...',
@@ -4877,8 +5213,7 @@ export default {
       batchInput: 'Proxy List',
       batchInputPlaceholder:
         "Enter one proxy per line in the following formats:\nsocks5://user:pass{'@'}192.168.1.1:1080\nhttp://192.168.1.1:8080\nhttps://user:pass{'@'}proxy.example.com:443",
-      batchInputHint:
-        "Supports http, https, socks5 protocols. Format: protocol://[user:pass{'@'}]host:port",
+      batchInputHint: "Supports http, https, socks5 protocols. Format: protocol://[user:pass{'@'}]host:port",
       parsedCount: '{count} valid',
       invalidCount: '{count} invalid',
       duplicateCount: '{count} duplicate',
@@ -4942,7 +5277,7 @@ export default {
       fallbackNone: 'No fallback',
       fallbackProxy: 'Backup proxy',
       fallbackDirect: 'Direct connection',
-      backupProxy: 'Backup proxy',
+      backupProxy: 'Backup proxy'
     },
     // Redeem Codes
     redeem: {
@@ -4956,7 +5291,8 @@ export default {
       concurrency: 'Concurrency',
       subscription: 'Subscription',
       invitation: 'Invitation',
-      invitationHint: 'Invitation codes are used to restrict user registration. They are automatically marked as used after use.',
+      invitationHint:
+        'Invitation codes are used to restrict user registration. They are automatically marked as used after use.',
       unused: 'Unused',
       used: 'Used',
       disabled: 'Disabled',
@@ -4997,8 +5333,7 @@ export default {
       exportCsv: 'Export CSV',
       deleteAllUnused: 'Delete All Unused Codes',
       deleteCode: 'Delete Redeem Code',
-      deleteCodeConfirm:
-        'Are you sure you want to delete this redeem code? This action cannot be undone.',
+      deleteCodeConfirm: 'Are you sure you want to delete this redeem code? This action cannot be undone.',
       deleteAllUnusedConfirm:
         'Are you sure you want to delete all unused (active) redeem codes? This action cannot be undone.',
       deleteAll: 'Delete All',
@@ -5509,7 +5844,7 @@ export default {
           internal: 'Internal'
         },
         total: 'Total:',
-        searchPlaceholder: 'Search request_id / client_request_id / message',
+        searchPlaceholder: 'Search request_id / client_request_id / message'
       },
       // Error Detail Modal
       errorDetail: {
@@ -5772,7 +6107,8 @@ export default {
           accountRateLimitedCount: 'Number of rate-limited accounts within the window.',
           accountErrorCount: 'Number of error accounts within the window (excluding temporarily unschedulable).',
           accountErrorRatio: 'Error account ratio within the window (0-100).',
-          accountTempUnscheduledCount: 'Number of accounts currently temporarily unschedulable (e.g. proxy/credential failure auto-eviction).',
+          accountTempUnscheduledCount:
+            'Number of accounts currently temporarily unschedulable (e.g. proxy/credential failure auto-eviction).',
           overloadAccountCount: 'Number of overloaded accounts within the window.'
         },
         hints: {
@@ -5946,7 +6282,8 @@ export default {
         dailySummary: 'Daily Summary',
         weeklySummary: 'Weekly Summary',
         metricThresholds: 'Metric Thresholds',
-        metricThresholdsHint: 'Configure alert thresholds for metrics, values exceeding thresholds will be displayed in red',
+        metricThresholdsHint:
+          'Configure alert thresholds for metrics, values exceeding thresholds will be displayed in red',
         slaMinPercent: 'SLA Minimum Percentage',
         slaMinPercentHint: 'SLA below this value will be displayed in red (default: 99.5%)',
         ttftP99MaxMs: 'TTFT P99 Maximum (ms)',
@@ -5963,21 +6300,27 @@ export default {
         errorLogRetentionDays: 'Error Log Retention Days',
         minuteMetricsRetentionDays: 'Minute Metrics Retention Days',
         hourlyMetricsRetentionDays: 'Hourly Metrics Retention Days',
-        retentionDaysHint: 'Recommended 7-90 days; longer periods consume more storage. Set to 0 to wipe all history on every scheduled cleanup',
+        retentionDaysHint:
+          'Recommended 7-90 days; longer periods consume more storage. Set to 0 to wipe all history on every scheduled cleanup',
         aggregation: 'Pre-aggregation Tasks',
         enableAggregation: 'Enable Pre-aggregation',
         aggregationHint: 'Pre-aggregation improves query performance for long time windows',
         errorFiltering: 'Error Filtering',
         ignoreCountTokensErrors: 'Ignore count_tokens errors',
-        ignoreCountTokensErrorsHint: 'When enabled, errors from count_tokens requests will not be written to the error log.',
+        ignoreCountTokensErrorsHint:
+          'When enabled, errors from count_tokens requests will not be written to the error log.',
         ignoreContextCanceled: 'Ignore client disconnect errors',
-        ignoreContextCanceledHint: 'When enabled, client disconnect (context canceled) errors will not be written to the error log.',
+        ignoreContextCanceledHint:
+          'When enabled, client disconnect (context canceled) errors will not be written to the error log.',
         ignoreNoAvailableAccounts: 'Ignore no available accounts errors',
-        ignoreNoAvailableAccountsHint: 'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
+        ignoreNoAvailableAccountsHint:
+          'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
         ignoreInvalidApiKeyErrors: 'Ignore invalid API key errors',
-        ignoreInvalidApiKeyErrorsHint: 'When enabled, invalid or missing API key errors (INVALID_API_KEY, API_KEY_REQUIRED) will not be written to the error log.',
+        ignoreInvalidApiKeyErrorsHint:
+          'When enabled, invalid or missing API key errors (INVALID_API_KEY, API_KEY_REQUIRED) will not be written to the error log.',
         ignoreInsufficientBalanceErrors: 'Ignore Insufficient Balance Errors',
-        ignoreInsufficientBalanceErrorsHint: 'When enabled, insufficient account balance errors will not be written to the error log.',
+        ignoreInsufficientBalanceErrorsHint:
+          'When enabled, insufficient account balance errors will not be written to the error log.',
         autoRefresh: 'Auto Refresh',
         enableAutoRefresh: 'Enable auto refresh',
         enableAutoRefreshHint: 'Automatically refresh dashboard data at a fixed interval.',
@@ -5989,10 +6332,12 @@ export default {
         displayAlertEvents: 'Display alert events',
         displayAlertEventsHint: 'Show or hide the recent alert events card on the ops dashboard. Enabled by default.',
         displayOpenAITokenStats: 'Display OpenAI token request stats',
-        displayOpenAITokenStatsHint: 'Show or hide the OpenAI token request stats card on the ops dashboard. Hidden by default.',
+        displayOpenAITokenStatsHint:
+          'Show or hide the OpenAI token request stats card on the ops dashboard. Hidden by default.',
         autoRefreshCountdown: 'Auto refresh: {seconds}s',
         openaiQuotaAutoPause: 'OpenAI Account Quota Auto-pause',
-        openaiQuotaAutoPauseHint: 'Automatically pause account scheduling when 5h or 7d quota usage reaches the configured threshold.',
+        openaiQuotaAutoPauseHint:
+          'Automatically pause account scheduling when 5h or 7d quota usage reaches the configured threshold.',
         openaiQuotaAutoPauseDefault5h: 'Default 5h Threshold (%)',
         openaiQuotaAutoPauseDefault7d: 'Default 7d Threshold (%)',
         openaiQuotaAutoPauseThresholdHint: 'Leave empty or 0 to disable auto-pause for that window.',
@@ -6043,7 +6388,8 @@ export default {
         accountError: 'Error'
       },
       tooltips: {
-        totalRequests: 'Total number of requests (including both successful and failed requests) in the selected time window.',
+        totalRequests:
+          'Total number of requests (including both successful and failed requests) in the selected time window.',
         throughputTrend: 'Requests/QPS + Tokens/TPS in the selected window.',
         switchRateTrend: 'Trend of account switches / total requests over the last 5 hours (avg switches).',
         latencyHistogram: 'Request duration distribution (ms) for successful requests.',
@@ -6089,30 +6435,35 @@ export default {
         payment: 'Payment',
         email: 'Email',
         backup: 'Backup',
-        data: 'Sora Storage',
+        data: 'Sora Storage'
       },
       features: {
         channelMonitor: {
           title: 'Channel Monitor',
-          description: 'Periodically probe configured channels and surface availability / latency to users. Turning it off stops the scheduler and returns an empty list on the user page.',
+          description:
+            'Periodically probe configured channels and surface availability / latency to users. Turning it off stops the scheduler and returns an empty list on the user page.',
           configureLink: 'Configure monitors in Channel Management > Channel Monitor',
           enabled: 'Enable Channel Monitor',
           enabledHint: 'Disabling stops background checks; existing history is preserved.',
           defaultInterval: 'Default check interval (seconds)',
-          defaultIntervalHint: 'Pre-fills the interval when creating a new monitor; each monitor can override it. Range 15 – 3600.',
+          defaultIntervalHint:
+            'Pre-fills the interval when creating a new monitor; each monitor can override it. Range 15 – 3600.'
         },
         availableChannels: {
           title: 'Available Channels',
-          description: 'Show logged-in users an aggregate view of the channels, models and pricing they can access. Disabled by default.',
+          description:
+            'Show logged-in users an aggregate view of the channels, models and pricing they can access. Disabled by default.',
           configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
           enabled: 'Enable Available Channels',
-          enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
+          enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.'
         },
         webChat: {
           title: 'Web Chat',
-          description: 'Provide in-console streaming text chat for users who do not configure CLI tools. Disabled by default; enabling creates hidden managed keys per group as needed.',
+          description:
+            'Provide in-console streaming text chat for users who do not configure CLI tools. Disabled by default; enabling creates hidden managed keys per group as needed.',
           enabled: 'Enable Web Chat',
-          enabledHint: 'When off, the sidebar entry is hidden, APIs reject access, and existing hidden keys remain invisible to normal users.',
+          enabledHint:
+            'When off, the sidebar entry is hidden, APIs reject access, and existing hidden keys remain invisible to normal users.'
         },
         riskControl: {
           title: 'Risk Control',
@@ -6121,25 +6472,31 @@ export default {
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
           cyberSessionBlock: 'Cyber session auto-block',
-          cyberSessionBlockHint: 'When enabled, sessions hit by upstream cyber_policy are blocked locally for the TTL and no longer forwarded. Only the offending session is blocked; other sessions on the same key are unaffected.',
-          cyberSessionBlockTTL: 'Block TTL (seconds)',
+          cyberSessionBlockHint:
+            'When enabled, sessions hit by upstream cyber_policy are blocked locally for the TTL and no longer forwarded. Only the offending session is blocked; other sessions on the same key are unaffected.',
+          cyberSessionBlockTTL: 'Block TTL (seconds)'
         },
         affiliate: {
           title: 'Affiliate (Invite Rebate)',
-          description: 'Existing users invite new ones; the inviter earns a percentage rebate on the invitee’s recharges. Disabled by default.',
+          description:
+            'Existing users invite new ones; the inviter earns a percentage rebate on the invitee’s recharges. Disabled by default.',
           enabled: 'Enable Affiliate',
-          enabledHint: 'When off, the affiliate menu is hidden, the aff parameter is ignored at signup, and new recharges generate no rebate. Existing rebate balances can still be transferred.',
+          enabledHint:
+            'When off, the affiliate menu is hidden, the aff parameter is ignored at signup, and new recharges generate no rebate. Existing rebate balances can still be transferred.',
           rebateRate: 'Global Rebate Rate',
           rebateRateHint: 'Default percentage given back to the inviter on recharges (0-100, e.g. 10 = 10%).',
           freezeHours: 'Rebate Freeze Period (hours)',
-          freezeHoursDesc: 'New rebates will be frozen for this period before becoming available for withdrawal. 0 = no freeze.',
+          freezeHoursDesc:
+            'New rebates will be frozen for this period before becoming available for withdrawal. 0 = no freeze.',
           durationDays: 'Rebate Duration (days)',
-          durationDaysDesc: 'Rebate relationship expires after this many days since invitee registration. 0 = permanent.',
+          durationDaysDesc:
+            'Rebate relationship expires after this many days since invitee registration. 0 = permanent.',
           perInviteeCap: 'Per-Invitee Rebate Cap',
           perInviteeCapDesc: 'Maximum total rebate from a single invitee. 0 = no limit.',
           customUsers: {
             title: 'Per-User Overrides',
-            description: 'Set a custom invite code or exclusive rebate rate for specific users. Lists only users that have an override applied.',
+            description:
+              'Set a custom invite code or exclusive rebate rate for specific users. Lists only users that have an override applied.',
             addButton: 'Add Custom User',
             searchPlaceholder: 'Search by email or username',
             batchButton: 'Batch Set Rate ({count} selected)',
@@ -6147,15 +6504,16 @@ export default {
             customBadge: 'custom',
             useGlobal: 'use global',
             resetTitle: 'Reset Custom Settings',
-            resetMessage: 'Reset all custom settings for {email}?\n• The exclusive rebate rate will be cleared (fall back to the global rate)\n• The invite code will be regenerated as a new system code (previously shared links will stop working)',
+            resetMessage:
+              'Reset all custom settings for {email}?\n• The exclusive rebate rate will be cleared (fall back to the global rate)\n• The invite code will be regenerated as a new system code (previously shared links will stop working)',
             totalLabel: '{total} total',
             col: {
               email: 'Email',
               username: 'Username',
               code: 'Invite Code',
               rate: 'Custom Rate',
-              actions: 'Actions',
-            },
+              actions: 'Actions'
+            }
           },
           modal: {
             addTitle: 'Add Custom User',
@@ -6170,15 +6528,15 @@ export default {
             ratePlaceholder: 'e.g. 30',
             rateHint: '0-100. Leave empty (in edit mode) to clear and fall back to the global rate.',
             errorBadRate: 'Please enter a number between 0 and 100',
-            errorEmpty: 'Fill at least one: custom invite code or exclusive rebate rate',
+            errorEmpty: 'Fill at least one: custom invite code or exclusive rebate rate'
           },
           batchModal: {
             title: 'Batch Set Rate ({count} users selected)',
             hint: 'Apply the same exclusive rebate rate to all selected users.',
             placeholder: 'e.g. 30',
-            clearHint: 'Submitting empty will clear the exclusive rate for selected users.',
-          },
-        },
+            clearHint: 'Submitting empty will clear the exclusive rate for selected users.'
+          }
+        }
       },
       emailTabDisabledTitle: 'Email Verification Not Enabled',
       emailTabDisabledHint: 'Enable email verification in the Security tab to configure SMTP settings.',
@@ -6230,7 +6588,8 @@ export default {
         siteKeyHint: 'Get this from your Cloudflare Dashboard',
         cloudflareDashboard: 'Cloudflare Dashboard',
         secretKeyHint: 'Server-side verification key (keep this secret)',
-        secretKeyConfiguredHint: 'Secret key configured. Leave empty to keep the current value.'      },
+        secretKeyConfiguredHint: 'Secret key configured. Leave empty to keep the current value.'
+      },
       linuxdo: {
         title: 'LinuxDo Connect Login',
         description: 'Configure LinuxDo Connect OAuth for SubAPIs end-user login',
@@ -6246,8 +6605,7 @@ export default {
         clientSecretConfiguredHint: 'Secret configured. Leave empty to keep the current value.',
         redirectUrl: 'Redirect URL',
         redirectUrlPlaceholder: 'https://your-domain.com/api/v1/auth/oauth/linuxdo/callback',
-        redirectUrlHint:
-          'Must match the redirect URL configured in Connect.Linux.Do (must be an absolute http(s) URL)',
+        redirectUrlHint: 'Must match the redirect URL configured in Connect.Linux.Do (must be an absolute http(s) URL)',
         quickSetCopy: 'Generate & Copy (current site)',
         redirectUrlSetAndCopied: 'Redirect URL generated and copied to clipboard'
       },
@@ -6308,18 +6666,17 @@ export default {
         defaultBalance: 'Default Balance',
         defaultBalanceHint: 'Initial balance for new users',
         affiliateRebateRate: 'Affiliate Rebate Rate',
-        affiliateRebateRateHint:
-          'Rebate percentage credited to inviter after recharge (0-100%, e.g. 10 means 10%)',
+        affiliateRebateRateHint: 'Rebate percentage credited to inviter after recharge (0-100%, e.g. 10 means 10%)',
         defaultConcurrency: 'Default Concurrency',
         defaultConcurrencyHint: 'Maximum concurrent requests for new users',
         defaultUserRpmLimit: 'Default User RPM Limit',
-        defaultUserRpmLimitHint: 'Default max requests per minute for new users; 0 = unlimited. Only applied at new user creation.',
+        defaultUserRpmLimitHint:
+          'Default max requests per minute for new users; 0 = unlimited. Only applied at new user creation.',
         defaultSubscriptions: 'Default Subscriptions',
         defaultSubscriptionsHint: 'Auto-assign these subscriptions when a new user is created or registered',
         addDefaultSubscription: 'Add Default Subscription',
         defaultSubscriptionsEmpty: 'No default subscriptions configured.',
-        defaultSubscriptionsDuplicate:
-          'Duplicate subscription group: {groupId}. Each group can only appear once.',
+        defaultSubscriptionsDuplicate: 'Duplicate subscription group: {groupId}. Each group can only appear once.',
         subscriptionGroup: 'Subscription Group',
         subscriptionValidityDays: 'Validity (days)',
         defaultPlatformQuotas: 'Default Platform Quotas',
@@ -6342,23 +6699,29 @@ export default {
         title: 'Gateway Scheduling Settings',
         description: 'Control API Key scheduling behavior',
         allowUngroupedKey: 'Allow Ungrouped Key Scheduling',
-        allowUngroupedKeyHint: 'When disabled, API Keys not assigned to any group cannot make requests (403 Forbidden). Keep disabled to ensure all Keys belong to a specific group.'
+        allowUngroupedKeyHint:
+          'When disabled, API Keys not assigned to any group cannot make requests (403 Forbidden). Keep disabled to ensure all Keys belong to a specific group.'
       },
       gatewayForwarding: {
         title: 'Request Forwarding',
         description: 'Control how requests are forwarded to upstream OAuth accounts',
         fingerprintUnification: 'Fingerprint Unification',
-        fingerprintUnificationHint: 'Unify X-Stainless-* headers across users sharing the same OAuth account. Disabling passes through each client\'s original headers.',
+        fingerprintUnificationHint:
+          "Unify X-Stainless-* headers across users sharing the same OAuth account. Disabling passes through each client's original headers.",
         metadataPassthrough: 'Metadata Passthrough',
-        metadataPassthroughHint: 'Pass through client\'s original metadata.user_id without rewriting. May improve upstream cache hit rates.',
+        metadataPassthroughHint:
+          "Pass through client's original metadata.user_id without rewriting. May improve upstream cache hit rates.",
         claudeOAuthSystemPromptInjection: 'Claude OAuth System Blocks',
-        claudeOAuthSystemPromptInjectionHint: 'Inject Claude Code-like system blocks for Claude OAuth requests from non-Claude-Code clients. Enabled by default.',
+        claudeOAuthSystemPromptInjectionHint:
+          'Inject Claude Code-like system blocks for Claude OAuth requests from non-Claude-Code clients. Enabled by default.',
         claudeOAuthSystemPrompt: 'Claude OAuth Expansion Prompt',
         claudeOAuthSystemPromptPlaceholder: 'Leave empty to use the built-in Claude Code expansion prompt.',
         claudeOAuthSystemPromptHint: 'Legacy compatibility: controls only the third injected system block.',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
-        claudeOAuthSystemPromptBlocksPlaceholder: 'Leave empty to use the built-in 3 blocks. Supports an array or {"blocks": [...]}.',
-        claudeOAuthSystemPromptBlocksHint: 'Each block is saved as JSON with enabled, type, text, and optional cache_control. {billing_header} stays dynamic per request; the Claude Code identity and expansion prompts can be edited directly or restored from presets.',
+        claudeOAuthSystemPromptBlocksPlaceholder:
+          'Leave empty to use the built-in 3 blocks. Supports an array or {"blocks": [...]}.',
+        claudeOAuthSystemPromptBlocksHint:
+          'Each block is saved as JSON with enabled, type, text, and optional cache_control. {billing_header} stays dynamic per request; the Claude Code identity and expansion prompts can be edited directly or restored from presets.',
         systemBlockTitle: 'System Block {index}',
         systemBlockPreset: 'Preset',
         systemBlockPresetBilling: 'Billing header',
@@ -6376,62 +6739,70 @@ export default {
         cacheTTL5m: '5 minutes',
         cacheTTL1h: '1 hour',
         anthropicCacheTTL1hInjection: 'Anthropic Cache TTL Injection',
-        anthropicCacheTTL1hInjectionHint: 'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
+        anthropicCacheTTL1hInjectionHint:
+          'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
         proxyAutoSelectCapacity: 'Proxy Auto-Select Capacity',
-        proxyAutoSelectCapacityHint: 'When adding accounts, proxies are selected by same-platform account count only. Accounts from other platforms do not consume this platform capacity.',
+        proxyAutoSelectCapacityHint:
+          'When adding accounts, proxies are selected by same-platform account count only. Accounts from other platforms do not consume this platform capacity.',
         proxyAutoSelectAnthropic: 'Anthropic / IP',
         proxyAutoSelectOpenAI: 'OpenAI / IP',
         proxyAutoSelectAntigravity: 'Antigravity / IP',
         rewriteMessageCacheControl: 'Rewrite Message Cache Breakpoints',
-        rewriteMessageCacheControlHint: 'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',
+        rewriteMessageCacheControlHint:
+          'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',
         antigravityUserAgentVersion: 'Antigravity UA Version',
         antigravityUserAgentVersionPlaceholder: '1.23.2',
-        antigravityUserAgentVersionHint: 'Leave empty to use ANTIGRAVITY_USER_AGENT_VERSION or the built-in default 1.23.2; when set, the admin setting takes precedence.',
+        antigravityUserAgentVersionHint:
+          'Leave empty to use ANTIGRAVITY_USER_AGENT_VERSION or the built-in default 1.23.2; when set, the admin setting takes precedence.',
         claudeUpstreamUserAgent: 'Claude/Anthropic Upstream UA',
         claudeUpstreamUserAgentPlaceholder: 'claude-cli/2.1.156 (external, cli)',
-        claudeUpstreamUserAgentHint: 'Force this full User-Agent for every Claude/Anthropic upstream request. Leave empty to use the built-in default; client headers, fingerprint cache, and monitor templates cannot override it.',
+        claudeUpstreamUserAgentHint:
+          'Force this full User-Agent for every Claude/Anthropic upstream request. Leave empty to use the built-in default; client headers, fingerprint cache, and monitor templates cannot override it.',
         openaiCodexUserAgent: 'OpenAI Codex UA',
-        openaiCodexUserAgentPlaceholder: 'codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)',
-        openaiCodexUserAgentHint: 'Used to bypass Cloudflare browser-UA challenges on the OpenAI upstream. Only applies when the client User-Agent is detected as a browser (Mozilla/...). Leave empty to use the built-in default.',
-        codexHardeningTitle: "Codex Settings",
-        codexClientRestrictionTitle: "Codex client restriction",
+        openaiCodexUserAgentPlaceholder:
+          'codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)',
+        openaiCodexUserAgentHint:
+          'Used to bypass Cloudflare browser-UA challenges on the OpenAI upstream. Only applies when the client User-Agent is detected as a browser (Mozilla/...). Leave empty to use the built-in default.',
+        codexHardeningTitle: 'Codex Settings',
+        codexClientRestrictionTitle: 'Codex client restriction',
         codexHardeningDesc:
           "Only affects OpenAI OAuth accounts with 'Codex official clients only' enabled (global). Beyond User-Agent/Originator, harden the decision with a version range, an engine-fingerprint gate, and black/whitelists.",
-        minCodexVersion: "Min Codex Version",
-        minCodexVersionPlaceholder: "e.g. 0.142.0",
-        maxCodexVersion: "Max Codex Version",
-        maxCodexVersionPlaceholder: "e.g. 0.200.0",
+        minCodexVersion: 'Min Codex Version',
+        minCodexVersionPlaceholder: 'e.g. 0.142.0',
+        maxCodexVersion: 'Max Codex Version',
+        maxCodexVersionPlaceholder: 'e.g. 0.200.0',
         codexVersionHint:
-          "Official clients only: checks their version against the [min, max] range. Leave a side empty to not limit it.",
-        codexFingerprintSignals: "Codex engine fingerprint signals",
+          'Official clients only: checks their version against the [min, max] range. Leave a side empty to not limit it.',
+        codexFingerprintSignals: 'Codex engine fingerprint signals',
         codexFingerprintSignalsDesc:
           "Define engine-fingerprint signals: every Required signal must match (AND); within a row, '/'-separated variants are OR'd. None checked = not enforced. Default checks only the x-codex- prefix. Types: header exact / header prefix / body path.",
-        codexFpTypeHeaderExact: "Header exact",
-        codexFpTypeHeaderPrefix: "Header prefix",
-        codexFpTypeBodyPath: "Body path",
+        codexFpTypeHeaderExact: 'Header exact',
+        codexFpTypeHeaderPrefix: 'Header prefix',
+        codexFpTypeBodyPath: 'Body path',
         codexFpMatchPlaceholder: "match; '/'-separate variants (e.g. session-id / session_id or x-codex-)",
-        codexFpRequired: "Required",
-        codexFingerprintNoRequiredWarn: "No signal is marked Required — the engine-fingerprint gate is inactive, allowing every candidate that passes identity/version. Check at least one signal to enable it.",
-        codexAllowAppServer: "Codex app-server",
+        codexFpRequired: 'Required',
+        codexFingerprintNoRequiredWarn:
+          'No signal is marked Required — the engine-fingerprint gate is inactive, allowing every candidate that passes identity/version. Check at least one signal to enable it.',
+        codexAllowAppServer: 'Codex app-server',
         codexAllowAppServerDesc:
           "Allow third-party clients that embed the Codex engine and connect over the app-server protocol (e.g. Claude Code's codex plugin). Off by default; when on, such clients are allowed once they pass the engine-fingerprint gate (the signal list below); off = only official clients and the whitelist are allowed.",
-        codexBlacklist: "User-Agent/Originator Blacklist",
+        codexBlacklist: 'User-Agent/Originator Blacklist',
         codexBlacklistDesc:
           "Deny if any field matches; takes precedence over any allow. originator is exact; User-Agent is a 'contains' match (comma-separated).",
-        codexWhitelist: "User-Agent/Originator Whitelist",
+        codexWhitelist: 'User-Agent/Originator Whitelist',
         codexWhitelistDesc:
           "Allow clients outside the official set: requires exact originator and every User-Agent marker present. Still subject to the fingerprint gate unless 'Skip engine fingerprint' is checked.",
-        codexWhitelistSkipFingerprint: "Skip engine fingerprint",
+        codexWhitelistSkipFingerprint: 'Skip engine fingerprint',
         codexWhitelistSkipFingerprintTooltip:
-          "Risk: when checked this entry is allowed on originator + User-Agent alone (both forgeable), with no engine-fingerprint backstop. Use only for trusted third-party clients that genuinely do not send a codex engine fingerprint.",
-        codexOriginatorPlaceholder: "originator (exact, e.g. opencode)",
-        codexUaContainsPlaceholder: "User-Agent contains markers, comma-separated (e.g. opencode/)",
-        codexAddRow: "Add entry",
-        codexRemoveRow: "Remove",
+          'Risk: when checked this entry is allowed on originator + User-Agent alone (both forgeable), with no engine-fingerprint backstop. Use only for trusted third-party clients that genuinely do not send a codex engine fingerprint.',
+        codexOriginatorPlaceholder: 'originator (exact, e.g. opencode)',
+        codexUaContainsPlaceholder: 'User-Agent contains markers, comma-separated (e.g. opencode/)',
+        codexAddRow: 'Add entry',
+        codexRemoveRow: 'Remove'
       },
       webSearchEmulation: {
         title: 'Web Search Emulation',
-        description: 'Inject web search capability for Anthropic API Key accounts that don\'t natively support it',
+        description: "Inject web search capability for Anthropic API Key accounts that don't natively support it",
         enabled: 'Enable Web Search Emulation',
         enabledHint: 'Global switch. When disabled, web search emulation is inactive for all channels and accounts.',
         providers: 'Search Providers',
@@ -6469,7 +6840,7 @@ export default {
         daily: 'Daily',
         weekly: 'Weekly',
         monthly: 'Monthly',
-        noProviders: 'No search providers configured',
+        noProviders: 'No search providers configured'
       },
       site: {
         title: 'Site Settings',
@@ -6485,8 +6856,7 @@ export default {
         siteSubtitleHint: 'Displayed on login and register pages',
         apiBaseUrl: 'API Base URL',
         apiBaseUrlPlaceholder: 'https://api.example.com',
-        apiBaseUrlHint:
-          'Used for "Use Key" and "Import to CC Switch" features. Leave empty to use current site URL.',
+        apiBaseUrlHint: 'Used for "Use Key" and "Import to CC Switch" features. Leave empty to use current site URL.',
         customEndpoints: {
           title: 'Custom Endpoints',
           description: 'Add additional API endpoint URLs for users to quickly copy on the API Keys page',
@@ -6497,7 +6867,7 @@ export default {
           endpointUrlPlaceholder: 'https://api2.example.com',
           descriptionLabel: 'Description',
           descriptionPlaceholder: 'e.g., Supports OpenAI format requests',
-          add: 'Add Endpoint',
+          add: 'Add Endpoint'
         },
         contactInfo: 'Contact Info',
         contactInfoPlaceholder: 'e.g., QQ: 123456789',
@@ -6513,9 +6883,12 @@ export default {
         logoTypeError: 'Please select an image file',
         logoReadError: 'Failed to read the image file',
         homeContent: 'Home Page Content',
-        homeContentPlaceholder: 'Enter custom content for the home page. Supports Markdown & HTML. If a URL is entered, it will be displayed as an iframe.',
-        homeContentHint: 'Customize the home page content. Supports Markdown/HTML. If you enter a URL (starting with http:// or https://), it will be used as an iframe src to embed an external page. When set, the default status information will no longer be displayed.',
-        homeContentIframeWarning: '⚠️ iframe mode note: Some websites have X-Frame-Options or CSP security policies that prevent embedding in iframes. If the page appears blank or shows an error, please verify the target website allows embedding, or consider using HTML mode to build your own content.',
+        homeContentPlaceholder:
+          'Enter custom content for the home page. Supports Markdown & HTML. If a URL is entered, it will be displayed as an iframe.',
+        homeContentHint:
+          'Customize the home page content. Supports Markdown/HTML. If you enter a URL (starting with http:// or https://), it will be used as an iframe src to embed an external page. When set, the default status information will no longer be displayed.',
+        homeContentIframeWarning:
+          '⚠️ iframe mode note: Some websites have X-Frame-Options or CSP security policies that prevent embedding in iframes. If the page appears blank or shows an error, please verify the target website allows embedding, or consider using HTML mode to build your own content.',
         hideCcsImportButton: 'Hide CCS Import Button',
         hideCcsImportButtonHint: 'When enabled, the "Import to CCS" button will be hidden on the API Keys page',
         tablePreferencesTitle: 'Global Table Preferences',
@@ -6524,9 +6897,11 @@ export default {
         tableDefaultPageSizeHint: 'Must be an integer between 5 and 1000',
         tablePageSizeOptions: 'Rows Per Page Options',
         tablePageSizeOptionsPlaceholder: '10, 20, 50, 100',
-        tablePageSizeOptionsHint: 'Use commas to separate integers between 5 and 1000; values are deduplicated and sorted on save',
+        tablePageSizeOptionsHint:
+          'Use commas to separate integers between 5 and 1000; values are deduplicated and sorted on save',
         tableDefaultPageSizeRangeError: 'Default rows per page must be between {min} and {max}',
-        tablePageSizeOptionsFormatError: 'Invalid options format. Enter comma-separated integers between {min} and {max}'
+        tablePageSizeOptionsFormatError:
+          'Invalid options format. Enter comma-separated integers between {min} and {max}'
       },
       purchase: {
         title: 'Recharge / Subscription Page',
@@ -6564,7 +6939,8 @@ export default {
         orderTimeoutHint: 'In minutes, minimum 1',
         maxPendingOrders: 'Max Pending Orders',
         cancelRateLimit: 'Limit Cancel Rate',
-        cancelRateLimitHint: 'When enabled, users who exceed the cancel limit within the time window cannot create new orders',
+        cancelRateLimitHint:
+          'When enabled, users who exceed the cancel limit within the time window cannot create new orders',
         cancelRateLimitEvery: 'Every',
         cancelRateLimitAllowMax: 'allow max',
         cancelRateLimitTimes: 'cancels',
@@ -6612,7 +6988,8 @@ export default {
         field_certSerial: 'Certificate Serial',
         field_h5AppName: 'H5 App Name',
         field_h5AppUrl: 'H5 App URL',
-        wxpayConfigHint: 'WeChat Pay usually only needs App ID. Fill MP App ID, H5 App Name, and H5 App URL only when your Official Account or H5 flow specifically requires them.',
+        wxpayConfigHint:
+          'WeChat Pay usually only needs App ID. Fill MP App ID, H5 App Name, and H5 App URL only when your Official Account or H5 flow specifically requires them.',
         wxpayAdvancedOptions: 'WeChat Pay Advanced Options',
         field_secretKey: 'Secret Key',
         field_clientId: 'Client ID',
@@ -6622,17 +6999,24 @@ export default {
         field_countryCode: 'Country/region code',
         field_currency: 'Payment currency',
         field_accountId: 'Airwallex Account ID',
-        field_airwallexApiBaseHint: 'Must match the API key environment: use https://api-demo.airwallex.com/api/v1 for sandbox/demo keys, and https://api.airwallex.com/api/v1 for production keys. Mixed environments return credentials_invalid / Access Denied.',
-        field_paymentCurrencyHint: 'Default is CNY. Stripe and Airwallex can choose HKD, USD, or another listed currency supported by the account; WeChat Pay, Alipay, and EasyPay remain CNY.',
-        field_accountIdHint: 'Leave this empty unless you use multiple accounts, an organization-level key, or connected-account payments. A single-account scoped API key uses the selected account by default.',
+        field_airwallexApiBaseHint:
+          'Must match the API key environment: use https://api-demo.airwallex.com/api/v1 for sandbox/demo keys, and https://api.airwallex.com/api/v1 for production keys. Mixed environments return credentials_invalid / Access Denied.',
+        field_paymentCurrencyHint:
+          'Default is CNY. Stripe and Airwallex can choose HKD, USD, or another listed currency supported by the account; WeChat Pay, Alipay, and EasyPay remain CNY.',
+        field_accountIdHint:
+          'Leave this empty unless you use multiple accounts, an organization-level key, or connected-account payments. A single-account scoped API key uses the selected account by default.',
         field_cid: 'Channel ID',
         field_cidAlipay: 'Alipay Channel ID',
         field_cidWxpay: 'WeChat Channel ID',
         stripeWebhookHint: 'Configure the following URL as a Webhook endpoint in Stripe Dashboard:',
-        stripeWebhookApiVersionHint: 'Set this Webhook endpoint API version to match the integrated Stripe SDK. Recommended: {version}. A mismatch can cause webhook parsing errors.',
-        airwallexWebhookHint: 'Configure the following URL as a Webhook endpoint in Airwallex. Select at least Payment Intent -> Succeeded (payment_intent.succeeded), preferably also Payment Intent -> Cancelled (payment_intent.cancelled). Use the account default or latest stable API version.',
-        airwallexGuideSummary: 'When creating an Airwallex scoped API key, select Read and Write for Payment Acceptance under account-level permissions.',
-        airwallexGuideNote: 'Do not grant unrelated permissions such as Spend, Payouts, Transfers, Funds Splits, or POS Terminals unless you explicitly need them. For webhooks, select at least payment_intent.succeeded, preferably also payment_intent.cancelled, and use the account default or latest stable API version.',
+        stripeWebhookApiVersionHint:
+          'Set this Webhook endpoint API version to match the integrated Stripe SDK. Recommended: {version}. A mismatch can cause webhook parsing errors.',
+        airwallexWebhookHint:
+          'Configure the following URL as a Webhook endpoint in Airwallex. Select at least Payment Intent -> Succeeded (payment_intent.succeeded), preferably also Payment Intent -> Cancelled (payment_intent.cancelled). Use the account default or latest stable API version.',
+        airwallexGuideSummary:
+          'When creating an Airwallex scoped API key, select Read and Write for Payment Acceptance under account-level permissions.',
+        airwallexGuideNote:
+          'Do not grant unrelated permissions such as Spend, Payouts, Transfers, Funds Splits, or POS Terminals unless you explicitly need them. For webhooks, select at least payment_intent.succeeded, preferably also payment_intent.cancelled, and use the account default or latest stable API version.',
         limitsTitle: 'Limits',
         limitSingleMin: 'Min per order',
         limitSingleMax: 'Max per order',
@@ -6664,25 +7048,31 @@ export default {
         alipayGuideFaceToFaceTitle: 'Face-to-face / QR Payment',
         alipayGuideFaceToFaceOpen: 'Enable face-to-face or QR payment capability.',
         alipayGuideFaceToFaceCall: 'Desktop orders call alipay.trade.precreate first and render the QR code directly.',
-        alipayGuideFaceToFaceFallback: 'If unavailable or failed, the flow falls back to website checkout automatically.',
+        alipayGuideFaceToFaceFallback:
+          'If unavailable or failed, the flow falls back to website checkout automatically.',
         alipayGuidePagePayTitle: 'Website Payment',
         alipayGuidePagePayOpen: 'Enable website payment.',
-        alipayGuidePagePayCall: 'When face-to-face is unavailable on desktop, the flow calls alipay.trade.page.pay and still renders the returned link as a QR code.',
+        alipayGuidePagePayCall:
+          'When face-to-face is unavailable on desktop, the flow calls alipay.trade.page.pay and still renders the returned link as a QR code.',
         alipayGuidePagePayFallback: 'The cashier link stays available so users can reopen the checkout page manually.',
         alipayGuideWapTitle: 'WAP Payment',
         alipayGuideWapOpen: 'Enable mobile website payment.',
         alipayGuideWapCall: 'Mobile orders call alipay.trade.wap.pay first and jump to Alipay checkout.',
-        alipayGuideWapFallback: 'If mobile payment is unavailable or fails, the frontend switches to QR payment and shows a notice.',
+        alipayGuideWapFallback:
+          'If mobile payment is unavailable or fails, the frontend switches to QR payment and shows a notice.',
         wxpayGuideSummary: 'Desktop prefers Native QR; mobile routes to JSAPI or H5 based on browser context.',
-        wxpayGuideNote: 'The current form defaults to one shared App ID, which fits the common single-subject web, mobile, and Official Account setup.',
+        wxpayGuideNote:
+          'The current form defaults to one shared App ID, which fits the common single-subject web, mobile, and Official Account setup.',
         wxpayGuideNativeTitle: 'Native / QR Payment',
         wxpayGuideNativeOpen: 'Enable Native or QR payment capability.',
         wxpayGuideNativeCall: 'Desktop orders use Native by default and the frontend renders the QR payload.',
         wxpayGuideNativeFallback: 'Mobile flows also fall back here when JSAPI or H5 cannot be used.',
         wxpayGuideJsapiTitle: 'JSAPI / Official Account',
-        wxpayGuideJsapiOpen: 'Enable Official Account payment and ensure the browser is inside WeChat with an available OpenID.',
+        wxpayGuideJsapiOpen:
+          'Enable Official Account payment and ensure the browser is inside WeChat with an available OpenID.',
         wxpayGuideJsapiCall: 'Inside WeChat, the app calls JSAPI after authorization and launches WeChat Pay directly.',
-        wxpayGuideJsapiFallback: 'If configuration is missing, the bridge is unavailable, or launch fails, the flow falls back to QR payment.',
+        wxpayGuideJsapiFallback:
+          'If configuration is missing, the bridge is unavailable, or launch fails, the flow falls back to QR payment.',
         wxpayGuideH5Title: 'H5 Payment',
         wxpayGuideH5Open: 'Enable H5 payment.',
         wxpayGuideH5Call: 'On mobile browsers outside WeChat, the app calls H5 payment when a client IP is available.',
@@ -6691,7 +7081,7 @@ export default {
         supportedTypes: 'Supported Payment Types',
         supportedTypesHint: 'Comma-separated, e.g. alipay,wxpay',
         refundEnabled: 'Allow Refund',
-        allowUserRefund: 'Allow User Refund',
+        allowUserRefund: 'Allow User Refund'
       },
       soraClient: {
         title: 'Sora Client',
@@ -6701,7 +7091,8 @@ export default {
       },
       customMenu: {
         title: 'Custom Menu Pages',
-        description: 'Add custom iframe pages to the sidebar navigation. Each page can be visible to regular users or administrators.',
+        description:
+          'Add custom iframe pages to the sidebar navigation. Each page can be visible to regular users or administrators.',
         itemLabel: 'Menu Item #{n}',
         name: 'Menu Name',
         namePlaceholder: 'e.g. Help Center',
@@ -6718,7 +7109,7 @@ export default {
         add: 'Add Menu Item',
         remove: 'Remove',
         moveUp: 'Move Up',
-        moveDown: 'Move Down',
+        moveDown: 'Move Down'
       },
       balanceNotify: {
         title: 'Balance Low Notification',
@@ -6728,7 +7119,7 @@ export default {
         thresholdHint: 'Used when user has not set a custom value',
         rechargeUrl: 'Recharge URL',
         rechargeUrlHint: 'Optional top-up page URL included in the email',
-        thresholdPlaceholder: 'Enter amount',
+        thresholdPlaceholder: 'Enter amount'
       },
       quotaNotify: {
         title: 'Account Quota Notification',
@@ -6737,7 +7128,7 @@ export default {
         emails: 'Notification Emails',
         emailsHint: 'Leave empty to disable notifications',
         addEmail: 'Add Email',
-        emailPlaceholder: 'Enter email address',
+        emailPlaceholder: 'Enter email address'
       },
       emailTemplates: {
         title: 'Email Templates',
@@ -6830,8 +7221,7 @@ export default {
         create: 'Create Key',
         creating: 'Creating...',
         regenerateConfirm: 'Are you sure? The current key will be immediately invalidated.',
-        deleteConfirm:
-          'Are you sure you want to delete the admin API key? External integrations will stop working.',
+        deleteConfirm: 'Are you sure you want to delete the admin API key? External integrations will stop working.',
         keyGenerated: 'New admin API key generated',
         keyDeleted: 'Admin API key deleted',
         copyKey: 'Copy Key',
@@ -6948,7 +7338,8 @@ export default {
         enabled: 'Enable 429 Default Cooldown',
         enabledHint: 'Pause account scheduling when a 429 has no reset time, then auto-recover after cooldown',
         cooldownSeconds: 'Cooldown Duration (seconds)',
-        cooldownSecondsHint: 'Default cooldown duration (1-7200 seconds); explicit upstream reset times still take precedence',
+        cooldownSecondsHint:
+          'Default cooldown duration (1-7200 seconds); explicit upstream reset times still take precedence',
         saved: '429 default cooldown settings saved',
         saveFailed: 'Failed to save 429 default cooldown settings'
       },
@@ -6979,9 +7370,11 @@ export default {
         enabled: 'Enable Request Rectifier',
         enabledHint: 'Master switch - disabling turns off all rectification features',
         thinkingSignature: 'Thinking Signature Rectifier',
-        thinkingSignatureHint: 'Automatically strip signatures and retry when upstream returns thinking block signature validation errors',
+        thinkingSignatureHint:
+          'Automatically strip signatures and retry when upstream returns thinking block signature validation errors',
         thinkingBudget: 'Thinking Budget Rectifier',
-        thinkingBudgetHint: 'Automatically set budget to 32000 and retry when upstream returns budget_tokens constraint error (≥1024)',
+        thinkingBudgetHint:
+          'Automatically set budget to 32000 and retry when upstream returns budget_tokens constraint error (≥1024)',
         apikeySignature: 'API Key Signature Rectifier',
         apikeySignatureHint:
           'Automatically strip signatures and retry when API Key accounts receive signature-related errors (built-in patterns always apply)',
@@ -6995,7 +7388,8 @@ export default {
       },
       betaPolicy: {
         title: 'Beta Policy',
-        description: 'How to handle Beta features when configuring the forwarding of Anthropic API requests. Applicable only to the /v1/messages endpoint.',
+        description:
+          'How to handle Beta features when configuring the forwarding of Anthropic API requests. Applicable only to the /v1/messages endpoint.',
         action: 'Action',
         actionPass: 'Pass (transparent)',
         actionFilter: 'Filter (remove)',
@@ -7011,7 +7405,8 @@ export default {
         saved: 'Beta policy settings saved',
         saveFailed: 'Failed to save beta policy settings',
         modelWhitelist: 'Model Whitelist',
-        modelWhitelistHint: 'Leave empty to apply to all models. Supports exact match and wildcard prefix (e.g., claude-opus-*)',
+        modelWhitelistHint:
+          'Leave empty to apply to all models. Supports exact match and wildcard prefix (e.g., claude-opus-*)',
         modelPatternPlaceholder: 'e.g., claude-opus-* or claude-opus-4-6',
         addModelPattern: 'Add model pattern',
         removePattern: 'Remove',
@@ -7025,7 +7420,8 @@ export default {
       },
       openaiFastPolicy: {
         title: 'OpenAI Fast/Flex Policy',
-        description: 'Intercept, filter, or pass OpenAI fast(priority) / flex requests based on the request body service_tier field. Applies to the OpenAI gateway only.',
+        description:
+          'Intercept, filter, or pass OpenAI fast(priority) / flex requests based on the request body service_tier field. Applies to the OpenAI gateway only.',
         empty: 'No rules configured. Click the button below to add one.',
         ruleHeader: 'Rule #{index}',
         removeRule: 'Remove rule',
@@ -7048,7 +7444,8 @@ export default {
         errorMessagePlaceholder: 'Custom error message when blocked',
         errorMessageHint: 'Leave empty for the default message.',
         modelWhitelist: 'Model whitelist',
-        modelWhitelistHint: 'Leave empty to apply to all models. Supports exact match and wildcard prefix (e.g., gpt-5.5*).',
+        modelWhitelistHint:
+          'Leave empty to apply to all models. Supports exact match and wildcard prefix (e.g., gpt-5.5*).',
         modelPatternPlaceholder: 'e.g., gpt-5.5 or gpt-5.5*',
         addModelPattern: 'Add model pattern',
         fallbackAction: 'Fallback action',
@@ -7084,10 +7481,13 @@ export default {
         title: 'Auth Source Defaults',
         description: 'Configure per-source default balance, concurrency, subscriptions, and grant rules.',
         requireEmailLabel: 'Require email on third-party signup',
-        requireEmailHint: 'When enabled, Linux DO, OIDC, and WeChat signups must provide an email before account creation.',
-        enabledHint: 'These defaults apply when a new user registers through this source. Grant on first bind only applies when an existing user binds this source.',
+        requireEmailHint:
+          'When enabled, Linux DO, OIDC, and WeChat signups must provide an email before account creation.',
+        enabledHint:
+          'These defaults apply when a new user registers through this source. Grant on first bind only applies when an existing user binds this source.',
         platformQuotasOverride: 'Platform Quota Override',
-        platformQuotasOverrideHint: 'Override the system default platform quotas for this signup source. Leave blank to inherit the system defaults.',
+        platformQuotasOverrideHint:
+          'Override the system default platform quotas for this signup source. Leave blank to inherit the system defaults.',
         sources: {
           email: {
             title: 'Email signup',
@@ -7109,7 +7509,8 @@ export default {
         grantOnFirstBindLabel: 'Grant on first bind',
         grantOnFirstBindHint: 'Grant default entitlements when an existing user first binds this source.',
         defaultSubscriptionsLabel: 'Default subscriptions',
-        defaultSubscriptionsHint: 'Applies only to this auth source. Leave empty to skip source-specific subscriptions.',
+        defaultSubscriptionsHint:
+          'Applies only to this auth source. Leave empty to skip source-specific subscriptions.',
         noSourceSubscriptions: 'No source-specific default subscriptions configured.'
       },
       paymentVisibleMethods: {
@@ -7121,15 +7522,17 @@ export default {
       },
       openaiExperimentalScheduler: {
         title: 'OpenAI experimental scheduler policy',
-        description: "Disabled by default. When enabled, this only changes the gateway's experimental account-selection policy for OpenAI traffic; it does not indicate an upstream OpenAI capability."
+        description:
+          "Disabled by default. When enabled, this only changes the gateway's experimental account-selection policy for OpenAI traffic; it does not indicate an upstream OpenAI capability."
       },
       usageRecords: {
         title: 'Usage Records',
-        description: 'Settings for usage and failed-request records visible to end users.',
+        description: 'Settings for usage and failed-request records visible to end users.'
       },
       user_error_view: {
         label: 'Allow users to view their own error requests',
-        description: 'When enabled, users can see a redacted view of their failed requests on the usage page (no internal/upstream details). Requires ops monitoring enabled to have data.',
+        description:
+          'When enabled, users can see a redacted view of their failed requests on the usage page (no internal/upstream details). Requires ops monitoring enabled to have data.'
       },
       saveSettings: 'Save Settings',
       saving: 'Saving...',
@@ -7266,7 +7669,8 @@ export default {
       },
 
       deleteConfirm: 'Delete Profile',
-      deleteConfirmMessage: 'Are you sure you want to delete profile "{name}"? Accounts using this profile will fall back to the built-in default.',
+      deleteConfirmMessage:
+        'Are you sure you want to delete profile "{name}"? Accounts using this profile will fall back to the built-in default.',
       createSuccess: 'Profile created successfully',
       updateSuccess: 'Profile updated successfully',
       deleteSuccess: 'Profile deleted successfully',
@@ -7336,7 +7740,7 @@ export default {
     notFoundTitle: 'Page not found',
     notFoundDesc: 'This custom page does not exist or has been removed.',
     notConfiguredTitle: 'Page URL not configured',
-    notConfiguredDesc: 'The URL for this custom page has not been properly configured.',
+    notConfiguredDesc: 'The URL for this custom page has not been properly configured.'
   },
 
   legalDocument: {
@@ -7372,8 +7776,7 @@ export default {
     title: 'My Subscriptions',
     description: 'View your subscription plans and usage',
     noActiveSubscriptions: 'No Active Subscriptions',
-    noActiveSubscriptionsDesc:
-      "You don't have any active subscriptions. Contact administrator to get one.",
+    noActiveSubscriptionsDesc: "You don't have any active subscriptions. Contact administrator to get one.",
     failedToLoad: 'Failed to load subscriptions',
     status: {
       active: 'Active',
@@ -7400,8 +7803,10 @@ export default {
     restartTour: 'Restart Onboarding Tour',
     dontShowAgain: "Don't show again",
     dontShowAgainTitle: 'Permanently close onboarding guide',
-    confirmDontShow: "Are you sure you don't want to see the onboarding guide again?\n\nYou can restart it anytime from the user menu in the top right corner.",
-    confirmExit: 'Are you sure you want to exit the onboarding guide? You can restart it anytime from the top right menu.',
+    confirmDontShow:
+      "Are you sure you don't want to see the onboarding guide again?\n\nYou can restart it anytime from the user menu in the top right corner.",
+    confirmExit:
+      'Are you sure you want to exit the onboarding guide? You can restart it anytime from the top right menu.',
     interactiveHint: 'Press Enter or Click to continue',
     navigation: {
       flipPage: 'Flip Page',
@@ -7411,131 +7816,158 @@ export default {
     admin: {
       welcome: {
         title: '👋 Welcome to SubAPIs',
-        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">SubAPIs is a powerful AI service gateway platform that helps you easily manage and distribute AI services.</p><p style="margin-bottom: 12px;"><b>🎯 Core Features:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>Group Management</b> - Create service tiers (VIP, Free Trial, etc.)</li><li>🔗 <b>Account Pool</b> - Connect multiple upstream AI service accounts</li><li>🔑 <b>Key Distribution</b> - Generate independent API Keys for users</li><li>💰 <b>Billing Control</b> - Flexible rate and quota management</li></ul><p style="color: #10b981; font-weight: 600;">Let\'s complete the initial setup in 3 minutes →</p></div>',
+        description:
+          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">SubAPIs is a powerful AI service gateway platform that helps you easily manage and distribute AI services.</p><p style="margin-bottom: 12px;"><b>🎯 Core Features:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>📦 <b>Group Management</b> - Create service tiers (VIP, Free Trial, etc.)</li><li>🔗 <b>Account Pool</b> - Connect multiple upstream AI service accounts</li><li>🔑 <b>Key Distribution</b> - Generate independent API Keys for users</li><li>💰 <b>Billing Control</b> - Flexible rate and quota management</li></ul><p style="color: #10b981; font-weight: 600;">Let\'s complete the initial setup in 3 minutes →</p></div>',
         nextBtn: 'Start Setup 🚀',
         prevBtn: 'Skip'
       },
       groupManage: {
         title: '📦 Step 1: Group Management',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>What is a Group?</b></p><p style="margin-bottom: 12px;">Groups are the core concept of SubAPIs, like a "service package":</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 Each group can contain multiple upstream accounts</li><li>💰 Each group has independent billing multiplier</li><li>👥 Can be set as public or exclusive</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Example:</b> You can create "VIP Premium" (high rate) and "Free Trial" (low rate) groups</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Group Management" on the left sidebar</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>What is a Group?</b></p><p style="margin-bottom: 12px;">Groups are the core concept of SubAPIs, like a "service package":</p><ul style="margin-left: 20px; margin-bottom: 12px; font-size: 13px;"><li>🎯 Each group can contain multiple upstream accounts</li><li>💰 Each group has independent billing multiplier</li><li>👥 Can be set as public or exclusive</li></ul><p style="margin-top: 12px; padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Example:</b> You can create "VIP Premium" (high rate) and "Free Trial" (low rate) groups</p><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Group Management" on the left sidebar</p></div>'
       },
       createGroup: {
         title: '➕ Create New Group',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Let\'s create your first group.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📝 Tip:</b> Recommend creating a test group first to familiarize yourself with the process</p><p style="color: #10b981; font-weight: 600;">👉 Click the "Create Group" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Let\'s create your first group.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📝 Tip:</b> Recommend creating a test group first to familiarize yourself with the process</p><p style="color: #10b981; font-weight: 600;">👉 Click the "Create Group" button</p></div>'
       },
       groupName: {
         title: '✏️ 1. Group Name',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Give your group an easy-to-identify name.</p><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>💡 Naming Suggestions:</b><ul style="margin: 8px 0 0 16px;"><li>"Test Group" - For testing</li><li>"VIP Premium" - High-quality service</li><li>"Free Trial" - Trial version</li></ul></div><p style="font-size: 13px; color: #6b7280;">Click "Next" when done</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Give your group an easy-to-identify name.</p><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>💡 Naming Suggestions:</b><ul style="margin: 8px 0 0 16px;"><li>"Test Group" - For testing</li><li>"VIP Premium" - High-quality service</li><li>"Free Trial" - Trial version</li></ul></div><p style="font-size: 13px; color: #6b7280;">Click "Next" when done</p></div>',
         nextBtn: 'Next'
       },
       groupPlatform: {
         title: '🤖 2. Select Platform',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the AI platform this group supports.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 Platform Guide:</b><ul style="margin: 8px 0 0 16px;"><li><b>Anthropic</b> - Claude models</li><li><b>OpenAI</b> - GPT models</li><li><b>Google</b> - Gemini models</li></ul></div><p style="font-size: 13px; color: #6b7280;">One group can only have one platform</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the AI platform this group supports.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 Platform Guide:</b><ul style="margin: 8px 0 0 16px;"><li><b>Anthropic</b> - Claude models</li><li><b>OpenAI</b> - GPT models</li><li><b>Google</b> - Gemini models</li></ul></div><p style="font-size: 13px; color: #6b7280;">One group can only have one platform</p></div>',
         nextBtn: 'Next'
       },
       groupMultiplier: {
         title: '💰 3. Rate Multiplier',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set the billing multiplier to control user charges.</p><div style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚙️ Billing Rules:</b><ul style="margin: 8px 0 0 16px;"><li><b>1.0</b> - Original price (cost price)</li><li><b>1.5</b> - User consumes $1, charged $1.5</li><li><b>2.0</b> - User consumes $1, charged $2</li><li><b>0.8</b> - Subsidy mode (loss-making)</li></ul></div><p style="font-size: 13px; color: #6b7280;">Recommend setting test group to 1.0</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set the billing multiplier to control user charges.</p><div style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚙️ Billing Rules:</b><ul style="margin: 8px 0 0 16px;"><li><b>1.0</b> - Original price (cost price)</li><li><b>1.5</b> - User consumes $1, charged $1.5</li><li><b>2.0</b> - User consumes $1, charged $2</li><li><b>0.8</b> - Subsidy mode (loss-making)</li></ul></div><p style="font-size: 13px; color: #6b7280;">Recommend setting test group to 1.0</p></div>',
         nextBtn: 'Next'
       },
       groupExclusive: {
         title: '🔒 4. Exclusive Group (Optional)',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Control group visibility and access permissions.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔐 Permission Guide:</b><ul style="margin: 8px 0 0 16px;"><li><b>Off</b> - Public group, visible to all users</li><li><b>On</b> - Exclusive group, only for specified users</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Use Cases:</b> VIP exclusive, internal testing, special customers</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Control group visibility and access permissions.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔐 Permission Guide:</b><ul style="margin: 8px 0 0 16px;"><li><b>Off</b> - Public group, visible to all users</li><li><b>On</b> - Exclusive group, only for specified users</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Use Cases:</b> VIP exclusive, internal testing, special customers</p></div>',
         nextBtn: 'Next'
       },
       groupSubmit: {
         title: '✅ Save Group',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Confirm the information and click create to save the group.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Note:</b> Platform type cannot be changed after creation, but other settings can be edited anytime</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>📌 Next Step:</b> After creation, we\'ll add upstream accounts to this group</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Confirm the information and click create to save the group.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Note:</b> Platform type cannot be changed after creation, but other settings can be edited anytime</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>📌 Next Step:</b> After creation, we\'ll add upstream accounts to this group</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
       },
       accountManage: {
         title: '🔗 Step 2: Add Account',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Great! Group created successfully 🎉</b></p><p style="margin-bottom: 12px;">Now add upstream AI service accounts to enable actual service delivery.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔑 Account Purpose:</b><ul style="margin: 8px 0 0 16px;"><li>Connect to upstream AI services (Claude, GPT, etc.)</li><li>One group can contain multiple accounts (load balancing)</li><li>Supports OAuth and Session Key methods</li></ul></div><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Account Management" on the left sidebar</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Great! Group created successfully 🎉</b></p><p style="margin-bottom: 12px;">Now add upstream AI service accounts to enable actual service delivery.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔑 Account Purpose:</b><ul style="margin: 8px 0 0 16px;"><li>Connect to upstream AI services (Claude, GPT, etc.)</li><li>One group can contain multiple accounts (load balancing)</li><li>Supports OAuth and Session Key methods</li></ul></div><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "Account Management" on the left sidebar</p></div>'
       },
       createAccount: {
         title: '➕ Add New Account',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to start adding your first upstream account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Recommend using OAuth method - more secure and no manual key extraction needed</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Add Account" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to start adding your first upstream account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Recommend using OAuth method - more secure and no manual key extraction needed</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Add Account" button</p></div>'
       },
       accountName: {
         title: '✏️ 1. Account Name',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set an easy-to-identify name for the account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Naming Suggestions:</b> "Claude Main", "GPT Backup 1", "Test Account", etc.</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set an easy-to-identify name for the account.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Naming Suggestions:</b> "Claude Main", "GPT Backup 1", "Test Account", etc.</p></div>',
         nextBtn: 'Next'
       },
       accountPlatform: {
         title: '🤖 2. Select Platform',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the service provider platform for this account.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ Important:</b> Platform must match the group you just created</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the service provider platform for this account.</p><p style="padding: 8px 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 13px;"><b>⚠️ Important:</b> Platform must match the group you just created</p></div>',
         nextBtn: 'Next'
       },
       accountType: {
         title: '🔐 3. Authorization Method',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the account authorization method.</p><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>✅ Recommended: OAuth Method</b><ul style="margin: 8px 0 0 16px;"><li>No manual key extraction needed</li><li>More secure with auto-refresh support</li><li>Works with Claude Code, ChatGPT OAuth</li></ul></div><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 Session Key Method</b><ul style="margin: 8px 0 0 16px;"><li>Requires manual extraction from browser</li><li>May need periodic updates</li><li>For platforms without OAuth support</li></ul></div></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Choose the account authorization method.</p><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>✅ Recommended: OAuth Method</b><ul style="margin: 8px 0 0 16px;"><li>No manual key extraction needed</li><li>More secure with auto-refresh support</li><li>Works with Claude Code, ChatGPT OAuth</li></ul></div><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 Session Key Method</b><ul style="margin: 8px 0 0 16px;"><li>Requires manual extraction from browser</li><li>May need periodic updates</li><li>For platforms without OAuth support</li></ul></div></div>',
         nextBtn: 'Next'
       },
       accountPriority: {
         title: '⚖️ 4. Priority (Optional)',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set the account call priority.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📊 Priority Rules:</b><ul style="margin: 8px 0 0 16px;"><li>Lower number = higher priority</li><li>System uses low-value accounts first</li><li>Same priority = random selection</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Use Case:</b> Set main account to lower value, backup accounts to higher value</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set the account call priority.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📊 Priority Rules:</b><ul style="margin: 8px 0 0 16px;"><li>Lower number = higher priority</li><li>System uses low-value accounts first</li><li>Same priority = random selection</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Use Case:</b> Set main account to lower value, backup accounts to higher value</p></div>',
         nextBtn: 'Next'
       },
       accountGroups: {
         title: '🎯 5. Assign Groups',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Key Step!</b> Assign the account to the group you just created.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important Reminder:</b><ul style="margin: 8px 0 0 16px;"><li>Must select at least one group</li><li>Unassigned accounts cannot be used</li><li>One account can be assigned to multiple groups</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Select the test group you just created</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Key Step!</b> Assign the account to the group you just created.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important Reminder:</b><ul style="margin: 8px 0 0 16px;"><li>Must select at least one group</li><li>Unassigned accounts cannot be used</li><li>One account can be assigned to multiple groups</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Select the test group you just created</p></div>',
         nextBtn: 'Next'
       },
       accountSubmit: {
         title: '✅ Save Account',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Confirm the information and click save.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 OAuth Flow:</b><ul style="margin: 8px 0 0 16px;"><li>Will redirect to service provider page after clicking save</li><li>Complete login and authorization on provider page</li><li>Auto-return after successful authorization</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>📌 Next Step:</b> After adding account, we\'ll create an API key</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Save" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Confirm the information and click save.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 OAuth Flow:</b><ul style="margin: 8px 0 0 16px;"><li>Will redirect to service provider page after clicking save</li><li>Complete login and authorization on provider page</li><li>Auto-return after successful authorization</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>📌 Next Step:</b> After adding account, we\'ll create an API key</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Save" button</p></div>'
       },
       keyManage: {
         title: '🔑 Step 3: Generate Key',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Congratulations! Account setup complete 🎉</b></p><p style="margin-bottom: 12px;">Final step: generate an API Key to test if the service works properly.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔑 API Key Purpose:</b><ul style="margin: 8px 0 0 16px;"><li>Credential for calling AI services</li><li>Each key is bound to one group</li><li>Can set quota and expiration</li><li>Supports independent usage statistics</li></ul></div><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "API Keys" on the left sidebar</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;"><b>Congratulations! Account setup complete 🎉</b></p><p style="margin-bottom: 12px;">Final step: generate an API Key to test if the service works properly.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🔑 API Key Purpose:</b><ul style="margin: 8px 0 0 16px;"><li>Credential for calling AI services</li><li>Each key is bound to one group</li><li>Can set quota and expiration</li><li>Supports independent usage statistics</li></ul></div><p style="margin-top: 16px; color: #10b981; font-weight: 600;">👉 Click "API Keys" on the left sidebar</p></div>'
       },
       createKey: {
         title: '➕ Create Key',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to create your first API Key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Copy and save immediately after creation - key is only shown once</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create Key" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to create your first API Key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Copy and save immediately after creation - key is only shown once</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create Key" button</p></div>'
       },
       keyName: {
         title: '✏️ 1. Key Name',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set an easy-to-manage name for the key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Naming Suggestions:</b> "Test Key", "Production", "Mobile", etc.</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Set an easy-to-manage name for the key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Naming Suggestions:</b> "Test Key", "Production", "Mobile", etc.</p></div>',
         nextBtn: 'Next'
       },
       keyGroup: {
         title: '🎯 2. Select Group',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Select the group you just configured.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 Group Determines:</b><ul style="margin: 8px 0 0 16px;"><li>Which accounts this key can use</li><li>What billing multiplier applies</li><li>Whether it\'s an exclusive key</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Select the test group you just created</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Select the group you just configured.</p><div style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>📌 Group Determines:</b><ul style="margin: 8px 0 0 16px;"><li>Which accounts this key can use</li><li>What billing multiplier applies</li><li>Whether it\'s an exclusive key</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Select the test group you just created</p></div>',
         nextBtn: 'Next'
       },
       keySubmit: {
         title: '🎉 Generate and Copy',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">System will generate a complete API Key after clicking create.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important Reminder:</b><ul style="margin: 8px 0 0 16px;"><li>Key is only shown once, copy immediately</li><li>Need to regenerate if lost</li><li>Keep it safe, don\'t share with others</li></ul></div><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🚀 Next Steps:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the generated sk-xxx key</li><li>Use in any OpenAI-compatible client</li><li>Start experiencing AI services!</li></ul></div><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">System will generate a complete API Key after clicking create.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important Reminder:</b><ul style="margin: 8px 0 0 16px;"><li>Key is only shown once, copy immediately</li><li>Need to regenerate if lost</li><li>Keep it safe, don\'t share with others</li></ul></div><div style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>🚀 Next Steps:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the generated sk-xxx key</li><li>Use in any OpenAI-compatible client</li><li>Start experiencing AI services!</li></ul></div><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
       }
     },
     // User tour steps
     user: {
       welcome: {
         title: '👋 Welcome to SubAPIs',
-        description: '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Hello! Welcome to the SubAPIs AI service platform.</p><p style="margin-bottom: 12px;"><b>🎯 Quick Start:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 Create API Key</li><li>📋 Copy key to your application</li><li>🚀 Start using AI services</li></ul><p style="color: #10b981; font-weight: 600;">Just 1 minute, let\'s get started →</p></div>',
+        description:
+          '<div style="line-height: 1.8;"><p style="margin-bottom: 16px;">Hello! Welcome to the SubAPIs AI service platform.</p><p style="margin-bottom: 12px;"><b>🎯 Quick Start:</b></p><ul style="margin-left: 20px; margin-bottom: 16px;"><li>🔑 Create API Key</li><li>📋 Copy key to your application</li><li>🚀 Start using AI services</li></ul><p style="color: #10b981; font-weight: 600;">Just 1 minute, let\'s get started →</p></div>',
         nextBtn: 'Start 🚀',
         prevBtn: 'Skip'
       },
       keyManage: {
         title: '🔑 API Key Management',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Manage all your API access keys here.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 What is an API Key?</b><br/>An API key is your credential for accessing AI services, like a key that allows your application to call AI capabilities.</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click to enter key page</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Manage all your API access keys here.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 What is an API Key?</b><br/>An API key is your credential for accessing AI services, like a key that allows your application to call AI capabilities.</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click to enter key page</p></div>'
       },
       createKey: {
         title: '➕ Create New Key',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to create your first API key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Key is only shown once after creation, make sure to copy and save</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create Key"</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click the button to create your first API key.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Tip:</b> Key is only shown once after creation, make sure to copy and save</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create Key"</p></div>'
       },
       keyName: {
         title: '✏️ Key Name',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Give your key an easy-to-identify name.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Examples:</b> "My First Key", "For Testing", etc.</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Give your key an easy-to-identify name.</p><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>💡 Examples:</b> "My First Key", "For Testing", etc.</p></div>',
         nextBtn: 'Next'
       },
       keyGroup: {
         title: '🎯 Select Group',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Select the service group assigned by the administrator.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 Group Info:</b><br/>Different groups may have different service quality and billing rates, choose according to your needs.</p></div>',
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Select the service group assigned by the administrator.</p><p style="padding: 8px 12px; background: #eff6ff; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px;"><b>📌 Group Info:</b><br/>Different groups may have different service quality and billing rates, choose according to your needs.</p></div>',
         nextBtn: 'Next'
       },
       keySubmit: {
         title: '🎉 Complete Creation',
-        description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click to confirm and create your API key.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the key (sk-xxx) immediately after creation</li><li>Key is only shown once, need to regenerate if lost</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>🚀 How to Use:</b><br/>Configure the key in any OpenAI-compatible client (like ChatBox, OpenCat, etc.) and start using!</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
+        description:
+          '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click to confirm and create your API key.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the key (sk-xxx) immediately after creation</li><li>Key is only shown once, need to regenerate if lost</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>🚀 How to Use:</b><br/>Configure the key in any OpenAI-compatible client (like ChatBox, OpenCat, etc.) and start using!</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
       }
     }
   },
@@ -7563,7 +7995,7 @@ export default {
       card: 'Card',
       link: 'Link',
       alipay_direct: 'Alipay (Direct)',
-      wxpay_direct: 'WeChat Pay (Direct)',
+      wxpay_direct: 'WeChat Pay (Direct)'
     },
     status: {
       pending: 'Pending',
@@ -7577,7 +8009,7 @@ export default {
       refunding: 'Refunding',
       refunded: 'Refunded',
       partially_refunded: 'Partially Refunded',
-      refund_failed: 'Refund Failed',
+      refund_failed: 'Refund Failed'
     },
     qr: {
       scanToPay: 'Scan to Pay',
@@ -7587,7 +8019,8 @@ export default {
       scanAlipayHint: 'Open Alipay on your phone and scan the QR code to pay',
       scanWxpayHint: 'Open WeChat on your phone and scan the QR code to pay',
       payInNewWindow: 'Complete Payment in New Window',
-      payInNewWindowHint: 'The payment page has opened in a new window. Please complete the payment there and return to this page.',
+      payInNewWindowHint:
+        'The payment page has opened in a new window. Please complete the payment there and return to this page.',
       openPayWindow: 'Reopen Payment Page',
       expiresIn: 'Expires in',
       expired: 'Order Expired',
@@ -7595,7 +8028,7 @@ export default {
       cancelled: 'Order Cancelled',
       cancelledDesc: 'You have cancelled this payment.',
       waitingPayment: 'Waiting for payment...',
-      cancelOrder: 'Cancel Order',
+      cancelOrder: 'Cancel Order'
     },
     orders: {
       title: 'My Orders',
@@ -7615,13 +8048,14 @@ export default {
       userId: 'User ID',
       orderType: 'Order Type',
       actions: 'Actions',
-      requestRefund: 'Request Refund',
+      requestRefund: 'Request Refund'
     },
     invoice: {
       apply: 'Invoice',
       submit: 'Submit and Issue',
       submitted: 'Invoice request submitted. The system is issuing it automatically.',
-      autoIssueHint: 'Select completed uninvoiced orders. The system invoices the actual paid amount and users cannot edit the invoice amount.',
+      autoIssueHint:
+        'Select completed uninvoiced orders. The system invoices the actual paid amount and users cannot edit the invoice amount.',
       selectOrders: 'Select Orders',
       totalAmount: 'Invoice Total',
       noEligibleOrders: 'No eligible orders',
@@ -7644,8 +8078,8 @@ export default {
         PROCESSING: 'Issuing',
         ISSUED: 'Issued',
         FAILED: 'Failed',
-        CANCELLED: 'Cancelled',
-      },
+        CANCELLED: 'Cancelled'
+      }
     },
     result: {
       processing: 'Payment Processing',
@@ -7654,7 +8088,7 @@ export default {
       subscriptionSuccess: 'Subscription Successful',
       failed: 'Payment Failed',
       backToRecharge: 'Back to Recharge',
-      viewOrders: 'View Orders',
+      viewOrders: 'View Orders'
     },
     currentBalance: 'Current Balance',
     rechargeAccount: 'Recharge Account',
@@ -7666,7 +8100,8 @@ export default {
     noPlans: 'No subscription plans available',
     notAvailable: 'Top-up is currently unavailable',
     backendUnavailableTitle: 'Payment backend is not available',
-    backendUnavailableDesc: 'The current backend does not expose payment APIs yet. Upgrade or restart the backend, then refresh this page.',
+    backendUnavailableDesc:
+      'The current backend does not expose payment APIs yet. Upgrade or restart the backend, then refresh this page.',
     confirmSubscription: 'Confirm Subscription',
     confirmCancel: 'Are you sure you want to cancel this order?',
     amountTooLow: 'Minimum amount is {min}',
@@ -7684,16 +8119,21 @@ export default {
       tooManyPending: 'Too many pending orders (max {max}). Please complete or cancel existing orders first.',
       cancelRateLimited: 'Too many cancellations. Please try again later.',
       wechatH5NotAuthorized: 'This merchant has not enabled WeChat H5 payment. Open this page in WeChat to continue.',
-      wechatPaymentMpNotConfigured: 'This site has not completed WeChat MP/JSAPI payment setup, so in-app WeChat payment is unavailable right now.',
-      wechatJsapiUnavailable: 'WeChat payment could not be invoked in the current environment. Reopen this page inside WeChat and try again.',
+      wechatPaymentMpNotConfigured:
+        'This site has not completed WeChat MP/JSAPI payment setup, so in-app WeChat payment is unavailable right now.',
+      wechatJsapiUnavailable:
+        'WeChat payment could not be invoked in the current environment. Reopen this page inside WeChat and try again.',
       wechatJsapiFailed: 'WeChat payment did not complete. Try invoking it again or switch to QR payment.',
       wechatUnavailable: 'WeChat payment is temporarily unavailable. Please try again later.',
       wechatOpenInWeChatHint: 'Open the current page inside WeChat, or switch to desktop WeChat QR payment.',
       wechatScanOnDesktopHint: 'On desktop, use WeChat Scan to pay; on mobile, reopen the current page inside WeChat.',
-      wechatSwitchBrowserHint: 'Switch to desktop WeChat QR payment, or reopen this page in an external browser and retry.',
-      mobilePaymentFallbackToQr: 'This merchant has not enabled mobile payment. The flow has been switched to QR payment automatically.',
+      wechatSwitchBrowserHint:
+        'Switch to desktop WeChat QR payment, or reopen this page in an external browser and retry.',
+      mobilePaymentFallbackToQr:
+        'This merchant has not enabled mobile payment. The flow has been switched to QR payment automatically.',
       alipayDesktopUnavailable: 'The desktop Alipay flow could not generate a QR code.',
-      alipayDesktopQrHint: 'Desktop Alipay should render a QR code. Refresh and retry, or make sure the payment page was not blocked.',
+      alipayDesktopQrHint:
+        'Desktop Alipay should render a QR code. Refresh and retry, or make sure the payment page was not blocked.',
       alipayMobileUnavailable: 'This page could not hand off to Alipay.',
       alipayMobileOpenHint: 'Allow the current page to open the Alipay app, or retry from the system browser.',
       // Structured error codes (reason strings from backend ApplicationError)
@@ -7713,7 +8153,7 @@ export default {
       WXPAY_CONFIG_MISSING_KEY: 'WeChat Pay config missing required key: {key}.',
       WXPAY_CONFIG_INVALID_KEY_LENGTH: 'WeChat Pay {key} length is invalid (expected {expected} bytes, got {actual}).',
       WXPAY_CONFIG_INVALID_KEY: 'WeChat Pay {key} is malformed. Make sure you copied the full PEM content.',
-      PENDING_ORDERS: 'This provider has pending orders. Please wait for them to complete before making changes.',
+      PENDING_ORDERS: 'This provider has pending orders. Please wait for them to complete before making changes.'
     },
     airwallexPay: 'Airwallex Payment',
     stripePay: 'Pay Now',
@@ -7722,7 +8162,7 @@ export default {
       redirecting: 'Redirecting to payment page...',
       loadingQr: 'Loading WeChat Pay QR code...',
       timeout: 'Timed out waiting for payment credentials, please retry',
-      qrFailed: 'Failed to get WeChat Pay QR code',
+      qrFailed: 'Failed to get WeChat Pay QR code'
     },
     subscribeNow: 'Subscribe Now',
     renewNow: 'Renew',
@@ -7735,7 +8175,7 @@ export default {
       monthlyLimit: 'Monthly',
       quota: 'Quota',
       unlimited: 'Unlimited',
-      models: 'Models',
+      models: 'Models'
     },
     days: 'days',
     months: 'months',
@@ -7749,7 +8189,7 @@ export default {
         overview: 'Overview',
         orders: 'Orders',
         channels: 'Channels',
-        plans: 'Plans',
+        plans: 'Plans'
       },
       todayRevenue: 'Today Revenue',
       totalRevenue: 'Total Revenue',
@@ -7870,7 +8310,8 @@ export default {
       monthlyLimit: 'Monthly Limit',
       unlimited: 'Unlimited',
       invoiceConfig: 'Invoice Config',
-      invoiceConfigHint: 'When enabled, users can select completed uninvoiced orders on the orders page and the system will issue invoices automatically.',
+      invoiceConfigHint:
+        'When enabled, users can select completed uninvoiced orders on the orders page and the system will issue invoices automatically.',
       invoiceEnabled: 'Enable Invoice Requests',
       invoiceEnabledHint: 'Controls whether the invoice entry is visible on the user orders page',
       invoiceAutoIssue: 'Auto Issue',
@@ -7902,9 +8343,10 @@ export default {
       providerPassword: 'Password',
       providerSsqyuuid: 'Tax Enterprise UUID',
       providerEncrypted: 'Use Encrypted API',
-      providerEncryptedHint: 'Backend currently uses unencrypted toEnService by default; SM4 support is not implemented yet',
-      invoiceRemark: 'Invoice Remark',
-    },
+      providerEncryptedHint:
+        'Backend currently uses unencrypted toEnService by default; SM4 support is not implemented yet',
+      invoiceRemark: 'Invoice Remark'
+    }
   },
 
   status: {
@@ -7938,7 +8380,7 @@ export default {
     daysAgoRelative: 'days ago',
     noData: 'No data',
     successful: 'successful',
-    failCount: 'failures',
+    failCount: 'failures'
   },
 
   adminStatus: {
@@ -7947,7 +8389,8 @@ export default {
     enabled: 'Enable Probe',
     enabledHint: 'When enabled, the system will periodically probe configured model endpoints.',
     publicVisible: 'Show to Users',
-    publicVisibleHint: 'When disabled, probing and Bark monitoring still run, but regular users no longer see the service status page or entry.',
+    publicVisibleHint:
+      'When disabled, probing and Bark monitoring still run, but regular users no longer see the service status page or entry.',
     interval: 'Probe Interval (minutes)',
     retention: 'Data Retention (days)',
     baseUrl: 'Gateway Base URL',
@@ -7955,9 +8398,11 @@ export default {
     baseUrlHint: 'The base URL of the gateway API for probe requests (e.g., https://your-domain.com)',
     apiKey: 'API Key',
     apiKeyPlaceholder: 'Enter API Key',
-    apiKeyHint: 'The API key used for probe requests, must have access to the configured models. Leave blank to keep the existing key.',
+    apiKeyHint:
+      'The API key used for probe requests, must have access to the configured models. Leave blank to keep the existing key.',
     models: 'Monitored Models',
-    modelsHint: 'Each model can use its own base URL and key. The scheduler probes enabled models at the configured interval.',
+    modelsHint:
+      'Each model can use its own base URL and key. The scheduler probes enabled models at the configured interval.',
     modelId: 'Model ID',
     displayName: 'Display Name',
     sortOrder: 'Sort Order',
@@ -7970,7 +8415,6 @@ export default {
     save: 'Save Service Status Settings',
     saved: 'Configuration saved',
     loadFailed: 'Failed to load status probe settings',
-    saveFailed: 'Failed to save status probe settings',
-  },
-
+    saveFailed: 'Failed to save status probe settings'
+  }
 }

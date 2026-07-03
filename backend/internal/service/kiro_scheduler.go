@@ -37,7 +37,7 @@ func (s *GatewayService) selectKiroAccountWithLoadAwareness(
 				continue
 			}
 			if sessionHash != "" && s.cache != nil {
-				_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, account.ID, stickySessionTTL)
+				_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, account.ID, s.stickySessionTTLForGroupID(ctx, groupID))
 			}
 			slog.Debug("kiro_scheduler_account_selected",
 				"group_id", derefGroupID(groupID),

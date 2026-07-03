@@ -58,6 +58,8 @@ function group(id: number, name: string, platform: GroupPlatform): AdminGroup {
     require_oauth_only: false,
     require_privacy_set: false,
     kiro_cache_emulation_enabled: false,
+    kiro_auto_sticky_enabled: false,
+    kiro_sticky_session_ttl_seconds: 0,
     kiro_cache_emulation_ratio: 0,
     created_at: '2026-06-11T00:00:00Z',
     updated_at: '2026-06-11T00:00:00Z',

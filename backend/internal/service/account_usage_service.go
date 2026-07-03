@@ -149,6 +149,7 @@ type WindowStats struct {
 	Cost         float64 `json:"cost"`
 	StandardCost float64 `json:"standard_cost"`
 	UserCost     float64 `json:"user_cost"`
+	KiroCredits  float64 `json:"kiro_credits"`
 }
 
 // UsageProgress 使用量进度
@@ -310,6 +311,11 @@ type ClaudeUsageFetcher interface {
 	FetchUsageWithOptions(ctx context.Context, opts *ClaudeUsageFetchOptions) (*ClaudeUsageResponse, error)
 }
 
+type KiroUsageTokenProvider interface {
+	GetAccessToken(ctx context.Context, account *Account) (string, error)
+	ForceRefreshAccessToken(ctx context.Context, account *Account) (string, error)
+}
+
 // AccountUsageService 账号使用量查询服务
 type AccountUsageService struct {
 	accountRepo             AccountRepository
@@ -322,6 +328,7 @@ type AccountUsageService struct {
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
 	kiroCooldownStore       KiroCooldownStore
+	kiroTokenProvider       KiroUsageTokenProvider
 	settingService          *SettingService
 }
 
@@ -353,6 +360,13 @@ func NewAccountUsageService(
 func (s *AccountUsageService) SetKiroCooldownStore(store KiroCooldownStore) *AccountUsageService {
 	if s != nil {
 		s.kiroCooldownStore = store
+	}
+	return s
+}
+
+func (s *AccountUsageService) SetKiroTokenProvider(provider KiroUsageTokenProvider) *AccountUsageService {
+	if s != nil {
+		s.kiroTokenProvider = provider
 	}
 	return s
 }
@@ -392,7 +406,7 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 		return usage, err
 	}
 
-	if account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+	if account.Platform == PlatformKiro {
 		return s.getKiroUsage(ctx, account, "active", false)
 	}
 
@@ -513,9 +527,6 @@ func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int
 	}
 
 	if account.Platform == PlatformKiro {
-		if account.Type != AccountTypeOAuth {
-			return nil, fmt.Errorf("passive usage only supported for Kiro OAuth accounts")
-		}
 		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 
@@ -1076,6 +1087,7 @@ func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Accou
 			Cost:         stats.Cost,
 			StandardCost: stats.StandardCost,
 			UserCost:     stats.UserCost,
+			KiroCredits:  stats.KiroCredits,
 		}
 
 		// 缓存窗口统计（1 分钟）
@@ -1104,6 +1116,7 @@ func (s *AccountUsageService) GetTodayStats(ctx context.Context, accountID int64
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
+		KiroCredits:  stats.KiroCredits,
 	}, nil
 }
 
@@ -1176,6 +1189,7 @@ func windowStatsFromAccountStats(stats *usagestats.AccountStats) *WindowStats {
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
+		KiroCredits:  stats.KiroCredits,
 	}
 }
 

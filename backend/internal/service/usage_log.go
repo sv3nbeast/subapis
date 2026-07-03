@@ -153,6 +153,8 @@ type UsageLog struct {
 	AccountRateMultiplier *float64
 	// AccountStatsCost 账号统计预计算费用（nil 表示使用 total_cost × account_rate_multiplier 旧公式）
 	AccountStatsCost *float64
+	// KiroCredits records Kiro credit consumption for Kiro account usage.
+	KiroCredits *float64
 
 	BillingType  int8
 	RequestType  RequestType

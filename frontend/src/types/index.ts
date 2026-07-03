@@ -261,8 +261,8 @@ export interface PublicSettings {
 
 export interface AuthResponse {
   access_token: string
-  refresh_token?: string  // New: Refresh Token for token renewal
-  expires_in?: number     // New: Access Token expiry time in seconds
+  refresh_token?: string // New: Refresh Token for token renewal
+  expires_in?: number // New: Access Token expiry time in seconds
   token_type: string
   user: User & { run_mode?: 'standard' | 'simple' }
 }
@@ -550,7 +550,10 @@ export interface Group {
   require_oauth_only: boolean
   require_privacy_set: boolean
   kiro_cache_emulation_enabled: boolean
+  kiro_auto_sticky_enabled: boolean
+  kiro_sticky_session_ttl_seconds: number
   kiro_cache_emulation_ratio: number
+  kiro_endpoint_mode: 'q' | 'krs' | 'auto'
   created_at: string
   updated_at: string
 }
@@ -674,7 +677,10 @@ export interface CreateGroupRequest {
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   kiro_cache_emulation_enabled?: boolean
+  kiro_auto_sticky_enabled?: boolean
+  kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
+  kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -711,7 +717,10 @@ export interface UpdateGroupRequest {
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   kiro_cache_emulation_enabled?: boolean
+  kiro_auto_sticky_enabled?: boolean
+  kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
+  kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
   copy_accounts_from_group_ids?: number[]
 }
 
@@ -857,10 +866,11 @@ export interface Account {
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
-  extra?: (CodexUsageSnapshot & OpenAICompactState & {
-    model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
-    antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
-  } & Record<string, unknown>)
+  extra?: CodexUsageSnapshot &
+    OpenAICompactState & {
+      model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
+      antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
+    } & Record<string, unknown>
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null
   proxy_fallback_origin_name?: string | null
@@ -884,17 +894,17 @@ export interface Account {
   schedulable: boolean
   rate_limited_at: string | null
   rate_limit_reset_at: string | null
-	  overload_until: string | null
-	  temp_unschedulable_until: string | null
-	  temp_unschedulable_reason: string | null
-	  kiro_quota_state?: string | null
-	  kiro_quota_reason?: string | null
-	  kiro_quota_reset_at?: string | null
-	  kiro_runtime_state?: string | null
-	  kiro_runtime_reason?: string | null
-	  kiro_runtime_reset_at?: string | null
+  overload_until: string | null
+  temp_unschedulable_until: string | null
+  temp_unschedulable_reason: string | null
+  kiro_quota_state?: string | null
+  kiro_quota_reason?: string | null
+  kiro_quota_reset_at?: string | null
+  kiro_runtime_state?: string | null
+  kiro_runtime_reason?: string | null
+  kiro_runtime_reset_at?: string | null
 
-	  // Session window fields (5-hour window)
+  // Session window fields (5-hour window)
   session_window_start: string | null
   session_window_end: string | null
   session_window_status: 'allowed' | 'allowed_warning' | 'rejected' | null
@@ -911,7 +921,7 @@ export interface Account {
   base_rpm?: number | null
   rpm_strategy?: string | null
   rpm_sticky_buffer?: number | null
-  user_msg_queue_mode?: string | null  // "serialize" | "throttle" | null
+  user_msg_queue_mode?: string | null // "serialize" | "throttle" | null
 
   // TLS指纹伪装（仅 Anthropic OAuth/SetupToken 账号有效）
   enable_tls_fingerprint?: boolean | null
@@ -960,6 +970,7 @@ export interface WindowStats {
   cost: number // Account cost (account multiplier)
   standard_cost?: number
   user_cost?: number
+  kiro_credits?: number
 }
 
 export interface UsageProgress {
@@ -974,7 +985,7 @@ export interface UsageProgress {
 // Antigravity 单个模型的配额信息
 export interface AntigravityModelQuota {
   utilization: number // 使用率 0-100
-  reset_time: string  // 重置时间 ISO8601
+  reset_time: string // 重置时间 ISO8601
 }
 
 export interface KiroCreditProgress {
@@ -1042,18 +1053,18 @@ export interface AccountUsageInfo {
   // Antigravity 403 forbidden 状态
   is_forbidden?: boolean
   forbidden_reason?: string
-  forbidden_type?: string   // "validation" | "violation" | "forbidden"
-  validation_url?: string   // 验证/申诉链接
+  forbidden_type?: string // "validation" | "violation" | "forbidden"
+  validation_url?: string // 验证/申诉链接
 
   // 状态标记（后端自动推导）
-  needs_verify?: boolean    // 需要人工验证（forbidden_type=validation）
-  is_banned?: boolean       // 账号被封（forbidden_type=violation）
-  needs_reauth?: boolean    // token 失效需重新授权（401）
+  needs_verify?: boolean // 需要人工验证（forbidden_type=validation）
+  is_banned?: boolean // 账号被封（forbidden_type=violation）
+  needs_reauth?: boolean // token 失效需重新授权（401）
 
   // 机器可读错误码：forbidden / unauthenticated / rate_limited / network_error
   error_code?: string
 
-  error?: string            // usage 获取失败时的错误信息
+  error?: string // usage 获取失败时的错误信息
 }
 
 // OpenAI Codex usage snapshot (from response headers)
@@ -1166,7 +1177,7 @@ export interface CreateProxyRequest {
   port: number
   username?: string | null
   password?: string | null
-  expires_at?: number | null   // unix 秒；null/0 = 永不过期
+  expires_at?: number | null // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days?: number
@@ -1180,7 +1191,7 @@ export interface UpdateProxyRequest {
   username?: string | null
   password?: string | null
   status?: 'active' | 'inactive'
-  expires_at?: number | null   // unix 秒；null/0 = 永不过期
+  expires_at?: number | null // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
   expiry_warn_days?: number
@@ -1933,7 +1944,7 @@ export interface UpdatePromoCodeRequest {
 
 export interface TotpStatus {
   enabled: boolean
-  enabled_at: number | null  // Unix timestamp in seconds
+  enabled_at: number | null // Unix timestamp in seconds
   feature_enabled: boolean
 }
 
@@ -2031,5 +2042,5 @@ export type {
   PlatformQuotaUpdateItem,
   PlatformQuotaPlatform,
   PlatformQuotaWindow,
-  PlatformQuotasResponse,
+  PlatformQuotasResponse
 } from '@/api/admin/users'

@@ -2,11 +2,19 @@ package kiro
 
 import (
 	"encoding/json"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestGenerateToolUseIDUsesClaudeStyleBase62Suffix(t *testing.T) {
+	id := GenerateToolUseID()
+
+	require.Len(t, id, 24)
+	require.True(t, regexp.MustCompile(`^01[0-9A-Za-z]{22}$`).MatchString(id))
+}
 
 func TestReplaceWebSearchToolDescriptionUsesTypeFallback(t *testing.T) {
 	body := []byte(`{

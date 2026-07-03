@@ -9,13 +9,17 @@ import (
 	"io"
 	mathrand "math/rand"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -138,8 +142,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		if resp.StatusCode >= 400 {
 			return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 		}
-		// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
-		upstreamModel := mappedModel
+		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
 			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
@@ -158,8 +161,13 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		if streamResult.usage == nil {
 			streamResult.usage = &ClaudeUsage{}
 		}
+		requestID := buildKiroClientRequestID(resp)
+		if requestID != "" {
+			c.Header("x-request-id", requestID)
+			c.Header("request-id", requestID)
+		}
 		return &ForwardResult{
-			RequestID:        resp.Header.Get("x-request-id"),
+			RequestID:        requestID,
 			Usage:            *streamResult.usage,
 			Model:            originalModel,
 			UpstreamModel:    upstreamModel,
@@ -174,23 +182,25 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if err != nil {
 		return nil, err
 	}
-	if tokenType != "oauth" {
-		return nil, fmt.Errorf("kiro requires oauth token, got %s", tokenType)
+	if !isKiroDirectTokenType(tokenType) {
+		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 	if isOnlyWebSearchToolInBody(body) {
 		webSearchResult, webSearchErr := s.executeKiroWebSearch(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
 		switch {
 		case errors.Is(webSearchErr, errKiroWebSearchFallback):
 		case webSearchErr == nil:
-			// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
-			upstreamModel := mappedModel
-			c.Header("Content-Type", "application/json")
-			if webSearchResult.RequestID != "" {
-				c.Header("x-request-id", webSearchResult.RequestID)
+			upstreamModel := resolveKiroUpstreamModel(mappedModel)
+			requestID := webSearchResult.RequestID
+			if requestID == "" {
+				requestID = kiropkg.NewClaudeRequestID()
 			}
+			c.Header("Content-Type", "application/json")
+			c.Header("x-request-id", requestID)
+			c.Header("request-id", requestID)
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
 			return &ForwardResult{
-				RequestID:     webSearchResult.RequestID,
+				RequestID:     requestID,
 				Usage:         webSearchResult.Usage,
 				Model:         originalModel,
 				UpstreamModel: upstreamModel,
@@ -282,16 +292,15 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	c.Header("Content-Type", "application/json")
-	if requestID := resp.Header.Get("x-request-id"); requestID != "" {
-		c.Header("x-request-id", requestID)
-	}
+	requestID := buildKiroClientRequestID(resp)
+	c.Header("x-request-id", requestID)
+	c.Header("request-id", requestID)
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 
-	// upstream_model 直接使用账号映射后的值，反映真实打到 Kiro 的模型 ID
-	upstreamModel := mappedModel
+	upstreamModel := resolveKiroUpstreamModel(mappedModel)
 
 	return &ForwardResult{
-		RequestID:     resp.Header.Get("x-request-id"),
+		RequestID:     requestID,
 		Usage:         kiroUsageToClaude(parseResult.Usage, inputTokens),
 		Model:         originalModel,
 		UpstreamModel: upstreamModel,
@@ -381,13 +390,30 @@ func kiroEmptyEventStreamMessage(err error) string {
 	return ""
 }
 
+func isKiroDirectTokenType(tokenType string) bool {
+	switch strings.ToLower(strings.TrimSpace(tokenType)) {
+	case "oauth", "apikey":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveKiroUpstreamModel(mappedModel string) string {
+	upstreamModel := kiropkg.MapModel(mappedModel)
+	if strings.TrimSpace(upstreamModel) == "" {
+		upstreamModel = strings.TrimSpace(mappedModel)
+	}
+	return upstreamModel
+}
+
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, 0, err
 	}
-	if tokenType != "oauth" {
-		return nil, 0, fmt.Errorf("kiro requires oauth token, got %s", tokenType)
+	if !isKiroDirectTokenType(tokenType) {
+		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
 	inputTokens := estimateKiroInputTokens(anthropicBody)
@@ -431,9 +457,9 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
-	if requestID := buildKiroRequestID(resp); requestID != "" {
-		wrappedHeaders.Set("x-request-id", requestID)
-	}
+	requestID := buildKiroClientRequestID(resp)
+	wrappedHeaders.Set("x-request-id", requestID)
+	wrappedHeaders.Set("request-id", requestID)
 
 	go func() {
 		defer releaseStreamCtx()
@@ -459,7 +485,12 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
 	var requestCtx kiropkg.KiroRequestContext
-	if err := s.checkAndWaitKiroCooldown(ctx, buildKiroAccountKey(account)); err != nil {
+	mode := kiroEndpointModeForRequest(account, parsed)
+	if mode == KiroEndpointModeKRS || mode == KiroEndpointModeAuto {
+		s.ensureKiroProfileArnForRequest(ctx, account, token, mode)
+	}
+	accountKey := buildKiroAccountKey(account)
+	if err := s.checkAndWaitKiroCooldown(ctx, accountKey); err != nil {
 		if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
 			return nil, requestCtx, failoverErr
 		}
@@ -468,15 +499,14 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	endpoints := buildKiroEndpoints(account)
+	endpoints := buildKiroEndpointsForMode(account, mode)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
-	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 	var lastKiro429 *UpstreamFailoverError
 
 	for idx, endpoint := range endpoints {
-		buildResult, err := s.buildKiroPayloadForAccountEndpoint(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
+		buildResult, err := s.buildKiroPayloadForParsedAccountEndpoint(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
 		if err != nil {
 			return nil, requestCtx, err
 		}
@@ -583,7 +613,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
-						buildResult, err = s.buildKiroPayloadForAccountEndpoint(ctx, account, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
+						buildResult, err = s.buildKiroPayloadForParsedAccountEndpoint(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
 						if err != nil {
 							return nil, requestCtx, err
 						}
@@ -637,6 +667,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 }
 
 func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
+	return buildKiroEndpointsForMode(account, KiroEndpointModeQ)
+}
+
+func buildKiroEndpointsForMode(account *Account, mode string) []kiroEndpointConfig {
 	if isKiroRuntimeEndpointMode(account) && strings.TrimSpace(account.GetCredential("profile_arn")) != "" {
 		region := kiroRuntimeAPIRegion(account)
 		return []kiroEndpointConfig{
@@ -647,6 +681,9 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 				Name:      "KiroRuntime",
 			},
 		}
+	}
+	if mode == KiroEndpointModeKRS {
+		return []kiroEndpointConfig{kiroKRSEndpointConfig()}
 	}
 	region := kiroAPIRegion(account)
 	endpoints := []kiroEndpointConfig{
@@ -669,7 +706,34 @@ func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 			Name:      "AmazonQ",
 		},
 	}
-	return sortKiroEndpointsByPreference(endpoints, account)
+	endpoints = sortKiroEndpointsByPreference(endpoints, account)
+	if mode == KiroEndpointModeAuto {
+		endpoints = append(endpoints, kiroKRSEndpointConfig())
+	}
+	return endpoints
+}
+
+func kiroKRSEndpointConfig() kiroEndpointConfig {
+	return kiroEndpointConfig{
+		URL:    kiroKRSEndpointURL,
+		Origin: "AI_EDITOR",
+		Name:   "KiroRuntime",
+	}
+}
+
+func kiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) string {
+	if account != nil {
+		if account.Type == AccountTypeAPIKey {
+			return KiroEndpointModeQ
+		}
+		if hasExplicitKiroEndpointPreference(account) {
+			return KiroEndpointModeQ
+		}
+	}
+	if parsed == nil || parsed.Group == nil {
+		return KiroEndpointModeQ
+	}
+	return parsed.Group.EffectiveKiroEndpointMode()
 }
 
 func sortKiroEndpointsByPreference(endpoints []kiroEndpointConfig, account *Account) []kiroEndpointConfig {
@@ -712,36 +776,165 @@ func (s *GatewayService) buildKiroPayloadForAccount(ctx context.Context, account
 }
 
 func (s *GatewayService) buildKiroPayloadForAccountEndpoint(ctx context.Context, account *Account, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, endpoint kiroEndpointConfig) (*kiropkg.KiroBuildResult, error) {
+	return s.buildKiroPayloadForParsedAccountEndpoint(ctx, account, nil, anthropicBody, modelID, token, requestModel, headers, endpoint)
+}
+
+func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, endpoint kiroEndpointConfig) (*kiropkg.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
-	profileArn := s.resolveKiroPayloadProfileArn(ctx, account, token)
+	var profileArn string
+	if endpoint.Name == "KiroRuntime" {
+		profileArn = s.resolveKiroPayloadProfileArn(ctx, account, token)
+		if profileArn == "" {
+			profileArn = kiroResolveProfileArnForKRS(account)
+		}
+	}
+	if isKiroCLIWireMode(account) && profileArn == "" {
+		profileArn = kiroResolveProfileArnForKRS(account)
+	}
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	if isKiroCLIWireMode(account) {
-		return kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
+		buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
 			Origin:                     "KIRO_CLI",
 			UseNativeEffort:            true,
 			AttachEnvState:             true,
 			InjectThinkingSystemPrompt: false,
 		})
+		if err != nil {
+			return nil, err
+		}
+		return applyStableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn, buildResult), nil
 	}
 	origin := strings.TrimSpace(endpoint.Origin)
 	if origin == "" {
 		origin = "AI_EDITOR"
 	}
-	return kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, origin, headers)
+	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, origin, headers)
+	if err != nil {
+		return nil, err
+	}
+	return applyStableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn, buildResult), nil
+}
+
+func applyStableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string, buildResult *kiropkg.KiroBuildResult) *kiropkg.KiroBuildResult {
+	if buildResult == nil {
+		return nil
+	}
+	if stableID := stableKiroConversationID(account, parsed, anthropicBody, modelID, profileArn); stableID != "" {
+		if next, err := sjson.SetBytes(buildResult.Payload, "conversationState.conversationId", stableID); err == nil {
+			buildResult.Payload = next
+		}
+	}
+	return buildResult
+}
+
+func stableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_KIRO_CONVERSATION_ID_MODE"))) {
+	case "random", "uuid", "off", "false", "0":
+		return ""
+	}
+	seed := stableKiroConversationSeed(account, parsed, anthropicBody, modelID, profileArn)
+	if seed == "" {
+		return ""
+	}
+	return generateSessionUUID(seed)
+}
+
+func stableKiroConversationSeed(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {
+	anchorType, anchor := stableKiroConversationAnchor(parsed, anthropicBody)
+	if anchor == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	_, _ = sb.WriteString("kiro-conversation-v1|")
+	if account != nil {
+		_, _ = sb.WriteString("account:")
+		_, _ = sb.WriteString(strconv.FormatInt(account.ID, 10))
+		_, _ = sb.WriteString("|credential:")
+		_, _ = sb.WriteString(kiroCacheCredentialIdentity(account))
+		_, _ = sb.WriteString("|")
+	}
+	if parsed != nil && parsed.SessionContext != nil {
+		_, _ = sb.WriteString("api_key:")
+		_, _ = sb.WriteString(strconv.FormatInt(parsed.SessionContext.APIKeyID, 10))
+		_, _ = sb.WriteString("|")
+	}
+	_, _ = sb.WriteString("model:")
+	_, _ = sb.WriteString(strings.TrimSpace(modelID))
+	_, _ = sb.WriteString("|profile:")
+	_, _ = sb.WriteString(strings.TrimSpace(profileArn))
+	_, _ = sb.WriteString("|anchor:")
+	_, _ = sb.WriteString(anchorType)
+	_, _ = sb.WriteString(":")
+	_, _ = sb.WriteString(anchor)
+	return sb.String()
+}
+
+func stableKiroConversationAnchor(parsed *ParsedRequest, anthropicBody []byte) (string, string) {
+	if parsed != nil {
+		if explicitID := strings.TrimSpace(parsed.ExplicitSessionID); explicitID != "" {
+			return "explicit", explicitID
+		}
+		if metadataUserID := strings.TrimSpace(parsed.MetadataUserID); metadataUserID != "" {
+			return "metadata", metadataUserID
+		}
+		if bodySessionID := strings.TrimSpace(parsed.BodySessionID); bodySessionID != "" {
+			return "body_session", bodySessionID
+		}
+		if systemText := extractTextFromSystemRaw(parsed.SystemRaw()); systemText != "" {
+			return "system", systemText
+		}
+	}
+	if len(anthropicBody) > 0 {
+		if systemText := extractTextFromSystemRaw([]byte(gjson.GetBytes(anthropicBody, "system").Raw)); systemText != "" {
+			return "system", systemText
+		}
+		if firstUserText := extractFirstUserText(anthropicBody); firstUserText != "" {
+			return "first_user", firstUserText
+		}
+	}
+	return "", ""
 }
 
 func logKiroStatelessReplay(account *Account, payload []byte) {
 	if account == nil {
 		return
 	}
+	conversationID := gjson.GetBytes(payload, "conversationState.conversationId").String()
+	systemPrompt := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
+	currentContent := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
 	logger.L().Info("kiro.stateless_replay",
 		zap.Int64("selected_account_id", account.ID),
 		zap.Bool("stateless_replay", true),
 		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
 		zap.Bool("has_agent_continuation_id", gjson.GetBytes(payload, "conversationState.agentContinuationId").Exists()),
+		zap.String("conversation_id_hash", hashKiroLogString(conversationID)),
+		zap.String("payload_hash_no_conversation_id", hashKiroPayloadWithoutConversationID(payload)),
+		zap.String("system_prompt_hash", hashKiroLogString(systemPrompt)),
+		zap.Int("system_prompt_len", len(systemPrompt)),
+		zap.String("current_content_hash", hashKiroLogString(currentContent)),
+		zap.Int("tool_count", len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array())),
 	)
+}
+
+func hashKiroPayloadWithoutConversationID(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	normalized := payload
+	if next, err := sjson.DeleteBytes(payload, "conversationState.conversationId"); err == nil {
+		normalized = next
+	}
+	return strconv.FormatUint(xxhash.Sum64(normalized), 36)
+}
+
+func hashKiroLogString(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strconv.FormatUint(xxhash.Sum64String(value), 36)
 }
 
 func prepareKiroPayloadBodyForRequestModel(anthropicBody []byte, requestModel string) []byte {
@@ -833,6 +1026,7 @@ func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheCreation5mTokens:    usage.CacheCreation5mInputTokens,
 		CacheCreation1hTokens:    usage.CacheCreation1hInputTokens,
+		KiroCredits:              usage.KiroCredits,
 	}
 }
 

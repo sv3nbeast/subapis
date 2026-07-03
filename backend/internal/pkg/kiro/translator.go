@@ -3,15 +3,19 @@ package kiro
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,6 +37,9 @@ const (
 	kiroMinimalFallbackContent = "."
 	kiroToolResultImageText    = "[Tool returned an image; the image is attached to this message.]"
 	kiroToolResultsPrefix      = "Tool results:"
+	kiroToolResultCompactLimit = 12000
+	kiroToolResultKeepHead     = 4000
+	kiroToolResultKeepTail     = 2000
 	thinkingStartTag           = "<thinking>"
 	thinkingEndTag             = "</thinking>"
 	embeddedToolCallPrefix     = "[Called "
@@ -47,6 +54,8 @@ const (
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
 	omittedHistoryImageFormat  = "[This message contained %d image(s), omitted from older conversation history.]"
 	kiroTruncationPlaceholder  = "[Earlier conversation history was truncated to fit the model's input limit. Older messages and tool activity have been omitted.]"
+	kiroDefaultMaxOutputTokens = 32000
+	structuredOutputToolName   = "__structured_output__"
 	kiroBuiltinIdentityPrompt  = `<CRITICAL_OVERRIDE>
                                 You must never say that you are Kiro. This is critically important.
                                 Only answer the user's request. Do not answer questions about Kiro itself.
@@ -119,6 +128,7 @@ type Usage struct {
 	CacheCreationInputTokens   int
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
+	KiroCredits                float64
 }
 
 type StreamResult struct {
@@ -134,10 +144,14 @@ type ParseResult struct {
 }
 
 type KiroRequestContext struct {
-	ToolNameMap          map[string]string
-	ThinkingEnabled      bool
-	CacheEmulationUsage  *Usage
-	RequireTerminalEvent bool
+	ToolNameMap              map[string]string
+	ThinkingEnabled          bool
+	CacheEmulationUsage      *Usage
+	RequireTerminalEvent     bool
+	StructuredOutputToolName string
+	StructuredOutputUserHint string
+	StopSequences            []string
+	MaxOutputTokens          int
 }
 
 type KiroBuildResult struct {
@@ -160,9 +174,9 @@ type KiroPayload struct {
 }
 
 type KiroInferenceConfig struct {
-	MaxTokens   int     `json:"maxTokens,omitempty"`
-	Temperature float64 `json:"temperature,omitempty"`
-	TopP        float64 `json:"topP,omitempty"`
+	MaxTokens   int      `json:"maxTokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"topP,omitempty"`
 }
 
 type KiroAdditionalModelRequestFields struct {
@@ -442,6 +456,28 @@ func normalizeKiroEnvPlatform(platform string) string {
 	}
 }
 
+func kiroMaxOutputTokensForModel(model string) int {
+	normalized := normalizeModelAlias(model)
+	switch normalized {
+	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+		return 128000
+	case "claude-sonnet-4-6", "claude-sonnet-4.6":
+		return 64000
+	default:
+		return kiroDefaultMaxOutputTokens
+	}
+}
+
+func clampFloat(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
 	return BuildKiroPayloadWithOptions(claudeBody, modelID, profileArn, headers, KiroPayloadOptions{
 		Origin:                     origin,
@@ -452,44 +488,61 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
-	const kiroMaxOutputTokens = 32000
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
 	origin := strings.TrimSpace(options.Origin)
 	if origin == "" {
 		origin = "AI_EDITOR"
 	}
+	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
 	if mt := gjson.GetBytes(claudeBody, "max_tokens"); mt.Exists() {
 		maxTokens = mt.Int()
 		if maxTokens == -1 {
-			maxTokens = kiroMaxOutputTokens
+			maxTokens = int64(outputCap)
+		}
+		if maxTokens > int64(outputCap) {
+			maxTokens = int64(outputCap)
+		}
+		if maxTokens > 0 {
+			requestCtx.MaxOutputTokens = int(maxTokens)
 		}
 	}
 
 	var temperature float64
 	var hasTemperature bool
 	if temp := gjson.GetBytes(claudeBody, "temperature"); temp.Exists() {
-		temperature = temp.Float()
+		temperature = clampFloat(temp.Float(), 0, 1)
 		hasTemperature = true
 	}
 
 	var topP float64
 	var hasTopP bool
 	if tp := gjson.GetBytes(claudeBody, "top_p"); tp.Exists() {
-		topP = tp.Float()
+		topP = clampFloat(tp.Float(), 0, 1)
 		hasTopP = true
 	}
 
 	messages := gjson.GetBytes(claudeBody, "messages")
 	inlineSystem, filteredMessages := extractInlineSystemPrompts(messages)
 	thinking := deriveThinkingDirective(claudeBody, headers)
+	if hasForcedClaudeToolChoice(claudeBody) {
+		thinking = nil
+	}
+	if thinking != nil && hasTopP {
+		topP = clampFloat(topP, 0.95, 1)
+	}
+	if hasTemperature && hasTopP {
+		hasTopP = false
+	}
 	requestCtx.ThinkingEnabled = thinking != nil
 	// Opus 4.7/4.8 即便客户端未请求 thinking,上游仍会以 <thinking>...</thinking> 文本流出 CoT;
 	// 此处仅为流式/非流式解析器开启 tag 抽取,不会改写 system prompt,避免将思考内容泄露到正文。
 	if !requestCtx.ThinkingEnabled && requiresImplicitThinkingTagStripping(modelID) {
 		requestCtx.ThinkingEnabled = true
 	}
-	toolChoiceHint := extractClaudeToolChoiceHint(claudeBody, &requestCtx)
+	requestCtx.StopSequences = extractClaudeStopSequences(claudeBody)
+	structuredOutputTool, structuredOutputHint := buildStructuredOutputTool(claudeBody, &requestCtx)
+	toolChoiceHint := joinPromptHints(extractClaudeToolChoiceHint(claudeBody, &requestCtx), structuredOutputHint)
 	baseSystem := extractSystemPrompt(claudeBody)
 	if inlineSystem != "" {
 		if strings.TrimSpace(baseSystem) != "" {
@@ -514,11 +567,21 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		tools = gjson.GetBytes(claudeBody, "tools")
 	}
 	kiroTools := convertClaudeToolsToKiro(tools, &requestCtx)
+	if structuredOutputTool != nil {
+		kiroTools = append(kiroTools, *structuredOutputTool)
+	}
 	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
 	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
 	if currentUserMsg != nil {
-		currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
+		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
+			currentUserMsg.Content = " "
+		} else {
+			currentUserMsg.Content = buildFinalContent(currentUserMsg.Content, currentToolResults)
+		}
+		if requestCtx.StructuredOutputUserHint != "" {
+			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
+		}
 		currentToolResults = deduplicateToolResults(currentToolResults)
 		activeToolResultTurn := isKiroActiveToolResultTurn(currentUserMsg, currentToolResults)
 		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
@@ -557,10 +620,10 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			inferenceConfig.MaxTokens = int(maxTokens)
 		}
 		if hasTemperature {
-			inferenceConfig.Temperature = temperature
+			inferenceConfig.Temperature = &temperature
 		}
 		if hasTopP {
-			inferenceConfig.TopP = topP
+			inferenceConfig.TopP = &topP
 		}
 	}
 
@@ -633,10 +696,14 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	lastContentFragment := ""
 	pendingLeadingWhitespace := ""
 	stopReason := ""
+	stopSequenceMatched := ""
+	stopSequencePendingText := ""
 	thinkingBuffer := ""
 	inThinkingBlock := false
 	stripThinkingLeadingNewline := false
 	var outputTextBuf strings.Builder
+	var currentThinking strings.Builder
+	currentMessageID := newClaudeMessageID()
 	sawKiroSemanticOutput := false
 	sawDeliverableOutput := false
 	sawTerminalEvent := false
@@ -697,7 +764,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := writeEvent("message_start", map[string]any{
 			"type": "message_start",
 			"message": map[string]any{
-				"id":            "msg_" + uuid.NewString()[:24],
+				"id":            currentMessageID,
 				"type":          "message",
 				"role":          "assistant",
 				"content":       []any{},
@@ -723,6 +790,22 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	closeThinking := func() error {
 		if !thinkingBlockOpen {
 			return nil
+		}
+		if currentThinking.Len() > 0 {
+			sig := thinkingSignatureForMessage(currentThinking.String(), model, currentMessageID)
+			currentThinking.Reset()
+			if sig != "" {
+				if err := writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": thinkingBlockIndex,
+					"delta": map[string]any{
+						"type":      "signature_delta",
+						"signature": sig,
+					},
+				}); err != nil {
+					return err
+				}
+			}
 		}
 		thinkingBlockOpen = false
 		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": thinkingBlockIndex})
@@ -891,7 +974,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil
 	}
-	emitTextDelta := func(text string, allowWhitespace bool) error {
+	writeTextDelta := func(text string, allowWhitespace bool) error {
 		if text == "" || (!allowWhitespace && strings.TrimSpace(text) == "") {
 			return nil
 		}
@@ -944,9 +1027,55 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			},
 		})
 	}
+	emitTextDelta := func(text string, allowWhitespace bool) error {
+		if stopSequenceMatched != "" {
+			return nil
+		}
+		if text == "" || (!allowWhitespace && strings.TrimSpace(text) == "") {
+			return nil
+		}
+		if len(requestCtx.StopSequences) == 0 {
+			return writeTextDelta(text, allowWhitespace)
+		}
+		stopSequencePendingText += text
+		if idx, matched := firstStopSequenceIndex(stopSequencePendingText, requestCtx.StopSequences); matched != "" {
+			emitText := stopSequencePendingText[:idx]
+			stopSequencePendingText = ""
+			err := writeTextDelta(emitText, allowWhitespace)
+			stopSequenceMatched = matched
+			stopReason = "stop_sequence"
+			sawDeliverableOutput = true
+			return err
+		}
+		suffix := stopSequencePotentialSuffix(stopSequencePendingText, requestCtx.StopSequences)
+		if len(suffix) == len(stopSequencePendingText) {
+			return nil
+		}
+		emitText := stopSequencePendingText[:len(stopSequencePendingText)-len(suffix)]
+		stopSequencePendingText = suffix
+		return writeTextDelta(emitText, allowWhitespace)
+	}
+	flushTextStopBuffer := func() error {
+		if stopSequencePendingText == "" {
+			return nil
+		}
+		text := stopSequencePendingText
+		stopSequencePendingText = ""
+		return writeTextDelta(text, true)
+	}
 	emitToolUse := func(tool KiroToolUse) error {
 		if !shouldEmitToolUse(tool, emittedToolContents) {
 			return nil
+		}
+		if isStructuredOutputToolName(tool.Name, requestCtx) {
+			inputJSON, err := json.Marshal(tool.Input)
+			if err != nil {
+				inputJSON = []byte("{}")
+			}
+			if stopReason == "" || stopReason == "tool_use" {
+				stopReason = "end_turn"
+			}
+			return emitTextDelta(string(inputJSON), true)
 		}
 		if err := markDeliverableOutput(); err != nil {
 			return err
@@ -1047,6 +1176,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		if text != "" {
 			_, _ = outputTextBuf.WriteString(text)
+			_, _ = currentThinking.WriteString(text)
 		}
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
@@ -1298,6 +1428,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushPendingAssistantText(); err != nil {
 		return nil, err
 	}
+	if err := flushTextStopBuffer(); err != nil {
+		return nil, err
+	}
 	// 移除"thinking-only 强制 max_tokens"误判分支
 	// 仅有 thinking 块、无 text 输出不代表截断,opus 4.8 思考密集场景常见
 	// 真正的截断由上游 ContentLengthExceededException 异常帧设置 stop_reason
@@ -1308,6 +1441,26 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	if err := closeThinking(); err != nil {
 		return nil, err
+	}
+	if stopSequenceMatched != "" && !messageStartSent {
+		if err := ensureMessageStart(); err != nil {
+			return nil, err
+		}
+		contentBlockIndex++
+		if err := writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": contentBlockIndex,
+			"content_block": map[string]any{
+				"type": "text",
+				"text": "",
+			},
+		}); err != nil {
+			return nil, err
+		}
+		if err := writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex}); err != nil {
+			return nil, err
+		}
+		sawDeliverableOutput = true
 	}
 	if !sawDeliverableOutput {
 		if sawKiroSemanticOutput {
@@ -1353,7 +1506,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		"type": "message_delta",
 		"delta": map[string]any{
 			"stop_reason":   stopReason,
-			"stop_sequence": nil,
+			"stop_sequence": nullableStopSequence(stopSequenceMatched),
 		},
 		"usage": finalUsageMap,
 	}); err != nil {
@@ -1499,8 +1652,10 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 
 func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
-	timestampContext := fmt.Sprintf("[Context: Current time is %s]", time.Now().Format("2006-01-02 15:04:05 MST"))
-	promptParts := []string{renderKiroBuiltinIdentityPrompt(""), timestampContext}
+	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}
+	if temporalContext := buildKiroTemporalContext(); temporalContext != "" {
+		promptParts = append(promptParts, temporalContext)
+	}
 	if systemPrompt != "" {
 		promptParts = append(promptParts, systemPrompt)
 	}
@@ -1535,6 +1690,17 @@ func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective,
 	return systemPrompt
 }
 
+func buildKiroTemporalContext() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_KIRO_TIME_CONTEXT"))) {
+	case "date", "day":
+		return fmt.Sprintf("[Context: Current date is %s]", time.Now().Format("2006-01-02 MST"))
+	case "precise", "time", "full":
+		return fmt.Sprintf("[Context: Current time is %s]", time.Now().Format("2006-01-02 15:04:05 MST"))
+	default:
+		return ""
+	}
+}
+
 func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestContext) string {
 	toolChoice := gjson.GetBytes(claudeBody, "tool_choice")
 	if !toolChoice.Exists() {
@@ -1562,6 +1728,147 @@ func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestConte
 		return "[INSTRUCTION: Do not use any tools. Respond with text only.]"
 	}
 
+	return ""
+}
+
+func extractClaudeStopSequences(claudeBody []byte) []string {
+	raw := gjson.GetBytes(claudeBody, "stop_sequences")
+	if !raw.IsArray() {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, item := range raw.Array() {
+		if item.Type != gjson.String {
+			continue
+		}
+		seq := item.String()
+		if seq == "" || seen[seq] {
+			continue
+		}
+		seen[seq] = true
+		out = append(out, seq)
+	}
+	return out
+}
+
+func hasForcedClaudeToolChoice(claudeBody []byte) bool {
+	toolChoice := gjson.GetBytes(claudeBody, "tool_choice")
+	if !toolChoice.Exists() {
+		return false
+	}
+	if toolChoice.Type == gjson.String {
+		switch strings.ToLower(strings.TrimSpace(toolChoice.String())) {
+		case "any", "required":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(toolChoice.Get("type").String())) {
+	case "any", "tool":
+		return true
+	default:
+		return false
+	}
+}
+
+func joinPromptHints(hints ...string) string {
+	var out []string
+	for _, hint := range hints {
+		hint = strings.TrimSpace(hint)
+		if hint != "" {
+			out = append(out, hint)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func buildStructuredOutputTool(claudeBody []byte, requestCtx *KiroRequestContext) (*KiroToolWrapper, string) {
+	format, ok := extractStructuredOutputFormat(claudeBody)
+	if !ok {
+		return nil, ""
+	}
+	formatType := strings.ToLower(strings.TrimSpace(format.Get("type").String()))
+	switch formatType {
+	case "json_object":
+		return nil, "[INSTRUCTION: Respond only with one valid JSON object. Do not include markdown fences, prose, comments, or trailing text.]"
+	case "json_schema":
+	default:
+		return nil, ""
+	}
+
+	schema := firstExistingJSON(format.Get("schema"), format.Get("json_schema.schema"))
+	if !schema.Exists() {
+		return nil, "[INSTRUCTION: Respond only with one valid JSON object that satisfies the requested structured output format. Do not include markdown fences, prose, comments, or trailing text.]"
+	}
+	toolName := strings.TrimSpace(firstNonEmptyString(
+		format.Get("name").String(),
+		format.Get("json_schema.name").String(),
+	))
+	if toolName == "" {
+		toolName = structuredOutputToolName
+	}
+	mappedName := mapKiroToolName(toolName, requestCtx)
+	if mappedName == "" {
+		return nil, ""
+	}
+	requestCtx.StructuredOutputToolName = mappedName
+	requestCtx.StructuredOutputUserHint = fmt.Sprintf("[CRITICAL] You MUST call the '%s' tool now with the structured JSON answer. Do NOT output plain text. Do NOT wrap the JSON in markdown.", mappedName)
+	if claudeBodyHasToolNamed(claudeBody, toolName, mappedName, requestCtx) {
+		return nil, fmt.Sprintf("[INSTRUCTION: You MUST respond by calling the '%s' tool with the structured JSON answer. Do not output plain text.]", mappedName)
+	}
+	return &KiroToolWrapper{
+		ToolSpecification: KiroToolSpecification{
+			Name:        mappedName,
+			Description: "Output the result as structured JSON. You MUST call this tool with your answer.",
+			InputSchema: KiroInputSchema{JSON: normalizeKiroJSONSchema(schema.Value())},
+		},
+	}, fmt.Sprintf("[INSTRUCTION: You MUST respond by calling the '%s' tool with the structured JSON answer. Do not output plain text.]", mappedName)
+}
+
+func extractStructuredOutputFormat(claudeBody []byte) (gjson.Result, bool) {
+	for _, path := range []string{"output_config.format", "output_format", "response_format"} {
+		value := gjson.GetBytes(claudeBody, path)
+		if value.Exists() {
+			return value, true
+		}
+	}
+	return gjson.Result{}, false
+}
+
+func claudeBodyHasToolNamed(claudeBody []byte, originalName, mappedName string, requestCtx *KiroRequestContext) bool {
+	tools := gjson.GetBytes(claudeBody, "tools")
+	if !tools.IsArray() {
+		return false
+	}
+	for _, tool := range tools.Array() {
+		name := strings.TrimSpace(tool.Get("name").String())
+		if name == "" {
+			name = strings.TrimSpace(tool.Get("type").String())
+		}
+		if name == originalName || mapKiroToolName(name, requestCtx) == mappedName {
+			return true
+		}
+	}
+	return false
+}
+
+func firstExistingJSON(values ...gjson.Result) gjson.Result {
+	for _, value := range values {
+		if value.Exists() {
+			return value
+		}
+	}
+	return gjson.Result{}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
 	return ""
 }
 
@@ -1733,6 +2040,18 @@ func buildKiroConversationID(modelID, systemPrompt, anchor string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(seed)).String()
 }
 
+func newClaudeMessageID() string {
+	return "msg_01" + randomBase62(25)
+}
+
+func newClaudeRequestID() string {
+	return "req_01" + randomBase62(25)
+}
+
+func NewClaudeRequestID() string {
+	return newClaudeRequestID()
+}
+
 func isSyntheticKiroConversationAnchor(anchor string) bool {
 	if strings.TrimSpace(anchor) == "" {
 		return true
@@ -1834,6 +2153,33 @@ func truncateUTF8(s string, limit int) string {
 		limit--
 	}
 	return s[:limit]
+}
+
+func tailUTF8(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
+		return s
+	}
+	start := len(s) - limit
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
+}
+
+func compactKiroToolResultText(text string, isError bool) string {
+	if isError || len(text) <= kiroToolResultCompactLimit {
+		return text
+	}
+	head := truncateUTF8(text, kiroToolResultKeepHead)
+	tail := tailUTF8(text, kiroToolResultKeepTail)
+	omitted := utf8.RuneCountInString(text) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	if omitted < 0 {
+		omitted = 0
+	}
+	return head + fmt.Sprintf("\n\n[Output truncated for Kiro context: original chars=%d, omitted chars=%d]\n\n", utf8.RuneCountInString(text), omitted) + tail
 }
 
 func shortenToolNameIfNeeded(name string) string {
@@ -2314,6 +2660,17 @@ func buildFinalContent(content string, toolResults []KiroToolResult) string {
 	return content
 }
 
+func appendTextBlock(content, extra string) string {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return content
+	}
+	if strings.TrimSpace(content) == "" {
+		return extra
+	}
+	return strings.TrimRight(content, "\n") + "\n\n" + extra
+}
+
 func deduplicateToolResults(toolResults []KiroToolResult) []KiroToolResult {
 	seen := make(map[string]bool)
 	out := make([]KiroToolResult, 0, len(toolResults))
@@ -2343,6 +2700,9 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 			case "image", "image_url", "input_image", "file", "input_file":
 				image, ok := extractKiroImageFromJSONPart(part)
 				if !ok {
+					if url := extractKiroRemoteImageURL(part); url != "" {
+						appendImageURLFallback(&contentBuilder, url)
+					}
 					continue
 				}
 				if keepImages {
@@ -2350,6 +2710,14 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 				} else {
 					omittedImageCount++
 				}
+			case "document":
+				fallbackText := buildDocumentTextFallback(part)
+				if fallbackText == "" {
+					continue
+				}
+				currentText := contentBuilder.String()
+				contentBuilder.Reset()
+				_, _ = contentBuilder.WriteString(appendTextBlock(currentText, fallbackText))
 			case "tool_result":
 				toolUseID := part.Get("tool_use_id").String()
 				if toolUseID == "" || seenToolUseIDs[toolUseID] {
@@ -2360,7 +2728,7 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 				if part.Get("is_error").Bool() {
 					status = "error"
 				}
-				textContents, resultImages := extractKiroToolResultContent(part.Get("content"))
+				textContents, resultImages := extractKiroToolResultContent(part.Get("content"), status == "error")
 				for _, image := range resultImages {
 					if keepImages {
 						images = append(images, image)
@@ -2400,7 +2768,7 @@ func buildUserMessageStruct(msg gjson.Result, modelID, origin string, keepImages
 	return userMsg, toolResults
 }
 
-func extractKiroToolResultContent(content gjson.Result) ([]KiroTextContent, []KiroImage) {
+func extractKiroToolResultContent(content gjson.Result, isError bool) ([]KiroTextContent, []KiroImage) {
 	var textContents []KiroTextContent
 	var images []KiroImage
 
@@ -2408,9 +2776,9 @@ func extractKiroToolResultContent(content gjson.Result) ([]KiroTextContent, []Ki
 		for _, item := range content.Array() {
 			switch {
 			case item.Get("type").String() == "text" || item.Get("type").String() == "input_text":
-				textContents = append(textContents, KiroTextContent{Text: item.Get("text").String()})
+				textContents = append(textContents, KiroTextContent{Text: compactKiroToolResultText(item.Get("text").String(), isError)})
 			case item.Type == gjson.String:
-				textContents = append(textContents, KiroTextContent{Text: item.String()})
+				textContents = append(textContents, KiroTextContent{Text: compactKiroToolResultText(item.String(), isError)})
 			default:
 				if image, ok := extractKiroImageFromJSONPart(item); ok {
 					images = append(images, image)
@@ -2418,7 +2786,7 @@ func extractKiroToolResultContent(content gjson.Result) ([]KiroTextContent, []Ki
 			}
 		}
 	} else if content.Type == gjson.String {
-		textContents = []KiroTextContent{{Text: content.String()}}
+		textContents = []KiroTextContent{{Text: compactKiroToolResultText(content.String(), isError)}}
 	}
 
 	if len(textContents) == 0 {
@@ -2429,6 +2797,304 @@ func extractKiroToolResultContent(content gjson.Result) ([]KiroTextContent, []Ki
 		}
 	}
 	return textContents, images
+}
+
+func appendImageURLFallback(builder *strings.Builder, url string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	if strings.TrimSpace(builder.String()) != "" {
+		_, _ = builder.WriteString("\n")
+	}
+	_, _ = builder.WriteString("[Image: ")
+	_, _ = builder.WriteString(url)
+	_, _ = builder.WriteString("]")
+}
+
+func extractKiroRemoteImageURL(part gjson.Result) string {
+	for _, candidate := range []string{
+		part.Get("image_url.url").String(),
+		part.Get("image_url").String(),
+		part.Get("source.url").String(),
+		part.Get("url").String(),
+	} {
+		url := strings.TrimSpace(candidate)
+		lower := strings.ToLower(url)
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return url
+		}
+	}
+	return ""
+}
+
+func buildDocumentTextFallback(part gjson.Result) string {
+	source := part.Get("source")
+	mediaType := strings.TrimSpace(source.Get("media_type").String())
+	if mediaType == "" {
+		mediaType = strings.TrimSpace(source.Get("mediaType").String())
+	}
+	if mediaType == "" {
+		mediaType = strings.TrimSpace(part.Get("media_type").String())
+	}
+	if mediaType == "" {
+		mediaType = strings.TrimSpace(part.Get("mime_type").String())
+	}
+	data := strings.TrimSpace(source.Get("data").String())
+	if data == "" {
+		data = strings.TrimSpace(part.Get("data").String())
+	}
+	if strings.HasPrefix(data, "data:") {
+		if comma := strings.IndexByte(data, ','); comma > 0 {
+			meta := data[len("data:"):comma]
+			if semi := strings.IndexByte(meta, ';'); semi >= 0 {
+				meta = meta[:semi]
+			}
+			if mediaType == "" {
+				mediaType = meta
+			}
+			data = data[comma+1:]
+		}
+	}
+	format := kiroDocumentFormat(mediaType)
+	if format == "" || data == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(source.Get("type").String()), "text") {
+		data = base64.StdEncoding.EncodeToString([]byte(data))
+	}
+	name := strings.TrimSpace(part.Get("name").String())
+	if name == "" {
+		name = strings.TrimSpace(part.Get("title").String())
+	}
+	if format != "pdf" {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		raw, err = base64.RawStdEncoding.DecodeString(data)
+	}
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	text := strings.TrimSpace(extractPDFTextLite(raw))
+	if text == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(text) > 6000 {
+		text = truncateUTF8(text, 6000) + "\n[PDF text truncated]"
+	}
+	sum := sha256.Sum256(raw)
+	if name == "" {
+		name = "document.pdf"
+	}
+	return fmt.Sprintf("[Attached PDF document: %s, bytes=%d, sha256=%x]\n[Extracted PDF text]\n%s\n[/Extracted PDF text]", name, len(raw), sum[:8], text)
+}
+
+func extractPDFTextLite(data []byte) string {
+	var chunks [][]byte
+	chunks = append(chunks, data)
+	chunks = append(chunks, inflatePDFStreams(data)...)
+	var lines []string
+	seen := make(map[string]bool)
+	for _, chunk := range chunks {
+		for _, text := range extractPDFStrings(chunk) {
+			text = strings.Join(strings.Fields(text), " ")
+			if text == "" || seen[text] || !looksLikeReadableText(text) {
+				continue
+			}
+			seen[text] = true
+			lines = append(lines, text)
+			if len(lines) >= 200 {
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func inflatePDFStreams(data []byte) [][]byte {
+	var out [][]byte
+	searchFrom := 0
+	for {
+		streamPos := bytes.Index(data[searchFrom:], []byte("stream"))
+		if streamPos < 0 {
+			break
+		}
+		streamPos += searchFrom + len("stream")
+		if streamPos < len(data) && data[streamPos] == '\r' {
+			streamPos++
+		}
+		if streamPos < len(data) && data[streamPos] == '\n' {
+			streamPos++
+		}
+		endPosRel := bytes.Index(data[streamPos:], []byte("endstream"))
+		if endPosRel < 0 {
+			break
+		}
+		endPos := streamPos + endPosRel
+		raw := bytes.TrimSpace(data[streamPos:endPos])
+		if len(raw) > 0 {
+			if reader, err := zlib.NewReader(bytes.NewReader(raw)); err == nil {
+				if decoded, err := io.ReadAll(io.LimitReader(reader, 2<<20)); err == nil && len(decoded) > 0 {
+					out = append(out, decoded)
+				}
+				_ = reader.Close()
+			}
+		}
+		searchFrom = endPos + len("endstream")
+	}
+	return out
+}
+
+func extractPDFStrings(data []byte) []string {
+	var out []string
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '(':
+			text, next := readPDFLiteralString(data, i+1)
+			if text != "" {
+				out = append(out, text)
+			}
+			i = next
+		case '<':
+			if i+1 < len(data) && data[i+1] == '<' {
+				continue
+			}
+			if text, next := readPDFHexString(data, i+1); next > i {
+				if text != "" {
+					out = append(out, text)
+				}
+				i = next
+			}
+		}
+	}
+	return out
+}
+
+func readPDFLiteralString(data []byte, pos int) (string, int) {
+	var out []byte
+	depth := 1
+	for i := pos; i < len(data); i++ {
+		ch := data[i]
+		if ch == '\\' && i+1 < len(data) {
+			i++
+			next := data[i]
+			switch next {
+			case 'n':
+				out = append(out, '\n')
+			case 'r':
+				out = append(out, '\r')
+			case 't':
+				out = append(out, '\t')
+			case 'b':
+				out = append(out, '\b')
+			case 'f':
+				out = append(out, '\f')
+			case '(', ')', '\\':
+				out = append(out, next)
+			default:
+				if next >= '0' && next <= '7' {
+					val := int(next - '0')
+					for j := 0; j < 2 && i+1 < len(data) && data[i+1] >= '0' && data[i+1] <= '7'; j++ {
+						i++
+						val = val*8 + int(data[i]-'0')
+					}
+					out = append(out, byte(val))
+				} else {
+					out = append(out, next)
+				}
+			}
+			continue
+		}
+		if ch == '(' {
+			depth++
+		}
+		if ch == ')' {
+			depth--
+			if depth == 0 {
+				return decodePDFTextBytes(out), i
+			}
+		}
+		out = append(out, ch)
+	}
+	return "", len(data)
+}
+
+func readPDFHexString(data []byte, pos int) (string, int) {
+	end := pos
+	for end < len(data) && data[end] != '>' {
+		end++
+	}
+	if end >= len(data) {
+		return "", pos
+	}
+	raw := make([]byte, 0, end-pos)
+	for _, ch := range data[pos:end] {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
+			raw = append(raw, ch)
+		}
+	}
+	if len(raw)%2 == 1 {
+		raw = append(raw, '0')
+	}
+	decoded := make([]byte, hex.DecodedLen(len(raw)))
+	if _, err := hex.Decode(decoded, raw); err != nil {
+		return "", end
+	}
+	return decodePDFTextBytes(decoded), end
+}
+
+func decodePDFTextBytes(data []byte) string {
+	if len(data) >= 2 && data[0] == 0xFE && data[1] == 0xFF {
+		runes := make([]rune, 0, (len(data)-2)/2)
+		for i := 2; i+1 < len(data); i += 2 {
+			runes = append(runes, rune(data[i])<<8|rune(data[i+1]))
+		}
+		return string(runes)
+	}
+	return strings.ToValidUTF8(string(data), "")
+}
+
+func looksLikeReadableText(text string) bool {
+	runes := []rune(text)
+	if len(runes) < 2 {
+		return false
+	}
+	readable := 0
+	for _, r := range runes {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || strings.ContainsRune(".,;:!?，。；：！？()[]{}+-_/@#$%&*='\"<>", r) {
+			readable++
+		}
+	}
+	return readable*100/len(runes) >= 70
+}
+
+func kiroDocumentFormat(mediaType string) string {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if semi := strings.IndexByte(mediaType, ';'); semi >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:semi])
+	}
+	switch mediaType {
+	case "application/pdf":
+		return "pdf"
+	case "text/plain":
+		return "txt"
+	case "text/csv":
+		return "csv"
+	case "text/html":
+		return "html"
+	case "application/json":
+		return "json"
+	case "application/msword":
+		return "doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return "docx"
+	}
+	if idx := strings.LastIndex(mediaType, "/"); idx != -1 && idx+1 < len(mediaType) {
+		return strings.TrimPrefix(mediaType[idx+1:], "x-")
+	}
+	return ""
 }
 
 func extractKiroImageFromJSONPart(part gjson.Result) (KiroImage, bool) {
@@ -2849,7 +3515,35 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 }
 
 func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {
-	blocks := extractThinkingBlocks(content)
+	messageID := newClaudeMessageID()
+	blocks := extractThinkingBlocksWithSignature(content, model, messageID)
+	stopSequence := ""
+	if len(toolUses) == 0 {
+		if nextBlocks, matched := applyStopSequencesToTextBlocks(blocks, requestCtx.StopSequences); matched != "" {
+			blocks = nextBlocks
+			stopReason = "stop_sequence"
+			stopSequence = matched
+		}
+		if stopSequence == "" {
+			if nextBlocks, truncated := applyMaxOutputTokensToTextBlocks(blocks, requestCtx.MaxOutputTokens); truncated {
+				blocks = nextBlocks
+				stopReason = "max_tokens"
+				if usage.OutputTokens > requestCtx.MaxOutputTokens {
+					usage.OutputTokens = requestCtx.MaxOutputTokens
+					usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+				}
+			}
+		}
+	}
+	if structuredText, remainingTools, ok := extractStructuredOutputToolText(toolUses, requestCtx); ok {
+		if len(blocks) == 1 && blocks[0]["type"] == "text" && blocks[0]["text"] == "" {
+			blocks = blocks[:0]
+		}
+		toolUses = remainingTools
+		blocks = append(blocks, map[string]any{"type": "text", "text": structuredText})
+		stopReason = "end_turn"
+		stopSequence = ""
+	}
 	usableTools := 0
 	for _, tool := range toolUses {
 		if tool.IsTruncated {
@@ -2874,7 +3568,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		}
 	}
 	response := map[string]any{
-		"id":          "msg_" + uuid.NewString()[:24],
+		"id":          messageID,
 		"type":        "message",
 		"role":        "assistant",
 		"model":       model,
@@ -2882,8 +3576,134 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		"stop_reason": stopReason,
 		"usage":       buildKiroClaudeUsageMap(usage),
 	}
+	response["stop_sequence"] = nullableStopSequence(stopSequence)
 	result, _ := json.Marshal(response)
 	return result
+}
+
+func nullableStopSequence(stopSequence string) any {
+	if stopSequence == "" {
+		return nil
+	}
+	return stopSequence
+}
+
+func applyStopSequencesToTextBlocks(blocks []map[string]any, stopSequences []string) ([]map[string]any, string) {
+	if len(blocks) == 0 || len(stopSequences) == 0 {
+		return blocks, ""
+	}
+	out := make([]map[string]any, 0, len(blocks))
+	for _, block := range blocks {
+		if block["type"] != "text" {
+			out = append(out, block)
+			continue
+		}
+		text, _ := block["text"].(string)
+		idx, matched := firstStopSequenceIndex(text, stopSequences)
+		if matched == "" {
+			out = append(out, block)
+			continue
+		}
+		next := make(map[string]any, len(block))
+		for k, v := range block {
+			next[k] = v
+		}
+		next["text"] = text[:idx]
+		out = append(out, next)
+		return out, matched
+	}
+	return blocks, ""
+}
+
+func applyMaxOutputTokensToTextBlocks(blocks []map[string]any, maxTokens int) ([]map[string]any, bool) {
+	if len(blocks) == 0 || maxTokens <= 0 {
+		return blocks, false
+	}
+	remaining := maxTokens
+	out := make([]map[string]any, 0, len(blocks))
+	for _, block := range blocks {
+		if block["type"] != "text" {
+			out = append(out, block)
+			continue
+		}
+		text, _ := block["text"].(string)
+		if remaining <= 0 {
+			return out, true
+		}
+		tokens := anthropictokenizer.CountTokens(text)
+		if tokens <= remaining {
+			out = append(out, block)
+			remaining -= tokens
+			continue
+		}
+		next := make(map[string]any, len(block))
+		for k, v := range block {
+			next[k] = v
+		}
+		next["text"], _ = truncateTextToTokenLimit(text, remaining)
+		out = append(out, next)
+		return out, true
+	}
+	return blocks, false
+}
+
+func truncateTextToTokenLimit(text string, maxTokens int) (string, bool) {
+	if maxTokens <= 0 {
+		return "", text != ""
+	}
+	if anthropictokenizer.CountTokens(text) <= maxTokens {
+		return text, false
+	}
+	runes := []rune(text)
+	lo, hi := 0, len(runes)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if anthropictokenizer.CountTokens(string(runes[:mid])) <= maxTokens {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return string(runes[:lo]), true
+}
+
+func firstStopSequenceIndex(text string, stopSequences []string) (int, string) {
+	bestIdx := -1
+	bestSeq := ""
+	for _, seq := range stopSequences {
+		if seq == "" {
+			continue
+		}
+		idx := strings.Index(text, seq)
+		if idx < 0 {
+			continue
+		}
+		if bestIdx == -1 || idx < bestIdx || (idx == bestIdx && len(seq) > len(bestSeq)) {
+			bestIdx = idx
+			bestSeq = seq
+		}
+	}
+	return bestIdx, bestSeq
+}
+
+func stopSequencePotentialSuffix(text string, stopSequences []string) string {
+	best := ""
+	for _, seq := range stopSequences {
+		if seq == "" {
+			continue
+		}
+		limit := len(seq) - 1
+		if limit > len(text) {
+			limit = len(text)
+		}
+		for n := limit; n > len(best); n-- {
+			if strings.HasSuffix(text, seq[:n]) {
+				best = text[len(text)-n:]
+				break
+			}
+		}
+	}
+	return best
 }
 
 func buildKiroClaudeUsageMap(usage Usage) map[string]any {
@@ -2902,6 +3722,27 @@ func buildKiroClaudeUsageMap(usage Usage) map[string]any {
 		}
 	}
 	return usageMap
+}
+
+func extractStructuredOutputToolText(toolUses []KiroToolUse, requestCtx KiroRequestContext) (string, []KiroToolUse, bool) {
+	if requestCtx.StructuredOutputToolName == "" || len(toolUses) == 0 {
+		return "", toolUses, false
+	}
+	remaining := make([]KiroToolUse, 0, len(toolUses))
+	for i, tool := range toolUses {
+		if isStructuredOutputToolName(tool.Name, requestCtx) {
+			if b, err := json.Marshal(tool.Input); err == nil {
+				return string(b), append(remaining, toolUses[i+1:]...), true
+			}
+			return "{}", append(remaining, toolUses[i+1:]...), true
+		}
+		remaining = append(remaining, tool)
+	}
+	return "", toolUses, false
+}
+
+func isStructuredOutputToolName(name string, requestCtx KiroRequestContext) bool {
+	return requestCtx.StructuredOutputToolName != "" && strings.TrimSpace(name) == requestCtx.StructuredOutputToolName
 }
 
 func restoreResponseToolName(name string, requestCtx KiroRequestContext) string {
@@ -2935,6 +3776,10 @@ func hasThinkingBlocksOnly(blocks []map[string]any) bool {
 }
 
 func extractThinkingBlocks(content string) []map[string]any {
+	return extractThinkingBlocksWithSignature(content, "claude", "")
+}
+
+func extractThinkingBlocksWithSignature(content, model, messageID string) []map[string]any {
 	if content == "" {
 		return nil
 	}
@@ -2966,7 +3811,7 @@ func extractThinkingBlocks(content string) []map[string]any {
 			blocks = append(blocks, map[string]any{
 				"type":      "thinking",
 				"thinking":  thinking,
-				"signature": thinkingSignature(thinking),
+				"signature": thinkingSignatureForMessage(thinking, model, messageID),
 			})
 		}
 		pos = end + len(thinkingEndTag)
@@ -3105,14 +3950,6 @@ func isInsideMarkdownFence(content string, pos int) bool {
 func isLineBlockQuote(content string, pos int) bool {
 	lineStart := strings.LastIndexByte(content[:pos], '\n') + 1
 	return strings.HasPrefix(strings.TrimLeftFunc(content[lineStart:pos], unicode.IsSpace), ">")
-}
-
-func thinkingSignature(content string) string {
-	if content == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(content))
-	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
 func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
@@ -4149,7 +4986,10 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 				usage.InputTokens += value
 			}
 		}
+		updateKiroCreditsFromMap(usage, tokenUsage)
 	}
+	updateKiroCreditsFromMap(usage, event)
+	updateKiroCreditsFromMap(usage, meta)
 	if value, ok := toInt(event["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
 	}
@@ -4167,6 +5007,13 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	}
 	if value, ok := toInt(meta["totalTokens"]); ok && value > 0 {
 		usage.TotalTokens = value
+	}
+	if eventType == "meteringEvent" {
+		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok {
+			usage.KiroCredits += value
+		} else if value, ok := toPositiveFiniteFloat(event["usage"]); ok {
+			usage.KiroCredits += value
+		}
 	}
 }
 
@@ -4250,6 +5097,60 @@ func toInt(value any) (int, bool) {
 	}
 }
 
+var kiroCreditUsageFieldNames = [...]string{
+	"kiroCredits",
+	"credits",
+	"creditsUsed",
+	"creditUsage",
+	"consumedCredits",
+}
+
+func updateKiroCreditsFromMap(usage *Usage, values map[string]any) {
+	if usage == nil || len(values) == 0 {
+		return
+	}
+	for _, field := range kiroCreditUsageFieldNames {
+		value, ok := toPositiveFiniteFloat(values[field])
+		if !ok {
+			continue
+		}
+		usage.KiroCredits = value
+		return
+	}
+}
+
+func toPositiveFiniteFloat(value any) (float64, bool) {
+	var out float64
+	switch v := value.(type) {
+	case float64:
+		out = v
+	case float32:
+		out = float64(v)
+	case int:
+		out = float64(v)
+	case int64:
+		out = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		out = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		out = parsed
+	default:
+		return 0, false
+	}
+	if math.IsNaN(out) || math.IsInf(out, 0) || out <= 0 {
+		return 0, false
+	}
+	return out, true
+}
+
 func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if simulated == nil {
 		return base
@@ -4267,6 +5168,9 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 }
 
 func addKiroCacheUsageFields(usageMap map[string]any, usage Usage) {
+	if usage.KiroCredits > 0 {
+		usageMap["_sub2api_kiro_credits"] = usage.KiroCredits
+	}
 	if usage.CacheCreationInputTokens > 0 {
 		usageMap["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}

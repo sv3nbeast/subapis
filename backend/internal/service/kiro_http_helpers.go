@@ -16,6 +16,9 @@ const (
 	kiroJSONContentType                 = "application/json"
 	kiroGenerateAssistantResponseTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
 	kiroGenerateAssistantResponsePath   = "/generateAssistantResponse"
+	kiroKRSEndpointURL                  = "https://runtime.us-east-1.kiro.dev/generateAssistantResponse"
+	kiroBuilderIDProfileARN             = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+	kiroSocialProfileARN                = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
 )
 
 func buildKiroAccountKey(account *Account) string {
@@ -77,6 +80,27 @@ func buildKiroMachineIDFallbackKey(account *Account) string {
 	return "account:unknown"
 }
 
+func kiroIsPlaceholderProfileARN(arn string) bool {
+	return strings.TrimSpace(arn) == kiroBuilderIDProfileARN
+}
+
+func kiroDefaultProfileARN(account *Account) string {
+	if account != nil && strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "social") {
+		return kiroSocialProfileARN
+	}
+	return kiroBuilderIDProfileARN
+}
+
+func kiroResolveProfileArnForKRS(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if arn := strings.TrimSpace(account.GetCredential("profile_arn")); arn != "" {
+		return arn
+	}
+	return kiroDefaultProfileARN(account)
+}
+
 func buildKiroRequestID(resp *http.Response) string {
 	if resp == nil {
 		return ""
@@ -88,6 +112,13 @@ func buildKiroRequestID(resp *http.Response) string {
 		return requestID
 	}
 	return strings.TrimSpace(resp.Header.Get("x-amz-request-id"))
+}
+
+func buildKiroClientRequestID(resp *http.Response) string {
+	if requestID := buildKiroRequestID(resp); requestID != "" {
+		return requestID
+	}
+	return kiropkg.NewClaudeRequestID()
 }
 
 func isKiroSuspendedBody(respBody []byte) bool {
@@ -160,6 +191,27 @@ func isKiroRuntimeEndpointMode(account *Account) bool {
 	return isKiroCLIWireMode(account)
 }
 
+func hasExplicitKiroEndpointPreference(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	for _, key := range []string{"kiro_wire_mode", "wire_mode"} {
+		switch strings.ToLower(strings.TrimSpace(account.GetCredential(key))) {
+		case "cli", "kiro_cli", "kiro-cli":
+			return true
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("kiro_endpoint_mode"))) {
+	case "runtime", "kiro_runtime":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(account.GetCredential("preferred_endpoint"))) {
+	case "runtime", "kiro_runtime", "kiro", "kiroide", "kiro_ide", "ide", "codewhisperer", "cw", "amazonq", "amazon_q", "q":
+		return true
+	}
+	return false
+}
+
 func kiroRuntimeAPIRegion(account *Account) string {
 	if account == nil {
 		return kiroDefaultRegion
@@ -176,6 +228,9 @@ func kiroRuntimeAPIRegion(account *Account) string {
 func applyKiroConditionalHeaders(req *http.Request, account *Account) {
 	if req == nil || account == nil {
 		return
+	}
+	if account.Type == AccountTypeAPIKey {
+		req.Header["TokenType"] = []string{"API_KEY"}
 	}
 	if strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "external_idp") {
 		req.Header.Set("TokenType", "EXTERNAL_IDP")
@@ -213,7 +268,11 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
+	if isKiroRuntimeRequestURL(req.URL) {
+		req.Header.Set("User-Agent", kiropkg.BuildKiroIDERuntimeUserAgent(accountKey, machineID))
+	} else {
+		req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
+	}
 	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
 	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
 	if req.URL != nil && req.URL.Host != "" {
@@ -233,7 +292,7 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 	req.Header.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
 	if account != nil && isKiroRuntimeRequestURL(req.URL) {
-		profileArn := strings.TrimSpace(account.GetCredential("profile_arn"))
+		profileArn := kiroResolveProfileArnForKRS(account)
 		if profileArn != "" {
 			req.Header.Set("x-amzn-kiro-profile-arn", profileArn)
 		}
