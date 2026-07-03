@@ -2124,3 +2124,45 @@ a663f3b4a Fix usage stats SQL/Scan column mismatch from official merge
 ### 备注
 
 - 仍未提升到主工作区 `main`；主工作区保持原脏状态作为保护。后续可用干净临时 worktree 以 `main` 为目标快进到该融合分支，或在确认后让本地 `main` 指向此融合提交。
+
+## 2026-07-04 07:51:25 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `fdf988d20ad55777be33643f36aac9c3e99bb9dc`
+- 官方提交: `2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 合并基线: `2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 官方领先数量: `0`
+- 本地领先数量: `420`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+fdf988d20 Record fork lineage merge audit
+f79209c64 Merge fork production lineage into official sync fusion
+5fc1d8e67 Merge official sync 与 local Kiro 与 pricing changes
+06419ceca Snapshot main dirty work before official sync promote
+9c6bb4740 Record official upstream merge completion
+7508dee57 Merge official upstream through usage queue safeguards
+31da59c14 Sync official 赞助信息 与 版本 metadata
+a4f09a106 Sync official Codex session import matching
+a4e72283c Sync official ops realtime account stats optimization
+e52368537 Sync official invitation redeem guard
+1ae046e56 Sync official Grok imagine 别名 normalization
+a60975298 Sync official admin group column 设置
+44e993c39 Sync official OpenAI subscription expiration import
+d791254f1 Sync official OpenAI inactive workspace plan handling
+5bc9582ba Sync official OpenAI reset credit expiration display
+27c793841 Sync official peak rate API contract test fix
+e496793ee Sync official billing test signature fixes
+877d0b643 Sync official peak rate CI contract fixes
+4c0df3cbc Sync official peak rate hardening follow-up
+c3820cd71 Sync official peak rate billing fixes
