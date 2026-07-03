@@ -274,7 +274,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			return s.handleAntigravityOAuth401(ctx, authAccount, upstreamMsg)
 		}
 		// 其他 OAuth 账号在 401 错误时临时不可调度（给 token 刷新窗口）；非 OAuth 账号保持原有 SetError 行为。
-		if authAccount.Type == AccountTypeOAuth && authAccount.Platform != PlatformAntigravity {
+		if authAccount.Type == AccountTypeOAuth {
 			// 1. 失效缓存
 			if s.tokenCacheInvalidator != nil {
 				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
@@ -318,7 +318,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			}
 			shouldDisable = true
 		} else {
-			// 非 OAuth / Antigravity OAuth：保持 SetError 行为
+			// 非 OAuth：保持 SetError 行为
 			msg := "Authentication failed (401): invalid or expired credentials"
 			if upstreamMsg != "" {
 				msg = "Authentication failed (401): " + upstreamMsg
@@ -388,6 +388,15 @@ func (s *RateLimitService) handleAntigravityOAuth401(ctx context.Context, accoun
 		if err := s.tokenCacheInvalidator.InvalidateToken(ctx, account); err != nil {
 			slog.Warn("antigravity_oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
 		}
+	}
+
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		msg := "Authentication failed (401): refresh_token missing, cannot recover"
+		if upstreamMsg != "" {
+			msg = "OAuth 401 (no refresh_token): " + upstreamMsg
+		}
+		s.handleAuthError(ctx, account, msg)
+		return true
 	}
 
 	now := time.Now()
