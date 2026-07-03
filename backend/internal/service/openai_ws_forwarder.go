@@ -1760,6 +1760,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	token string,
 	decision OpenAIWSProtocolDecision,
 	isCodexCLI bool,
+	correctToolCalls bool,
 	reqStream bool,
 	originalModel string,
 	mappedModel string,
@@ -2230,7 +2231,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(message, mappedModelBytes) {
 				message = replaceOpenAIWSMessageModel(message, mappedModel, originalModel)
 			}
-			if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(message) {
+			if correctToolCalls && s.toolCorrector != nil && openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(message) {
 				if corrected, changed := s.toolCorrector.CorrectToolCallsInSSEBytes(message); changed {
 					message = corrected
 				}
@@ -2378,7 +2379,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if needModelReplace {
 			finalResponse = s.replaceModelInResponseBody(finalResponse, mappedModel, originalModel)
 		}
-		finalResponse = s.correctToolCallsInResponseBody(finalResponse)
+		if correctToolCalls {
+			finalResponse = s.correctToolCallsInResponseBody(finalResponse)
+		} else {
+			finalResponse = normalizeOpenAIResponsesFunctionCallArgumentsOnly(finalResponse)
+		}
 		populateOpenAIUsageFromResponseJSON(finalResponse, usage)
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
@@ -2570,6 +2575,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageBillingModel  string
 		imageSizeTier      string
 		imageInputSize     string
+		correctToolCalls   bool
 		payloadBytes       int
 	}
 	ingressSessionOriginalModel := ""
@@ -2781,6 +2787,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageBillingModel:  imageBillingModel,
 			imageSizeTier:      imageSizeTier,
 			imageInputSize:     imageInputSize,
+			correctToolCalls:   shouldCorrectCodexToolCallsForClient(c, normalized, !isCodexCLI),
 			payloadBytes:       len(normalized),
 		}, nil
 	}
@@ -2912,6 +2919,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				currentBridgePayload.imageBillingModel,
 				currentBridgePayload.imageSizeTier,
 				currentBridgePayload.imageInputSize,
+				currentBridgePayload.correctToolCalls,
 				turn,
 				writeClientMessage,
 			)
@@ -3115,7 +3123,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, correctToolCalls bool) (*OpenAIForwardResult, error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
@@ -3290,7 +3298,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
-				if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {
+				if correctToolCalls && s.toolCorrector != nil && openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {
 					if corrected, changed := s.toolCorrector.CorrectToolCallsInSSEBytes(upstreamMessage); changed {
 						upstreamMessage = corrected
 					}
@@ -3380,6 +3388,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentImageBillingModel := firstPayload.imageBillingModel
 	currentImageSizeTier := firstPayload.imageSizeTier
 	currentImageInputSize := firstPayload.imageInputSize
+	currentCorrectToolCalls := firstPayload.correctToolCalls
 	currentPayloadBytes := firstPayload.payloadBytes
 	isStrictAffinityTurn := func(payload []byte) bool {
 		if !storeDisabled {
@@ -3868,7 +3877,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize)
+		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize, currentCorrectToolCalls)
 		if relayErr != nil {
 			lastTurnClean = false
 			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
@@ -4001,6 +4010,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		currentImageBillingModel = nextPayload.imageBillingModel
 		currentImageSizeTier = nextPayload.imageSizeTier
 		currentImageInputSize = nextPayload.imageInputSize
+		currentCorrectToolCalls = nextPayload.correctToolCalls
 		currentPayloadBytes = nextPayload.payloadBytes
 		storeDisabled = s.isOpenAIWSStoreDisabledInRequestRaw(currentPayload, account)
 		if !storeDisabled {

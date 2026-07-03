@@ -24,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -53,6 +54,7 @@ type AccountHandler struct {
 	openaiOAuthService      *service.OpenAIOAuthService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
+	kiroOAuthService        *service.KiroOAuthService
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
@@ -94,6 +96,11 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+}
+
+// SetKiroOAuthService injects Kiro OAuth refresh support for manual account refresh.
+func (h *AccountHandler) SetKiroOAuthService(kiroOAuthService *service.KiroOAuthService) {
+	h.kiroOAuthService = kiroOAuthService
 }
 
 // CreateAccountRequest represents create account request
@@ -924,6 +931,21 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 				return nil, "", fmt.Errorf("failed to clear account error: %w", clearErr)
 			}
 		}
+	} else if account.Platform == service.PlatformKiro {
+		if h.kiroOAuthService == nil {
+			return nil, "", fmt.Errorf("kiro oauth service is not configured")
+		}
+		tokenInfo, err := h.kiroOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, "", err
+		}
+
+		newCredentials = h.kiroOAuthService.BuildAccountCredentials(tokenInfo)
+		for k, v := range account.Credentials {
+			if _, exists := newCredentials[k]; !exists {
+				newCredentials[k] = v
+			}
+		}
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)
@@ -975,6 +997,8 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
 	// Antigravity OAuth: 刷新成功后检查并设置 privacy_mode
 	h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
+	// Kiro OAuth: 刷新成功后解析并回填 profile_arn
+	h.adminService.EnsureKiroProfileArn(ctx, updatedAccount)
 
 	return updatedAccount, "", nil
 }
@@ -2098,6 +2122,26 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	if account.Platform == service.PlatformKiro {
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, kiropkg.DefaultModels)
+			return
+		}
+		response.Success(c, buildMappedKiroModels(mapping))
+		return
+	}
+
+	if account.Platform == service.PlatformGrok {
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, xai.DefaultModels())
+			return
+		}
+		response.Success(c, buildMappedGrokModels(mapping))
+		return
+	}
+
 	if account.IsDroid() {
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
@@ -2217,6 +2261,62 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	response.Success(c, models)
+}
+
+func buildMappedKiroModels(mapping map[string]string) []kiropkg.Model {
+	models := make([]kiropkg.Model, 0, len(mapping))
+	requestedModels := make([]string, 0, len(mapping))
+	for requestedModel := range mapping {
+		requestedModels = append(requestedModels, requestedModel)
+	}
+	sort.Strings(requestedModels)
+	for _, requestedModel := range requestedModels {
+		var found bool
+		for _, dm := range kiropkg.DefaultModels {
+			if dm.ID == requestedModel {
+				models = append(models, dm)
+				found = true
+				break
+			}
+		}
+		if !found {
+			models = append(models, kiropkg.Model{
+				ID:          requestedModel,
+				Type:        "model",
+				DisplayName: requestedModel,
+			})
+		}
+	}
+	return models
+}
+
+func buildMappedGrokModels(mapping map[string]string) []xai.Model {
+	defaultModels := xai.DefaultModels()
+	models := make([]xai.Model, 0, len(mapping))
+	requestedModels := make([]string, 0, len(mapping))
+	for requestedModel := range mapping {
+		requestedModels = append(requestedModels, requestedModel)
+	}
+	sort.Strings(requestedModels)
+	for _, requestedModel := range requestedModels {
+		var found bool
+		for _, dm := range defaultModels {
+			if dm.ID == requestedModel {
+				models = append(models, dm)
+				found = true
+				break
+			}
+		}
+		if !found {
+			models = append(models, xai.Model{
+				ID:          requestedModel,
+				Object:      "model",
+				OwnedBy:     "xai",
+				DisplayName: requestedModel,
+			})
+		}
+	}
+	return models
 }
 
 // SyncUpstreamModels handles syncing live supported models from an account's upstream.

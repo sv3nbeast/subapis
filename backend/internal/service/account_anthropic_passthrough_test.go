@@ -59,6 +59,31 @@ func TestAccount_IsAnthropicAPIKeyPassthroughEnabled(t *testing.T) {
 		}
 		require.False(t, openai.IsAnthropicAPIKeyPassthroughEnabled())
 	})
+
+	t.Run("Kiro API Key 配置 base_url 时可走 Anthropic 兼容透传", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformKiro,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"base_url": "https://kiro-upstream.example.com",
+			},
+			Extra: map[string]any{
+				"anthropic_passthrough": true,
+			},
+		}
+		require.True(t, account.IsAnthropicAPIKeyPassthroughEnabled())
+	})
+
+	t.Run("Kiro API Key 无 base_url 仍走 Kiro 直连", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformKiro,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				"anthropic_passthrough": true,
+			},
+		}
+		require.False(t, account.IsAnthropicAPIKeyPassthroughEnabled())
+	})
 }
 
 func TestAccount_GetAnthropicAPIKeyAuthScheme(t *testing.T) {

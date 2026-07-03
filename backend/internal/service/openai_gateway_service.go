@@ -214,12 +214,13 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 // OpenAIUsage represents OpenAI API response usage
 type OpenAIUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	ImageInputTokens         int `json:"image_input_tokens,omitempty"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
-	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+	InputTokens              int     `json:"input_tokens"`
+	ImageInputTokens         int     `json:"image_input_tokens,omitempty"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens,omitempty"`
+	ImageOutputTokens        int     `json:"image_output_tokens,omitempty"`
+	KiroCredits              float64 `json:"-"`
 }
 
 // OpenAIForwardResult represents the result of forwarding
@@ -3030,6 +3031,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageInputSize = imageCfg.InputSize
 	}
 
+	correctToolCallsForClient := shouldCorrectCodexToolCallsForClient(c, body, !isCodexCLI)
+
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -3135,6 +3138,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				token,
 				wsDecision,
 				isCodexCLI,
+				correctToolCallsForClient,
 				reqStream,
 				originalModel,
 				upstreamModel,
@@ -3351,7 +3355,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageCount := 0
 		var imageOutputSizes []string
 		if reqStream {
-			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
+			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel, correctToolCallsForClient)
 			if err != nil {
 				return nil, err
 			}
@@ -3361,7 +3365,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
 		} else {
-			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel, correctToolCallsForClient)
 			if err != nil {
 				return nil, err
 			}
@@ -4399,8 +4403,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 		}
-		// Correct tool calls in final response
-		body = s.correctToolCallsInResponseBody(body)
+		body = normalizeOpenAIResponsesFunctionCallArgumentsOnly(body)
 	} else {
 		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 		if terminalOK && terminalType == "response.failed" {
@@ -4961,7 +4964,11 @@ type openaiNonStreamingResult struct {
 	imageOutputSizes []string
 }
 
-func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
+func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, correctToolCallsOpt ...bool) (*openaiStreamingResult, error) {
+	correctToolCalls := false
+	if len(correctToolCallsOpt) > 0 {
+		correctToolCalls = correctToolCallsOpt[0]
+	}
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -5207,12 +5214,14 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 			imageCounter.AddSSEData(dataBytes)
 
-			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
-			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
-				dataBytes = correctedData
-				data = string(correctedData)
-				line = "data: " + data
-				eventType = strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+			// Correct Codex tool calls only for clients that use the OpenCode tool surface.
+			if correctToolCalls && s.toolCorrector != nil {
+				if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
+					dataBytes = correctedData
+					data = string(correctedData)
+					line = "data: " + data
+					eventType = strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+				}
 			}
 			if imageOutput, ok := extractImageGenerationOutputFromSSEData(dataBytes, streamSeenImages); ok {
 				streamImageOutputs = append(streamImageOutputs, imageOutput)
@@ -5530,6 +5539,14 @@ func (s *OpenAIGatewayService) correctToolCallsInResponseBody(body []byte) []byt
 	return updated
 }
 
+func normalizeOpenAIResponsesFunctionCallArgumentsOnly(body []byte) []byte {
+	updated, changed := normalizeOpenAIResponsesFunctionCallArguments(body)
+	if !changed {
+		return body
+	}
+	return updated
+}
+
 func normalizeOpenAIResponsesFunctionCallArguments(data []byte) ([]byte, bool) {
 	if len(bytes.TrimSpace(data)) == 0 || !bytes.Contains(data, []byte(`"arguments"`)) {
 		return data, false
@@ -5692,10 +5709,48 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 		CacheCreationInputTokens: int(value.Get("cache_creation_input_tokens").Int()),
 		CacheReadInputTokens:     int(cacheReadTokens),
 		ImageOutputTokens:        int(imageOutputTokens),
+		KiroCredits:              kiroCreditsFromUsageGJSON(value),
 	}, true
 }
 
-func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func kiroCreditsFromUsageGJSON(value gjson.Result) float64 {
+	if !value.Exists() || !value.IsObject() {
+		return 0
+	}
+	for _, field := range []string{
+		"_sub2api_kiro_credits",
+		"kiro_credits",
+		"kiroCredits",
+		"credits",
+		"creditsUsed",
+		"creditUsage",
+		"consumedCredits",
+	} {
+		if v := value.Get(field); v.Exists() && v.Float() > 0 {
+			return v.Float()
+		}
+	}
+	return 0
+}
+
+func mergeOpenAIUsageKiroCreditsFromJSON(usage *OpenAIUsage, body []byte) {
+	if usage == nil || len(body) == 0 || !gjson.ValidBytes(body) {
+		return
+	}
+	if credits := kiroCreditsFromUsageGJSON(gjson.GetBytes(body, "usage")); credits > 0 {
+		usage.KiroCredits = credits
+		return
+	}
+	if credits := kiroCreditsFromUsageGJSON(gjson.GetBytes(body, "response.usage")); credits > 0 {
+		usage.KiroCredits = credits
+	}
+}
+
+func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string, correctToolCallsOpt ...bool) (*openaiNonStreamingResult, error) {
+	correctToolCalls := false
+	if len(correctToolCallsOpt) > 0 {
+		correctToolCalls = correctToolCallsOpt[0]
+	}
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
@@ -5705,7 +5760,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, correctToolCalls)
 	}
 	bodyLooksLikeSSE := bytes.Contains(body, []byte("data:")) || bytes.Contains(body, []byte("event:"))
 
@@ -5715,13 +5770,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, correctToolCalls)
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, correctToolCalls)
 		}
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
@@ -5757,7 +5812,11 @@ func isEventStreamResponse(header http.Header) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, correctToolCallsOpt ...bool) (*openaiNonStreamingResult, error) {
+	correctToolCalls := false
+	if len(correctToolCallsOpt) > 0 {
+		correctToolCalls = correctToolCallsOpt[0]
+	}
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -5780,8 +5839,11 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 		}
-		// Correct tool calls in final response
-		body = s.correctToolCallsInResponseBody(body)
+		if correctToolCalls {
+			body = s.correctToolCallsInResponseBody(body)
+		} else {
+			body = normalizeOpenAIResponsesFunctionCallArgumentsOnly(body)
+		}
 	} else {
 		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 		if terminalOK && terminalType == "response.failed" {
@@ -6534,6 +6596,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.DurationMs = &durationMs
 	usageLog.FirstTokenMs = result.FirstTokenMs
 	usageLog.CreatedAt = time.Now()
+	if result.Usage.KiroCredits > 0 {
+		kiroCredits := result.Usage.KiroCredits
+		usageLog.KiroCredits = &kiroCredits
+	}
 	// 设置渠道信息
 	usageLog.ChannelID = optionalInt64Ptr(input.ChannelID)
 	usageLog.ModelMappingChain = optionalTrimmedStringPtr(input.ModelMappingChain)

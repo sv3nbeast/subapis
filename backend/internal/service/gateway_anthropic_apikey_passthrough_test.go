@@ -190,6 +190,61 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, rec.Header().Get("Set-Cookie"), "响应头应经过安全过滤")
 }
 
+func TestGatewayService_KiroAPIKeyWithBaseURLUsesAnthropicCompatiblePassthrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("Authorization", "Bearer inbound-token")
+	c.Request.Header.Set("X-Api-Key", "inbound-api-key")
+
+	body := []byte(`{"model":"claude-sonnet-4-6","stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed := &ParsedRequest{
+		Body:   NewRequestBodyRef(body),
+		Model:  "claude-sonnet-4-6",
+		Stream: false,
+	}
+
+	upstreamJSON := `{"id":"msg_kiro_external","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1},"stop_reason":"end_turn"}`
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_kiro_external"}},
+			Body:       io.NopCloser(strings.NewReader(upstreamJSON)),
+		},
+	}
+	svc := &GatewayService{
+		cfg:          &config.Config{},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          211,
+		Name:        "kiro-external-apikey",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "kiro-external-key",
+			"base_url": "https://kiro-upstream.example.com",
+		},
+		Extra: map[string]any{
+			"anthropic_passthrough": true,
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "kiro-upstream.example.com", upstream.lastReq.URL.Host)
+	require.Equal(t, "/v1/messages", upstream.lastReq.URL.Path)
+	require.Equal(t, "kiro-external-key", getHeaderRaw(upstream.lastReq.Header, "x-api-key"))
+	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "authorization"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-amzn-kiro-agent-mode"))
+	require.JSONEq(t, upstreamJSON, rec.Body.String())
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_NormalizesClaudeCodeDateWatermark(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

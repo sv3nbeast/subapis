@@ -297,6 +297,9 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if src.CacheCreationInputTokens > 0 {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
 	}
+	if src.KiroCredits > 0 {
+		dst.KiroCredits = src.KiroCredits
+	}
 }
 
 func buildKiroParsedRequestFromAnthropicBody(body []byte, requestModel string, stream bool, original *ParsedRequest) (*ParsedRequest, error) {

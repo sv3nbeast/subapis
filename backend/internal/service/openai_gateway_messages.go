@@ -657,6 +657,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 							if event.Response.Usage != nil {
 								usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 							}
+							mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
 							return event.Response, usage, acc, nil
 						}
 					}
@@ -704,6 +705,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 				}
+				mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
 				return event.Response, usage, acc, nil
 			}
 
@@ -827,6 +829,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if event.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
 			}
+			mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
 			// cyber_policy 致命不可重试：标记供 handler 事后记录；以 Anthropic SSE error 事件
 			// 回写让客户端感知并停止重试（F4），丢弃后续转换输出。
 			if strings.TrimSpace(event.Type) == "response.failed" {

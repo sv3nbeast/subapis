@@ -252,6 +252,39 @@ function buildOpenAISetupTokenAccount() {
   } as any
 }
 
+function buildKiroAPIKeyAccount(baseUrl = '') {
+  return {
+    id: 4,
+    name: 'Kiro API Key',
+    notes: '',
+    platform: 'kiro',
+    type: 'apikey',
+    credentials: {
+      api_key: 'kiro-test-key',
+      ...(baseUrl ? { base_url: baseUrl } : {}),
+      model_mapping: {
+        'claude-sonnet-5': 'claude-sonnet-5'
+      }
+    },
+    extra: baseUrl
+      ? {
+          anthropic_passthrough: true
+        }
+      : {
+          kiro_credit_unit_price_usd: 0.071,
+          anthropic_passthrough: true
+        },
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -745,5 +778,65 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty(
       'antigravity_project_id'
     )
+  })
+
+  it('saves Kiro API Key direct mode without base URL passthrough and with credit unit price', async () => {
+    const account = buildKiroAPIKeyAccount('')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="kiro-credit-unit-price-usd"]').setValue('0.082')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.credentials).not.toHaveProperty('base_url')
+    expect(payload.credentials?.api_key).toBe('kiro-test-key')
+    expect(payload.extra?.kiro_credit_unit_price_usd).toBe(0.082)
+    expect(payload.extra).not.toHaveProperty('anthropic_passthrough')
+  })
+
+  it('saves Kiro API Key relay mode with base URL passthrough and without credit unit price', async () => {
+    const account = buildKiroAPIKeyAccount('https://relay.example.com')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.credentials?.base_url).toBe('https://relay.example.com')
+    expect(payload.extra?.anthropic_passthrough).toBe(true)
+    expect(payload.extra).not.toHaveProperty('kiro_credit_unit_price_usd')
+  })
+
+  it('switches Kiro API Key relay mode back to direct mode when base URL is cleared', async () => {
+    const account = buildKiroAPIKeyAccount('https://relay.example.com')
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const baseUrlInput = wrapper
+      .findAll<HTMLInputElement>('input')
+      .find((input) => input.element.value === 'https://relay.example.com')
+    expect(baseUrlInput).toBeTruthy()
+
+    await baseUrlInput!.setValue('')
+    await wrapper.get('[data-testid="kiro-credit-unit-price-usd"]').setValue('0.09')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.credentials).not.toHaveProperty('base_url')
+    expect(payload.extra?.kiro_credit_unit_price_usd).toBe(0.09)
+    expect(payload.extra).not.toHaveProperty('anthropic_passthrough')
   })
 })

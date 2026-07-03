@@ -20,6 +20,8 @@ type kiroAccountTokenRefresher interface {
 	BuildAccountCredentials(tokenInfo *KiroTokenInfo) map[string]any
 }
 
+type kiroProfileARNResolver func(ctx context.Context, account *Account, accessToken string) string
+
 type KiroTokenProvider struct {
 	accountRepo      AccountRepository
 	tokenCache       KiroTokenCache
@@ -27,6 +29,7 @@ type KiroTokenProvider struct {
 	refreshAPI       *OAuthRefreshAPI
 	executor         OAuthRefreshExecutor
 	refreshPolicy    ProviderRefreshPolicy
+	profileResolver  kiroProfileARNResolver
 }
 
 func NewKiroTokenProvider(
@@ -49,6 +52,10 @@ func (p *KiroTokenProvider) SetRefreshAPI(api *OAuthRefreshAPI, executor OAuthRe
 
 func (p *KiroTokenProvider) SetRefreshPolicy(policy ProviderRefreshPolicy) {
 	p.refreshPolicy = policy
+}
+
+func (p *KiroTokenProvider) SetProfileARNResolver(resolver kiroProfileARNResolver) {
+	p.profileResolver = resolver
 }
 
 func (p *KiroTokenProvider) GetAccessToken(ctx context.Context, account *Account) (string, error) {
@@ -201,10 +208,21 @@ func (p *KiroTokenProvider) ForceRefreshAccessToken(ctx context.Context, account
 	if accessToken == "" {
 		return "", errors.New("access_token not found after kiro refresh")
 	}
+	p.resolveProfileArnAfterRefresh(ctx, account, accessToken)
 	if err := p.cacheAccessToken(ctx, account, accessToken); err != nil {
 		return "", err
 	}
 	return accessToken, nil
+}
+
+func (p *KiroTokenProvider) resolveProfileArnAfterRefresh(ctx context.Context, account *Account, accessToken string) {
+	if p == nil || p.profileResolver == nil || account == nil || strings.TrimSpace(accessToken) == "" {
+		return
+	}
+	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
+		return
+	}
+	_ = p.profileResolver(ctx, account, accessToken)
 }
 
 func (p *KiroTokenProvider) cacheAccessToken(ctx context.Context, account *Account, accessToken string) error {

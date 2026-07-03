@@ -4,7 +4,9 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -1705,11 +1707,58 @@ func (a *Account) IsOpenAIOAuthPassthroughEnabled() bool {
 // 字段：accounts.extra.anthropic_passthrough。
 // 字段缺失或类型不正确时，按 false（关闭）处理。
 func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
-	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
+	if a == nil || a.Type != AccountTypeAPIKey || a.Extra == nil {
 		return false
+	}
+	if a.Platform != PlatformAnthropic {
+		if a.Platform != PlatformKiro || strings.TrimSpace(a.GetCredential("base_url")) == "" {
+			return false
+		}
 	}
 	enabled, ok := a.Extra["anthropic_passthrough"].(bool)
 	return ok && enabled
+}
+
+// ValidateKiroCreditUnitPriceFromExtra validates account-level Kiro credit cost metadata.
+func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra["kiro_credit_unit_price_usd"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	var value float64
+	switch v := raw.(type) {
+	case float64:
+		value = v
+	case float32:
+		value = float64(v)
+	case int:
+		value = float64(v)
+	case int64:
+		value = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+		}
+		value = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+		}
+		value = parsed
+	default:
+		return fmt.Errorf("kiro_credit_unit_price_usd must be a number")
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return fmt.Errorf("kiro_credit_unit_price_usd must be a finite number >= 0")
+	}
+	extra["kiro_credit_unit_price_usd"] = value
+	return nil
 }
 
 // IsWebSearchEmulationEnabled 返回 Anthropic API Key 账号是否启用 web search 模拟。

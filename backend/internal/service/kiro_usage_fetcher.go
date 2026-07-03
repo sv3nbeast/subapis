@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/google/uuid"
 )
 
 const (
@@ -93,7 +95,7 @@ func (s *AccountUsageService) getKiroUsage(ctx context.Context, account *Account
 			ErrorCode: errorCodeNetworkError,
 		}, nil
 	}
-	if account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+	if !isKiroDirectModeAccount(account) {
 		return &UsageInfo{
 			Source:    source,
 			UpdatedAt: &now,
@@ -155,7 +157,11 @@ func (s *AccountUsageService) getKiroUsage(ctx context.Context, account *Account
 }
 
 func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, account *Account, source string) (*UsageInfo, error) {
-	token := strings.TrimSpace(account.GetCredential("access_token"))
+	token, err := s.getKiroUsageAccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, fmt.Errorf("no access token available")
 	}
@@ -165,6 +171,19 @@ func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, accoun
 
 	resp, err := s.requestKiroUsageLimits(ctx, account, region, profileArn, token)
 	if err != nil {
+		if account.Type != AccountTypeAPIKey && s.shouldRetryKiroUsageWithRefresh(err) {
+			refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
+			if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
+				resp, err = s.requestKiroUsageLimits(ctx, account, region, profileArn, strings.TrimSpace(refreshedToken))
+				if err == nil {
+					usage := mapKiroUsageToInfo(resp)
+					usage.Source = source
+					s.storeKiroUsageSnapshot(account.ID, usage)
+					return usage, nil
+				}
+				return nil, err
+			}
+		}
 		return nil, err
 	}
 
@@ -172,6 +191,36 @@ func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, accoun
 	usage.Source = source
 	s.storeKiroUsageSnapshot(account.ID, usage)
 	return usage, nil
+}
+
+func isKiroDirectModeAccount(account *Account) bool {
+	if account == nil || account.Platform != PlatformKiro {
+		return false
+	}
+	if account.Type == AccountTypeOAuth {
+		return true
+	}
+	if account.Type == AccountTypeAPIKey {
+		return strings.TrimSpace(account.GetCredential("base_url")) == ""
+	}
+	return false
+}
+
+func (s *AccountUsageService) getKiroUsageAccessToken(ctx context.Context, account *Account) (string, error) {
+	if account != nil && account.Type == AccountTypeAPIKey {
+		return firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key"), nil
+	}
+	if s != nil && s.kiroTokenProvider != nil {
+		return s.kiroTokenProvider.GetAccessToken(ctx, account)
+	}
+	return strings.TrimSpace(account.GetCredential("access_token")), nil
+}
+
+func (s *AccountUsageService) shouldRetryKiroUsageWithRefresh(err error) bool {
+	if s == nil || s.kiroTokenProvider == nil || err == nil {
+		return false
+	}
+	return classifyKiroError(err).Category == kiroErrorAuthError
 }
 
 func (s *AccountUsageService) storeKiroUsageSnapshot(accountID int64, usage *UsageInfo) {
@@ -225,7 +274,7 @@ func cloneUsageInfo(info *UsageInfo) *UsageInfo {
 }
 
 func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, account *Account, region, profileArn, token string) (*kiroUsageLimitsResponse, error) {
-	endpoint := strings.TrimRight(resolveKiroRestEndpoint(), "/")
+	endpoint := strings.TrimRight(resolveKiroRuntimeEndpoint(region), "/")
 	reqURL, err := url.Parse(endpoint + "/getUsageLimits")
 	if err != nil {
 		return nil, fmt.Errorf("build kiro usage url failed: %w", err)
@@ -236,14 +285,13 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 		q.Set("profileArn", profileArn)
 	}
 	q.Set("resourceType", kiroUsageResourceType)
-	q.Set("isEmailRequired", "true")
 	reqURL.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("create kiro usage request failed: %w", err)
 	}
-	applyKiroRestHeaders(req, account, token)
+	s.applyKiroRuntimeHeaders(req, account, token)
 
 	client, err := httpclient.GetClient(httpclient.Options{
 		ProxyURL:           accountProxyURL(account),
@@ -274,6 +322,23 @@ func (s *AccountUsageService) requestKiroUsageLimits(ctx context.Context, accoun
 		return nil, fmt.Errorf("decode kiro usage response failed: %w", err)
 	}
 	return &parsed, nil
+}
+
+func (s *AccountUsageService) applyKiroRuntimeHeaders(req *http.Request, account *Account, token string) {
+	if req == nil {
+		return
+	}
+	accountKey := buildKiroAccountKey(account)
+	machineID := buildKiroMachineID(account)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
+	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
+	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
+	applyKiroConditionalHeaders(req, account)
 }
 
 func accountProxyURL(account *Account) string {

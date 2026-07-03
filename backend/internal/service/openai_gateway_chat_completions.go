@@ -258,6 +258,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
+			return nil, newOpenAIClientCanceledError(err)
+		}
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -587,6 +590,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if event.Response != nil && event.Response.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 			}
+			mergeOpenAIUsageKiroCreditsFromJSON(&usage, []byte(payload))
 		}
 		if strings.TrimSpace(event.Type) == "response.failed" {
 			payloadBytes := []byte(payload)

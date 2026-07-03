@@ -9,45 +9,38 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	kiroRestAPIBaseURL             = "https://codewhisperer.us-east-1.amazonaws.com"
-	kiroListAvailableProfilesPath  = "/ListAvailableProfiles"
-	kiroProfileResolveMaxAttempts  = 3
-	kiroProfileResolveBodyByteSize = 2 << 20
+	kiroRestAPIBaseURL              = "https://codewhisperer.us-east-1.amazonaws.com"
+	kiroListAvailableProfilesTarget = "AmazonCodeWhispererService.ListAvailableProfiles"
+	kiroProfileResolveMaxAttempts   = 3
+	kiroProfileResolveBodyByteSize  = 2 << 20
+)
+
+var (
+	kiroProfileResolutionFlight singleflight.Group
+	kiroProfileResolutionLocks  sync.Map // map[string]*sync.Mutex
 )
 
 func (s *GatewayService) resolveKiroPayloadProfileArn(ctx context.Context, account *Account, accessToken string) string {
 	if account == nil || account.Platform != PlatformKiro {
 		return ""
 	}
-	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" {
-		return profileArn
-	}
-	if account.Type != AccountTypeOAuth {
-		return ""
-	}
-
-	if profileArn, err := s.resolveKiroProfileArnFromAvailableProfiles(ctx, account, accessToken); err == nil && profileArn != "" {
-		if persistErr := s.persistKiroResolvedProfileArn(ctx, account, profileArn); persistErr != nil {
-			logger.L().Warn("kiro profile arn cache failed",
-				zap.Int64("account_id", account.ID),
-				zap.Error(persistErr),
-			)
+	if account.Type == AccountTypeOAuth {
+		if profileArn := s.resolveAndPersistKiroProfileArnOnly(ctx, account, accessToken); profileArn != "" {
+			return profileArn
 		}
+	} else if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
 		return profileArn
-	} else if err != nil {
-		logger.L().Warn("kiro profile arn list failed",
-			zap.Int64("account_id", account.ID),
-			zap.Error(err),
-		)
 	}
 
 	if s.kiroTokenProvider != nil && account.Type == AccountTypeOAuth && strings.TrimSpace(account.GetCredential("refresh_token")) != "" {
@@ -75,6 +68,103 @@ func (s *GatewayService) resolveKiroPayloadProfileArn(ctx context.Context, accou
 	}
 
 	return ""
+}
+
+func (s *GatewayService) resolveAndPersistKiroProfileArnOnly(ctx context.Context, account *Account, accessToken string) string {
+	if account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return ""
+	}
+	flightKey := kiroProfileResolutionFlightKey(account)
+	if profileArn := cachedKiroProfileArnWithLock(flightKey, account); profileArn != "" {
+		return profileArn
+	}
+	value, err, _ := kiroProfileResolutionFlight.Do(flightKey, func() (any, error) {
+		if profileArn := cachedKiroProfileArnWithLock(flightKey, account); profileArn != "" {
+			return profileArn, nil
+		}
+		profileArn, err := s.resolveKiroProfileArnFromAvailableProfiles(ctx, account, accessToken)
+		if err != nil {
+			return "", err
+		}
+		if profileArn == "" {
+			return "", nil
+		}
+		if persistErr := s.persistKiroResolvedProfileArnWithLock(ctx, flightKey, account, profileArn); persistErr != nil {
+			logger.L().Warn("kiro profile arn cache failed",
+				zap.Int64("account_id", account.ID),
+				zap.Error(persistErr),
+			)
+		}
+		return profileArn, nil
+	})
+	if err != nil {
+		logger.L().Warn("kiro profile arn list failed",
+			zap.Int64("account_id", account.ID),
+			zap.Error(err),
+		)
+		return ""
+	}
+	profileArn, _ := value.(string)
+	if profileArn == "" {
+		return ""
+	}
+	return profileArn
+}
+
+func cachedKiroProfileArnWithLock(flightKey string, account *Account) string {
+	lockKiroProfileResolution(flightKey)
+	defer unlockKiroProfileResolution(flightKey)
+	return cachedKiroProfileArn(account)
+}
+
+func cachedKiroProfileArn(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	profileArn := strings.TrimSpace(account.GetCredential("profile_arn"))
+	if profileArn == "" || kiroIsPlaceholderProfileARN(profileArn) {
+		return ""
+	}
+	return profileArn
+}
+
+func kiroProfileResolutionFlightKey(account *Account) string {
+	if account == nil {
+		return "account:nil"
+	}
+	if account.ID > 0 {
+		return fmt.Sprintf("account:%d", account.ID)
+	}
+	return fmt.Sprintf("ptr:%p", account)
+}
+
+func lockKiroProfileResolution(key string) {
+	if key == "" {
+		key = "account:unknown"
+	}
+	value, _ := kiroProfileResolutionLocks.LoadOrStore(key, &sync.Mutex{})
+	value.(*sync.Mutex).Lock()
+}
+
+func unlockKiroProfileResolution(key string) {
+	if key == "" {
+		key = "account:unknown"
+	}
+	value, ok := kiroProfileResolutionLocks.Load(key)
+	if !ok {
+		return
+	}
+	value.(*sync.Mutex).Unlock()
+}
+
+func (s *GatewayService) ensureKiroProfileArnForRequest(ctx context.Context, account *Account, token string, mode string) {
+	if s == nil || account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return
+	}
+	if mode != KiroEndpointModeKRS && mode != KiroEndpointModeAuto {
+		return
+	}
+	_ = s.resolveAndPersistKiroProfileArnOnly(ctx, account, token)
 }
 
 func (s *GatewayService) resolveKiroProfileArnFromAvailableProfiles(ctx context.Context, account *Account, accessToken string) (string, error) {
@@ -107,12 +197,12 @@ func (s *GatewayService) resolveKiroProfileArnFromAvailableProfiles(ctx context.
 }
 
 func (s *GatewayService) listKiroAvailableProfileArn(ctx context.Context, account *Account, accessToken string, attempt int) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, kiroRestAPIBaseURL+kiroListAvailableProfilesPath, bytes.NewReader([]byte(`{"maxResults":10}`)))
+	endpointURL := fmt.Sprintf("https://q.%s.amazonaws.com/", kiroAPIRegion(account))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader([]byte(`{"maxResults":10}`)))
 	if err != nil {
 		return "", err
 	}
-	applyKiroRestHeaders(req, account, accessToken)
-	req.Header.Set("Content-Type", "application/json")
+	applyKiroListAvailableProfilesHeaders(req, account, accessToken, attempt, kiroProfileResolveMaxAttempts)
 
 	resp, err := s.httpUpstream.DoWithTLS(req, kiroProxyURL(account), account.ID, account.Concurrency, s.resolveKiroTLSProfile(account))
 	if err != nil {
@@ -163,6 +253,12 @@ func (s *GatewayService) persistKiroResolvedProfileArn(ctx context.Context, acco
 	return nil
 }
 
+func (s *GatewayService) persistKiroResolvedProfileArnWithLock(ctx context.Context, flightKey string, account *Account, profileArn string) error {
+	lockKiroProfileResolution(flightKey)
+	defer unlockKiroProfileResolution(flightKey)
+	return s.persistKiroResolvedProfileArn(ctx, account, profileArn)
+}
+
 var errKiroProfileListEmpty = fmt.Errorf("empty profile list")
 
 type kiroProfileFetchError struct {
@@ -203,6 +299,32 @@ func applyKiroRestHeaders(req *http.Request, account *Account, token string) {
 	req.Header.Set("User-Agent", kiropkg.BuildRestUserAgent(accountKey, machineID))
 	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRestAmzUserAgent(accountKey, machineID))
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	if req.URL != nil && req.URL.Host != "" {
+		req.Host = req.URL.Host
+	}
+	applyKiroConditionalHeaders(req, account)
+}
+
+func applyKiroListAvailableProfilesHeaders(req *http.Request, account *Account, token string, attempt, maxAttempts int) {
+	if req == nil {
+		return
+	}
+	accountKey := buildKiroAccountKey(account)
+	machineID := buildKiroMachineID(account)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", kiroListAvailableProfilesTarget)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	req.Header.Set("User-Agent", kiropkg.BuildRuntimeUserAgent(accountKey, machineID))
+	req.Header.Set("X-Amz-User-Agent", kiropkg.BuildRuntimeAmzUserAgent(accountKey, machineID))
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	if attempt <= 0 {
+		attempt = 1
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	req.Header.Set("Amz-Sdk-Request", fmt.Sprintf("attempt=%d; max=%d", attempt, maxAttempts))
 	if req.URL != nil && req.URL.Host != "" {
 		req.Host = req.URL.Host
 	}

@@ -37,6 +37,7 @@ func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRep
 }
 
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
+	service.NormalizeGroupRuntimeFields(groupIn)
 	builder := r.client.Group.Create().
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
@@ -68,7 +69,10 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
+		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
+		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).
 		SetKiroCacheEmulationRatio(groupIn.KiroCacheEmulationRatio).
+		SetKiroEndpointMode(groupIn.KiroEndpointMode).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).
@@ -122,6 +126,7 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 }
 
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
+	service.NormalizeGroupRuntimeFields(groupIn)
 	builder := r.client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
 		SetDescription(groupIn.Description).
@@ -150,7 +155,10 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
+		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
+		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).
 		SetKiroCacheEmulationRatio(groupIn.KiroCacheEmulationRatio).
+		SetKiroEndpointMode(groupIn.KiroEndpointMode).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).

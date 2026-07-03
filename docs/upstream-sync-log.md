@@ -2064,3 +2064,40 @@ a663f3b4a Fix usage stats SQL/Scan column mismatch from official merge
 ### 备注
 
 - 未执行 `promote`；当前仅完成融合线同步与验证。若要三线合一提升到 `main`，需在确认主工作区状态与发布窗口后执行 `bash scripts/sub2api-threeway-sync.sh --mode promote`。
+
+## 2026-07-04 07:42:00 +0800
+
+- 模式: `dirty-snapshot-fusion`
+- 目标分支: `codex/official-sync-plus-dirty-20260704-063656`
+- 官方融合基线: `codex/official-sync-review@9c6bb4740`
+- 本地脏快照: `codex/main-dirty-snapshot-20260704-063656@06419ceca`
+- 官方引用: `origin/main@2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 动作: 在隔离 worktree 中把主工作区脏快照里的 Kiro / Fable 5 / OpenAI 网关 / 前端管理台等业务改动融合到已包含官方 `origin/main` 的同步线，暂不提升到 `main`
+
+### 本次解决点
+
+- 保留官方 `origin/main` 已同步的 usage log queue / Antigravity 401 auto recover / ops realtime / sponsors/version 等更新，同时融合主工作区未提交的 Kiro 优化与 Claude Fable 5/ Sonnet 5 价格配置。
+- Ent schema 同时保留官方高峰倍率字段与本地 Kiro sticky / endpoint mode / credits 字段，并重新执行 `go generate ./ent`。
+- Wire 生成保持官方 OpenAI quota service 注入，同时保留 Kiro token provider、Grok provider 等本地网关注入。
+- OpenAI chat-completions 自动透传分支补回 inbound client cancel 包装，避免客户端取消被错误记为上游失败。
+- 前端账号创建/编辑、分组配置、Kiro relay/direct、credit unit price、AccountTodayStatsCell 与 billingMode 相关测试均与融合后 UI 文案对齐。
+- 清理临时 `frontend/node_modules` symlink，最终状态无未跟踪依赖目录。
+
+### 验证
+
+- `git diff --check`：通过
+- `git diff --name-only --diff-filter=U`：无输出
+- `rg -n '^(<<<<<<<|=======|>>>>>>>)' backend frontend runtimes || true`：仅 `backend/internal/pkg/antigravity/request_transformer.go` 中测试字符串样式分隔线误报，非冲突标记
+- `cd backend && go test ./internal/service -run '^$' -count=1`：通过
+- `cd backend && go test ./internal/handler/admin ./internal/repository -run 'Kiro|Group|AvailableModels|Migration|Sonnet|Fable|Grok|Peak' -count=1`：通过
+- `cd backend && go test ./internal/service -run 'TestForwardAsChatCompletionsClientCanceledSkipsOpsUpstreamError|Kiro|Fable|Sonnet|OpenAI|UsageLog|APIKey|Auth|Peak|Grok|Media|401|Ops' -count=1`：通过
+- `cd backend && go test ./cmd/server -run '^$' -count=1`：通过
+- `cd backend && go test ./internal/pkg/kiro -count=1`：通过
+- `cd backend && go test ./internal/handler -run 'OpenAI|Failover|Group|Stream|Kiro' -count=1`：通过
+- `cd frontend && npm run typecheck`：通过
+- `cd frontend && npm run test:run -- AccountTodayStatsCell EditAccountModal BulkEditAccountModal billingMode`：通过（48 tests passed；保留既有 duplicate setupFiles / localstorage-file / ProxyAdBanner / Browserslist warning）
+
+### 备注
+
+- 本提交仅完成隔离融合分支；主工作区 `/Users/sven.sun/Desktop/Api/sub2api` 仍保留原脏状态作为安全边界。
+- 未执行 `bash scripts/sub2api-threeway-sync.sh --mode promote`。如需三线合一提升到 `main`，应先确认是否以本融合分支作为提升源，并处理主工作区脏状态保护。

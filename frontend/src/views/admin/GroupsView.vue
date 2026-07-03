@@ -690,6 +690,36 @@
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
             {{ t("admin.groups.kiroCache.description") }}
           </p>
+          <div class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
+            <select v-model="createForm.kiro_endpoint_mode" class="input">
+              <option value="q">{{ t("admin.groups.kiroCache.endpointQ") }}</option>
+              <option value="krs">{{ t("admin.groups.kiroCache.endpointKRS") }}</option>
+              <option value="auto">{{ t("admin.groups.kiroCache.endpointAuto") }}</option>
+            </select>
+            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
+          </div>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="createForm.kiro_auto_sticky_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.autoSticky") }}
+          </label>
+          <div v-if="createForm.kiro_auto_sticky_enabled" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
+            <input
+              v-model.number="createForm.kiro_sticky_session_ttl_seconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
+          </div>
           <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input
               v-model="createForm.kiro_cache_emulation_enabled"
@@ -721,6 +751,36 @@
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
             {{ t("admin.groups.kiroCache.description") }}
           </p>
+          <div class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
+            <select v-model="editForm.kiro_endpoint_mode" class="input">
+              <option value="q">{{ t("admin.groups.kiroCache.endpointQ") }}</option>
+              <option value="krs">{{ t("admin.groups.kiroCache.endpointKRS") }}</option>
+              <option value="auto">{{ t("admin.groups.kiroCache.endpointAuto") }}</option>
+            </select>
+            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
+          </div>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.kiro_auto_sticky_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.autoSticky") }}
+          </label>
+          <div v-if="editForm.kiro_auto_sticky_enabled" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
+            <input
+              v-model.number="editForm.kiro_sticky_session_ttl_seconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
+          </div>
           <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
             <input
               v-model="editForm.kiro_cache_emulation_enabled"
@@ -3618,7 +3678,10 @@ const createForm = reactive({
   require_oauth_only: false,
   require_privacy_set: false,
   kiro_cache_emulation_enabled: false,
+  kiro_auto_sticky_enabled: true,
+  kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 1,
+  kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
   // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -3911,7 +3974,10 @@ const editForm = reactive({
   require_oauth_only: false,
   require_privacy_set: false,
   kiro_cache_emulation_enabled: false,
+  kiro_auto_sticky_enabled: true,
+  kiro_sticky_session_ttl_seconds: 3600,
   kiro_cache_emulation_ratio: 1,
+  kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
 	  // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -4173,7 +4239,10 @@ const closeCreateModal = () => {
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
   createForm.kiro_cache_emulation_enabled = false;
+  createForm.kiro_auto_sticky_enabled = true;
+  createForm.kiro_sticky_session_ttl_seconds = 3600;
   createForm.kiro_cache_emulation_ratio = 1;
+  createForm.kiro_endpoint_mode = "q";
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   Object.assign(createForm.models_list_config, createModelsListState());
   createForm.mcp_xml_inject = true;
@@ -4208,6 +4277,22 @@ const normalizeRateMultiplier = (
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+};
+
+const normalizeKiroStickyTTLSeconds = (
+  value: number | string | null | undefined,
+): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 3600;
+  }
+  if (parsed < 60) {
+    return 60;
+  }
+  if (parsed > 86400) {
+    return 86400;
+  }
+  return Math.trunc(parsed);
 };
 
 const handleCreateGroup = async () => {
@@ -4254,7 +4339,14 @@ const handleCreateGroup = async () => {
     );
     if (requestData.platform !== "kiro") {
       requestData.kiro_cache_emulation_enabled = false;
+      requestData.kiro_auto_sticky_enabled = false;
+      requestData.kiro_sticky_session_ttl_seconds = 0;
       requestData.kiro_cache_emulation_ratio = 0;
+      requestData.kiro_endpoint_mode = "q";
+    } else {
+      requestData.kiro_sticky_session_ttl_seconds = normalizeKiroStickyTTLSeconds(
+        requestData.kiro_sticky_session_ttl_seconds,
+      );
     }
     requestData.peak_rate_enabled = createForm.peak_rate_enabled;
     requestData.peak_start = createForm.peak_start;
@@ -4320,7 +4412,11 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.require_privacy_set = group.require_privacy_set ?? false;
   editForm.kiro_cache_emulation_enabled =
     group.kiro_cache_emulation_enabled ?? false;
+  editForm.kiro_auto_sticky_enabled = group.kiro_auto_sticky_enabled ?? true;
+  editForm.kiro_sticky_session_ttl_seconds =
+    group.kiro_sticky_session_ttl_seconds ?? 3600;
   editForm.kiro_cache_emulation_ratio = group.kiro_cache_emulation_ratio ?? 1;
+  editForm.kiro_endpoint_mode = group.kiro_endpoint_mode ?? "q";
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   Object.assign(
     editForm.models_list_config,
@@ -4411,7 +4507,14 @@ const handleUpdateGroup = async () => {
     );
     if (payload.platform !== "kiro") {
       payload.kiro_cache_emulation_enabled = false;
+      payload.kiro_auto_sticky_enabled = false;
+      payload.kiro_sticky_session_ttl_seconds = 0;
       payload.kiro_cache_emulation_ratio = 0;
+      payload.kiro_endpoint_mode = "q";
+    } else {
+      payload.kiro_sticky_session_ttl_seconds = normalizeKiroStickyTTLSeconds(
+        payload.kiro_sticky_session_ttl_seconds,
+      );
     }
     payload.peak_rate_enabled = editForm.peak_rate_enabled;
     payload.peak_start = editForm.peak_start;

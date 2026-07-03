@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 )
 
 type kiroProfileHTTPUpstream struct {
+	mu        sync.Mutex
 	responses []*http.Response
 	requests  []*http.Request
 }
@@ -25,6 +27,8 @@ func (u *kiroProfileHTTPUpstream) Do(*http.Request, string, int64, int) (*http.R
 }
 
 func (u *kiroProfileHTTPUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.requests = append(u.requests, req)
 	if len(u.responses) == 0 {
 		return nil, fmt.Errorf("no mocked response")
@@ -121,14 +125,18 @@ func TestKiroProfileResolverResolvesAndCachesMissingProfileArn(t *testing.T) {
 	}
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
 
-	buildResult, err := svc.buildKiroPayloadForAccount(context.Background(), account, body, "claude-sonnet-4.6", "access-token", "claude-sonnet-4-6", nil)
+	endpoint := kiroEndpointConfig{Name: "KiroRuntime", Origin: "AI_EDITOR", URL: kiroKRSEndpointURL}
+	buildResult, err := svc.buildKiroPayloadForAccountEndpoint(context.Background(), account, body, "claude-sonnet-4.6", "access-token", "claude-sonnet-4-6", nil, endpoint)
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableProfiles", upstream.requests[0].URL.String())
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/", upstream.requests[0].URL.String())
 	require.Equal(t, upstream.requests[0].URL.Host, upstream.requests[0].Host)
 	require.Equal(t, "Bearer access-token", upstream.requests[0].Header.Get("Authorization"))
-	require.Contains(t, upstream.requests[0].Header.Get("User-Agent"), "api/codewhispererruntime#1.0.0")
-	require.Contains(t, upstream.requests[0].Header.Get("X-Amz-User-Agent"), "aws-sdk-js/1.0.0")
+	require.Equal(t, "application/x-amz-json-1.0", upstream.requests[0].Header.Get("Content-Type"))
+	require.Equal(t, kiroListAvailableProfilesTarget, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Contains(t, upstream.requests[0].Header.Get("User-Agent"), "api/codewhispererstreaming#1.0.34")
+	require.Contains(t, upstream.requests[0].Header.Get("X-Amz-User-Agent"), "aws-sdk-js/1.0.34")
+	require.Equal(t, "attempt=1; max=3", upstream.requests[0].Header.Get("Amz-Sdk-Request"))
 	listBody, err := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"maxResults":10}`, string(listBody))
@@ -176,10 +184,124 @@ func TestKiroProfileResolverFallsBackToRefreshProfileArn(t *testing.T) {
 	t.Cleanup(func() { kiroRetrySleep = originalSleep })
 	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
 
-	buildResult, err := svc.buildKiroPayloadForAccount(context.Background(), account, body, "claude-sonnet-4.6", "expired-token", "claude-sonnet-4-6", nil)
+	endpoint := kiroEndpointConfig{Name: "KiroRuntime", Origin: "AI_EDITOR", URL: kiroKRSEndpointURL}
+	buildResult, err := svc.buildKiroPayloadForAccountEndpoint(context.Background(), account, body, "claude-sonnet-4.6", "expired-token", "claude-sonnet-4-6", nil, endpoint)
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 3)
 	require.Equal(t, "fresh-token", account.GetCredential("access_token"))
 	require.Equal(t, "arn:aws:codewhisperer:us-west-2:123456789012:profile/REFRESHED", account.GetCredential("profile_arn"))
 	require.Equal(t, "arn:aws:codewhisperer:us-west-2:123456789012:profile/REFRESHED", gjson.GetBytes(buildResult.Payload, "profileArn").String())
+}
+
+func TestKiroProfileResolverDefaultQPayloadDoesNotResolveOrAttachProfileArn(t *testing.T) {
+	account := &Account{
+		ID:          203,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"auth_method":  "idc",
+			"provider":     "AWS",
+		},
+	}
+	repo := &kiroProfileRepo{account: account}
+	upstream := &kiroProfileHTTPUpstream{
+		responses: []*http.Response{
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED"}]}`),
+		},
+	}
+	svc := &GatewayService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
+
+	buildResult, err := svc.buildKiroPayloadForAccount(context.Background(), account, body, "claude-sonnet-4.6", "access-token", "claude-sonnet-4-6", nil)
+
+	require.NoError(t, err)
+	require.Empty(t, upstream.requests)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Empty(t, gjson.GetBytes(buildResult.Payload, "profileArn").String())
+}
+
+func TestKiroProfileResolverSingleflightCoalescesConcurrentResolves(t *testing.T) {
+	account := &Account{
+		ID:          204,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"auth_method":  "idc",
+			"provider":     "AWS",
+		},
+	}
+	repo := &kiroProfileRepo{account: account}
+	upstream := &kiroProfileHTTPUpstream{
+		responses: []*http.Response{
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-SF"}]}`),
+		},
+	}
+	svc := &GatewayService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+	}
+
+	const goroutines = 8
+	start := make(chan struct{})
+	results := make(chan string, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- svc.resolveAndPersistKiroProfileArnOnly(context.Background(), account, "access-token")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for profileArn := range results {
+		require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-SF", profileArn)
+	}
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-SF", account.GetCredential("profile_arn"))
+}
+
+func TestKiroProfileResolverSingleflightDoesNotCacheFailure(t *testing.T) {
+	account := &Account{
+		ID:          205,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+		},
+	}
+	repo := &kiroProfileRepo{account: account}
+	upstream := &kiroProfileHTTPUpstream{
+		responses: []*http.Response{
+			newKiroProfileJSONResponse(http.StatusForbidden, `{"message":"not ready"}`),
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RETRY"}]}`),
+		},
+	}
+	svc := &GatewayService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+	}
+
+	require.Empty(t, svc.resolveAndPersistKiroProfileArnOnly(context.Background(), account, "access-token"))
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RETRY", svc.resolveAndPersistKiroProfileArnOnly(context.Background(), account, "access-token"))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, 1, repo.updateCredentialsCalls)
 }

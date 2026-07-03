@@ -33,9 +33,9 @@ type Group struct {
 	RateMultiplier float64 `json:"rate_multiplier,omitempty"`
 	// 是否启用高峰时段倍率
 	PeakRateEnabled bool `json:"peak_rate_enabled,omitempty"`
-	// 高峰开始时间 HH:MM（含），如 14:00；空表示未配置
+	// 高峰开始时间 HH:MM（含），如 14:00；空表示未配置；不支持跨天
 	PeakStart string `json:"peak_start,omitempty"`
-	// 高峰结束时间 HH:MM（不含），如 18:00
+	// 高峰结束时间 HH:MM（不含），必须大于 peak_start；不支持跨天，如 22:00-02:00
 	PeakEnd string `json:"peak_end,omitempty"`
 	// 高峰时段叠加倍率，仅在 peak_rate_enabled 且处于 [peak_start, peak_end) 时乘入文本倍率
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier,omitempty"`
@@ -99,8 +99,14 @@ type Group struct {
 	RpmLimit int `json:"rpm_limit,omitempty"`
 	// 是否启用 Kiro 模拟缓存（仅 kiro 分组生效）
 	KiroCacheEmulationEnabled bool `json:"kiro_cache_emulation_enabled,omitempty"`
+	// 是否启用 Kiro 自动粘性会话路由（仅 kiro 分组生效）
+	KiroAutoStickyEnabled bool `json:"kiro_auto_sticky_enabled,omitempty"`
+	// Kiro 粘性会话绑定 TTL 秒数，范围 60-86400（仅 kiro 分组生效）
+	KiroStickySessionTTLSeconds int `json:"kiro_sticky_session_ttl_seconds,omitempty"`
 	// Kiro 模拟缓存生效比例，范围 0-1（仅 kiro 分组生效）
 	KiroCacheEmulationRatio float64 `json:"kiro_cache_emulation_ratio,omitempty"`
+	// Kiro endpoint 模式：q、krs、auto（仅 kiro 分组生效）
+	KiroEndpointMode string `json:"kiro_endpoint_mode,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the GroupQuery when eager-loading is set.
 	Edges        GroupEdges `json:"edges"`
@@ -209,13 +215,13 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled, group.FieldKiroAutoStickyEnabled:
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldKiroCacheEmulationRatio:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
+		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit, group.FieldKiroStickySessionTTLSeconds:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldKiroEndpointMode:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -498,11 +504,29 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.KiroCacheEmulationEnabled = value.Bool
 			}
+		case group.FieldKiroAutoStickyEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_auto_sticky_enabled", values[i])
+			} else if value.Valid {
+				_m.KiroAutoStickyEnabled = value.Bool
+			}
+		case group.FieldKiroStickySessionTTLSeconds:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_sticky_session_ttl_seconds", values[i])
+			} else if value.Valid {
+				_m.KiroStickySessionTTLSeconds = int(value.Int64)
+			}
 		case group.FieldKiroCacheEmulationRatio:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field kiro_cache_emulation_ratio", values[i])
 			} else if value.Valid {
 				_m.KiroCacheEmulationRatio = value.Float64
+			}
+		case group.FieldKiroEndpointMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_endpoint_mode", values[i])
+			} else if value.Valid {
+				_m.KiroEndpointMode = value.String
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -720,8 +744,17 @@ func (_m *Group) String() string {
 	builder.WriteString("kiro_cache_emulation_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.KiroCacheEmulationEnabled))
 	builder.WriteString(", ")
+	builder.WriteString("kiro_auto_sticky_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.KiroAutoStickyEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("kiro_sticky_session_ttl_seconds=")
+	builder.WriteString(fmt.Sprintf("%v", _m.KiroStickySessionTTLSeconds))
+	builder.WriteString(", ")
 	builder.WriteString("kiro_cache_emulation_ratio=")
 	builder.WriteString(fmt.Sprintf("%v", _m.KiroCacheEmulationRatio))
+	builder.WriteString(", ")
+	builder.WriteString("kiro_endpoint_mode=")
+	builder.WriteString(_m.KiroEndpointMode)
 	builder.WriteByte(')')
 	return builder.String()
 }

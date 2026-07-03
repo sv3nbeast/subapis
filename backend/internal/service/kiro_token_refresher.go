@@ -35,7 +35,7 @@ func (r *KiroTokenRefresher) NeedsRefresh(account *Account, _ time.Duration) boo
 	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {
-		return false
+		return strings.TrimSpace(account.GetCredential("refresh_token")) != ""
 	}
 	return time.Until(*expiresAt) <= kiroRefreshWindow
 }

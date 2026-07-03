@@ -41,6 +41,11 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)
 	requireColumn(t, tx, "redeem_codes", "validity_days", "integer", 0, false)
 
+	// groups: Kiro sticky session settings
+	requireColumn(t, tx, "groups", "kiro_auto_sticky_enabled", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "kiro_sticky_session_ttl_seconds", "integer", 0, false)
+	requireColumn(t, tx, "groups", "kiro_endpoint_mode", "character varying", 16, false)
+
 	// usage_logs: billing_type used by filters/stats
 	requireColumn(t, tx, "usage_logs", "billing_type", "smallint", 0, false)
 	requireColumn(t, tx, "usage_logs", "request_type", "smallint", 0, false)
@@ -49,6 +54,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "image_output_size", "character varying", 32, true)
 	requireColumn(t, tx, "usage_logs", "image_size_source", "character varying", 16, true)
 	requireColumn(t, tx, "usage_logs", "image_size_breakdown", "jsonb", 0, true)
+	requireColumn(t, tx, "usage_logs", "kiro_credits", "numeric", 0, true)
 	requireConstraintDefinitionContains(
 		t,
 		tx,

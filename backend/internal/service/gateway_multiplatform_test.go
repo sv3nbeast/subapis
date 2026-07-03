@@ -1490,6 +1490,26 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 			accounts: []Account{
 				{ID: 1, Platform: PlatformAnthropic, Priority: 2, Status: StatusActive, Schedulable: true},
 				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true, Extra: map[string]any{"mixed_scheduling": true}},
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
+		require.NoError(t, err)
+		require.NotNil(t, acc)
+		require.Equal(t, int64(2), acc.ID)
+		require.Equal(t, PlatformKiro, acc.Platform)
+	})
+
 	t.Run("混合调度-Gemini家族限流后跳过Antigravity账户", func(t *testing.T) {
 		resetAt := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
 		repo := &mockAccountRepoForPlatform{
@@ -1583,10 +1603,24 @@ func TestGatewayService_selectAccountWithMixedScheduling(t *testing.T) {
 				{ID: 1, Platform: PlatformAnthropic, Priority: 3, Status: StatusActive, Schedulable: true},
 				{ID: 2, Platform: PlatformKiro, Priority: 1, Status: StatusActive, Schedulable: true},
 				{ID: 3, Platform: PlatformDroid, Priority: 1, Status: StatusActive, Schedulable: true},
-		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "gemini-3-pro-preview", nil, PlatformGemini)
+			},
+			accountsByID: map[int64]*Account{},
+		}
+		for i := range repo.accounts {
+			repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+		}
+
+		svc := &GatewayService{
+			accountRepo: repo,
+			cache:       &mockGatewayCacheForPlatform{},
+			cfg:         testConfig(),
+		}
+
+		acc, err := svc.selectAccountWithMixedScheduling(ctx, nil, "", "claude-sonnet-4-5", nil, PlatformAnthropic)
 		require.NoError(t, err)
 		require.NotNil(t, acc)
-		require.Equal(t, int64(3), acc.ID)
+		require.Equal(t, int64(1), acc.ID)
+		require.Equal(t, PlatformAnthropic, acc.Platform)
 	})
 
 	t.Run("混合调度-Gemini家族限流不影响Claude调度", func(t *testing.T) {

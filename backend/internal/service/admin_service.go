@@ -95,6 +95,8 @@ type AdminService interface {
 	EnsureOpenAIPrivacy(ctx context.Context, account *Account) string
 	// EnsureAntigravityPrivacy 检查 Antigravity OAuth 账号 privacy_mode，未设置则调用 setUserSettings 并持久化。
 	EnsureAntigravityPrivacy(ctx context.Context, account *Account) string
+	// EnsureKiroProfileArn 检查 Kiro OAuth 账号 profile_arn，缺失或为占位符则解析并持久化。
+	EnsureKiroProfileArn(ctx context.Context, account *Account) string
 	// ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
 	// ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。
@@ -242,8 +244,11 @@ type CreateGroupInput struct {
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
-	KiroCacheEmulationEnabled bool
-	KiroCacheEmulationRatio   float64
+	KiroCacheEmulationEnabled   bool
+	KiroAutoStickyEnabled       *bool
+	KiroStickySessionTTLSeconds *int
+	KiroCacheEmulationRatio     float64
+	KiroEndpointMode            string
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
 	CopyAccountsFromGroupIDs []int64
 }
@@ -291,8 +296,11 @@ type UpdateGroupInput struct {
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效），nil 表示未提供不改动。
-	KiroCacheEmulationEnabled *bool
-	KiroCacheEmulationRatio   *float64
+	KiroCacheEmulationEnabled   *bool
+	KiroAutoStickyEnabled       *bool
+	KiroStickySessionTTLSeconds *int
+	KiroCacheEmulationRatio     *float64
+	KiroEndpointMode            *string
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64
 }
@@ -570,23 +578,25 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
-	userRepo             UserRepository
-	groupRepo            GroupRepository
-	accountRepo          AccountRepository
-	proxyRepo            ProxyRepository
-	apiKeyRepo           APIKeyRepository
-	redeemCodeRepo       RedeemCodeRepository
-	userGroupRateRepo    UserGroupRateRepository
-	userRPMCache         UserRPMCache
-	billingCacheService  *BillingCacheService
-	proxyProber          ProxyExitInfoProber
-	proxyLatencyCache    ProxyLatencyCache
-	authCacheInvalidator APIKeyAuthCacheInvalidator
-	entClient            *dbent.Client // 用于开启数据库事务
-	settingService       *SettingService
-	defaultSubAssigner   DefaultSubscriptionAssigner
-	userSubRepo          UserSubscriptionRepository
-	privacyClientFactory PrivacyClientFactory
+	userRepo                       UserRepository
+	groupRepo                      GroupRepository
+	accountRepo                    AccountRepository
+	proxyRepo                      ProxyRepository
+	apiKeyRepo                     APIKeyRepository
+	redeemCodeRepo                 RedeemCodeRepository
+	userGroupRateRepo              UserGroupRateRepository
+	userRPMCache                   UserRPMCache
+	billingCacheService            *BillingCacheService
+	proxyProber                    ProxyExitInfoProber
+	proxyLatencyCache              ProxyLatencyCache
+	authCacheInvalidator           APIKeyAuthCacheInvalidator
+	entClient                      *dbent.Client // 用于开启数据库事务
+	settingService                 *SettingService
+	defaultSubAssigner             DefaultSubscriptionAssigner
+	userSubRepo                    UserSubscriptionRepository
+	privacyClientFactory           PrivacyClientFactory
+	kiroProfileHTTPUpstream        HTTPUpstream
+	kiroProfileTLSFPProfileService *TLSFingerprintProfileService
 }
 
 type userGroupRateBatchReader interface {
@@ -632,6 +642,13 @@ func NewAdminService(
 		userSubRepo:          userSubRepo,
 		privacyClientFactory: privacyClientFactory,
 	}
+}
+
+// SetKiroProfileResolverDeps injects the local upstream transport used to prefill
+// Kiro profile ARN after manual account refresh.
+func (s *adminServiceImpl) SetKiroProfileResolverDeps(httpUpstream HTTPUpstream, tlsFPProfileService *TLSFingerprintProfileService) {
+	s.kiroProfileHTTPUpstream = httpUpstream
+	s.kiroProfileTLSFPProfileService = tlsFPProfileService
 }
 
 // User management implementations
@@ -2072,6 +2089,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	allowImageGeneration := input.AllowImageGeneration || defaultAllowImageGenerationForPlatform(platform)
+	kiroAutoStickyEnabled := true
+	if input.KiroAutoStickyEnabled != nil {
+		kiroAutoStickyEnabled = *input.KiroAutoStickyEnabled
+	}
+	kiroStickySessionTTLSeconds := DefaultKiroStickySessionTTLSeconds
+	if input.KiroStickySessionTTLSeconds != nil {
+		kiroStickySessionTTLSeconds = *input.KiroStickySessionTTLSeconds
+	}
 
 	// 如果指定了复制账号的源分组，先获取账号 ID 列表
 	var accountIDsToCopy []int64
@@ -2140,7 +2165,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
 		RPMLimit:                        input.RPMLimit,
 		KiroCacheEmulationEnabled:       input.KiroCacheEmulationEnabled,
+		KiroAutoStickyEnabled:           kiroAutoStickyEnabled,
+		KiroStickySessionTTLSeconds:     kiroStickySessionTTLSeconds,
 		KiroCacheEmulationRatio:         input.KiroCacheEmulationRatio,
+		KiroEndpointMode:                input.KiroEndpointMode,
 	}
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
@@ -2416,8 +2444,17 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.KiroCacheEmulationEnabled != nil {
 		group.KiroCacheEmulationEnabled = *input.KiroCacheEmulationEnabled
 	}
+	if input.KiroAutoStickyEnabled != nil {
+		group.KiroAutoStickyEnabled = *input.KiroAutoStickyEnabled
+	}
+	if input.KiroStickySessionTTLSeconds != nil {
+		group.KiroStickySessionTTLSeconds = *input.KiroStickySessionTTLSeconds
+	}
 	if input.KiroCacheEmulationRatio != nil {
 		group.KiroCacheEmulationRatio = *input.KiroCacheEmulationRatio
+	}
+	if input.KiroEndpointMode != nil {
+		group.KiroEndpointMode = *input.KiroEndpointMode
 	}
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
@@ -2886,6 +2923,11 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 		ComputeQuotaResetAt(account.Extra)
+		if isKiroDirectModeAccount(account) {
+			if err := ValidateKiroCreditUnitPriceFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
 	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
@@ -3024,6 +3066,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		ComputeQuotaResetAt(account.Extra)
+		if isKiroDirectModeAccount(account) {
+			if err := ValidateKiroCreditUnitPriceFromExtra(account.Extra); err != nil {
+				return nil, err
+			}
+		}
 		NormalizeFixedQuotaWindows(account.Extra)
 	}
 	// 影子代理恒继承母账号(由 propagateProxyToShadows 同步),不接受独立编辑——外审 B/P1;
@@ -4512,6 +4559,27 @@ func (s *adminServiceImpl) EnsureAntigravityPrivacy(ctx context.Context, account
 	}
 	applyAntigravityPrivacyMode(account, mode)
 	return mode
+}
+
+// EnsureKiroProfileArn 检查 Kiro OAuth 账号是否已有真实 profile_arn，
+// 缺失或为占位符时复用网关 resolver 解析并持久化。
+func (s *adminServiceImpl) EnsureKiroProfileArn(ctx context.Context, account *Account) string {
+	if s == nil || account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return ""
+	}
+	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
+		return profileArn
+	}
+	token := strings.TrimSpace(account.GetCredential("access_token"))
+	if token == "" || s.kiroProfileHTTPUpstream == nil {
+		return ""
+	}
+	resolver := &GatewayService{
+		accountRepo:         s.accountRepo,
+		httpUpstream:        s.kiroProfileHTTPUpstream,
+		tlsFPProfileService: s.kiroProfileTLSFPProfileService,
+	}
+	return resolver.resolveAndPersistKiroProfileArnOnly(ctx, account, token)
 }
 
 // ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。

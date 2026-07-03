@@ -106,6 +106,11 @@ func (UsageLog) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),
+		field.Float("kiro_credits").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
+			Comment("Kiro credits consumed by this usage log"),
 
 		// 其他字段
 		field.Int8("billing_type").

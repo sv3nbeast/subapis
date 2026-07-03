@@ -1,9 +1,33 @@
 package service
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
+
+func TestShouldCorrectCodexToolCallsForClient_OfficialCodexPreservesUpdatePlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(nil)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.141.0")
+
+	body := []byte(`{"tools":[{"type":"function","name":"todowrite"}]}`)
+	require.False(t, shouldCorrectCodexToolCallsForClient(c, body, true))
+}
+
+func TestShouldCorrectCodexToolCallsForClient_OpenCodeToolsEnableRewrite(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"todowrite"},{"type":"function","name":"edit"}]}`)
+	require.True(t, shouldCorrectCodexToolCallsForClient(nil, body, false))
+}
+
+func TestShouldCorrectCodexToolCallsForClient_NativeToolsDisableRewrite(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"function","name":"update_plan"},{"type":"function","name":"apply_patch"}]}`)
+	require.False(t, shouldCorrectCodexToolCallsForClient(nil, body, true))
+}
 
 // TestOpenAIGatewayService_ToolCorrection 测试 OpenAIGatewayService 中的工具修正集成
 func TestOpenAIGatewayService_ToolCorrection(t *testing.T) {

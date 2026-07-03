@@ -1,16 +1,6 @@
 <template>
-  <BaseDialog
-    :show="show"
-    :title="t('admin.accounts.editAccount')"
-    width="normal"
-    @close="handleClose"
-  >
-    <form
-      v-if="account"
-      id="edit-account-form"
-      @submit.prevent="handleSubmit"
-      class="space-y-5"
-    >
+  <BaseDialog :show="show" :title="t('admin.accounts.editAccount')" width="normal" @close="handleClose">
+    <form v-if="account" id="edit-account-form" @submit.prevent="handleSubmit" class="space-y-5">
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -83,11 +73,7 @@
           </div>
 
           <div v-if="modelMappings.length > 0" class="mb-3 space-y-2">
-            <div
-              v-for="(mapping, index) in modelMappings"
-              :key="getModelMappingKey(mapping)"
-              class="space-y-1"
-            >
+            <div v-for="(mapping, index) in modelMappings" :key="getModelMappingKey(mapping)" class="space-y-1">
               <div class="flex items-center gap-2">
                 <input
                   v-model="mapping.from"
@@ -104,10 +90,7 @@
                 <input
                   v-model="mapping.to"
                   type="text"
-                  :class="[
-                    'input flex-1',
-                    mapping.to.includes('*') ? 'border-red-500 dark:border-red-500' : ''
-                  ]"
+                  :class="['input flex-1', mapping.to.includes('*') ? 'border-red-500 dark:border-red-500' : '']"
                   :placeholder="t('admin.accounts.actualModel')"
                 />
                 <button
@@ -162,10 +145,7 @@
         <div v-else-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
-          <div
-            v-if="isOpenAIModelRestrictionDisabled"
-            class="mb-3 rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
-          >
+          <div v-if="isOpenAIModelRestrictionDisabled" class="mb-3 rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
             <p class="text-xs text-amber-700 dark:text-amber-400">
               {{ t('admin.accounts.openai.modelRestrictionDisabledByPassthrough') }}
             </p>
@@ -184,12 +164,7 @@
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
                 ]"
               >
-                <svg
-                  class="mr-1.5 inline h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
+                <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -209,12 +184,7 @@
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
                 ]"
               >
-                <svg
-                  class="mr-1.5 inline h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
+                <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -230,10 +200,12 @@
             <div v-if="modelRestrictionMode === 'whitelist'">
               <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-                <span v-if="allowedModels.length === 0">{{
-                  t('admin.accounts.supportsAllModels')
-                }}</span>
+                {{
+                  t('admin.accounts.selectedModels', {
+                    count: allowedModels.length
+                  })
+                }}
+                <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
               </p>
             </div>
 
@@ -241,12 +213,7 @@
             <div v-else>
               <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
                 <p class="text-xs text-purple-700 dark:text-purple-400">
-                  <svg
-                    class="mr-1 inline h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
+                  <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path
                       stroke-linecap="round"
                       stroke-linejoin="round"
@@ -258,75 +225,65 @@
                 </p>
               </div>
 
-            <!-- Model Mapping List -->
-            <div v-if="modelMappings.length > 0" class="mb-3 space-y-2">
-              <div
-                v-for="(mapping, index) in modelMappings"
-                :key="getModelMappingKey(mapping)"
-                class="flex items-center gap-2"
-              >
-                <input
-                  v-model="mapping.from"
-                  type="text"
-                  class="input flex-1"
-                  :placeholder="t('admin.accounts.requestModel')"
-                />
-                <svg
-                  class="h-4 w-4 flex-shrink-0 text-gray-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+              <!-- Model Mapping List -->
+              <div v-if="modelMappings.length > 0" class="mb-3 space-y-2">
+                <div
+                  v-for="(mapping, index) in modelMappings"
+                  :key="getModelMappingKey(mapping)"
+                  class="flex items-center gap-2"
                 >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M14 5l7 7m0 0l-7 7m7-7H3"
+                  <input
+                    v-model="mapping.from"
+                    type="text"
+                    class="input flex-1"
+                    :placeholder="t('admin.accounts.requestModel')"
                   />
-                </svg>
-                <input
-                  v-model="mapping.to"
-                  type="text"
-                  class="input flex-1"
-                  :placeholder="t('admin.accounts.actualModel')"
-                />
-                <button
-                  type="button"
-                  @click="removeModelMapping(index)"
-                  class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                >
-                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg
+                    class="h-4 w-4 flex-shrink-0 text-gray-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
                     <path
                       stroke-linecap="round"
                       stroke-linejoin="round"
                       stroke-width="2"
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      d="M14 5l7 7m0 0l-7 7m7-7H3"
                     />
                   </svg>
-                </button>
+                  <input
+                    v-model="mapping.to"
+                    type="text"
+                    class="input flex-1"
+                    :placeholder="t('admin.accounts.actualModel')"
+                  />
+                  <button
+                    type="button"
+                    @click="removeModelMapping(index)"
+                    class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                  >
+                    <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <button
-              type="button"
-              @click="addModelMapping"
-              class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
-            >
-              <svg
-                class="mr-1 inline h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
+              <button
+                type="button"
+                @click="addModelMapping"
+                class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
-              {{ t('admin.accounts.addMapping') }}
-            </button>
+                <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+                {{ t('admin.accounts.addMapping') }}
+              </button>
 
               <!-- Quick Add Buttons -->
               <div class="flex flex-wrap gap-2">
@@ -461,12 +418,7 @@
               />
               <button type="button" @click="addCustomErrorCode" class="btn btn-secondary px-3">
                 <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M12 4v16m8-8H4"
-                  />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
                 </svg>
               </button>
             </div>
@@ -479,11 +431,7 @@
                 class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-sm font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400"
               >
                 {{ code }}
-                <button
-                  type="button"
-                  @click="removeErrorCode(code)"
-                  class="hover:text-red-900 dark:hover:text-red-300"
-                >
+                <button type="button" @click="removeErrorCode(code)" class="hover:text-red-900 dark:hover:text-red-300">
                   <Icon name="x" size="sm" :stroke-width="2" />
                 </button>
               </span>
@@ -493,7 +441,6 @@
             </div>
           </div>
         </div>
-
       </div>
 
       <!-- Anthropic OAuth/SetupToken model mapping -->
@@ -520,18 +467,8 @@
               class="input flex-1"
               :placeholder="t('admin.accounts.requestModel')"
             />
-            <svg
-              class="h-4 w-4 flex-shrink-0 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M14 5l7 7m0 0l-7 7m7-7H3"
-              />
+            <svg class="h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
             </svg>
             <input
               v-model="mapping.to"
@@ -626,10 +563,12 @@
           <div v-if="account.platform === 'openai' && modelRestrictionMode === 'whitelist'">
             <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-              <span v-if="allowedModels.length === 0">{{
-                t('admin.accounts.supportsAllModels')
-              }}</span>
+              {{
+                t('admin.accounts.selectedModels', {
+                  count: allowedModels.length
+                })
+              }}
+              <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
             </p>
           </div>
 
@@ -698,7 +637,10 @@
                     </svg>
                   </button>
                 </div>
-                <p v-if="account.platform === 'kiro' && !isValidWildcardPattern(mapping.from)" class="text-xs text-red-500">
+                <p
+                  v-if="account.platform === 'kiro' && !isValidWildcardPattern(mapping.from)"
+                  class="text-xs text-red-500"
+                >
                   {{ t('admin.accounts.wildcardOnlyAtEnd') }}
                 </p>
                 <p v-if="account.platform === 'kiro' && mapping.to.includes('*')" class="text-xs text-red-500">
@@ -731,7 +673,26 @@
         </template>
       </div>
 
-      <div v-if="account.platform === 'kiro' && account.type === 'oauth'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="isKiroDirectAccount" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
+        <input
+          v-model.number="kiroCreditUnitPriceUsd"
+          type="number"
+          min="0"
+          step="0.001"
+          class="input"
+          placeholder="0"
+          data-testid="kiro-credit-unit-price-usd"
+        />
+        <p class="input-hint">
+          {{ t('admin.accounts.kiroCreditUnitPriceUsdHint') }}
+        </p>
+      </div>
+
+      <div
+        v-if="account.platform === 'kiro' && account.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
         <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.groups.kiroCache.title') }}
         </label>
@@ -765,28 +726,23 @@
       <div v-if="account.type === 'upstream'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.upstream.baseUrl') }}</label>
-          <input
-            v-model="editBaseUrl"
-            type="text"
-            class="input"
-            placeholder="https://cloudcode-pa.googleapis.com"
-          />
-          <p class="input-hint">{{ t('admin.accounts.upstream.baseUrlHint') }}</p>
+          <input v-model="editBaseUrl" type="text" class="input" placeholder="https://cloudcode-pa.googleapis.com" />
+          <p class="input-hint">
+            {{ t('admin.accounts.upstream.baseUrlHint') }}
+          </p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.upstream.apiKey') }}</label>
-          <input
-            v-model="editApiKey"
-            type="password"
-            class="input font-mono"
-            placeholder="sk-..."
-          />
+          <input v-model="editApiKey" type="password" class="input font-mono" placeholder="sk-..." />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
         </div>
       </div>
 
       <!-- Vertex Service Account -->
-      <div v-if="(account.platform === 'gemini' || account.platform === 'anthropic') && account.type === 'service_account'" class="space-y-4">
+      <div
+        v-if="(account.platform === 'gemini' || account.platform === 'anthropic') && account.type === 'service_account'"
+        class="space-y-4"
+      >
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label class="input-label">Project ID</label>
@@ -797,30 +753,22 @@
               readonly
               :placeholder="t('admin.accounts.vertexProjectIdPlaceholder')"
             />
-            <p class="input-hint">{{ t('admin.accounts.vertexSaJsonEditHint') }}</p>
+            <p class="input-hint">
+              {{ t('admin.accounts.vertexSaJsonEditHint') }}
+            </p>
           </div>
           <div>
             <label class="input-label">Location</label>
-            <select
-              v-model="editVertexLocation"
-              required
-              class="input font-mono"
-            >
-              <optgroup
-                v-for="group in VERTEX_LOCATION_OPTIONS"
-                :key="group.label"
-                :label="group.label"
-              >
-                <option
-                  v-for="option in group.options"
-                  :key="option.value"
-                  :value="option.value"
-                >
+            <select v-model="editVertexLocation" required class="input font-mono">
+              <optgroup v-for="group in VERTEX_LOCATION_OPTIONS" :key="group.label" :label="group.label">
+                <option v-for="option in group.options" :key="option.value" :value="option.value">
                   {{ option.label }}
                 </option>
               </optgroup>
             </select>
-            <p class="input-hint">{{ t('admin.accounts.vertexLocationHint') }}</p>
+            <p class="input-hint">
+              {{ t('admin.accounts.vertexLocationHint') }}
+            </p>
           </div>
         </div>
 
@@ -840,12 +788,7 @@
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
               ]"
             >
-              <svg
-                class="mr-1.5 inline h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
+              <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -865,12 +808,7 @@
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
               ]"
             >
-              <svg
-                class="mr-1.5 inline h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
+              <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -886,10 +824,12 @@
           <div v-if="modelRestrictionMode === 'whitelist'">
             <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-              <span v-if="allowedModels.length === 0">{{
-                t('admin.accounts.supportsAllModels')
-              }}</span>
+              {{
+                t('admin.accounts.selectedModels', {
+                  count: allowedModels.length
+                })
+              }}
+              <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
             </p>
           </div>
 
@@ -897,12 +837,7 @@
           <div v-else>
             <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
               <p class="text-xs text-purple-700 dark:text-purple-400">
-                <svg
-                  class="mr-1 inline h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
+                <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -927,18 +862,8 @@
                   class="input flex-1"
                   :placeholder="t('admin.accounts.requestModel')"
                 />
-                <svg
-                  class="h-4 w-4 flex-shrink-0 text-gray-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M14 5l7 7m0 0l-7 7m7-7H3"
-                  />
+                <svg class="h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
                 </svg>
                 <input
                   v-model="mapping.to"
@@ -968,18 +893,8 @@
               @click="addModelMapping"
               class="mb-3 w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
             >
-              <svg
-                class="mr-1 inline h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 4v16m8-8H4"
-                />
+              <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
               </svg>
               {{ t('admin.accounts.addMapping') }}
             </button>
@@ -1006,12 +921,7 @@
         <template v-if="!isBedrockAPIKeyMode">
           <div>
             <label class="input-label">{{ t('admin.accounts.bedrockAccessKeyId') }}</label>
-            <input
-              v-model="editBedrockAccessKeyId"
-              type="text"
-              class="input font-mono"
-              placeholder="AKIA..."
-            />
+            <input v-model="editBedrockAccessKeyId" type="text" class="input font-mono" placeholder="AKIA..." />
           </div>
           <div>
             <label class="input-label">{{ t('admin.accounts.bedrockSecretAccessKey') }}</label>
@@ -1021,7 +931,9 @@
               class="input font-mono"
               :placeholder="t('admin.accounts.bedrockSecretKeyLeaveEmpty')"
             />
-            <p class="input-hint">{{ t('admin.accounts.bedrockSecretKeyLeaveEmpty') }}</p>
+            <p class="input-hint">
+              {{ t('admin.accounts.bedrockSecretKeyLeaveEmpty') }}
+            </p>
           </div>
           <div>
             <label class="input-label">{{ t('admin.accounts.bedrockSessionToken') }}</label>
@@ -1031,7 +943,9 @@
               class="input font-mono"
               :placeholder="t('admin.accounts.bedrockSecretKeyLeaveEmpty')"
             />
-            <p class="input-hint">{{ t('admin.accounts.bedrockSessionTokenHint') }}</p>
+            <p class="input-hint">
+              {{ t('admin.accounts.bedrockSessionTokenHint') }}
+            </p>
           </div>
         </template>
 
@@ -1044,18 +958,15 @@
             class="input font-mono"
             :placeholder="t('admin.accounts.bedrockApiKeyLeaveEmpty')"
           />
-          <p class="input-hint">{{ t('admin.accounts.bedrockApiKeyLeaveEmpty') }}</p>
+          <p class="input-hint">
+            {{ t('admin.accounts.bedrockApiKeyLeaveEmpty') }}
+          </p>
         </div>
 
         <!-- Shared: Region -->
         <div>
           <label class="input-label">{{ t('admin.accounts.bedrockRegion') }}</label>
-          <input
-            v-model="editBedrockRegion"
-            type="text"
-            class="input"
-            placeholder="us-east-1"
-          />
+          <input v-model="editBedrockRegion" type="text" class="input" placeholder="us-east-1" />
           <p class="input-hint">{{ t('admin.accounts.bedrockRegionHint') }}</p>
         </div>
 
@@ -1069,7 +980,9 @@
             />
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.bedrockForceGlobal') }}</span>
           </label>
-          <p class="input-hint mt-1">{{ t('admin.accounts.bedrockForceGlobalHint') }}</p>
+          <p class="input-hint mt-1">
+            {{ t('admin.accounts.bedrockForceGlobalHint') }}
+          </p>
         </div>
 
         <!-- Model Restriction for Bedrock -->
@@ -1108,15 +1021,28 @@
           <div v-if="modelRestrictionMode === 'whitelist'">
             <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+              {{
+                t('admin.accounts.selectedModels', {
+                  count: allowedModels.length
+                })
+              }}
               <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
             </p>
           </div>
 
           <!-- Mapping Mode -->
           <div v-else class="space-y-3">
-            <div v-for="(mapping, index) in modelMappings" :key="getModelMappingKey(mapping)" class="flex items-center gap-2">
-              <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
+            <div
+              v-for="(mapping, index) in modelMappings"
+              :key="getModelMappingKey(mapping)"
+              class="flex items-center gap-2"
+            >
+              <input
+                v-model="mapping.from"
+                type="text"
+                class="input flex-1"
+                :placeholder="t('admin.accounts.fromModel')"
+              />
               <span class="text-gray-400">→</span>
               <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
               <button type="button" @click="modelMappings.splice(index, 1)" class="text-red-500 hover:text-red-700">
@@ -1206,7 +1132,9 @@
           class="input font-mono"
           :placeholder="t('admin.accounts.antigravityProjectIdPlaceholder')"
         />
-        <p class="input-hint">{{ t('admin.accounts.antigravityProjectIdHint') }}</p>
+        <p class="input-hint">
+          {{ t('admin.accounts.antigravityProjectIdHint') }}
+        </p>
       </div>
 
       <!-- Antigravity model restriction (applies to all antigravity types) -->
@@ -1217,7 +1145,9 @@
         <!-- Mapping Mode Only (no toggle for Antigravity) -->
         <div>
           <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
-            <p class="text-xs text-purple-700 dark:text-purple-400">{{ t('admin.accounts.mapRequestModels') }}</p>
+            <p class="text-xs text-purple-700 dark:text-purple-400">
+              {{ t('admin.accounts.mapRequestModels') }}
+            </p>
           </div>
 
           <div v-if="antigravityModelMappings.length > 0" class="mb-3 space-y-2">
@@ -1243,10 +1173,7 @@
                 <input
                   v-model="mapping.to"
                   type="text"
-                  :class="[
-                    'input flex-1',
-                    mapping.to.includes('*') ? 'border-red-500 dark:border-red-500' : ''
-                  ]"
+                  :class="['input flex-1', mapping.to.includes('*') ? 'border-red-500 dark:border-red-500' : '']"
                   :placeholder="t('admin.accounts.actualModel')"
                 />
                 <button
@@ -1327,11 +1254,19 @@
           </div>
           <div v-if="tlsFingerprintEnabled" class="mt-3">
             <select v-model="tlsFingerprintProfileId" class="input">
-              <option :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
-              <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
-              <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+              <option :value="null">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}
+              </option>
+              <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}
+              </option>
+              <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">
+                {{ p.name }}
+              </option>
             </select>
-            <p class="input-hint">{{ t('admin.accounts.quotaControl.tlsFingerprint.antigravityAutoHint') }}</p>
+            <p class="input-hint">
+              {{ t('admin.accounts.quotaControl.tlsFingerprint.antigravityAutoHint') }}
+            </p>
           </div>
         </div>
       </div>
@@ -1390,7 +1325,11 @@
             >
               <div class="mb-2 flex items-center justify-between">
                 <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {{ t('admin.accounts.tempUnschedulable.ruleIndex', { index: index + 1 }) }}
+                  {{
+                    t('admin.accounts.tempUnschedulable.ruleIndex', {
+                      index: index + 1
+                    })
+                  }}
                 </span>
                 <div class="flex items-center gap-2">
                   <button
@@ -1451,7 +1390,9 @@
                     class="input"
                     :placeholder="t('admin.accounts.tempUnschedulable.keywordsPlaceholder')"
                   />
-                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.keywordsHint') }}</p>
+                  <p class="input-hint">
+                    {{ t('admin.accounts.tempUnschedulable.keywordsHint') }}
+                  </p>
                 </div>
                 <div class="sm:col-span-2">
                   <label class="input-label">{{ t('admin.accounts.tempUnschedulable.description') }}</label>
@@ -1471,12 +1412,7 @@
             @click="addTempUnschedRule()"
             class="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-sm text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
           >
-            <svg
-              class="mr-1 inline h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
+            <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
             </svg>
             {{ t('admin.accounts.tempUnschedulable.addRule') }}
@@ -1491,9 +1427,7 @@
       >
         <div class="flex items-center justify-between">
           <div>
-            <label class="input-label mb-0">{{
-              t('admin.accounts.interceptWarmupRequests')
-            }}</label>
+            <label class="input-label mb-0">{{ t('admin.accounts.interceptWarmupRequests') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.interceptWarmupRequestsDesc') }}
             </p>
@@ -1527,31 +1461,37 @@
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
-          <input v-model.number="form.concurrency" type="number" min="1" class="input"
-            @input="form.concurrency = Math.max(1, form.concurrency || 1)" />
+          <input
+            v-model.number="form.concurrency"
+            type="number"
+            min="1"
+            class="input"
+            @input="form.concurrency = Math.max(1, form.concurrency || 1)"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.loadFactor') }}</label>
-          <input v-model.number="form.load_factor" type="number" min="1"
-            class="input" :placeholder="String(form.concurrency || 1)"
-            @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null" />
+          <input
+            v-model.number="form.load_factor"
+            type="number"
+            min="1"
+            class="input"
+            :placeholder="String(form.concurrency || 1)"
+            @input="form.load_factor = (form.load_factor &amp;&amp; form.load_factor >= 1) ? form.load_factor : null"
+          />
           <p class="input-hint">{{ t('admin.accounts.loadFactorHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.priority') }}</label>
-          <input
-            v-model.number="form.priority"
-            type="number"
-            min="1"
-            class="input"
-            data-tour="account-form-priority"
-          />
+          <input v-model.number="form.priority" type="number" min="1" class="input" data-tour="account-form-priority" />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" />
-          <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
+          <p class="input-hint">
+            {{ t('admin.accounts.billingRateMultiplierHint') }}
+          </p>
         </div>
       </div>
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -1595,9 +1535,13 @@
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
-        <div class="overflow-hidden rounded-lg border border-sky-100 bg-sky-50/60 shadow-sm dark:border-sky-900/50 dark:bg-sky-950/20">
+        <div
+          class="overflow-hidden rounded-lg border border-sky-100 bg-sky-50/60 shadow-sm dark:border-sky-900/50 dark:bg-sky-950/20"
+        >
           <div class="flex items-start gap-3 px-4 py-3">
-            <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-sky-600 shadow-sm ring-1 ring-sky-100 dark:bg-dark-800 dark:text-sky-300 dark:ring-sky-900/60">
+            <div
+              class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-sky-600 shadow-sm ring-1 ring-sky-100 dark:bg-dark-800 dark:text-sky-300 dark:ring-sky-900/60"
+            >
               <Icon name="sparkles" size="sm" />
             </div>
             <div class="min-w-0 flex-1">
@@ -1642,7 +1586,9 @@
                 </span>
                 <span class="min-w-0">
                   <span class="block text-sm font-medium">{{ option.label }}</span>
-                  <span class="mt-0.5 block text-xs leading-4 text-slate-500 dark:text-slate-400">{{ option.description }}</span>
+                  <span class="mt-0.5 block text-xs leading-4 text-slate-500 dark:text-slate-400">{{
+                    option.description
+                  }}</span>
                 </span>
               </button>
             </div>
@@ -1796,9 +1742,14 @@
       </div>
 
       <!-- API Key / Bedrock 账号配额限制 -->
-      <div v-if="account?.type === 'apikey' || account?.type === 'bedrock'" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div
+        v-if="account?.type === 'apikey' || account?.type === 'bedrock'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
+      >
         <div class="mb-3">
-          <h3 class="input-label mb-0 text-base font-semibold">{{ t('admin.accounts.quotaControl.title') }}</h3>
+          <h3 class="input-label mb-0 text-base font-semibold">
+            {{ t('admin.accounts.quotaControl.title') }}
+          </h3>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.quotaLimitHint') }}
           </p>
@@ -1910,17 +1861,16 @@
         </div>
         <div class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
           <span class="font-medium">{{ t(openAICompactStatusKey) }}</span>
-          <span
-            v-if="account?.extra?.openai_compact_checked_at"
-            class="ml-2 text-gray-500 dark:text-gray-400"
-          >
+          <span v-if="account?.extra?.openai_compact_checked_at" class="ml-2 text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.openai.compactLastChecked') }}:
             {{ formatDateTime(new Date(String(account.extra.openai_compact_checked_at))) }}
           </span>
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.openai.compactModelMapping') }}</label>
-          <p class="input-hint">{{ t('admin.accounts.openai.compactModelMappingDesc') }}</p>
+          <p class="input-hint">
+            {{ t('admin.accounts.openai.compactModelMappingDesc') }}
+          </p>
           <div v-if="openAICompactModelMappings.length > 0" class="mb-3 space-y-2">
             <div
               v-for="(mapping, index) in openAICompactModelMappings"
@@ -1934,13 +1884,12 @@
                 :placeholder="t('admin.accounts.fromModel')"
               />
               <span class="text-gray-400">→</span>
-              <input
-                v-model="mapping.to"
-                type="text"
-                class="input flex-1"
-                :placeholder="t('admin.accounts.toModel')"
-              />
-              <button type="button" @click="removeOpenAICompactModelMapping(index)" class="text-red-500 hover:text-red-700">
+              <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
+              <button
+                type="button"
+                @click="removeOpenAICompactModelMapping(index)"
+                class="text-red-500 hover:text-red-700"
+              >
                 <Icon name="trash" size="sm" />
               </button>
             </div>
@@ -1954,9 +1903,7 @@
       <div>
         <div class="flex items-center justify-between">
           <div>
-            <label class="input-label mb-0">{{
-              t('admin.accounts.autoPauseOnExpired')
-            }}</label>
+            <label class="input-label mb-0">{{ t('admin.accounts.autoPauseOnExpired') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.autoPauseOnExpiredDesc') }}
             </p>
@@ -2063,7 +2010,9 @@
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
-          <h3 class="input-label mb-0 text-base font-semibold">{{ t('admin.accounts.quotaControl.title') }}</h3>
+          <h3 class="input-label mb-0 text-base font-semibold">
+            {{ t('admin.accounts.quotaControl.title') }}
+          </h3>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
             {{ t('admin.accounts.quotaControl.hint') }}
           </p>
@@ -2109,7 +2058,9 @@
                   :placeholder="t('admin.accounts.quotaControl.windowCost.limitPlaceholder')"
                 />
               </div>
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.windowCost.limitHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.windowCost.limitHint') }}
+              </p>
             </div>
             <div>
               <label class="input-label">{{ t('admin.accounts.quotaControl.windowCost.stickyReserve') }}</label>
@@ -2124,7 +2075,9 @@
                   :placeholder="t('admin.accounts.quotaControl.windowCost.stickyReservePlaceholder')"
                 />
               </div>
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.windowCost.stickyReserveHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.windowCost.stickyReserveHint') }}
+              </p>
             </div>
           </div>
         </div>
@@ -2166,7 +2119,9 @@
                 class="input"
                 :placeholder="t('admin.accounts.quotaControl.sessionLimit.maxSessionsPlaceholder')"
               />
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.sessionLimit.maxSessionsHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.sessionLimit.maxSessionsHint') }}
+              </p>
             </div>
             <div>
               <label class="input-label">{{ t('admin.accounts.quotaControl.sessionLimit.idleTimeout') }}</label>
@@ -2179,9 +2134,13 @@
                   class="input pr-12"
                   :placeholder="t('admin.accounts.quotaControl.sessionLimit.idleTimeoutPlaceholder')"
                 />
-                <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400">{{ t('common.minutes') }}</span>
+                <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400">{{
+                  t('common.minutes')
+                }}</span>
               </div>
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.sessionLimit.idleTimeoutHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.sessionLimit.idleTimeoutHint') }}
+              </p>
             </div>
           </div>
         </div>
@@ -2224,7 +2183,9 @@
                 class="input"
                 :placeholder="t('admin.accounts.quotaControl.rpmLimit.baseRpmPlaceholder')"
               />
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.rpmLimit.baseRpmHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.rpmLimit.baseRpmHint') }}
+              </p>
             </div>
 
             <div>
@@ -2241,8 +2202,12 @@
                   ]"
                 >
                   <div class="text-center">
-                    <div>{{ t('admin.accounts.quotaControl.rpmLimit.strategyTiered') }}</div>
-                    <div class="mt-0.5 text-[10px] opacity-70">{{ t('admin.accounts.quotaControl.rpmLimit.strategyTieredHint') }}</div>
+                    <div>
+                      {{ t('admin.accounts.quotaControl.rpmLimit.strategyTiered') }}
+                    </div>
+                    <div class="mt-0.5 text-[10px] opacity-70">
+                      {{ t('admin.accounts.quotaControl.rpmLimit.strategyTieredHint') }}
+                    </div>
                   </div>
                 </button>
                 <button
@@ -2256,8 +2221,12 @@
                   ]"
                 >
                   <div class="text-center">
-                    <div>{{ t('admin.accounts.quotaControl.rpmLimit.strategyStickyExempt') }}</div>
-                    <div class="mt-0.5 text-[10px] opacity-70">{{ t('admin.accounts.quotaControl.rpmLimit.strategyStickyExemptHint') }}</div>
+                    <div>
+                      {{ t('admin.accounts.quotaControl.rpmLimit.strategyStickyExempt') }}
+                    </div>
+                    <div class="mt-0.5 text-[10px] opacity-70">
+                      {{ t('admin.accounts.quotaControl.rpmLimit.strategyStickyExemptHint') }}
+                    </div>
                   </div>
                 </button>
               </div>
@@ -2273,9 +2242,10 @@
                 class="input"
                 :placeholder="t('admin.accounts.quotaControl.rpmLimit.stickyBufferPlaceholder')"
               />
-              <p class="input-hint">{{ t('admin.accounts.quotaControl.rpmLimit.stickyBufferHint') }}</p>
+              <p class="input-hint">
+                {{ t('admin.accounts.quotaControl.rpmLimit.stickyBufferHint') }}
+              </p>
             </div>
-
           </div>
 
           <!-- 用户消息限速模式（独立于 RPM 开关，始终可见） -->
@@ -2285,14 +2255,18 @@
               {{ t('admin.accounts.quotaControl.rpmLimit.userMsgQueueHint') }}
             </p>
             <div class="flex space-x-2">
-              <button type="button" v-for="opt in umqModeOptions" :key="opt.value"
+              <button
+                type="button"
+                v-for="opt in umqModeOptions"
+                :key="opt.value"
                 @click="userMsgQueueMode = opt.value"
                 :class="[
                   'px-3 py-1.5 text-sm rounded-md border transition-colors',
                   userMsgQueueMode === opt.value
                     ? 'bg-primary-600 text-white border-primary-600'
                     : 'bg-white dark:bg-dark-700 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-dark-500 hover:bg-gray-50 dark:hover:bg-dark-600'
-                ]">
+                ]"
+              >
                 {{ opt.label }}
               </button>
             </div>
@@ -2327,9 +2301,15 @@
           <!-- Profile selector -->
           <div v-if="tlsFingerprintEnabled" class="mt-3">
             <select v-model="tlsFingerprintProfileId" class="input">
-              <option :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
-              <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
-              <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+              <option :value="null">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}
+              </option>
+              <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}
+              </option>
+              <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">
+                {{ p.name }}
+              </option>
             </select>
           </div>
         </div>
@@ -2538,7 +2518,6 @@
         :mixed-scheduling="mixedScheduling"
         data-tour="account-form-groups"
       />
-
     </form>
 
     <template #footer>
@@ -2553,20 +2532,8 @@
           class="btn btn-primary"
           data-tour="account-form-submit"
         >
-          <svg
-            v-if="submitting"
-            class="-ml-1 mr-2 h-4 w-4 animate-spin"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              class="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              stroke-width="4"
-            ></circle>
+          <svg v-if="submitting" class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path
               class="opacity-75"
               fill="currentColor"
@@ -2615,10 +2582,7 @@ import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
-import {
-  applyAntigravityProjectID,
-  applyInterceptWarmup
-} from '@/components/account/credentialsBuilder'
+import { applyAntigravityProjectID, applyInterceptWarmup } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
@@ -2668,7 +2632,8 @@ const baseUrlHint = computed(() => {
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (props.account.platform === 'kiro') return t('admin.accounts.kiro.baseUrlHint')
-  if (props.account.platform === 'droid') return 'Factory.ai API base URL. Leave unchanged for the official Droid endpoint.'
+  if (props.account.platform === 'droid')
+    return 'Factory.ai API base URL. Leave unchanged for the official Droid endpoint.'
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -2695,6 +2660,11 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const kiroCreditUnitPriceUsd = ref(0)
+const isKiroRelayAccount = computed(
+  () => props.account?.platform === 'kiro' && props.account?.type === 'apikey' && editBaseUrl.value.trim() !== ''
+)
+const isKiroDirectAccount = computed(() => props.account?.platform === 'kiro' && !isKiroRelayAccount.value)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -2705,9 +2675,9 @@ const editBedrockApiKeyValue = ref('')
 const editVertexProjectId = ref('')
 const editVertexClientEmail = ref('')
 const editVertexLocation = ref('us-central1')
-const isBedrockAPIKeyMode = computed(() =>
-  props.account?.type === 'bedrock' &&
-  (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
+const isBedrockAPIKeyMode = computed(
+  () =>
+    props.account?.type === 'bedrock' && (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
 )
 const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
@@ -2740,9 +2710,11 @@ const getAntigravityModelMappingKey = createStableObjectKeyResolver<ModelMapping
 const getTempUnschedRuleKey = createStableObjectKeyResolver<TempUnschedRuleForm>('edit-temp-unsched-rule')
 
 const showMixedChannelWarning = ref(false)
-const mixedChannelWarningDetails = ref<{ groupName: string; currentPlatform: string; otherPlatform: string } | null>(
-  null
-)
+const mixedChannelWarningDetails = ref<{
+  groupName: string
+  currentPlatform: string
+  otherPlatform: string
+} | null>(null)
 const mixedChannelWarningRawMessage = ref('')
 const mixedChannelWarningAction = ref<(() => Promise<void>) | null>(null)
 const antigravityMixedChannelConfirmed = ref(false)
@@ -2761,8 +2733,14 @@ const rpmStickyBuffer = ref<number | null>(null)
 const userMsgQueueMode = ref('')
 const umqModeOptions = computed(() => [
   { value: '', label: t('admin.accounts.quotaControl.rpmLimit.umqModeOff') },
-  { value: 'throttle', label: t('admin.accounts.quotaControl.rpmLimit.umqModeThrottle') },
-  { value: 'serialize', label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize') },
+  {
+    value: 'throttle',
+    label: t('admin.accounts.quotaControl.rpmLimit.umqModeThrottle')
+  },
+  {
+    value: 'serialize',
+    label: t('admin.accounts.quotaControl.rpmLimit.umqModeSerialize')
+  }
 ])
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
@@ -2790,14 +2768,7 @@ const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
-const {
-  globalEnabled: quotaNotifyGlobalEnabled,
-  state: quotaNotifyState,
-  loadGlobalState: loadQuotaNotifyGlobal,
-  loadFromExtra: loadQuotaNotifyFromExtra,
-  writeToExtra: writeQuotaNotifyToExtra,
-  reset: resetQuotaNotify,
-} = useQuotaNotifyState()
+const { loadGlobalState: loadQuotaNotifyGlobal } = useQuotaNotifyState()
 
 // Load global feature states once
 adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
@@ -2822,9 +2793,19 @@ const editQuotaNotifyTotalEnabled = ref<boolean | null>(null)
 const editQuotaNotifyTotalThreshold = ref<number | null>(null)
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
-  { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
-  { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
-  { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
+  {
+    value: OPENAI_WS_MODE_CTX_POOL,
+    label: t('admin.accounts.openai.wsModeCtxPool')
+  },
+  {
+    value: OPENAI_WS_MODE_PASSTHROUGH,
+    label: t('admin.accounts.openai.wsModePassthrough')
+  },
+  {
+    value: OPENAI_WS_MODE_HTTP_BRIDGE,
+    label: t('admin.accounts.openai.wsModeHttpBridge')
+  }
+
 ])
 const openaiResponsesWebSocketV2Mode = computed({
   get: () => {
@@ -2844,11 +2825,13 @@ const openaiResponsesWebSocketV2Mode = computed({
 const openAIWSModeConcurrencyHintKey = computed(() =>
   resolveOpenAIWSModeConcurrencyHintKey(openaiResponsesWebSocketV2Mode.value)
 )
-const codexImageGenerationBridgeOptions = computed<Array<{
-  value: CodexImageGenerationBridgeMode
-  label: string
-  description: string
-}>>(() => [
+const codexImageGenerationBridgeOptions = computed<
+  Array<{
+    value: CodexImageGenerationBridgeMode
+    label: string
+    description: string
+  }>
+>(() => [
   {
     value: 'inherit',
     label: t('admin.accounts.openai.codexImageGenerationBridgeInherit'),
@@ -2983,6 +2966,7 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
   props.account?.platform === 'openai' && openaiPassthroughEnabled.value
+
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
@@ -3154,9 +3138,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
-  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
-    ? newAccount.status
-    : 'active'
+  form.status =
+    newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error'
+      ? newAccount.status
+      : 'active'
   form.group_ids = newAccount.group_ids || []
   form.expires_at = newAccount.expires_at ?? null
 
@@ -3184,6 +3169,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
   autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
   autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
+  const rawKiroCreditUnitPrice = extra?.kiro_credit_unit_price_usd
+  kiroCreditUnitPriceUsd.value =
+    typeof rawKiroCreditUnitPrice === 'number'
+      ? rawKiroCreditUnitPrice
+      : typeof rawKiroCreditUnitPrice === 'string'
+        ? Number(rawKiroCreditUnitPrice) || 0
+        : 0
+
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
@@ -3210,9 +3203,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         openAIResponsesMode.value = 'auto'
       }
     }
-    const codexImageGenerationBridgeValue = typeof extra?.codex_image_generation_bridge === 'boolean'
-      ? extra.codex_image_generation_bridge
-      : extra?.codex_image_generation_bridge_enabled
+    const codexImageGenerationBridgeValue =
+      typeof extra?.codex_image_generation_bridge === 'boolean'
+        ? extra.codex_image_generation_bridge
+        : extra?.codex_image_generation_bridge_enabled
+
     if (codexImageGenerationBridgeValue === true) {
       codexImageGenerationBridgeMode.value = 'enabled'
     } else if (codexImageGenerationBridgeValue === false) {
@@ -3232,8 +3227,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     })
     if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
-      codexCLIOnlyAppServerEnabled.value =
-        extra?.codex_cli_only_allow_app_server === true
+      codexCLIOnlyAppServerEnabled.value = extra?.codex_cli_only_allow_app_server === true
     }
     const compactMappings = accountCredentials?.compact_model_mapping as Record<string, string> | undefined
     if (compactMappings && typeof compactMappings === 'object') {
@@ -3259,9 +3253,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
     const rawKiroRatio = extra?.kiro_cache_emulation_ratio
     kiroCacheEmulationRatio.value =
-      typeof rawKiroRatio === 'number' && rawKiroRatio >= 0 && rawKiroRatio <= 1
-        ? rawKiroRatio
-        : 1
+      typeof rawKiroRatio === 'number' && rawKiroRatio >= 0 && rawKiroRatio <= 1 ? rawKiroRatio : 1
   } else {
     kiroCacheEmulationEnabled.value = false
     kiroCacheEmulationRatio.value = 1
@@ -3270,11 +3262,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
   if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {
     const quotaVal = extra?.quota_limit as number | undefined
-    editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
+    editQuotaLimit.value = quotaVal && quotaVal > 0 ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
-    editQuotaDailyLimit.value = (dailyVal && dailyVal > 0) ? dailyVal : null
+    editQuotaDailyLimit.value = dailyVal && dailyVal > 0 ? dailyVal : null
     const weeklyVal = extra?.quota_weekly_limit as number | undefined
-    editQuotaWeeklyLimit.value = (weeklyVal && weeklyVal > 0) ? weeklyVal : null
+    editQuotaWeeklyLimit.value = weeklyVal && weeklyVal > 0 ? weeklyVal : null
     // Load quota reset mode config
     editDailyResetMode.value = (extra?.quota_daily_reset_mode as 'rolling' | 'fixed') || null
     editDailyResetHour.value = (extra?.quota_daily_reset_hour as number) ?? null
@@ -3320,7 +3312,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     if (rawAgMapping && typeof rawAgMapping === 'object') {
       const entries = Object.entries(rawAgMapping)
       // 无论是白名单样式(key===value)还是真正的映射，都统一转换为映射列表
-      antigravityModelMappings.value = entries.map(([from, to]) => ({ from, to }))
+      antigravityModelMappings.value = entries.map(([from, to]) => ({
+        from,
+        to
+      }))
     } else {
       // 兼容旧数据：从 model_whitelist 读取，转换为映射格式
       const rawWhitelist = credentials?.model_whitelist
@@ -3347,35 +3342,39 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
-	    const platformDefaultUrl =
-	      newAccount.platform === 'openai'
-	        ? 'https://api.openai.com'
-	        : newAccount.platform === 'gemini'
-	          ? 'https://generativelanguage.googleapis.com'
-	          : newAccount.platform === 'kiro'
-	            ? ''
-	            : newAccount.platform === 'droid'
-	              ? 'https://api.factory.ai/api/llm'
-	              : 'https://api.anthropic.com'
-	    editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+    const platformDefaultUrl =
+      newAccount.platform === 'openai'
+        ? 'https://api.openai.com'
+        : newAccount.platform === 'gemini'
+          ? 'https://generativelanguage.googleapis.com'
+          : newAccount.platform === 'kiro'
+            ? ''
+            : newAccount.platform === 'droid'
+              ? 'https://api.factory.ai/api/llm'
+              : 'https://api.anthropic.com'
+    editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
-	    // Load model mappings and detect mode
-	    const existingMappings = credentials.model_mapping as Record<string, string> | undefined
-	    if (newAccount.platform === 'kiro') {
-	      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
-	        applyKiroModelMappings(Object.entries(existingMappings))
-	      } else {
-	        fetchKiroDefaultMappings().then((mappings) => {
-	          if (props.account?.id !== newAccount.id || props.account?.type !== 'apikey' || props.account?.platform !== 'kiro') {
-	            return
-	          }
-	          modelRestrictionMode.value = 'mapping'
-	          modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
-	          allowedModels.value = []
-	        })
-	      }
-	    } else if (existingMappings && typeof existingMappings === 'object') {
-	      const entries = Object.entries(existingMappings)
+    // Load model mappings and detect mode
+    const existingMappings = credentials.model_mapping as Record<string, string> | undefined
+    if (newAccount.platform === 'kiro') {
+      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
+        applyKiroModelMappings(Object.entries(existingMappings))
+      } else {
+        fetchKiroDefaultMappings().then((mappings) => {
+          if (
+            props.account?.id !== newAccount.id ||
+            props.account?.type !== 'apikey' ||
+            props.account?.platform !== 'kiro'
+          ) {
+            return
+          }
+          modelRestrictionMode.value = 'mapping'
+          modelMappings.value = mappings.map(({ from, to }) => ({ from, to }))
+          allowedModels.value = []
+        })
+      }
+    } else if (existingMappings && typeof existingMappings === 'object') {
+      const entries = Object.entries(existingMappings)
 
       // Detect if this is whitelist mode (all from === to) or mapping mode
       const isWhitelistMode = entries.length > 0 && entries.every(([from, to]) => from === to)
@@ -3429,13 +3428,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     // Load pool mode for bedrock
     poolModeEnabled.value = bedrockCreds.pool_mode === true
     const retryCount = bedrockCreds.pool_mode_retry_count
-    poolModeRetryCount.value = (typeof retryCount === 'number' && retryCount >= 0) ? retryCount : DEFAULT_POOL_MODE_RETRY_COUNT
+    poolModeRetryCount.value =
+      typeof retryCount === 'number' && retryCount >= 0 ? retryCount : DEFAULT_POOL_MODE_RETRY_COUNT
 
     // Load quota limits for bedrock
     const bedrockExtra = (newAccount.extra as Record<string, unknown>) || {}
     editQuotaLimit.value = typeof bedrockExtra.quota_limit === 'number' ? bedrockExtra.quota_limit : null
-    editQuotaDailyLimit.value = typeof bedrockExtra.quota_daily_limit === 'number' ? bedrockExtra.quota_daily_limit : null
-    editQuotaWeeklyLimit.value = typeof bedrockExtra.quota_weekly_limit === 'number' ? bedrockExtra.quota_weekly_limit : null
+    editQuotaDailyLimit.value =
+      typeof bedrockExtra.quota_daily_limit === 'number' ? bedrockExtra.quota_daily_limit : null
+    editQuotaWeeklyLimit.value =
+      typeof bedrockExtra.quota_weekly_limit === 'number' ? bedrockExtra.quota_weekly_limit : null
     // Load quota notify for bedrock
     editQuotaNotifyDailyEnabled.value = (bedrockExtra.quota_notify_daily_enabled as boolean) ?? null
     editQuotaNotifyDailyThreshold.value = (bedrockExtra.quota_notify_daily_threshold as number) ?? null
@@ -3466,11 +3468,16 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   } else if (newAccount.type === 'upstream' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editBaseUrl.value = (credentials.base_url as string) || ''
-  } else if ((newAccount.platform === 'gemini' || newAccount.platform === 'anthropic') && newAccount.type === 'service_account' && newAccount.credentials) {
+  } else if (
+    (newAccount.platform === 'gemini' || newAccount.platform === 'anthropic') &&
+    newAccount.type === 'service_account' &&
+    newAccount.credentials
+  ) {
     const credentials = newAccount.credentials as Record<string, unknown>
     editVertexProjectId.value = (credentials.project_id as string) || ''
     editVertexClientEmail.value = (credentials.client_email as string) || ''
-    editVertexLocation.value = (credentials.location as string) || (credentials.vertex_location as string) || 'us-central1'
+    editVertexLocation.value =
+      (credentials.location as string) || (credentials.vertex_location as string) || 'us-central1'
 
     // Load model mappings for service_account
     const existingMappings = credentials.model_mapping as Record<string, string> | undefined
@@ -3502,24 +3509,22 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
-	    // Load model mappings for OAuth accounts
-	    if (newAccount.platform === 'kiro' && newAccount.credentials) {
-	      const oauthCredentials = newAccount.credentials as Record<string, unknown>
-	      const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
-	      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
-	        applyKiroModelMappings(Object.entries(existingMappings))
-	      } else {
-	        loadDefaultKiroModelMappings()
-	      }
-	    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'anthropic') && newAccount.credentials) {
-	      const oauthCredentials = newAccount.credentials as Record<string, unknown>
-	      const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
+    // Load model mappings for OAuth accounts
+    if (newAccount.platform === 'kiro' && newAccount.credentials) {
+      const oauthCredentials = newAccount.credentials as Record<string, unknown>
+      const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
+      if (existingMappings && typeof existingMappings === 'object' && Object.keys(existingMappings).length > 0) {
+        applyKiroModelMappings(Object.entries(existingMappings))
+      } else {
+        loadDefaultKiroModelMappings()
+      }
+    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'anthropic') && newAccount.credentials) {
+      const oauthCredentials = newAccount.credentials as Record<string, unknown>
+      const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
       if (existingMappings && typeof existingMappings === 'object') {
         const entries = Object.entries(existingMappings)
         const isWhitelistMode =
-          newAccount.platform === 'openai' &&
-          entries.length > 0 &&
-          entries.every(([from, to]) => from === to)
+          newAccount.platform === 'openai' && entries.length > 0 && entries.every(([from, to]) => from === to)
         if (isWhitelistMode) {
           modelRestrictionMode.value = 'whitelist'
           allowedModels.value = entries.map(([from]) => from)
@@ -3550,7 +3555,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 async function loadTLSProfiles() {
   try {
     const profiles = await adminAPI.tlsFingerprintProfiles.list()
-    tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name }))
+    tlsFingerprintProfiles.value = profiles.map((p) => ({
+      id: p.id,
+      name: p.name
+    }))
   } catch {
     tlsFingerprintProfiles.value = []
   }
@@ -3588,7 +3596,7 @@ const addPresetMapping = (from: string, to: string) => {
   modelMappings.value.push({ from, to })
 }
 
-const applyKiroModelMappings = (entries: Array<[string, string]>) => {
+function applyKiroModelMappings(entries: Array<[string, string]>) {
   modelRestrictionMode.value = 'mapping'
   modelMappings.value = entries.map(([from, to]) => ({ from, to }))
   allowedModels.value = []
@@ -3777,7 +3785,10 @@ function loadTempUnschedRules(credentials?: Record<string, unknown>) {
 }
 
 function supportsTLSFingerprint(account: Account) {
-  return account.platform === 'antigravity' || (account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token'))
+  return (
+    account.platform === 'antigravity' ||
+    (account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token'))
+  )
 }
 
 function resolveTLSFingerprintEnabled(account: Account, extra?: Record<string, unknown>) {
@@ -3911,9 +3922,7 @@ function toPositiveNumber(value: unknown) {
   return Math.trunc(num)
 }
 
-const supportsMixedScheduling = computed(() =>
-  ['antigravity', 'kiro', 'droid'].includes(props.account?.platform || '')
-)
+const supportsMixedScheduling = computed(() => ['antigravity', 'kiro', 'droid'].includes(props.account?.platform || ''))
 
 const needsMixedChannelCheck = () =>
   ['antigravity', 'anthropic', 'kiro', 'droid'].includes(props.account?.platform || '')
@@ -3943,8 +3952,7 @@ const openMixedChannelDialog = (opts: {
   onConfirm: () => Promise<void>
 }) => {
   mixedChannelWarningDetails.value = buildMixedChannelDetails(opts.response)
-  mixedChannelWarningRawMessage.value =
-    opts.message || opts.response?.message || t('admin.accounts.failedToUpdate')
+  mixedChannelWarningRawMessage.value = opts.message || opts.response?.message || t('admin.accounts.failedToUpdate')
   mixedChannelWarningAction.value = opts.onConfirm
   showMixedChannelWarning.value = true
 }
@@ -4054,43 +4062,46 @@ const handleSubmit = async () => {
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
 
-	    // For apikey type, handle credentials update
-	    if (props.account.type === 'apikey') {
-	      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
-	      const newBaseUrl = props.account.platform === 'kiro'
-	        ? editBaseUrl.value.trim()
-	        : editBaseUrl.value.trim() || defaultBaseUrl.value
-	      const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
-	      if (!newBaseUrl) {
-	        appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
-	        return
-	      }
+    // For apikey type, handle credentials update
+    if (props.account.type === 'apikey') {
+      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+      const newBaseUrl =
+        props.account.platform === 'kiro' ? editBaseUrl.value.trim() : editBaseUrl.value.trim() || defaultBaseUrl.value
+      const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
+      if (!newBaseUrl && props.account.platform !== 'kiro') {
+        appStore.showError(t('admin.accounts.upstream.pleaseEnterBaseUrl'))
+        return
+      }
 
       // Always update credentials for apikey type to handle model mapping changes
       const newCredentials: Record<string, unknown> = {
-        ...currentCredentials,
-        base_url: newBaseUrl
+        ...currentCredentials
+      }
+      if (newBaseUrl) {
+        newCredentials.base_url = newBaseUrl
+      } else {
+        delete newCredentials.base_url
       }
 
-	      // Handle API key
-	      const hasExistingApiKey =
-	        props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
-	      if (editApiKey.value.trim()) {
-	        // User provided a new API key
-	        newCredentials.api_key = editApiKey.value.trim()
-	      } else if (hasExistingApiKey && currentCredentials.api_key) {
-	        // Preserve existing api_key for legacy unredacted responses.
-	        newCredentials.api_key = currentCredentials.api_key
-	      } else if (!hasExistingApiKey) {
-	        appStore.showError(t('admin.accounts.apiKeyIsRequired'))
-	        return
-	      }
+      // Handle API key
+      const hasExistingApiKey = props.account.credentials_status?.has_api_key ?? Boolean(currentCredentials.api_key)
+      if (editApiKey.value.trim()) {
+        // User provided a new API key
+        newCredentials.api_key = editApiKey.value.trim()
+      } else if (hasExistingApiKey && currentCredentials.api_key) {
+        // Preserve existing api_key for legacy unredacted responses.
+        newCredentials.api_key = currentCredentials.api_key
+      } else if (!hasExistingApiKey) {
+        appStore.showError(t('admin.accounts.apiKeyIsRequired'))
+        return
+      }
 
-	      // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
-	      if (shouldApplyModelMapping) {
-	        const modelMapping = props.account.platform === 'kiro'
-	          ? buildModelMappingObject('mapping', [], modelMappings.value)
-	          : buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+      // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
+      if (shouldApplyModelMapping) {
+        const modelMapping =
+          props.account.platform === 'kiro'
+            ? buildModelMappingObject('mapping', [], modelMappings.value)
+            : buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
         if (modelMapping) {
           newCredentials.model_mapping = modelMapping
         } else {
@@ -4152,7 +4163,10 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if ((props.account.platform === 'gemini' || props.account.platform === 'anthropic') && props.account.type === 'service_account') {
+    } else if (
+      (props.account.platform === 'gemini' || props.account.platform === 'anthropic') &&
+      props.account.type === 'service_account'
+    ) {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
@@ -4256,6 +4270,7 @@ const handleSubmit = async () => {
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
       if (!applyTempUnschedConfig(newCredentials)) {
         return
+
       }
 
       updatePayload.credentials = newCredentials
@@ -4284,18 +4299,23 @@ const handleSubmit = async () => {
         newCredentials.model_mapping = modelMapping
       } else {
         delete newCredentials.model_mapping
+
       }
 
       updatePayload.credentials = newCredentials
     }
 
-    // Anthropic OAuth/SetupToken: mappings only rewrite the upstream model; they do not restrict scheduling.
+    // Anthropic OAuth/SetupToken: persist model mapping to credentials.
+    // For these account types, mappings only rewrite the upstream model; they do not restrict scheduling.
+
     if (
       props.account.platform === 'anthropic' &&
       (props.account.type === 'oauth' || props.account.type === 'setup-token')
     ) {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown>) ||
+        (props.account.credentials as Record<string, unknown>) ||
+        {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
       if (modelMapping) {
@@ -4310,8 +4330,10 @@ const handleSubmit = async () => {
     // Antigravity: persist model mapping to credentials (applies to all antigravity types)
     // Antigravity 只支持映射模式
     if (props.account.platform === 'antigravity') {
-      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
-        ((props.account.credentials as Record<string, unknown>) || {})
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown>) ||
+        (props.account.credentials as Record<string, unknown>) ||
+        {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       if (props.account.type === 'oauth') {
         applyAntigravityProjectID(newCredentials, antigravityProjectId.value, 'edit')
@@ -4322,11 +4344,7 @@ const handleSubmit = async () => {
       delete newCredentials.model_mapping
 
       // 只使用映射模式
-      const antigravityModelMapping = buildModelMappingObject(
-        'mapping',
-        [],
-        antigravityModelMappings.value
-      )
+      const antigravityModelMapping = buildModelMappingObject('mapping', [], antigravityModelMappings.value)
       if (antigravityModelMapping) {
         newCredentials.model_mapping = antigravityModelMapping
       }
@@ -4365,7 +4383,10 @@ const handleSubmit = async () => {
     }
 
     // For Anthropic OAuth/SetupToken accounts, handle quota control settings in extra
-    if (props.account.platform === 'anthropic' && (props.account.type === 'oauth' || props.account.type === 'setup-token')) {
+    if (
+      props.account.platform === 'anthropic' &&
+      (props.account.type === 'oauth' || props.account.type === 'setup-token')
+    ) {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
 
@@ -4390,9 +4411,7 @@ const handleSubmit = async () => {
       // RPM limit settings
       if (rpmLimitEnabled.value) {
         const DEFAULT_BASE_RPM = 15
-        newExtra.base_rpm = (baseRpm.value != null && baseRpm.value > 0)
-          ? baseRpm.value
-          : DEFAULT_BASE_RPM
+        newExtra.base_rpm = baseRpm.value != null && baseRpm.value > 0 ? baseRpm.value : DEFAULT_BASE_RPM
         newExtra.rpm_strategy = rpmStrategy.value
         if (rpmStickyBuffer.value != null && rpmStickyBuffer.value > 0) {
           newExtra.rpm_sticky_buffer = rpmStickyBuffer.value
@@ -4411,7 +4430,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.user_msg_queue_mode
       }
-      delete newExtra.user_msg_queue_enabled  // 清理旧字段
+      delete newExtra.user_msg_queue_enabled // 清理旧字段
 
       // TLS fingerprint setting
       if (tlsFingerprintEnabled.value) {
@@ -4484,8 +4503,8 @@ const handleSubmit = async () => {
     }
 
     if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        ((props.account.extra as Record<string, unknown>) || {})
+      const currentExtra =
+        (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (kiroCacheEmulationEnabled.value) {
         newExtra.kiro_cache_emulation_enabled = true
@@ -4497,17 +4516,41 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
+    if (props.account.platform === 'kiro') {
+      const currentExtra =
+        (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (isKiroDirectAccount.value) {
+        const unitPrice = Number(kiroCreditUnitPriceUsd.value ?? 0)
+        newExtra.kiro_credit_unit_price_usd = Number.isFinite(unitPrice) ? unitPrice : 0
+        if (props.account.type === 'apikey') {
+          delete newExtra.anthropic_passthrough
+        }
+      } else {
+        delete newExtra.kiro_credit_unit_price_usd
+        if (props.account.type === 'apikey') {
+          newExtra.anthropic_passthrough = true
+        }
+      }
+      updatePayload.extra = newExtra
+    }
+
     // For OpenAI OAuth/SetupToken/API Key accounts, handle passthrough mode in extra
     if (props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')) {
+
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
       if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
         newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
-        newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
+        newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(
+          openaiOAuthResponsesWebSocketV2Mode.value
+        )
       } else if (props.account.type === 'apikey') {
         newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
-        newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
+        newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(
+          openaiAPIKeyResponsesWebSocketV2Mode.value
+        )
       }
       delete newExtra.responses_websockets_v2_enabled
       delete newExtra.openai_ws_enabled
@@ -4560,8 +4603,8 @@ const handleSubmit = async () => {
 
     // For apikey/bedrock accounts, handle quota_limit in extra
     if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
+      const currentExtra =
+        (updatePayload.extra as Record<string, unknown>) || (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
         newExtra.quota_limit = editQuotaLimit.value

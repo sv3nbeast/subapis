@@ -1,6 +1,8 @@
 package kiro
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -135,7 +137,25 @@ func extractSearchText(content gjson.Result) string {
 }
 
 func GenerateToolUseID() string {
-	return strings.ReplaceAll(uuid.NewString(), "-", "")[:22]
+	return "01" + randomBase62(22)
+}
+
+func randomBase62(n int) string {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		sum := sha256.Sum256([]byte(uuid.NewString()))
+		for i := range b {
+			b[i] = sum[i%len(sum)]
+		}
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return string(b)
 }
 
 func ReplaceWebSearchToolDescription(body []byte) ([]byte, error) {

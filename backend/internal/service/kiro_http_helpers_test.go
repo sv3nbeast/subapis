@@ -44,7 +44,7 @@ func TestBuildKiroMachineIDPrefersExplicitHexCredential(t *testing.T) {
 	require.Equal(t, "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894", buildKiroMachineID(account))
 }
 
-func TestBuildKiroMachineIDPreservesExplicitUUIDCredential(t *testing.T) {
+func TestBuildKiroMachineIDNormalizesExplicitUUIDCredential(t *testing.T) {
 	account := &Account{
 		ID:       101,
 		Platform: PlatformKiro,
@@ -55,7 +55,7 @@ func TestBuildKiroMachineIDPreservesExplicitUUIDCredential(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, "2582956e-cc88-4669-b546-07adbffcb894", buildKiroMachineID(account))
+	require.Equal(t, "2582956ecc884669b54607adbffcb8942582956ecc884669b54607adbffcb894", buildKiroMachineID(account))
 }
 
 func TestBuildKiroMachineIDDerivesFromRefreshToken(t *testing.T) {
@@ -82,6 +82,32 @@ func TestBuildKiroMachineIDDerivesFromAPIKeyAccount(t *testing.T) {
 	}
 
 	require.Equal(t, kiropkg.BuildMachineID("", "kiro-api-key", "account:103"), buildKiroMachineID(account))
+}
+
+func TestIsKiroDirectModeAccount(t *testing.T) {
+	require.True(t, isKiroDirectModeAccount(&Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+	}))
+	require.True(t, isKiroDirectModeAccount(&Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "kiro-api-key",
+		},
+	}))
+	require.False(t, isKiroDirectModeAccount(&Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "kiro-api-key",
+			"base_url": "https://kiro-upstream.example.com",
+		},
+	}))
+	require.False(t, isKiroDirectModeAccount(&Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+	}))
 }
 
 func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
@@ -355,4 +381,57 @@ func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {
 			require.Equal(t, tt.want, []string{endpoints[0].Name, endpoints[1].Name, endpoints[2].Name})
 		})
 	}
+}
+
+func TestBuildKiroEndpointsForModeKRS(t *testing.T) {
+	endpoints := buildKiroEndpointsForMode(&Account{Platform: PlatformKiro, Type: AccountTypeOAuth}, KiroEndpointModeKRS)
+	require.Len(t, endpoints, 1)
+	require.Equal(t, "KiroRuntime", endpoints[0].Name)
+	require.Equal(t, kiroKRSEndpointURL, endpoints[0].URL)
+}
+
+func TestBuildKiroEndpointsForModeAutoAppendsKRSAfterLocalFallbacks(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"api_region": "us-west-2",
+		},
+	}
+
+	endpoints := buildKiroEndpointsForMode(account, KiroEndpointModeAuto)
+	require.Len(t, endpoints, 4)
+	require.Equal(t, []string{"KiroIDE", "CodeWhisperer", "AmazonQ", "KiroRuntime"}, []string{
+		endpoints[0].Name,
+		endpoints[1].Name,
+		endpoints[2].Name,
+		endpoints[3].Name,
+	})
+	require.Equal(t, kiroKRSEndpointURL, endpoints[3].URL)
+}
+
+func TestKiroEndpointModeForRequestRespectsAccountExplicitPreference(t *testing.T) {
+	parsed := &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}}
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"preferred_endpoint": "amazonq",
+		},
+	}
+
+	require.Equal(t, KiroEndpointModeQ, kiroEndpointModeForRequest(account, parsed))
+}
+
+func TestKiroEndpointModeForRequestIgnoresUnknownAccountPreference(t *testing.T) {
+	parsed := &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}}
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"preferred_endpoint": "unknown",
+		},
+	}
+
+	require.Equal(t, KiroEndpointModeAuto, kiroEndpointModeForRequest(account, parsed))
 }
