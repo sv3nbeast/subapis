@@ -1761,14 +1761,37 @@
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.apiKeyAuthScheme') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.apiKeyAuthSchemeDesc') }}
+            </p>
+          </div>
+          <select v-model="anthropicAPIKeyAuthScheme" class="input w-52 text-sm">
+            <option value="x_api_key">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeXApiKey') }}</option>
+            <option value="authorization_bearer">{{ t('admin.accounts.anthropic.apiKeyAuthSchemeBearer') }}</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Anthropic API Key: Web Search Emulation -->
+      <div
+        v-if="account?.platform === 'anthropic' && account?.type === 'apikey' && webSearchGlobalEnabled"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.anthropic.webSearchEmulation') }}</label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.anthropic.webSearchEmulationDesc') }}
             </p>
           </div>
-          <Toggle v-model="webSearchEmulationEnabled" />
+          <select v-model="webSearchEmulationMode" class="input w-24 text-sm">
+            <option value="default">{{ t('common.default') }}</option>
+            <option value="enabled">{{ t('common.enabled') }}</option>
+            <option value="disabled">{{ t('common.disabled') }}</option>
+          </select>
         </div>
       </div>
 
@@ -2598,6 +2621,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -2761,8 +2785,26 @@ const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled'
 const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inherit')
+type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
-const webSearchEmulationEnabled = ref(false)
+const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
+const webSearchEmulationMode = ref('default')
+const webSearchGlobalEnabled = ref(false)
+const {
+  globalEnabled: quotaNotifyGlobalEnabled,
+  state: quotaNotifyState,
+  loadGlobalState: loadQuotaNotifyGlobal,
+  loadFromExtra: loadQuotaNotifyFromExtra,
+  writeToExtra: writeQuotaNotifyToExtra,
+  reset: resetQuotaNotify,
+} = useQuotaNotifyState()
+
+// Load global feature states once
+adminAPI.settings.getWebSearchEmulationConfig().then(cfg => {
+  webSearchGlobalEnabled.value = cfg?.enabled === true && (cfg?.providers?.length ?? 0) > 0
+}).catch(() => { webSearchGlobalEnabled.value = false })
+
+loadQuotaNotifyGlobal()
 const editQuotaLimit = ref<number | null>(null)
 const editQuotaDailyLimit = ref<number | null>(null)
 const editQuotaWeeklyLimit = ref<number | null>(null)
@@ -3155,7 +3197,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAppServerEnabled.value = false
   codexImageGenerationBridgeMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
-  webSearchEmulationEnabled.value = false
+  anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
@@ -3200,7 +3242,18 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
-    webSearchEmulationEnabled.value = extra?.web_search_emulation === true
+    anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
+      ? 'authorization_bearer'
+      : 'x_api_key'
+    // 三态：string "default"/"enabled"/"disabled"，向后兼容旧 bool
+    const wsVal = extra?.web_search_emulation
+    if (wsVal === 'enabled' || wsVal === 'disabled') {
+      webSearchEmulationMode.value = wsVal
+    } else if (wsVal === true) {
+      webSearchEmulationMode.value = 'enabled'
+    } else {
+      webSearchEmulationMode.value = 'default'
+    }
   }
   if (newAccount.platform === 'kiro' && newAccount.type === 'oauth') {
     kiroCacheEmulationEnabled.value = extra?.kiro_cache_emulation_enabled === true
@@ -4411,10 +4464,15 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.anthropic_passthrough
       }
-      if (webSearchEmulationEnabled.value) {
-        newExtra.web_search_emulation = true
+      if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
+        newExtra.anthropic_apikey_auth_scheme = 'authorization_bearer'
       } else {
+        delete newExtra.anthropic_apikey_auth_scheme
+      }
+      if (webSearchEmulationMode.value === 'default') {
         delete newExtra.web_search_emulation
+      } else {
+        newExtra.web_search_emulation = webSearchEmulationMode.value
       }
       updatePayload.extra = newExtra
     }
