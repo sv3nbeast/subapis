@@ -2030,3 +2030,37 @@ b083879ef 恢复proxy auto-assignment dropped 中的 67-commit official sync
 a663f3b4a Fix usage stats SQL/Scan column mismatch from official merge
 4cbd3b78e 更新upstream sync ledger after promote
 5ceb7712c Merge official origin/main (ce6af413) into fork
+
+## 2026-07-04 06:14:59 +0800
+
+- 模式: `merge-finalize`
+- 目标分支: `codex/official-sync-review`
+- 官方引用: `origin/main`
+- 官方提交: `2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 合并基线: `7dc7cfce1db5d31599815ff29acf6847ead0f0b7`
+- 合并提交: `7508dee5756f9f18dc57a39133e34d6579bfde94`
+- 备份分支: `codex/official-sync-review-pre-merge-20260704-053156`
+- 动作: 完成 `git merge --no-commit --no-ff origin/main` 冲突收尾并提交
+
+### 本次解决点
+
+- 保留本地 Kiro / Antigravity / Claude 拟态 / OpenAI WS 等业务增强逻辑，同时把官方 `origin/main@2649573b9` 纳入融合线祖先。
+- 采用官方 Grok media generation 分组回填意图，迁移编号对齐为 `158_enable_grok_media_generation_groups.sql`，并同步回归测试名为 `TestMigration158BackfillsGrokMediaGenerationGroups`。
+- 补回官方账号编辑 redacted credentials 前端回归：API Key 与 Vertex Service Account 在 `credentials_status` 表示密钥存在时允许保存；缺失凭据时阻止保存；legacy 后端无 `credentials_status` 时保持兼容。
+- 修正 `EditAccountModal.vue` 中 Vertex Service Account 保存判断，优先使用 `props.account.credentials_status` 判断既有 `service_account_json`，避免后端脱敏后误判为空。
+- 保留官方 PaymentView 高峰倍率卡片的小合并变更。
+- 已确认无冲突标记、无未解决冲突，merge 状态已清理。
+
+### 验证
+
+- `git diff --check`：通过
+- `git diff --check --cached`：通过
+- `git diff --name-only --diff-filter=U`：无输出
+- `cd backend && go test ./internal/server/middleware ./migrations -run 'Grok|Media|APIKey|Auth|Payment|Identity|Migration158' -count=1`：通过
+- `cd backend && go test ./internal/service -run '^(TestOpenAIGateway|Test.*UsageLog|Test.*APIKey|Test.*Auth|Test.*Peak|Test.*Passthrough|Test.*Streaming|Test.*Grok|Test.*Media|Test.*401|TestOps)' -count=1`：通过
+- `cd frontend && ./node_modules/.bin/vitest run src/components/account/__tests__/EditAccountModal.spec.ts`：通过（21 tests passed；保留既有 `ProxyAdBanner` / Browserslist / duplicate setupFiles warning）
+- `git merge-base --is-ancestor origin/main HEAD`：通过，`origin/main` 已成为 `codex/official-sync-review` 祖先
+
+### 备注
+
+- 未执行 `promote`；当前仅完成融合线同步与验证。若要三线合一提升到 `main`，需在确认主工作区状态与发布窗口后执行 `bash scripts/sub2api-threeway-sync.sh --mode promote`。
