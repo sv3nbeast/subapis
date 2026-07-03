@@ -208,6 +208,12 @@
                       </div>
                     </div>
                   </div>
+                  <div v-if="planHasPeakRate(selectedPlan)" class="card-glass border-amber-200/70 p-5 sm:p-6 dark:border-amber-900/40">
+                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.peakRate') }}</span>
+                    <div class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300">
+                      {{ planPeakRateLabel(selectedPlan) }}
+                    </div>
+                  </div>
                   <div v-if="enabledMethods.length >= 1" class="card-glass p-5 sm:p-6">
                     <PaymentMethodSelector
                       :methods="subMethodOptions"
@@ -286,6 +292,7 @@
                       </div>
                       <div class="flex flex-wrap gap-x-3 text-[11px] text-gray-400 dark:text-gray-500">
                         <span>{{ t('payment.planCard.rate') }}: ×{{ sub.group?.rate_multiplier ?? 1 }}</span>
+                        <span v-if="subscriptionHasPeakRate(sub)">{{ t('payment.planCard.peakRate') }}: {{ subscriptionPeakRateLabel(sub) }}</span>
                         <span v-if="sub.group?.daily_limit_usd == null && sub.group?.weekly_limit_usd == null && sub.group?.monthly_limit_usd == null">{{ t('payment.planCard.quota') }}: {{ t('payment.planCard.unlimited') }}</span>
                         <span v-if="sub.expires_at">{{ t('userSubscriptions.daysRemaining', { days: getDaysRemaining(sub.expires_at) }) }}</span>
                         <span v-else>{{ t('userSubscriptions.noExpiration') }}</span>
@@ -394,6 +401,16 @@ const accountDisplayName = computed(() => {
 function getDaysRemaining(expiresAt: string): number {
   const diff = new Date(expiresAt).getTime() - Date.now()
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+}
+
+function subscriptionHasPeakRate(sub: { group?: { peak_rate_enabled?: boolean; peak_start?: string; peak_end?: string } | null }): boolean {
+  const group = sub.group
+  return Boolean(group?.peak_rate_enabled && group.peak_start && group.peak_end)
+}
+
+function subscriptionPeakRateLabel(sub: { group?: { peak_start?: string; peak_end?: string; peak_rate_multiplier?: number } | null }): string {
+  const group = sub.group
+  return `${group?.peak_start}-${group?.peak_end} ×${group?.peak_rate_multiplier ?? 1}`
 }
 
 const loading = ref(true)
@@ -818,6 +835,14 @@ const planValiditySuffix = computed(() => {
   if (u === 'year' || u === 'years') return t('payment.perYear')
   return `${selectedPlan.value.validity_days}${t('payment.days')}`
 })
+
+function planHasPeakRate(plan: SubscriptionPlan): boolean {
+  return Boolean(plan.peak_rate_enabled && plan.peak_start && plan.peak_end)
+}
+
+function planPeakRateLabel(plan: SubscriptionPlan): string {
+  return `${plan.peak_start}-${plan.peak_end} ×${plan.peak_rate_multiplier ?? 1}`
+}
 
 function selectPlan(plan: SubscriptionPlan) {
   selectedPlan.value = plan

@@ -824,7 +824,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              <span>启用高峰时段倍率</span>
+              <span>{{ t("admin.groups.peakRate.enable") }}</span>
             </label>
           </div>
           <div
@@ -832,7 +832,7 @@
             class="mb-4 grid grid-cols-3 gap-3"
           >
             <div>
-              <label class="input-label">高峰开始</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakStart") }}</label>
               <input
                 v-model="createForm.peak_start"
                 type="time"
@@ -840,7 +840,7 @@
               />
             </div>
             <div>
-              <label class="input-label">高峰结束</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakEnd") }}</label>
               <input
                 v-model="createForm.peak_end"
                 type="time"
@@ -848,7 +848,7 @@
               />
             </div>
             <div>
-              <label class="input-label">高峰倍率</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakMultiplier") }}</label>
               <input
                 v-model.number="createForm.peak_rate_multiplier"
                 type="number"
@@ -856,6 +856,7 @@
                 min="0"
                 class="input"
                 placeholder="1"
+                :title="t('admin.groups.peakRate.multiplierHint')"
               />
             </div>
           </div>
@@ -2137,7 +2138,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              <span>启用高峰时段倍率</span>
+              <span>{{ t("admin.groups.peakRate.enable") }}</span>
             </label>
           </div>
           <div
@@ -2145,7 +2146,7 @@
             class="mb-4 grid grid-cols-3 gap-3"
           >
             <div>
-              <label class="input-label">高峰开始</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakStart") }}</label>
               <input
                 v-model="editForm.peak_start"
                 type="time"
@@ -2153,7 +2154,7 @@
               />
             </div>
             <div>
-              <label class="input-label">高峰结束</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakEnd") }}</label>
               <input
                 v-model="editForm.peak_end"
                 type="time"
@@ -2161,7 +2162,7 @@
               />
             </div>
             <div>
-              <label class="input-label">高峰倍率</label>
+              <label class="input-label">{{ t("admin.groups.peakRate.peakMultiplier") }}</label>
               <input
                 v-model.number="editForm.peak_rate_multiplier"
                 type="number"
@@ -2169,6 +2170,7 @@
                 min="0"
                 class="input"
                 placeholder="1"
+                :title="t('admin.groups.peakRate.multiplierHint')"
               />
             </div>
           </div>
