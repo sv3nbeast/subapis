@@ -1775,7 +1775,7 @@
         </div>
       </div>
 
-      <!-- Anthropic API Key: Web Search Emulation -->
+      <!-- Anthropic API Key: Web Search Emulation (hidden when global disabled) -->
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey' && webSearchGlobalEnabled"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -4169,7 +4169,13 @@ const handleSubmit = async () => {
         return
       }
 
-      if (!currentCredentials.service_account_json && !currentCredentials.service_account) {
+      const credentialsStatus = props.account.credentials_status
+      const hasExistingServiceAccountJson = credentialsStatus
+        ? Boolean(
+            credentialsStatus.has_service_account_json || credentialsStatus.has_service_account
+          )
+        : Boolean(currentCredentials.service_account_json || currentCredentials.service_account)
+      if (!hasExistingServiceAccountJson) {
         appStore.showError(t('admin.accounts.vertexSaJsonRequired'))
         return
       }
