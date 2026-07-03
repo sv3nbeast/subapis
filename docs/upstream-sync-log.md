@@ -1969,3 +1969,64 @@ a663f3b4 Fix usage stats SQL/Scan column mismatch from official merge
 5ceb7712 Merge official origin/main (ce6af413) into fork
 5860d101 增加upstream sync conflict ledger
 2f6d1ed8 Anchor bridge trailing breakpoint 到 last non-system message
+
+## 2026-07-04 01:58:29 +0800
+
+- 模式: `ai`
+- 目标分支: `codex/official-sync-review`
+- 官方引用: `origin/main`
+- 本地提交: `440dc3d33ef2b2467634db8fd5711c498fc53ff1`
+- 官方提交: `2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 合并基线: `7dc7cfce1db5d31599815ff29acf6847ead0f0b7`
+- 官方领先数量: `62`
+- 本地领先数量: `377`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-official-sync-review-20260704.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+2649573b9 合并拉取请求 #3684（来源：Wei-Shaw/fix/usage-log-queue-silent-drop）
+a1b2b32e0 修复：prevent silent usage_logs drops under queue overflow (#3656)
+28c2d20d9 合并拉取请求 #3675（来源：wucm667/fix/antigravity-401-auto-recover）
+d0a1443a4 修复（antigravity）：allow OAuth 401 auto recovery
+87dfc6613 合并拉取请求 #3659（来源：jianjianai/fix/ops-realtime-stats-performance）
+5d7f213cb 合并拉取请求 #3657（来源：jianjianai/fix/redeem-invitation-bad-request）
+a5638a4e5 修复：match Codex session imports by chatgpt_user_id before shared account id
+3f2ef6046 修复：optimize ops realtime account stats
+372436323 修复邀请码普通兑换错误
+0b8e5eec3 杂项：将VERSION同步到 0.1.143 [skip ci]
+9caa3c9c5 合并拉取请求 #3635（来源：JRBaggins/hotfix/openai-oauth-count-tokens-latest）
+3020652fa 合并拉取请求 #3565（来源：zy6p/zy6p/pr-openai-ws-http-bridge）
+537bd5046 合并拉取请求 #3638（来源：infinityf4p/show-reset-credit-expiration）
+6bc6998b0 合并拉取请求 #3627（来源：alfadb/fix/ollama-anthropic-bearer-auth）
+4e23c77ec 合并拉取请求 #3626（来源：DanisJiang/fix/claude-code-stream-keepalive）
+821399ade 合并拉取请求 #3622（来源：deqiying/feat/subscription-revoke-restore）
+441b8ec2e 合并拉取请求 #3614（来源：heathermhuang/codex/grok-media-group-gate-fix）
+fafdd8342 合并拉取请求 #3641（来源：infinityf4p/fix/openai-plan-type-workspace）
+50dff6762 合并拉取请求 #3630（来源：seng1e/fix/codex-image-bridge-skip-compact）
+e63492090 合并拉取请求 #3609（来源：phoenixikkifullstack/fix/antigravity-gemini-3.1-pro-high）
+
+### 本地领先
+
+440dc3d33 Merge official upstream updates through 7dc7cfc
+f6bb0d96c Record official sync analysis 针对 20260701
+8563b1bbd 支持 Claude Sonnet 5
+c1dd977d6 Debug-capture: bypass sync guard 针对 the captured user only
+d160966d9 Normalize Claude Code current date reminders
+e19cf128d Normalize Claude Code date watermark
+9e6a8ff72 Stop-bleed: restore guard rejecting non-stream /v1/messages
+18fc3c6ed Always stream-aggregate non-stream /v1/messages (fix 429 account poisoning)
+912837b82 Make Anthropic org_uuid rate-limit propagation opt-中的 (default off)
+7603a46d7 增加per-account non-stream→stream aggregation 针对 /v1/messages
+70da4896f 恢复kiro/droid account create + reauth UI dropped 中的 67-commit sync
+3597ab789 恢复Claude account create 默认值 (RPM limit + TLS fingerprint) dropped 中的 sync
+b083879ef 恢复proxy auto-assignment dropped 中的 67-commit official sync
+6a590e5d4 Fix 前端 测试: restore 2 merge-dropped official components + align specs
+6bc48b282 Sync upstream official 67 commits (ce6af413 -> c2754222)
+492144be8 移除dead CCH signing config (前端 toggle + backend setting chain)
+04ec256ef Fix Claude prompt-cache rebuilds: rewrite inline role:system 到 role:user 中的 place
+a663f3b4a Fix usage stats SQL/Scan column mismatch from official merge
+4cbd3b78e 更新upstream sync ledger after promote
+5ceb7712c Merge official origin/main (ce6af413) into fork
