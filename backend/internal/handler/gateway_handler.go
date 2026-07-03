@@ -40,6 +40,30 @@ const (
 
 var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 
+var stickySessionHeaderNames = []string{
+	"X-Session-ID",
+	"Anthropic-Session-Id",
+	"X-Claude-Code-Session-Id",
+	"X-OpenCode-Session",
+	"X-Session-Affinity",
+	"X-Conversation-ID",
+	"Session-Id",
+	"session_id",
+	"conversation_id",
+}
+
+func explicitStickySessionIDFromHeaders(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, name := range stickySessionHeaderNames {
+		if value := strings.TrimSpace(c.GetHeader(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func gatewayProxyLogFields(account *service.Account) []zap.Field {
 	if account == nil {
 		return []zap.Field{zap.Bool("proxy_enabled", false)}
@@ -299,6 +323,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
+	parsedReq.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// [DEBUG-STICKY] 打印会话 hash 生成结果
@@ -1976,6 +2001,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		UserAgent: c.GetHeader("User-Agent"),
 		APIKeyID:  apiKey.ID,
 	}
+	parsedReq.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 选择支持该模型的账号

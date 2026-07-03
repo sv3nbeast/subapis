@@ -169,10 +169,20 @@ func (Group) Fields() []ent.Field {
 		field.Bool("kiro_cache_emulation_enabled").
 			Default(false).
 			Comment("是否启用 Kiro 模拟缓存（仅 kiro 分组生效）"),
+		field.Bool("kiro_auto_sticky_enabled").
+			Default(true).
+			Comment("是否启用 Kiro 自动粘性会话路由（仅 kiro 分组生效）"),
+		field.Int("kiro_sticky_session_ttl_seconds").
+			Default(3600).
+			Comment("Kiro 粘性会话绑定 TTL 秒数，范围 60-86400（仅 kiro 分组生效）"),
 		field.Float("kiro_cache_emulation_ratio").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(5,4)"}).
 			Default(1.0).
 			Comment("Kiro 模拟缓存生效比例，范围 0-1（仅 kiro 分组生效）"),
+		field.String("kiro_endpoint_mode").
+			MaxLen(16).
+			Default("q").
+			Comment("Kiro endpoint 模式：q、krs、auto（仅 kiro 分组生效）"),
 	}
 }
 

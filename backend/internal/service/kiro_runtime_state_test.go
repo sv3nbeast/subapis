@@ -424,6 +424,110 @@ func TestExecuteKiroUpstreamDoesNotMarkCooldownForKiro429(t *testing.T) {
 	require.Equal(t, 0, store.mark429Calls)
 }
 
+func TestExecuteKiroUpstreamAutoEndpointFallsBackToKRS(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/KRS",
+		},
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 1"}`),
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 2"}`),
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 3"}`),
+			newJSONResponse(http.StatusOK, `{"ok":true}`),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	parsed := &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}}
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(context.Background(), account, parsed, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 4)
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[3].URL.Host)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/KRS", upstream.requests[3].Header.Get("x-amzn-kiro-profile-arn"))
+	require.Contains(t, upstream.requests[3].Header.Get("User-Agent"), "KiroIDE ")
+}
+
+func TestExecuteKiroUpstreamAutoEndpointResolvesProfileArnForKRS(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          43,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"auth_method":  "idc",
+			"provider":     "AWS",
+		},
+	}
+	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-KRS"}]}`),
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 1"}`),
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 2"}`),
+			newJSONResponse(http.StatusTooManyRequests, `{"message":"slow down 3"}`),
+			newJSONResponse(http.StatusOK, `{"ok":true}`),
+		},
+	}
+	svc := &GatewayService{
+		accountRepo:         repo,
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	parsed := &ParsedRequest{Group: &Group{Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}}
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(context.Background(), account, parsed, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 5)
+	require.Equal(t, "/", upstream.requests[0].URL.Path)
+	require.Equal(t, kiroListAvailableProfilesTarget, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[4].URL.Host)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-KRS", upstream.requests[4].Header.Get("x-amzn-kiro-profile-arn"))
+	krsBody, readErr := io.ReadAll(upstream.requests[4].Body)
+	require.NoError(t, readErr)
+	require.Contains(t, string(krsBody), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-KRS"`)
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED-KRS", account.GetCredential("profile_arn"))
+}
+
 func TestExecuteKiroUpstreamKeepsServerErrorRetriesAtDefaultLimit(t *testing.T) {
 	originalSleep := kiroRetrySleep
 	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
@@ -508,7 +612,7 @@ func TestExecuteKiroUpstreamInvalidModelDoesNotRefreshProfileArnOrRetry(t *testi
 
 	firstBody, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
-	require.Contains(t, string(firstBody), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE"`)
+	require.NotContains(t, string(firstBody), `"profileArn":`)
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/STALE", account.GetCredential("profile_arn"))
 }
 

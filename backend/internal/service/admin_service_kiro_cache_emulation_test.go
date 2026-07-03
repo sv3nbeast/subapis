@@ -90,6 +90,7 @@ func TestAdminServiceKiroCacheEmulationCreatePersistsConfig(t *testing.T) {
 		RateMultiplier:            1,
 		KiroCacheEmulationEnabled: true,
 		KiroCacheEmulationRatio:   0.5,
+		KiroEndpointMode:          KiroEndpointModeAuto,
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup error: %v", err)
@@ -102,6 +103,15 @@ func TestAdminServiceKiroCacheEmulationCreatePersistsConfig(t *testing.T) {
 	}
 	if repo.created.KiroCacheEmulationRatio != 0.5 {
 		t.Fatalf("ratio = %v, want 0.5", repo.created.KiroCacheEmulationRatio)
+	}
+	if !repo.created.KiroAutoStickyEnabled {
+		t.Fatal("expected Kiro auto sticky to default enabled")
+	}
+	if repo.created.KiroStickySessionTTLSeconds != DefaultKiroStickySessionTTLSeconds {
+		t.Fatalf("ttl = %v, want %v", repo.created.KiroStickySessionTTLSeconds, DefaultKiroStickySessionTTLSeconds)
+	}
+	if repo.created.KiroEndpointMode != KiroEndpointModeAuto {
+		t.Fatalf("endpoint mode = %q, want %q", repo.created.KiroEndpointMode, KiroEndpointModeAuto)
 	}
 }
 
@@ -120,10 +130,12 @@ func TestAdminServiceKiroCacheEmulationUpdatePersistsConfig(t *testing.T) {
 	svc := &adminServiceImpl{groupRepo: repo}
 	enabled := true
 	ratio := 0.75
+	endpointMode := KiroEndpointModeKRS
 
 	group, err := svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{
 		KiroCacheEmulationEnabled: &enabled,
 		KiroCacheEmulationRatio:   &ratio,
+		KiroEndpointMode:          &endpointMode,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGroup error: %v", err)
@@ -137,6 +149,45 @@ func TestAdminServiceKiroCacheEmulationUpdatePersistsConfig(t *testing.T) {
 	if repo.updated.KiroCacheEmulationRatio != 0.75 {
 		t.Fatalf("ratio = %v, want 0.75", repo.updated.KiroCacheEmulationRatio)
 	}
+	if repo.updated.KiroEndpointMode != KiroEndpointModeKRS {
+		t.Fatalf("endpoint mode = %q, want %q", repo.updated.KiroEndpointMode, KiroEndpointModeKRS)
+	}
+}
+
+func TestAdminServiceKiroStickyUpdatePersistsConfig(t *testing.T) {
+	repo := &groupRepoStubForKiroCacheEmulation{
+		getByID: &Group{
+			ID:                          7,
+			Name:                        "kiro-cache",
+			Platform:                    PlatformKiro,
+			RateMultiplier:              1,
+			Status:                      StatusActive,
+			SubscriptionType:            SubscriptionTypeStandard,
+			KiroAutoStickyEnabled:       true,
+			KiroStickySessionTTLSeconds: DefaultKiroStickySessionTTLSeconds,
+			KiroCacheEmulationRatio:     1,
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+	autoSticky := false
+	ttl := 30
+
+	group, err := svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{
+		KiroAutoStickyEnabled:       &autoSticky,
+		KiroStickySessionTTLSeconds: &ttl,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGroup error: %v", err)
+	}
+	if group == nil || repo.updated == nil {
+		t.Fatal("expected updated group")
+	}
+	if repo.updated.KiroAutoStickyEnabled {
+		t.Fatal("expected Kiro auto sticky to be disabled")
+	}
+	if repo.updated.KiroStickySessionTTLSeconds != MinKiroStickySessionTTLSeconds {
+		t.Fatalf("ttl = %v, want %v", repo.updated.KiroStickySessionTTLSeconds, MinKiroStickySessionTTLSeconds)
+	}
 }
 
 func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
@@ -149,6 +200,7 @@ func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
 		RateMultiplier:            1,
 		KiroCacheEmulationEnabled: true,
 		KiroCacheEmulationRatio:   0.5,
+		KiroEndpointMode:          KiroEndpointModeKRS,
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup error: %v", err)
@@ -158,5 +210,14 @@ func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
 	}
 	if repo.created.KiroCacheEmulationRatio != 0 {
 		t.Fatalf("non-Kiro ratio = %v, want 0", repo.created.KiroCacheEmulationRatio)
+	}
+	if repo.created.KiroAutoStickyEnabled {
+		t.Fatal("non-Kiro group must not keep Kiro auto sticky enabled")
+	}
+	if repo.created.KiroStickySessionTTLSeconds != 0 {
+		t.Fatalf("non-Kiro sticky ttl = %v, want 0", repo.created.KiroStickySessionTTLSeconds)
+	}
+	if repo.created.KiroEndpointMode != "" {
+		t.Fatalf("non-Kiro endpoint mode = %q, want empty", repo.created.KiroEndpointMode)
 	}
 }

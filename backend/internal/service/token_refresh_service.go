@@ -35,6 +35,10 @@ type TokenRefreshService struct {
 	privacyClientFactory PrivacyClientFactory
 	proxyRepo            ProxyRepository
 
+	// Kiro profile ARN prefill after background token refresh.
+	kiroProfileHTTPUpstream        HTTPUpstream
+	kiroProfileTLSFPProfileService *TLSFingerprintProfileService
+
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -103,6 +107,13 @@ func NewTokenRefreshService(
 func (s *TokenRefreshService) SetPrivacyDeps(factory PrivacyClientFactory, proxyRepo ProxyRepository) {
 	s.privacyClientFactory = factory
 	s.proxyRepo = proxyRepo
+}
+
+// SetKiroProfileResolverDeps injects the local upstream transport used to prefill
+// Kiro profile ARN after background token refresh.
+func (s *TokenRefreshService) SetKiroProfileResolverDeps(httpUpstream HTTPUpstream, tlsFPProfileService *TLSFingerprintProfileService) {
+	s.kiroProfileHTTPUpstream = httpUpstream
+	s.kiroProfileTLSFPProfileService = tlsFPProfileService
 }
 
 // SetRefreshAPI 注入统一的 OAuth 刷新 API
@@ -420,6 +431,7 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	// 对所有 OAuth 账号调用缓存失效（InvalidateToken 内部根据平台判断是否需要处理）
+	s.ensureKiroProfileArn(ctx, account)
 	if s.cacheInvalidator != nil && account.Type == AccountTypeOAuth {
 		if err := s.cacheInvalidator.InvalidateToken(ctx, account); err != nil {
 			slog.Warn("token_refresh.invalidate_token_cache_failed",
@@ -445,6 +457,28 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	s.ensureOpenAIPrivacy(ctx, account)
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
 	s.ensureAntigravityPrivacy(ctx, account)
+}
+
+// ensureKiroProfileArn resolves and persists the real Kiro profile ARN after a
+// successful background token refresh. It reuses the GatewayService resolver so
+// the request path, TLS profile, proxy handling, and retry policy stay aligned.
+func (s *TokenRefreshService) ensureKiroProfileArn(ctx context.Context, account *Account) {
+	if s == nil || account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
+		return
+	}
+	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
+		return
+	}
+	token := strings.TrimSpace(account.GetCredential("access_token"))
+	if token == "" || s.kiroProfileHTTPUpstream == nil {
+		return
+	}
+	resolver := &GatewayService{
+		accountRepo:         s.accountRepo,
+		httpUpstream:        s.kiroProfileHTTPUpstream,
+		tlsFPProfileService: s.kiroProfileTLSFPProfileService,
+	}
+	_ = resolver.resolveAndPersistKiroProfileArnOnly(ctx, account, token)
 }
 
 func shouldTokenRefreshClearTempUnschedulable(reason string) bool {

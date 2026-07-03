@@ -131,6 +131,43 @@ func TestKiroTokenProviderGetAccessTokenRefreshesMissingAccessTokenRuntime(t *te
 	require.Equal(t, "fresh-access", repo.account.GetCredential("access_token"))
 }
 
+func TestKiroTokenProviderForceRefreshPrefillsProfileArnRuntime(t *testing.T) {
+	account := &Account{
+		ID:       43,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"refresh_token": "old-refresh",
+			"profile_arn":   kiroBuilderIDProfileARN,
+		},
+	}
+	repo := &kiroTokenProviderRuntimeRepo{account: account}
+	refresher := &kiroTokenProviderRuntimeRefresher{tokenInfo: &KiroTokenInfo{
+		AccessToken: "fresh-access",
+		ExpiresAt:   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	}}
+	provider := NewKiroTokenProvider(repo, nil, nil)
+	provider.kiroOAuthService = refresher
+
+	resolverCalls := int32(0)
+	provider.SetProfileARNResolver(func(ctx context.Context, resolvedAccount *Account, accessToken string) string {
+		atomic.AddInt32(&resolverCalls, 1)
+		require.Equal(t, account.ID, resolvedAccount.ID)
+		require.Equal(t, "fresh-access", accessToken)
+		credentials := MergeCredentials(resolvedAccount.Credentials, map[string]any{
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED",
+		})
+		require.NoError(t, persistAccountCredentials(ctx, repo, resolvedAccount, credentials))
+		return resolvedAccount.GetCredential("profile_arn")
+	})
+
+	token, err := provider.ForceRefreshAccessToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "fresh-access", token)
+	require.Equal(t, int32(1), atomic.LoadInt32(&resolverCalls))
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED", repo.account.GetCredential("profile_arn"))
+}
+
 func TestKiroTokenProviderGetAccessTokenMissingTokensRequiresReauthRuntime(t *testing.T) {
 	account := &Account{
 		ID:       42,

@@ -42,10 +42,19 @@ func TestDefaultBedrockModelMapping_DefaultsOpus48(t *testing.T) {
 	cases := map[string]string{
 		"claude-opus-4-8":          "us.anthropic.claude-opus-4-8-v1",
 		"claude-opus-4-8-thinking": "us.anthropic.claude-opus-4-8-v1",
+		"claude-sonnet-5":          "anthropic.claude-sonnet-5",
 	}
 	for from, want := range cases {
 		if got, ok := DefaultBedrockModelMapping[from]; !ok || got != want {
 			t.Fatalf("unexpected default Bedrock %q mapping: got %q exists=%v want %q", from, got, ok, want)
 		}
+	}
+}
+
+func TestDefaultKiroModelMapping_DefaultsSonnet5(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := DefaultKiroModelMapping["claude-sonnet-5"]; !ok || got != "claude-sonnet-5" {
+		t.Fatalf("unexpected default Kiro claude-sonnet-5 mapping: got %q exists=%v", got, ok)
 	}
 }

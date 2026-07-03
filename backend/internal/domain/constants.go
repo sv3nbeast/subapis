@@ -125,6 +125,7 @@ var DefaultAntigravityModelMapping = map[string]string{
 // DefaultKiroModelMapping 是 Kiro 平台的默认模型映射。
 // 键为对外暴露/允许请求的模型名，值为实际发送到 Kiro 上游的模型名。
 var DefaultKiroModelMapping = map[string]string{
+	"claude-sonnet-5":                     "claude-sonnet-5",
 	"claude-opus-4-8":                     "claude-opus-4.8",
 	"claude-opus-4-8-thinking":            "claude-opus-4.8",
 	"claude-opus-4-7":                     "claude-opus-4.7",
@@ -159,6 +160,7 @@ var DefaultBedrockModelMapping = map[string]string{
 	"claude-opus-4-1":          "us.anthropic.claude-opus-4-1-20250805-v1:0",
 	"claude-opus-4-20250514":   "us.anthropic.claude-opus-4-20250514-v1:0",
 	// Claude Sonnet
+	"claude-sonnet-5":            "anthropic.claude-sonnet-5",
 	"claude-sonnet-4-6-thinking": "us.anthropic.claude-sonnet-4-6",
 	"claude-sonnet-4-6":          "us.anthropic.claude-sonnet-4-6",
 	"claude-sonnet-4-5":          "us.anthropic.claude-sonnet-4-5-20250929-v1:0",

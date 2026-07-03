@@ -42,6 +42,68 @@ const (
 	SocialProviderGitHub SocialProvider = "Github"
 )
 
+const (
+	ProviderGoogle     = "Google"
+	ProviderGithub     = "Github"
+	ProviderBuilderId  = "BuilderId"
+	ProviderEnterprise = "Enterprise"
+)
+
+func IsValidKiroProvider(p string) bool {
+	switch strings.TrimSpace(p) {
+	case ProviderGoogle, ProviderGithub, ProviderBuilderId, ProviderEnterprise:
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveIDCProvider(startURL string) string {
+	if strings.TrimSpace(startURL) == "" || strings.TrimSpace(startURL) == BuilderIDStartURL {
+		return ProviderBuilderId
+	}
+	return ProviderEnterprise
+}
+
+func resolveIDCRefreshProvider(startURL string, provider ...string) string {
+	switch strings.TrimSpace(firstNonEmpty(provider...)) {
+	case ProviderBuilderId:
+		return ProviderBuilderId
+	case ProviderEnterprise:
+		return ProviderEnterprise
+	default:
+		return resolveIDCProvider(startURL)
+	}
+}
+
+func normalizeKiroExpiresAt(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("expiresAt is empty")
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+	}
+	for i, layout := range layouts {
+		var (
+			t   time.Time
+			err error
+		)
+		if i >= 2 {
+			t, err = time.ParseInLocation(layout, value, time.UTC)
+		} else {
+			t, err = time.Parse(layout, value)
+		}
+		if err == nil {
+			return t.Local().Format(time.RFC3339), nil
+		}
+	}
+	return "", fmt.Errorf("invalid expiresAt format: %q", raw)
+}
+
 type AuthSession struct {
 	State        string
 	CodeVerifier string
@@ -532,7 +594,7 @@ func buildIDCTokenData(ctx context.Context, proxyURL string, resp *createTokenRe
 		ProfileArn:   resp.ProfileArn,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "idc",
-		Provider:     "AWS",
+		Provider:     resolveIDCProvider(startURL),
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		StartURL:     startURL,
@@ -542,7 +604,7 @@ func buildIDCTokenData(ctx context.Context, proxyURL string, resp *createTokenRe
 	return token, nil
 }
 
-func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refreshToken, region, startURL string) (*TokenData, error) {
+func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refreshToken, region, startURL string, provider ...string) (*TokenData, error) {
 	if region == "" {
 		region = defaultIDCRegion
 	}
@@ -571,7 +633,7 @@ func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refr
 		ProfileArn:   resp.ProfileArn,
 		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:   "idc",
-		Provider:     "AWS",
+		Provider:     resolveIDCRefreshProvider(startURL, provider...),
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		StartURL:     startURL,
@@ -615,6 +677,26 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 		if reg.ClientSecret != "" {
 			token.ClientSecret = reg.ClientSecret
 		}
+	}
+	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
+		token.AuthMethod = "idc"
+	}
+	token.Provider = strings.TrimSpace(token.Provider)
+	if strings.EqualFold(token.Provider, "AWS") && token.AuthMethod == "idc" {
+		token.Provider = resolveIDCProvider(token.StartURL)
+	}
+	if !IsValidKiroProvider(token.Provider) {
+		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise)", token.Provider)
+	}
+	if token.AuthMethod == "idc" && strings.TrimSpace(token.Region) == "" {
+		token.Region = defaultIDCRegion
+	}
+	if strings.TrimSpace(token.ExpiresAt) != "" {
+		normalized, err := normalizeKiroExpiresAt(token.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse kiro token expiresAt: %w", err)
+		}
+		token.ExpiresAt = normalized
 	}
 	return &token, nil
 }

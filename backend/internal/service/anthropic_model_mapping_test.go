@@ -126,6 +126,16 @@ func TestResolveAnthropicUpstreamModel(t *testing.T) {
 			wantSource:     "alias",
 		},
 		{
+			name: "oauth normalizes sonnet 5 thinking suffix without enabling thinking alias",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+			},
+			requestedModel: "claude-sonnet-5-thinking",
+			wantModel:      "claude-sonnet-5",
+			wantSource:     "alias",
+		},
+		{
 			name: "api key falls back to dotted opus 4.8 thinking default alias mapping",
 			account: &Account{
 				Platform: PlatformAnthropic,
@@ -172,6 +182,7 @@ func TestIsAnthropicThinkingModelAlias(t *testing.T) {
 		{model: "claude-opus-4-8", want: false},
 		{model: "claude-opus-4.8", want: false},
 		{model: "claude-sonnet-4-5-thinking", want: false},
+		{model: "claude-sonnet-5-thinking", want: false},
 	}
 
 	for _, tt := range tests {

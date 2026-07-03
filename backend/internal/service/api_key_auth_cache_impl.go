@@ -13,7 +13,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 13 // v13: Kiro cache emulation + exclusive group authorization fields
+const apiKeyAuthSnapshotVersion = 15 // v15: carry Kiro endpoint mode in snapshot
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -246,37 +246,42 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		// 查询失败或无 override 时留 nil，checkRPM 会回退到 DB 查询
 	}
 	if apiKey.Group != nil {
+		groupForSnapshot := *apiKey.Group
+		NormalizeGroupRuntimeFields(&groupForSnapshot)
 		snapshot.Group = &APIKeyAuthGroupSnapshot{
-			ID:                              apiKey.Group.ID,
-			Name:                            apiKey.Group.Name,
-			Platform:                        apiKey.Group.Platform,
-			IsExclusive:                     apiKey.Group.IsExclusive,
-			Status:                          apiKey.Group.Status,
-			SubscriptionType:                apiKey.Group.SubscriptionType,
-			RateMultiplier:                  apiKey.Group.RateMultiplier,
-			DailyLimitUSD:                   apiKey.Group.DailyLimitUSD,
-			WeeklyLimitUSD:                  apiKey.Group.WeeklyLimitUSD,
-			MonthlyLimitUSD:                 apiKey.Group.MonthlyLimitUSD,
-			AllowImageGeneration:            apiKey.Group.AllowImageGeneration,
-			ImageRateIndependent:            apiKey.Group.ImageRateIndependent,
-			ImageRateMultiplier:             apiKey.Group.ImageRateMultiplier,
-			ImagePrice1K:                    apiKey.Group.ImagePrice1K,
-			ImagePrice2K:                    apiKey.Group.ImagePrice2K,
-			ImagePrice4K:                    apiKey.Group.ImagePrice4K,
-			ClaudeCodeOnly:                  apiKey.Group.ClaudeCodeOnly,
-			FallbackGroupID:                 apiKey.Group.FallbackGroupID,
-			FallbackGroupIDOnInvalidRequest: apiKey.Group.FallbackGroupIDOnInvalidRequest,
-			ModelRouting:                    apiKey.Group.ModelRouting,
-			ModelRoutingEnabled:             apiKey.Group.ModelRoutingEnabled,
-			MCPXMLInject:                    apiKey.Group.MCPXMLInject,
-			SupportedModelScopes:            apiKey.Group.SupportedModelScopes,
-			AllowMessagesDispatch:           apiKey.Group.AllowMessagesDispatch,
-			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
-			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
-			ModelsListConfig:                apiKey.Group.ModelsListConfig,
-			KiroCacheEmulationEnabled:       apiKey.Group.KiroCacheEmulationEnabled,
-			KiroCacheEmulationRatio:         apiKey.Group.KiroCacheEmulationRatio,
-			RPMLimit:                        apiKey.Group.RPMLimit,
+			ID:                              groupForSnapshot.ID,
+			Name:                            groupForSnapshot.Name,
+			Platform:                        groupForSnapshot.Platform,
+			IsExclusive:                     groupForSnapshot.IsExclusive,
+			Status:                          groupForSnapshot.Status,
+			SubscriptionType:                groupForSnapshot.SubscriptionType,
+			RateMultiplier:                  groupForSnapshot.RateMultiplier,
+			DailyLimitUSD:                   groupForSnapshot.DailyLimitUSD,
+			WeeklyLimitUSD:                  groupForSnapshot.WeeklyLimitUSD,
+			MonthlyLimitUSD:                 groupForSnapshot.MonthlyLimitUSD,
+			AllowImageGeneration:            groupForSnapshot.AllowImageGeneration,
+			ImageRateIndependent:            groupForSnapshot.ImageRateIndependent,
+			ImageRateMultiplier:             groupForSnapshot.ImageRateMultiplier,
+			ImagePrice1K:                    groupForSnapshot.ImagePrice1K,
+			ImagePrice2K:                    groupForSnapshot.ImagePrice2K,
+			ImagePrice4K:                    groupForSnapshot.ImagePrice4K,
+			ClaudeCodeOnly:                  groupForSnapshot.ClaudeCodeOnly,
+			FallbackGroupID:                 groupForSnapshot.FallbackGroupID,
+			FallbackGroupIDOnInvalidRequest: groupForSnapshot.FallbackGroupIDOnInvalidRequest,
+			ModelRouting:                    groupForSnapshot.ModelRouting,
+			ModelRoutingEnabled:             groupForSnapshot.ModelRoutingEnabled,
+			MCPXMLInject:                    groupForSnapshot.MCPXMLInject,
+			SupportedModelScopes:            groupForSnapshot.SupportedModelScopes,
+			AllowMessagesDispatch:           groupForSnapshot.AllowMessagesDispatch,
+			DefaultMappedModel:              groupForSnapshot.DefaultMappedModel,
+			MessagesDispatchModelConfig:     groupForSnapshot.MessagesDispatchModelConfig,
+			ModelsListConfig:                groupForSnapshot.ModelsListConfig,
+			KiroCacheEmulationEnabled:       groupForSnapshot.KiroCacheEmulationEnabled,
+			KiroAutoStickyEnabled:           groupForSnapshot.EffectiveKiroAutoStickyEnabled(),
+			KiroStickySessionTTLSeconds:     groupForSnapshot.EffectiveKiroStickySessionTTLSeconds(),
+			KiroCacheEmulationRatio:         groupForSnapshot.KiroCacheEmulationRatio,
+			KiroEndpointMode:                groupForSnapshot.EffectiveKiroEndpointMode(),
+			RPMLimit:                        groupForSnapshot.RPMLimit,
 		}
 	}
 	return snapshot
@@ -350,9 +355,13 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                snapshot.Group.ModelsListConfig,
 			KiroCacheEmulationEnabled:       snapshot.Group.KiroCacheEmulationEnabled,
+			KiroAutoStickyEnabled:           snapshot.Group.KiroAutoStickyEnabled,
+			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
+			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 		}
+		NormalizeGroupRuntimeFields(apiKey.Group)
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey

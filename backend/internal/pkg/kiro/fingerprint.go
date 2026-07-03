@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -38,8 +39,15 @@ var (
 	runtimeSDKVersions   = []string{"1.0.0"}
 	streamingSDKVersions = []string{"1.0.34"}
 	nodeVersions         = []string{"22.22.0"}
-	kiroVersions         = []string{"0.11.107"}
+	kiroVersions         = []string{"0.11.132", "0.11.131", "0.11.130"}
 )
+
+var kiroIDEUserAgentVersion = func() string {
+	if v := strings.TrimSpace(os.Getenv("KIRO_IDE_VERSION")); v != "" {
+		return v
+	}
+	return "0.12.301"
+}()
 
 func globalRuntimeFingerprints() *runtimeFingerprintManager {
 	globalRuntimeFingerprintManagerOnce.Do(func() {
@@ -123,8 +131,10 @@ func NormalizeMachineID(machineID string) (string, bool) {
 	if len(trimmed) == 64 && isHexString(trimmed) {
 		return strings.ToLower(trimmed), true
 	}
-	if _, err := uuid.Parse(trimmed); err == nil {
-		return strings.ToLower(trimmed), true
+	withoutDashes := strings.ReplaceAll(trimmed, "-", "")
+	if len(withoutDashes) == 32 && isHexString(withoutDashes) {
+		normalized := strings.ToLower(withoutDashes)
+		return normalized + normalized, true
 	}
 	return "", false
 }
@@ -188,6 +198,11 @@ func BuildRuntimeUserAgent(accountKey, machineID string) string {
 		fp.KiroVersion,
 		fp.KiroHash,
 	)
+}
+
+func BuildKiroIDERuntimeUserAgent(accountKey, machineID string) string {
+	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
+	return fmt.Sprintf("KiroIDE %s %s", kiroIDEUserAgentVersion, fp.KiroHash)
 }
 
 func BuildRuntimeAmzUserAgent(accountKey, machineID string) string {

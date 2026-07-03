@@ -11,17 +11,13 @@
             @change="debouncedReload"
             @update:searchQuery="debouncedReload"
           />
-          <AccountTableActions
-            :loading="loading"
-            @refresh="handleManualRefresh"
-            @create="showCreate = true"
-          >
+          <AccountTableActions :loading="loading" @refresh="handleManualRefresh" @create="showCreate = true">
             <template #after>
               <!-- Auto Refresh Dropdown -->
               <div class="relative" ref="autoRefreshDropdownRef">
                 <button
                   @click="
-                    showAutoRefreshDropdown = !showAutoRefreshDropdown;
+                    showAutoRefreshDropdown = !showAutoRefreshDropdown
                     showAccountToolsDropdown = false
                   "
                   class="btn btn-secondary px-2 md:px-3"
@@ -31,7 +27,9 @@
                   <span class="hidden md:inline">
                     {{
                       autoRefreshEnabled
-                        ? t('admin.accounts.autoRefreshCountdown', { seconds: autoRefreshCountdown })
+                        ? t('admin.accounts.autoRefreshCountdown', {
+                            seconds: autoRefreshCountdown
+                          })
                         : t('admin.accounts.autoRefresh')
                     }}
                   </span>
@@ -66,7 +64,7 @@
               <div class="relative" ref="accountToolsDropdownRef">
                 <button
                   @click="
-                    showAccountToolsDropdown = !showAccountToolsDropdown;
+                    showAccountToolsDropdown = !showAccountToolsDropdown
                     showAutoRefreshDropdown = false
                   "
                   class="btn btn-secondary px-2 md:px-3"
@@ -87,19 +85,25 @@
                       </div>
                     </div>
                     <button class="account-tools-menu-item" @click="openSyncFromCrs">
-                      <span class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+                      <span
+                        class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300"
+                      >
                         <Icon name="sync" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.accounts.syncFromCrs') }}</span>
                     </button>
                     <button class="account-tools-menu-item" @click="openImportData">
-                      <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+                      <span
+                        class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300"
+                      >
                         <Icon name="upload" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
                     </button>
                     <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
-                      <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
+                      <span
+                        class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300"
+                      >
                         <Icon name="download" size="sm" />
                       </span>
                       <span class="flex-1 text-left">
@@ -109,7 +113,11 @@
                         v-if="selIds.length"
                         class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/40 dark:text-primary-300"
                       >
-                        {{ t('admin.accounts.selectedCount', { count: selIds.length }) }}
+                        {{
+                          t('admin.accounts.selectedCount', {
+                            count: selIds.length
+                          })
+                        }}
                       </span>
                     </button>
 
@@ -120,13 +128,17 @@
                       </div>
                     </div>
                     <button class="account-tools-menu-item" @click="openErrorPassthrough">
-                      <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                      <span
+                        class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300"
+                      >
                         <Icon name="shield" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.errorPassthrough.title') }}</span>
                     </button>
                     <button class="account-tools-menu-item" @click="openTLSFingerprintProfiles">
-                      <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                      <span
+                        class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200"
+                      >
                         <Icon name="lock" size="sm" />
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
@@ -163,10 +175,7 @@
           class="mt-2 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200"
         >
           <span>{{ t('admin.accounts.listPendingSyncHint') }}</span>
-          <button
-            class="btn btn-secondary px-2 py-1 text-xs"
-            @click="syncPendingListChanges"
-          >
+          <button class="btn btn-secondary px-2 py-1 text-xs" @click="syncPendingListChanges">
             {{ t('admin.accounts.listPendingSyncAction') }}
           </button>
         </div>
@@ -184,197 +193,311 @@
           @toggle-schedulable="handleBulkToggleSchedulable"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <DataTable
-          :columns="cols"
-          :data="accounts"
-          :loading="loading"
-          row-key="id"
-          :server-side-sort="true"
-          @sort="handleSort"
-          default-sort-key="name"
-          default-sort-order="asc"
-          :sort-storage-key="ACCOUNT_SORT_STORAGE_KEY"
-        >
-          <template #header-select>
-            <input
-              type="checkbox"
-              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              :checked="allVisibleSelected"
-              @click.stop
-              @change="toggleSelectAllVisible($event)"
-            />
-          </template>
-          <template #cell-select="{ row }">
-            <input type="checkbox" :checked="selIds.includes(row.id)" @change="toggleSel(row.id)" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-          </template>
-          <template #cell-id="{ value }">
-            <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
-          </template>
-          <template #cell-name="{ row, value }">
-            <div class="flex flex-col">
-              <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+          <DataTable
+            :columns="cols"
+            :data="accounts"
+            :loading="loading"
+            row-key="id"
+            :server-side-sort="true"
+            @sort="handleSort"
+            default-sort-key="name"
+            default-sort-order="asc"
+            :sort-storage-key="ACCOUNT_SORT_STORAGE_KEY"
+          >
+            <template #header-select>
+              <input
+                type="checkbox"
+                class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                :checked="allVisibleSelected"
+                @click.stop
+                @change="toggleSelectAllVisible($event)"
+              />
+            </template>
+            <template #cell-select="{ row }">
+              <input
+                type="checkbox"
+                :checked="selIds.includes(row.id)"
+                @change="toggleSel(row.id)"
+                class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+            </template>
+            <template #cell-id="{ value }">
+              <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
+            </template>
+            <template #cell-name="{ row, value }">
+              <div class="flex flex-col">
+                <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+                <span
+                  v-if="row.extra?.email_address || row.extra?.email || row.credentials?.email"
+                  class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]"
+                  :title="String(row.extra?.email_address || row.extra?.email || row.credentials?.email)"
+                >
+                  {{ row.extra?.email_address || row.extra?.email || row.credentials?.email }}
+                </span>
+              </div>
+            </template>
+            <template #cell-notes="{ value }">
               <span
-                v-if="row.extra?.email_address || row.extra?.email || row.credentials?.email"
-                class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]"
-                :title="String(row.extra?.email_address || row.extra?.email || row.credentials?.email)"
+                v-if="value"
+                :title="value"
+                class="block max-w-xs truncate text-sm text-gray-600 dark:text-gray-300"
+                >{{ value }}</span
               >
-                {{ row.extra?.email_address || row.extra?.email || row.credentials?.email }}
-              </span>
-            </div>
-          </template>
-          <template #cell-notes="{ value }">
-            <span v-if="value" :title="value" class="block max-w-xs truncate text-sm text-gray-600 dark:text-gray-300">{{ value }}</span>
-            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-          </template>
-          <template #cell-platform_type="{ row }">
-            <div class="flex min-w-0 flex-col gap-1">
-              <div class="flex flex-wrap items-center gap-1">
-                <PlatformTypeBadge
-                  :platform="row.platform"
-                  :type="row.type"
-                  :plan-type="row.credentials?.plan_type"
-                  :overages-enabled="isKiroOveragesEnabled(row)"
-                  :privacy-mode="row.extra?.privacy_mode"
-                  :subscription-expires-at="row.credentials?.subscription_expires_at"
-                />
-                <span
-                  v-if="getAntigravityTierLabel(row)"
-                  :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
-                >
-                  {{ getAntigravityTierLabel(row) }}
-                </span>
-              </div>
-              <div
-                v-if="getOpenAICompactMeta(row)"
-                :class="[
-                  'inline-flex items-center gap-1.5 pl-0.5 text-[11px] font-medium leading-4',
-                  getOpenAICompactMeta(row)?.className
-                ]"
-                :title="getOpenAICompactTitle(row)"
-              >
-                <span :class="['h-1.5 w-1.5 rounded-full', getOpenAICompactMeta(row)?.dotClass]" />
-                <span>{{ getOpenAICompactMeta(row)?.label }}</span>
-              </div>
-            </div>
-          </template>
-          <template #cell-capacity="{ row }">
-            <AccountCapacityCell :account="row" />
-          </template>
-          <template #cell-status="{ row }">
-            <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
-          </template>
-          <template #cell-schedulable="{ row }">
-            <button @click="handleToggleSchedulable(row)" :disabled="togglingSchedulable === row.id" class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-dark-800" :class="[row.schedulable ? 'bg-primary-500 hover:bg-primary-600' : 'bg-gray-200 hover:bg-gray-300 dark:bg-dark-600 dark:hover:bg-dark-500']" :title="row.schedulable ? t('admin.accounts.schedulableEnabled') : t('admin.accounts.schedulableDisabled')">
-              <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
-            </button>
-          </template>
-          <template #cell-today_stats="{ row }">
-            <AccountTodayStatsCell
-              :stats="todayStatsByAccountId[String(row.id)] ?? null"
-              :loading="todayStatsLoading"
-              :error="todayStatsError"
-            />
-          </template>
-          <template #cell-groups="{ row }">
-            <AccountGroupsCell :groups="row.groups" :max-display="4" />
-          </template>
-          <template #header-usage="{ column }">
-            <div class="flex items-center">
-              <span>{{ column.label }}</span>
-              <HelpTooltip :content="t('admin.accounts.usageWindowsHint')" width-class="w-72" />
-            </div>
-          </template>
-          <template #cell-usage="{ row }">
-            <AccountUsageCell
-              :account="row"
-              :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
-              :today-stats-loading="todayStatsLoading"
-              :manual-refresh-token="usageManualRefreshToken"
-              @kiro-usage-meta="handleKiroUsageMeta(row, $event)"
-            />
-          </template>
-          <template #cell-proxy="{ row }">
-            <div class="flex flex-col gap-1">
-              <div v-if="row.proxy" class="flex items-center gap-2">
-                <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
-                <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
-                  ({{ row.proxy.country_code }})
-                </span>
-              </div>
               <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-              <div v-if="row.proxy && row.proxy.expires_at" class="flex items-center gap-2 text-xs">
-                <span class="text-gray-600 dark:text-gray-300">{{ formatDateTime(row.proxy.expires_at) }}</span>
-                <span :class="proxyExpiryBadge(row.proxy)">{{ proxyExpiryText(row.proxy) }}</span>
-              </div>
-              <div v-if="row.proxy_fallback_origin_id" class="flex items-center gap-1">
-                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" :title="t('admin.accounts.fallbackActiveTip', { origin: row.proxy_fallback_origin_name })">
-                  {{ t('admin.accounts.fallbackActive') }}
-                </span>
-                <button class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700" @click="onRevertFallback(row)">{{ t('admin.accounts.revertProxy') }}</button>
-              </div>
-            </div>
-          </template>
-          <template #cell-rate_multiplier="{ row }">
-            <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-              {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
-            </span>
-          </template>
-          <template #cell-priority="{ value }">
-            <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
-          </template>
-          <template #cell-last_used_at="{ value }">
-            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
-          </template>
-          <template #cell-created_at="{ value }">
-            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
-          </template>
-          <template #cell-expires_at="{ row, value }">
-            <div class="flex flex-col items-start gap-1">
-              <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatExpiresAt(value) }}</span>
-              <div v-if="isExpired(value) || (row.auto_pause_on_expired && value)" class="flex items-center gap-1">
-                <span
-                  v-if="isExpired(value)"
-                  class="inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+            </template>
+            <template #cell-platform_type="{ row }">
+              <div class="flex min-w-0 flex-col gap-1">
+                <div class="flex flex-wrap items-center gap-1">
+                  <PlatformTypeBadge
+                    :platform="row.platform"
+                    :type="row.type"
+                    :plan-type="row.credentials?.plan_type"
+                    :overages-enabled="isKiroOveragesEnabled(row)"
+                    :privacy-mode="row.extra?.privacy_mode"
+                    :subscription-expires-at="row.credentials?.subscription_expires_at"
+                  />
+                  <span
+                    v-if="getAntigravityTierLabel(row)"
+                    :class="[
+                      'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium',
+                      getAntigravityTierClass(row)
+                    ]"
+                  >
+                    {{ getAntigravityTierLabel(row) }}
+                  </span>
+                </div>
+                <div
+                  v-if="getOpenAICompactMeta(row)"
+                  :class="[
+                    'inline-flex items-center gap-1.5 pl-0.5 text-[11px] font-medium leading-4',
+                    getOpenAICompactMeta(row)?.className
+                  ]"
+                  :title="getOpenAICompactTitle(row)"
                 >
-                  {{ t('admin.accounts.expired') }}
-                </span>
-                <span
-                  v-if="row.auto_pause_on_expired && value"
-                  class="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                >
-                  {{ t('admin.accounts.autoPauseOnExpired') }}
-                </span>
+                  <span :class="['h-1.5 w-1.5 rounded-full', getOpenAICompactMeta(row)?.dotClass]" />
+                  <span>{{ getOpenAICompactMeta(row)?.label }}</span>
+                </div>
               </div>
-            </div>
-          </template>
-          <template #cell-actions="{ row }">
-            <div class="flex items-center gap-1">
-              <button @click="handleEdit(row)" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" /></svg>
-                <span class="text-xs">{{ t('common.edit') }}</span>
+            </template>
+            <template #cell-capacity="{ row }">
+              <AccountCapacityCell :account="row" />
+            </template>
+            <template #cell-status="{ row }">
+              <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
+            </template>
+            <template #cell-schedulable="{ row }">
+              <button
+                @click="handleToggleSchedulable(row)"
+                :disabled="togglingSchedulable === row.id"
+                class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-dark-800"
+                :class="[
+                  row.schedulable
+                    ? 'bg-primary-500 hover:bg-primary-600'
+                    : 'bg-gray-200 hover:bg-gray-300 dark:bg-dark-600 dark:hover:bg-dark-500'
+                ]"
+                :title="
+                  row.schedulable ? t('admin.accounts.schedulableEnabled') : t('admin.accounts.schedulableDisabled')
+                "
+              >
+                <span
+                  class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                  :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']"
+                />
               </button>
-              <button @click="handleDelete(row)" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
-                <span class="text-xs">{{ t('common.delete') }}</span>
-              </button>
-              <button @click="openMenu(row, $event)" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-dark-700 dark:hover:text-white">
-                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" /></svg>
-                <span class="text-xs">{{ t('common.more') }}</span>
-              </button>
-            </div>
-          </template>
-        </DataTable>
+            </template>
+            <template #cell-today_stats="{ row }">
+              <AccountTodayStatsCell
+                :stats="todayStatsByAccountId[String(row.id)] ?? null"
+                :platform="row.platform"
+                :kiro-credit-unit-price-usd="getKiroCreditUnitPriceUsd(row)"
+                :is-relay="isKiroRelayAccount(row)"
+                :loading="todayStatsLoading"
+                :error="todayStatsError"
+              />
+            </template>
+            <template #cell-groups="{ row }">
+              <AccountGroupsCell :groups="row.groups" :max-display="4" />
+            </template>
+            <template #header-usage="{ column }">
+              <div class="flex items-center">
+                <span>{{ column.label }}</span>
+                <HelpTooltip :content="t('admin.accounts.usageWindowsHint')" width-class="w-72" />
+              </div>
+            </template>
+            <template #cell-usage="{ row }">
+              <AccountUsageCell
+                :account="row"
+                :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
+                :today-stats-loading="todayStatsLoading"
+                :manual-refresh-token="usageManualRefreshToken"
+                @kiro-usage-meta="handleKiroUsageMeta(row, $event)"
+              />
+            </template>
+            <template #cell-proxy="{ row }">
+              <div class="flex flex-col gap-1">
+                <div v-if="row.proxy" class="flex items-center gap-2">
+                  <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
+                  <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
+                    ({{ row.proxy.country_code }})
+                  </span>
+                </div>
+                <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+                <div v-if="row.proxy && row.proxy.expires_at" class="flex items-center gap-2 text-xs">
+                  <span class="text-gray-600 dark:text-gray-300">{{ formatDateTime(row.proxy.expires_at) }}</span>
+                  <span :class="proxyExpiryBadge(row.proxy)">{{ proxyExpiryText(row.proxy) }}</span>
+                </div>
+                <div v-if="row.proxy_fallback_origin_id" class="flex items-center gap-1">
+                  <span
+                    class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                    :title="
+                      t('admin.accounts.fallbackActiveTip', {
+                        origin: row.proxy_fallback_origin_name
+                      })
+                    "
+                  >
+                    {{ t('admin.accounts.fallbackActive') }}
+                  </span>
+                  <button
+                    class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    @click="onRevertFallback(row)"
+                  >
+                    {{ t('admin.accounts.revertProxy') }}
+                  </button>
+                </div>
+              </div>
+            </template>
+            <template #cell-rate_multiplier="{ row }">
+              <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
+                {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+              </span>
+            </template>
+            <template #cell-priority="{ value }">
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
+            </template>
+            <template #cell-last_used_at="{ value }">
+              <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
+            </template>
+            <template #cell-created_at="{ value }">
+              <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
+            </template>
+            <template #cell-expires_at="{ row, value }">
+              <div class="flex flex-col items-start gap-1">
+                <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatExpiresAt(value) }}</span>
+                <div v-if="isExpired(value) || (row.auto_pause_on_expired && value)" class="flex items-center gap-1">
+                  <span
+                    v-if="isExpired(value)"
+                    class="inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                  >
+                    {{ t('admin.accounts.expired') }}
+                  </span>
+                  <span
+                    v-if="row.auto_pause_on_expired && value"
+                    class="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                  >
+                    {{ t('admin.accounts.autoPauseOnExpired') }}
+                  </span>
+                </div>
+              </div>
+            </template>
+            <template #cell-actions="{ row }">
+              <div class="flex items-center gap-1">
+                <button
+                  @click="handleEdit(row)"
+                  class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"
+                    />
+                  </svg>
+                  <span class="text-xs">{{ t('common.edit') }}</span>
+                </button>
+                <button
+                  @click="handleDelete(row)"
+                  class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+                    />
+                  </svg>
+                  <span class="text-xs">{{ t('common.delete') }}</span>
+                </button>
+                <button
+                  @click="openMenu(row, $event)"
+                  class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:hover:bg-dark-700 dark:hover:text-white"
+                >
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"
+                    />
+                  </svg>
+                  <span class="text-xs">{{ t('common.more') }}</span>
+                </button>
+              </div>
+            </template>
+          </DataTable>
         </div>
       </template>
-      <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
+      <template #pagination
+        ><Pagination
+          v-if="pagination.total > 0"
+          :page="pagination.page"
+          :total="pagination.total"
+          :page-size="pagination.page_size"
+          @update:page="handlePageChange"
+          @update:pageSize="handlePageSizeChange"
+      /></template>
     </TablePageLayout>
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
-    <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
+    <CreateAccountModal
+      :show="showCreate"
+      :proxies="proxies"
+      :groups="groups"
+      @close="showCreate = false"
+      @created="reload"
+    />
+    <EditAccountModal
+      :show="showEdit"
+      :account="edAcc"
+      :proxies="proxies"
+      :groups="groups"
+      @close="showEdit = false"
+      @updated="handleAccountUpdated"
+    />
+    <ReAuthAccountModal
+      :show="showReAuth"
+      :account="reAuthAcc"
+      @close="closeReAuthModal"
+      @reauthorized="handleAccountUpdated"
+    />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
-    <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
+    <ScheduledTestsPanel
+      :show="showSchedulePanel"
+      :account-id="scheduleAcc?.id ?? null"
+      :model-options="scheduleModelOptions"
+      @close="closeSchedulePanel"
+    />
+    <AccountActionMenu
+      :show="menu.show"
+      :account="menu.acc"
+      :position="menu.pos"
+      @close="menu.show = false"
+      @test="handleTest"
+      @stats="handleViewStats"
+      @schedule="handleSchedule"
+      @reauth="handleReAuth"
+      @refresh-token="handleRefresh"
+      @recover-state="handleRecoverState"
+      @reset-quota="handleResetQuota"
+      @set-privacy="handleSetPrivacy"
+    />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -388,11 +511,37 @@
       @close="showBulkEdit = false"
       @updated="handleBulkUpdated"
     />
-    <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
-    <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
-    <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
+    <TempUnschedStatusModal
+      :show="showTempUnsched"
+      :account="tempUnschedAcc"
+      @close="showTempUnsched = false"
+      @reset="handleTempUnschedReset"
+    />
+    <ConfirmDialog
+      :show="showDeleteDialog"
+      :title="t('admin.accounts.deleteAccount')"
+      :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })"
+      :confirm-text="t('common.delete')"
+      :cancel-text="t('common.cancel')"
+      :danger="true"
+      @confirm="confirmDelete"
+      @cancel="showDeleteDialog = false"
+    />
+    <ConfirmDialog
+      :show="showExportDataDialog"
+      :title="t('admin.accounts.dataExport')"
+      :message="t('admin.accounts.dataExportConfirmMessage')"
+      :confirm-text="t('admin.accounts.dataExportConfirm')"
+      :cancel-text="t('common.cancel')"
+      @confirm="handleExportData"
+      @cancel="showExportDataDialog = false"
+    >
       <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-        <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" v-model="includeProxyOnExport" />
+        <input
+          type="checkbox"
+          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          v-model="includeProxyOnExport"
+        />
         <span>{{ t('admin.accounts.dataExportIncludeProxies') }}</span>
       </label>
     </ConfirmDialog>
@@ -417,7 +566,13 @@ import DataTable from '@/components/common/DataTable.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
+import {
+  CreateAccountModal,
+  EditAccountModal,
+  BulkEditAccountModal,
+  SyncFromCrsModal,
+  TempUnschedStatusModal
+} from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
@@ -440,7 +595,15 @@ import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfil
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
-import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
+import type {
+  Account,
+  AccountPlatform,
+  AccountType,
+  Proxy as AccountProxy,
+  AdminGroup,
+  WindowStats,
+  ClaudeModel
+} from '@/types'
 
 const { t, te, locale } = useI18n()
 const appStore = useAppStore()
@@ -473,19 +636,11 @@ type AccountBulkEditTarget =
       selectedTypes: AccountType[]
     }
 const selPlatforms = computed<AccountPlatform[]>(() => {
-  const platforms = new Set(
-    accounts.value
-      .filter(a => isSelected(a.id))
-      .map(a => a.platform)
-  )
+  const platforms = new Set(accounts.value.filter((a) => isSelected(a.id)).map((a) => a.platform))
   return [...platforms]
 })
 const selTypes = computed<AccountType[]>(() => {
-  const types = new Set(
-    accounts.value
-      .filter(a => isSelected(a.id))
-      .map(a => a.type)
-  )
+  const types = new Set(accounts.value.filter((a) => isSelected(a.id)).map((a) => a.type))
   return [...types]
 })
 const showCreate = ref(false)
@@ -513,7 +668,11 @@ const showSchedulePanel = ref(false)
 const scheduleAcc = ref<Account | null>(null)
 const scheduleModelOptions = ref<SelectOption[]>([])
 const togglingSchedulable = ref<number | null>(null)
-const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:number}|null}>({ show: false, acc: null, pos: null })
+const menu = reactive<{
+  show: boolean
+  acc: Account | null
+  pos: { top: number; left: number } | null
+}>({ show: false, acc: null, pos: null })
 const exportingData = ref(false)
 
 // Account tools dropdown
@@ -547,7 +706,11 @@ type AccountColumnFallbackKey = keyof typeof accountColumnFallbacks
 const accountColumnLabel = (key: AccountColumnFallbackKey) => {
   const i18nKey = `admin.accounts.columns.${key}`
   if (te(i18nKey)) return t(i18nKey)
-  const lang = String(locale.value || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  const lang = String(locale.value || '')
+    .toLowerCase()
+    .startsWith('zh')
+    ? 'zh'
+    : 'en'
   return accountColumnFallbacks[key][lang]
 }
 
@@ -626,7 +789,7 @@ const refreshTodayStatsBatch = async () => {
     return
   }
 
-  const accountIDs = accounts.value.map(account => account.id)
+  const accountIDs = accounts.value.map((account) => account.id)
   const reqSeq = ++todayStatsReqSeq.value
   if (accountIDs.length === 0) {
     todayStatsByAccountId.value = {}
@@ -672,17 +835,17 @@ const loadSavedColumns = () => {
     const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
     if (saved) {
       const parsed = JSON.parse(saved) as string[]
-      parsed.forEach(key => {
+      parsed.forEach((key) => {
         hiddenColumns.add(key)
       })
     } else {
-      DEFAULT_HIDDEN_COLUMNS.forEach(key => {
+      DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
         hiddenColumns.add(key)
       })
     }
   } catch (e) {
     console.error('Failed to load saved columns:', e)
-    DEFAULT_HIDDEN_COLUMNS.forEach(key => {
+    DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
       hiddenColumns.add(key)
     })
   }
@@ -700,7 +863,10 @@ const loadSavedAutoRefresh = () => {
   try {
     const saved = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY)
     if (!saved) return
-    const parsed = JSON.parse(saved) as { enabled?: boolean; interval_seconds?: number }
+    const parsed = JSON.parse(saved) as {
+      enabled?: boolean
+      interval_seconds?: number
+    }
     autoRefreshEnabled.value = parsed.enabled === true
     const interval = Number(parsed.interval_seconds)
     if (autoRefreshIntervals.includes(interval as any)) {
@@ -925,20 +1091,36 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.schedulable !== next.schedulable ||
     current.status !== next.status ||
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
-	    current.overload_until !== next.overload_until ||
-	    current.temp_unschedulable_until !== next.temp_unschedulable_until ||
-	    current.kiro_quota_state !== next.kiro_quota_state ||
-	    current.kiro_quota_reason !== next.kiro_quota_reason ||
-	    current.kiro_quota_reset_at !== next.kiro_quota_reset_at ||
-	    current.kiro_runtime_state !== next.kiro_runtime_state ||
-	    current.kiro_runtime_reason !== next.kiro_runtime_reason ||
-	    current.kiro_runtime_reset_at !== next.kiro_runtime_reset_at ||
-	    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
-	  )
-	}
+    current.overload_until !== next.overload_until ||
+    current.temp_unschedulable_until !== next.temp_unschedulable_until ||
+    current.kiro_quota_state !== next.kiro_quota_state ||
+    current.kiro_quota_reason !== next.kiro_quota_reason ||
+    current.kiro_quota_reset_at !== next.kiro_quota_reset_at ||
+    current.kiro_runtime_state !== next.kiro_runtime_state ||
+    current.kiro_runtime_reason !== next.kiro_runtime_reason ||
+    current.kiro_runtime_reset_at !== next.kiro_runtime_reset_at ||
+    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
+  )
+}
 
 const isKiroOveragesEnabled = (account: Account) => {
   return account.platform === 'kiro' && account.credentials?.kiro_overages_enabled === true
+}
+
+const isKiroRelayAccount = (account: Account): boolean => {
+  return (
+    account.platform === 'kiro' &&
+    account.type === 'apikey' &&
+    typeof account.credentials?.base_url === 'string' &&
+    account.credentials.base_url.trim() !== ''
+  )
+}
+
+const getKiroCreditUnitPriceUsd = (account: Account): number => {
+  if (account.platform !== 'kiro') return 0
+  const raw = account.extra?.kiro_credit_unit_price_usd
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0
+  return Number.isFinite(value) && value > 0 ? value : 0
 }
 
 const handleKiroUsageMeta = (account: Account, meta: { plan_type?: string; kiro_overages_enabled: boolean }) => {
@@ -960,7 +1142,7 @@ const syncAccountRefs = (nextAccount: Account) => {
 
 const mergeAccountsIncrementally = (nextRows: Account[]) => {
   const currentRows = accounts.value
-  const currentByID = new Map(currentRows.map(row => [row.id, row]))
+  const currentByID = new Map(currentRows.map((row) => [row.id, row]))
   let changed = nextRows.length !== currentRows.length
   const mergedRows = nextRows.map((nextRow) => {
     const currentRow = currentByID.get(nextRow.id)
@@ -1077,10 +1259,7 @@ const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
     if (isAnyModalOpen.value) return
     if (menu.show || showAccountToolsDropdown.value || showAutoRefreshDropdown.value) return
     if (inAutoRefreshSilentWindow()) {
-      autoRefreshCountdown.value = Math.max(
-        0,
-        Math.ceil((autoRefreshSilentUntil.value - Date.now()) / 1000)
-      )
+      autoRefreshCountdown.value = Math.max(0, Math.ceil((autoRefreshSilentUntil.value - Date.now()) / 1000))
       return
     }
 
@@ -1113,10 +1292,14 @@ function getAntigravityTierFromRow(row: any): string | null {
 function getAntigravityTierLabel(row: any): string | null {
   const tier = getAntigravityTierFromRow(row)
   switch (tier) {
-    case 'free-tier': return t('admin.accounts.tier.free')
-    case 'g1-pro-tier': return t('admin.accounts.tier.pro')
-    case 'g1-ultra-tier': return t('admin.accounts.tier.ultra')
-    default: return null
+    case 'free-tier':
+      return t('admin.accounts.tier.free')
+    case 'g1-pro-tier':
+      return t('admin.accounts.tier.pro')
+    case 'g1-ultra-tier':
+      return t('admin.accounts.tier.ultra')
+    default:
+      return null
   }
 }
 
@@ -1170,10 +1353,14 @@ function getOpenAICompactTitle(row: any): string {
 function getAntigravityTierClass(row: any): string {
   const tier = getAntigravityTierFromRow(row)
   switch (tier) {
-    case 'free-tier': return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-    case 'g1-pro-tier': return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
-    case 'g1-ultra-tier': return 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300'
-    default: return ''
+    case 'free-tier':
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+    case 'g1-pro-tier':
+      return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
+    case 'g1-ultra-tier':
+      return 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300'
+    default:
+      return ''
   }
 }
 
@@ -1182,23 +1369,59 @@ const allColumns = computed(() => {
   const c = [
     { key: 'select', label: '', sortable: false },
     { key: 'name', label: accountColumnLabel('name'), sortable: true },
-    { key: 'platform_type', label: accountColumnLabel('platformType'), sortable: false },
+    {
+      key: 'platform_type',
+      label: accountColumnLabel('platformType'),
+      sortable: false
+    },
     { key: 'capacity', label: accountColumnLabel('capacity'), sortable: false },
     { key: 'status', label: accountColumnLabel('status'), sortable: true },
-    { key: 'schedulable', label: accountColumnLabel('schedulable'), sortable: true },
-    { key: 'today_stats', label: accountColumnLabel('todayStats'), sortable: false }
+    {
+      key: 'schedulable',
+      label: accountColumnLabel('schedulable'),
+      sortable: true
+    },
+    {
+      key: 'today_stats',
+      label: accountColumnLabel('todayStats'),
+      sortable: false
+    }
   ]
   if (!authStore.isSimpleMode) {
-    c.push({ key: 'groups', label: accountColumnLabel('groups'), sortable: false })
+    c.push({
+      key: 'groups',
+      label: accountColumnLabel('groups'),
+      sortable: false
+    })
   }
   c.push(
-    { key: 'usage', label: accountColumnLabel('usageWindows'), sortable: false },
+    {
+      key: 'usage',
+      label: accountColumnLabel('usageWindows'),
+      sortable: false
+    },
     { key: 'proxy', label: accountColumnLabel('proxy'), sortable: false },
     { key: 'priority', label: accountColumnLabel('priority'), sortable: true },
-    { key: 'rate_multiplier', label: accountColumnLabel('billingRateMultiplier'), sortable: true },
-    { key: 'last_used_at', label: accountColumnLabel('lastUsed'), sortable: true },
-    { key: 'created_at', label: accountColumnLabel('createdAt'), sortable: true },
-    { key: 'expires_at', label: accountColumnLabel('expiresAt'), sortable: true },
+    {
+      key: 'rate_multiplier',
+      label: accountColumnLabel('billingRateMultiplier'),
+      sortable: true
+    },
+    {
+      key: 'last_used_at',
+      label: accountColumnLabel('lastUsed'),
+      sortable: true
+    },
+    {
+      key: 'created_at',
+      label: accountColumnLabel('createdAt'),
+      sortable: true
+    },
+    {
+      key: 'expires_at',
+      label: accountColumnLabel('expiresAt'),
+      sortable: true
+    },
     { key: 'notes', label: accountColumnLabel('notes'), sortable: false },
     { key: 'actions', label: accountColumnLabel('actions'), sortable: false }
   )
@@ -1207,17 +1430,20 @@ const allColumns = computed(() => {
 
 // Columns that can be toggled (exclude select, name, and actions)
 const toggleableColumns = computed(() =>
-  allColumns.value.filter(col => col.key !== 'select' && col.key !== 'name' && col.key !== 'actions')
+  allColumns.value.filter((col) => col.key !== 'select' && col.key !== 'name' && col.key !== 'actions')
 )
 
 // Filtered columns based on visibility
 const cols = computed(() =>
-  allColumns.value.filter(col =>
-    col.key === 'select' || col.key === 'name' || col.key === 'actions' || !hiddenColumns.has(col.key)
+  allColumns.value.filter(
+    (col) => col.key === 'select' || col.key === 'name' || col.key === 'actions' || !hiddenColumns.has(col.key)
   )
 )
 
-const handleEdit = (a: Account) => { edAcc.value = a; showEdit.value = true }
+const handleEdit = (a: Account) => {
+  edAcc.value = a
+  showEdit.value = true
+}
 const openMenu = (a: Account, e: MouseEvent) => {
   menu.acc = a
 
@@ -1235,10 +1461,10 @@ const openMenu = (a: Account, e: MouseEvent) => {
 
     if (viewportWidth < 768) {
       // 居中显示,水平位置
-      left = Math.max(padding, Math.min(
-        rect.left + rect.width / 2 - menuWidth / 2,
-        viewportWidth - menuWidth - padding
-      ))
+      left = Math.max(
+        padding,
+        Math.min(rect.left + rect.width / 2 - menuWidth / 2, viewportWidth - menuWidth - padding)
+      )
 
       // 优先显示在按钮下方
       top = rect.bottom + 4
@@ -1252,10 +1478,7 @@ const openMenu = (a: Account, e: MouseEvent) => {
         }
       }
     } else {
-      left = Math.max(padding, Math.min(
-        e.clientX - menuWidth,
-        viewportWidth - menuWidth - padding
-      ))
+      left = Math.max(padding, Math.min(e.clientX - menuWidth, viewportWidth - menuWidth - padding))
       top = e.clientY
       if (top + menuHeight > viewportHeight - padding) {
         top = viewportHeight - menuHeight - padding
@@ -1273,15 +1496,33 @@ const toggleSelectAllVisible = (event: Event) => {
   const target = event.target as HTMLInputElement
   toggleVisible(target.checked)
 }
-const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); clearSelection(); reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
+const handleBulkDelete = async () => {
+  if (!confirm(t('common.confirm'))) return
+  try {
+    await Promise.all(selIds.value.map((id) => adminAPI.accounts.delete(id)))
+    clearSelection()
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk delete accounts:', error)
+  }
+}
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
     const result = await adminAPI.accounts.batchClearError(selIds.value)
     if (result.failed > 0) {
-      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+      appStore.showError(
+        t('admin.accounts.bulkActions.partialSuccess', {
+          success: result.success,
+          failed: result.failed
+        })
+      )
     } else {
-      appStore.showSuccess(t('admin.accounts.bulkActions.resetStatusSuccess', { count: result.success }))
+      appStore.showSuccess(
+        t('admin.accounts.bulkActions.resetStatusSuccess', {
+          count: result.success
+        })
+      )
       clearSelection()
     }
     reload()
@@ -1295,9 +1536,18 @@ const handleBulkRefreshToken = async () => {
   try {
     const result = await adminAPI.accounts.batchRefresh(selIds.value)
     if (result.failed > 0) {
-      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+      appStore.showError(
+        t('admin.accounts.bulkActions.partialSuccess', {
+          success: result.success,
+          failed: result.failed
+        })
+      )
     } else {
-      appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
+      appStore.showSuccess(
+        t('admin.accounts.bulkActions.refreshTokenSuccess', {
+          count: result.success
+        })
+      )
       clearSelection()
     }
     reload()
@@ -1336,8 +1586,8 @@ const normalizeBulkSchedulableResult = (
 
   const results = Array.isArray(result.results) ? result.results : []
   if (results.length > 0) {
-    const successIds = results.filter(item => item.success).map(item => item.account_id)
-    const failedIds = results.filter(item => !item.success).map(item => item.account_id)
+    const successIds = results.filter((item) => item.success).map((item) => item.account_id)
+    const failedIds = results.filter((item) => !item.success).map((item) => item.account_id)
     return {
       successIds,
       failedIds,
@@ -1374,8 +1624,13 @@ const normalizeBulkSchedulableResult = (
 const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   const accountIds = [...selIds.value]
   try {
-    const result = await adminAPI.accounts.bulkUpdate(accountIds, { schedulable })
-    const { successIds, failedIds, successCount, failedCount, hasIds, hasCounts } = normalizeBulkSchedulableResult(result, accountIds)
+    const result = await adminAPI.accounts.bulkUpdate(accountIds, {
+      schedulable
+    })
+    const { successIds, failedIds, successCount, failedCount, hasIds, hasCounts } = normalizeBulkSchedulableResult(
+      result,
+      accountIds
+    )
     if (!hasIds && !hasCounts) {
       appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
       setSelectedIds(accountIds)
@@ -1394,9 +1649,13 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
       appStore.showSuccess(message)
     }
     if (failedCount > 0) {
-      const message = hasCounts || hasIds
-        ? t('admin.accounts.bulkSchedulablePartial', { success: successCount, failed: failedCount })
-        : t('admin.accounts.bulkSchedulableResultUnknown')
+      const message =
+        hasCounts || hasIds
+          ? t('admin.accounts.bulkSchedulablePartial', {
+              success: successCount,
+              failed: failedCount
+            })
+          : t('admin.accounts.bulkSchedulableResultUnknown')
       appStore.showError(message)
       setSelectedIds(failedIds.length > 0 ? failedIds : accountIds)
     } else {
@@ -1424,8 +1683,8 @@ const buildBulkEditFilterSnapshot = () => {
 }
 
 const collectSelectionMetadata = (rows: Account[]) => {
-  const selectedPlatforms = Array.from(new Set(rows.map(account => account.platform)))
-  const selectedTypes = Array.from(new Set(rows.map(account => account.type)))
+  const selectedPlatforms = Array.from(new Set(rows.map((account) => account.platform)))
+  const selectedTypes = Array.from(new Set(rows.map((account) => account.type)))
   return { selectedPlatforms, selectedTypes }
 }
 
@@ -1459,7 +1718,10 @@ const handleBulkUpdated = () => {
   clearSelection()
   reload()
 }
-const handleDataImported = () => { showImportData.value = false; reload() }
+const handleDataImported = () => {
+  showImportData.value = false
+  reload()
+}
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
 const buildAccountQueryFilters = () => ({
@@ -1477,16 +1739,20 @@ const accountMatchesCurrentFilters = (account: Account) => {
   if (filters.platform && account.platform !== filters.platform) return false
   if (filters.type && account.type !== filters.type) return false
   if (filters.status) {
-	    const now = Date.now()
-	    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
-	    const kiroRuntimeResetAt = account.kiro_runtime_reset_at ? new Date(account.kiro_runtime_reset_at).getTime() : Number.NaN
-	    const isKiroRuntimeLimited =
-	      account.platform === 'kiro' &&
-	      account.kiro_runtime_state === 'cooldown' &&
-	      Number.isFinite(kiroRuntimeResetAt) &&
-	      kiroRuntimeResetAt > now
-	    const isRateLimited = (Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) || isKiroRuntimeLimited
-	    const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
+    const now = Date.now()
+    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
+    const kiroRuntimeResetAt = account.kiro_runtime_reset_at
+      ? new Date(account.kiro_runtime_reset_at).getTime()
+      : Number.NaN
+    const isKiroRuntimeLimited =
+      account.platform === 'kiro' &&
+      account.kiro_runtime_state === 'cooldown' &&
+      Number.isFinite(kiroRuntimeResetAt) &&
+      kiroRuntimeResetAt > now
+    const isRateLimited = (Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now) || isKiroRuntimeLimited
+    const tempUnschedUntil = account.temp_unschedulable_until
+      ? new Date(account.temp_unschedulable_until).getTime()
+      : Number.NaN
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
 
     if (filters.status === 'active') {
@@ -1517,7 +1783,9 @@ const accountMatchesCurrentFilters = (account: Account) => {
       return false
     }
   }
-  const search = String(filters.search || '').trim().toLowerCase()
+  const search = String(filters.search || '')
+    .trim()
+    .toLowerCase()
   if (search && !account.name.toLowerCase().includes(search)) return false
   return true
 }
@@ -1543,11 +1811,11 @@ const syncPaginationAfterLocalRemoval = () => {
 }
 
 const patchAccountInList = (updatedAccount: Account) => {
-  const index = accounts.value.findIndex(account => account.id === updatedAccount.id)
+  const index = accounts.value.findIndex((account) => account.id === updatedAccount.id)
   if (index === -1) return
   const mergedAccount = mergeRuntimeFields(accounts.value[index], updatedAccount)
   if (!accountMatchesCurrentFilters(mergedAccount)) {
-    accounts.value = accounts.value.filter(account => account.id !== mergedAccount.id)
+    accounts.value = accounts.value.filter((account) => account.id !== mergedAccount.id)
     syncPaginationAfterLocalRemoval()
     removeSelectedAccounts([mergedAccount.id])
     if (menu.acc?.id === mergedAccount.id) {
@@ -1588,7 +1856,9 @@ const handleExportData = async () => {
     )
     const timestamp = formatExportTimestamp()
     const filename = `sub2api-account-${timestamp}.json`
-    const blob = new Blob([JSON.stringify(dataPayload, null, 2)], { type: 'application/json' })
+    const blob = new Blob([JSON.stringify(dataPayload, null, 2)], {
+      type: 'application/json'
+    })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
@@ -1603,24 +1873,49 @@ const handleExportData = async () => {
     showExportDataDialog.value = false
   }
 }
-const closeTestModal = () => { showTest.value = false; testingAcc.value = null }
-const closeStatsModal = () => { showStats.value = false; statsAcc.value = null }
-const closeReAuthModal = () => { showReAuth.value = false; reAuthAcc.value = null }
-const handleTest = (a: Account) => { testingAcc.value = a; showTest.value = true }
-const handleViewStats = (a: Account) => { statsAcc.value = a; showStats.value = true }
+const closeTestModal = () => {
+  showTest.value = false
+  testingAcc.value = null
+}
+const closeStatsModal = () => {
+  showStats.value = false
+  statsAcc.value = null
+}
+const closeReAuthModal = () => {
+  showReAuth.value = false
+  reAuthAcc.value = null
+}
+const handleTest = (a: Account) => {
+  testingAcc.value = a
+  showTest.value = true
+}
+const handleViewStats = (a: Account) => {
+  statsAcc.value = a
+  showStats.value = true
+}
 const handleSchedule = async (a: Account) => {
   scheduleAcc.value = a
   scheduleModelOptions.value = []
   showSchedulePanel.value = true
   try {
     const models = await adminAPI.accounts.getAvailableModels(a.id)
-    scheduleModelOptions.value = models.map((m: ClaudeModel) => ({ value: m.id, label: m.display_name || m.id }))
+    scheduleModelOptions.value = models.map((m: ClaudeModel) => ({
+      value: m.id,
+      label: m.display_name || m.id
+    }))
   } catch {
     scheduleModelOptions.value = []
   }
 }
-const closeSchedulePanel = () => { showSchedulePanel.value = false; scheduleAcc.value = null; scheduleModelOptions.value = [] }
-const handleReAuth = (a: Account) => { reAuthAcc.value = a; showReAuth.value = true }
+const closeSchedulePanel = () => {
+  showSchedulePanel.value = false
+  scheduleAcc.value = null
+  scheduleModelOptions.value = []
+}
+const handleReAuth = (a: Account) => {
+  reAuthAcc.value = a
+  showReAuth.value = true
+}
 const handleRefresh = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
@@ -1672,8 +1967,21 @@ const onRevertFallback = async (a: Account) => {
     appStore.showError(error?.response?.data?.message || t('admin.accounts.revertProxyFailed'))
   }
 }
-const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
-const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
+const handleDelete = (a: Account) => {
+  deletingAcc.value = a
+  showDeleteDialog.value = true
+}
+const confirmDelete = async () => {
+  if (!deletingAcc.value) return
+  try {
+    await adminAPI.accounts.delete(deletingAcc.value.id)
+    showDeleteDialog.value = false
+    deletingAcc.value = null
+    reload()
+  } catch (error) {
+    console.error('Failed to delete account:', error)
+  }
+}
 const handleToggleSchedulable = async (a: Account) => {
   const nextSchedulable = !a.schedulable
   togglingSchedulable.value = a.id
@@ -1688,7 +1996,10 @@ const handleToggleSchedulable = async (a: Account) => {
     togglingSchedulable.value = null
   }
 }
-const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
+const handleShowTempUnsched = (a: Account) => {
+  tempUnschedAcc.value = a
+  showTempUnsched.value = true
+}
 const handleTempUnschedReset = async (updated: Account) => {
   showTempUnsched.value = false
   tempUnschedAcc.value = null

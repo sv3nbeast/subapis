@@ -66,3 +66,17 @@ func TestClaudeCodeMimicryBetaConstants(t *testing.T) {
 		t.Fatalf("HaikuBetaHeader must not include Claude Code beta: %s", HaikuBetaHeader)
 	}
 }
+
+func TestDefaultModelsContainSonnet5WithoutDuplicates(t *testing.T) {
+	seen := make(map[string]bool, len(DefaultModels))
+	for _, model := range DefaultModels {
+		if seen[model.ID] {
+			t.Fatalf("DefaultModels contains duplicate model ID %q", model.ID)
+		}
+		seen[model.ID] = true
+	}
+
+	if !seen["claude-sonnet-5"] {
+		t.Fatalf("DefaultModels must include claude-sonnet-5")
+	}
+}

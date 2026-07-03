@@ -249,16 +249,19 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 			Concurrency: 3,
 		},
 		Group: &Group{
-			ID:                        groupID,
-			Name:                      "kiro",
-			Platform:                  PlatformKiro,
-			Status:                    StatusActive,
-			SubscriptionType:          SubscriptionTypeStandard,
-			RateMultiplier:            1,
-			AllowMessagesDispatch:     true,
-			DefaultMappedModel:        "gpt-5.4",
-			KiroCacheEmulationEnabled: true,
-			KiroCacheEmulationRatio:   0.91,
+			ID:                          groupID,
+			Name:                        "kiro",
+			Platform:                    PlatformKiro,
+			Status:                      StatusActive,
+			SubscriptionType:            SubscriptionTypeStandard,
+			RateMultiplier:              1,
+			AllowMessagesDispatch:       true,
+			DefaultMappedModel:          "gpt-5.4",
+			KiroCacheEmulationEnabled:   true,
+			KiroAutoStickyEnabled:       true,
+			KiroStickySessionTTLSeconds: 7200,
+			KiroCacheEmulationRatio:     0.91,
+			KiroEndpointMode:            KiroEndpointModeAuto,
 			MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
 				OpusMappedModel:   "gpt-5.4-nano",
 				SonnetMappedModel: "gpt-5.3-codex",
@@ -278,7 +281,10 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesMessagesDispatchModelConfig(t 
 	require.NotNil(t, roundTrip.Group)
 	require.Equal(t, apiKey.Group.MessagesDispatchModelConfig, roundTrip.Group.MessagesDispatchModelConfig)
 	require.True(t, roundTrip.Group.KiroCacheEmulationEnabled)
+	require.True(t, roundTrip.Group.KiroAutoStickyEnabled)
+	require.Equal(t, 7200, roundTrip.Group.KiroStickySessionTTLSeconds)
 	require.Equal(t, 0.91, roundTrip.Group.KiroCacheEmulationRatio)
+	require.Equal(t, KiroEndpointModeAuto, roundTrip.Group.KiroEndpointMode)
 }
 
 func TestAPIKeyService_GetByKey_IgnoresLegacyAuthCacheSnapshotWithoutMessagesDispatchConfig(t *testing.T) {

@@ -173,3 +173,33 @@ func TestKiroOAuthService_ExchangeCodeUsesDeviceCodeWhenPresent(t *testing.T) {
 	require.Equal(t, "access-token", token.AccessToken)
 	require.Equal(t, "kiro@example.com", token.Email)
 }
+
+func TestKiroOAuthService_RefreshTokenRejectsMissingRefreshToken(t *testing.T) {
+	svc := NewKiroOAuthService(nil)
+
+	_, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod: "social",
+	})
+
+	require.EqualError(t, err, "kiro refresh_token is empty; reauthorize Kiro account")
+}
+
+func TestKiroOAuthService_RefreshTokenRejectsIDCMissingClientCredentials(t *testing.T) {
+	svc := NewKiroOAuthService(nil)
+
+	_, err := svc.RefreshToken(context.Background(), &KiroRefreshTokenInput{
+		AuthMethod:   "idc",
+		RefreshToken: "refresh-token",
+		ClientID:     "client-id",
+	})
+
+	require.EqualError(t, err, "kiro idc refresh requires client_id and client_secret")
+}
+
+func TestResolveKiroRefreshAuthMethodInfersIDCFromClientCredentials(t *testing.T) {
+	require.Equal(t, "idc", resolveKiroRefreshAuthMethod("", "client-id", "client-secret"))
+	require.Equal(t, "social", resolveKiroRefreshAuthMethod("", "client-id", ""))
+	require.Equal(t, "social", resolveKiroRefreshAuthMethod("", "", "client-secret"))
+	require.Equal(t, "social", resolveKiroRefreshAuthMethod("", "", ""))
+	require.Equal(t, "idc", resolveKiroRefreshAuthMethod("IDC", "", ""))
+}

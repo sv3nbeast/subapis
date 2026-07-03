@@ -261,7 +261,20 @@ func (s *BillingService) initFallbackPricing() {
 		OutputPricePerToken:        50e-6,   // $50 per MTok
 		CacheCreationPricePerToken: 12.5e-6, // $12.50 per MTok
 		CacheReadPricePerToken:     1e-6,    // $1 per MTok
-		SupportsCacheBreakdown:     false,
+		CacheCreation5mPrice:       12.5e-6, // $12.50 per MTok
+		CacheCreation1hPrice:       20e-6,   // $20 per MTok
+		SupportsCacheBreakdown:     true,
+	}
+
+	// Claude Sonnet 5 (promotional pricing through 2026-08-31)
+	s.fallbackPrices["claude-sonnet-5"] = &ModelPricing{
+		InputPricePerToken:         2e-6,   // $2 per MTok
+		OutputPricePerToken:        10e-6,  // $10 per MTok
+		CacheCreationPricePerToken: 2.5e-6, // $2.50 per MTok
+		CacheReadPricePerToken:     0.2e-6, // $0.20 per MTok
+		CacheCreation5mPrice:       2.5e-6, // $2.50 per MTok
+		CacheCreation1hPrice:       4e-6,   // $4 per MTok
+		SupportsCacheBreakdown:     true,
 	}
 
 	// Gemini 3.1 Pro
@@ -589,6 +602,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["claude-3-opus"]
 	}
 	if strings.Contains(modelLower, "sonnet") {
+		if strings.Contains(modelLower, "5") {
+			return s.fallbackPrices["claude-sonnet-5"]
+		}
 		if strings.Contains(modelLower, "4") && !strings.Contains(modelLower, "3") {
 			return s.fallbackPrices["claude-sonnet-4"]
 		}

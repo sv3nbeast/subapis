@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
+	"github.com/stretchr/testify/require"
 )
 
 type accountUsageCodexProbeRepo struct {
@@ -29,6 +32,67 @@ func (r *accountUsageCodexProbeRepo) SetRateLimited(_ context.Context, _ int64, 
 		r.rateLimitCh <- resetAt
 	}
 	return nil
+}
+
+type accountUsageWindowStatsRepo struct {
+	UsageLogRepository
+	stats *usagestats.AccountStats
+}
+
+func (r *accountUsageWindowStatsRepo) GetAccountWindowStats(context.Context, int64, time.Time) (*usagestats.AccountStats, error) {
+	return r.stats, nil
+}
+
+func (r *accountUsageWindowStatsRepo) GetAccountTodayStats(context.Context, int64) (*usagestats.AccountStats, error) {
+	return r.stats, nil
+}
+
+func TestAccountUsageService_AddWindowStatsKeepsKiroCredits(t *testing.T) {
+	t.Parallel()
+
+	repo := &accountUsageWindowStatsRepo{
+		stats: &usagestats.AccountStats{
+			Requests:    2,
+			Tokens:      140600,
+			Cost:        0.77,
+			UserCost:    0.7,
+			KiroCredits: 0.17,
+		},
+	}
+	svc := &AccountUsageService{
+		usageLogRepo: repo,
+		cache:        NewUsageCache(),
+	}
+	usage := &UsageInfo{FiveHour: &UsageProgress{}}
+
+	svc.addWindowStats(context.Background(), &Account{ID: 123}, usage)
+
+	require.NotNil(t, usage.FiveHour.WindowStats)
+	require.InDelta(t, 0.17, usage.FiveHour.WindowStats.KiroCredits, 0.000001)
+	if cached, ok := svc.cache.windowStatsCache.Load(int64(123)); ok {
+		cache := cached.(*windowStatsCache)
+		require.InDelta(t, 0.17, cache.stats.KiroCredits, 0.000001)
+	} else {
+		t.Fatal("expected cached window stats")
+	}
+}
+
+func TestAccountUsageService_GetTodayStatsKeepsKiroCredits(t *testing.T) {
+	t.Parallel()
+
+	repo := &accountUsageWindowStatsRepo{
+		stats: &usagestats.AccountStats{
+			Requests:    3,
+			Tokens:      42,
+			KiroCredits: 0.23,
+		},
+	}
+	svc := &AccountUsageService{usageLogRepo: repo}
+
+	stats, err := svc.GetTodayStats(context.Background(), 123)
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.InDelta(t, 0.23, stats.KiroCredits, 0.000001)
 }
 
 func TestShouldRefreshOpenAICodexSnapshot(t *testing.T) {
