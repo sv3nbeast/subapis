@@ -453,7 +453,10 @@ func shouldTokenRefreshClearTempUnschedulable(reason string) bool {
 		return false
 	}
 	return strings.HasPrefix(reason, "token refresh retry exhausted:") ||
-		strings.HasPrefix(reason, "token refresh failed on request path:")
+		strings.HasPrefix(reason, "token refresh failed on request path:") ||
+		strings.HasPrefix(reason, "oauth 401:") ||
+		strings.HasPrefix(reason, "authentication failed (401): invalid or expired credentials") ||
+		strings.Contains(reason, "delayed_token_refresh_at=")
 }
 
 // errRefreshSkipped 表示刷新被跳过（锁竞争或已被其他路径刷新），不计入 failed 或 refreshed
