@@ -2101,3 +2101,26 @@ a663f3b4a Fix usage stats SQL/Scan column mismatch from official merge
 
 - 本提交仅完成隔离融合分支；主工作区 `/Users/sven.sun/Desktop/Api/sub2api` 仍保留原脏状态作为安全边界。
 - 未执行 `bash scripts/sub2api-threeway-sync.sh --mode promote`。如需三线合一提升到 `main`，应先确认是否以本融合分支作为提升源，并处理主工作区脏状态保护。
+
+## 2026-07-04 07:55:00 +0800
+
+- 模式: `fork-lineage-merge`
+- 目标分支: `codex/official-sync-plus-dirty-20260704-063656`
+- fork 生产线: `sv3nbeast/main@fe32e0a897468a1fdf718c8ba79c52c59c31c948`
+- 动作: 在隔离融合分支中补入 `sv3nbeast/main` 的祖先关系，避免后续推送 fork main 时发生非快进；冲突文件均保留已验证的融合分支内容。
+
+### 本次解决点
+
+- `sv3nbeast/main` 上的 Sonnet 5 历史价格、图片用量展示、OpenAI Codex native tool names、Kiro gateway/Fable 5 发布内容，已在前一轮脏快照融合提交中被内容吸收。
+- 本次 merge commit 的 tree 与前一融合提交保持一致，仅补 ancestry；确认 `origin/main`、`sv3nbeast/main`、`codex/main-dirty-snapshot-20260704-063656` 均为当前融合分支祖先。
+
+### 验证
+
+- `git merge-base --is-ancestor origin/main HEAD`：通过
+- `git merge-base --is-ancestor sv3nbeast/main HEAD`：通过
+- `git merge-base --is-ancestor codex/main-dirty-snapshot-20260704-063656 HEAD`：通过
+- `git show -s --format=%T HEAD` 与 `HEAD^` tree 相同：通过
+
+### 备注
+
+- 仍未提升到主工作区 `main`；主工作区保持原脏状态作为保护。后续可用干净临时 worktree 以 `main` 为目标快进到该融合分支，或在确认后让本地 `main` 指向此融合提交。
