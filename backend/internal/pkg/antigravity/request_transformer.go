@@ -163,6 +163,9 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		SessionID: generateStableSessionID(contents),
 	}
 
+	// 不为无工具请求发送空 ToolConfig；Gemini reasoning 模型会把空 VALIDATED
+	// 配置判为 invalid argument，本地策略也要求所有无工具请求保持 ToolConfig=nil。
+
 	if systemInstruction != nil {
 		innerRequest.SystemInstruction = systemInstruction
 	}
@@ -935,26 +938,30 @@ func shouldEnableThinkingForContent(req *ClaudeRequest, model string) bool {
 }
 
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
-	temperature := 0.4
-	topP := 1.0
-	topK := 50
+	isReasoning := IsGeminiReasoningModel(req.Model)
 	config := &GeminiGenerationConfig{
 		MaxOutputTokens: resolveCloudCodeMaxOutputTokens(req.MaxTokens, req.Model),
-		Temperature:     &temperature,
-		TopP:            &topP,
-		TopK:            &topK,
-		CandidateCount:  1,
-		StopSequences:   resolveClaudeStopSequences(req.StopSequences),
 	}
 
-	if req.Temperature != nil {
-		config.Temperature = req.Temperature
-	}
-	if req.TopP != nil {
-		config.TopP = req.TopP
-	}
-	if req.TopK != nil {
-		config.TopK = req.TopK
+	if !isReasoning {
+		temperature := 0.4
+		topP := 1.0
+		topK := 50
+		config.Temperature = &temperature
+		config.TopP = &topP
+		config.TopK = &topK
+		config.CandidateCount = 1
+		config.StopSequences = resolveClaudeStopSequences(req.StopSequences)
+
+		if req.Temperature != nil {
+			config.Temperature = req.Temperature
+		}
+		if req.TopP != nil {
+			config.TopP = req.TopP
+		}
+		if req.TopK != nil {
+			config.TopK = req.TopK
+		}
 	}
 
 	if thinkingConfig := buildClaudeThinkingConfig(req); thinkingConfig != nil {
