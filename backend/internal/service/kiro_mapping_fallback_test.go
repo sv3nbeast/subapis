@@ -19,11 +19,8 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	require.Equal(t, "claude-sonnet-4.6", account.GetMappedModel("claude-sonnet-4-6"))
 }
 
-func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Default.RateMultiplier = 1.1
-
-	svc := NewGatewayService(
+func newGatewayServiceForKiroCostTest(cfg *config.Config) *GatewayService {
+	return NewGatewayService(
 		nil,
 		nil,
 		nil,
@@ -54,8 +51,15 @@ func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *te
 		nil,
 		nil,
 		nil,
-		nil, // userPlatformQuotaRepo
+		nil,
 	)
+}
+
+func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Default.RateMultiplier = 1.1
+
+	svc := newGatewayServiceForKiroCostTest(cfg)
 
 	result := &ForwardResult{
 		Model:         "auto",
@@ -76,6 +80,30 @@ func TestGatewayServiceCalculateTokenCost_KiroAutoUsesConservativeFallback(t *te
 	require.NotNil(t, cost)
 	require.InDelta(t, expected.ActualCost, cost.ActualCost, 1e-12)
 	require.InDelta(t, expected.TotalCost, cost.TotalCost, 1e-12)
+}
+
+func TestGatewayServiceCalculateTokenCost_KiroCreditUnitPriceOverridesTokenPricing(t *testing.T) {
+	cfg := &config.Config{}
+	svc := newGatewayServiceForKiroCostTest(cfg)
+
+	result := &ForwardResult{
+		Model:         "claude-opus-4-8",
+		UpstreamModel: "claude-opus-4.8",
+		Usage: ClaudeUsage{
+			InputTokens:  200_000,
+			OutputTokens: 10,
+			KiroCredits:  1.5,
+		},
+	}
+
+	cost := svc.calculateTokenCost(context.Background(), result, &APIKey{}, "claude-opus-4-8", 1.2, &recordUsageOpts{
+		IsKiroAccount:          true,
+		KiroCreditUnitPriceUSD: 0.071,
+	})
+	require.NotNil(t, cost)
+	require.Equal(t, string(BillingModeToken), cost.BillingMode)
+	require.InDelta(t, 0.1065, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.1278, cost.ActualCost, 1e-12)
 }
 
 func TestKiroRuntimeEndpointModeRequiresProfileArn(t *testing.T) {

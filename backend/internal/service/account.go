@@ -269,6 +269,20 @@ func (a *Account) EffectiveKiroCacheEmulationEnabled() bool {
 	return a != nil && a.IsKiro() && a.IsKiroCacheEmulationEnabled() && a.GetKiroCacheEmulationRatio() > 0
 }
 
+// KiroCreditUnitPriceUSD returns the optional account-level USD price per Kiro
+// credit. A non-positive, non-finite, missing, or non-Kiro value means the
+// gateway should continue using the normal token/channel pricing path.
+func (a *Account) KiroCreditUnitPriceUSD() float64 {
+	if a == nil || !a.IsKiro() || a.Extra == nil {
+		return 0
+	}
+	value := parseExtraFloat64(a.Extra["kiro_credit_unit_price_usd"])
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 0
+	}
+	return value
+}
+
 func (a *Account) IsDroid() bool {
 	return a.Platform == PlatformDroid
 }

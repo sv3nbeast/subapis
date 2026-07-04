@@ -11336,7 +11336,8 @@ type recordUsageOpts struct {
 	LongContextMultiplier float64
 
 	// Kiro 账号在上游返回 auto 等无法定价模型时使用保守计费兜底。
-	IsKiroAccount bool
+	IsKiroAccount          bool
+	KiroCreditUnitPriceUSD float64
 }
 
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
@@ -11479,6 +11480,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		opts = &recordUsageOpts{}
 	}
 	opts.IsKiroAccount = account != nil && account.Platform == PlatformKiro
+	if opts.IsKiroAccount {
+		opts.KiroCreditUnitPriceUSD = account.KiroCreditUnitPriceUSD()
+	}
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, opts)
@@ -11600,6 +11604,21 @@ func (s *GatewayService) calculateKiroConservativeTokenCost(tokens UsageTokens, 
 	return cost
 }
 
+func calculateKiroCreditUnitCost(result *ForwardResult, multiplier float64, opts *recordUsageOpts) *CostBreakdown {
+	if result == nil || opts == nil || !opts.IsKiroAccount || opts.KiroCreditUnitPriceUSD <= 0 || result.Usage.KiroCredits <= 0 {
+		return nil
+	}
+	if multiplier < 0 {
+		multiplier = 0
+	}
+	totalCost := result.Usage.KiroCredits * opts.KiroCreditUnitPriceUSD
+	return &CostBreakdown{
+		TotalCost:   totalCost,
+		ActualCost:  totalCost * multiplier,
+		BillingMode: string(BillingModeToken),
+	}
+}
+
 // resolveChannelPricing 检查指定模型是否存在渠道级别定价。
 // 返回非 nil 的 ResolvedPricing 表示有渠道定价，nil 表示走默认定价路径。
 func (s *GatewayService) resolveChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {
@@ -11679,6 +11698,10 @@ func (s *GatewayService) calculateTokenCost(
 
 	var cost *CostBreakdown
 	var err error
+
+	if cost = calculateKiroCreditUnitCost(result, multiplier, opts); cost != nil {
+		return cost
+	}
 
 	// 优先尝试渠道定价 → CalculateCostUnified
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {

@@ -30,6 +30,23 @@ func TestValidateKiroCreditUnitPriceFromExtra(t *testing.T) {
 	})
 }
 
+func TestAccountKiroCreditUnitPriceUSD(t *testing.T) {
+	require.Equal(t, 0.071, (&Account{
+		Platform: PlatformKiro,
+		Extra:    map[string]any{"kiro_credit_unit_price_usd": "0.071"},
+	}).KiroCreditUnitPriceUSD())
+
+	require.Zero(t, (&Account{
+		Platform: PlatformKiro,
+		Extra:    map[string]any{"kiro_credit_unit_price_usd": 0},
+	}).KiroCreditUnitPriceUSD())
+
+	require.Zero(t, (&Account{
+		Platform: PlatformAnthropic,
+		Extra:    map[string]any{"kiro_credit_unit_price_usd": 0.071},
+	}).KiroCreditUnitPriceUSD())
+}
+
 func TestUpdateAccount_ValidatesKiroCreditUnitPriceExtra(t *testing.T) {
 	accountID := int64(201)
 	repo := &kiroCreditUnitPriceAccountRepoStub{
