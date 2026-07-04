@@ -198,7 +198,10 @@ func normalizeKiroEndpointFields(g *Group) {
 		return
 	}
 	if g.Platform != PlatformKiro {
-		g.KiroEndpointMode = ""
+		// The database column is NOT NULL and constrained to q/krs/auto.  Keep the
+		// neutral default for non-Kiro groups instead of clearing the field; otherwise
+		// updating any non-Kiro group would violate groups_kiro_endpoint_mode_check.
+		g.KiroEndpointMode = KiroEndpointModeQ
 		return
 	}
 	g.KiroEndpointMode = g.EffectiveKiroEndpointMode()

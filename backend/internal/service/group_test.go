@@ -145,7 +145,7 @@ func TestNormalizeGroupRuntimeFields_ClearsKiroSettingsForNonKiro(t *testing.T) 
 	require.Zero(t, group.KiroStickySessionTTLSeconds)
 	require.False(t, group.KiroCacheEmulationEnabled)
 	require.Zero(t, group.KiroCacheEmulationRatio)
-	require.Empty(t, group.KiroEndpointMode)
+	require.Equal(t, KiroEndpointModeQ, group.KiroEndpointMode)
 }
 
 func TestGroup_EffectiveKiroEndpointMode(t *testing.T) {
