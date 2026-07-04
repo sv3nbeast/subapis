@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -162,4 +164,27 @@ func TestGatewayService_CountTokensKiroOAuth401NonRetryableRefreshCanSetErrorBut
 
 	require.Equal(t, 0, repo.setTempCalls)
 	require.Equal(t, 1, repo.setErrorCalls, "non-retryable refresh failure should still mark the account error")
+}
+
+func TestGatewayService_ForwardCountTokens_KiroReturnsEstimatedTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[{"type":"text","text":"hello world"}]}]}`)), PlatformAnthropic)
+	require.NoError(t, err)
+
+	svc := &GatewayService{}
+	account := &Account{
+		ID:       1569,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+	}
+
+	err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"input_tokens":3}`, rec.Body.String())
 }

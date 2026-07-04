@@ -12008,6 +12008,16 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 
+	// Kiro 上游的 count_tokens 端点当前不支持 JWT/OAuth 鉴权，会返回
+	// "jwt auth is not yet supported on count_tokens"。该探测接口不应污染账号
+	// 状态或让客户端在正式 /v1/messages 前失败，直接返回本地估算值。
+	if account.Platform == PlatformKiro {
+		c.JSON(http.StatusOK, gin.H{
+			"input_tokens": estimateAnthropicCountTokens(parsed),
+		})
+		return nil
+	}
+
 	if reqModel != "" {
 		mappingResult := resolveAnthropicUpstreamModel(account, reqModel)
 		mappedModel := mappingResult.Model
