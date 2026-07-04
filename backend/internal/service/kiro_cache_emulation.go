@@ -26,7 +26,7 @@ const (
 	kiroCacheMinTokensDefault    = 1024
 	kiroCacheMinTokensOpus       = 4096
 	kiroCacheMinTokensHaiku3     = 2048
-	kiroCachePrefixLookbackLimit = 10
+	kiroCachePrefixLookbackLimit = 128
 )
 
 type kiroCacheEmulationUsage struct {

@@ -843,9 +843,10 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-5", KiroRequestContext{})
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", result.StopReason)
-	require.Equal(t, 15, result.Usage.InputTokens)
+	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 22, result.Usage.TotalTokens)
+	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 
 	var response map[string]any
 	require.NoError(t, json.Unmarshal(result.ResponseBody, &response))

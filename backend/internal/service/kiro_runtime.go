@@ -76,6 +76,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		mappedModel = next
 	}
 	body := parsed.Body.Bytes()
+	body = s.prepareKiroBridgeCacheEmulationBody(ctx, account, body)
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
@@ -390,6 +391,40 @@ func kiroEmptyEventStreamMessage(err error) string {
 		err = errors.Unwrap(err)
 	}
 	return ""
+}
+
+func (s *GatewayService) shouldPrepareKiroBridgeCacheEmulation(ctx context.Context, account *Account, body []byte) bool {
+	_ = s
+	_ = body
+	if account == nil || !account.IsKiro() || !isKiroDirectModeAccount(account) {
+		return false
+	}
+	return IsClaudeCodeXMLInvokeBridgeUserAgent(ClaudeCodeUserAgent(ctx))
+}
+
+// prepareKiroBridgeCacheEmulationBody aligns Kiro's local cache-emulation
+// breakpoints with Claude Desktop / Agent SDK traffic.
+//
+// Kiro upstream does not consume Anthropic cache_control blocks directly, but
+// the local Kiro billing emulation uses the Anthropic request body to decide
+// which prefixes should be treated as cache read/write. Claude Desktop 3P
+// agent-sdk clients often place a drifting message cache_control on the current
+// tail (or omit one entirely for sub-agent turns), so using the body as-is makes
+// the emulated prefix unstable. Reuse the bridge strategy from the Anthropic
+// path: strip message cache_control and add stable + trailing message anchors.
+//
+// Unlike injectBridgeCacheBreakpoints, this helper intentionally does not rename
+// tools; Kiro's translator has its own tool-name mapping and response restore
+// context.
+func (s *GatewayService) prepareKiroBridgeCacheEmulationBody(ctx context.Context, account *Account, body []byte) []byte {
+	if !s.shouldPrepareKiroBridgeCacheEmulation(ctx, account, body) {
+		return body
+	}
+	body = stripMessageCacheControl(body)
+	body = addBridgeMessageCacheBreakpointsWithTTL(body, cacheTTLTarget1h)
+	body = enforceCacheControlLimit(body)
+	body = normalizeCacheControlTTLOrder(body)
+	return body
 }
 
 func isKiroDirectTokenType(tokenType string) bool {

@@ -149,6 +149,129 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('25')
   })
 
+  it('Kiro OAuth 会拉取并显示 Credits 用量窗口', async () => {
+    getUsage.mockResolvedValue({
+      kiro_subscription_name: 'Kiro Pro',
+      kiro_subscription_type: 'pro',
+      kiro_reset_at: '2026-03-31T00:00:00Z',
+      kiro_overages_enabled: true,
+      kiro_credit: {
+        current_usage: 42,
+        usage_limit: 100,
+        percentage_used: 42
+      },
+      kiro_bonus: {
+        current_usage: 3,
+        usage_limit: 10,
+        percentage_used: 30,
+        days_remaining: 5,
+        expiry_date: '2026-03-20T00:00:00Z'
+      },
+      kiro_overage: {
+        current_overages: 2,
+        overage_charges: 0.14,
+        currency_code: 'USD',
+        currency_symbol: '$'
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 1003,
+          platform: 'kiro',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledWith(1003)
+    expect(wrapper.text()).toContain('Kiro Pro')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.kiroCredits|42|2026-03-31T00:00:00Z')
+    expect(wrapper.text()).toContain('42 / 100')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.kiroBonus|30|2026-03-20T00:00:00Z')
+    expect(wrapper.emitted('kiro-usage-meta')?.[0]).toEqual([
+      { plan_type: 'pro', kiro_overages_enabled: true }
+    ])
+  })
+
+  it('Kiro API Key 直连会显示用量窗口，外部中转不主动查询', async () => {
+    getUsage.mockResolvedValue({
+      kiro_credit: {
+        current_usage: 1,
+        usage_limit: 10,
+        percentage_used: 10
+      }
+    })
+
+    const direct = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 1004,
+          platform: 'kiro',
+          type: 'apikey',
+          credentials: {},
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledWith(1004)
+    expect(direct.text()).toContain('admin.accounts.usageWindow.kiroCredits|10')
+
+    getUsage.mockClear()
+    const relay = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 1005,
+          platform: 'kiro',
+          type: 'apikey',
+          credentials: { base_url: 'https://relay.example.com' },
+          quota_limit: 0,
+          quota_daily_limit: 0,
+          quota_weekly_limit: 0,
+          extra: {}
+        }),
+        todayStats: null,
+        todayStatsLoading: false
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(relay.text().trim()).toBe('-')
+  })
+
 
   it('OpenAI OAuth 快照已过期时首屏会重新请求 usage', async () => {
     getUsage.mockResolvedValue({

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
+	"github.com/tidwall/gjson"
 )
 
 func TestKiroCacheEmulationGroupDefaultsAndNonKiro(t *testing.T) {
@@ -261,6 +263,49 @@ func TestKiroCacheEmulationAutoBreakpointPrefersStablePrefix(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationMatchesOlderPrefixBeyondTenBreakpoints(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 92, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	firstBody := kiroCacheManyMessageBody("stable", 14, 0)
+	secondBody := kiroCacheManyMessageBody("stable", 14, 24)
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, firstBody, "claude-sonnet-4-6", 20000)
+	if first == nil || first.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected first request to create cache, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, secondBody, "claude-sonnet-4-6", 26000)
+	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected older stable prefix to be found beyond short lookback, got %+v", second)
+	}
+}
+
+func TestPrepareKiroBridgeCacheEmulationBodyUsesStableMessageAnchors(t *testing.T) {
+	svc := &GatewayService{}
+	ua := "claude-cli/2.1.197 (external, claude-desktop-3p, agent-sdk/0.3.197)"
+	ctx := SetClaudeCodeUserAgent(context.Background(), ua)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"stable","cache_control":{"type":"ephemeral","ttl":"5m"}}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"middle","cache_control":{"type":"ephemeral","ttl":"5m"}}]},` +
+		`{"role":"system","content":[{"type":"text","text":"tail reminder","cache_control":{"type":"ephemeral","ttl":"5m"}}]}` +
+		`],"tools":[{"name":"LongCustomToolName","input_schema":{"type":"object"}}]}`)
+
+	out := svc.prepareKiroBridgeCacheEmulationBody(ctx, &Account{ID: 93, Platform: PlatformKiro, Type: AccountTypeOAuth}, body)
+	if got := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("stable message cache ttl = %q, want 1h; body=%s", got, out)
+	}
+	if got := gjson.GetBytes(out, "messages.1.content.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("last non-system message cache ttl = %q, want 1h; body=%s", got, out)
+	}
+	if gjson.GetBytes(out, "messages.2.content.0.cache_control").Exists() {
+		t.Fatalf("tail system reminder should not keep drifting message cache_control: %s", out)
+	}
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "LongCustomToolName" {
+		t.Fatalf("kiro bridge preparation must not rename tools, got %q", got)
+	}
+}
+
 func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	bodyWithoutMetadata := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello world"}]}`)
 	bodyWithMetadata := []byte(`{"model":"claude-sonnet-4-6","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":"hello world"}]}`)
@@ -333,4 +378,23 @@ func kiroCacheMultiMessageBodyWithoutControl(prefixLabel, tailLabel string) []by
 	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
 	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 160)
 	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q}]},{"role":"user","content":[{"type":"text","text":%q}]}]}`, prefix, tail))
+}
+
+func kiroCacheManyMessageBody(prefixLabel string, stableTailCount, newTailCount int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"model":"claude-sonnet-4-6","messages":[`)
+	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
+	b.WriteString(fmt.Sprintf(`{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]}`, prefix))
+	for i := 0; i < stableTailCount; i++ {
+		b.WriteString(",")
+		text := strings.Repeat(fmt.Sprintf("stable tail %02d ", i), 64)
+		b.WriteString(fmt.Sprintf(`{"role":"assistant","content":[{"type":"text","text":%q}]}`, text))
+	}
+	for i := 0; i < newTailCount; i++ {
+		b.WriteString(",")
+		text := strings.Repeat(fmt.Sprintf("new tail %02d ", i), 64)
+		b.WriteString(fmt.Sprintf(`{"role":"assistant","content":[{"type":"text","text":%q}]}`, text))
+	}
+	b.WriteString(`]}`)
+	return []byte(b.String())
 }

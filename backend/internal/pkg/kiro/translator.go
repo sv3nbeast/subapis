@@ -4982,11 +4982,6 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		}
 		if value, ok := toInt(tokenUsage["cacheReadInputTokens"]); ok {
 			usage.CacheReadInputTokens = value
-			if usage.InputTokens == 0 {
-				usage.InputTokens = value
-			} else {
-				usage.InputTokens += value
-			}
 		}
 		updateKiroCreditsFromMap(usage, tokenUsage)
 	}

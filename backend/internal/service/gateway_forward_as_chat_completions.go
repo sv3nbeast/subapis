@@ -213,6 +213,7 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	parsed *ParsedRequest,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	anthropicBody = s.prepareKiroBridgeCacheEmulationBody(ctx, account, anthropicBody)
 	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
 	if err != nil {
 		return nil, err

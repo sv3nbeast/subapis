@@ -324,6 +324,123 @@
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
 
+    <!-- Kiro direct accounts: upstream Credits window + local Sub2API usage -->
+    <template v-else-if="account.platform === 'kiro' && isKiroDirectAccount">
+      <div v-if="loading" class="space-y-1.5">
+        <div class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+      <div v-else-if="needsReauth" class="space-y-1">
+        <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+          {{ t('admin.accounts.needsReauth') }}
+        </span>
+      </div>
+      <div v-else-if="usageInfo" class="space-y-1">
+        <div v-if="kiroPlanLabel" class="mb-0.5">
+          <span class="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+            {{ kiroPlanLabel }}
+          </span>
+        </div>
+
+        <div v-if="todayStats" class="mb-0.5 flex items-center">
+          <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
+            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+              {{ formatKeyRequests }} req
+            </span>
+            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
+              {{ formatKeyTokens }}
+            </span>
+            <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">
+              A ${{ formatKeyCost }}
+            </span>
+            <span
+              v-if="todayStats.user_cost != null"
+              class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+              :title="t('usage.userBilled')"
+            >
+              U ${{ formatKeyUserCost }}
+            </span>
+            <span
+              v-if="todayStats.kiro_credits != null && todayStats.kiro_credits > 0"
+              class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+            >
+              {{ formatKiroCreditAmount(todayStats.kiro_credits) }} cr
+            </span>
+          </div>
+        </div>
+        <div
+          v-else-if="todayStatsLoading"
+          class="mb-0.5 flex items-center gap-1"
+        >
+          <div class="h-3 w-10 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-8 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+
+        <UsageProgressBar
+          v-if="usageInfo.kiro_credit"
+          :label="t('admin.accounts.usageWindow.kiroCredits')"
+          :utilization="usageInfo.kiro_credit.percentage_used"
+          :resets-at="usageInfo.kiro_reset_at"
+          color="amber"
+        />
+        <div v-if="usageInfo.kiro_credit" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ formatKiroCreditProgress(usageInfo.kiro_credit) }}
+        </div>
+
+        <UsageProgressBar
+          v-if="usageInfo.kiro_bonus"
+          :label="t('admin.accounts.usageWindow.kiroBonus')"
+          :utilization="usageInfo.kiro_bonus.percentage_used"
+          :resets-at="usageInfo.kiro_bonus.expiry_date || usageInfo.kiro_reset_at"
+          color="purple"
+        />
+        <div v-if="usageInfo.kiro_bonus" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ formatKiroCreditProgress(usageInfo.kiro_bonus) }}
+          <span v-if="usageInfo.kiro_bonus.days_remaining != null">
+            · {{ t('admin.accounts.usageWindow.kiroDaysLeft', { days: usageInfo.kiro_bonus.days_remaining }) }}
+          </span>
+        </div>
+
+        <div v-if="kiroOverageDisplay" class="text-[10px] text-amber-600 dark:text-amber-400">
+          {{ kiroOverageDisplay }}
+        </div>
+        <div v-if="usageInfo.error" class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]" :title="usageInfo.error">
+          {{ usageErrorLabel }}
+        </div>
+        <div v-if="!hasKiroUsageDetails" class="text-xs text-gray-400">-</div>
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': activeQueryLoading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+      </div>
+      <div v-else class="text-xs text-gray-400">-</div>
+    </template>
+
     <!-- Grok OAuth accounts: passive xAI quota headers + local Sub2API usage -->
     <template v-else-if="account.platform === 'grok' && account.type === 'oauth'">
       <div v-if="loading" class="space-y-1.5">
@@ -584,7 +701,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, GeminiCredentials, KiroCreditProgress, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber, formatRelativeTime } from '@/utils/format'
@@ -611,6 +728,10 @@ const props = withDefaults(
   }
 )
 
+const emit = defineEmits<{
+  (e: 'kiro-usage-meta', meta: { plan_type?: string; kiro_overages_enabled: boolean }): void
+}>()
+
 const { t } = useI18n()
 const desktopViewportQuery = '(min-width: 768px)'
 
@@ -633,10 +754,28 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
+const isKiroRelayAccount = computed(() => {
+  return (
+    props.account.platform === 'kiro' &&
+    props.account.type === 'apikey' &&
+    typeof props.account.credentials?.base_url === 'string' &&
+    props.account.credentials.base_url.trim() !== ''
+  )
+})
+
+const isKiroDirectAccount = computed(() => {
+  if (props.account.platform !== 'kiro') return false
+  if (props.account.type === 'oauth') return true
+  return props.account.type === 'apikey' && !isKiroRelayAccount.value
+})
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
+  // Kiro direct accounts expose upstream Credits windows. Relay API-key accounts
+  // are external Anthropic-compatible upstreams, so they only show local stats.
+  if (props.account.platform === 'kiro') return isKiroDirectAccount.value
   return props.account.type === 'oauth' || props.account.type === 'setup-token'
 })
 
@@ -655,6 +794,9 @@ const shouldFetchUsage = computed(() => {
   }
   if (props.account.platform === 'openai') {
     return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'kiro') {
+    return isKiroDirectAccount.value
   }
   return false
 })
@@ -1079,6 +1221,66 @@ const formatWindowRequests = (stats: WindowStats) => formatCompactNumber(stats.r
 const formatWindowTokens = (stats: WindowStats) => formatCompactNumber(stats.tokens)
 const formatWindowCost = (stats: WindowStats) => stats.cost.toFixed(2)
 
+const kiroPlanLabel = computed(() => {
+  if (props.account.platform !== 'kiro') return null
+  const name = (usageInfo.value?.kiro_subscription_name || '').trim()
+  const type = (usageInfo.value?.kiro_subscription_type || '').trim()
+  if (name && type && !name.toLowerCase().includes(type.toLowerCase())) {
+    return `${name} · ${type}`
+  }
+  return name || type || null
+})
+
+const hasKiroUsageDetails = computed(() => {
+  if (props.account.platform !== 'kiro') return false
+  return Boolean(
+    usageInfo.value?.kiro_credit ||
+    usageInfo.value?.kiro_bonus ||
+    usageInfo.value?.kiro_overage ||
+    usageInfo.value?.error ||
+    props.todayStats
+  )
+})
+
+const kiroOverageDisplay = computed(() => {
+  const overage = usageInfo.value?.kiro_overage
+  if (!overage) return null
+  const hasUsage = Number(overage.current_overages ?? 0) > 0
+  const hasCharge = Number(overage.overage_charges ?? 0) > 0
+  if (!hasUsage && !hasCharge) return null
+  const parts: string[] = [t('admin.accounts.usageWindow.kiroOverage')]
+  if (hasUsage) {
+    parts.push(formatKiroCreditAmount(overage.current_overages))
+  }
+  if (hasCharge) {
+    const symbol = overage.currency_symbol || ''
+    parts.push(`${symbol}${Number(overage.overage_charges).toFixed(2)}`)
+  }
+  return parts.join(' · ')
+})
+
+const emitKiroUsageMeta = (usage: AccountUsageInfo | null | undefined) => {
+  if (props.account.platform !== 'kiro' || !usage) return
+  const planType = (usage.kiro_subscription_type || usage.kiro_subscription_name || '').trim()
+  emit('kiro-usage-meta', {
+    ...(planType ? { plan_type: planType } : {}),
+    kiro_overages_enabled: usage.kiro_overages_enabled === true
+  })
+}
+
+const formatKiroCreditAmount = (value: number | null | undefined): string => {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n)) return '0'
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: n > 0 && n < 1 ? 2 : 0,
+    maximumFractionDigits: 2
+  })
+}
+
+const formatKiroCreditProgress = (progress: KiroCreditProgress): string => {
+  return `${formatKiroCreditAmount(progress.current_usage)} / ${formatKiroCreditAmount(progress.usage_limit)}`
+}
+
 // 账户类型显示标签
 const antigravityTierLabel = computed(() => {
   switch (antigravityTier.value) {
@@ -1176,6 +1378,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
     const cached = _usageCache.get(props.account.id)
     if (cached && Date.now() - cached.ts < USAGE_CACHE_TTL) {
       usageInfo.value = cached.data
+      emitKiroUsageMeta(cached.data)
       loading.value = false
       return
     }
@@ -1192,6 +1395,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
     if (!unmounted.value) {
       usageInfo.value = result
       _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+      emitKiroUsageMeta(result)
     }
   } catch (e: any) {
     if (!unmounted.value) {
@@ -1256,7 +1460,10 @@ const attachVisibilityObserver = () => {
 const loadActiveUsage = async () => {
   activeQueryLoading.value = true
   try {
-    usageInfo.value = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    usageInfo.value = result
+    _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    emitKiroUsageMeta(result)
   } catch (e: any) {
     console.error('Failed to load active usage:', e)
   } finally {
