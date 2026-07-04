@@ -112,6 +112,7 @@ func TestGatewayServiceKiroEmptyStreamIsRetryableFailover(t *testing.T) {
 		require.NotNil(t, failoverErr)
 		require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 		require.True(t, failoverErr.RetryableOnSameAccount)
+		require.True(t, failoverErr.SuppressTempUnschedule)
 	}
 }
 
@@ -125,6 +126,7 @@ func TestGatewayServiceKiroIncompleteStreamIsRetryableFailover(t *testing.T) {
 	require.NotNil(t, failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "incomplete kiro event stream")
 }
 
@@ -143,6 +145,7 @@ func TestGatewayServiceKiroEmptyStreamWrappedFailoverKeepsKiroClassification(t *
 	require.NotNil(t, failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "empty kiro event stream")
 }
 
@@ -247,6 +250,56 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 0.000001)
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
+}
+
+func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"partial answer from kiro"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	parsed := &ParsedRequest{
+		Model:  "claude-opus-4-8",
+		Stream: true,
+		Body:   NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.NotNil(t, result.FirstTokenMs)
+	require.Contains(t, rec.Body.String(), "partial answer")
+	require.Contains(t, rec.Body.String(), "from kiro")
+	require.Contains(t, rec.Body.String(), "event: message_stop")
+	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
 }
 
 func TestForwardKiroMessagesStreamOpenContextCanceledDoesNotWriteFallbackBody(t *testing.T) {
@@ -474,16 +527,13 @@ func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testin
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
 
-	require.Nil(t, result)
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
-	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "incomplete kiro event stream")
-	require.Empty(t, rec.Body.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Contains(t, rec.Body.String(), `"text":"part"`)
+	require.Contains(t, rec.Body.String(), `"text":"ial answer"`)
 	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
-	require.NotContains(t, rec.Body.String(), "event: message_stop")
+	require.Contains(t, rec.Body.String(), "event: message_stop")
 }
 
 func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) {

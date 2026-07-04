@@ -1974,7 +1974,7 @@ func TestStreamEventStreamAsAnthropicDoesNotCreateHalfWordFromKiroDelta(t *testi
 	require.Contains(t, output, `"text":"'m starting"`)
 }
 
-func TestStreamEventStreamAsAnthropicRequiresTerminalEventWhenConfigured(t *testing.T) {
+func TestStreamEventStreamAsAnthropicSynthesizesTerminalWhenUpstreamOmitsIt(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
 		"assistantResponseEvent": map[string]any{
@@ -1987,14 +1987,12 @@ func TestStreamEventStreamAsAnthropicRequiresTerminalEventWhenConfigured(t *test
 		RequireTerminalEvent: true,
 	})
 
-	require.Nil(t, result)
-	require.Error(t, err)
-	var incompleteErr *IncompleteStreamError
-	require.ErrorAs(t, err, &incompleteErr)
-	require.Contains(t, err.Error(), "missing terminal event")
-	require.Contains(t, out.String(), "event: sub2api_internal_kiro_ping")
-	require.NotContains(t, out.String(), "partial answer")
-	require.NotContains(t, out.String(), "event: message_stop")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), "partial answer")
+	require.Contains(t, out.String(), "event: message_stop")
+	require.NotContains(t, out.String(), "event: sub2api_internal_kiro_ping")
 }
 
 func TestStreamEventStreamAsAnthropicAcceptsTerminalEventWhenRequired(t *testing.T) {
@@ -2031,11 +2029,13 @@ func TestStreamEventStreamAsAnthropicThinkingOnlyResponse(t *testing.T) {
 
 	var out bytes.Buffer
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-5", 9, KiroRequestContext{ThinkingEnabled: true})
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty kiro event stream")
-	require.Contains(t, err.Error(), "no deliverable assistant output")
-	require.Empty(t, out.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), `"type":"thinking_delta"`)
+	require.Contains(t, out.String(), `"thinking":"I should think first."`)
+	require.Contains(t, out.String(), `"type":"signature_delta"`)
+	require.Contains(t, out.String(), "event: message_stop")
 }
 
 func TestStreamEventStreamAsAnthropicParsesMultipleReasoningEventsWhenEnabled(t *testing.T) {

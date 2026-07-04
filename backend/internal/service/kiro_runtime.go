@@ -357,6 +357,7 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 			StatusCode:             http.StatusBadGateway,
 			ResponseBody:           body,
 			RetryableOnSameAccount: true,
+			SuppressTempUnschedule: true,
 			Cause:                  err,
 		}
 	}
@@ -376,6 +377,7 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		StatusCode:             http.StatusBadGateway,
 		ResponseBody:           body,
 		RetryableOnSameAccount: true,
+		SuppressTempUnschedule: true,
 		Cause:                  err,
 	}
 }

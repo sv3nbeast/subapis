@@ -665,6 +665,7 @@ type UpstreamFailoverError struct {
 	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SuppressTempUnschedule bool        // 可同账号重试但不应写入账号临时禁调（如 Kiro 流协议尾帧缺失/空解析）
 	KiroRateLimited        bool        // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
 	Cause                  error       // 内部原因，用于 errors.As 分类；不直接暴露给客户端
 }
@@ -725,7 +726,7 @@ func (e *sseStreamErrorEventError) Error() string { return "have error in stream
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
-	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+	if failoverErr == nil || !failoverErr.RetryableOnSameAccount || failoverErr.SuppressTempUnschedule {
 		return
 	}
 	// 根据状态码选择封禁策略

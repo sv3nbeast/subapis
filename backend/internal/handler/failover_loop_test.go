@@ -424,6 +424,22 @@ func TestHandleFailoverError_TempUnschedule(t *testing.T) {
 		require.Equal(t, 502, mock.calls[0].failoverErr.StatusCode)
 		require.True(t, mock.calls[0].failoverErr.RetryableOnSameAccount)
 	})
+
+	t.Run("重试错误可禁止写入TempUnschedule", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(3, false)
+		err := newTestFailoverErr(502, true, false)
+		err.SuppressTempUnschedule = true
+
+		for i := 0; i < maxSameAccountRetries; i++ {
+			fs.HandleFailoverError(context.Background(), mock, 42, service.PlatformKiro, err)
+		}
+		action := fs.HandleFailoverError(context.Background(), mock, 42, service.PlatformKiro, err)
+
+		require.Equal(t, FailoverContinue, action)
+		require.Empty(t, mock.calls)
+		require.Contains(t, fs.FailedAccountIDs, int64(42), "仍应在本轮 failover 中排除失败账号，避免无限同账号循环")
+	})
 }
 
 func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {

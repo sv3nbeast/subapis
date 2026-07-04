@@ -743,9 +743,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	markDeliverableOutput := func() error {
 		sawDeliverableOutput = true
-		if requestCtx.RequireTerminalEvent {
-			return nil
-		}
 		return releaseStreamOutput()
 	}
 	ensureMessageStart := func() error {
@@ -1169,6 +1166,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		})
 	}
 	emitThinkingDelta := func(text string) error {
+		if text != "" {
+			if err := markDeliverableOutput(); err != nil {
+				return err
+			}
+		}
 		if !thinkingBlockOpen {
 			if err := startThinkingBlock(); err != nil {
 				return err
@@ -1468,7 +1470,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
-	if requestCtx.RequireTerminalEvent && !sawTerminalEvent {
+	if requestCtx.RequireTerminalEvent && !sawTerminalEvent && !sawDeliverableOutput {
 		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing terminal event"}
 	}
 	if usage.OutputTokens == 0 {
