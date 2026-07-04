@@ -17,7 +17,7 @@
               <div class="relative" ref="autoRefreshDropdownRef">
                 <button
                   @click="
-                    showAutoRefreshDropdown = !showAutoRefreshDropdown
+                    showAutoRefreshDropdown = !showAutoRefreshDropdown;
                     showAccountToolsDropdown = false
                   "
                   class="btn btn-secondary px-2 md:px-3"
@@ -64,7 +64,7 @@
               <div class="relative" ref="accountToolsDropdownRef">
                 <button
                   @click="
-                    showAccountToolsDropdown = !showAccountToolsDropdown
+                    showAccountToolsDropdown = !showAccountToolsDropdown;
                     showAutoRefreshDropdown = false
                   "
                   class="btn btn-secondary px-2 md:px-3"
