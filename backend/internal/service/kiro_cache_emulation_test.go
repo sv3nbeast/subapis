@@ -69,6 +69,34 @@ func TestKiroCacheEmulationRejectsNonKiroAccount(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationMixedGroupIsolation(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBodyWithoutControl("mixed isolation")
+
+	if got := svc.buildKiroCacheEmulationUsage(&Account{ID: 41, Platform: PlatformAnthropic}, group, body, "claude-sonnet-4-6", 3000); got != nil {
+		t.Fatalf("non-kiro account in mixed group should not seed or consume kiro cache, got %+v", got)
+	}
+
+	kiroA := kiroCacheAccount(42, "refresh-a", "access-a")
+	first := svc.buildKiroCacheEmulationUsage(kiroA, group, body, "claude-sonnet-4-6", 3000)
+	if first == nil || first.CacheCreationInputTokens != 3000 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("unexpected first kiro usage: %+v", first)
+	}
+
+	kiroB := kiroCacheAccount(43, "refresh-b", "access-b")
+	otherKiro := svc.buildKiroCacheEmulationUsage(kiroB, group, body, "claude-sonnet-4-6", 3000)
+	if otherKiro == nil || otherKiro.CacheCreationInputTokens != 3000 || otherKiro.CacheReadInputTokens != 0 {
+		t.Fatalf("different kiro account in same group must not share cache: %+v", otherKiro)
+	}
+
+	second := svc.buildKiroCacheEmulationUsage(kiroA, group, body, "claude-sonnet-4-6", 3000)
+	if second == nil || second.CacheReadInputTokens != 3000 || second.CacheCreationInputTokens != 0 {
+		t.Fatalf("same kiro account should reuse its own cache: %+v", second)
+	}
+}
+
 func TestKiroCacheEmulationAccountEnabledDefaultsRatioToOne(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}
@@ -281,6 +309,30 @@ func TestKiroCacheEmulationMatchesOlderPrefixBeyondTenBreakpoints(t *testing.T) 
 	}
 }
 
+func TestKiroCacheEmulationAutoBreakpointsMatchRollingHistory(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 94, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	firstBody := kiroCacheManyMessageBodyWithoutControl("rolling", 12, 0)
+	secondBody := kiroCacheManyMessageBodyWithoutControl("rolling", 12, 4)
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, firstBody, "claude-sonnet-4-6", 20000)
+	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("expected first request to create automatic rolling cache, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, secondBody, "claude-sonnet-4-6", 26000)
+	if second == nil || second.CacheReadInputTokens <= 0 {
+		t.Fatalf("expected rolling history to read an older automatic breakpoint, got %+v", second)
+	}
+	if second.CacheCreationInputTokens <= 0 {
+		t.Fatalf("newly stable history segment should be written after older prefix hit, got %+v", second)
+	}
+	if second.InputTokens <= 0 {
+		t.Fatalf("current tail should remain normal input tokens, got %+v", second)
+	}
+}
+
 func TestPrepareKiroBridgeCacheEmulationBodyUsesStableMessageAnchors(t *testing.T) {
 	svc := &GatewayService{}
 	ua := "claude-cli/2.1.197 (external, claude-desktop-3p, agent-sdk/0.3.197)"
@@ -385,6 +437,25 @@ func kiroCacheManyMessageBody(prefixLabel string, stableTailCount, newTailCount 
 	b.WriteString(`{"model":"claude-sonnet-4-6","messages":[`)
 	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
 	b.WriteString(fmt.Sprintf(`{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]}`, prefix))
+	for i := 0; i < stableTailCount; i++ {
+		b.WriteString(",")
+		text := strings.Repeat(fmt.Sprintf("stable tail %02d ", i), 64)
+		b.WriteString(fmt.Sprintf(`{"role":"assistant","content":[{"type":"text","text":%q}]}`, text))
+	}
+	for i := 0; i < newTailCount; i++ {
+		b.WriteString(",")
+		text := strings.Repeat(fmt.Sprintf("new tail %02d ", i), 64)
+		b.WriteString(fmt.Sprintf(`{"role":"assistant","content":[{"type":"text","text":%q}]}`, text))
+	}
+	b.WriteString(`]}`)
+	return []byte(b.String())
+}
+
+func kiroCacheManyMessageBodyWithoutControl(prefixLabel string, stableTailCount, newTailCount int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"model":"claude-sonnet-4-6","messages":[`)
+	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
+	b.WriteString(fmt.Sprintf(`{"role":"user","content":[{"type":"text","text":%q}]}`, prefix))
 	for i := 0; i < stableTailCount; i++ {
 		b.WriteString(",")
 		text := strings.Repeat(fmt.Sprintf("stable tail %02d ", i), 64)

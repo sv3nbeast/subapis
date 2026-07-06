@@ -103,6 +103,18 @@ func TestMigration122ScrubsPendingOAuthCompletionTokensAtRest(t *testing.T) {
 	require.Contains(t, sql, "token_type")
 }
 
+func TestMigration161KeepsUserPlatformQuotaConstraintAlignedWithCurrentPlatforms(t *testing.T) {
+	content, err := FS.ReadFile("161_sync_user_platform_quotas_platform_check.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS user_platform_quotas_platform_check")
+	require.Contains(t, sql, "ADD CONSTRAINT user_platform_quotas_platform_check")
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "kiro", "droid", "grok"} {
+		require.Contains(t, sql, "'"+platform+"'")
+	}
+}
+
 func TestMigration123BackfillsLegacyAuthSourceGrantDefaultsSafely(t *testing.T) {
 	content, err := FS.ReadFile("123_fix_legacy_auth_source_grant_on_signup_defaults.sql")
 	require.NoError(t, err)

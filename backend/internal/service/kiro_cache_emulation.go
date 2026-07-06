@@ -199,7 +199,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 		}
 	}
 	if len(profile.breakpoints) == 0 && !profile.hasExplicitTTL {
-		profile.addAutomaticBreakpoint(blocks)
+		profile.addAutomaticBreakpoints(blocks)
 	}
 	if profile.lastCacheableBreakpoint() == nil {
 		return nil, false
@@ -207,7 +207,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 	return profile, true
 }
 
-func (p *kiroCacheProfile) addAutomaticBreakpoint(blocks []kiroPendingBlock) {
+func (p *kiroCacheProfile) addAutomaticBreakpoints(blocks []kiroPendingBlock) {
 	if p == nil || len(blocks) == 0 || len(p.blocks) != len(blocks) {
 		return
 	}
@@ -218,26 +218,39 @@ func (p *kiroCacheProfile) addAutomaticBreakpoint(blocks []kiroPendingBlock) {
 		}
 	}
 
-	candidateIndex := -1
+	candidateIndexes := make([]int, 0, min(len(blocks), kiroCachePrefixLookbackLimit))
 	for i, block := range blocks {
 		if p.blocks[i].cumulativeTokens < p.minCacheable {
 			continue
 		}
-		if finalMessageIndex >= 0 && block.messageIndex != nil && *block.messageIndex == finalMessageIndex {
-			continue
+		if block.messageIndex != nil {
+			// 自动断点只放在完整消息边界，避免把一条消息的中间内容误当成
+			// 可稳定复用前缀；当前最后一条消息通常是本轮新增输入，也不参与
+			// 自动缓存。显式 cache_control 仍按用户指定逻辑处理，不受这里影响。
+			if !block.isMessageEnd {
+				continue
+			}
+			if finalMessageIndex >= 0 && *block.messageIndex == finalMessageIndex {
+				continue
+			}
 		}
-		candidateIndex = i
+		candidateIndexes = append(candidateIndexes, i)
 	}
-	if candidateIndex < 0 {
+	if len(candidateIndexes) == 0 {
 		for i := len(blocks) - 1; i >= 0; i-- {
 			if p.blocks[i].cumulativeTokens >= p.minCacheable {
-				candidateIndex = i
+				candidateIndexes = append(candidateIndexes, i)
 				break
 			}
 		}
 	}
-	if candidateIndex >= 0 {
-		p.breakpoints = append(p.breakpoints, kiroCacheBreakpoint{blockIndex: candidateIndex, ttl: kiroCacheDefaultTTL})
+	if len(candidateIndexes) > kiroCachePrefixLookbackLimit {
+		candidateIndexes = candidateIndexes[len(candidateIndexes)-kiroCachePrefixLookbackLimit:]
+	}
+	for _, candidateIndex := range candidateIndexes {
+		if candidateIndex >= 0 {
+			p.breakpoints = append(p.breakpoints, kiroCacheBreakpoint{blockIndex: candidateIndex, ttl: kiroCacheDefaultTTL})
+		}
 	}
 }
 
