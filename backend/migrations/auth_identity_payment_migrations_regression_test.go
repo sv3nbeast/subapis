@@ -115,6 +115,19 @@ func TestMigration161KeepsUserPlatformQuotaConstraintAlignedWithCurrentPlatforms
 	}
 }
 
+func TestMigration162AllowsUsageLogCyberRequestType(t *testing.T) {
+	content, err := FS.ReadFile("162_allow_usage_log_request_type_cyber.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS usage_logs_request_type_check")
+	require.Contains(t, sql, "ADD CONSTRAINT usage_logs_request_type_check")
+	for _, value := range []string{"0", "1", "2", "3", "4"} {
+		require.Contains(t, sql, value)
+	}
+	require.Contains(t, sql, "request_type")
+}
+
 func TestMigration123BackfillsLegacyAuthSourceGrantDefaultsSafely(t *testing.T) {
 	content, err := FS.ReadFile("123_fix_legacy_auth_source_grant_on_signup_defaults.sql")
 	require.NoError(t, err)
