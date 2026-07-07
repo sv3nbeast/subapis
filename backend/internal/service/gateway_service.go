@@ -529,6 +529,16 @@ type GatewayCache interface {
 	DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error
 }
 
+// KiroCachePersistenceStore 是 GatewayCache 的可选窄扩展接口，用于把 Kiro
+// cache emulation 的 prefix fingerprint 持久化到外部缓存（如 Redis）。
+//
+// 运行时通过 type assertion 按需启用，不要求所有测试桩都实现。stableKey 可能包含
+// 凭证稳定身份，具体实现应在写外部缓存前自行摘要化，避免原始标识泄露到键名。
+type KiroCachePersistenceStore interface {
+	GetKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprints []string) (map[string]bool, error)
+	UpsertKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error
+}
+
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
 func derefGroupID(groupID *int64) int64 {
 	if groupID == nil {

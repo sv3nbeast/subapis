@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -10,6 +12,23 @@ import (
 )
 
 const stickySessionPrefix = "sticky_session:"
+const kiroCacheFingerprintPrefix = "kiro_cache_emulation:"
+
+var kiroCacheFingerprintUpsertScript = redis.NewScript(`
+local ttl = tonumber(ARGV[1])
+if ttl == nil or ttl <= 0 then
+  return 0
+end
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  redis.call('PSETEX', KEYS[1], ttl, '1')
+  return 1
+end
+local current = redis.call('PTTL', KEYS[1])
+if current < 0 or current < ttl then
+  redis.call('PEXPIRE', KEYS[1], ttl)
+end
+return 1
+`)
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -50,6 +69,59 @@ func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, ses
 func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Del(ctx, key).Err()
+}
+
+func buildKiroCacheFingerprintKey(stableKey string, fingerprint string) string {
+	stableDigest := sha256.Sum256([]byte(stableKey))
+	return fmt.Sprintf("%s%s:%s", kiroCacheFingerprintPrefix, hex.EncodeToString(stableDigest[:]), fingerprint)
+}
+
+func (c *gatewayCache) GetKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprints []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(fingerprints))
+	if c == nil || c.rdb == nil || stableKey == "" || len(fingerprints) == 0 {
+		return out, nil
+	}
+	pipe := c.rdb.Pipeline()
+	cmds := make(map[string]*redis.IntCmd, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		if fingerprint == "" {
+			continue
+		}
+		cmds[fingerprint] = pipe.Exists(ctx, buildKiroCacheFingerprintKey(stableKey, fingerprint))
+	}
+	if len(cmds) == 0 {
+		return out, nil
+	}
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	for fingerprint, cmd := range cmds {
+		n, cmdErr := cmd.Result()
+		if cmdErr != nil && cmdErr != redis.Nil {
+			return nil, cmdErr
+		}
+		out[fingerprint] = n > 0
+	}
+	return out, nil
+}
+
+func (c *gatewayCache) UpsertKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error {
+	if c == nil || c.rdb == nil || stableKey == "" || len(fingerprintTTLs) == 0 {
+		return nil
+	}
+	pipe := c.rdb.Pipeline()
+	for fingerprint, ttl := range fingerprintTTLs {
+		if fingerprint == "" || ttl <= 0 {
+			continue
+		}
+		_ = kiroCacheFingerprintUpsertScript.Run(ctx, pipe, []string{buildKiroCacheFingerprintKey(stableKey, fingerprint)}, ttl.Milliseconds())
+	}
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	return nil
 }
 
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.

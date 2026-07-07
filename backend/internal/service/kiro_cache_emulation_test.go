@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -333,6 +334,64 @@ func TestKiroCacheEmulationAutoBreakpointsMatchRollingHistory(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationRecoversFromPersistentStoreAfterTrackerReset(t *testing.T) {
+	resetKiroCacheTracker()
+	cache := newFakeKiroGatewayCache()
+	svc := &GatewayService{cache: cache}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	account := kiroCacheAccount(95, "persist-refresh", "persist-access")
+	group := kiroCacheGroup(1)
+	body := kiroCacheManyMessageBodyWithoutControl("persistent", 12, 0)
+
+	first := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("expected first request to seed persistent store, got %+v", first)
+	}
+
+	resetKiroCacheTracker()
+
+	second := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if second == nil || second.CacheReadInputTokens <= 0 {
+		t.Fatalf("expected persistent store to recover cache hit after reset, got %+v", second)
+	}
+}
+
+func TestKiroCacheEmulationIgnoresVolatileToolIdentifiers(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 96, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	firstBody := kiroCacheToolContextBodyWithoutControl("tool-stable", "toolu_01ABC", "tail one")
+	secondBody := kiroCacheToolContextBodyWithoutControl("tool-stable", "toolu_99XYZ", "tail two")
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, firstBody, "claude-sonnet-4-6", 16000)
+	if first == nil || first.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected first tool-context request to create cache, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, secondBody, "claude-sonnet-4-6", 16000)
+	if second == nil || second.CacheReadInputTokens <= 0 || second.InputTokens <= 0 {
+		t.Fatalf("volatile tool ids should not destroy stable prefix hit, got %+v", second)
+	}
+}
+
+func TestKiroCacheEmulationMatchesVeryLongHistoryBeyondDefaultLookback(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 97, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	firstBody := kiroCacheManyMessageBodyWithoutControl("very-long", 180, 0)
+	secondBody := kiroCacheManyMessageBodyWithoutControl("very-long", 180, 24)
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, firstBody, "claude-sonnet-4-6", 260000)
+	if first == nil || first.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected first long-history request to create cache, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, secondBody, "claude-sonnet-4-6", 320000)
+	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheCreationInputTokens <= 0 {
+		t.Fatalf("expected long-history stable prefix to match beyond default lookback, got %+v", second)
+	}
+}
+
 func TestPrepareKiroCacheEmulationProfileBodyUsesStableMessageAnchors(t *testing.T) {
 	svc := &GatewayService{}
 	ua := "claude-cli/2.1.197 (external, claude-desktop-3p, agent-sdk/0.3.197)"
@@ -452,6 +511,65 @@ func resetKiroCacheTracker() {
 	globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 }
 
+type fakeKiroGatewayCache struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+}
+
+func newFakeKiroGatewayCache() *fakeKiroGatewayCache {
+	return &fakeKiroGatewayCache{entries: make(map[string]time.Time)}
+}
+
+func (c *fakeKiroGatewayCache) GetSessionAccountID(context.Context, int64, string) (int64, error) {
+	return 0, nil
+}
+
+func (c *fakeKiroGatewayCache) SetSessionAccountID(context.Context, int64, string, int64, time.Duration) error {
+	return nil
+}
+
+func (c *fakeKiroGatewayCache) RefreshSessionTTL(context.Context, int64, string, time.Duration) error {
+	return nil
+}
+
+func (c *fakeKiroGatewayCache) DeleteSessionAccountID(context.Context, int64, string) error {
+	return nil
+}
+
+func (c *fakeKiroGatewayCache) GetKiroCacheFingerprints(_ context.Context, stableKey string, fingerprints []string) (map[string]bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	out := make(map[string]bool, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		key := stableKey + "|" + fingerprint
+		if expiresAt, ok := c.entries[key]; ok && expiresAt.After(now) {
+			out[fingerprint] = true
+			continue
+		}
+		delete(c.entries, key)
+	}
+	return out, nil
+}
+
+func (c *fakeKiroGatewayCache) UpsertKiroCacheFingerprints(_ context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for fingerprint, ttl := range fingerprintTTLs {
+		if ttl <= 0 {
+			continue
+		}
+		key := stableKey + "|" + fingerprint
+		expiresAt := now.Add(ttl)
+		if existing, ok := c.entries[key]; ok && existing.After(expiresAt) {
+			continue
+		}
+		c.entries[key] = expiresAt
+	}
+	return nil
+}
+
 func kiroCacheGroup(ratio float64) *Group {
 	return &Group{ID: 12, Platform: PlatformKiro, KiroCacheEmulationEnabled: true, KiroCacheEmulationRatio: ratio}
 }
@@ -524,4 +642,16 @@ func kiroCacheManyMessageBodyWithoutControl(prefixLabel string, stableTailCount,
 	}
 	b.WriteString(`]}`)
 	return []byte(b.String())
+}
+
+func kiroCacheToolContextBodyWithoutControl(prefixLabel, toolID, tailLabel string) []byte {
+	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
+	toolResult := strings.Repeat("tool result chunk "+prefixLabel+" ", 128)
+	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 128)
+	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[`+
+		`{"role":"user","content":[{"type":"text","text":%q}]},`+
+		`{"role":"assistant","content":[{"type":"tool_use","id":%q,"name":"read_file","input":{"path":"/tmp/a.txt"}}]},`+
+		`{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"content":[{"type":"text","text":%q}]}]},`+
+		`{"role":"assistant","content":[{"type":"text","text":%q}]}`+
+		`]}`, prefix, toolID, toolID, toolResult, tail))
 }

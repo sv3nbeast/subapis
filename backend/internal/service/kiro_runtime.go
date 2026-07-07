@@ -431,7 +431,7 @@ func (s *GatewayService) prepareKiroCacheEmulationProfileBody(ctx context.Contex
 
 func (s *GatewayService) buildKiroCacheEmulationUsageForRequest(ctx context.Context, account *Account, group *Group, upstreamBody []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
 	profileBody := s.prepareKiroCacheEmulationProfileBody(ctx, account, upstreamBody)
-	return s.buildKiroCacheEmulationUsage(account, group, profileBody, model, inputTokens)
+	return s.buildKiroCacheEmulationUsageWithContext(ctx, account, group, profileBody, model, inputTokens)
 }
 
 func isKiroDirectTokenType(tokenType string) bool {

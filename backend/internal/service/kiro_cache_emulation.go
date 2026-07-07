@@ -2,8 +2,10 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -27,6 +29,7 @@ const (
 	kiroCacheMinTokensOpus       = 4096
 	kiroCacheMinTokensHaiku3     = 2048
 	kiroCachePrefixLookbackLimit = 128
+	kiroCachePrefixLookbackMax   = 512
 )
 
 type kiroCacheEmulationUsage struct {
@@ -51,6 +54,10 @@ type kiroCacheTracker struct {
 var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 
 func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
+	return s.buildKiroCacheEmulationUsageWithContext(context.Background(), account, group, body, model, inputTokens)
+}
+
+func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
 	if account == nil || account.ID <= 0 || !account.IsKiro() || len(body) == 0 {
 		return nil
 	}
@@ -70,8 +77,23 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *G
 	if cacheKey == 0 {
 		return nil
 	}
-	result := globalKiroCacheTracker.compute(cacheKey, profile)
-	globalKiroCacheTracker.update(cacheKey, profile)
+	stableKey := strings.TrimSpace(kiroCacheCredentialIdentity(account))
+	persistence := s.kiroCachePersistenceStore()
+	match := globalKiroCacheTracker.match(ctx, stableKey, cacheKey, profile, persistence)
+	if persistEntries := globalKiroCacheTracker.update(cacheKey, profile); persistence != nil && stableKey != "" && len(persistEntries) > 0 {
+		_ = persistence.UpsertKiroCacheFingerprints(ctx, stableKey, persistEntries)
+	}
+	result := &kiroCacheEmulationUsage{}
+	if match != nil {
+		result.CacheReadInputTokens = min(match.cumulativeTokens, profile.totalInputTokens)
+	}
+	lastBreakpoint := profile.lastCacheableBreakpoint()
+	if lastBreakpoint == nil {
+		return nil
+	}
+	lastBreakpointTokens := min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens)
+	result.CacheCreationInputTokens = max(lastBreakpointTokens-result.CacheReadInputTokens, 0)
+	result.CacheCreation5mInputTokens, result.CacheCreation1hInputTokens = profile.ttlBreakdown(result.CacheReadInputTokens)
 	result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
 	result.CacheCreationInputTokens = scaleKiroCacheTokens(result.CacheCreationInputTokens, ratio)
 	result.CacheCreation5mInputTokens = scaleKiroCacheTokens(result.CacheCreation5mInputTokens, ratio)
@@ -84,6 +106,14 @@ func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *G
 		return nil
 	}
 	return result
+}
+
+func (s *GatewayService) kiroCachePersistenceStore() KiroCachePersistenceStore {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	persistence, _ := s.cache.(KiroCachePersistenceStore)
+	return persistence
 }
 
 func kiroGroupCacheEmulationFallback(group *Group) (bool, float64) {
@@ -138,6 +168,15 @@ type kiroPendingBlock struct {
 	breakpointTTL *time.Duration
 	messageIndex  *int
 	isMessageEnd  bool
+	role          string
+	blockType     string
+}
+
+type kiroCacheLookupCandidate struct {
+	fingerprint      [32]byte
+	fingerprintHex   string
+	cumulativeTokens int
+	ttl              time.Duration
 }
 
 func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCacheProfile, bool) {
@@ -218,10 +257,25 @@ func (p *kiroCacheProfile) addAutomaticBreakpoints(blocks []kiroPendingBlock) {
 		}
 	}
 
-	candidateIndexes := make([]int, 0, min(len(blocks), kiroCachePrefixLookbackLimit))
+	candidateTTLs := make(map[int]time.Duration, min(len(blocks), kiroCachePrefixLookbackLimit))
+	orderedCandidateIndexes := make([]int, 0, min(len(blocks), kiroCachePrefixLookbackLimit))
+	addCandidate := func(index int, ttl time.Duration) {
+		if index < 0 {
+			return
+		}
+		if _, exists := candidateTTLs[index]; !exists {
+			orderedCandidateIndexes = append(orderedCandidateIndexes, index)
+		}
+		if ttl > candidateTTLs[index] {
+			candidateTTLs[index] = ttl
+		}
+	}
 	for i, block := range blocks {
 		if p.blocks[i].cumulativeTokens < p.minCacheable {
 			continue
+		}
+		if shouldAddKiroToolContextBreakpoint(block, finalMessageIndex) {
+			addCandidate(i, kiroCacheDefaultTTL)
 		}
 		if block.messageIndex != nil {
 			// 自动断点只放在完整消息边界，避免把一条消息的中间内容误当成
@@ -234,23 +288,48 @@ func (p *kiroCacheProfile) addAutomaticBreakpoints(blocks []kiroPendingBlock) {
 				continue
 			}
 		}
-		candidateIndexes = append(candidateIndexes, i)
+		addCandidate(i, kiroCacheDefaultTTL)
 	}
-	if len(candidateIndexes) == 0 {
+	if len(orderedCandidateIndexes) == 0 {
 		for i := len(blocks) - 1; i >= 0; i-- {
 			if p.blocks[i].cumulativeTokens >= p.minCacheable {
-				candidateIndexes = append(candidateIndexes, i)
+				addCandidate(i, kiroCacheDefaultTTL)
 				break
 			}
 		}
 	}
-	if len(candidateIndexes) > kiroCachePrefixLookbackLimit {
-		candidateIndexes = candidateIndexes[len(candidateIndexes)-kiroCachePrefixLookbackLimit:]
+	limit := kiroCacheEffectiveLookbackLimit(len(orderedCandidateIndexes))
+	if len(orderedCandidateIndexes) > limit {
+		orderedCandidateIndexes = orderedCandidateIndexes[len(orderedCandidateIndexes)-limit:]
 	}
-	for _, candidateIndex := range candidateIndexes {
+	for _, candidateIndex := range orderedCandidateIndexes {
 		if candidateIndex >= 0 {
-			p.breakpoints = append(p.breakpoints, kiroCacheBreakpoint{blockIndex: candidateIndex, ttl: kiroCacheDefaultTTL})
+			p.breakpoints = append(p.breakpoints, kiroCacheBreakpoint{blockIndex: candidateIndex, ttl: candidateTTLs[candidateIndex]})
 		}
+	}
+}
+
+func shouldAddKiroToolContextBreakpoint(block kiroPendingBlock, finalMessageIndex int) bool {
+	if block.messageIndex == nil || !isKiroToolContextBlock(block.blockType) {
+		return false
+	}
+	if finalMessageIndex < 0 {
+		return true
+	}
+	// 最后一条消息里的 tool_use/tool_result 若后面还有新的文本块，前面的工具上下文
+	// 仍然是稳定历史，可以单独落断点，避免当前 tail 增长导致整段重建。
+	if *block.messageIndex == finalMessageIndex {
+		return !block.isMessageEnd
+	}
+	return true
+}
+
+func isKiroToolContextBlock(blockType string) bool {
+	switch strings.ToLower(strings.TrimSpace(blockType)) {
+	case "tool_use", "tool_result", "server_tool_use", "server_tool_result", "mcp_tool_use", "mcp_tool_result":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -259,18 +338,20 @@ func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {
 	if tools, ok := payload["tools"].([]any); ok {
 		for toolIndex, tool := range tools {
 			value := stripKiroCacheControl(tool)
+			value = normalizeKiroCacheBlockValue(value)
 			blocks = append(blocks, kiroPendingBlock{
 				value:  map[string]any{"kind": "tool", "tool_index": toolIndex, "tool": value},
-				tokens: kiroTokensPerTool, breakpointTTL: extractKiroCacheTTL(tool),
+				tokens: kiroTokensPerTool, breakpointTTL: extractKiroCacheTTL(tool), blockType: "tool_definition",
 			})
 		}
 	}
 	for systemIndex, systemBlock := range normalizeKiroSystemBlocks(payload["system"]) {
 		value := stripKiroCacheControl(systemBlock)
+		value = normalizeKiroCacheBlockValue(value)
 		canonicalizeKiroSystemBlock(value)
 		blocks = append(blocks, kiroPendingBlock{
 			value:  map[string]any{"kind": "system", "system_index": systemIndex, "block": value},
-			tokens: countKiroSystemBlockTokens(systemBlock), breakpointTTL: extractKiroCacheTTL(systemBlock),
+			tokens: countKiroSystemBlockTokens(systemBlock), breakpointTTL: extractKiroCacheTTL(systemBlock), blockType: classifyKiroBlockType(value),
 		})
 	}
 	messages, _ := payload["messages"].([]any)
@@ -284,21 +365,68 @@ func flattenKiroCacheBlocks(payload map[string]any) []kiroPendingBlock {
 			block := map[string]any{"type": "text", "text": typed}
 			blocks = append(blocks, kiroPendingBlock{
 				value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": 0, "block": block},
-				tokens: countKiroMessageContentTokens(block), messageIndex: &mi, isMessageEnd: true,
+				tokens: countKiroMessageContentTokens(block), messageIndex: &mi, isMessageEnd: true, role: role, blockType: "text",
 			})
 		case []any:
 			lastBlockIndex := len(typed) - 1
 			for blockIndex, rawBlock := range typed {
 				mi := messageIndex
 				value := stripKiroCacheControl(rawBlock)
+				value = normalizeKiroCacheBlockValue(value)
 				blocks = append(blocks, kiroPendingBlock{
 					value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": blockIndex, "block": value},
-					tokens: countKiroMessageContentTokens(rawBlock), breakpointTTL: extractKiroCacheTTL(rawBlock), messageIndex: &mi, isMessageEnd: blockIndex == lastBlockIndex,
+					tokens: countKiroMessageContentTokens(rawBlock), breakpointTTL: extractKiroCacheTTL(rawBlock), messageIndex: &mi, isMessageEnd: blockIndex == lastBlockIndex, role: role, blockType: classifyKiroBlockType(value),
 				})
 			}
 		}
 	}
 	return blocks
+}
+
+func classifyKiroBlockType(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return "text"
+	case map[string]any:
+		return strings.ToLower(strings.TrimSpace(kiroCacheAsString(typed["type"])))
+	default:
+		return ""
+	}
+}
+
+func normalizeKiroCacheBlockValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		blockType := classifyKiroBlockType(x)
+		out := make(map[string]any, len(x))
+		for k, child := range x {
+			if shouldStripKiroVolatileField(blockType, k) {
+				continue
+			}
+			out[k] = normalizeKiroCacheBlockValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, child := range x {
+			out[i] = normalizeKiroCacheBlockValue(child)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func shouldStripKiroVolatileField(blockType string, key string) bool {
+	normalizedKey := strings.ToLower(strings.TrimSpace(key))
+	switch blockType {
+	case "tool_use", "tool_result", "server_tool_use", "server_tool_result", "mcp_tool_use", "mcp_tool_result":
+		switch normalizedKey {
+		case "id", "tool_use_id", "tooluseid", "call_id", "callid", "request_id", "requestid", "session_id", "sessionid", "invocation_id", "invocationid", "trace_id", "traceid":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeKiroSystemBlocks(system any) []any {
@@ -372,42 +500,110 @@ func (p *kiroCacheProfile) lastCacheableBreakpoint() *kiroResolvedBreakpoint {
 	return &last
 }
 
-func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *kiroCacheEmulationUsage {
-	out := &kiroCacheEmulationUsage{}
+func kiroCacheEffectiveLookbackLimit(total int) int {
+	if total <= 0 {
+		return kiroCachePrefixLookbackLimit
+	}
+	if total < kiroCachePrefixLookbackLimit {
+		return total
+	}
+	if total > kiroCachePrefixLookbackMax {
+		return kiroCachePrefixLookbackMax
+	}
+	return total
+}
+
+func buildKiroCacheLookupCandidates(profile *kiroCacheProfile) []kiroCacheLookupCandidate {
+	if profile == nil {
+		return nil
+	}
+	breakpoints := profile.cacheableBreakpoints()
+	if len(breakpoints) == 0 {
+		return nil
+	}
+	limit := kiroCacheEffectiveLookbackLimit(len(breakpoints))
+	if len(breakpoints) > limit {
+		breakpoints = breakpoints[len(breakpoints)-limit:]
+	}
+	candidates := make([]kiroCacheLookupCandidate, 0, len(breakpoints))
+	for i := len(breakpoints) - 1; i >= 0; i-- {
+		breakpoint := breakpoints[i]
+		candidate := profile.blocks[breakpoint.blockIndex]
+		candidates = append(candidates, kiroCacheLookupCandidate{
+			fingerprint:      candidate.prefixFingerprint,
+			fingerprintHex:   hex.EncodeToString(candidate.prefixFingerprint[:]),
+			cumulativeTokens: min(breakpoint.cumulativeTokens, profile.totalInputTokens),
+			ttl:              breakpoint.ttl,
+		})
+	}
+	return candidates
+}
+
+func (t *kiroCacheTracker) match(ctx context.Context, stableKey string, cacheKey uint64, profile *kiroCacheProfile, persistence KiroCachePersistenceStore) *kiroCacheLookupCandidate {
 	if t == nil || profile == nil || cacheKey == 0 {
-		return out
+		return nil
 	}
-	lastBreakpoint := profile.lastCacheableBreakpoint()
-	if lastBreakpoint == nil {
-		return out
+	candidates := buildKiroCacheLookupCandidates(profile)
+	if len(candidates) == 0 {
+		return nil
 	}
-	lastBreakpointTokens := min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens)
 	now := time.Now()
+	if matched := t.matchInMemoryLocked(cacheKey, candidates, now); matched != nil {
+		return matched
+	}
+	if persistence == nil || stableKey == "" {
+		return nil
+	}
+	fingerprints := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		fingerprints = append(fingerprints, candidate.fingerprintHex)
+	}
+	hits, err := persistence.GetKiroCacheFingerprints(ctx, stableKey, fingerprints)
+	if err != nil {
+		return nil
+	}
+	for _, candidate := range candidates {
+		if !hits[candidate.fingerprintHex] {
+			continue
+		}
+		t.mu.Lock()
+		t.pruneLocked(now)
+		accountEntries := t.entries[cacheKey]
+		if accountEntries == nil {
+			accountEntries = make(map[[32]byte]kiroCacheEntry)
+			t.entries[cacheKey] = accountEntries
+		}
+		accountEntries[candidate.fingerprint] = kiroCacheEntry{
+			tokens:    candidate.cumulativeTokens,
+			ttl:       candidate.ttl,
+			expiresAt: now.Add(candidate.ttl),
+		}
+		t.mu.Unlock()
+		matched := candidate
+		return &matched
+	}
+	return nil
+}
+
+func (t *kiroCacheTracker) matchInMemoryLocked(cacheKey uint64, candidates []kiroCacheLookupCandidate, now time.Time) *kiroCacheLookupCandidate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.pruneLocked(now)
-
-	matchedTokens := 0
-	if accountEntries := t.entries[cacheKey]; accountEntries != nil {
-		breakpoints := profile.cacheableBreakpoints()
-		for i, seen := len(breakpoints)-1, 0; i >= 0 && seen < kiroCachePrefixLookbackLimit; i, seen = i-1, seen+1 {
-			breakpoint := breakpoints[i]
-			candidate := profile.blocks[breakpoint.blockIndex]
-			entry, ok := accountEntries[candidate.prefixFingerprint]
-			if !ok || !entry.expiresAt.After(now) {
-				continue
-			}
-			entry.expiresAt = now.Add(entry.ttl)
-			accountEntries[candidate.prefixFingerprint] = entry
-			matchedTokens = min(breakpoint.cumulativeTokens, profile.totalInputTokens)
-			break
-		}
+	accountEntries := t.entries[cacheKey]
+	if len(accountEntries) == 0 {
+		return nil
 	}
-	newTokens := max(lastBreakpointTokens-matchedTokens, 0)
-	out.CacheReadInputTokens = max(matchedTokens, 0)
-	out.CacheCreationInputTokens = newTokens
-	out.CacheCreation5mInputTokens, out.CacheCreation1hInputTokens = profile.ttlBreakdown(matchedTokens)
-	return out
+	for _, candidate := range candidates {
+		entry, ok := accountEntries[candidate.fingerprint]
+		if !ok || !entry.expiresAt.After(now) {
+			continue
+		}
+		entry.expiresAt = now.Add(maxDuration(entry.ttl, candidate.ttl))
+		accountEntries[candidate.fingerprint] = entry
+		matched := candidate
+		return &matched
+	}
+	return nil
 }
 
 func (p *kiroCacheProfile) ttlBreakdown(matchedTokens int) (int, int) {
@@ -425,9 +621,14 @@ func (p *kiroCacheProfile) ttlBreakdown(matchedTokens int) (int, int) {
 	return newTokens, 0
 }
 
-func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) {
+func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) map[string]time.Duration {
 	if t == nil || profile == nil || cacheKey == 0 {
-		return
+		return nil
+	}
+	persistEntries := make(map[string]time.Duration)
+	for _, breakpoint := range profile.cacheableBreakpoints() {
+		block := profile.blocks[breakpoint.blockIndex]
+		persistEntries[hex.EncodeToString(block.prefixFingerprint[:])] = breakpoint.ttl
 	}
 	now := time.Now()
 	t.mu.Lock()
@@ -453,6 +654,7 @@ func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) {
 		}
 		accountEntries[block.prefixFingerprint] = kiroCacheEntry{tokens: block.cumulativeTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
 	}
+	return persistEntries
 }
 
 func (t *kiroCacheTracker) pruneLocked(now time.Time) {
