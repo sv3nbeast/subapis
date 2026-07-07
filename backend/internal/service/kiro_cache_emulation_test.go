@@ -333,7 +333,7 @@ func TestKiroCacheEmulationAutoBreakpointsMatchRollingHistory(t *testing.T) {
 	}
 }
 
-func TestPrepareKiroBridgeCacheEmulationBodyUsesStableMessageAnchors(t *testing.T) {
+func TestPrepareKiroCacheEmulationProfileBodyUsesStableMessageAnchors(t *testing.T) {
 	svc := &GatewayService{}
 	ua := "claude-cli/2.1.197 (external, claude-desktop-3p, agent-sdk/0.3.197)"
 	ctx := SetClaudeCodeUserAgent(context.Background(), ua)
@@ -343,7 +343,7 @@ func TestPrepareKiroBridgeCacheEmulationBodyUsesStableMessageAnchors(t *testing.
 		`{"role":"system","content":[{"type":"text","text":"tail reminder","cache_control":{"type":"ephemeral","ttl":"5m"}}]}` +
 		`],"tools":[{"name":"LongCustomToolName","input_schema":{"type":"object"}}]}`)
 
-	out := svc.prepareKiroBridgeCacheEmulationBody(ctx, &Account{ID: 93, Platform: PlatformKiro, Type: AccountTypeOAuth}, body)
+	out := svc.prepareKiroCacheEmulationProfileBody(ctx, &Account{ID: 93, Platform: PlatformKiro, Type: AccountTypeOAuth}, body)
 	if got := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); got != "1h" {
 		t.Fatalf("stable message cache ttl = %q, want 1h; body=%s", got, out)
 	}
@@ -355,6 +355,62 @@ func TestPrepareKiroBridgeCacheEmulationBodyUsesStableMessageAnchors(t *testing.
 	}
 	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "LongCustomToolName" {
 		t.Fatalf("kiro bridge preparation must not rename tools, got %q", got)
+	}
+}
+
+func TestPrepareKiroCacheEmulationProfileBodyCoversPlainClaudeCLI(t *testing.T) {
+	svc := &GatewayService{}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[` +
+		`{"role":"user","content":[{"type":"text","text":"stable"}]},` +
+		`{"role":"assistant","content":[{"type":"text","text":"middle"}]},` +
+		`{"role":"system","content":[{"type":"text","text":"tail reminder"}]}` +
+		`]}`)
+
+	out := svc.prepareKiroCacheEmulationProfileBody(ctx, &Account{ID: 1621, Platform: PlatformKiro, Type: AccountTypeOAuth}, body)
+	if got := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("plain CLI stable message cache ttl = %q, want 1h; body=%s", got, out)
+	}
+	if got := gjson.GetBytes(out, "messages.1.content.0.cache_control.ttl").String(); got != "1h" {
+		t.Fatalf("plain CLI trailing message cache ttl = %q, want 1h; body=%s", got, out)
+	}
+	if gjson.GetBytes(out, "messages.2.content.0.cache_control").Exists() {
+		t.Fatalf("plain CLI profile should avoid drifting tail system reminder: %s", out)
+	}
+	if strings.Contains(string(body), "cache_control") {
+		t.Fatalf("profile preparation must not mutate caller-owned upstream body: %s", body)
+	}
+}
+
+func TestBuildKiroCacheEmulationUsageForRequestPlainCLIUsesProfileOnly(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	account := &Account{ID: 1621, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	group := kiroCacheGroup(1)
+	body := kiroCacheManyMessageBodyWithoutControl("plain-cli-profile", 12, 0)
+
+	first := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("plain CLI first request should write stable profile cache, got %+v", first)
+	}
+	if strings.Contains(string(body), "cache_control") {
+		t.Fatalf("cache emulation profile must not be written back into upstream body: %s", body)
+	}
+	second := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if second == nil || second.CacheReadInputTokens <= 0 {
+		t.Fatalf("plain CLI second request should read stable profile cache, got %+v", second)
+	}
+}
+
+func TestPrepareKiroCacheEmulationProfileBodySkipsNonKiroAccounts(t *testing.T) {
+	svc := &GatewayService{}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
+
+	out := svc.prepareKiroCacheEmulationProfileBody(ctx, &Account{ID: 93, Platform: PlatformAnthropic, Type: AccountTypeOAuth}, body)
+	if string(out) != string(body) {
+		t.Fatalf("non-kiro account should not receive kiro cache profile body: %s", out)
 	}
 }
 

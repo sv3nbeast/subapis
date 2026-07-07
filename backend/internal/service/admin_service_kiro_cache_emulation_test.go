@@ -217,7 +217,7 @@ func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
 	if repo.created.KiroStickySessionTTLSeconds != 0 {
 		t.Fatalf("non-Kiro sticky ttl = %v, want 0", repo.created.KiroStickySessionTTLSeconds)
 	}
-	if repo.created.KiroEndpointMode != "" {
-		t.Fatalf("non-Kiro endpoint mode = %q, want empty", repo.created.KiroEndpointMode)
+	if repo.created.KiroEndpointMode != KiroEndpointModeQ {
+		t.Fatalf("non-Kiro endpoint mode = %q, want %q", repo.created.KiroEndpointMode, KiroEndpointModeQ)
 	}
 }

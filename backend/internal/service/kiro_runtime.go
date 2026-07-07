@@ -76,7 +76,6 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		mappedModel = next
 	}
 	body := parsed.Body.Bytes()
-	body = s.prepareKiroBridgeCacheEmulationBody(ctx, account, body)
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
@@ -267,7 +266,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, parsed.Group, body, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, mappedModel, requestCtx)
 	if err != nil {
@@ -393,31 +392,34 @@ func kiroEmptyEventStreamMessage(err error) string {
 	return ""
 }
 
-func (s *GatewayService) shouldPrepareKiroBridgeCacheEmulation(ctx context.Context, account *Account, body []byte) bool {
+func (s *GatewayService) shouldPrepareKiroCacheEmulationProfile(ctx context.Context, account *Account, body []byte) bool {
 	_ = s
-	_ = body
-	if account == nil || !account.IsKiro() || !isKiroDirectModeAccount(account) {
+	if account == nil || !account.IsKiro() || !isKiroDirectModeAccount(account) || len(body) == 0 {
 		return false
 	}
-	return IsClaudeCodeXMLInvokeBridgeUserAgent(ClaudeCodeUserAgent(ctx))
+	ua := strings.ToLower(strings.TrimSpace(ClaudeCodeUserAgent(ctx)))
+	return strings.Contains(ua, "claude-cli/") || IsClaudeCodeXMLInvokeBridgeUserAgent(ua)
 }
 
-// prepareKiroBridgeCacheEmulationBody aligns Kiro's local cache-emulation
-// breakpoints with Claude Desktop / Agent SDK traffic.
+// prepareKiroCacheEmulationProfileBody aligns Kiro's local cache-emulation
+// breakpoints with Claude CLI / Claude Desktop / Agent SDK traffic.
 //
 // Kiro upstream does not consume Anthropic cache_control blocks directly, but
 // the local Kiro billing emulation uses the Anthropic request body to decide
-// which prefixes should be treated as cache read/write. Claude Desktop 3P
-// agent-sdk clients often place a drifting message cache_control on the current
-// tail (or omit one entirely for sub-agent turns), so using the body as-is makes
-// the emulated prefix unstable. Reuse the bridge strategy from the Anthropic
-// path: strip message cache_control and add stable + trailing message anchors.
+// which prefixes should be treated as cache read/write. Claude CLI traffic can
+// either carry a drifting message cache_control on the current tail (Desktop /
+// Agent SDK bridge variants) or omit message cache_control entirely (plain
+// external CLI), so using the body as-is makes the emulated prefix unstable and
+// leaves too many tokens as uncached input. Reuse the bridge strategy from the
+// Anthropic path: strip message cache_control and add stable + trailing message
+// anchors.
 //
-// Unlike injectBridgeCacheBreakpoints, this helper intentionally does not rename
-// tools; Kiro's translator has its own tool-name mapping and response restore
-// context.
-func (s *GatewayService) prepareKiroBridgeCacheEmulationBody(ctx context.Context, account *Account, body []byte) []byte {
-	if !s.shouldPrepareKiroBridgeCacheEmulation(ctx, account, body) {
+// This body is profile-only: callers must feed it into buildKiroCacheEmulationUsage
+// and must keep sending the original Anthropic body to Kiro upstream. Unlike
+// injectBridgeCacheBreakpoints, this helper intentionally does not rename tools;
+// Kiro's translator has its own tool-name mapping and response restore context.
+func (s *GatewayService) prepareKiroCacheEmulationProfileBody(ctx context.Context, account *Account, body []byte) []byte {
+	if !s.shouldPrepareKiroCacheEmulationProfile(ctx, account, body) {
 		return body
 	}
 	body = stripMessageCacheControl(body)
@@ -425,6 +427,11 @@ func (s *GatewayService) prepareKiroBridgeCacheEmulationBody(ctx context.Context
 	body = enforceCacheControlLimit(body)
 	body = normalizeCacheControlTTLOrder(body)
 	return body
+}
+
+func (s *GatewayService) buildKiroCacheEmulationUsageForRequest(ctx context.Context, account *Account, group *Group, upstreamBody []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
+	profileBody := s.prepareKiroCacheEmulationProfileBody(ctx, account, upstreamBody)
+	return s.buildKiroCacheEmulationUsage(account, group, profileBody, model, inputTokens)
 }
 
 func isKiroDirectTokenType(tokenType string) bool {
@@ -455,7 +462,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 
 	inputTokens := estimateKiroInputTokens(anthropicBody)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
-		cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+		cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
@@ -487,7 +494,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	cacheUsage := s.buildKiroCacheEmulationUsage(account, group, anthropicBody, mappedModel, inputTokens)
+	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	requestCtx.RequireTerminalEvent = true
 
