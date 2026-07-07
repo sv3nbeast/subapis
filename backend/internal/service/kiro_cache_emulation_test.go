@@ -271,6 +271,23 @@ func TestKiroCacheEmulationAutoBreakpointWithoutCacheControl(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationScalesBreakpointsToEstimatedInputTokens(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 98, Platform: PlatformKiro}
+	group := kiroCacheGroup(1)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"short stable prompt"}]}]}`)
+
+	first := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 120000)
+	if first == nil || first.CacheCreationInputTokens != 120000 || first.CacheReadInputTokens != 0 || first.InputTokens != 0 {
+		t.Fatalf("first request should scale cache creation to estimated input total, got %+v", first)
+	}
+	second := svc.buildKiroCacheEmulationUsage(account, group, body, "claude-sonnet-4-6", 120000)
+	if second == nil || second.CacheReadInputTokens != 120000 || second.CacheCreationInputTokens != 0 || second.InputTokens != 0 {
+		t.Fatalf("second request should scale cache read to estimated input total, got %+v", second)
+	}
+}
+
 func TestKiroCacheEmulationAutoBreakpointPrefersStablePrefix(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}

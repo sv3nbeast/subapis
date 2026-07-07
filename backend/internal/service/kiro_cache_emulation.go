@@ -237,6 +237,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 			}
 		}
 	}
+	profile.scaleCumulativeTokensToTotal(cumulativeTokens)
 	if len(profile.breakpoints) == 0 && !profile.hasExplicitTTL {
 		profile.addAutomaticBreakpoints(blocks)
 	}
@@ -244,6 +245,32 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 		return nil, false
 	}
 	return profile, true
+}
+
+func (p *kiroCacheProfile) scaleCumulativeTokensToTotal(rawTotal int) {
+	if p == nil || len(p.blocks) == 0 || rawTotal <= 0 || p.totalInputTokens <= 0 || rawTotal == p.totalInputTokens {
+		return
+	}
+	previous := 0
+	for i := range p.blocks {
+		raw := p.blocks[i].cumulativeTokens
+		if raw <= 0 {
+			p.blocks[i].cumulativeTokens = previous
+			continue
+		}
+		scaled := int(math.Round(float64(raw) * float64(p.totalInputTokens) / float64(rawTotal)))
+		if scaled == 0 {
+			scaled = 1
+		}
+		if scaled < previous {
+			scaled = previous
+		}
+		if scaled > p.totalInputTokens {
+			scaled = p.totalInputTokens
+		}
+		p.blocks[i].cumulativeTokens = scaled
+		previous = scaled
+	}
 }
 
 func (p *kiroCacheProfile) addAutomaticBreakpoints(blocks []kiroPendingBlock) {
