@@ -1166,11 +1166,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		})
 	}
 	emitThinkingDelta := func(text string) error {
-		if text != "" {
-			if err := markDeliverableOutput(); err != nil {
-				return err
-			}
-		}
 		if !thinkingBlockOpen {
 			if err := startThinkingBlock(); err != nil {
 				return err

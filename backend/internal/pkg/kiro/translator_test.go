@@ -1277,6 +1277,30 @@ func TestParseNonStreamingEventStreamThinkingOnlyResponse(t *testing.T) {
 	require.Contains(t, err.Error(), "no deliverable assistant output")
 }
 
+func TestStreamEventStreamAsAnthropicThinkingOnlyDoesNotReleasePartialOutput(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{
+			"text": "I should think first.",
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(),
+		stream,
+		&out,
+		"claude-sonnet-4-5",
+		9,
+		KiroRequestContext{ThinkingEnabled: true},
+	)
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty kiro event stream")
+	require.Contains(t, err.Error(), "no deliverable assistant output")
+	require.Empty(t, out.String(), "thinking-only empty stream must not leak partial SSE frames")
+}
+
 func TestParseNonStreamingEventStreamMergesManyReasoningFragments(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	for _, frag := range []string{"I ", "need ", "to ", "think"} {
