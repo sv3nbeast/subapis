@@ -59,14 +59,22 @@ func TestDefaultKiroModelMapping_DefaultsSonnet5(t *testing.T) {
 	}
 }
 
-func TestDefaultKiroModelMapping_ContainsHaiku45ShortAlias(t *testing.T) {
+func TestDefaultKiroModelMapping_ContainsClaude45ShortAliases(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"claude-haiku-4-5":                   "claude-haiku-4.5",
-		"claude-haiku-4-5-thinking":          "claude-haiku-4.5",
-		"claude-haiku-4-5-20251001":          "claude-haiku-4.5",
-		"claude-haiku-4-5-20251001-thinking": "claude-haiku-4.5",
+		"claude-opus-4-5":                     "claude-opus-4.5",
+		"claude-opus-4-5-thinking":            "claude-opus-4.5",
+		"claude-opus-4-5-20251101":            "claude-opus-4.5",
+		"claude-opus-4-5-20251101-thinking":   "claude-opus-4.5",
+		"claude-sonnet-4-5":                   "claude-sonnet-4.5",
+		"claude-sonnet-4-5-thinking":          "claude-sonnet-4.5",
+		"claude-sonnet-4-5-20250929":          "claude-sonnet-4.5",
+		"claude-sonnet-4-5-20250929-thinking": "claude-sonnet-4.5",
+		"claude-haiku-4-5":                    "claude-haiku-4.5",
+		"claude-haiku-4-5-thinking":           "claude-haiku-4.5",
+		"claude-haiku-4-5-20251001":           "claude-haiku-4.5",
+		"claude-haiku-4-5-20251001-thinking":  "claude-haiku-4.5",
 	}
 	for from, want := range cases {
 		if got, ok := DefaultKiroModelMapping[from]; !ok || got != want {

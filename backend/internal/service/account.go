@@ -648,6 +648,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 			})
 			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
+		if a.Platform == domain.PlatformKiro {
+			ensureKiroVersionAliases(result)
+		}
 		return result
 	}
 
@@ -736,6 +739,40 @@ func ensureAntigravityDefaultAlias(mapping map[string]string, model string, targ
 		}
 	}
 	mapping[model] = target
+}
+
+func ensureKiroVersionAliases(mapping map[string]string) {
+	aliases := []struct {
+		Alias     string
+		Canonical string
+	}{
+		{Alias: "claude-opus-4-5", Canonical: "claude-opus-4-5-20251101"},
+		{Alias: "claude-opus-4-5-thinking", Canonical: "claude-opus-4-5-20251101-thinking"},
+		{Alias: "claude-sonnet-4-5", Canonical: "claude-sonnet-4-5-20250929"},
+		{Alias: "claude-sonnet-4-5-thinking", Canonical: "claude-sonnet-4-5-20250929-thinking"},
+		{Alias: "claude-haiku-4-5", Canonical: "claude-haiku-4-5-20251001"},
+		{Alias: "claude-haiku-4-5-thinking", Canonical: "claude-haiku-4-5-20251001-thinking"},
+	}
+	for _, alias := range aliases {
+		ensureKiroVersionAlias(mapping, alias.Alias, alias.Canonical)
+	}
+}
+
+func ensureKiroVersionAlias(mapping map[string]string, alias, canonical string) {
+	if mapping == nil || alias == "" || canonical == "" {
+		return
+	}
+	if _, exists := mapping[alias]; exists {
+		return
+	}
+	for pattern := range mapping {
+		if matchWildcard(pattern, alias) {
+			return
+		}
+	}
+	if target, exists := mapping[canonical]; exists && strings.TrimSpace(target) != "" {
+		mapping[alias] = target
+	}
 }
 
 func normalizeRequestedModelForLookup(platform, requestedModel string) string {

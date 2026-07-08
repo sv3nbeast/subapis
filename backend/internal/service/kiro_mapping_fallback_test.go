@@ -23,6 +23,35 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	require.Equal(t, "claude-haiku-4.5", account.GetMappedModel("claude-haiku-4-5-20251001"))
 }
 
+func TestAccountKiroExplicitMappingAddsClaude45ShortAliases(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-opus-4-5-20251101":            "claude-opus-4.5",
+				"claude-opus-4-5-20251101-thinking":   "claude-opus-4.5",
+				"claude-sonnet-4-5-20250929":          "claude-sonnet-4.5",
+				"claude-sonnet-4-5-20250929-thinking": "claude-sonnet-4.5",
+				"claude-haiku-4-5-20251001":           "claude-haiku-4.5",
+				"claude-haiku-4-5-20251001-thinking":  "claude-haiku-4.5",
+			},
+		},
+	}
+
+	cases := map[string]string{
+		"claude-opus-4-5":            "claude-opus-4.5",
+		"claude-opus-4-5-thinking":   "claude-opus-4.5",
+		"claude-sonnet-4-5":          "claude-sonnet-4.5",
+		"claude-sonnet-4-5-thinking": "claude-sonnet-4.5",
+		"claude-haiku-4-5":           "claude-haiku-4.5",
+		"claude-haiku-4-5-thinking":  "claude-haiku-4.5",
+	}
+	for model, want := range cases {
+		require.True(t, account.IsModelSupported(model), model)
+		require.Equal(t, want, account.GetMappedModel(model), model)
+	}
+}
+
 func newGatewayServiceForKiroCostTest(cfg *config.Config) *GatewayService {
 	return NewGatewayService(
 		nil,
