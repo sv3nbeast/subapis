@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -500,6 +501,34 @@ func TestKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	}
 	if withMetadata <= 0 || withoutMetadata <= 0 || withMetadata > withoutMetadata*2 {
 		t.Fatalf("unexpected estimates without=%d with=%d", withoutMetadata, withMetadata)
+	}
+}
+
+func TestKiroInputTokenEstimateCountsPromptContentNotSerializedEnvelope(t *testing.T) {
+	text := strings.Repeat(`{"path":"C:\\tmp\\file","line":"hello world","ok":true}\n`, 3000)
+	body := []byte(fmt.Sprintf(`{"model":"claude-opus-4-8","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":[{"type":"text","text":%q}]}]}`, text))
+
+	estimate := estimateKiroInputTokens(body)
+	contentTokens := anthropictokenizer.CountTokens(text) + kiroTokensPerMessage
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	serializedMessages, err := canonicalJSON(payload["messages"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	serializedEnvelopeTokens := anthropictokenizer.CountTokens(string(serializedMessages)) + kiroTokensPerMessage
+
+	if estimate > contentTokens+8 {
+		t.Fatalf("estimate should follow prompt content tokens, got estimate=%d content=%d", estimate, contentTokens)
+	}
+	if serializedEnvelopeTokens <= estimate*11/10 {
+		t.Fatalf("test fixture did not create a meaningfully inflated JSON envelope: serialized=%d estimate=%d", serializedEnvelopeTokens, estimate)
+	}
+	if estimate >= serializedEnvelopeTokens {
+		t.Fatalf("estimate must not use serialized request-envelope tokens, got estimate=%d serialized=%d", estimate, serializedEnvelopeTokens)
 	}
 }
 
