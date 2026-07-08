@@ -743,67 +743,6 @@
           </div>
         </div>
 
-        <!-- Kiro 模拟缓存配置 -->
-        <div v-if="editForm.platform === 'kiro'" class="border-t pt-4">
-          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
-            {{ t("admin.groups.kiroCache.title") }}
-          </label>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-            {{ t("admin.groups.kiroCache.description") }}
-          </p>
-          <div class="mb-4">
-            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
-            <select v-model="editForm.kiro_endpoint_mode" class="input">
-              <option value="q">{{ t("admin.groups.kiroCache.endpointQ") }}</option>
-              <option value="krs">{{ t("admin.groups.kiroCache.endpointKRS") }}</option>
-              <option value="auto">{{ t("admin.groups.kiroCache.endpointAuto") }}</option>
-            </select>
-            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
-          </div>
-          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input
-              v-model="editForm.kiro_auto_sticky_enabled"
-              type="checkbox"
-              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            {{ t("admin.groups.kiroCache.autoSticky") }}
-          </label>
-          <div v-if="editForm.kiro_auto_sticky_enabled" class="mb-4">
-            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
-            <input
-              v-model.number="editForm.kiro_sticky_session_ttl_seconds"
-              type="number"
-              step="60"
-              min="60"
-              max="86400"
-              class="input"
-              placeholder="3600"
-            />
-            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
-          </div>
-          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input
-              v-model="editForm.kiro_cache_emulation_enabled"
-              type="checkbox"
-              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            {{ t("admin.groups.kiroCache.enabled") }}
-          </label>
-          <div v-if="editForm.kiro_cache_emulation_enabled">
-            <label class="input-label">{{ t("admin.groups.kiroCache.ratio") }}</label>
-            <input
-              v-model.number="editForm.kiro_cache_emulation_ratio"
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              class="input"
-              placeholder="1"
-            />
-            <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
-          </div>
-        </div>
-
         <!-- 图片生成计费配置（antigravity 和 gemini 平台） -->
         <div
           v-if="
@@ -2154,6 +2093,67 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
+          </div>
+        </div>
+
+        <!-- Kiro 模拟缓存配置 -->
+        <div v-if="editForm.platform === 'kiro'" class="border-t pt-4">
+          <label class="block mb-2 font-medium text-gray-700 dark:text-gray-300">
+            {{ t("admin.groups.kiroCache.title") }}
+          </label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.kiroCache.description") }}
+          </p>
+          <div class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.endpointMode") }}</label>
+            <select v-model="editForm.kiro_endpoint_mode" class="input">
+              <option value="q">{{ t("admin.groups.kiroCache.endpointQ") }}</option>
+              <option value="krs">{{ t("admin.groups.kiroCache.endpointKRS") }}</option>
+              <option value="auto">{{ t("admin.groups.kiroCache.endpointAuto") }}</option>
+            </select>
+            <p class="input-hint">{{ t("admin.groups.kiroCache.endpointModeHint") }}</p>
+          </div>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.kiro_auto_sticky_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.autoSticky") }}
+          </label>
+          <div v-if="editForm.kiro_auto_sticky_enabled" class="mb-4">
+            <label class="input-label">{{ t("admin.groups.kiroCache.stickyTTL") }}</label>
+            <input
+              v-model.number="editForm.kiro_sticky_session_ttl_seconds"
+              type="number"
+              step="60"
+              min="60"
+              max="86400"
+              class="input"
+              placeholder="3600"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.stickyTTLHint") }}</p>
+          </div>
+          <label class="mb-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="editForm.kiro_cache_emulation_enabled"
+              type="checkbox"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            {{ t("admin.groups.kiroCache.enabled") }}
+          </label>
+          <div v-if="editForm.kiro_cache_emulation_enabled">
+            <label class="input-label">{{ t("admin.groups.kiroCache.ratio") }}</label>
+            <input
+              v-model.number="editForm.kiro_cache_emulation_ratio"
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              class="input"
+              placeholder="1"
+            />
+            <p class="input-hint">{{ t("admin.groups.kiroCache.ratioHint") }}</p>
           </div>
         </div>
 
