@@ -2885,6 +2885,62 @@ func TestStreamEventStreamAsAnthropicRejectsEmptyKiroStream(t *testing.T) {
 	require.Empty(t, out.String())
 }
 
+func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurn(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        0,
+				"totalTokens":         10,
+			},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{
+			"stopReason": "end_turn",
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{RequireTerminalEvent: true})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	output := out.String()
+	require.Contains(t, output, "event: message_start")
+	require.Contains(t, output, `"content":[]`)
+	require.Contains(t, output, "event: message_delta")
+	require.Contains(t, output, `"stop_reason":"end_turn"`)
+	require.Contains(t, output, "event: message_stop")
+}
+
+func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurnWithoutTerminal(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        0,
+				"totalTokens":         10,
+			},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{RequireTerminalEvent: true})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	output := out.String()
+	require.Contains(t, output, "event: message_start")
+	require.Contains(t, output, `"content":[]`)
+	require.Contains(t, output, `"stop_reason":"end_turn"`)
+	require.Contains(t, output, "event: message_stop")
+}
+
 func TestStreamEventStreamAsAnthropicRejectsKiroExceptionFrame(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamExceptionFrame(t, "ThrottlingException", map[string]any{

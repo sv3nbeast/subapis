@@ -704,6 +704,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	var outputTextBuf strings.Builder
 	var currentThinking strings.Builder
 	currentMessageID := newClaudeMessageID()
+	sawKiroEvent := false
 	sawKiroSemanticOutput := false
 	sawDeliverableOutput := false
 	sawTerminalEvent := false
@@ -1389,6 +1390,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := json.Unmarshal(msg.Payload, &event); err != nil {
 			continue
 		}
+		sawKiroEvent = true
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
@@ -1463,7 +1465,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if sawKiroSemanticOutput {
 			return nil, errors.New("empty kiro event stream: no deliverable assistant output")
 		}
-		return nil, errors.New("empty kiro event stream: no assistant output")
+		if !sawKiroEvent {
+			return nil, errors.New("empty kiro event stream: no assistant output")
+		}
+		// Kiro can legitimately finish a turn with only metadata/usage/terminal
+		// frames and no assistant content. Treat that as an empty end_turn
+		// response rather than a 502/failover. A truly empty byte stream still
+		// errors via sawKiroEvent=false, and exception frames are handled while
+		// reading the event stream.
+		sawDeliverableOutput = true
 	}
 	if requestCtx.RequireTerminalEvent && !sawTerminalEvent && !sawDeliverableOutput {
 		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing terminal event"}
