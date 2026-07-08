@@ -113,6 +113,86 @@ func TestSelectAccountWithLoadAwarenessUsesKiroSchedulerWhenLoadBatchDisabled(t 
 	require.Equal(t, int64(1), second.Account.ID)
 }
 
+func TestSelectAccountWithLoadAwarenessKiroHonorsStickyBinding(t *testing.T) {
+	kiroSchedulerCursor.Store(0)
+	sessionHash := "same-session"
+	repo := stubOpenAIAccountRepo{accounts: []Account{
+		{ID: 1, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Concurrency: 1},
+		{ID: 2, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Concurrency: 1},
+	}}
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{sessionHash: 1}}
+	svc := &GatewayService{
+		accountRepo: repo,
+		cache:       cache,
+		cfg: &config.Config{Gateway: config.GatewayConfig{Scheduling: config.GatewaySchedulingConfig{
+			LoadBatchEnabled:         true,
+			StickySessionWaitTimeout: 30 * time.Second,
+			StickySessionMaxWaiting:  100,
+			FallbackWaitTimeout:      30 * time.Second,
+			FallbackMaxWaiting:       100,
+		}}},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformKiro)
+
+	selected, err := svc.SelectAccountWithLoadAwareness(ctx, nil, sessionHash, "claude-sonnet-4-6", nil, "", 0)
+	require.NoError(t, err)
+
+	require.Equal(t, int64(1), selected.Account.ID)
+	require.Equal(t, int64(1), cache.sessionBindings[sessionHash])
+}
+
+func TestSelectAccountWithLoadAwarenessKiroDoesNotOverwriteExcludedStickyBinding(t *testing.T) {
+	kiroSchedulerCursor.Store(0)
+	sessionHash := "same-session"
+	repo := stubOpenAIAccountRepo{accounts: []Account{
+		{ID: 1, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Concurrency: 1},
+		{ID: 2, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Concurrency: 1},
+	}}
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{sessionHash: 1}}
+	svc := &GatewayService{
+		accountRepo: repo,
+		cache:       cache,
+		cfg: &config.Config{Gateway: config.GatewayConfig{Scheduling: config.GatewaySchedulingConfig{
+			LoadBatchEnabled:    true,
+			FallbackWaitTimeout: 30 * time.Second,
+			FallbackMaxWaiting:  100,
+		}}},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformKiro)
+
+	selected, err := svc.SelectAccountWithLoadAwareness(ctx, nil, sessionHash, "claude-sonnet-4-6", map[int64]struct{}{1: {}}, "", 0)
+	require.NoError(t, err)
+
+	require.Equal(t, int64(2), selected.Account.ID)
+	require.Equal(t, int64(1), cache.sessionBindings[sessionHash])
+}
+
+func TestSelectAccountWithLoadAwarenessKiroClearsStaleStickyBinding(t *testing.T) {
+	kiroSchedulerCursor.Store(0)
+	sessionHash := "same-session"
+	repo := stubOpenAIAccountRepo{accounts: []Account{
+		{ID: 2, Platform: PlatformKiro, Status: StatusActive, Schedulable: true, Concurrency: 1},
+	}}
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{sessionHash: 1}}
+	svc := &GatewayService{
+		accountRepo: repo,
+		cache:       cache,
+		cfg: &config.Config{Gateway: config.GatewayConfig{Scheduling: config.GatewaySchedulingConfig{
+			LoadBatchEnabled:    true,
+			FallbackWaitTimeout: 30 * time.Second,
+			FallbackMaxWaiting:  100,
+		}}},
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformKiro)
+
+	selected, err := svc.SelectAccountWithLoadAwareness(ctx, nil, sessionHash, "claude-sonnet-4-6", nil, "", 0)
+	require.NoError(t, err)
+
+	require.Equal(t, int64(2), selected.Account.ID)
+	require.Equal(t, int64(2), cache.sessionBindings[sessionHash])
+	require.Equal(t, 1, cache.deletedSessions[sessionHash])
+}
+
 func kiroSchedulerIDs(accounts []*Account) []int64 {
 	ids := make([]int64, 0, len(accounts))
 	for _, account := range accounts {

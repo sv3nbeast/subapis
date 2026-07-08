@@ -24,6 +24,58 @@ func (s *GatewayService) selectKiroAccountWithLoadAwareness(
 	cfg := s.schedulingConfig()
 	candidates := s.filterSelectableAccounts(ctx, accounts, PlatformKiro, useMixed, requestedModel, excludedIDs, false)
 	candidates = s.filterKiroSchedulerCandidates(ctx, candidates, requestedModel)
+
+	stickyAccountID, stickySource := s.kiroStickyAccountID(ctx, groupID, sessionHash)
+	stickyBindingActive := stickyAccountID > 0
+	stickyBindingCleared := false
+	if stickyBindingActive {
+		stickyCandidates := s.filterSelectableAccounts(ctx, accounts, PlatformKiro, useMixed, requestedModel, excludedIDs, true)
+		stickyCandidates = s.filterKiroSchedulerCandidates(ctx, stickyCandidates, requestedModel)
+		stickyCandidate := findAccountByID(stickyCandidates, stickyAccountID)
+		if stickyCandidate != nil {
+			if result, err := s.tryAcquireAccountSlot(ctx, stickyCandidate.ID, stickyCandidate.Concurrency); err == nil && result.Acquired {
+				if !s.checkAndRegisterSession(ctx, stickyCandidate, sessionHash) {
+					result.ReleaseFunc()
+				} else {
+					if sessionHash != "" && s.cache != nil {
+						_ = s.cache.RefreshSessionTTL(ctx, derefGroupID(groupID), sessionHash, s.stickySessionTTLForGroupID(ctx, groupID))
+					}
+					slog.Debug("kiro_scheduler_account_selected",
+						"group_id", derefGroupID(groupID),
+						"model", requestedModel,
+						"account_id", stickyCandidate.ID,
+						"mode", "kiro_sticky",
+						"sticky_source", stickySource,
+					)
+					return s.newSelectionResult(ctx, stickyCandidate, true, result.ReleaseFunc, nil)
+				}
+			}
+
+			if s.concurrencyService != nil {
+				waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyCandidate.ID)
+				if waitingCount < cfg.StickySessionMaxWaiting && s.checkAndRegisterSession(ctx, stickyCandidate, sessionHash) {
+					slog.Debug("kiro_scheduler_account_selected",
+						"group_id", derefGroupID(groupID),
+						"model", requestedModel,
+						"account_id", stickyCandidate.ID,
+						"mode", "kiro_sticky_wait_plan",
+						"sticky_source", stickySource,
+					)
+					return s.newSelectionResult(ctx, stickyCandidate, false, nil, &AccountWaitPlan{
+						AccountID:      stickyCandidate.ID,
+						MaxConcurrency: stickyCandidate.Concurrency,
+						Timeout:        cfg.StickySessionWaitTimeout,
+						MaxWaiting:     cfg.StickySessionMaxWaiting,
+					})
+				}
+			}
+		} else if shouldClearKiroStickyBinding(ctx, s, accounts, stickyAccountID, requestedModel, excludedIDs) {
+			if sessionHash != "" && s.cache != nil {
+				_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+			}
+			stickyBindingCleared = true
+		}
+	}
 	if len(candidates) == 0 {
 		return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, PlatformKiro, accounts, excludedIDs, useMixed)
 	}
@@ -36,7 +88,7 @@ func (s *GatewayService) selectKiroAccountWithLoadAwareness(
 				result.ReleaseFunc()
 				continue
 			}
-			if sessionHash != "" && s.cache != nil {
+			if shouldBindKiroFallbackSession(sessionHash, stickyAccountID, stickyBindingCleared, account.ID) && s.cache != nil {
 				_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, account.ID, s.stickySessionTTLForGroupID(ctx, groupID))
 			}
 			slog.Debug("kiro_scheduler_account_selected",
@@ -61,6 +113,79 @@ func (s *GatewayService) selectKiroAccountWithLoadAwareness(
 		})
 	}
 	return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, PlatformKiro, accounts, excludedIDs, useMixed)
+}
+
+func (s *GatewayService) kiroStickyAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, string) {
+	if prefetch := prefetchedStickyAccountIDFromContext(ctx, groupID); prefetch > 0 {
+		return prefetch, "prefetch"
+	}
+	if sessionHash == "" || s == nil || s.cache == nil {
+		return 0, ""
+	}
+	accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+	if err != nil || accountID <= 0 {
+		return 0, ""
+	}
+	return accountID, "cache"
+}
+
+func shouldBindKiroFallbackSession(sessionHash string, stickyAccountID int64, stickyBindingCleared bool, selectedAccountID int64) bool {
+	if sessionHash == "" || selectedAccountID <= 0 {
+		return false
+	}
+	return stickyAccountID <= 0 || stickyBindingCleared || stickyAccountID == selectedAccountID
+}
+
+func shouldClearKiroStickyBinding(ctx context.Context, s *GatewayService, accounts []Account, stickyAccountID int64, requestedModel string, excludedIDs map[int64]struct{}) bool {
+	if stickyAccountID <= 0 {
+		return false
+	}
+	if _, excluded := excludedIDs[stickyAccountID]; excluded {
+		return false
+	}
+	account := findAccountValueByID(accounts, stickyAccountID)
+	if account == nil {
+		return true
+	}
+	if shouldClearStickySessionWithContext(ctx, account, requestedModel) {
+		return true
+	}
+	if account.Platform != PlatformKiro {
+		return true
+	}
+	if requestedModel != "" && s != nil && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+		return true
+	}
+	if s != nil {
+		if err := s.validateKiroSchedulerCandidate(ctx, account, requestedModel); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func findAccountByID(accounts []*Account, accountID int64) *Account {
+	if accountID <= 0 {
+		return nil
+	}
+	for _, account := range accounts {
+		if account != nil && account.ID == accountID {
+			return account
+		}
+	}
+	return nil
+}
+
+func findAccountValueByID(accounts []Account, accountID int64) *Account {
+	if accountID <= 0 {
+		return nil
+	}
+	for i := range accounts {
+		if accounts[i].ID == accountID {
+			return &accounts[i]
+		}
+	}
+	return nil
 }
 
 func (s *GatewayService) filterKiroSchedulerCandidates(ctx context.Context, accounts []*Account, requestedModel string) []*Account {
