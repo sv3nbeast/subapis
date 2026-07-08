@@ -138,6 +138,8 @@ var DefaultKiroModelMapping = map[string]string{
 	"claude-opus-4-5-20251101-thinking":   "claude-opus-4.5",
 	"claude-sonnet-4-5-20250929":          "claude-sonnet-4.5",
 	"claude-sonnet-4-5-20250929-thinking": "claude-sonnet-4.5",
+	"claude-haiku-4-5":                    "claude-haiku-4.5",
+	"claude-haiku-4-5-thinking":           "claude-haiku-4.5",
 	"claude-haiku-4-5-20251001":           "claude-haiku-4.5",
 	"claude-haiku-4-5-20251001-thinking":  "claude-haiku-4.5",
 }
