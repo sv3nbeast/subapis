@@ -15,6 +15,7 @@ import (
 	"log/slog"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -258,6 +259,12 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 
 func (h *AccountHandler) ImportData(c *gin.Context) {
 	if body, err := c.GetRawData(); err == nil {
+		if normalizedBody, ok, normalizeErr := normalizeKiroAccountImportBody(body); normalizeErr != nil {
+			response.BadRequest(c, normalizeErr.Error())
+			return
+		} else if ok {
+			body = normalizedBody
+		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 		if isUnsupportedAccountDataFormat(body) {
 			response.BadRequest(c, "unsupported data format")
@@ -282,6 +289,189 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 	executeAdminIdempotentJSON(c, "admin.accounts.import_data", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		return h.importData(ctx, req)
 	})
+}
+
+func normalizeKiroAccountImportBody(body []byte) ([]byte, bool, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, false, nil
+	}
+	rawData := bytes.TrimSpace(envelope["data"])
+	if len(rawData) == 0 {
+		return nil, false, nil
+	}
+	payload, ok, err := buildKiroDataPayloadFromRaw(rawData)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, err
+	}
+	envelope["data"] = payloadBytes
+	rewritten, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, false, err
+	}
+	return rewritten, true, nil
+}
+
+func buildKiroDataPayloadFromRaw(raw json.RawMessage) (DataPayload, bool, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return DataPayload{}, false, nil
+	}
+
+	var items []json.RawMessage
+	switch raw[0] {
+	case '{':
+		if !looksLikeKiroTokenJSON(raw) {
+			return DataPayload{}, false, nil
+		}
+		items = []json.RawMessage{raw}
+	case '[':
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return DataPayload{}, false, nil
+		}
+		if len(items) == 0 {
+			return DataPayload{}, false, nil
+		}
+		for _, item := range items {
+			if !looksLikeKiroTokenJSON(item) {
+				return DataPayload{}, false, nil
+			}
+		}
+	default:
+		return DataPayload{}, false, nil
+	}
+
+	accounts := make([]DataAccount, 0, len(items))
+	for i, item := range items {
+		account, err := buildKiroDataAccount(item, i, len(items))
+		if err != nil {
+			return DataPayload{}, true, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	return DataPayload{
+		Type:       dataType,
+		Version:    dataVersion,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Proxies:    []DataProxy{},
+		Accounts:   accounts,
+	}, true, nil
+}
+
+func looksLikeKiroTokenJSON(raw json.RawMessage) bool {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return false
+	}
+	return stringFromMap(obj, "accessToken", "access_token") != "" &&
+		(stringFromMap(obj, "refreshToken", "refresh_token") != "" ||
+			stringFromMap(obj, "profileArn", "profile_arn") != "" ||
+			stringFromMap(obj, "provider") != "" ||
+			stringFromMap(obj, "authMethod", "auth_method") != "" ||
+			stringFromMap(obj, "clientId", "client_id") != "" ||
+			stringFromMap(obj, "issuerUrl", "issuer_url") != "" ||
+			stringFromMap(obj, "tokenEndpoint", "token_endpoint") != "")
+}
+
+func buildKiroDataAccount(raw json.RawMessage, index, total int) (DataAccount, error) {
+	token, err := kiropkg.ParseImportedToken(string(raw), "")
+	if err != nil {
+		return DataAccount{}, fmt.Errorf("invalid kiro token at index %d: %w", index+1, err)
+	}
+	var obj map[string]any
+	_ = json.Unmarshal(raw, &obj)
+	name := firstNonEmpty(
+		stringFromMap(obj, "name"),
+		stringFromMap(obj, "label"),
+		stringFromMap(obj, "email"),
+		token.Email,
+		kiroImportNameFromProfileArn(token.ProfileArn),
+		kiroImportNameFromClientID(token.ClientID),
+	)
+	if name == "" {
+		name = "Kiro account"
+	}
+	if total > 1 && (stringFromMap(obj, "name") == "" && stringFromMap(obj, "label") == "") {
+		name = fmt.Sprintf("%s #%d", name, index+1)
+	}
+	notes := "Imported from Kiro token JSON"
+	return DataAccount{
+		Name:        name,
+		Notes:       &notes,
+		Platform:    service.PlatformKiro,
+		Type:        service.AccountTypeOAuth,
+		Credentials: kiroImportedTokenCredentials(token),
+		Concurrency: 10,
+		Priority:    1,
+	}, nil
+}
+
+func kiroImportedTokenCredentials(token *kiropkg.TokenData) map[string]any {
+	if token == nil {
+		return map[string]any{}
+	}
+	creds := map[string]any{}
+	putString := func(key, value string) {
+		if strings.TrimSpace(value) != "" {
+			creds[key] = strings.TrimSpace(value)
+		}
+	}
+	putString("access_token", token.AccessToken)
+	putString("refresh_token", token.RefreshToken)
+	putString("profile_arn", token.ProfileArn)
+	putString("expires_at", token.ExpiresAt)
+	putString("auth_method", token.AuthMethod)
+	putString("provider", token.Provider)
+	putString("client_id", token.ClientID)
+	putString("client_secret", token.ClientSecret)
+	putString("client_id_hash", token.ClientIDHash)
+	putString("email", token.Email)
+	putString("start_url", token.StartURL)
+	putString("region", token.Region)
+	putString("issuer_url", token.IssuerURL)
+	putString("token_endpoint", token.TokenEndpoint)
+	putString("scopes", token.Scopes)
+	return creds
+}
+
+func stringFromMap(obj map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := obj[key]; ok {
+			if value, ok := raw.(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
+func kiroImportNameFromProfileArn(profileArn string) string {
+	profileArn = strings.TrimSpace(profileArn)
+	if profileArn == "" {
+		return ""
+	}
+	parts := strings.Split(profileArn, "/")
+	suffix := strings.TrimSpace(parts[len(parts)-1])
+	if suffix == "" {
+		return "Kiro " + profileArn
+	}
+	return "Kiro " + suffix
+}
+
+func kiroImportNameFromClientID(clientID string) string {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return ""
+	}
+	if len(clientID) > 8 {
+		clientID = clientID[:8]
+	}
+	return "Kiro " + clientID
 }
 
 func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) (DataImportResult, error) {

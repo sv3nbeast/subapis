@@ -176,18 +176,73 @@ func sessionExpired(session *AuthSession, now time.Time) bool {
 }
 
 type TokenData struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ProfileArn   string `json:"profileArn,omitempty"`
-	ExpiresAt    string `json:"expiresAt,omitempty"`
-	AuthMethod   string `json:"authMethod,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	ClientID     string `json:"clientId,omitempty"`
-	ClientSecret string `json:"clientSecret,omitempty"`
-	ClientIDHash string `json:"clientIdHash,omitempty"`
-	Email        string `json:"email,omitempty"`
-	StartURL     string `json:"startUrl,omitempty"`
-	Region       string `json:"region,omitempty"`
+	AccessToken   string `json:"accessToken"`
+	RefreshToken  string `json:"refreshToken"`
+	ProfileArn    string `json:"profileArn,omitempty"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
+	AuthMethod    string `json:"authMethod,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	ClientID      string `json:"clientId,omitempty"`
+	ClientSecret  string `json:"clientSecret,omitempty"`
+	ClientIDHash  string `json:"clientIdHash,omitempty"`
+	Email         string `json:"email,omitempty"`
+	StartURL      string `json:"startUrl,omitempty"`
+	Region        string `json:"region,omitempty"`
+	IssuerURL     string `json:"issuerUrl,omitempty"`
+	TokenEndpoint string `json:"tokenEndpoint,omitempty"`
+	Scopes        string `json:"scopes,omitempty"`
+}
+
+func (t *TokenData) UnmarshalJSON(data []byte) error {
+	type tokenDataFields struct {
+		AccessToken        string `json:"accessToken"`
+		AccessTokenSnake   string `json:"access_token"`
+		RefreshToken       string `json:"refreshToken"`
+		RefreshTokenSnake  string `json:"refresh_token"`
+		ProfileArn         string `json:"profileArn"`
+		ProfileArnSnake    string `json:"profile_arn"`
+		ExpiresAt          string `json:"expiresAt"`
+		ExpiresAtSnake     string `json:"expires_at"`
+		Expired            string `json:"expired"`
+		AuthMethod         string `json:"authMethod"`
+		AuthMethodSnake    string `json:"auth_method"`
+		Provider           string `json:"provider"`
+		ClientID           string `json:"clientId"`
+		ClientIDSnake      string `json:"client_id"`
+		ClientSecret       string `json:"clientSecret"`
+		ClientSecretSnake  string `json:"client_secret"`
+		ClientIDHash       string `json:"clientIdHash"`
+		ClientIDHashSnake  string `json:"client_id_hash"`
+		Email              string `json:"email"`
+		StartURL           string `json:"startUrl"`
+		StartURLSnake      string `json:"start_url"`
+		Region             string `json:"region"`
+		IssuerURL          string `json:"issuerUrl"`
+		IssuerURLSnake     string `json:"issuer_url"`
+		TokenEndpoint      string `json:"tokenEndpoint"`
+		TokenEndpointSnake string `json:"token_endpoint"`
+		Scopes             string `json:"scopes"`
+	}
+	var fields tokenDataFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	t.AccessToken = firstNonEmpty(fields.AccessToken, fields.AccessTokenSnake)
+	t.RefreshToken = firstNonEmpty(fields.RefreshToken, fields.RefreshTokenSnake)
+	t.ProfileArn = firstNonEmpty(fields.ProfileArn, fields.ProfileArnSnake)
+	t.ExpiresAt = firstNonEmpty(fields.ExpiresAt, fields.ExpiresAtSnake, fields.Expired)
+	t.AuthMethod = firstNonEmpty(fields.AuthMethod, fields.AuthMethodSnake)
+	t.Provider = fields.Provider
+	t.ClientID = firstNonEmpty(fields.ClientID, fields.ClientIDSnake)
+	t.ClientSecret = firstNonEmpty(fields.ClientSecret, fields.ClientSecretSnake)
+	t.ClientIDHash = firstNonEmpty(fields.ClientIDHash, fields.ClientIDHashSnake)
+	t.Email = fields.Email
+	t.StartURL = firstNonEmpty(fields.StartURL, fields.StartURLSnake)
+	t.Region = fields.Region
+	t.IssuerURL = firstNonEmpty(fields.IssuerURL, fields.IssuerURLSnake)
+	t.TokenEndpoint = firstNonEmpty(fields.TokenEndpoint, fields.TokenEndpointSnake)
+	t.Scopes = fields.Scopes
+	return nil
 }
 
 type socialTokenResponse struct {
@@ -269,6 +324,22 @@ type userInfoResponse struct {
 type deviceRegistration struct {
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
+}
+
+func (r *deviceRegistration) UnmarshalJSON(data []byte) error {
+	type deviceRegistrationFields struct {
+		ClientID          string `json:"clientId"`
+		ClientIDSnake     string `json:"client_id"`
+		ClientSecret      string `json:"clientSecret"`
+		ClientSecretSnake string `json:"client_secret"`
+	}
+	var fields deviceRegistrationFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	r.ClientID = firstNonEmpty(fields.ClientID, fields.ClientIDSnake)
+	r.ClientSecret = firstNonEmpty(fields.ClientSecret, fields.ClientSecretSnake)
+	return nil
 }
 
 type RefreshTokenInvalidError struct {
@@ -643,6 +714,65 @@ func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refr
 	return token, nil
 }
 
+func RefreshExternalIDPToken(ctx context.Context, proxyURL, refreshToken, clientID, clientSecret, tokenEndpoint, scopes, region, profileArn, issuerURL string) (*TokenData, error) {
+	tokenEndpoint = strings.TrimSpace(tokenEndpoint)
+	if tokenEndpoint == "" {
+		return nil, fmt.Errorf("kiro external_idp refresh requires token_endpoint")
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return nil, fmt.Errorf("kiro external_idp refresh requires client_id")
+	}
+	if region == "" {
+		region = defaultIDCRegion
+	}
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("client_id", clientID)
+	form.Set("refresh_token", strings.TrimSpace(refreshToken))
+	if strings.TrimSpace(clientSecret) != "" {
+		form.Set("client_secret", strings.TrimSpace(clientSecret))
+	}
+	if strings.TrimSpace(scopes) != "" {
+		form.Set("scope", strings.TrimSpace(scopes))
+	}
+	var resp createTokenResponse
+	if err := doForm(ctx, proxyURL, http.MethodPost, tokenEndpoint, form, &resp, map[string]string{
+		"Accept": "application/json",
+	}); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(resp.AccessToken) == "" {
+		return nil, fmt.Errorf("kiro external_idp token response missing access token")
+	}
+	expiresIn := resp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	nextRefreshToken := strings.TrimSpace(resp.RefreshToken)
+	if nextRefreshToken == "" {
+		nextRefreshToken = strings.TrimSpace(refreshToken)
+	}
+	nextProfileArn := strings.TrimSpace(resp.ProfileArn)
+	if nextProfileArn == "" {
+		nextProfileArn = strings.TrimSpace(profileArn)
+	}
+	return &TokenData{
+		AccessToken:   resp.AccessToken,
+		RefreshToken:  nextRefreshToken,
+		ProfileArn:    nextProfileArn,
+		ExpiresAt:     time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
+		AuthMethod:    "external_idp",
+		Provider:      ProviderEnterprise,
+		ClientID:      clientID,
+		ClientSecret:  strings.TrimSpace(clientSecret),
+		Region:        region,
+		IssuerURL:     strings.TrimSpace(issuerURL),
+		TokenEndpoint: tokenEndpoint,
+		Scopes:        strings.TrimSpace(scopes),
+	}, nil
+}
+
 func FetchOIDCUserEmail(ctx context.Context, proxyURL, accessToken, region string) string {
 	if strings.TrimSpace(accessToken) == "" {
 		return ""
@@ -662,7 +792,7 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
 		return nil, fmt.Errorf("failed to parse kiro token: %w", err)
 	}
-	token.AuthMethod = strings.ToLower(strings.TrimSpace(token.AuthMethod))
+	token.AuthMethod = normalizeImportedAuthMethod(token.AuthMethod)
 	if strings.TrimSpace(token.AccessToken) == "" {
 		return nil, fmt.Errorf("access token is empty")
 	}
@@ -681,14 +811,20 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
 		token.AuthMethod = "idc"
 	}
+	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.TokenEndpoint) != "" {
+		token.AuthMethod = "external_idp"
+	}
 	token.Provider = strings.TrimSpace(token.Provider)
+	if token.AuthMethod == "external_idp" && token.Provider == "" {
+		token.Provider = ProviderEnterprise
+	}
 	if strings.EqualFold(token.Provider, "AWS") && token.AuthMethod == "idc" {
 		token.Provider = resolveIDCProvider(token.StartURL)
 	}
 	if !IsValidKiroProvider(token.Provider) {
 		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise)", token.Provider)
 	}
-	if token.AuthMethod == "idc" && strings.TrimSpace(token.Region) == "" {
+	if (token.AuthMethod == "idc" || token.AuthMethod == "external_idp") && strings.TrimSpace(token.Region) == "" {
 		token.Region = defaultIDCRegion
 	}
 	if strings.TrimSpace(token.ExpiresAt) != "" {
@@ -699,6 +835,19 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 		token.ExpiresAt = normalized
 	}
 	return &token, nil
+}
+
+func normalizeImportedAuthMethod(authMethod string) string {
+	switch strings.ToLower(strings.TrimSpace(authMethod)) {
+	case "idc", "iam_identity_center":
+		return "idc"
+	case "external_idp", "external-idp", "externalidp":
+		return "external_idp"
+	case "social":
+		return "social"
+	default:
+		return strings.ToLower(strings.TrimSpace(authMethod))
+	}
 }
 
 func getOIDCEndpoint(region string) string {
@@ -745,6 +894,44 @@ func doJSON(ctx context.Context, proxyURL, method, rawURL string, payload any, o
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for key, value := range extraHeaders {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyText := strings.TrimSpace(string(respBody))
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(bodyText), "invalid_grant") {
+			return &RefreshTokenInvalidError{StatusCode: resp.StatusCode, Body: bodyText}
+		}
+		return fmt.Errorf("upstream request failed (status %d): %s", resp.StatusCode, bodyText)
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	return json.Unmarshal(respBody, out)
+}
+
+func doForm(ctx context.Context, proxyURL, method, rawURL string, values url.Values, out any, extraHeaders map[string]string) error {
+	client, err := newHTTPClient(proxyURL)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	for key, value := range extraHeaders {
 		req.Header.Set(key, value)
 	}

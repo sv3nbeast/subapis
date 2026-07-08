@@ -23,9 +23,10 @@ export function useKiroOAuth() {
   }
 
   const errorMessage = (err: any) =>
-    err?.message ||
     err?.response?.data?.message ||
     err?.response?.data?.detail ||
+    err?.message ||
+    err?.reason ||
     t('admin.accounts.oauth.authFailed')
 
   const generateAuthUrl = async (
@@ -177,7 +178,10 @@ export function useKiroOAuth() {
     client_id_hash: tokenInfo.client_id_hash,
     email: tokenInfo.email,
     start_url: tokenInfo.start_url,
-    region: tokenInfo.region
+    region: tokenInfo.region,
+    issuer_url: tokenInfo.issuer_url,
+    token_endpoint: tokenInfo.token_endpoint,
+    scopes: tokenInfo.scopes
   })
 
   return {

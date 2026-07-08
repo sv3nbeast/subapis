@@ -52,18 +52,21 @@ type KiroIDCAuthURLResult struct {
 }
 
 type KiroTokenInfo struct {
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ProfileArn   string `json:"profile_arn,omitempty"`
-	ExpiresAt    string `json:"expires_at,omitempty"`
-	AuthMethod   string `json:"auth_method,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
-	ClientIDHash string `json:"client_id_hash,omitempty"`
-	Email        string `json:"email,omitempty"`
-	StartURL     string `json:"start_url,omitempty"`
-	Region       string `json:"region,omitempty"`
+	AccessToken   string `json:"access_token,omitempty"`
+	RefreshToken  string `json:"refresh_token,omitempty"`
+	ProfileArn    string `json:"profile_arn,omitempty"`
+	ExpiresAt     string `json:"expires_at,omitempty"`
+	AuthMethod    string `json:"auth_method,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	ClientSecret  string `json:"client_secret,omitempty"`
+	ClientIDHash  string `json:"client_id_hash,omitempty"`
+	Email         string `json:"email,omitempty"`
+	StartURL      string `json:"start_url,omitempty"`
+	Region        string `json:"region,omitempty"`
+	IssuerURL     string `json:"issuer_url,omitempty"`
+	TokenEndpoint string `json:"token_endpoint,omitempty"`
+	Scopes        string `json:"scopes,omitempty"`
 }
 
 type KiroGenerateAuthURLInput struct {
@@ -87,15 +90,18 @@ type KiroGenerateIDCAuthURLInput struct {
 }
 
 type KiroRefreshTokenInput struct {
-	RefreshToken string
-	AuthMethod   string
-	Provider     string
-	ClientID     string
-	ClientSecret string
-	StartURL     string
-	Region       string
-	ProfileArn   string
-	ProxyID      *int64
+	RefreshToken  string
+	AuthMethod    string
+	Provider      string
+	ClientID      string
+	ClientSecret  string
+	StartURL      string
+	Region        string
+	ProfileArn    string
+	IssuerURL     string
+	TokenEndpoint string
+	Scopes        string
+	ProxyID       *int64
 }
 
 type KiroImportTokenInput struct {
@@ -287,6 +293,8 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 			return nil, fmt.Errorf("kiro idc refresh requires client_id and client_secret")
 		}
 		token, err = kiropkg.RefreshIDCToken(ctx, proxyURL, input.ClientID, input.ClientSecret, input.RefreshToken, input.Region, input.StartURL, input.Provider)
+	case "external_idp", "external-idp", "externalidp":
+		token, err = kiropkg.RefreshExternalIDPToken(ctx, proxyURL, input.RefreshToken, input.ClientID, input.ClientSecret, input.TokenEndpoint, input.Scopes, input.Region, input.ProfileArn, input.IssuerURL)
 	default:
 		token, err = kiropkg.RefreshSocialToken(ctx, proxyURL, input.RefreshToken, input.Provider)
 	}
@@ -308,6 +316,15 @@ func (s *KiroOAuthService) RefreshToken(ctx context.Context, input *KiroRefreshT
 	if token.Region == "" {
 		token.Region = input.Region
 	}
+	if token.IssuerURL == "" {
+		token.IssuerURL = input.IssuerURL
+	}
+	if token.TokenEndpoint == "" {
+		token.TokenEndpoint = input.TokenEndpoint
+	}
+	if token.Scopes == "" {
+		token.Scopes = input.Scopes
+	}
 	return toKiroTokenInfo(token), nil
 }
 
@@ -327,15 +344,18 @@ func (s *KiroOAuthService) RefreshAccountToken(ctx context.Context, account *Acc
 		return nil, fmt.Errorf("not a kiro oauth account")
 	}
 	return s.RefreshToken(ctx, &KiroRefreshTokenInput{
-		RefreshToken: account.GetCredential("refresh_token"),
-		AuthMethod:   account.GetCredential("auth_method"),
-		Provider:     account.GetCredential("provider"),
-		ClientID:     account.GetCredential("client_id"),
-		ClientSecret: account.GetCredential("client_secret"),
-		StartURL:     account.GetCredential("start_url"),
-		Region:       account.GetCredential("region"),
-		ProfileArn:   account.GetCredential("profile_arn"),
-		ProxyID:      account.ProxyID,
+		RefreshToken:  account.GetCredential("refresh_token"),
+		AuthMethod:    account.GetCredential("auth_method"),
+		Provider:      account.GetCredential("provider"),
+		ClientID:      account.GetCredential("client_id"),
+		ClientSecret:  account.GetCredential("client_secret"),
+		StartURL:      account.GetCredential("start_url"),
+		Region:        account.GetCredential("region"),
+		ProfileArn:    account.GetCredential("profile_arn"),
+		IssuerURL:     account.GetCredential("issuer_url"),
+		TokenEndpoint: account.GetCredential("token_endpoint"),
+		Scopes:        account.GetCredential("scopes"),
+		ProxyID:       account.ProxyID,
 	})
 }
 
@@ -389,6 +409,15 @@ func (s *KiroOAuthService) BuildAccountCredentials(tokenInfo *KiroTokenInfo) map
 	if tokenInfo.Region != "" {
 		creds["region"] = tokenInfo.Region
 	}
+	if tokenInfo.IssuerURL != "" {
+		creds["issuer_url"] = tokenInfo.IssuerURL
+	}
+	if tokenInfo.TokenEndpoint != "" {
+		creds["token_endpoint"] = tokenInfo.TokenEndpoint
+	}
+	if tokenInfo.Scopes != "" {
+		creds["scopes"] = tokenInfo.Scopes
+	}
 
 	return creds
 }
@@ -398,18 +427,21 @@ func toKiroTokenInfo(token *kiropkg.TokenData) *KiroTokenInfo {
 		return nil
 	}
 	return &KiroTokenInfo{
-		AccessToken:  token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		ProfileArn:   token.ProfileArn,
-		ExpiresAt:    token.ExpiresAt,
-		AuthMethod:   token.AuthMethod,
-		Provider:     token.Provider,
-		ClientID:     token.ClientID,
-		ClientSecret: token.ClientSecret,
-		ClientIDHash: token.ClientIDHash,
-		Email:        token.Email,
-		StartURL:     token.StartURL,
-		Region:       token.Region,
+		AccessToken:   token.AccessToken,
+		RefreshToken:  token.RefreshToken,
+		ProfileArn:    token.ProfileArn,
+		ExpiresAt:     token.ExpiresAt,
+		AuthMethod:    token.AuthMethod,
+		Provider:      token.Provider,
+		ClientID:      token.ClientID,
+		ClientSecret:  token.ClientSecret,
+		ClientIDHash:  token.ClientIDHash,
+		Email:         token.Email,
+		StartURL:      token.StartURL,
+		Region:        token.Region,
+		IssuerURL:     token.IssuerURL,
+		TokenEndpoint: token.TokenEndpoint,
+		Scopes:        token.Scopes,
 	}
 }
 

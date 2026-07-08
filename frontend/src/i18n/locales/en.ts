@@ -4911,7 +4911,8 @@ export default {
           regionLabel: 'AWS IDC Region',
           regionPlaceholder: 'us-east-1',
           tokenJsonLabel: 'Kiro Token JSON',
-          tokenJsonHint: 'Paste exported token JSON containing accessToken and refreshToken.',
+          tokenJsonHint:
+            'Paste exported token JSON containing accessToken/refreshToken or access_token/refresh_token; external_idp/token_endpoint format is supported.',
           deviceRegistrationLabel: 'Device Registration JSON',
           deviceRegistrationHint: 'Optional. Paste clientId/clientSecret registration JSON when needed for refresh.',
           missingState:

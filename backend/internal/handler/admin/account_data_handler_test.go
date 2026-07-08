@@ -315,7 +315,7 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
 }
 
-func TestImportDataRejectsKiroAccountManagerJSON(t *testing.T) {
+func TestImportDataAcceptsKiroAccountManagerJSON(t *testing.T) {
 	router, adminSvc := setupAccountDataRouter()
 
 	dataPayload := map[string]any{
@@ -349,9 +349,69 @@ func TestImportDataRejectsKiroAccountManagerJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), "unsupported data format")
-	require.Len(t, adminSvc.createdAccounts, 0)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	created := adminSvc.createdAccounts[0]
+	require.Equal(t, service.PlatformKiro, created.Platform)
+	require.Equal(t, service.AccountTypeOAuth, created.Type)
+	require.Equal(t, "Kiro BuilderId account", created.Name)
+	require.Equal(t, "access-token", created.Credentials["access_token"])
+	require.Equal(t, "refresh-token", created.Credentials["refresh_token"])
+	require.Equal(t, "idc", created.Credentials["auth_method"])
+	require.Equal(t, "BuilderId", created.Credentials["provider"])
+	require.Equal(t, "client-id", created.Credentials["client_id"])
+	require.Equal(t, "client-secret", created.Credentials["client_secret"])
+	require.Equal(t, "client-id-hash", created.Credentials["client_id_hash"])
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/test", created.Credentials["profile_arn"])
+	require.Equal(t, 10, created.Concurrency)
+	require.Equal(t, 1, created.Priority)
+	require.True(t, created.SkipDefaultGroupBind)
+}
+
+func TestImportDataAcceptsCLIProxyAPIKiroExternalIDPJSON(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"access_token":   "access-token",
+			"auth_method":    "external_idp",
+			"client_id":      "client-id",
+			"expired":        "2026-07-08T06:13:47Z",
+			"issuer_url":     "https://login.microsoftonline.com/example/v2.0",
+			"profile_arn":    "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID",
+			"refresh_token":  "refresh-token",
+			"region":         "us-east-1",
+			"scopes":         "api://client-id/codewhisperer:conversations offline_access",
+			"token_endpoint": "https://login.microsoftonline.com/example/oauth2/v2.0/token",
+			"type":           "kiro",
+		},
+		"skip_default_group_bind": true,
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	created := adminSvc.createdAccounts[0]
+	require.Equal(t, service.PlatformKiro, created.Platform)
+	require.Equal(t, service.AccountTypeOAuth, created.Type)
+	require.Equal(t, "Kiro PROFILEID", created.Name)
+	require.Equal(t, "access-token", created.Credentials["access_token"])
+	require.Equal(t, "refresh-token", created.Credentials["refresh_token"])
+	require.Equal(t, "external_idp", created.Credentials["auth_method"])
+	require.Equal(t, "Enterprise", created.Credentials["provider"])
+	require.Equal(t, "client-id", created.Credentials["client_id"])
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID", created.Credentials["profile_arn"])
+	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", created.Credentials["issuer_url"])
+	require.Equal(t, "https://login.microsoftonline.com/example/oauth2/v2.0/token", created.Credentials["token_endpoint"])
+	require.Equal(t, "api://client-id/codewhisperer:conversations offline_access", created.Credentials["scopes"])
+	require.Equal(t, "us-east-1", created.Credentials["region"])
+	require.NotEmpty(t, created.Credentials["expires_at"])
+	require.True(t, created.SkipDefaultGroupBind)
 }
 
 func TestImportDataNormalizesLegacyProxyKey(t *testing.T) {

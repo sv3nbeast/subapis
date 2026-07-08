@@ -4944,7 +4944,7 @@ export default {
           regionLabel: 'AWS IDC Region',
           regionPlaceholder: 'us-east-1',
           tokenJsonLabel: 'Kiro Token JSON',
-          tokenJsonHint: '粘贴包含 accessToken 和 refreshToken 的导出 Token JSON。',
+          tokenJsonHint: '粘贴包含 accessToken/refreshToken 或 access_token/refresh_token 的导出 Token JSON，支持 external_idp/token_endpoint 格式。',
           deviceRegistrationLabel: 'Device Registration JSON',
           deviceRegistrationHint: '可选。需要刷新时可粘贴包含 clientId/clientSecret 的注册 JSON。',
           missingState: '回调缺少 state，请粘贴完整回调链接，或重新生成授权链接后重试。',

@@ -30,6 +30,9 @@ export interface KiroTokenInfo {
   email?: string
   start_url?: string
   region?: string
+  issuer_url?: string
+  token_endpoint?: string
+  scopes?: string
   [key: string]: unknown
 }
 
