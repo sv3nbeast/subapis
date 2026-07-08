@@ -2885,7 +2885,7 @@ func TestStreamEventStreamAsAnthropicRejectsEmptyKiroStream(t *testing.T) {
 	require.Empty(t, out.String())
 }
 
-func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurn(t *testing.T) {
+func TestStreamEventStreamAsAnthropicRejectsMetadataOnlyKiroTurn(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{
@@ -2905,18 +2905,16 @@ func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurn(t *testing.T) {
 	var out bytes.Buffer
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{RequireTerminalEvent: true})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "end_turn", result.StopReason)
-	output := out.String()
-	require.Contains(t, output, "event: message_start")
-	require.Contains(t, output, `"content":[]`)
-	require.Contains(t, output, "event: message_delta")
-	require.Contains(t, output, `"stop_reason":"end_turn"`)
-	require.Contains(t, output, "event: message_stop")
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty kiro event stream")
+	require.Contains(t, err.Error(), "metadata-only assistant output")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_delta")
+	require.NotContains(t, out.String(), "event: message_stop")
 }
 
-func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurnWithoutTerminal(t *testing.T) {
+func TestStreamEventStreamAsAnthropicRejectsMetadataOnlyKiroTurnWithoutTerminal(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{
@@ -2931,14 +2929,13 @@ func TestStreamEventStreamAsAnthropicAllowsMetadataOnlyKiroTurnWithoutTerminal(t
 	var out bytes.Buffer
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{RequireTerminalEvent: true})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "end_turn", result.StopReason)
-	output := out.String()
-	require.Contains(t, output, "event: message_start")
-	require.Contains(t, output, `"content":[]`)
-	require.Contains(t, output, `"stop_reason":"end_turn"`)
-	require.Contains(t, output, "event: message_stop")
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty kiro event stream")
+	require.Contains(t, err.Error(), "metadata-only assistant output")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_delta")
+	require.NotContains(t, out.String(), "event: message_stop")
 }
 
 func TestStreamEventStreamAsAnthropicRejectsKiroExceptionFrame(t *testing.T) {

@@ -304,6 +304,59 @@ func TestForwardKiroMessagesStreamThinkingOnlyDoesNotWritePartialBody(t *testing
 	require.Empty(t, rec.Body.String(), "thinking-only empty stream must not write partial response body")
 }
 
+func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":119824,"outputTokens":5,"totalTokens":119829}}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          88,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-4-8-thinking","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "metadata-only assistant output")
+	require.Empty(t, rec.Body.String(), "metadata-only empty stream must not write a successful empty response body")
+}
+
 func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
