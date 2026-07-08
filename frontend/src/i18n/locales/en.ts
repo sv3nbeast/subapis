@@ -3034,6 +3034,12 @@ export default {
         targetModelPlaceholder: 'e.g., gpt-5.4',
         removeExactMapping: 'Remove Exact Mapping'
       },
+      nonStreamMessages: {
+        title: 'Non-stream /v1/messages',
+        allow: 'Allow synchronous requests',
+        hint:
+          'When enabled, client stream=false requests are converted to stream=true upstream and aggregated back into a single JSON response. Enable only for groups that need this compatibility path.'
+      },
       invalidRequestFallback: {
         title: 'Invalid Request Fallback Group',
         hint: 'Triggered only when upstream explicitly returns prompt too long. Leave empty to disable fallback.',

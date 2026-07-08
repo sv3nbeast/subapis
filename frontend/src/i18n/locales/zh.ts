@@ -3036,6 +3036,11 @@ export default {
         targetModelPlaceholder: '例如: gpt-5.4',
         removeExactMapping: '删除精确映射'
       },
+      nonStreamMessages: {
+        title: '非流式 /v1/messages',
+        allow: '允许非流式请求',
+        hint: '启用后，客户端发送 stream=false 时，网关会对上游强制 stream=true，再将 SSE 聚合回单次 JSON 响应。建议仅对需要恢复兼容的分组开启。'
+      },
       invalidRequestFallback: {
         title: '无效请求兜底分组',
         hint: '仅当上游明确返回 prompt too long 时才会触发，留空表示不兜底',

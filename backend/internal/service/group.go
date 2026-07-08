@@ -67,6 +67,7 @@ type Group struct {
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
+	AllowNonStreamMessages      bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	DefaultMappedModel          string
@@ -207,9 +208,28 @@ func normalizeKiroEndpointFields(g *Group) {
 	g.KiroEndpointMode = g.EffectiveKiroEndpointMode()
 }
 
+func supportsGatewayNonStreamMessagesPlatform(platform string) bool {
+	switch platform {
+	case PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformDroid:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeGatewayNonStreamMessagesFields(g *Group) {
+	if g == nil {
+		return
+	}
+	if !supportsGatewayNonStreamMessagesPlatform(g.Platform) {
+		g.AllowNonStreamMessages = false
+	}
+}
+
 func NormalizeGroupRuntimeFields(g *Group) {
 	normalizeKiroCacheEmulationFields(g)
 	normalizeKiroEndpointFields(g)
+	normalizeGatewayNonStreamMessagesFields(g)
 }
 
 func (g *Group) IsActive() bool {

@@ -467,6 +467,20 @@ func (_c *GroupCreate) SetNillableAllowMessagesDispatch(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (_c *GroupCreate) SetAllowNonStreamMessages(v bool) *GroupCreate {
+	_c.mutation.SetAllowNonStreamMessages(v)
+	return _c
+}
+
+// SetNillableAllowNonStreamMessages sets the "allow_non_stream_messages" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableAllowNonStreamMessages(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetAllowNonStreamMessages(*v)
+	}
+	return _c
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (_c *GroupCreate) SetRequireOauthOnly(v bool) *GroupCreate {
 	_c.mutation.SetRequireOauthOnly(v)
@@ -838,6 +852,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultAllowMessagesDispatch
 		_c.mutation.SetAllowMessagesDispatch(v)
 	}
+	if _, ok := _c.mutation.AllowNonStreamMessages(); !ok {
+		v := group.DefaultAllowNonStreamMessages
+		_c.mutation.SetAllowNonStreamMessages(v)
+	}
 	if _, ok := _c.mutation.RequireOauthOnly(); !ok {
 		v := group.DefaultRequireOauthOnly
 		_c.mutation.SetRequireOauthOnly(v)
@@ -982,6 +1000,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.AllowMessagesDispatch(); !ok {
 		return &ValidationError{Name: "allow_messages_dispatch", err: errors.New(`ent: missing required field "Group.allow_messages_dispatch"`)}
+	}
+	if _, ok := _c.mutation.AllowNonStreamMessages(); !ok {
+		return &ValidationError{Name: "allow_non_stream_messages", err: errors.New(`ent: missing required field "Group.allow_non_stream_messages"`)}
 	}
 	if _, ok := _c.mutation.RequireOauthOnly(); !ok {
 		return &ValidationError{Name: "require_oauth_only", err: errors.New(`ent: missing required field "Group.require_oauth_only"`)}
@@ -1184,6 +1205,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AllowMessagesDispatch(); ok {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
 		_node.AllowMessagesDispatch = value
+	}
+	if value, ok := _c.mutation.AllowNonStreamMessages(); ok {
+		_spec.SetField(group.FieldAllowNonStreamMessages, field.TypeBool, value)
+		_node.AllowNonStreamMessages = value
 	}
 	if value, ok := _c.mutation.RequireOauthOnly(); ok {
 		_spec.SetField(group.FieldRequireOauthOnly, field.TypeBool, value)
@@ -1910,6 +1935,18 @@ func (u *GroupUpsert) SetAllowMessagesDispatch(v bool) *GroupUpsert {
 // UpdateAllowMessagesDispatch sets the "allow_messages_dispatch" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateAllowMessagesDispatch() *GroupUpsert {
 	u.SetExcluded(group.FieldAllowMessagesDispatch)
+	return u
+}
+
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (u *GroupUpsert) SetAllowNonStreamMessages(v bool) *GroupUpsert {
+	u.Set(group.FieldAllowNonStreamMessages, v)
+	return u
+}
+
+// UpdateAllowNonStreamMessages sets the "allow_non_stream_messages" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAllowNonStreamMessages() *GroupUpsert {
+	u.SetExcluded(group.FieldAllowNonStreamMessages)
 	return u
 }
 
@@ -2721,6 +2758,20 @@ func (u *GroupUpsertOne) SetAllowMessagesDispatch(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateAllowMessagesDispatch() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateAllowMessagesDispatch()
+	})
+}
+
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (u *GroupUpsertOne) SetAllowNonStreamMessages(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowNonStreamMessages(v)
+	})
+}
+
+// UpdateAllowNonStreamMessages sets the "allow_non_stream_messages" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAllowNonStreamMessages() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowNonStreamMessages()
 	})
 }
 
@@ -3723,6 +3774,20 @@ func (u *GroupUpsertBulk) SetAllowMessagesDispatch(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateAllowMessagesDispatch() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateAllowMessagesDispatch()
+	})
+}
+
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (u *GroupUpsertBulk) SetAllowNonStreamMessages(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowNonStreamMessages(v)
+	})
+}
+
+// UpdateAllowNonStreamMessages sets the "allow_non_stream_messages" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAllowNonStreamMessages() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowNonStreamMessages()
 	})
 }
 

@@ -132,6 +132,7 @@ func TestNormalizeGroupRuntimeFields_KiroStickySettings(t *testing.T) {
 func TestNormalizeGroupRuntimeFields_ClearsKiroSettingsForNonKiro(t *testing.T) {
 	group := &Group{
 		Platform:                    PlatformOpenAI,
+		AllowNonStreamMessages:      true,
 		KiroAutoStickyEnabled:       true,
 		KiroStickySessionTTLSeconds: 3600,
 		KiroCacheEmulationEnabled:   true,
@@ -141,11 +142,23 @@ func TestNormalizeGroupRuntimeFields_ClearsKiroSettingsForNonKiro(t *testing.T) 
 
 	NormalizeGroupRuntimeFields(group)
 
+	require.False(t, group.AllowNonStreamMessages)
 	require.False(t, group.KiroAutoStickyEnabled)
 	require.Zero(t, group.KiroStickySessionTTLSeconds)
 	require.False(t, group.KiroCacheEmulationEnabled)
 	require.Zero(t, group.KiroCacheEmulationRatio)
 	require.Equal(t, KiroEndpointModeQ, group.KiroEndpointMode)
+}
+
+func TestNormalizeGroupRuntimeFields_PreservesAllowNonStreamMessagesForSupportedPlatforms(t *testing.T) {
+	group := &Group{
+		Platform:               PlatformAnthropic,
+		AllowNonStreamMessages: true,
+	}
+
+	NormalizeGroupRuntimeFields(group)
+
+	require.True(t, group.AllowNonStreamMessages)
 }
 
 func TestGroup_EffectiveKiroEndpointMode(t *testing.T) {

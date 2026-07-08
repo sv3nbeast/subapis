@@ -1388,6 +1388,45 @@
           </div>
         </div>
 
+        <div
+          v-if="supportsNonStreamMessages(createForm.platform)"
+          class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
+        >
+          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            {{ t("admin.groups.nonStreamMessages.title") }}
+          </h4>
+          <div class="flex items-center justify-between">
+            <label class="text-sm text-gray-600 dark:text-gray-400">{{
+              t("admin.groups.nonStreamMessages.allow")
+            }}</label>
+            <button
+              type="button"
+              @click="
+                createForm.allow_non_stream_messages =
+                  !createForm.allow_non_stream_messages
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                createForm.allow_non_stream_messages
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  createForm.allow_non_stream_messages
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ t("admin.groups.nonStreamMessages.hint") }}
+          </p>
+        </div>
+
         <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini) -->
         <div
           v-if="
@@ -2698,6 +2737,45 @@
           </div>
         </div>
 
+        <div
+          v-if="supportsNonStreamMessages(editForm.platform)"
+          class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4"
+        >
+          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            {{ t("admin.groups.nonStreamMessages.title") }}
+          </h4>
+          <div class="flex items-center justify-between">
+            <label class="text-sm text-gray-600 dark:text-gray-400">{{
+              t("admin.groups.nonStreamMessages.allow")
+            }}</label>
+            <button
+              type="button"
+              @click="
+                editForm.allow_non_stream_messages =
+                  !editForm.allow_non_stream_messages
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                editForm.allow_non_stream_messages
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  editForm.allow_non_stream_messages
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {{ t("admin.groups.nonStreamMessages.hint") }}
+          </p>
+        </div>
+
         <!-- 账号过滤控制 (OpenAI/Antigravity/Anthropic/Gemini) -->
         <div
           v-if="
@@ -3458,6 +3536,11 @@ const subscriptionTypeOptions = computed(() => [
   { value: "subscription", label: t("admin.groups.subscription.subscription") },
 ]);
 
+const supportsNonStreamMessages = (platform: string) =>
+  ["anthropic", "gemini", "antigravity", "kiro", "droid"].includes(
+    String(platform || ""),
+  );
+
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
 const fallbackGroupOptions = computed(() => {
   const options: { value: number | null; label: string }[] = [
@@ -3670,6 +3753,7 @@ const createForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
+  allow_non_stream_messages: false,
   opus_mapped_model: createMessagesDispatchDefaults.opus_mapped_model,
   sonnet_mapped_model: createMessagesDispatchDefaults.sonnet_mapped_model,
   haiku_mapped_model: createMessagesDispatchDefaults.haiku_mapped_model,
@@ -3966,6 +4050,7 @@ const editForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
+  allow_non_stream_messages: false,
   opus_mapped_model: editMessagesDispatchDefaults.opus_mapped_model,
   sonnet_mapped_model: editMessagesDispatchDefaults.sonnet_mapped_model,
   haiku_mapped_model: editMessagesDispatchDefaults.haiku_mapped_model,
@@ -4235,6 +4320,7 @@ const closeCreateModal = () => {
   createForm.claude_code_only = false;
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
+  createForm.allow_non_stream_messages = false;
   resetMessagesDispatchFormState(createForm);
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
@@ -4317,7 +4403,8 @@ const handleCreateGroup = async () => {
 	      model_routing: convertRoutingRulesToApiFormat(
 	        createModelRoutingRules.value,
 	      ),
-	      models_list_config: buildModelsListConfig(createForm.models_list_config),
+      models_list_config: buildModelsListConfig(createForm.models_list_config),
+      allow_non_stream_messages: createForm.allow_non_stream_messages,
 	      messages_dispatch_model_config:
         createForm.platform === "openai"
           ? messagesDispatchFormStateToConfig({
@@ -4403,6 +4490,8 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.allow_messages_dispatch =
     group.allow_messages_dispatch ||
     messagesDispatchFormState.allow_messages_dispatch;
+  editForm.allow_non_stream_messages =
+    group.allow_non_stream_messages ?? false;
   editForm.opus_mapped_model = messagesDispatchFormState.opus_mapped_model;
   editForm.sonnet_mapped_model = messagesDispatchFormState.sonnet_mapped_model;
   editForm.haiku_mapped_model = messagesDispatchFormState.haiku_mapped_model;
@@ -4452,6 +4541,7 @@ const closeEditModal = () => {
   editForm.peak_start = "";
   editForm.peak_end = "";
   editForm.peak_rate_multiplier = 1.0;
+  editForm.allow_non_stream_messages = false;
   resetMessagesDispatchFormState(editForm);
 };
 
@@ -4482,6 +4572,7 @@ const handleUpdateGroup = async () => {
         editForm.fallback_group_id_on_invalid_request === null
           ? 0
           : editForm.fallback_group_id_on_invalid_request,
+      allow_non_stream_messages: editForm.allow_non_stream_messages,
 	      model_routing: convertRoutingRulesToApiFormat(
 	        editModelRoutingRules.value,
 	      ),

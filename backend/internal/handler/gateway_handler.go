@@ -266,7 +266,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
 	isInterceptableSync := isConnectionProbe ||
 		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone
-	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync && !h.gatewayService.AllowSyncForDebugCapture(c) {
+	groupAllowsNonStream := apiKey != nil && apiKey.Group != nil && apiKey.Group.AllowNonStreamMessages
+	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync && !h.gatewayService.AllowSyncForDebugCapture(c) && !groupAllowsNonStream {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
 		return
 	}

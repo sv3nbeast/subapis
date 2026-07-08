@@ -210,6 +210,11 @@ func AllowMessagesDispatch(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldAllowMessagesDispatch, v))
 }
 
+// AllowNonStreamMessages applies equality check predicate on the "allow_non_stream_messages" field. It's identical to AllowNonStreamMessagesEQ.
+func AllowNonStreamMessages(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAllowNonStreamMessages, v))
+}
+
 // RequireOauthOnly applies equality check predicate on the "require_oauth_only" field. It's identical to RequireOauthOnlyEQ.
 func RequireOauthOnly(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRequireOauthOnly, v))
@@ -1538,6 +1543,16 @@ func AllowMessagesDispatchEQ(v bool) predicate.Group {
 // AllowMessagesDispatchNEQ applies the NEQ predicate on the "allow_messages_dispatch" field.
 func AllowMessagesDispatchNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldAllowMessagesDispatch, v))
+}
+
+// AllowNonStreamMessagesEQ applies the EQ predicate on the "allow_non_stream_messages" field.
+func AllowNonStreamMessagesEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldAllowNonStreamMessages, v))
+}
+
+// AllowNonStreamMessagesNEQ applies the NEQ predicate on the "allow_non_stream_messages" field.
+func AllowNonStreamMessagesNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldAllowNonStreamMessages, v))
 }
 
 // RequireOauthOnlyEQ applies the EQ predicate on the "require_oauth_only" field.

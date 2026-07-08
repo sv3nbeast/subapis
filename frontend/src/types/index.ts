@@ -554,6 +554,7 @@ export interface Group {
   fallback_group_id_on_invalid_request: number | null
   // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
   allow_messages_dispatch?: boolean
+  allow_non_stream_messages?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
@@ -682,6 +683,7 @@ export interface CreateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
+  allow_non_stream_messages?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -726,6 +728,7 @@ export interface UpdateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   allow_messages_dispatch?: boolean
+  allow_non_stream_messages?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -1043,6 +1046,7 @@ export interface AccountUsageInfo {
   five_hour: UsageProgress | null
   seven_day: UsageProgress | null
   seven_day_sonnet: UsageProgress | null
+  seven_day_fable?: UsageProgress | null
   gemini_shared_daily?: UsageProgress | null
   gemini_pro_daily?: UsageProgress | null
   gemini_flash_daily?: UsageProgress | null
@@ -1764,6 +1768,11 @@ export interface UserErrorRequest {
   message: string
   key_name: string
   key_deleted: boolean
+  client_ip?: string
+  group_name?: string
+  request_type?: number
+  stream?: boolean
+  user_agent?: string
 }
 
 export interface UserErrorRequestDetail extends UserErrorRequest {
@@ -1781,6 +1790,9 @@ export interface UserErrorListParams {
   status_code?: number
   category?: string
   api_key_id?: number
+  // 服务端排序,列白名单见后端 opsErrorLogsOrderBy(created_at/model/status_code)
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
 }
 
 export interface UsageQueryParams {

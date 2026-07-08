@@ -192,6 +192,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		FallbackGroupID:                 g.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
+		AllowNonStreamMessages:          g.AllowNonStreamMessages,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		KiroCacheEmulationEnabled:       g.EffectiveKiroCacheEmulationEnabled(),

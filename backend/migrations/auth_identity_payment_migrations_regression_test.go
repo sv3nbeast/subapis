@@ -128,6 +128,15 @@ func TestMigration162AllowsUsageLogCyberRequestType(t *testing.T) {
 	require.Contains(t, sql, "request_type")
 }
 
+func TestMigration163AddsGroupAllowNonStreamMessagesFlag(t *testing.T) {
+	content, err := FS.ReadFile("163_add_group_allow_non_stream_messages.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "ALTER TABLE groups")
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS allow_non_stream_messages BOOLEAN NOT NULL DEFAULT FALSE")
+}
+
 func TestMigration123BackfillsLegacyAuthSourceGrantDefaultsSafely(t *testing.T) {
 	content, err := FS.ReadFile("123_fix_legacy_auth_source_grant_on_signup_defaults.sql")
 	require.NoError(t, err)

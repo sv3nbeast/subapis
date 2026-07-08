@@ -890,50 +890,54 @@ func init() {
 	groupDescAllowMessagesDispatch := groupFields[29].Descriptor()
 	// group.DefaultAllowMessagesDispatch holds the default value on creation for the allow_messages_dispatch field.
 	group.DefaultAllowMessagesDispatch = groupDescAllowMessagesDispatch.Default.(bool)
+	// groupDescAllowNonStreamMessages is the schema descriptor for allow_non_stream_messages field.
+	groupDescAllowNonStreamMessages := groupFields[30].Descriptor()
+	// group.DefaultAllowNonStreamMessages holds the default value on creation for the allow_non_stream_messages field.
+	group.DefaultAllowNonStreamMessages = groupDescAllowNonStreamMessages.Default.(bool)
 	// groupDescRequireOauthOnly is the schema descriptor for require_oauth_only field.
-	groupDescRequireOauthOnly := groupFields[30].Descriptor()
+	groupDescRequireOauthOnly := groupFields[31].Descriptor()
 	// group.DefaultRequireOauthOnly holds the default value on creation for the require_oauth_only field.
 	group.DefaultRequireOauthOnly = groupDescRequireOauthOnly.Default.(bool)
 	// groupDescRequirePrivacySet is the schema descriptor for require_privacy_set field.
-	groupDescRequirePrivacySet := groupFields[31].Descriptor()
+	groupDescRequirePrivacySet := groupFields[32].Descriptor()
 	// group.DefaultRequirePrivacySet holds the default value on creation for the require_privacy_set field.
 	group.DefaultRequirePrivacySet = groupDescRequirePrivacySet.Default.(bool)
 	// groupDescDefaultMappedModel is the schema descriptor for default_mapped_model field.
-	groupDescDefaultMappedModel := groupFields[32].Descriptor()
+	groupDescDefaultMappedModel := groupFields[33].Descriptor()
 	// group.DefaultDefaultMappedModel holds the default value on creation for the default_mapped_model field.
 	group.DefaultDefaultMappedModel = groupDescDefaultMappedModel.Default.(string)
 	// group.DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
 	group.DefaultMappedModelValidator = groupDescDefaultMappedModel.Validators[0].(func(string) error)
 	// groupDescMessagesDispatchModelConfig is the schema descriptor for messages_dispatch_model_config field.
-	groupDescMessagesDispatchModelConfig := groupFields[33].Descriptor()
+	groupDescMessagesDispatchModelConfig := groupFields[34].Descriptor()
 	// group.DefaultMessagesDispatchModelConfig holds the default value on creation for the messages_dispatch_model_config field.
 	group.DefaultMessagesDispatchModelConfig = groupDescMessagesDispatchModelConfig.Default.(domain.OpenAIMessagesDispatchModelConfig)
 	// groupDescModelsListConfig is the schema descriptor for models_list_config field.
-	groupDescModelsListConfig := groupFields[34].Descriptor()
+	groupDescModelsListConfig := groupFields[35].Descriptor()
 	// group.DefaultModelsListConfig holds the default value on creation for the models_list_config field.
 	group.DefaultModelsListConfig = groupDescModelsListConfig.Default.(domain.GroupModelsListConfig)
 	// groupDescRpmLimit is the schema descriptor for rpm_limit field.
-	groupDescRpmLimit := groupFields[35].Descriptor()
+	groupDescRpmLimit := groupFields[36].Descriptor()
 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
 	// groupDescKiroCacheEmulationEnabled is the schema descriptor for kiro_cache_emulation_enabled field.
-	groupDescKiroCacheEmulationEnabled := groupFields[36].Descriptor()
+	groupDescKiroCacheEmulationEnabled := groupFields[37].Descriptor()
 	// group.DefaultKiroCacheEmulationEnabled holds the default value on creation for the kiro_cache_emulation_enabled field.
 	group.DefaultKiroCacheEmulationEnabled = groupDescKiroCacheEmulationEnabled.Default.(bool)
 	// groupDescKiroAutoStickyEnabled is the schema descriptor for kiro_auto_sticky_enabled field.
-	groupDescKiroAutoStickyEnabled := groupFields[37].Descriptor()
+	groupDescKiroAutoStickyEnabled := groupFields[38].Descriptor()
 	// group.DefaultKiroAutoStickyEnabled holds the default value on creation for the kiro_auto_sticky_enabled field.
 	group.DefaultKiroAutoStickyEnabled = groupDescKiroAutoStickyEnabled.Default.(bool)
 	// groupDescKiroStickySessionTTLSeconds is the schema descriptor for kiro_sticky_session_ttl_seconds field.
-	groupDescKiroStickySessionTTLSeconds := groupFields[38].Descriptor()
+	groupDescKiroStickySessionTTLSeconds := groupFields[39].Descriptor()
 	// group.DefaultKiroStickySessionTTLSeconds holds the default value on creation for the kiro_sticky_session_ttl_seconds field.
 	group.DefaultKiroStickySessionTTLSeconds = groupDescKiroStickySessionTTLSeconds.Default.(int)
 	// groupDescKiroCacheEmulationRatio is the schema descriptor for kiro_cache_emulation_ratio field.
-	groupDescKiroCacheEmulationRatio := groupFields[39].Descriptor()
+	groupDescKiroCacheEmulationRatio := groupFields[40].Descriptor()
 	// group.DefaultKiroCacheEmulationRatio holds the default value on creation for the kiro_cache_emulation_ratio field.
 	group.DefaultKiroCacheEmulationRatio = groupDescKiroCacheEmulationRatio.Default.(float64)
 	// groupDescKiroEndpointMode is the schema descriptor for kiro_endpoint_mode field.
-	groupDescKiroEndpointMode := groupFields[40].Descriptor()
+	groupDescKiroEndpointMode := groupFields[41].Descriptor()
 	// group.DefaultKiroEndpointMode holds the default value on creation for the kiro_endpoint_mode field.
 	group.DefaultKiroEndpointMode = groupDescKiroEndpointMode.Default.(string)
 	// group.KiroEndpointModeValidator is a validator for the "kiro_endpoint_mode" field. It is called by the builders before save.

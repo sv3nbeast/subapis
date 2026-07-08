@@ -85,6 +85,8 @@ type Group struct {
 	SortOrder int `json:"sort_order,omitempty"`
 	// 是否允许 /v1/messages 调度到此 OpenAI 分组
 	AllowMessagesDispatch bool `json:"allow_messages_dispatch,omitempty"`
+	// 是否允许 /v1/messages 非流式请求（内部转流式聚合）
+	AllowNonStreamMessages bool `json:"allow_non_stream_messages,omitempty"`
 	// 仅允许非 apikey 类型账号关联到此分组
 	RequireOauthOnly bool `json:"require_oauth_only,omitempty"`
 	// 调度时仅允许 privacy 已成功设置的账号
@@ -215,7 +217,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled, group.FieldKiroAutoStickyEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowNonStreamMessages, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled, group.FieldKiroAutoStickyEnabled:
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldKiroCacheEmulationRatio:
 			values[i] = new(sql.NullFloat64)
@@ -457,6 +459,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field allow_messages_dispatch", values[i])
 			} else if value.Valid {
 				_m.AllowMessagesDispatch = value.Bool
+			}
+		case group.FieldAllowNonStreamMessages:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field allow_non_stream_messages", values[i])
+			} else if value.Valid {
+				_m.AllowNonStreamMessages = value.Bool
 			}
 		case group.FieldRequireOauthOnly:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -722,6 +730,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("allow_messages_dispatch=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AllowMessagesDispatch))
+	builder.WriteString(", ")
+	builder.WriteString("allow_non_stream_messages=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AllowNonStreamMessages))
 	builder.WriteString(", ")
 	builder.WriteString("require_oauth_only=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RequireOauthOnly))

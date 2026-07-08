@@ -157,6 +157,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("allow_messages_dispatch").
 			Default(false).
 			Comment("是否允许 /v1/messages 调度到此 OpenAI 分组"),
+		field.Bool("allow_non_stream_messages").
+			Default(false).
+			Comment("是否允许 /v1/messages 非流式请求（内部转流式聚合）"),
 		field.Bool("require_oauth_only").
 			Default(false).
 			Comment("仅允许非 apikey 类型账号关联到此分组"),

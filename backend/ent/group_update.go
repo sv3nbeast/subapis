@@ -623,6 +623,20 @@ func (_u *GroupUpdate) SetNillableAllowMessagesDispatch(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (_u *GroupUpdate) SetAllowNonStreamMessages(v bool) *GroupUpdate {
+	_u.mutation.SetAllowNonStreamMessages(v)
+	return _u
+}
+
+// SetNillableAllowNonStreamMessages sets the "allow_non_stream_messages" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAllowNonStreamMessages(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetAllowNonStreamMessages(*v)
+	}
+	return _u
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (_u *GroupUpdate) SetRequireOauthOnly(v bool) *GroupUpdate {
 	_u.mutation.SetRequireOauthOnly(v)
@@ -1290,6 +1304,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AllowMessagesDispatch(); ok {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowNonStreamMessages(); ok {
+		_spec.SetField(group.FieldAllowNonStreamMessages, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RequireOauthOnly(); ok {
 		_spec.SetField(group.FieldRequireOauthOnly, field.TypeBool, value)
@@ -2234,6 +2251,20 @@ func (_u *GroupUpdateOne) SetNillableAllowMessagesDispatch(v *bool) *GroupUpdate
 	return _u
 }
 
+// SetAllowNonStreamMessages sets the "allow_non_stream_messages" field.
+func (_u *GroupUpdateOne) SetAllowNonStreamMessages(v bool) *GroupUpdateOne {
+	_u.mutation.SetAllowNonStreamMessages(v)
+	return _u
+}
+
+// SetNillableAllowNonStreamMessages sets the "allow_non_stream_messages" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAllowNonStreamMessages(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAllowNonStreamMessages(*v)
+	}
+	return _u
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (_u *GroupUpdateOne) SetRequireOauthOnly(v bool) *GroupUpdateOne {
 	_u.mutation.SetRequireOauthOnly(v)
@@ -2931,6 +2962,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AllowMessagesDispatch(); ok {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AllowNonStreamMessages(); ok {
+		_spec.SetField(group.FieldAllowNonStreamMessages, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RequireOauthOnly(); ok {
 		_spec.SetField(group.FieldRequireOauthOnly, field.TypeBool, value)
