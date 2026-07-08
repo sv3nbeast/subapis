@@ -713,6 +713,19 @@ func TestSupportedModels_PricingOnlyNoMapping(t *testing.T) {
 	require.Equal(t, int64(1), got[1].Pricing.ID)
 }
 
+func TestSupportedModels_DisabledPricingHidden(t *testing.T) {
+	ch := &Channel{
+		ModelPricing: []ChannelModelPricing{
+			{ID: 1, Platform: "anthropic", Models: []string{"claude-opus-4-6"}, Disabled: true},
+			{ID: 2, Platform: "anthropic", Models: []string{"claude-haiku-4-5"}},
+		},
+	}
+	got := ch.SupportedModels()
+	require.Len(t, got, 1)
+	require.Equal(t, "claude-haiku-4-5", got[0].Name)
+	require.Equal(t, int64(2), got[0].Pricing.ID)
+}
+
 func TestSupportedModels_ExactMappingUsesTargetPricing(t *testing.T) {
 	// 精确 mapping `src → target`：定价应按 target 查（实际计费的是 target），
 	// 而不是按 src 自查。

@@ -211,6 +211,9 @@ func newEmptyChannelCache() *channelCache {
 func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
 	for j := range ch.ModelPricing {
 		pricing := &ch.ModelPricing[j]
+		if pricing.Disabled {
+			continue
+		}
 		if !isPlatformPricingMatch(platform, pricing.Platform) {
 			continue // 跳过非本平台的定价
 		}
@@ -726,14 +729,18 @@ func validateAccountStatsPricingRules(rules []AccountStatsPricingRule) error {
 // validatePricingBillingMode 校验计费模式配置：按次/图片模式必须配价格或区间，所有价格字段不能为负，区间至少有一个价格字段。
 func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {
-		if err := checkBillingModeRequirements(p); err != nil {
-			return err
+		if !p.Disabled {
+			if err := checkBillingModeRequirements(p); err != nil {
+				return err
+			}
 		}
 		if err := checkPricesNotNegative(p); err != nil {
 			return err
 		}
-		if err := checkIntervalsHavePrices(p); err != nil {
-			return err
+		if !p.Disabled {
+			if err := checkIntervalsHavePrices(p); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1073,6 +1080,9 @@ func toModelEntry(pattern string) modelEntry {
 func validateNoConflictingModels(pricingList []ChannelModelPricing) error {
 	byPlatform := make(map[string][]modelEntry)
 	for _, p := range pricingList {
+		if p.Disabled {
+			continue
+		}
 		for _, model := range p.Models {
 			byPlatform[p.Platform] = append(byPlatform[p.Platform], toModelEntry(model))
 		}
@@ -1101,6 +1111,9 @@ func validateNoConflictingMappings(mapping map[string]map[string]string) error {
 
 func validatePricingIntervals(pricingList []ChannelModelPricing) error {
 	for _, pricing := range pricingList {
+		if pricing.Disabled {
+			continue
+		}
 		if err := ValidateIntervals(pricing.Intervals, pricing.BillingMode); err != nil {
 			return infraerrors.BadRequest(
 				"INVALID_PRICING_INTERVALS",

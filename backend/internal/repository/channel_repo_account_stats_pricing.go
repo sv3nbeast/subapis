@@ -71,7 +71,7 @@ func (r *channelRepository) batchLoadAccountStatsModelPricing(ctx context.Contex
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, rule_id, platform, models, billing_mode, input_price, output_price,
 		        cache_write_price, cache_write_5m_price, cache_write_1h_price, cache_read_price,
-		        image_output_price, per_request_price, created_at, updated_at
+		        image_output_price, per_request_price, enabled, created_at, updated_at
 		 FROM channel_account_stats_model_pricing
 		 WHERE rule_id = ANY($1)
 		 ORDER BY rule_id, id`,
@@ -86,6 +86,7 @@ func (r *channelRepository) batchLoadAccountStatsModelPricing(ctx context.Contex
 		var pricing service.ChannelModelPricing
 		var ruleID int64
 		var modelsJSON []byte
+		var enabled bool
 		if err := rows.Scan(
 			&pricing.ID,
 			&ruleID,
@@ -100,11 +101,13 @@ func (r *channelRepository) batchLoadAccountStatsModelPricing(ctx context.Contex
 			&pricing.CacheReadPrice,
 			&pricing.ImageOutputPrice,
 			&pricing.PerRequestPrice,
+			&enabled,
 			&pricing.CreatedAt,
 			&pricing.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan account stats model pricing: %w", err)
 		}
+		pricing.Disabled = !enabled
 		if err := json.Unmarshal(modelsJSON, &pricing.Models); err != nil {
 			pricing.Models = []string{}
 		}
@@ -240,8 +243,8 @@ func createAccountStatsModelPricingTx(ctx context.Context, tx *sql.Tx, ruleID in
 	if err := tx.QueryRowContext(ctx,
 		`INSERT INTO channel_account_stats_model_pricing
 		 (rule_id, platform, models, billing_mode, input_price, output_price, cache_write_price,
-		  cache_write_5m_price, cache_write_1h_price, cache_read_price, image_output_price, per_request_price)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		  cache_write_5m_price, cache_write_1h_price, cache_read_price, image_output_price, per_request_price, enabled)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id, created_at, updated_at`,
 		ruleID,
 		pricing.Platform,
@@ -255,6 +258,7 @@ func createAccountStatsModelPricingTx(ctx context.Context, tx *sql.Tx, ruleID in
 		pricing.CacheReadPrice,
 		pricing.ImageOutputPrice,
 		pricing.PerRequestPrice,
+		!pricing.Disabled,
 	).Scan(&pricing.ID, &pricing.CreatedAt, &pricing.UpdatedAt); err != nil {
 		return fmt.Errorf("insert account stats model pricing: %w", err)
 	}

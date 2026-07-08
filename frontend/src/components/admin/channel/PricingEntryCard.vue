@@ -1,5 +1,8 @@
 <template>
-  <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
+  <div
+    class="rounded-lg border border-gray-200 bg-gray-50 p-3 transition-opacity dark:border-dark-600 dark:bg-dark-800"
+    :class="entry.enabled === false ? 'opacity-75' : ''"
+  >
     <!-- Collapsed summary header (clickable) -->
     <div
       class="flex cursor-pointer select-none items-center gap-2"
@@ -44,11 +47,31 @@
         >
           {{ billingModeLabel }}
         </span>
+        <span
+          v-if="entry.enabled === false"
+          class="flex-shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-dark-600 dark:text-gray-300"
+        >
+          {{ t('admin.channels.form.pricingDisabled') }}
+        </span>
       </div>
 
       <!-- Expanded: show the label "Pricing Entry" or similar -->
       <div v-else class="flex-1 text-xs font-medium text-gray-500 dark:text-gray-400">
         {{ t('admin.channels.form.pricingEntry') }}
+      </div>
+
+      <!-- Enable switch (always visible, stop propagation) -->
+      <div class="flex flex-shrink-0 items-center gap-1.5" @click.stop>
+        <span
+          class="hidden text-xs sm:inline"
+          :class="entry.enabled === false ? 'text-gray-400' : 'text-primary-600 dark:text-primary-400'"
+        >
+          {{ entry.enabled === false ? t('admin.channels.form.pricingDisabled') : t('admin.channels.form.pricingEnabled') }}
+        </span>
+        <Toggle
+          :modelValue="entry.enabled !== false"
+          @update:modelValue="emit('update', { ...entry, enabled: $event })"
+        />
       </div>
 
       <!-- Remove button (always visible, stop propagation) -->
@@ -73,6 +96,9 @@
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.channels.form.models') }} <span class="text-red-500">*</span>
             </label>
+            <p v-if="entry.enabled === false" class="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+              {{ t('admin.channels.form.pricingDisabledHint') }}
+            </p>
             <ModelTagInput
               :models="entry.models"
               :platform="props.platform"
@@ -240,6 +266,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'

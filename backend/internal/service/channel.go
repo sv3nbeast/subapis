@@ -102,6 +102,7 @@ type ChannelModelPricing struct {
 	ChannelID         int64
 	Platform          string            // 所属平台（anthropic/openai/gemini/...）
 	Models            []string          // 绑定的模型列表
+	Disabled          bool              // true 表示后台保留价格但运行时忽略
 	BillingMode       BillingMode       // 计费模式
 	InputPrice        *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
 	OutputPrice       *float64          // 每 token 输出价格（USD）
@@ -158,6 +159,9 @@ func (c *Channel) GetModelPricing(model string) *ChannelModelPricing {
 	modelLower := strings.ToLower(model)
 
 	for i := range c.ModelPricing {
+		if c.ModelPricing[i].Disabled {
+			continue
+		}
 		for _, m := range c.ModelPricing[i].Models {
 			if strings.ToLower(m) == modelLower {
 				cp := c.ModelPricing[i].Clone()
@@ -423,6 +427,9 @@ func (c *Channel) GetModelPricingByPlatform(platform, model string) *ChannelMode
 	}
 	modelLower := strings.ToLower(model)
 	for i := range c.ModelPricing {
+		if c.ModelPricing[i].Disabled {
+			continue
+		}
 		if c.ModelPricing[i].Platform != platform {
 			continue
 		}
@@ -456,6 +463,9 @@ func buildPricingIndex(pricings []ChannelModelPricing) map[string]*platformPrici
 	idx := make(map[string]*platformPricingIndex)
 	for i := range pricings {
 		p := pricings[i]
+		if p.Disabled {
+			continue
+		}
 		pidx, ok := idx[p.Platform]
 		if !ok {
 			pidx = &platformPricingIndex{

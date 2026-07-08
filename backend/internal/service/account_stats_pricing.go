@@ -116,6 +116,9 @@ type accountStatsWildcardMatch struct {
 func findAccountStatsPricingForModel(pricingList []ChannelModelPricing, platform string, modelLower string) *ChannelModelPricing {
 	for i := range pricingList {
 		pricing := &pricingList[i]
+		if pricing.Disabled {
+			continue
+		}
 		if !isAccountStatsPlatformMatch(platform, pricing.Platform) {
 			continue
 		}
@@ -129,6 +132,9 @@ func findAccountStatsPricingForModel(pricingList []ChannelModelPricing, platform
 	var matches []accountStatsWildcardMatch
 	for i := range pricingList {
 		pricing := &pricingList[i]
+		if pricing.Disabled {
+			continue
+		}
 		if !isAccountStatsPlatformMatch(platform, pricing.Platform) {
 			continue
 		}

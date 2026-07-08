@@ -865,6 +865,7 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 function addPricingEntry(sectionIdx: number) {
   form.platforms[sectionIdx].model_pricing.push({
     models: [],
+    enabled: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -889,6 +890,7 @@ function removePricingEntry(sectionIdx: number, idx: number) {
 function createEmptyPricingEntry(): PricingFormEntry {
   return {
     models: [],
+    enabled: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -980,6 +982,7 @@ function pricingEntryToAPI(entry: PricingFormEntry, platform: GroupPlatform): Ch
   return {
     platform,
     models: entry.models,
+    enabled: entry.enabled !== false,
     billing_mode: entry.billing_mode,
     input_price: mTokToPerToken(entry.input_price),
     output_price: mTokToPerToken(entry.output_price),
@@ -996,6 +999,7 @@ function pricingEntryToAPI(entry: PricingFormEntry, platform: GroupPlatform): Ch
 function pricingAPIToForm(pricing: ChannelModelPricing): PricingFormEntry {
   return {
     models: pricing.models || [],
+    enabled: pricing.enabled !== false,
     billing_mode: pricing.billing_mode,
     input_price: perTokenToMTok(pricing.input_price),
     output_price: perTokenToMTok(pricing.output_price),
@@ -1378,6 +1382,7 @@ async function handleSubmit() {
     // Collect all pricing models for this platform
     const allModels: string[] = []
     for (const entry of section.model_pricing) {
+      if (entry.enabled === false) continue
       allModels.push(...entry.models)
     }
     const pricingConflict = findModelConflict(allModels)
@@ -1405,6 +1410,7 @@ async function handleSubmit() {
     for (const rule of section.account_stats_pricing_rules) {
       const statsModels: string[] = []
       for (const entry of rule.pricing) {
+        if (entry.enabled === false) continue
         statsModels.push(...entry.models)
       }
       const statsConflict = findModelConflict(statsModels)
@@ -1423,6 +1429,7 @@ async function handleSubmit() {
   // 校验 per_request/image 模式必须有价格 (只校验启用的平台)
   for (const section of form.platforms.filter(s => s.enabled)) {
     for (const entry of section.model_pricing) {
+      if (entry.enabled === false) continue
       if (entry.models.length === 0) continue
       if ((entry.billing_mode === 'per_request' || entry.billing_mode === 'image') &&
           (entry.per_request_price == null || entry.per_request_price === '') &&
@@ -1433,6 +1440,7 @@ async function handleSubmit() {
     }
     for (const rule of section.account_stats_pricing_rules) {
       for (const entry of rule.pricing) {
+        if (entry.enabled === false) continue
         if (entry.models.length === 0) continue
         if ((entry.billing_mode === 'per_request' || entry.billing_mode === 'image') &&
             (entry.per_request_price == null || entry.per_request_price === '') &&
@@ -1448,6 +1456,7 @@ async function handleSubmit() {
   // 校验区间合法性（范围、重叠等）
   for (const section of form.platforms.filter(s => s.enabled)) {
     for (const entry of section.model_pricing) {
+      if (entry.enabled === false) continue
       if (!entry.intervals || entry.intervals.length === 0) continue
       const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
       if (intervalErr) {
@@ -1460,6 +1469,7 @@ async function handleSubmit() {
     }
     for (const rule of section.account_stats_pricing_rules) {
       for (const entry of rule.pricing) {
+        if (entry.enabled === false) continue
         if (!entry.intervals || entry.intervals.length === 0) continue
         const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
         if (intervalErr) {

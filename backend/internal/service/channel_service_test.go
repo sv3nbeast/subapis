@@ -772,6 +772,41 @@ func TestGetChannelModelPricing_NoMatch(t *testing.T) {
 	require.Nil(t, result)
 }
 
+func TestGetChannelModelPricing_DisabledEntryIgnored(t *testing.T) {
+	ch := Channel{
+		ID:       1,
+		Status:   StatusActive,
+		GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{
+			{ID: 100, Platform: "anthropic", Models: []string{"claude-opus-4"}, InputPrice: testPtrFloat64(15e-6), Disabled: true},
+			{ID: 200, Platform: "anthropic", Models: []string{"claude-sonnet-4"}, InputPrice: testPtrFloat64(10e-6)},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	require.Nil(t, svc.GetChannelModelPricing(context.Background(), 10, "claude-opus-4"))
+	require.NotNil(t, svc.GetChannelModelPricing(context.Background(), 10, "claude-sonnet-4"))
+}
+
+func TestIsModelRestricted_DisabledEntryNotAllowed(t *testing.T) {
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		RestrictModels: true,
+		GroupIDs:       []int64{10},
+		ModelPricing: []ChannelModelPricing{
+			{ID: 100, Platform: "anthropic", Models: []string{"claude-opus-4"}, Disabled: true},
+			{ID: 200, Platform: "anthropic", Models: []string{"claude-sonnet-4"}},
+		},
+	}
+	repo := makeStandardRepo(ch, map[int64]string{10: "anthropic"})
+	svc := newTestChannelService(repo)
+
+	require.True(t, svc.IsModelRestricted(context.Background(), 10, "claude-opus-4"))
+	require.False(t, svc.IsModelRestricted(context.Background(), 10, "claude-sonnet-4"))
+}
+
 func TestGetChannelModelPricing_DisplayOnlyIgnored(t *testing.T) {
 	ch := Channel{
 		ID:          1,

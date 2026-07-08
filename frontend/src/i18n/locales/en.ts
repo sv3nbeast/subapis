@@ -3299,6 +3299,10 @@ export default {
         noPlatforms: 'Click "Add Platform" to start configuring the channel',
         mappingCount: 'mappings',
         pricingEntry: 'Pricing Entry',
+        pricingEnabled: 'Enabled',
+        pricingDisabled: 'Disabled',
+        pricingDisabledHint:
+          'This pricing entry is disabled: models and prices are kept, but it will not be used for available models, model allowlist, or channel billing.',
         noModels: 'No models added',
         applyPricingToAccountStats: 'Apply request pricing to account stats',
         applyPricingToAccountStatsHint:
