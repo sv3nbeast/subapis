@@ -142,6 +142,40 @@ func TestRefreshExternalIDPTokenDerivesAzureEndpointFromIssuerURL(t *testing.T) 
 	require.Equal(t, server.URL+"/tenant/oauth2/v2.0/token", token.TokenEndpoint)
 }
 
+func TestRefreshExternalIDPTokenFallsBackToDirectWhenProxyRejects(t *testing.T) {
+	tokenHits := 0
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-access-token","expires_in":1800}`))
+	}))
+	defer tokenServer.Close()
+
+	proxyHits := 0
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits++
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	}))
+	defer proxyServer.Close()
+
+	token, err := RefreshExternalIDPToken(
+		context.Background(),
+		proxyServer.URL,
+		"old-refresh-token",
+		"client-id",
+		"",
+		tokenServer.URL,
+		"",
+		"us-east-1",
+		"profile-arn",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, proxyHits)
+	require.Equal(t, 1, tokenHits)
+	require.Equal(t, "new-access-token", token.AccessToken)
+}
+
 func TestParseImportedTokenInfersIDCAuthMetadataFromDeviceRegistration(t *testing.T) {
 	token, err := ParseImportedToken(`{
 		"accessToken": "access-token",

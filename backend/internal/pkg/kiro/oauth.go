@@ -740,7 +740,14 @@ func RefreshExternalIDPToken(ctx context.Context, proxyURL, refreshToken, client
 	if err := doForm(ctx, proxyURL, http.MethodPost, tokenEndpoint, form, &resp, map[string]string{
 		"Accept": "application/json",
 	}); err != nil {
-		return nil, err
+		if strings.TrimSpace(proxyURL) == "" {
+			return nil, err
+		}
+		if directErr := doForm(ctx, "", http.MethodPost, tokenEndpoint, form, &resp, map[string]string{
+			"Accept": "application/json",
+		}); directErr != nil {
+			return nil, fmt.Errorf("kiro external_idp refresh failed via proxy: %v; direct fallback failed: %w", err, directErr)
+		}
 	}
 	if strings.TrimSpace(resp.AccessToken) == "" {
 		return nil, fmt.Errorf("kiro external_idp token response missing access token")
