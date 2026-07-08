@@ -46,10 +46,25 @@ func TestParseImportedTokenAcceptsCLIProxyAPIExternalIDPFormat(t *testing.T) {
 	require.Equal(t, "client-id", token.ClientID)
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID", token.ProfileArn)
 	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", token.IssuerURL)
+	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", token.StartURL)
 	require.Equal(t, "https://login.microsoftonline.com/example/oauth2/v2.0/token", token.TokenEndpoint)
 	require.Equal(t, "api://client-id/codewhisperer:conversations offline_access", token.Scopes)
 	_, err = time.Parse(time.RFC3339, token.ExpiresAt)
 	require.NoError(t, err)
+}
+
+func TestParseImportedTokenDerivesExternalIDPTokenEndpointFromIssuerURL(t *testing.T) {
+	token, err := ParseImportedToken(`{
+		"access_token": "access-token",
+		"refresh_token": "refresh-token",
+		"auth_method": "external_idp",
+		"client_id": "client-id",
+		"issuer_url": "https://login.microsoftonline.com/example/v2.0",
+		"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID"
+	}`, "")
+	require.NoError(t, err)
+	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", token.StartURL)
+	require.Equal(t, "https://login.microsoftonline.com/example/oauth2/v2.0/token", token.TokenEndpoint)
 }
 
 func TestRefreshExternalIDPTokenUsesFormRefreshGrant(t *testing.T) {
@@ -99,6 +114,32 @@ func TestRefreshExternalIDPTokenUsesFormRefreshGrant(t *testing.T) {
 	require.Equal(t, "external_idp", token.AuthMethod)
 	require.Equal(t, ProviderEnterprise, token.Provider)
 	require.Equal(t, server.URL, token.TokenEndpoint)
+}
+
+func TestRefreshExternalIDPTokenDerivesAzureEndpointFromIssuerURL(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-access-token","expires_in":1800}`))
+	}))
+	defer server.Close()
+
+	token, err := RefreshExternalIDPToken(
+		context.Background(),
+		"",
+		"old-refresh-token",
+		"client-id",
+		"",
+		"",
+		"",
+		"us-east-1",
+		"profile-arn",
+		server.URL+"/tenant/v2.0",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "/tenant/oauth2/v2.0/token", gotPath)
+	require.Equal(t, server.URL+"/tenant/oauth2/v2.0/token", token.TokenEndpoint)
 }
 
 func TestParseImportedTokenInfersIDCAuthMetadataFromDeviceRegistration(t *testing.T) {

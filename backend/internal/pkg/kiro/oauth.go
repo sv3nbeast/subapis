@@ -715,7 +715,7 @@ func RefreshIDCToken(ctx context.Context, proxyURL, clientID, clientSecret, refr
 }
 
 func RefreshExternalIDPToken(ctx context.Context, proxyURL, refreshToken, clientID, clientSecret, tokenEndpoint, scopes, region, profileArn, issuerURL string) (*TokenData, error) {
-	tokenEndpoint = strings.TrimSpace(tokenEndpoint)
+	tokenEndpoint = ResolveExternalIDPTokenEndpoint(tokenEndpoint, issuerURL)
 	if tokenEndpoint == "" {
 		return nil, fmt.Errorf("kiro external_idp refresh requires token_endpoint")
 	}
@@ -773,6 +773,28 @@ func RefreshExternalIDPToken(ctx context.Context, proxyURL, refreshToken, client
 	}, nil
 }
 
+func ResolveExternalIDPTokenEndpoint(tokenEndpoint, issuerURL string) string {
+	if endpoint := strings.TrimSpace(tokenEndpoint); endpoint != "" {
+		return endpoint
+	}
+	issuer := strings.TrimRight(strings.TrimSpace(issuerURL), "/")
+	if issuer == "" {
+		return ""
+	}
+	lower := strings.ToLower(issuer)
+	if strings.HasSuffix(lower, "/token") && strings.Contains(lower, "/oauth2/") {
+		return issuer
+	}
+	const azureV2Suffix = "/v2.0"
+	if strings.HasSuffix(lower, azureV2Suffix) {
+		return issuer[:len(issuer)-len(azureV2Suffix)] + "/oauth2/v2.0/token"
+	}
+	if strings.Contains(lower, "login.microsoftonline.com/") {
+		return issuer + "/oauth2/v2.0/token"
+	}
+	return ""
+}
+
 func FetchOIDCUserEmail(ctx context.Context, proxyURL, accessToken, region string) string {
 	if strings.TrimSpace(accessToken) == "" {
 		return ""
@@ -817,6 +839,12 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	token.Provider = strings.TrimSpace(token.Provider)
 	if token.AuthMethod == "external_idp" && token.Provider == "" {
 		token.Provider = ProviderEnterprise
+	}
+	if token.AuthMethod == "external_idp" {
+		if strings.TrimSpace(token.StartURL) == "" && strings.TrimSpace(token.IssuerURL) != "" {
+			token.StartURL = strings.TrimSpace(token.IssuerURL)
+		}
+		token.TokenEndpoint = ResolveExternalIDPTokenEndpoint(token.TokenEndpoint, firstNonEmpty(token.IssuerURL, token.StartURL))
 	}
 	if strings.EqualFold(token.Provider, "AWS") && token.AuthMethod == "idc" {
 		token.Provider = resolveIDCProvider(token.StartURL)
