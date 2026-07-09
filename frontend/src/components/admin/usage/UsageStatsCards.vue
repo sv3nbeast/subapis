@@ -1,5 +1,5 @@
 <template>
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+  <div class="grid grid-cols-2 gap-4 lg:grid-cols-5">
     <div class="card p-4 flex items-center gap-3">
       <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30 text-blue-600">
         <Icon name="document" size="md" />
@@ -22,9 +22,6 @@
           <span>/</span>
           <span class="group relative inline-flex cursor-help items-center gap-0.5" tabindex="0">
             <span>{{ cacheLabel() }}: {{ formatTokens(stats?.total_cache_tokens || 0) }}</span>
-            <span v-if="totalPromptTokens > 0" class="text-purple-500 dark:text-purple-400">
-              · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(totalCacheHitRate) }}
-            </span>
             <svg
               class="h-3.5 w-3.5 text-gray-400"
               fill="none"
@@ -83,6 +80,23 @@
       </div>
     </div>
     <div class="card p-4 flex items-center gap-3">
+      <div class="rounded-lg bg-cyan-100 p-2 dark:bg-cyan-900/30">
+        <Icon name="database" size="md" class="text-cyan-600 dark:text-cyan-400" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+          {{ t('usage.inputCacheReadRatio') }}
+        </p>
+        <p class="text-xl font-bold text-cyan-600 dark:text-cyan-400">
+          {{ formatPercent(inputCacheReadRatio) }}
+        </p>
+        <p class="truncate text-xs text-gray-500 dark:text-gray-400">
+          {{ t('usage.cacheReadTokens', { tokens: formatTokens(cacheReadTokens) }) }} /
+          {{ t('usage.cacheWriteTokens', { tokens: formatTokens(cacheCreationTokens) }) }}
+        </p>
+      </div>
+    </div>
+    <div class="card p-4 flex items-center gap-3">
       <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30 text-purple-600">
         <Icon name="clock" size="md" />
       </div>
@@ -126,18 +140,17 @@ const formatTokens = (value: number) => {
   return value.toLocaleString()
 }
 
-const totalPromptTokens = computed(() =>
-  (props.stats?.total_input_tokens ?? 0) +
-  (props.stats?.total_cache_creation_tokens ?? 0) +
-  (props.stats?.total_cache_read_tokens ?? 0)
+const cacheCreationTokens = computed(() => props.stats?.total_cache_creation_tokens ?? 0)
+const cacheReadTokens = computed(() => props.stats?.total_cache_read_tokens ?? 0)
+const inputSideTokens = computed(
+  () => (props.stats?.total_input_tokens ?? 0) + cacheCreationTokens.value + cacheReadTokens.value
 )
-
-const totalCacheHitRate = computed(() => {
-  if (totalPromptTokens.value <= 0) return 0
-  return ((props.stats?.total_cache_read_tokens ?? 0) / totalPromptTokens.value) * 100
+const inputCacheReadRatio = computed(() => {
+  if (inputSideTokens.value <= 0) return 0
+  return cacheReadTokens.value / inputSideTokens.value
 })
 
-const formatPercent = (value: number) => `${value.toFixed(1)}%`
+const formatPercent = (value: number) => `${(value * 100).toFixed(2)}%`
 
 const cacheLabel = () => t('usage.cacheTotal')
 const cacheDetailLabel = () => t('usage.cacheBreakdown')

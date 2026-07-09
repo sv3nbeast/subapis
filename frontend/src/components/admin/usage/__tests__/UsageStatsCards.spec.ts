@@ -14,6 +14,8 @@ const messages: Record<string, string> = {
   'usage.cacheCreationTokensLabel': 'Cache Creation',
   'usage.cacheReadTokensLabel': 'Cache Read',
   'usage.inputCacheReadRatio': 'Input Cache Hit Rate',
+  'usage.cacheReadTokens': 'Read {tokens}',
+  'usage.cacheWriteTokens': 'Write {tokens}',
   'usage.totalCost': 'Total Cost',
   'usage.accountCost': 'Cost',
   'usage.standardCost': 'Standard',
@@ -25,7 +27,15 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => messages[key] ?? key,
+      t: (key: string, params?: Record<string, unknown>) => {
+        let message = messages[key] ?? key
+        if (params) {
+          for (const [paramKey, value] of Object.entries(params)) {
+            message = message.replace(`{${paramKey}}`, String(value))
+          }
+        }
+        return message
+      },
     }),
   }
 })
@@ -59,7 +69,10 @@ describe('UsageStatsCards', () => {
 
     const text = wrapper.text()
     expect(text).toContain('Cache: 34')
-    expect(text).toContain('Input Cache Hit Rate: 16.4%')
+    expect(text).toContain('Input Cache Hit Rate')
+    expect(text).toContain('16.42%')
+    expect(text).toContain('Read 22')
+    expect(text).toContain('Write 12')
     expect(text).toContain('Cache Token Breakdown')
     expect(text).toContain('Cache Creation')
     expect(text).toContain('12')
