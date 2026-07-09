@@ -1531,6 +1531,7 @@ func validateKiroRequestShape(parsed *ParsedRequest) string {
 
 	lastRole := ""
 	hasUserContext := false
+	var lastMsg map[string]any
 	for _, raw := range messages {
 		msg, ok := raw.(map[string]any)
 		if !ok {
@@ -1541,18 +1542,41 @@ func validateKiroRequestShape(parsed *ParsedRequest) string {
 			continue
 		}
 		lastRole = role
+		lastMsg = msg
 		if role == "user" && kiroUserMessageHasContext(msg["content"]) {
 			hasUserContext = true
 		}
 	}
 
-	if lastRole == "assistant" {
-		return "assistant-prefill final message is not supported; last message must be user"
+	if lastRole == "assistant" && kiroAssistantMessageHasToolUse(lastMsg["content"]) {
+		return "assistant final tool_use is not supported; provide tool_result as final user message"
 	}
 	if !hasUserContext {
 		return "at least one non-empty user message is required"
 	}
 	return ""
+}
+
+func kiroAssistantMessageHasToolUse(content any) bool {
+	switch v := content.(type) {
+	case []any:
+		for _, rawBlock := range v {
+			block, ok := rawBlock.(map[string]any)
+			if !ok {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(stringFromKiroRequestShapeValue(block["type"])), "tool_use") {
+				return true
+			}
+		}
+	case []map[string]any:
+		for _, block := range v {
+			if strings.EqualFold(strings.TrimSpace(stringFromKiroRequestShapeValue(block["type"])), "tool_use") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func kiroUserMessageHasContext(content any) bool {

@@ -921,7 +921,65 @@ func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testin
 	require.Contains(t, rec.Body.String(), "event: message_stop")
 }
 
-func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) {
+func TestForwardKiroMessagesAllowsAssistantTextPrefill(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":" continuation"}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":true,
+		"max_tokens":128,
+		"messages":[
+			{"role":"user","content":"hello"},
+			{"role":"assistant","content":"prefill"}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+		},
+	}
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Contains(t, rec.Body.String(), " continuation")
+	require.Len(t, upstream.requests, 1)
+	payload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	require.True(t, kiroPayloadHistoryContainsAssistantContent(payload, "prefill"))
+	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
+}
+
+func TestForwardKiroMessagesRejectsFinalAssistantToolUseBeforeUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -933,17 +991,17 @@ func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) 
 		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
 		tlsFPProfileService: &TLSFingerprintProfileService{},
 	}
-	parsed := &ParsedRequest{
-		Model: "claude-sonnet-4-6",
-		Body: NewRequestBodyRef([]byte(`{
-			"model":"claude-sonnet-4-6",
-			"max_tokens":128,
-			"messages":[
-				{"role":"user","content":"hello"},
-				{"role":"assistant","content":"prefill"}
-			]
-		}`)),
-	}
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":true,
+		"max_tokens":128,
+		"messages":[
+			{"role":"user","content":"find weather"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"get_weather","input":{}}]}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
 	account := &Account{
 		ID:          42,
 		Platform:    PlatformKiro,
@@ -960,8 +1018,8 @@ func TestForwardKiroMessagesRejectsAssistantPrefillBeforeUpstream(t *testing.T) 
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), "assistant-prefill final message is not supported")
-	require.Empty(t, upstream.requests, "invalid Kiro request shape must not hit upstream")
+	require.Contains(t, rec.Body.String(), "assistant final tool_use is not supported")
+	require.Empty(t, upstream.requests, "invalid Kiro final tool_use shape must not hit upstream")
 }
 
 func TestValidateKiroRequestShapeAllowsToolResultFinalTurn(t *testing.T) {
@@ -985,6 +1043,15 @@ func newKiroEventStreamResponse(status int, body []byte) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
 		Body:       io.NopCloser(strings.NewReader(string(body))),
 	}
+}
+
+func kiroPayloadHistoryContainsAssistantContent(payload []byte, content string) bool {
+	for _, item := range gjson.GetBytes(payload, "conversationState.history").Array() {
+		if item.Get("assistantResponseMessage.content").String() == content {
+			return true
+		}
+	}
+	return false
 }
 
 func buildKiroExceptionFrame(t *testing.T, exceptionType string, payload any) []byte {
