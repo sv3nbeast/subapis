@@ -315,8 +315,82 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, parsed.Group, body, mappedModel, inputTokens)
-	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
-	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, mappedModel, requestCtx)
+	currentResp := resp
+	currentRequestCtx := requestCtx
+	maxBodyRetries := kiroStreamBodyRetryMax()
+	var parseResult *kiropkg.ParseResult
+	for bodyAttempt := 0; ; bodyAttempt++ {
+		currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+		parseResult, err = kiropkg.ParseNonStreamingEventStreamWithContext(currentResp.Body, mappedModel, currentRequestCtx)
+		_ = currentResp.Body.Close()
+		if err == nil {
+			resp = currentResp
+			break
+		}
+		emptyStreamMsg := kiroEmptyEventStreamMessage(err)
+		if emptyStreamMsg == "" || maxBodyRetries <= 0 {
+			break
+		}
+		if bodyAttempt >= maxBodyRetries {
+			err = &kiroStreamBodyRetriesExhaustedError{
+				Attempts: bodyAttempt + 1,
+				Cause:    err,
+			}
+			break
+		}
+		retryAttempt := bodyAttempt + 1
+		requestID := buildKiroClientRequestID(currentResp)
+		retryNonce := buildKiroStreamBodyRetryNonce(account, requestID, retryAttempt)
+		logger.L().Warn("kiro.non_stream_body_retry",
+			zap.Int64("account_id", account.ID),
+			zap.String("request_id", requestID),
+			zap.Int("retry_attempt", retryAttempt),
+			zap.Int("retry_max", maxBodyRetries),
+			zap.String("reason", sanitizeUpstreamErrorMessage(emptyStreamMsg)),
+		)
+		if sleepErr := sleepKiroRetry(ctx, bodyAttempt); sleepErr != nil {
+			logger.L().Warn("kiro.non_stream_body_retry_sleep_failed",
+				zap.Int64("account_id", account.ID),
+				zap.String("request_id", requestID),
+				zap.Int("retry_attempt", retryAttempt),
+				zap.Error(sleepErr),
+			)
+			break
+		}
+		nextResp, nextRequestCtx, openErr := s.executeKiroUpstreamWithParsedOptions(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header, kiroUpstreamRequestOptions{
+			ConversationRetryNonce: retryNonce,
+			EndpointStartOffset:    retryAttempt,
+		})
+		if openErr != nil {
+			logger.L().Warn("kiro.non_stream_body_retry_open_failed",
+				zap.Int64("account_id", account.ID),
+				zap.String("request_id", requestID),
+				zap.Int("retry_attempt", retryAttempt),
+				zap.Error(openErr),
+			)
+			break
+		}
+		if nextResp == nil {
+			logger.L().Warn("kiro.non_stream_body_retry_empty_response",
+				zap.Int64("account_id", account.ID),
+				zap.String("request_id", requestID),
+				zap.Int("retry_attempt", retryAttempt),
+			)
+			break
+		}
+		if nextResp.StatusCode < 200 || nextResp.StatusCode >= 300 {
+			logger.L().Warn("kiro.non_stream_body_retry_non_2xx",
+				zap.Int64("account_id", account.ID),
+				zap.String("request_id", requestID),
+				zap.Int("retry_attempt", retryAttempt),
+				zap.Int("status_code", nextResp.StatusCode),
+			)
+			_ = nextResp.Body.Close()
+			break
+		}
+		currentResp = nextResp
+		currentRequestCtx = nextRequestCtx
+	}
 	if err != nil {
 		if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

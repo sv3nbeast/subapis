@@ -197,6 +197,145 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	require.Equal(t, http.StatusOK, rec.Code, "parse failover should not write a plain 502 before handler can retry")
 }
 
+func TestForwardKiroMessagesNonStreamingMetadataOnlyRetriesWithFreshConversationAndEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	oldSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	defer func() { kiroRetrySleep = oldSleep }()
+
+	metadataOnlyBody := bytes.NewBuffer(nil)
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "reasoningContentEvent",
+	}, []byte(`{"reasoningContentEvent":{"text":"I should think first."}}`)))
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"non-stream recovered after retry"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":11,"outputTokens":5,"totalTokens":16}}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody.Bytes()),
+			newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          88,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-4-7","max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Contains(t, rec.Body.String(), "non-stream recovered after retry")
+	require.Len(t, upstream.requests, 2)
+	require.NotEqual(t, upstream.requests[0].URL.String(), upstream.requests[1].URL.String(), "non-stream body retry should rotate Kiro endpoint")
+
+	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	secondPayload, err := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, err)
+	firstConversationID := gjson.GetBytes(firstPayload, "conversationState.conversationId").String()
+	secondConversationID := gjson.GetBytes(secondPayload, "conversationState.conversationId").String()
+	require.NotEmpty(t, firstConversationID)
+	require.NotEmpty(t, secondConversationID)
+	require.NotEqual(t, firstConversationID, secondConversationID, "non-stream body retry must avoid replaying the same stable conversation id")
+}
+
+func TestForwardKiroMessagesNonStreamingMetadataOnlyExhaustionDoesNotAmplifySameAccountRetry(t *testing.T) {
+	t.Setenv(kiroStreamBodyRetryEnvVariable, "1")
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	oldSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	defer func() { kiroRetrySleep = oldSleep }()
+
+	metadataOnly := func() []byte {
+		body := bytes.NewBuffer(nil)
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "reasoningContentEvent",
+		}, []byte(`{"reasoningContentEvent":{"text":"I should think first."}}`)))
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "messageStopEvent",
+		}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+		return body.Bytes()
+	}
+
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
+			newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          88,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-4-7","max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount, "internal non-stream Kiro body retries are exhausted; handler must not multiply same-account retries")
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "no deliverable assistant output")
+	require.Empty(t, rec.Body.String(), "non-stream exhaustion must not write a partial response body")
+	require.Len(t, upstream.requests, 2)
+}
+
 func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
