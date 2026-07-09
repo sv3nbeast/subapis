@@ -22,6 +22,9 @@
           <span>/</span>
           <span class="group relative inline-flex cursor-help items-center gap-0.5" tabindex="0">
             <span>{{ cacheLabel() }}: {{ formatTokens(stats?.total_cache_tokens || 0) }}</span>
+            <span v-if="totalPromptTokens > 0" class="text-purple-500 dark:text-purple-400">
+              · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(totalCacheHitRate) }}
+            </span>
             <svg
               class="h-3.5 w-3.5 text-gray-400"
               fill="none"
@@ -122,6 +125,19 @@ const formatTokens = (value: number) => {
   if (value >= 1e3) return (value / 1e3).toFixed(2) + 'K'
   return value.toLocaleString()
 }
+
+const totalPromptTokens = computed(() =>
+  (props.stats?.total_input_tokens ?? 0) +
+  (props.stats?.total_cache_creation_tokens ?? 0) +
+  (props.stats?.total_cache_read_tokens ?? 0)
+)
+
+const totalCacheHitRate = computed(() => {
+  if (totalPromptTokens.value <= 0) return 0
+  return ((props.stats?.total_cache_read_tokens ?? 0) / totalPromptTokens.value) * 100
+})
+
+const formatPercent = (value: number) => `${value.toFixed(1)}%`
 
 const cacheLabel = () => t('usage.cacheTotal')
 const cacheDetailLabel = () => t('usage.cacheBreakdown')
