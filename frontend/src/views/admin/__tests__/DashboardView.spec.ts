@@ -140,4 +140,51 @@ describe('admin DashboardView', () => {
       granularity: 'hour'
     }))
   })
+
+  it('shows cache read and write token breakdown on summary cards', async () => {
+    getSnapshotV2.mockResolvedValueOnce({
+      stats: {
+        ...createDashboardStats(),
+        today_input_tokens: 10,
+        today_output_tokens: 20,
+        today_cache_creation_tokens: 30,
+        today_cache_read_tokens: 40,
+        today_tokens: 100,
+        total_input_tokens: 100,
+        total_output_tokens: 200,
+        total_cache_creation_tokens: 300,
+        total_cache_read_tokens: 400,
+        total_tokens: 1000
+      },
+      trend: [],
+      models: []
+    })
+
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          LoadingSpinner: true,
+          Icon: true,
+          DateRangePicker: true,
+          Select: true,
+          ModelDistributionChart: true,
+          TokenUsageTrend: true,
+          Line: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('admin.dashboard.cache: 70')
+    expect(text).toContain('usage.inputCacheReadRatio: 50.0%')
+    expect(text).toContain('usage.cacheRead: 40')
+    expect(text).toContain('usage.cacheWrite: 30')
+    expect(text).toContain('admin.dashboard.cache: 700')
+    expect(text).toContain('usage.inputCacheReadRatio: 50.0%')
+    expect(text).toContain('usage.cacheRead: 400')
+    expect(text).toContain('usage.cacheWrite: 300')
+  })
 })

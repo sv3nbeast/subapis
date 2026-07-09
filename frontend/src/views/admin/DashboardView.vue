@@ -110,6 +110,20 @@
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   {{ formatTokens(stats.today_tokens) }}
                 </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.dashboard.input') }}: {{ formatTokens(stats.today_input_tokens) }} /
+                  {{ t('admin.dashboard.output') }}: {{ formatTokens(stats.today_output_tokens) }}
+                </p>
+                <p v-if="todayCacheTokens > 0" class="text-xs text-cyan-600 dark:text-cyan-400">
+                  {{ t('admin.dashboard.cache') }}: {{ formatTokens(todayCacheTokens) }}
+                  <span class="text-violet-600 dark:text-violet-400">
+                    · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(todayCacheHitRate) }}
+                  </span>
+                  <span class="text-gray-400 dark:text-gray-500">
+                    ({{ t('usage.cacheRead') }}: {{ formatTokens(stats.today_cache_read_tokens) }} /
+                    {{ t('usage.cacheWrite') }}: {{ formatTokens(stats.today_cache_creation_tokens) }})
+                  </span>
+                </p>
                 <p class="text-xs">
                   <span
                     class="text-green-600 dark:text-green-400"
@@ -145,6 +159,20 @@
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   {{ formatTokens(stats.total_tokens) }}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.dashboard.input') }}: {{ formatTokens(stats.total_input_tokens) }} /
+                  {{ t('admin.dashboard.output') }}: {{ formatTokens(stats.total_output_tokens) }}
+                </p>
+                <p v-if="totalCacheTokens > 0" class="text-xs text-cyan-600 dark:text-cyan-400">
+                  {{ t('admin.dashboard.cache') }}: {{ formatTokens(totalCacheTokens) }}
+                  <span class="text-violet-600 dark:text-violet-400">
+                    · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(totalCacheHitRate) }}
+                  </span>
+                  <span class="text-gray-400 dark:text-gray-500">
+                    ({{ t('usage.cacheRead') }}: {{ formatTokens(stats.total_cache_read_tokens) }} /
+                    {{ t('usage.cacheWrite') }}: {{ formatTokens(stats.total_cache_creation_tokens) }})
+                  </span>
                 </p>
                 <p class="text-xs">
                   <span
@@ -360,6 +388,31 @@ let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
 const rankingLimit = 12
 
+const todayCacheTokens = computed(() =>
+  (stats.value?.today_cache_creation_tokens ?? 0) + (stats.value?.today_cache_read_tokens ?? 0)
+)
+const totalCacheTokens = computed(() =>
+  (stats.value?.total_cache_creation_tokens ?? 0) + (stats.value?.total_cache_read_tokens ?? 0)
+)
+const cacheHitRate = (inputTokens: number, cacheCreationTokens: number, cacheReadTokens: number) => {
+  const promptTokens = inputTokens + cacheCreationTokens + cacheReadTokens
+  return promptTokens > 0 ? (cacheReadTokens / promptTokens) * 100 : 0
+}
+const todayCacheHitRate = computed(() =>
+  cacheHitRate(
+    stats.value?.today_input_tokens ?? 0,
+    stats.value?.today_cache_creation_tokens ?? 0,
+    stats.value?.today_cache_read_tokens ?? 0,
+  )
+)
+const totalCacheHitRate = computed(() =>
+  cacheHitRate(
+    stats.value?.total_input_tokens ?? 0,
+    stats.value?.total_cache_creation_tokens ?? 0,
+    stats.value?.total_cache_read_tokens ?? 0,
+  )
+)
+
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -553,6 +606,8 @@ const formatCost = (value: number | null | undefined): string => {
   }
   return safeValue.toFixed(4)
 }
+
+const formatPercent = (value: number): string => `${value.toFixed(1)}%`
 
 const formatDuration = (ms: number): string => {
   if (ms >= 1000) {

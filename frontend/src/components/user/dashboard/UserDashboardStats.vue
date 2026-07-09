@@ -79,6 +79,16 @@
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayTokens') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.today_tokens || 0) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.input') }}: {{ formatTokens(stats?.today_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.today_output_tokens || 0) }}</p>
+          <p v-if="todayCacheTokens > 0" class="text-xs text-cyan-600 dark:text-cyan-400">
+            {{ t('dashboard.cache') }}: {{ formatTokens(todayCacheTokens) }}
+            <span class="text-violet-600 dark:text-violet-400">
+              · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(todayCacheHitRate) }}
+            </span>
+            <span class="text-gray-400 dark:text-gray-500">
+              ({{ t('usage.cacheRead') }}: {{ formatTokens(stats?.today_cache_read_tokens || 0) }} /
+              {{ t('usage.cacheWrite') }}: {{ formatTokens(stats?.today_cache_creation_tokens || 0) }})
+            </span>
+          </p>
         </div>
       </div>
     </div>
@@ -93,6 +103,16 @@
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.totalTokens') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.total_tokens || 0) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.input') }}: {{ formatTokens(stats?.total_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.total_output_tokens || 0) }}</p>
+          <p v-if="totalCacheTokens > 0" class="text-xs text-cyan-600 dark:text-cyan-400">
+            {{ t('dashboard.cache') }}: {{ formatTokens(totalCacheTokens) }}
+            <span class="text-violet-600 dark:text-violet-400">
+              · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(totalCacheHitRate) }}
+            </span>
+            <span class="text-gray-400 dark:text-gray-500">
+              ({{ t('usage.cacheRead') }}: {{ formatTokens(stats?.total_cache_read_tokens || 0) }} /
+              {{ t('usage.cacheWrite') }}: {{ formatTokens(stats?.total_cache_creation_tokens || 0) }})
+            </span>
+          </p>
         </div>
       </div>
     </div>
@@ -251,7 +271,10 @@ const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',
   openai: 'OpenAI',
   gemini: 'Gemini',
-  antigravity: 'Antigravity'
+  antigravity: 'Antigravity',
+  kiro: 'Kiro',
+  droid: 'Droid',
+  grok: 'Grok'
 }
 
 const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
@@ -260,6 +283,31 @@ const sortedPlatforms = computed(() => {
   const list = props.stats?.by_platform ?? []
   return [...list].sort((a, b) => b.total_actual_cost - a.total_actual_cost)
 })
+
+const todayCacheTokens = computed(() =>
+  (props.stats?.today_cache_creation_tokens ?? 0) + (props.stats?.today_cache_read_tokens ?? 0)
+)
+const totalCacheTokens = computed(() =>
+  (props.stats?.total_cache_creation_tokens ?? 0) + (props.stats?.total_cache_read_tokens ?? 0)
+)
+const cacheHitRate = (inputTokens: number, cacheCreationTokens: number, cacheReadTokens: number) => {
+  const promptTokens = inputTokens + cacheCreationTokens + cacheReadTokens
+  return promptTokens > 0 ? (cacheReadTokens / promptTokens) * 100 : 0
+}
+const todayCacheHitRate = computed(() =>
+  cacheHitRate(
+    props.stats?.today_input_tokens ?? 0,
+    props.stats?.today_cache_creation_tokens ?? 0,
+    props.stats?.today_cache_read_tokens ?? 0,
+  )
+)
+const totalCacheHitRate = computed(() =>
+  cacheHitRate(
+    props.stats?.total_input_tokens ?? 0,
+    props.stats?.total_cache_creation_tokens ?? 0,
+    props.stats?.total_cache_read_tokens ?? 0,
+  )
+)
 
 // 处理"各平台之和 < 总值"的差值：后端按平台聚合时过滤了无法归属平台的行
 // （group 与 account 都缺 platform）。这里把差值作为"其他"卡片显式展示，
@@ -387,5 +435,6 @@ const formatTokens = (t: number) => {
   if (t >= 1000) return `${(t / 1000).toFixed(1)}K`
   return t.toString()
 }
+const formatPercent = (value: number) => `${value.toFixed(1)}%`
 const formatDuration = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(0)}ms`
 </script>
