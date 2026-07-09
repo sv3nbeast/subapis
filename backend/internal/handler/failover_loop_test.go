@@ -443,7 +443,7 @@ func TestHandleFailoverError_TempUnschedule(t *testing.T) {
 }
 
 func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
-	t.Run("前4次429立即重试同账号", func(t *testing.T) {
+	t.Run("达到软切换阈值前立即重试同账号", func(t *testing.T) {
 		mock := &mockTempUnscheduler{}
 		fs := NewFailoverState(10, false)
 		err := newTestKiro429FailoverErr()
@@ -459,7 +459,7 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		require.Empty(t, mock.calls)
 	})
 
-	t.Run("第5次429软切换到下一个账号", func(t *testing.T) {
+	t.Run("达到软切换阈值时切换到下一个账号", func(t *testing.T) {
 		mock := &mockTempUnscheduler{}
 		fs := NewFailoverState(10, false)
 		err := newTestKiro429FailoverErr()
@@ -513,7 +513,7 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		require.NotContains(t, fs.Kiro429SoftExcludedIDs, int64(1469))
 	})
 
-	t.Run("第12次429硬排除账号", func(t *testing.T) {
+	t.Run("达到硬重试上限时硬排除账号", func(t *testing.T) {
 		mock := &mockTempUnscheduler{}
 		fs := NewFailoverState(20, false)
 		err := newTestKiro429FailoverErr()
@@ -534,7 +534,7 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		require.Empty(t, mock.calls)
 	})
 
-	t.Run("所有Kiro账号达到12次后耗尽", func(t *testing.T) {
+	t.Run("所有Kiro账号达到硬重试上限后耗尽", func(t *testing.T) {
 		fs := NewFailoverState(20, false)
 		err := newTestKiro429FailoverErr()
 		fs.LastFailoverErr = err

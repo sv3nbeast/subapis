@@ -41,7 +41,9 @@ const (
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
 	singleAccountBackoffDelay = 2 * time.Second
 
-	kiro429SoftSwitchThreshold   = 5
+	// Kiro 429 只在同账号上补试一次；再次 429 就在本请求内软切换账号，
+	// 避免长时间卡在同一个上游限流账号，同时不触发账号临时禁用。
+	kiro429SoftSwitchThreshold   = 2
 	kiro429HardRetryLimit        = 12
 	kiro429DecisionRetrySame     = "retry_same"
 	kiro429DecisionSoftSwitch    = "soft_switch"

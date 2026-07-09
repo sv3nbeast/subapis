@@ -14,22 +14,6 @@ import (
 const stickySessionPrefix = "sticky_session:"
 const kiroCacheFingerprintPrefix = "kiro_cache_emulation:"
 
-var kiroCacheFingerprintUpsertScript = redis.NewScript(`
-local ttl = tonumber(ARGV[1])
-if ttl == nil or ttl <= 0 then
-  return 0
-end
-if redis.call('EXISTS', KEYS[1]) == 0 then
-  redis.call('PSETEX', KEYS[1], ttl, '1')
-  return 1
-end
-local current = redis.call('PTTL', KEYS[1])
-if current < 0 or current < ttl then
-  redis.call('PEXPIRE', KEYS[1], ttl)
-end
-return 1
-`)
-
 type gatewayCache struct {
 	rdb *redis.Client
 }
@@ -111,15 +95,37 @@ func (c *gatewayCache) UpsertKiroCacheFingerprints(ctx context.Context, stableKe
 		return nil
 	}
 	pipe := c.rdb.Pipeline()
+	cmds := make([]redis.Cmder, 0, len(fingerprintTTLs)*3)
 	for fingerprint, ttl := range fingerprintTTLs {
 		if fingerprint == "" || ttl <= 0 {
 			continue
 		}
-		_ = kiroCacheFingerprintUpsertScript.Run(ctx, pipe, []string{buildKiroCacheFingerprintKey(stableKey, fingerprint)}, ttl.Milliseconds())
+		ttlMillis := ttl.Milliseconds()
+		if ttlMillis <= 0 {
+			continue
+		}
+		key := buildKiroCacheFingerprintKey(stableKey, fingerprint)
+		// 不再使用 Lua script：go-redis pipeline 中 EVALSHA 遇到 NOSCRIPT 不会像
+		// 普通 client 调用一样可靠回退，生产曾出现大量 NOSCRIPT，导致 Kiro
+		// cache fingerprint 持久化未真正落 Redis。这里用 Redis 原生命令实现同等语义：
+		// 1) 新 key：SET ... NX PX ttl；
+		// 2) 已存在且新 TTL 更长：PEXPIRE ... GT；
+		// 3) 已存在但意外无 TTL：PEXPIRE ... NX。
+		cmds = append(cmds, pipe.SetNX(ctx, key, "1", ttl))
+		cmds = append(cmds, pipe.Do(ctx, "PEXPIRE", key, ttlMillis, "GT"))
+		cmds = append(cmds, pipe.Do(ctx, "PEXPIRE", key, ttlMillis, "NX"))
+	}
+	if len(cmds) == 0 {
+		return nil
 	}
 	_, err := pipe.Exec(ctx)
 	if err != nil && err != redis.Nil {
 		return err
+	}
+	for _, cmd := range cmds {
+		if cmdErr := cmd.Err(); cmdErr != nil && cmdErr != redis.Nil {
+			return cmdErr
+		}
 	}
 	return nil
 }
