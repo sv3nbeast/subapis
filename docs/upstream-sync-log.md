@@ -2227,3 +2227,45 @@ dfe4c0e67 支持 CLIProxyAPI Kiro token imports
 eede77a9d Fix admin 支付 order response sanitization
 e726354bb Fix Kiro cache emulation token scaling
 0e630c2b5 Improve Kiro cache emulation stability
+
+## 2026-07-09 13:47:40 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `52d6e9517d4baf332ecb4b8eb46c617ea79b6aed`
+- 官方提交: `6f43986c376d76144cb39c7a562c179e19ac7439`
+- 合并基线: `6f43986c376d76144cb39c7a562c179e19ac7439`
+- 官方领先数量: `0`
+- 本地领先数量: `453`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+52d6e9517 Merge official upstream through 20260709
+d0a8bf6f5 Record official sync analysis 针对 20260709
+0ab6d54f2 恢复usage cache ratio stats card
+f1e9b823a 恢复usage cache hit rate display
+dc64d597a 恢复dashboard cache metrics display
+9078c2fb0 Fix Anthropic thinking signature preflight
+49ca134f1 支持 Kiro explicit Claude 4.5 aliases
+6255c2ec8 Allow Kiro Haiku 4.5 short 别名
+67d09f7c5 Fix Kiro sticky account scheduling
+05f716672 Retry Kiro metadata-only stream turns
+883e2afff Fix Kiro group endpoint mode editing
+5f968fdf7 增加group allow non-stream messages flag
+09a76008a 增加channel model pricing enable switch
+b30b71d60 Fix Kiro metadata-only stream handling
+c859ff0f4 Show compensation credits 中的 user orders
+9ca31ccf6 Fix Kiro cache token estimate inflation
+5dd82b8de Fallback Kiro external IDP refresh without proxy
+ae9f25494 加固 Kiro external IDP token refresh fallback
+dfe4c0e67 支持 CLIProxyAPI Kiro token imports
+eede77a9d Fix admin 支付 order response sanitization
