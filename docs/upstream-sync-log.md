@@ -2166,3 +2166,64 @@ e496793ee Sync official billing test signature fixes
 877d0b643 Sync official peak rate CI contract fixes
 4c0df3cbc Sync official peak rate hardening follow-up
 c3820cd71 Sync official peak rate billing fixes
+
+## 2026-07-09 12:53:05 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `0ab6d54f27cb782827a3abb0a1117a2446b134a8`
+- 官方提交: `6f43986c376d76144cb39c7a562c179e19ac7439`
+- 合并基线: `2649573b999c4a3572cb9fafc47dfbfb0ce3bf3c`
+- 官方领先数量: `172`
+- 本地领先数量: `451`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+6f43986c3 合并拉取请求 #3811（来源：jianjianai/hotfix/admin-scheduler-score-opt-in）
+f407d6a04 合并拉取请求 #3804（来源：fengshao1227/fix/compact-body-signal-routing）
+a56eb5b4d 修复（compact）：body-signal 提升上移到 handler 层并对齐 path-based 链路
+a85531762 合并远程跟踪分支 `origin/main` 到 `fix/compact-body-signal-routing`
+f4e8bec54 合并拉取请求 #3803（来源：fengshao1227/fix/sidebar-scroll-position-persist）
+6631cbad6 合并拉取请求 #3812（来源：Wei-Shaw/refactor/split-bloated-files-r2）
+d0bcaa8b0 测试（i18n）：新增语言包 spread 组装键冲突守卫测试
+bb5d2e84a 重构（handler）：纯移动拆分 setting_handler.go（3957→468行）
+f013bc114 重构（service）：纯移动拆分 admin_service.go（4409→642行）
+2a4c28e8f 重构（service）：纯移动拆分 antigravity_gateway_service.go（4664→639行）
+d0f669338 重构（service）：纯移动拆分 openai_ws_forwarder.go（4675→399行）
+db3bd9971 重构（repository）：纯移动拆分 usage_log_repo.go（4701→212行）
+4d23ad4ba 重构（service）：纯移动拆分 openai_gateway_service.go（4872→1095行）
+50043b117 重构（service）：纯移动拆分 setting_service.go（5471→263行）
+084d26cbd 重构（service）：纯移动拆分 gateway_service.go（7294→1289行）
+d9e514f98 重构（i18n）：拆分 zh/en 语言包为域模块（深比较等价校验通过）
+317339e71 合并拉取请求 #3813（来源：Wei-Shaw/fix/bump-aws-sdk-eventstream-vuln）
+a4f942d8a 修复（deps）：升级 AWS SDK 修复 govulncheck 报告的 GO-2026-5764
+6ae5fc31b 修复（管理后台）：gate scheduler score calculation
+e8e234252 合并拉取请求 #3807（来源：Wei-Shaw/refactor/gateway-cc-pipeline-and-file-split）
+
+### 本地领先
+
+0ab6d54f2 恢复usage cache ratio stats card
+f1e9b823a 恢复usage cache hit rate display
+dc64d597a 恢复dashboard cache metrics display
+9078c2fb0 Fix Anthropic thinking signature preflight
+49ca134f1 支持 Kiro explicit Claude 4.5 aliases
+6255c2ec8 Allow Kiro Haiku 4.5 short 别名
+67d09f7c5 Fix Kiro sticky account scheduling
+05f716672 Retry Kiro metadata-only stream turns
+883e2afff Fix Kiro group endpoint mode editing
+5f968fdf7 增加group allow non-stream messages flag
+09a76008a 增加channel model pricing enable switch
+b30b71d60 Fix Kiro metadata-only stream handling
+c859ff0f4 Show compensation credits 中的 user orders
+9ca31ccf6 Fix Kiro cache token estimate inflation
+5dd82b8de Fallback Kiro external IDP refresh without proxy
+ae9f25494 加固 Kiro external IDP token refresh fallback
+dfe4c0e67 支持 CLIProxyAPI Kiro token imports
+eede77a9d Fix admin 支付 order response sanitization
+e726354bb Fix Kiro cache emulation token scaling
+0e630c2b5 Improve Kiro cache emulation stability
