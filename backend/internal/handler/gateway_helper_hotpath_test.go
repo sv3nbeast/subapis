@@ -471,6 +471,10 @@ func (s *helperUserMsgQueueCacheStub) GetCurrentTimeMs(ctx context.Context) (int
 	return time.Now().UnixMilli(), nil
 }
 
+func (s *helperUserMsgQueueCacheStub) ReconcileExpiredLockCandidates(ctx context.Context, maxCount int) (int, error) {
+	return 0, nil
+}
+
 func (s *helperUserMsgQueueCacheStub) ForceReleaseLock(ctx context.Context, accountID int64) error {
 	return nil
 }

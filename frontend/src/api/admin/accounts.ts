@@ -42,6 +42,7 @@ export async function list(
     model?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -78,6 +79,7 @@ export async function listWithEtag(
     model?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },

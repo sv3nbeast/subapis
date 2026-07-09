@@ -567,6 +567,10 @@ const (
 	OpenAIFastTierAny      = "all"      // 匹配任意已识别的 service_tier
 	OpenAIFastTierPriority = "priority" // 仅匹配 fast（priority）
 	OpenAIFastTierFlex     = "flex"     // 仅匹配 flex
+
+	// OpenAIFastPolicyActionForcePriority 会保留 service_tier 字段并强制写成
+	// priority，用于让目标模型始终走 OpenAI fast/priority 档。
+	OpenAIFastPolicyActionForcePriority = "force_priority"
 )
 
 // OpenAIFastPolicyRule 单条 OpenAI fast/flex 策略规则
