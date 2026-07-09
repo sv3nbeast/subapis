@@ -30,11 +30,19 @@ type kiroEndpointConfig struct {
 	Name      string
 }
 
+type kiroUpstreamRequestOptions struct {
+	ConversationRetryNonce string
+	EndpointStartOffset    int
+}
+
 const kiroInvalidModelTempUnschedDuration = time.Minute
 
 const (
-	kiroRetryBaseDelay = 200 * time.Millisecond
-	kiroRetryMaxDelay  = 2 * time.Second
+	kiroRetryBaseDelay             = 200 * time.Millisecond
+	kiroRetryMaxDelay              = 2 * time.Second
+	kiroStreamBodyRetryDefaultMax  = 2
+	kiroStreamBodyRetryHardMax     = 4
+	kiroStreamBodyRetryEnvVariable = "SUB2API_KIRO_STREAM_BODY_RETRIES"
 )
 
 var kiroRetrySleep = sleepWithContext
@@ -56,6 +64,24 @@ func kiroRetryBackoffDelay(attempt int) time.Duration {
 
 func sleepKiroRetry(ctx context.Context, attempt int) error {
 	return kiroRetrySleep(ctx, kiroRetryBackoffDelay(attempt))
+}
+
+func kiroStreamBodyRetryMax() int {
+	raw := strings.TrimSpace(os.Getenv(kiroStreamBodyRetryEnvVariable))
+	if raw == "" {
+		return kiroStreamBodyRetryDefaultMax
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return kiroStreamBodyRetryDefaultMax
+	}
+	if n < 0 {
+		return 0
+	}
+	if n > kiroStreamBodyRetryHardMax {
+		return kiroStreamBodyRetryHardMax
+	}
+	return n
 }
 
 func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
@@ -495,8 +521,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		return resp, inputTokens, nil
 	}
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
-	requestCtx.RequireTerminalEvent = true
 
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()
@@ -504,16 +528,86 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	requestID := buildKiroClientRequestID(resp)
 	wrappedHeaders.Set("x-request-id", requestID)
 	wrappedHeaders.Set("request-id", requestID)
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
 
 	go func() {
 		defer releaseStreamCtx()
-		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(streamCtx, resp.Body, pw, mappedModel, inputTokens, requestCtx)
-		if streamErr != nil {
-			_ = pw.CloseWithError(streamErr)
-			return
+		currentResp := resp
+		currentRequestCtx := requestCtx
+		maxBodyRetries := kiroStreamBodyRetryMax()
+		for bodyAttempt := 0; ; bodyAttempt++ {
+			currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+			currentRequestCtx.RequireTerminalEvent = true
+			_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(streamCtx, currentResp.Body, pw, mappedModel, inputTokens, currentRequestCtx)
+			_ = currentResp.Body.Close()
+			if streamErr == nil {
+				_ = pw.Close()
+				return
+			}
+			emptyStreamMsg := kiroEmptyEventStreamMessage(streamErr)
+			if emptyStreamMsg == "" || bodyAttempt >= maxBodyRetries {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			retryAttempt := bodyAttempt + 1
+			retryNonce := buildKiroStreamBodyRetryNonce(account, requestID, retryAttempt)
+			logger.L().Warn("kiro.stream_body_retry",
+				zap.Int64("account_id", accountID),
+				zap.String("request_id", requestID),
+				zap.Int("retry_attempt", retryAttempt),
+				zap.Int("retry_max", maxBodyRetries),
+				zap.String("reason", sanitizeUpstreamErrorMessage(emptyStreamMsg)),
+			)
+			if sleepErr := sleepKiroRetry(streamCtx, bodyAttempt); sleepErr != nil {
+				logger.L().Warn("kiro.stream_body_retry_sleep_failed",
+					zap.Int64("account_id", accountID),
+					zap.String("request_id", requestID),
+					zap.Int("retry_attempt", retryAttempt),
+					zap.Error(sleepErr),
+				)
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			nextResp, nextRequestCtx, err := s.executeKiroUpstreamWithParsedOptions(streamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, kiroUpstreamRequestOptions{
+				ConversationRetryNonce: retryNonce,
+				EndpointStartOffset:    retryAttempt,
+			})
+			if err != nil {
+				logger.L().Warn("kiro.stream_body_retry_open_failed",
+					zap.Int64("account_id", accountID),
+					zap.String("request_id", requestID),
+					zap.Int("retry_attempt", retryAttempt),
+					zap.Error(err),
+				)
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			if nextResp == nil {
+				logger.L().Warn("kiro.stream_body_retry_empty_response",
+					zap.Int64("account_id", accountID),
+					zap.String("request_id", requestID),
+					zap.Int("retry_attempt", retryAttempt),
+				)
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			if nextResp.StatusCode < 200 || nextResp.StatusCode >= 300 {
+				logger.L().Warn("kiro.stream_body_retry_non_2xx",
+					zap.Int64("account_id", accountID),
+					zap.String("request_id", requestID),
+					zap.Int("retry_attempt", retryAttempt),
+					zap.Int("status_code", nextResp.StatusCode),
+				)
+				_ = nextResp.Body.Close()
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			currentResp = nextResp
+			currentRequestCtx = nextRequestCtx
 		}
-		_ = pw.Close()
 	}()
 
 	return &http.Response{
@@ -528,6 +622,10 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 }
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
+	return s.executeKiroUpstreamWithParsedOptions(ctx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, kiroUpstreamRequestOptions{})
+}
+
+func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, options kiroUpstreamRequestOptions) (*http.Response, kiropkg.KiroRequestContext, error) {
 	var requestCtx kiropkg.KiroRequestContext
 	mode := kiroEndpointModeForRequest(account, parsed)
 	if mode == KiroEndpointModeKRS || mode == KiroEndpointModeAuto {
@@ -544,6 +642,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
 	endpoints := buildKiroEndpointsForMode(account, mode)
+	endpoints = rotateKiroEndpoints(endpoints, options.EndpointStartOffset)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	maxRetries := 2
@@ -554,6 +653,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 		if err != nil {
 			return nil, requestCtx, err
 		}
+		applyKiroUpstreamRequestOptions(buildResult, options)
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
 		logKiroStatelessReplay(account, buildResult.Payload)
@@ -661,6 +761,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 						if err != nil {
 							return nil, requestCtx, err
 						}
+						applyKiroUpstreamRequestOptions(buildResult, options)
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
 						logKiroStatelessReplay(account, buildResult.Payload)
@@ -712,6 +813,20 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 
 func buildKiroEndpoints(account *Account) []kiroEndpointConfig {
 	return buildKiroEndpointsForMode(account, KiroEndpointModeQ)
+}
+
+func rotateKiroEndpoints(endpoints []kiroEndpointConfig, offset int) []kiroEndpointConfig {
+	if len(endpoints) <= 1 || offset <= 0 {
+		return endpoints
+	}
+	offset %= len(endpoints)
+	if offset == 0 {
+		return endpoints
+	}
+	rotated := make([]kiroEndpointConfig, 0, len(endpoints))
+	rotated = append(rotated, endpoints[offset:]...)
+	rotated = append(rotated, endpoints[:offset]...)
+	return rotated
 }
 
 func buildKiroEndpointsForMode(account *Account, mode string) []kiroEndpointConfig {
@@ -871,6 +986,50 @@ func applyStableKiroConversationID(account *Account, parsed *ParsedRequest, anth
 		}
 	}
 	return buildResult
+}
+
+func applyKiroUpstreamRequestOptions(buildResult *kiropkg.KiroBuildResult, options kiroUpstreamRequestOptions) {
+	if buildResult == nil {
+		return
+	}
+	if strings.TrimSpace(options.ConversationRetryNonce) != "" {
+		buildResult.Payload = applyKiroConversationRetryNonce(buildResult.Payload, options.ConversationRetryNonce)
+	}
+}
+
+func applyKiroConversationRetryNonce(payload []byte, nonce string) []byte {
+	nonce = strings.TrimSpace(nonce)
+	if nonce == "" || len(payload) == 0 {
+		return payload
+	}
+	conversationID := strings.TrimSpace(gjson.GetBytes(payload, "conversationState.conversationId").String())
+	continuationID := strings.TrimSpace(gjson.GetBytes(payload, "conversationState.agentContinuationId").String())
+	payloadHash := strconv.FormatUint(xxhash.Sum64(payload), 36)
+	retryConversationID := generateSessionUUID(strings.Join([]string{
+		"kiro-conversation-body-retry-v1",
+		conversationID,
+		continuationID,
+		payloadHash,
+		nonce,
+	}, "|"))
+	next, err := sjson.SetBytes(payload, "conversationState.conversationId", retryConversationID)
+	if err != nil {
+		return payload
+	}
+	return next
+}
+
+func buildKiroStreamBodyRetryNonce(account *Account, requestID string, retryAttempt int) string {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return strings.Join([]string{
+		"account:" + strconv.FormatInt(accountID, 10),
+		"request:" + strings.TrimSpace(requestID),
+		"attempt:" + strconv.Itoa(retryAttempt),
+		"ts:" + strconv.FormatInt(time.Now().UnixNano(), 10),
+	}, "|")
 }
 
 func stableKiroConversationID(account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, profileArn string) string {

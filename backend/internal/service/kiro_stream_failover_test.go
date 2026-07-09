@@ -19,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type kiroStreamFailoverCooldownStore struct {
@@ -355,6 +356,82 @@ func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(
 	require.True(t, failoverErr.SuppressTempUnschedule)
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "metadata-only assistant output")
 	require.Empty(t, rec.Body.String(), "metadata-only empty stream must not write a successful empty response body")
+}
+
+func TestForwardKiroMessagesStreamMetadataOnlyRetriesWithFreshConversationAndEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	oldSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	defer func() { kiroRetrySleep = oldSleep }()
+
+	metadataOnlyBody := bytes.NewBuffer(nil)
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":119824,"outputTokens":5,"totalTokens":119829}}}`)))
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"recovered after retry"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":11,"outputTokens":4,"totalTokens":15}}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody.Bytes()),
+			newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          88,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
+		},
+	}
+	body := []byte(`{"model":"claude-sonnet-5","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Contains(t, rec.Body.String(), "recovered after retry")
+	require.Len(t, upstream.requests, 2)
+	require.NotEqual(t, upstream.requests[0].URL.String(), upstream.requests[1].URL.String(), "body-level retry should rotate Kiro endpoint before falling back to handler failover")
+
+	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	secondPayload, err := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, err)
+	firstConversationID := gjson.GetBytes(firstPayload, "conversationState.conversationId").String()
+	secondConversationID := gjson.GetBytes(secondPayload, "conversationState.conversationId").String()
+	require.NotEmpty(t, firstConversationID)
+	require.NotEmpty(t, secondConversationID)
+	require.NotEqual(t, firstConversationID, secondConversationID, "metadata-only body retry must avoid replaying the same stable conversation id")
 }
 
 func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing.T) {
