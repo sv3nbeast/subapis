@@ -35,6 +35,28 @@ type kiroUpstreamRequestOptions struct {
 	EndpointStartOffset    int
 }
 
+type kiroStreamBodyRetriesExhaustedError struct {
+	Attempts int
+	Cause    error
+}
+
+func (e *kiroStreamBodyRetriesExhaustedError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "kiro stream body retries exhausted"
+	}
+	if e.Attempts <= 0 {
+		return "kiro stream body retries exhausted: " + e.Cause.Error()
+	}
+	return fmt.Sprintf("kiro stream body retries exhausted after %d attempts: %s", e.Attempts, e.Cause.Error())
+}
+
+func (e *kiroStreamBodyRetriesExhaustedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 const kiroInvalidModelTempUnschedDuration = time.Minute
 
 const (
@@ -388,6 +410,28 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		}
 	}
 
+	var bodyRetriesExhausted *kiroStreamBodyRetriesExhaustedError
+	if errors.As(err, &bodyRetriesExhausted) {
+		emptyStreamMsg := kiroEmptyEventStreamMessage(bodyRetriesExhausted)
+		if emptyStreamMsg == "" {
+			emptyStreamMsg = bodyRetriesExhausted.Error()
+		}
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": sanitizeUpstreamErrorMessage(emptyStreamMsg),
+			},
+		})
+		return &UpstreamFailoverError{
+			StatusCode:             http.StatusBadGateway,
+			ResponseBody:           body,
+			RetryableOnSameAccount: false,
+			SuppressTempUnschedule: true,
+			Cause:                  err,
+		}
+	}
+
 	emptyStreamMsg := kiroEmptyEventStreamMessage(err)
 	if emptyStreamMsg == "" {
 		return nil
@@ -548,8 +592,19 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				return
 			}
 			emptyStreamMsg := kiroEmptyEventStreamMessage(streamErr)
-			if emptyStreamMsg == "" || bodyAttempt >= maxBodyRetries {
+			if emptyStreamMsg == "" {
 				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			if maxBodyRetries <= 0 {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			if bodyAttempt >= maxBodyRetries {
+				_ = pw.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
+					Attempts: bodyAttempt + 1,
+					Cause:    streamErr,
+				})
 				return
 			}
 			retryAttempt := bodyAttempt + 1
