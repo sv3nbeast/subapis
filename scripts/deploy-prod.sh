@@ -126,6 +126,8 @@ RSYNC_ARGS=(
   frontend/node_modules
   --exclude
   backend/internal/web/dist
+  --exclude
+  backend/bin
   --exclude=backend/*.test
   --exclude
   backend/server
@@ -157,6 +159,7 @@ TAR_EXCLUDES=(
   --exclude=node_modules
   --exclude=frontend/node_modules
   --exclude=backend/internal/web/dist
+  --exclude=backend/bin
   --exclude=backend/*.test
   --exclude=backend/server
   --exclude=.gocache
