@@ -6472,7 +6472,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
-		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account)
+		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account, passthroughModel)
 		if migratedBody, migrated := migrateAnthropicInlineSystemMessages(passthroughBody); migrated {
 			passthroughBody = migratedBody
 		}
@@ -6655,7 +6655,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
 	body = sanitizeAnthropicUpstreamRequestBody(body)
-	body = PrepareSharedAnthropicThinkingHistory(body, account)
+	if err := replaceBody(PrepareSharedAnthropicThinkingHistory(body, account, reqModel)); err != nil {
+		return nil, err
+	}
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {
@@ -11966,16 +11968,18 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		originalModel := parsed.Model
-		if reqModel := parsed.Model; reqModel != "" {
-			mappingResult := resolveAnthropicUpstreamModel(account, reqModel)
-			if mappedModel := mappingResult.Model; mappedModel != reqModel {
+		passthroughModel := parsed.Model
+		if passthroughModel != "" {
+			mappingResult := resolveAnthropicUpstreamModel(account, passthroughModel)
+			if mappedModel := mappingResult.Model; mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
-				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s, source=%s)", reqModel, mappedModel, account.Name, mappingResult.Source)
+				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s, source=%s)", passthroughModel, mappedModel, account.Name, mappingResult.Source)
+				passthroughModel = mappedModel
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
 		passthroughBody = sanitizeAnthropicCountTokensRequestBody(passthroughBody)
-		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account)
+		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account, passthroughModel)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
 	}
 
@@ -12067,7 +12071,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
 	body = sanitizeAnthropicCountTokensRequestBody(body)
-	body = PrepareSharedAnthropicThinkingHistory(body, account)
+	if err := replaceBody(PrepareSharedAnthropicThinkingHistory(body, account, reqModel)); err != nil {
+		return err
+	}
 	if shouldMimicClaudeCode {
 		body = enforceCacheControlLimit(body)
 		body = normalizeClaudeCodeMimicryUpstreamBody(body)

@@ -827,14 +827,27 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 	return out
 }
 
-func PrepareSharedAnthropicThinkingHistory(body []byte, account *Account) []byte {
+func PrepareSharedAnthropicThinkingHistory(body []byte, account *Account, mappedModel ...string) []byte {
 	if len(body) == 0 || account == nil || !account.IsAnthropicOAuthOrSetupToken() {
 		return body
 	}
 	if !hasHistoricalThinkingBlocks(body) {
 		return body
 	}
-	return FilterThinkingBlocksForRetry(body, "")
+	model := firstNonEmptyThinkingHistoryModel(mappedModel...)
+	if model == "" {
+		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	}
+	return FilterThinkingBlocksForRetry(body, model)
+}
+
+func firstNonEmptyThinkingHistoryModel(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func hasHistoricalThinkingBlocks(body []byte) bool {
