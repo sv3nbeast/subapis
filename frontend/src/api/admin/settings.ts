@@ -592,6 +592,8 @@ export interface SystemSettings {
   proxy_auto_select_max_anthropic_accounts_per_proxy: number;
   proxy_auto_select_max_openai_accounts_per_proxy: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy: number;
+  proxy_auto_select_max_grok_accounts_per_proxy: number;
+  proxy_auto_select_max_kiro_accounts_per_proxy: number;
   openai_codex_user_agent: string;
   // codex_cli_only 加固
   min_codex_version: string;
@@ -836,6 +838,8 @@ export interface UpdateSettingsRequest {
   proxy_auto_select_max_anthropic_accounts_per_proxy?: number;
   proxy_auto_select_max_openai_accounts_per_proxy?: number;
   proxy_auto_select_max_antigravity_accounts_per_proxy?: number;
+  proxy_auto_select_max_grok_accounts_per_proxy?: number;
+  proxy_auto_select_max_kiro_accounts_per_proxy?: number;
   openai_codex_user_agent?: string;
   // codex_cli_only 加固
   min_codex_version?: string;

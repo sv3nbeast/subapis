@@ -7147,6 +7147,8 @@ export default {
         proxyAutoSelectAnthropic: 'Anthropic / IP',
         proxyAutoSelectOpenAI: 'OpenAI / IP',
         proxyAutoSelectAntigravity: 'Antigravity / IP',
+        proxyAutoSelectGrok: 'Grok / IP',
+        proxyAutoSelectKiro: 'Kiro / IP',
         rewriteMessageCacheControl: 'Rewrite Message Cache Breakpoints',
         rewriteMessageCacheControlHint:
           'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',

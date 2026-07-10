@@ -4392,7 +4392,7 @@
                     {{ t("admin.settings.gatewayForwarding.proxyAutoSelectCapacityHint") }}
                   </p>
                 </div>
-                <div class="mt-4 grid gap-4 sm:grid-cols-3">
+                <div class="mt-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
                   <div>
                     <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
                       {{ t("admin.settings.gatewayForwarding.proxyAutoSelectAnthropic") }}
@@ -4423,6 +4423,30 @@
                     </label>
                     <input
                       v-model.number="form.proxy_auto_select_max_antigravity_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectGrok") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_grok_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectKiro") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_kiro_accounts_per_proxy"
                       type="number"
                       min="1"
                       max="100"
@@ -8551,6 +8575,8 @@ const form = reactive<SettingsForm>({
   proxy_auto_select_max_anthropic_accounts_per_proxy: 1,
   proxy_auto_select_max_openai_accounts_per_proxy: 1,
   proxy_auto_select_max_antigravity_accounts_per_proxy: 5,
+  proxy_auto_select_max_grok_accounts_per_proxy: 1,
+  proxy_auto_select_max_kiro_accounts_per_proxy: 1,
   // Balance & quota notification
   openai_codex_user_agent: "",
   // codex_cli_only 加固
@@ -9742,6 +9768,16 @@ async function saveSettings() {
         form.proxy_auto_select_max_antigravity_accounts_per_proxy,
         5,
       );
+    form.proxy_auto_select_max_grok_accounts_per_proxy =
+      normalizeProxyAutoSelectLimit(
+        form.proxy_auto_select_max_grok_accounts_per_proxy,
+        1,
+      );
+    form.proxy_auto_select_max_kiro_accounts_per_proxy =
+      normalizeProxyAutoSelectLimit(
+        form.proxy_auto_select_max_kiro_accounts_per_proxy,
+        1,
+      );
 
     const normalizedLoginAgreementDocuments =
       normalizeLoginAgreementDocumentsForSave();
@@ -10013,6 +10049,10 @@ async function saveSettings() {
         form.proxy_auto_select_max_openai_accounts_per_proxy,
       proxy_auto_select_max_antigravity_accounts_per_proxy:
         form.proxy_auto_select_max_antigravity_accounts_per_proxy,
+      proxy_auto_select_max_grok_accounts_per_proxy:
+        form.proxy_auto_select_max_grok_accounts_per_proxy,
+      proxy_auto_select_max_kiro_accounts_per_proxy:
+        form.proxy_auto_select_max_kiro_accounts_per_proxy,
       openai_codex_user_agent:
         form.openai_codex_user_agent?.trim() || "",
       min_codex_version: form.min_codex_version?.trim() || "",

@@ -7122,6 +7122,8 @@ export default {
         proxyAutoSelectAnthropic: 'Anthropic / IP',
         proxyAutoSelectOpenAI: 'OpenAI / IP',
         proxyAutoSelectAntigravity: 'Antigravity / IP',
+        proxyAutoSelectGrok: 'Grok / IP',
+        proxyAutoSelectKiro: 'Kiro / IP',
         rewriteMessageCacheControl: '改写消息缓存断点',
         rewriteMessageCacheControlHint:
           '默认关闭，保留客户端在 messages 内容块中的 cache_control。开启后会清除客户端断点并注入代理断点，适合不自行管理缓存策略的客户端。',
