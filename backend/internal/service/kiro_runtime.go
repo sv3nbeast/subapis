@@ -193,6 +193,21 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
+			// handleStreamingResponse already emitted a standards-compliant SSE
+			// error after partial client output. Do not reclassify it as failover:
+			// the handler must not append a second error event or retry into the
+			// already-started stream.
+			if HasGatewaySSEErrorWritten(c) {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: 0,
+					Kind:               "stream_partial_error",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, err
+			}
 			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,

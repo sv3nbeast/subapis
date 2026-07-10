@@ -708,6 +708,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	sawKiroSemanticOutput := false
 	sawDeliverableOutput := false
 	sawTerminalEvent := false
+	sawCompletionMetadata := false
+	sawFinalUsageEvidence := false
+	sawExplicitCompletionReason := false
 	streamOutputReleased := false
 	var bufferedStreamOutput bytes.Buffer
 
@@ -1397,14 +1400,32 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
-			if kiroSemanticEventIsTerminal(semanticEvents[i].SourceEventType) {
+			semanticEvent := &semanticEvents[i]
+			if kiroSemanticEventIsTerminal(semanticEvent.SourceEventType) {
 				sawTerminalEvent = true
 			}
-			switch semanticEvents[i].Type {
+			switch semanticEvent.Type {
 			case kiroSemanticContent, kiroSemanticReasoning, kiroSemanticAssistantTU, kiroSemanticToolUse, kiroSemanticToolInput:
 				sawKiroSemanticOutput = true
+				if kiroSemanticEventHasNewOutput(semanticEvent) {
+					// Completion metadata must describe the latest emitted output.
+					// If more output arrives afterwards, an earlier metadata frame
+					// cannot prove that the eventual EOF is a complete turn.
+					sawCompletionMetadata = false
+					sawFinalUsageEvidence = false
+					sawExplicitCompletionReason = false
+				}
 			}
-			if err := applySemanticEvent(&semanticEvents[i]); err != nil {
+			if kiroSemanticEventIsCompletionMetadata(semanticEvent.SourceEventType) {
+				sawCompletionMetadata = true
+				if kiroEventHasFinalUsageEvidence(semanticEvent.SourceEventType, semanticEvent.RawEvent) {
+					sawFinalUsageEvidence = true
+				}
+			}
+			if kiroStopReasonIsCompletionEvidence(semanticEvent.SourceStopReason) {
+				sawExplicitCompletionReason = true
+			}
+			if err := applySemanticEvent(semanticEvent); err != nil {
 				return nil, err
 			}
 		}
@@ -1473,7 +1494,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
-	if requestCtx.RequireTerminalEvent && !sawTerminalEvent && !sawDeliverableOutput {
+	hasCompletionEvidence := sawTerminalEvent ||
+		sawExplicitCompletionReason ||
+		stopSequenceMatched != "" ||
+		(sawCompletionMetadata && sawFinalUsageEvidence)
+	if requestCtx.RequireTerminalEvent && !hasCompletionEvidence {
 		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing terminal event"}
 	}
 	if usage.OutputTokens == 0 {
@@ -4321,6 +4346,108 @@ func kiroSemanticEventIsTerminal(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func kiroSemanticEventIsCompletionMetadata(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "messageMetadataEvent", "metadataEvent", "usageEvent", "meteringEvent":
+		return true
+	default:
+		return false
+	}
+}
+
+func kiroSemanticEventHasNewOutput(event *kiroSemanticEvent) bool {
+	if event == nil {
+		return false
+	}
+	switch event.Type {
+	case kiroSemanticContent:
+		return event.Content != "" && !event.IsDuplicateContent
+	case kiroSemanticReasoning:
+		return event.Reasoning != ""
+	case kiroSemanticAssistantTU:
+		return event.ToolUse != nil
+	case kiroSemanticToolUse:
+		return event.ToolName != "" || event.ToolInput != "" || len(event.ToolInputMap) > 0
+	case kiroSemanticToolInput:
+		return event.ToolUseID != "" && (event.ToolInput != "" || len(event.ToolInputMap) > 0)
+	default:
+		return false
+	}
+}
+
+func kiroStopReasonIsCompletionEvidence(stopReason string) bool {
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "end_turn", "tool_use", "max_tokens", "stop_sequence":
+		return true
+	default:
+		return false
+	}
+}
+
+func kiroEventHasFinalUsageEvidence(eventType string, event map[string]any) bool {
+	if !kiroSemanticEventIsCompletionMetadata(eventType) || len(event) == 0 {
+		return false
+	}
+	meta := nestedEvent(event, eventType)
+	if kiroUsageMapHasFinalEvidence(meta) {
+		return true
+	}
+	return kiroUsageMapHasFinalEvidence(event)
+}
+
+func kiroUsageMapHasFinalEvidence(values map[string]any) bool {
+	if len(values) == 0 {
+		return false
+	}
+	for _, nestedKey := range []string{"tokenUsage", "usage"} {
+		if nested, ok := values[nestedKey].(map[string]any); ok && kiroUsageMapHasFinalTokenCount(nested) {
+			return true
+		}
+	}
+	if usageValue, ok := values["usage"]; ok && kiroMeteringUsageValueIsFinalEvidence(usageValue) {
+		return true
+	}
+	return kiroUsageMapHasFinalTokenCount(values)
+}
+
+func kiroMeteringUsageValueIsFinalEvidence(value any) bool {
+	var usage float64
+	switch v := value.(type) {
+	case float64:
+		usage = v
+	case float32:
+		usage = float64(v)
+	case int:
+		usage = float64(v)
+	case int64:
+		usage = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return false
+		}
+		usage = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return false
+		}
+		usage = parsed
+	default:
+		return false
+	}
+	return !math.IsNaN(usage) && !math.IsInf(usage, 0) && usage >= 0
+}
+
+func kiroUsageMapHasFinalTokenCount(values map[string]any) bool {
+	for _, field := range []string{"outputTokens", "output_tokens", "totalTokens", "total_tokens"} {
+		if value, ok := toInt(values[field]); ok && value >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func repairJSON(input string) string {
