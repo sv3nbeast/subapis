@@ -855,6 +855,9 @@ export default {
     total: 'Total',
     balance: 'Balance',
     available: 'Available',
+    availableBalance: 'Available Balance',
+    frozenBalance: 'Frozen Balance',
+    totalBalance: 'Total Balance',
     copiedToClipboard: 'Copied to clipboard',
     copied: 'Copied',
     copy: 'Copy',
@@ -1341,6 +1344,7 @@ export default {
     total: 'Last 30d',
     quota: 'Quota',
     lastUsedAt: 'Last Used',
+    lastUsedIP: 'Last Used IP',
     useKey: 'Use Key',
     useKeyModal: {
       title: 'Use API Key',
@@ -1519,6 +1523,9 @@ export default {
     type: 'Type',
     tokens: 'Tokens',
     cost: 'Cost',
+    latency: 'Latency',
+    latencyFirstToken: 'First Token',
+    latencyDuration: 'Duration',
     firstToken: 'First Token',
     duration: 'Duration',
     time: 'Time',
@@ -1588,7 +1595,7 @@ export default {
       detailAccuracy: 'Accuracy',
       detailCoordinates: 'Coordinates',
     },
-    tabs: { usage: 'Usage', errors: 'Error Requests' },
+    tabs: { usage: 'Usage', errors: 'Error Requests', ranking: 'User Ranking' },
     errors: {
       time: 'Time',
       model: 'Model',
@@ -2592,6 +2599,7 @@ export default {
       creating: 'Creating...',
       updating: 'Updating...',
       form: {
+        roleLabel: 'Role',
         rpmLimit: 'Requests Per Minute (RPM)',
         rpmLimitPlaceholder: '0 = unlimited',
         rpmLimitHint:
@@ -2995,6 +3003,16 @@ export default {
         modeHint:
           'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
+        notConfigured: 'Not configured'
+      },
+      videoPricing: {
+        title: 'Video Generation Pricing',
+        description: 'Configure base video prices per second by resolution. Leave empty to use default prices.',
+        independentMultiplier: 'Use independent video multiplier',
+        videoMultiplier: 'Video multiplier',
+        modeHint:
+          'By default, video billing uses per-second price × duration × current effective group multiplier. Independent mode uses the video multiplier instead.',
+        finalPricePreview: 'Final per-second price preview',
         notConfigured: 'Not configured'
       },
       peakRate: {
@@ -4072,6 +4090,11 @@ export default {
         createdAt: 'Created At',
         expiresAt: 'Expires At',
         actions: 'Actions'
+      },
+      schedulerScore: {
+        hint:
+          'Shows the current scheduling score as group / base score / sticky score. +∞ means the current sticky session has priority.',
+        ungrouped: 'Ungrouped'
       },
       usageWindowsHint:
         '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
@@ -5774,11 +5797,26 @@ export default {
       billingModeToken: 'Token',
       billingModePerRequest: 'Per Request',
       billingModeImage: 'Image',
+      billingModeVideo: 'Video',
       allBillingModes: 'All Billing Modes',
       ipAddress: 'IP',
       clickToViewBalance: 'Click to view balance history',
       failedToLoadUser: 'Failed to load user info',
       userDeletedBadge: 'Deleted',
+      tokenRanking: {
+        subtitle: 'Ranks users by token usage within the selected filters and time range.',
+        userCount: '{count} users',
+        rowHint: "Click to view this user's usage records",
+        columns: {
+          user: 'User',
+          requests: 'Requests',
+          inputTokens: 'Input Tokens',
+          outputTokens: 'Output Tokens',
+          cacheTokens: 'Cache Tokens',
+          totalTokens: 'Total Tokens',
+          cost: 'Cost'
+        }
+      },
       cleanup: {
         button: 'Cleanup',
         title: 'Cleanup Usage Records',
@@ -8044,6 +8082,23 @@ export default {
     updating: 'Updating...',
     updateComplete: 'Update Complete',
     updateFailed: 'Update Failed',
+    rollback: 'Rollback',
+    rollbackSourceHint: 'Select an available historical version, or copy a manual rollback command.',
+    noRollbackVersions: 'No rollback versions available',
+    rollbackSelectVersion: 'Select a version to roll back to',
+    manualRollbackCommand: 'Manual rollback command',
+    deployScript: 'Deployment Script',
+    deployDocker: 'Docker Compose',
+    dockerEditCompose: 'Edit the Compose file and set the image tag',
+    dockerRecreate: 'Recreate the service',
+    copyCommand: 'Copy command',
+    copied: 'Copied',
+    rollbackWarning: 'Rollback changes the application version only; database changes and data are not rolled back.',
+    rollingBack: 'Rolling back...',
+    rollbackConfirm: 'Roll back to {version}',
+    rollbackComplete: 'Rollback Complete',
+    rollbackFailed: 'Rollback Failed',
+    loadVersionsFailed: 'Failed to load rollback versions',
     restartRequired: 'Please restart the service to apply the update',
     restartNow: 'Restart Now',
     restarting: 'Restarting...',

@@ -784,6 +784,9 @@ export default {
     total: '总计',
     balance: '余额',
     available: '可用',
+    availableBalance: '可用余额',
+    frozenBalance: '冻结金额',
+    totalBalance: '总余额',
     copiedToClipboard: '已复制到剪贴板',
     copied: '已复制',
     copy: '复制',
@@ -1278,6 +1281,7 @@ export default {
     total: '近30天',
     quota: '额度',
     lastUsedAt: '上次使用时间',
+    lastUsedIP: '最近使用 IP',
     useKey: '使用密钥',
     useKeyModal: {
       title: '使用 API 密钥',
@@ -1449,6 +1453,9 @@ export default {
     type: '类型',
     tokens: 'Token',
     cost: '费用',
+    latency: '延迟',
+    latencyFirstToken: '首 Token',
+    latencyDuration: '总耗时',
     firstToken: '首 Token',
     duration: '耗时',
     time: '时间',
@@ -1518,7 +1525,7 @@ export default {
       detailAccuracy: '定位精度',
       detailCoordinates: '坐标',
     },
-    tabs: { usage: '用量明细', errors: '错误请求' },
+    tabs: { usage: '用量明细', errors: '错误请求', ranking: '用户排行' },
     errors: {
       time: '时间',
       model: '模型',
@@ -2998,6 +3005,16 @@ export default {
         finalPricePreview: '最终单张价格预览',
         notConfigured: '未配置'
       },
+      videoPricing: {
+        title: '视频生成计费',
+        description: '按分辨率配置视频每秒基础单价，留空则使用默认价格',
+        independentMultiplier: '视频倍率独立',
+        videoMultiplier: '视频独立倍率',
+        modeHint:
+          '默认关闭独立倍率时，视频费用 = 每秒价格 × 时长 × 当前分组有效倍率；开启后改用视频独立倍率。',
+        finalPricePreview: '最终每秒价格预览',
+        notConfigured: '未配置'
+      },
       peakRate: {
         enable: '启用高峰倍率',
         peakStart: '高峰开始',
@@ -3981,6 +3998,10 @@ export default {
         createdAt: '创建时间',
         expiresAt: '过期时间',
         actions: '操作'
+      },
+      schedulerScore: {
+        hint: '按“分组 / 基础分 / 粘性分”展示账号当前调度评分；+∞ 表示当前粘性会话优先命中。',
+        ungrouped: '未分组'
       },
       usageWindowsHint:
         '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
@@ -5779,11 +5800,26 @@ export default {
       billingModeToken: '按量',
       billingModePerRequest: '按次',
       billingModeImage: '按次(图片)',
+      billingModeVideo: '按次（视频）',
       allBillingModes: '全部计费模式',
       ipAddress: 'IP',
       clickToViewBalance: '点击查看充值记录',
       failedToLoadUser: '加载用户信息失败',
       userDeletedBadge: '已删除',
+      tokenRanking: {
+        subtitle: '按当前筛选条件和时间范围统计用户 Token 用量排行。',
+        userCount: '共 {count} 位用户',
+        rowHint: '点击查看该用户的使用记录',
+        columns: {
+          user: '用户',
+          requests: '请求数',
+          inputTokens: '输入 Token',
+          outputTokens: '输出 Token',
+          cacheTokens: '缓存 Token',
+          totalTokens: '总 Token',
+          cost: '费用'
+        }
+      },
       cleanup: {
         button: '清理',
         title: '清理使用记录',
@@ -7993,6 +8029,23 @@ export default {
     updating: '正在更新...',
     updateComplete: '更新完成',
     updateFailed: '更新失败',
+    rollback: '版本回滚',
+    rollbackSourceHint: '可选择已有历史版本执行回滚，或复制命令手动操作。',
+    noRollbackVersions: '暂无可回滚版本',
+    rollbackSelectVersion: '请选择要回滚的版本',
+    manualRollbackCommand: '手动回滚命令',
+    deployScript: '部署脚本',
+    deployDocker: 'Docker Compose',
+    dockerEditCompose: '编辑 Compose 文件并设置镜像版本',
+    dockerRecreate: '重新创建服务',
+    copyCommand: '复制命令',
+    copied: '已复制',
+    rollbackWarning: '回滚仅切换应用版本，不会回滚数据库结构变更或业务数据。',
+    rollingBack: '正在回滚...',
+    rollbackConfirm: '回滚到 {version}',
+    rollbackComplete: '回滚完成',
+    rollbackFailed: '回滚失败',
+    loadVersionsFailed: '加载可回滚版本失败',
     restartRequired: '请重启服务以应用更新',
     restartNow: '立即重启',
     restarting: '正在重启...',
