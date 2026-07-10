@@ -4269,56 +4269,29 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		toolUseID := firstKiroStringField(tu, "toolUseId", "toolUseID", "tool_use_id", "id")
 		name := firstKiroStringField(tu, "name", "toolName", "tool_name")
 		isStop := firstKiroBoolField(tu, "stop", "isStop", "done")
+		semanticEvent := kiroSemanticEvent{
+			Type:             kiroSemanticToolUse,
+			ToolUseID:        toolUseID,
+			ToolName:         name,
+			ToolStop:         isStop,
+			SourceStopReason: sourceStopReason,
+		}
+		hasToolEvent := toolUseID != "" || name != "" || isStop
 		if inputRaw, ok := tu["input"]; ok {
+			hasToolEvent = true
 			switch v := inputRaw.(type) {
 			case string:
-				if name != "" {
-					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolUse,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInput:        v,
-						ToolStop:         isStop,
-						SourceStopReason: sourceStopReason,
-					})
-				} else if toolUseID != "" {
-					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolInput,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInput:        v,
-						SourceStopReason: sourceStopReason,
-					})
-				}
+				semanticEvent.ToolInput = v
 			case map[string]any:
-				if name != "" {
-					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolUse,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInputMap:     v,
-						ToolStop:         isStop,
-						SourceStopReason: sourceStopReason,
-					})
-				} else if toolUseID != "" {
-					out = append(out, kiroSemanticEvent{
-						Type:             kiroSemanticToolInput,
-						ToolUseID:        toolUseID,
-						ToolName:         name,
-						ToolInputMap:     v,
-						SourceStopReason: sourceStopReason,
-					})
-				}
+				semanticEvent.ToolInputMap = v
 			}
 		}
-		if isStop {
-			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticToolStop,
-				ToolUseID:        toolUseID,
-				ToolName:         name,
-				ToolStop:         true,
-				SourceStopReason: sourceStopReason,
-			})
+		if hasToolEvent {
+			// Kiro may split a single tool call into a start frame containing
+			// only id/name, one or more input-only frames, and a stop-only
+			// frame. Route every fragment through the stateful tool handler so
+			// later frames can inherit the name captured by the start frame.
+			out = append(out, semanticEvent)
 		}
 	case "messageMetadataEvent", "metadataEvent", "supplementaryWebLinksEvent", "usageEvent", "messageStopEvent", "message_stop":
 		out = append(out, kiroSemanticEvent{
