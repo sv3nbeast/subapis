@@ -2391,3 +2391,25 @@ dc64d597a 恢复dashboard cache metrics display
 67d09f7c5 Fix Kiro sticky account scheduling
 05f716672 Retry Kiro metadata-only stream turns
 883e2afff Fix Kiro group endpoint mode editing
+
+## 2026-07-10 14:27:24 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 融合前提交: `b8afac3a27ec5adcf2f2455b154370365f927f33`
+- 官方目标: `0dec1ad2922ff8c9d27b67f8a31dfb35bce1902b`
+- 增量基线: `312ab1f0bdd00e7d155fa9af44349303886eb5c3`
+- 动作: 增量融合并完成验证，未提升到 `main`
+- 保留策略: 保留本地单体 Gateway、Kiro、缓存、计费与粘性会话逻辑；移植官方 GPT-5.6 缓存写入计费、Windows WebSocket 断连识别和用户明细 request_type 修复
+- 验证: 后端 `go test ./... -count=1` 通过；前端 `npm run lint:check`、`npm run typecheck`、`npm run test:run` 通过（148 files / 930 tests）
+
+### 本次官方增量
+
+- `4a2b10c94` 支持 GPT-5.6 cache write billing
+- `383f61d0e` 对齐 GPT-5.6 官方定价
+- `062af81fb` 保留显式 GPT-5.6 cache write 价格
+- `0a5f34a2e` 识别 Windows WebSocket reset
+- `5c15d32ff` 稳定 expired lock reconciliation 测试
+- `dda8f7873` 管理员用户明细使用 ParseUsageRequestType
+- `ea9f40b63` 前端 UserBreakdown request_type 类型对齐
+- `0dec1ad29` 统一 isOpenAIGPT56Model 声明
