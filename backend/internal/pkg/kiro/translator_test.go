@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -168,6 +169,10 @@ func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Greater(t, result.Context.InputTokenBudget, 0)
+	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.InputTokenBudget)
+	require.Less(t, result.Context.InputTokenBudget, anthropictokenizer.CountTokens(string(body)))
+	require.Less(t, result.Context.InputTokenBudget, 1_000_000)
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
@@ -2704,6 +2709,79 @@ func TestKiroCacheEmulationUsageUsesTotalTokensBudgetWhenInputMissing(t *testing
 	require.Greater(t, usage.CacheReadInputTokens, 0)
 	require.Less(t, usage.CacheReadInputTokens, 100)
 	require.LessOrEqual(t, usage.CacheCreation5mInputTokens, usage.CacheCreationInputTokens)
+}
+
+func TestKiroInputBudgetCapsNonStreamingCacheUsageWithoutUpstreamInputTokens(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"outputTokens": 5,
+				"totalTokens":  5,
+			},
+		},
+	}))
+
+	const budget = 200_000
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4.8", KiroRequestContext{
+		InputTokenBudget: budget,
+		CacheEmulationUsage: &Usage{
+			InputTokens:              120_606,
+			CacheReadInputTokens:     1_085_459,
+			CacheCreationInputTokens: 0,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, budget, kiroUsageInputBucketTotal(result.Usage))
+	require.Equal(t, budget+5, result.Usage.TotalTokens)
+	require.Less(t, result.Usage.CacheReadInputTokens, budget)
+	require.Equal(t, budget, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())+
+		int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())+
+		int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int()))
+}
+
+func TestKiroInputBudgetCapsStreamingCacheUsageWithoutUpstreamInputTokens(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "hello"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"outputTokens": 5,
+				"totalTokens":  5,
+			},
+		},
+	}))
+
+	const budget = 200_000
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.8", 1_206_065, KiroRequestContext{
+		InputTokenBudget: budget,
+		CacheEmulationUsage: &Usage{
+			InputTokens:              120_606,
+			CacheReadInputTokens:     1_085_459,
+			CacheCreationInputTokens: 0,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, budget, kiroUsageInputBucketTotal(result.Usage))
+	require.Equal(t, budget+5, result.Usage.TotalTokens)
+
+	var startUsage gjson.Result
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") || !strings.Contains(line, `"type":"message_start"`) {
+			continue
+		}
+		startUsage = gjson.Get(strings.TrimPrefix(line, "data: "), "message.usage")
+		break
+	}
+	require.True(t, startUsage.Exists())
+	require.Equal(t, budget, int(startUsage.Get("input_tokens").Int())+
+		int(startUsage.Get("cache_read_input_tokens").Int())+
+		int(startUsage.Get("cache_creation_input_tokens").Int()))
 }
 
 func TestRepairJSONKeepsStringBracesWhileRepairingTrailingComma(t *testing.T) {

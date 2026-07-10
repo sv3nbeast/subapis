@@ -144,9 +144,13 @@ type ParseResult struct {
 }
 
 type KiroRequestContext struct {
-	ToolNameMap              map[string]string
-	ThinkingEnabled          bool
-	CacheEmulationUsage      *Usage
+	ToolNameMap         map[string]string
+	ThinkingEnabled     bool
+	CacheEmulationUsage *Usage
+	// InputTokenBudget is a conservative estimate of the serialized Kiro
+	// payload actually sent upstream, after Kiro-history truncation. It keeps
+	// fallback/cache-emulation usage from billing omitted Anthropic history.
+	InputTokenBudget         int
 	RequireTerminalEvent     bool
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
@@ -657,6 +661,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	if err != nil {
 		return nil, err
 	}
+	requestCtx.InputTokenBudget = estimateKiroPayloadInputTokens(payloadBytes)
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
 }
 
@@ -668,6 +673,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
+	usage = constrainKiroUsageToInputBudget(usage, requestCtx.InputTokenBudget)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
 		Usage:        usage,
@@ -754,6 +760,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if requestCtx.CacheEmulationUsage != nil {
 			startUsage = mergeKiroCacheEmulationUsage(startUsage, requestCtx.CacheEmulationUsage)
 		}
+		startUsage = constrainKiroUsageToInputBudget(startUsage, requestCtx.InputTokenBudget)
 		usageMap := map[string]any{
 			"input_tokens":  startUsage.InputTokens,
 			"output_tokens": 0,
@@ -1487,6 +1494,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
+	usage = constrainKiroUsageToInputBudget(usage, requestCtx.InputTokenBudget)
 	if stopReason == "" {
 		if len(emittedToolContents) > 0 {
 			stopReason = "tool_use"
@@ -5166,6 +5174,24 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	base.CacheCreation1hInputTokens = normalized.CacheCreation1hInputTokens
 	base.TotalTokens = base.InputTokens + base.OutputTokens + base.CacheReadInputTokens + base.CacheCreationInputTokens
 	return base
+}
+
+func constrainKiroUsageToInputBudget(usage Usage, budget int) Usage {
+	if budget <= 0 || kiroUsageInputBucketTotal(usage) <= budget {
+		return usage
+	}
+	normalized := normalizeKiroCacheEmulationUsage(Usage{InputTokens: budget}, usage)
+	normalized.OutputTokens = usage.OutputTokens
+	normalized.KiroCredits = usage.KiroCredits
+	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
+	return normalized
+}
+
+func estimateKiroPayloadInputTokens(payload []byte) int {
+	if len(payload) == 0 {
+		return 0
+	}
+	return max(anthropictokenizer.CountTokens(string(payload)), 1)
 }
 
 func normalizeKiroCacheEmulationUsage(base Usage, simulated Usage) Usage {

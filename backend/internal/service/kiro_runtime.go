@@ -313,6 +313,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if resp.StatusCode >= 400 {
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 	}
+	inputTokens = kiroInputTokenBudget(requestCtx, inputTokens)
 
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	currentResp := resp
@@ -606,12 +607,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 
 	inputTokens := estimateKiroInputTokens(anthropicBody)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
-		cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		pr, pw := io.Pipe()
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
 		go func() {
-			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, cacheUsage)
+			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, account, group, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -638,6 +638,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
+	inputTokens = kiroInputTokenBudget(requestCtx, inputTokens)
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 
 	pr, pw := io.Pipe()
@@ -1344,6 +1345,13 @@ func estimateKiroInputTokens(body []byte) int {
 		return 1
 	}
 	return tokens
+}
+
+func kiroInputTokenBudget(requestCtx kiropkg.KiroRequestContext, fallback int) int {
+	if requestCtx.InputTokenBudget > 0 {
+		return requestCtx.InputTokenBudget
+	}
+	return fallback
 }
 
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
