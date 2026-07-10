@@ -212,7 +212,7 @@ func ResponsesEventToAnthropicEvents(
 	case "response.output_text.delta":
 		return resToAnthHandleTextDelta(evt, state)
 	case "response.output_text.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleBlockDone(evt, state)
 	case "response.function_call_arguments.delta",
 		// custom/freeform 工具的输入增量与 function_call 参数增量同形。
 		"response.custom_tool_call_input.delta":
@@ -226,7 +226,7 @@ func ResponsesEventToAnthropicEvents(
 		"response.reasoning_text.delta":
 		return resToAnthHandleReasoningDelta(evt, state)
 	case "response.reasoning_summary_text.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleBlockDone(evt, state)
 	// response.done 是 Realtime/WS 与项目透传路径使用的终止别名；
 	// 普通 Responses HTTP SSE 的公开终止事件仍以 response.completed 为主。
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
@@ -380,6 +380,11 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		events = append(events, closeCurrentBlock(state)...)
 
 		idx := state.ContentBlockIndex
+		// Register the output_index → block mapping so the matching
+		// output_text.done / output_item.done can locate this exact block,
+		// even when the bridge defers those terminal events to finalize and
+		// emits them after another block has already opened.
+		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "text"
 
@@ -434,8 +439,18 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 }
 
 func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	// This terminal event may target a block that was already closed while
+	// streaming a later block: the Chat→Responses bridge defers every tool's
+	// func_args.done to finalize and replays them in a fixed order. Acting on
+	// whatever block happens to be open would emit an input_json_delta against a
+	// stale index — the orphan the Anthropic client rejects with
+	// "Content block not found". Only act when this event owns the open block;
+	// otherwise it was already finalized during streaming and is a no-op.
+	if !isCurrentOpenBlock(evt, state) {
+		return nil
+	}
 	if state.CurrentBlockType != "tool_use" {
-		return resToAnthHandleBlockDone(state)
+		return closeCurrentBlock(state)
 	}
 
 	raw := evt.Arguments
@@ -462,6 +477,10 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 			PartialJSON: raw,
 		},
 	}}
+	// Mark the input as already flushed so closeCurrentBlock's Read fallback
+	// (below) does not emit it a second time.
+	state.CurrentToolArgs = ""
+	state.CurrentToolHadDelta = true
 	events = append(events, closeCurrentBlock(state)...)
 	return events
 }
@@ -486,11 +505,33 @@ func resToAnthHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEv
 	}}
 }
 
-func resToAnthHandleBlockDone(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if !state.ContentBlockOpen {
+func resToAnthHandleBlockDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	// Same finalize-ordering hazard as func_args.done: output_text.done /
+	// reasoning_summary_text.done may arrive after their block was already
+	// closed (the bridge replays terminal events for message + every tool at
+	// the end, after later blocks opened). Only close the block this event
+	// actually owns.
+	if !isCurrentOpenBlock(evt, state) {
 		return nil
 	}
 	return closeCurrentBlock(state)
+}
+
+// isCurrentOpenBlock reports whether the block registered for evt.OutputIndex is
+// the one currently open. A block opens at state.ContentBlockIndex and that
+// counter only advances when the block closes, so the open block is exactly the
+// one whose registered index equals the current counter. Terminal events whose
+// output_index was never registered (e.g. a message item that never produced
+// text) or whose block already closed return false and become no-ops.
+func isCurrentOpenBlock(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) bool {
+	if !state.ContentBlockOpen {
+		return false
+	}
+	blockIdx, ok := state.OutputIndexToBlockIdx[evt.OutputIndex]
+	if !ok {
+		return false
+	}
+	return blockIdx == state.ContentBlockIndex
 }
 
 func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -503,7 +544,13 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 		return resToAnthHandleWebSearchDone(evt, state)
 	}
 
-	if state.ContentBlockOpen {
+	// Only close the block this item actually owns. In the batched-finalize path
+	// the message item's output_item.done (output_index 0) arrives while a later
+	// tool block is still open; closing "whatever is open" would truncate that
+	// tool block and strand its func_args.done as an orphan. Blocks whose
+	// terminal event already ran (text/reasoning closed by their own *.done) are
+	// no-ops here.
+	if isCurrentOpenBlock(evt, state) {
 		return closeCurrentBlock(state)
 	}
 	return nil
@@ -621,13 +668,40 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 		return nil
 	}
 	idx := state.ContentBlockIndex
+
+	var events []AnthropicStreamEvent
+	// Read tool input is buffered (not streamed) and normally flushed by this
+	// block's own func_args.done. When a Read block is instead closed by a later
+	// block opening (parallel tool calls) or by abnormal termination, its buffered
+	// input would otherwise be dropped, leaving an empty "{}" tool_use. Flush it
+	// here so the input survives. func_args.done clears CurrentToolArgs and sets
+	// CurrentToolHadDelta before calling close, so this never double-emits.
+	if state.CurrentBlockType == "tool_use" &&
+		state.CurrentToolName == "Read" &&
+		!state.CurrentToolHadDelta &&
+		state.CurrentToolArgs != "" {
+		if sanitized := sanitizeAnthropicToolUseInput(state.CurrentToolName, state.CurrentToolArgs); len(sanitized) > 0 {
+			events = append(events, AnthropicStreamEvent{
+				Type:  "content_block_delta",
+				Index: &idx,
+				Delta: &AnthropicDelta{
+					Type:        "input_json_delta",
+					PartialJSON: string(sanitized),
+				},
+			})
+		}
+	}
+
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
+	state.CurrentBlockType = ""
 	state.CurrentToolName = ""
 	state.CurrentToolArgs = ""
 	state.CurrentToolHadDelta = false
-	return []AnthropicStreamEvent{{
+
+	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_stop",
 		Index: &idx,
-	}}
+	})
+	return events
 }

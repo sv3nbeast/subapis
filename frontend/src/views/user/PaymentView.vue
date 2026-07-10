@@ -241,7 +241,7 @@
                       </div>
                       <div class="flex justify-between border-t border-gray-100 pt-3 dark:border-dark-700">
                         <span class="text-gray-500 dark:text-gray-400">{{ t('payment.paymentMethod') }}</span>
-                        <span class="font-semibold text-gray-950 dark:text-white">{{ selectedMethod ? t(`payment.methods.${selectedMethod}`) : '-' }}</span>
+                        <span class="font-semibold text-gray-950 dark:text-white">{{ selectedMethodLabel }}</span>
                       </div>
                     </div>
                   </div>
@@ -711,14 +711,37 @@ function formatSelectedPaymentAmount(value: number): string {
 }
 
 function formatSelectedSubscriptionPaymentAmount(value: number): string {
-  return formatSelectedPaymentAmount(roundPaymentAmount(value, selectedCurrency.value))
+  return formatSelectedPaymentAmount(roundPaymentAmount(subscriptionAmountForCurrency(value, selectedCurrency.value), selectedCurrency.value))
 }
+
+const subscriptionUsdToCnyRate = computed(() => {
+  const rate = Number(checkout.value.subscription_usd_to_cny_rate)
+  return Number.isFinite(rate) && rate > 0 ? rate : 0
+})
+
+function subscriptionAmountForCurrency(value: number, currency: string): number {
+  if (!Number.isFinite(value)) return 0
+  const normalizedCurrency = normalizePaymentCurrency(currency)
+  if (normalizedCurrency === 'CNY' && subscriptionUsdToCnyRate.value > 0) {
+    return value * subscriptionUsdToCnyRate.value
+  }
+  return value
+}
+
+function paymentMethodDisplayName(type: string): string {
+  const method = visibleMethods.value[type]
+  const displayName = method?.display_name?.trim()
+  return displayName || (type ? t(`payment.methods.${type}`) : '-')
+}
+
+const selectedMethodLabel = computed(() => paymentMethodDisplayName(selectedMethod.value))
 
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
     const ml = visibleMethods.value[type]
     return {
       type,
+      display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
       available: ml?.available !== false && amountFitsMethod(validAmount.value, type),
     }
@@ -760,7 +783,7 @@ const canSubmit = computed(() =>
 
 const subPaymentAmount = computed(() => {
   const price = selectedPlan.value?.price ?? 0
-  return roundPaymentAmount(price, selectedCurrency.value)
+  return roundPaymentAmount(subscriptionAmountForCurrency(price, selectedCurrency.value), selectedCurrency.value)
 })
 
 const subFeeAmount = computed(() => {
@@ -774,7 +797,7 @@ const subTotalAmount = computed(() => {
 })
 
 function subscriptionTotalAmountForCurrency(value: number, currency: string): number {
-  const paymentAmount = roundPaymentAmount(value, currency)
+  const paymentAmount = roundPaymentAmount(subscriptionAmountForCurrency(value, currency), currency)
   if (feeRate.value <= 0 || paymentAmount <= 0) return paymentAmount
   const fee = ceilPaymentAmount((paymentAmount * feeRate.value) / 100, currency)
   return roundPaymentAmount(paymentAmount + fee, currency)
@@ -788,6 +811,7 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
     const currency = normalizePaymentCurrency(ml?.currency)
     return {
       type,
+      display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
       available: ml?.available !== false && amountFitsMethod(subscriptionTotalAmountForCurrency(price, currency), type),
     }
@@ -1241,7 +1265,7 @@ onMounted(async () => {
       if (restored) {
         paymentState.value = restored
         paymentPhase.value = 'paying'
-        const restoredMethod = normalizeVisibleMethod(restored.paymentType)
+        const restoredMethod = normalizeVisibleMethod(restored.paymentType) || restored.paymentType.trim()
         if (restoredMethod) {
           selectedMethod.value = restoredMethod
         }

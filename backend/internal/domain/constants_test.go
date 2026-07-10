@@ -42,7 +42,7 @@ func TestDefaultBedrockModelMapping_DefaultsOpus48(t *testing.T) {
 	cases := map[string]string{
 		"claude-opus-4-8":          "us.anthropic.claude-opus-4-8-v1",
 		"claude-opus-4-8-thinking": "us.anthropic.claude-opus-4-8-v1",
-		"claude-sonnet-5":          "us.anthropic.claude-sonnet-5-v1",
+		"claude-sonnet-5":          "anthropic.claude-sonnet-5",
 	}
 	for from, want := range cases {
 		if got, ok := DefaultBedrockModelMapping[from]; !ok || got != want {

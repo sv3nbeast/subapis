@@ -247,6 +247,8 @@ const testPrompt = ref('')
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
+const testMode = ref<'default' | 'compact'>('default')
+const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
@@ -295,6 +297,7 @@ watch(
   async (newVal) => {
     if (newVal && props.account) {
       testPrompt.value = ''
+      testMode.value = 'default'
       resetState()
       await loadAvailableModels()
     } else {
@@ -385,6 +388,18 @@ const startTest = async () => {
   abortController = new AbortController()
 
   try {
+    const requestBody: {
+      model_id: string
+      prompt: string
+      mode?: 'default' | 'compact'
+    } = {
+      model_id: selectedModelId.value,
+      prompt: supportsGeminiImageTest.value ? testPrompt.value.trim() : ''
+    }
+    if (isOpenAIAccount.value) {
+      requestBody.mode = testMode.value
+    }
+
     // Use the configured API base; EventSource does not support POST.
     const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
 
@@ -395,10 +410,7 @@ const startTest = async () => {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-              model_id: selectedModelId.value,
-              prompt: supportsGeminiImageTest.value ? testPrompt.value.trim() : ''
-            }),
+      body: JSON.stringify(requestBody),
       signal: abortController.signal
     })
 

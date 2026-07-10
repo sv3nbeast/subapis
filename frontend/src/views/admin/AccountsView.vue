@@ -375,6 +375,29 @@
             <template #cell-priority="{ value }">
               <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
             </template>
+            <template #header-scheduler_score="{ column }">
+              <div class="flex items-center">
+                <span>{{ column.label }}</span>
+                <HelpTooltip :content="t('admin.accounts.schedulerScore.hint')" width-class="w-80" />
+              </div>
+            </template>
+            <template #cell-scheduler_score="{ row }">
+              <div v-if="getSchedulerScoreRows(row).length" class="flex min-w-[7rem] flex-col gap-0.5 font-mono text-[11px] leading-4">
+                <div
+                  v-for="score in getSchedulerScoreRows(row)"
+                  :key="String(score.group_id)"
+                  class="flex items-center gap-1 whitespace-nowrap text-gray-700 dark:text-gray-300"
+                  :title="`${formatSchedulerScoreGroup(score)} / ${formatSchedulerScore(score.base_score)} / ${formatStickySchedulerScore(score)}`"
+                >
+                  <span class="max-w-[4.75rem] truncate text-gray-500 dark:text-dark-400">{{ formatSchedulerScoreGroup(score) }}</span>
+                  <span class="text-gray-300 dark:text-gray-600">/</span>
+                  <span>{{ formatSchedulerScore(score.base_score) }}</span>
+                  <span class="text-gray-300 dark:text-gray-600">/</span>
+                  <span class="text-primary-700 dark:text-primary-300">{{ formatStickySchedulerScore(score) }}</span>
+                </div>
+              </div>
+              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+            </template>
             <template #cell-last_used_at="{ value }">
               <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
             </template>
@@ -609,6 +632,7 @@ import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import type {
   Account,
   AccountPlatform,
+  AccountSchedulerGroupScore,
   AccountType,
   Proxy as AccountProxy,
   AdminGroup,
@@ -692,8 +716,11 @@ const exportingData = ref(false)
 const showAccountToolsDropdown = ref(false)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
+// One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavier backend scoring.
+const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
+const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
 
 const accountColumnFallbacks = {
   name: { zh: '名称', en: 'Name' },
@@ -706,6 +733,7 @@ const accountColumnFallbacks = {
   usageWindows: { zh: '额度窗口', en: 'Usage Windows' },
   proxy: { zh: '代理', en: 'Proxy' },
   priority: { zh: '优先级', en: 'Priority' },
+  schedulerScore: { zh: '调度分', en: 'Scheduler Score' },
   billingRateMultiplier: { zh: '账号倍率', en: 'Account Rate' },
   lastUsed: { zh: '最后使用', en: 'Last Used' },
   createdAt: { zh: '创建时间', en: 'Created At' },
@@ -717,10 +745,10 @@ const accountColumnFallbacks = {
 type AccountColumnFallbackKey = keyof typeof accountColumnFallbacks
 
 const accountColumnLabel = (key: AccountColumnFallbackKey) => {
-  const i18nKey = `admin.accounts.columns.${key}`
-  if (te(i18nKey)) return t(i18nKey)
-  const lang = String(locale.value || '')
-    .toLowerCase()
+	const i18nKey = `admin.accounts.columns.${key}`
+	if (typeof te === 'function' && te(i18nKey)) return t(i18nKey)
+	const lang = String(locale && typeof locale === 'object' && 'value' in locale ? locale.value || '' : '')
+		.toLowerCase()
     .startsWith('zh')
     ? 'zh'
     : 'en'
@@ -843,6 +871,36 @@ const autoRefreshIntervalLabel = (sec: number) => {
   return `${sec}s`
 }
 
+const formatSchedulerScore = (value: unknown): string => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '-'
+  return num.toFixed(6).replace(/\.?0+$/, '')
+}
+
+const formatStickySchedulerScore = (score: AccountSchedulerGroupScore): string => {
+  if (!score) return '-'
+  if (score.sticky_score_infinity) return '+∞'
+  return formatSchedulerScore(score.sticky_score)
+}
+
+const getSchedulerScoreRows = (account: Account): AccountSchedulerGroupScore[] => {
+  const groupRows = Array.isArray(account.scheduler_scores)
+    ? account.scheduler_scores.filter((score) => score.group_id != null)
+    : []
+  if (groupRows.length) return groupRows
+  // 未分组账号没有分组维度分数，回退展示后端返回的基础分。
+  if (account.scheduler_score) {
+    return [{ group_id: null, ...account.scheduler_score }]
+  }
+  return []
+}
+
+const formatSchedulerScoreGroup = (score: AccountSchedulerGroupScore): string => {
+  if ('group_name' in score && score.group_name) return score.group_name
+  if ('group_id' in score && score.group_id != null) return `#${score.group_id}`
+  return t('admin.accounts.schedulerScore.ungrouped')
+}
+
 const loadSavedColumns = () => {
   try {
     const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
@@ -851,16 +909,24 @@ const loadSavedColumns = () => {
       parsed.forEach((key) => {
         hiddenColumns.add(key)
       })
+      // Older saved column layouts may have scheduler_score visible; migrate them to the new safe default once.
+      if (localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY) !== HIDDEN_COLUMNS_CURRENT_VERSION) {
+        hiddenColumns.add('scheduler_score')
+        localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+        localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
+      }
     } else {
       DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
         hiddenColumns.add(key)
       })
+      localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
     }
   } catch (e) {
     console.error('Failed to load saved columns:', e)
     DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
       hiddenColumns.add(key)
     })
+    localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
   }
 }
 
@@ -942,9 +1008,22 @@ const toggleColumn = (key: string) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
   }
+  if (key === 'scheduler_score') {
+    // The server only returns scheduler scores when this column is visible, so reload the current page immediately.
+    syncAccountListDerivedParams()
+    load().catch((error) => {
+      console.error('Failed to reload accounts after toggling scheduler score column:', error)
+    })
+  }
 }
 
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
+const shouldIncludeSchedulerScore = () => isColumnVisible('scheduler_score')
+const syncAccountListDerivedParams = () => {
+  // Keep every load path, including auto-refresh and sorting, aligned with current column visibility.
+  const requestParams = params as any
+  requestParams.include_scheduler_score = shouldIncludeSchedulerScore() ? '1' : '0'
+}
 
 const {
   items: accounts,
@@ -967,7 +1046,8 @@ const {
     search: '',
     model: '',
     sort_by: sortState.sort_by,
-    sort_order: sortState.sort_order
+    sort_order: sortState.sort_order,
+    include_scheduler_score: shouldIncludeSchedulerScore() ? '1' : '0'
   }
 })
 
@@ -1005,6 +1085,7 @@ const load = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  syncAccountListDerivedParams()
   if (isFirstLoad.value) {
     requestParams.lite = '1'
   }
@@ -1020,6 +1101,7 @@ const reload = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  syncAccountListDerivedParams()
   await baseReload()
   await refreshTodayStatsBatch()
 }
@@ -1028,6 +1110,7 @@ const debouncedReload = () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  syncAccountListDerivedParams()
   baseDebouncedReload()
 }
 
@@ -1035,6 +1118,7 @@ const handlePageChange = (page: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  syncAccountListDerivedParams()
   baseHandlePageChange(page)
 }
 
@@ -1042,6 +1126,7 @@ const handlePageSizeChange = (size: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  syncAccountListDerivedParams()
   baseHandlePageSizeChange(size)
 }
 
@@ -1187,6 +1272,7 @@ const refreshAccountsIncrementally = async () => {
   if (autoRefreshFetching.value) return
   autoRefreshFetching.value = true
   try {
+    syncAccountListDerivedParams()
     const result = await adminAPI.accounts.listWithEtag(
       pagination.page,
       pagination.page_size,
@@ -1200,6 +1286,7 @@ const refreshAccountsIncrementally = async () => {
         model?: string
         sort_by?: string
         sort_order?: AccountSortOrder
+        include_scheduler_score?: string
       },
       { etag: autoRefreshETag.value }
     )
@@ -1421,6 +1508,11 @@ const allColumns = computed(() => {
     },
     { key: 'proxy', label: accountColumnLabel('proxy'), sortable: false },
     { key: 'priority', label: accountColumnLabel('priority'), sortable: true },
+    {
+      key: 'scheduler_score',
+      label: accountColumnLabel('schedulerScore'),
+      sortable: false
+    },
     {
       key: 'rate_multiplier',
       label: accountColumnLabel('billingRateMultiplier'),

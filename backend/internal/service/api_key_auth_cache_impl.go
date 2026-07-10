@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 16 // v16: include group peak rate fields, Kiro sticky/cache settings, and Kiro endpoint mode
+const apiKeyAuthSnapshotVersion = 17 // v17: include group video/batch pricing fields, peak rate fields, Kiro sticky/cache settings, and Kiro endpoint mode
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -99,7 +100,7 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 		s.authCacheL1.Del(cacheKey)
 	}); err != nil {
 		// Log but don't fail - L1 cache will still work, just without cross-instance invalidation
-		println("[Service] Warning: failed to start auth cache invalidation subscriber:", err.Error())
+		slog.Warn("failed to start auth cache invalidation subscriber", "error", err)
 	}
 }
 
@@ -260,11 +261,17 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			WeeklyLimitUSD:                  groupForSnapshot.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 groupForSnapshot.MonthlyLimitUSD,
 			AllowImageGeneration:            groupForSnapshot.AllowImageGeneration,
+			AllowBatchImageGeneration:       groupForSnapshot.AllowBatchImageGeneration,
 			ImageRateIndependent:            groupForSnapshot.ImageRateIndependent,
 			ImageRateMultiplier:             groupForSnapshot.ImageRateMultiplier,
 			ImagePrice1K:                    groupForSnapshot.ImagePrice1K,
 			ImagePrice2K:                    groupForSnapshot.ImagePrice2K,
 			ImagePrice4K:                    groupForSnapshot.ImagePrice4K,
+			VideoRateIndependent:            groupForSnapshot.VideoRateIndependent,
+			VideoRateMultiplier:             groupForSnapshot.VideoRateMultiplier,
+			VideoPrice480P:                  groupForSnapshot.VideoPrice480P,
+			VideoPrice720P:                  groupForSnapshot.VideoPrice720P,
+			VideoPrice1080P:                 groupForSnapshot.VideoPrice1080P,
 			ClaudeCodeOnly:                  groupForSnapshot.ClaudeCodeOnly,
 			FallbackGroupID:                 groupForSnapshot.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: groupForSnapshot.FallbackGroupIDOnInvalidRequest,
@@ -343,11 +350,17 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
+			AllowBatchImageGeneration:       snapshot.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,
 			ImageRateMultiplier:             snapshot.Group.ImageRateMultiplier,
 			ImagePrice1K:                    snapshot.Group.ImagePrice1K,
 			ImagePrice2K:                    snapshot.Group.ImagePrice2K,
 			ImagePrice4K:                    snapshot.Group.ImagePrice4K,
+			VideoRateIndependent:            snapshot.Group.VideoRateIndependent,
+			VideoRateMultiplier:             snapshot.Group.VideoRateMultiplier,
+			VideoPrice480P:                  snapshot.Group.VideoPrice480P,
+			VideoPrice720P:                  snapshot.Group.VideoPrice720P,
+			VideoPrice1080P:                 snapshot.Group.VideoPrice1080P,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,

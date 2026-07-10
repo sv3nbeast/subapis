@@ -546,7 +546,8 @@ import { listPublicChannelMonitors, type PublicMonitorView } from '@/api/publicC
 import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { formatRelativeWithDateTime } from '@/utils/format'
-import type { UserAnnouncement } from '@/types'
+import { sanitizeUrl } from '@/utils/url'
+import type { UserAnnouncement } from '@/types' 
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -583,9 +584,9 @@ const publicMonitorItems = ref<PublicMonitorView[]>([])
 const publicMonitorLoading = ref(false)
 
 // Site settings - directly from appStore (already initialized from injected config)
-const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?.site_name || appStore.siteName))
-const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '')
-const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
+const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API'))
+const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const apiBaseUrl = computed(() => {
   const configured = appStore.cachedPublicSettings?.api_base_url || appStore.apiBaseUrl

@@ -22,7 +22,7 @@
     </div>
 
     <!-- Navigation -->
-    <nav class="sidebar-nav scrollbar-hide">
+    <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
       <!-- Admin View: Admin menu first, then personal menu -->
       <template v-if="isAdmin">
         <!-- Admin Section -->
@@ -205,12 +205,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
+import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { statusAPI } from '@/api/status'
 
@@ -272,6 +273,7 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
+const sidebarNavRef = ref<HTMLElement | null>(null)
 const pendingActivePath = ref<string | null>(null)
 const activePath = computed(() => pendingActivePath.value || route.path)
 const prefetchedNavPaths = new Set<string>()
@@ -281,7 +283,7 @@ type ComponentImportFn = () => Promise<unknown>
 
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
-const siteLogo = computed(() => appStore.siteLogo)
+const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
@@ -1046,6 +1048,10 @@ watch(
 )
 
 onMounted(async () => {
+  await nextTick()
+  if (sidebarNavRef.value && appStore.sidebarScrollTop > 0) {
+    sidebarNavRef.value.scrollTop = appStore.sidebarScrollTop
+  }
   if (isAdmin.value) {
     adminSettingsStore.fetch()
   }
@@ -1061,6 +1067,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  if (sidebarNavRef.value) {
+    appStore.sidebarScrollTop = sidebarNavRef.value.scrollTop
+  }
   if (pendingActiveTimer) {
     clearTimeout(pendingActiveTimer)
   }

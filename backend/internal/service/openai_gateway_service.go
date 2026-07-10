@@ -48,7 +48,7 @@ const (
 	// 与真实 Codex CLI 的 User-Agent 结构对齐：
 	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
 	// 旧值 "codex_cli_rs/0.125.0" 缺少 OS/架构/终端后缀，易被上游指纹识别为非官方客户端。
-	codexCLIUserAgent = "codex_cli_rs/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color"
+	codexCLIUserAgent = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color"
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -62,7 +62,7 @@ const (
 	openAIWSRetryBackoffMaxDefault     = 2 * time.Second
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
-	codexCLIVersion                    = "0.125.0"
+	codexCLIVersion                    = "0.144.1"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 配额自动暂停时，超过该时长仍未刷新的 used% 快照视为陈旧，不再据此暂停账号。
@@ -256,6 +256,10 @@ type OpenAIForwardResult struct {
 	ImageOutputSizes   []string
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
+	VideoCount         int
+	VideoResolution    string
+	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
+	VideoDurationSeconds int
 
 	wsReplayInput       []json.RawMessage
 	wsReplayInputExists bool
@@ -2647,6 +2651,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
+	if err != nil {
+		return nil, err
+	}
+	if normalized {
+		body = normalizedBody
+	}
+
 	originalBody := body
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
@@ -2700,9 +2712,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	if passthroughEnabled {
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
-		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
+		mappedModel := account.GetMappedModel(reqModel)
+		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
-		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, account.GetMappedModel(reqModel))
+		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
 	}
 
@@ -3342,7 +3355,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		defer func() { _ = resp.Body.Close() }()
 
-		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
+		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, firstNonEmpty(upstreamModel, billingModel, originalModel))
 		// 国产模型默认 effort 补充：此处 reqModel 已被 mapping 重写为 billingModel（见
 		// line 2510-2515 的 GetMappedModel + reqModel 赋值），可直接作为 mappedModel。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, reqModel)
@@ -4007,6 +4020,108 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	return !openAIStreamEventIsPreamble(eventType)
 }
 
+func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
+	if isOpenAIContextWindowError(message, payload) {
+		return http.StatusBadRequest
+	}
+
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+	}
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
+	if errType == "" {
+		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
+	}
+	combined := strings.TrimSpace(errType + " " + code + " " + strings.ToLower(strings.TrimSpace(message)))
+	switch {
+	case strings.Contains(errType, "invalid_request"):
+		return http.StatusBadRequest
+	case strings.Contains(combined, "rate_limit"):
+		return http.StatusTooManyRequests
+	case strings.Contains(combined, "authentication") || strings.Contains(combined, "unauthorized") || strings.Contains(combined, "invalid_api_key"):
+		return http.StatusUnauthorized
+	case strings.Contains(combined, "permission") || strings.Contains(combined, "forbidden") || strings.Contains(combined, "access denied"):
+		return http.StatusForbidden
+	case code == "server_is_overloaded" || code == "slow_down":
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+func openAIStreamFailedEventPassthroughBody(payload []byte, failedMessage string) []byte {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return payload
+	}
+	if gjson.GetBytes(payload, "error").Exists() {
+		return payload
+	}
+	responseError := gjson.GetBytes(payload, "response.error")
+	if !responseError.Exists() {
+		if strings.TrimSpace(failedMessage) == "" {
+			return payload
+		}
+		body, err := marshalOpenAIUpstreamJSON(gin.H{
+			"error": gin.H{
+				"message": failedMessage,
+			},
+		})
+		if err != nil {
+			return payload
+		}
+		return body
+	}
+
+	errorPayload := gin.H{}
+	if errType := strings.TrimSpace(gjson.Get(responseError.Raw, "type").String()); errType != "" {
+		errorPayload["type"] = errType
+	}
+	if code := strings.TrimSpace(gjson.Get(responseError.Raw, "code").String()); code != "" {
+		errorPayload["code"] = code
+	}
+	if param := strings.TrimSpace(gjson.Get(responseError.Raw, "param").String()); param != "" {
+		errorPayload["param"] = param
+	}
+	message := strings.TrimSpace(gjson.Get(responseError.Raw, "message").String())
+	if message == "" {
+		message = strings.TrimSpace(failedMessage)
+	}
+	if message != "" {
+		errorPayload["message"] = message
+	}
+	if len(errorPayload) == 0 {
+		return payload
+	}
+	body, err := marshalOpenAIUpstreamJSON(gin.H{"error": errorPayload})
+	if err != nil {
+		return payload
+	}
+	return body
+}
+
+// applyOpenAIStreamFailedErrorPassthroughRule 对 response.failed 事件应用错误透传规则：
+// 归一化 body 供关键词匹配/消息提取，并推断语义状态码使按错误码配置的规则可以命中。
+// platform 必须传 account.Platform——本服务同时承载 openai 与 grok 平台账号，规则按平台匹配。
+func applyOpenAIStreamFailedErrorPassthroughRule(
+	c *gin.Context,
+	platform string,
+	payload []byte,
+	failedMessage string,
+) (status int, errType string, errMsg string, matched bool) {
+	ruleBody := openAIStreamFailedEventPassthroughBody(payload, failedMessage)
+	upstreamStatus := openAIStreamFailedEventSemanticStatus(payload, failedMessage)
+	return applyErrorPassthroughRule(
+		c,
+		platform,
+		upstreamStatus,
+		ruleBody,
+		http.StatusBadGateway,
+		"upstream_error",
+		"Upstream request failed",
+	)
+}
+
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
 	if isOpenAIContextWindowError(message, payload) {
 		return false
@@ -4369,7 +4484,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
@@ -4401,6 +4518,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 				}
 			}
 		}
+		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
 		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
@@ -4431,7 +4549,9 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			contentType = "text/event-stream"
 		}
 	}
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
@@ -5798,7 +5918,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
@@ -5837,6 +5959,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 				}
 			}
 		}
+		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
 		if originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
@@ -5871,7 +5994,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			contentType = "text/event-stream"
 		}
 	}
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
@@ -6020,10 +6145,17 @@ func responsesStreamEventMayContributeToOutput(eventType string) bool {
 	}
 }
 
-// reconstructResponseOutputFromSSE scans raw SSE body text for delta events and
-// returns a JSON-encoded output array reconstructed from accumulated deltas.
-// Returns (nil, false) if no content was found in deltas.
+// reconstructResponseOutputFromSSE scans raw SSE body text and returns a
+// JSON-encoded output array for a terminal event whose output is empty.
+// Raw output_item.done items are preferred: per the Responses protocol they
+// are the authoritative final form of each item. Delta accumulation only
+// covers text/function_call/reasoning content and silently drops unknown
+// item types such as compaction.
+// Returns (nil, false) if nothing could be reconstructed.
 func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
+	if outputJSON, ok := collectRawResponsesOutputItemsFromSSE(bodyText); ok {
+		return outputJSON, true
+	}
 	acc := apicompat.NewBufferedResponseAccumulator()
 	imageOutputs := make([]json.RawMessage, 0, 1)
 	seenImages := make(map[string]struct{})
@@ -6040,6 +6172,60 @@ func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
 		}
 	})
 	return buildResponsesOutputJSON(acc, imageOutputs)
+}
+
+// collectRawResponsesOutputItemsFromSSE 按到达顺序收集 SSE 流中
+// response.output_item.done 携带的原始 item。item 以 raw JSON 逐字节保留，
+// 避免经窄结构体重建时丢弃 encrypted_content/summary/opaque 等 compact
+// 专属或未来新增字段。若整条流没有任何 done 事件，退回收集 output_item.added
+// 中的 compaction 类 item；若 done 事件缺少 compaction，也用 added 兜底补齐。
+func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
+	var items []json.RawMessage
+	seen := make(map[string]struct{})
+	hasCompactionItem := false
+	appendItem := func(item gjson.Result) {
+		if !item.Exists() || !item.IsObject() {
+			return
+		}
+		key := strings.TrimSpace(item.Get("id").String())
+		if key == "" {
+			key = item.Raw
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		if isResponsesCompactionItemType(item.Get("type").String()) {
+			hasCompactionItem = true
+		}
+		items = append(items, json.RawMessage(item.Raw))
+	}
+	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+		if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.done" {
+			return
+		}
+		appendItem(gjson.GetBytes(data, "item"))
+	})
+	if !hasCompactionItem {
+		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.added" {
+				return
+			}
+			item := gjson.GetBytes(data, "item")
+			if !isResponsesCompactionItemType(item.Get("type").String()) {
+				return
+			}
+			appendItem(item)
+		})
+	}
+	if len(items) == 0 {
+		return nil, false
+	}
+	outputJSON, err := json.Marshal(items)
+	if err != nil {
+		return nil, false
+	}
+	return outputJSON, true
 }
 
 func buildResponsesOutputJSON(acc *apicompat.BufferedResponseAccumulator, imageOutputs []json.RawMessage) ([]byte, bool) {
@@ -6063,6 +6249,78 @@ func buildResponsesOutputJSON(acc *apicompat.BufferedResponseAccumulator, imageO
 		return nil, false
 	}
 	return outputJSON, true
+}
+
+// isResponsesCompactionItemType reports whether the item type is the Codex
+// remote-compact result item ("compaction", upstream alias "compaction_summary").
+func isResponsesCompactionItemType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "compaction", "compaction_summary":
+		return true
+	default:
+		return false
+	}
+}
+
+// supplementCompactionItemFromSSE 保证 compact 请求的终态 output 携带
+// compaction item：终态 output 非空但缺失 compaction、而原始事件流的
+// output_item.done（或 added）中存在时（上游不一致形态），以 raw JSON 补入。
+// Codex remote compact v2 只从 output_item.done 收集 item 且要求恰好一个
+// compaction item——纯流式透传下客户端直接读事件流天然拿得到，
+// SSE→JSON 提取链路必须给出等价结果。非 compact 请求原样返回。
+func supplementCompactionItemFromSSE(c *gin.Context, finalResponse []byte, bodyText string) []byte {
+	if !isOpenAIResponsesCompactPath(c) {
+		return finalResponse
+	}
+	if len(gjson.GetBytes(finalResponse, "output").Array()) == 0 {
+		// 空 output 由 reconstructResponseOutputFromSSE 整体修补，不在此处理。
+		return finalResponse
+	}
+	if responsesOutputHasCompactionItem(finalResponse) {
+		return finalResponse
+	}
+	item, found := findRawCompactionItemFromSSE(bodyText)
+	if !found {
+		return finalResponse
+	}
+	patched, err := sjson.SetRawBytes(finalResponse, "output.-1", item)
+	if err != nil {
+		return finalResponse
+	}
+	return patched
+}
+
+func responsesOutputHasCompactionItem(response []byte) bool {
+	for _, item := range gjson.GetBytes(response, "output").Array() {
+		if isResponsesCompactionItemType(item.Get("type").String()) {
+			return true
+		}
+	}
+	return false
+}
+
+func findRawCompactionItemFromSSE(bodyText string) (json.RawMessage, bool) {
+	var found json.RawMessage
+	pick := func(eventType string) {
+		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+			if found != nil {
+				return
+			}
+			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != eventType {
+				return
+			}
+			item := gjson.GetBytes(data, "item")
+			if !item.IsObject() || !isResponsesCompactionItemType(item.Get("type").String()) {
+				return
+			}
+			found = json.RawMessage(item.Raw)
+		})
+	}
+	pick("response.output_item.done")
+	if found == nil {
+		pick("response.output_item.added")
+	}
+	return found, found != nil
 }
 
 func extractImageGenerationOutputFromSSEData(data []byte, seen map[string]struct{}) (json.RawMessage, bool) {
@@ -6451,7 +6709,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	user := input.User
 	account := input.Account
 	subscription := input.Subscription
-	ApplyOpenAIImageBillingResolution(result)
+	if !isGrokVideoUsageResult(result, nil) {
+		ApplyOpenAIImageBillingResolution(result)
+	}
 
 	// 计算实际的新输入token（减去缓存读取的token）
 	// 因为 input_tokens 包含了 cache_read_tokens，而缓存读取的token不应按输入价格计费
@@ -6484,7 +6744,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，
 	// 不并入上面的 Resolve，以免污染 user:group 倍率缓存。
-	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, timezone.Now())
+	baseMultiplier := multiplier
+	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, baseMultiplier, timezone.Now())
+	videoMultiplier := resolveVideoRateMultiplier(apiKey, baseMultiplier)
 
 	var cost *CostBreakdown
 	var err error
@@ -6510,7 +6772,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
-	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, tokens, serviceTier)
+	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
 	if err != nil {
 		if !isUsagePricingUnavailableError(err) {
 			return err
@@ -6574,6 +6836,13 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageSizeSource:     optionalTrimmedStringPtr(result.ImageSizeSource),
 		ImageSizeBreakdown:  result.ImageSizeBreakdown,
 	}
+	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
+	if isVideoUsage {
+		usageLog.VideoCount = result.VideoCount
+		usageLog.VideoResolution = optionalTrimmedStringPtr(NormalizeVideoBillingResolutionOrDefault(result.VideoResolution))
+		videoDurationSeconds := NormalizeVideoBillingDurationSecondsOrDefault(result.VideoDurationSeconds)
+		usageLog.VideoDurationSeconds = &videoDurationSeconds
+	}
 	if cost != nil {
 		usageLog.InputCost = cost.InputCost
 		usageLog.OutputCost = cost.OutputCost
@@ -6583,7 +6852,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		usageLog.TotalCost = cost.TotalCost
 		usageLog.ActualCost = cost.ActualCost
 	}
-	if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
+	if isVideoUsage && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
+		usageLog.RateMultiplier = videoMultiplier
+	} else if result.ImageCount > 0 && (cost == nil || cost.BillingMode != string(BillingModeToken)) {
 		usageLog.RateMultiplier = imageMultiplier
 	} else {
 		usageLog.RateMultiplier = multiplier
@@ -6608,6 +6879,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// 设置计费模式
 	if cost != nil && cost.BillingMode != "" {
 		billingMode := cost.BillingMode
+		usageLog.BillingMode = &billingMode
+	} else if isVideoUsage {
+		billingMode := string(BillingModeVideo)
 		usageLog.BillingMode = &billingMode
 	} else if result.ImageCount > 0 {
 		billingMode := string(BillingModeImage)
@@ -6707,10 +6981,16 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	billingModels []string,
 	multiplier float64,
 	imageMultiplier float64,
+	videoMultiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
+	if isGrokVideoUsageResult(result, billingModels) {
+		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
+			return s.calculateOpenAIVideoCost(ctx, billingModel, apiKey, result, videoMultiplier), nil
+		}
+	}
 	if result != nil && result.ImageCount > 0 {
 		// 渠道定价为 token 计费时走 token 路径，否则走图片计费
 		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
@@ -6736,6 +7016,24 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		lastErr = errors.New("no non-empty billing model candidates")
 	}
 	return nil, fmt.Errorf("calculate OpenAI usage cost failed for billing models %s: %w", strings.Join(billingModels, ","), lastErr)
+}
+
+func isGrokVideoBillingModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "grok-imagine-video")
+}
+
+func isGrokVideoUsageResult(result *OpenAIForwardResult, billingModels []string) bool {
+	if result == nil || result.VideoCount <= 0 {
+		return false
+	}
+	candidates := append([]string{}, billingModels...)
+	candidates = append(candidates, result.BillingModel, result.Model, result.UpstreamModel)
+	for _, candidate := range candidates {
+		if isGrokVideoBillingModel(candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func isUsagePricingUnavailableError(err error) bool {
@@ -6781,6 +7079,17 @@ func (s *OpenAIGatewayService) calculateOpenAIImageCost(
 	multiplier float64,
 ) *CostBreakdown {
 	sizeTier := NormalizeImageBillingTierOrDefault(result.ImageSize)
+	groupConfig := imagePriceConfigFromAPIKey(apiKey)
+	if apiKeyHasConfiguredImagePrice(apiKey, sizeTier) {
+		return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+	}
+	if refreshed := s.apiKeyWithFreshGroupMediaPricing(ctx, apiKey); refreshed != apiKey {
+		apiKey = refreshed
+		groupConfig = imagePriceConfigFromAPIKey(apiKey)
+		if apiKeyHasConfiguredImagePrice(apiKey, sizeTier) {
+			return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+		}
+	}
 	if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved != nil &&
 		(resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage) {
 		gid := apiKey.Group.ID
@@ -6800,15 +7109,92 @@ func (s *OpenAIGatewayService) calculateOpenAIImageCost(
 		logger.LegacyPrintf("service.openai_gateway", "Calculate image channel cost failed: %v", err)
 	}
 
-	var groupConfig *ImagePriceConfig
-	if apiKey != nil && apiKey.Group != nil {
-		groupConfig = &ImagePriceConfig{
-			Price1K: apiKey.Group.ImagePrice1K,
-			Price2K: apiKey.Group.ImagePrice2K,
-			Price4K: apiKey.Group.ImagePrice4K,
+	return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+}
+
+func (s *OpenAIGatewayService) calculateOpenAIVideoCost(
+	ctx context.Context,
+	billingModel string,
+	apiKey *APIKey,
+	result *OpenAIForwardResult,
+	multiplier float64,
+) *CostBreakdown {
+	videoCount := result.VideoCount
+	if videoCount <= 0 {
+		videoCount = 1
+	}
+	resolution := NormalizeVideoBillingResolutionOrDefault(result.VideoResolution)
+	durationSeconds := NormalizeVideoBillingDurationSecondsOrDefault(result.VideoDurationSeconds)
+	groupConfig := videoPriceConfigFromAPIKey(apiKey)
+	if apiKeyHasConfiguredVideoPrice(apiKey, resolution) {
+		return s.billingService.CalculateVideoCost(billingModel, resolution, videoCount, durationSeconds, groupConfig, multiplier)
+	}
+	if refreshed := s.apiKeyWithFreshGroupMediaPricing(ctx, apiKey); refreshed != apiKey {
+		apiKey = refreshed
+		groupConfig = videoPriceConfigFromAPIKey(apiKey)
+		if apiKeyHasConfiguredVideoPrice(apiKey, resolution) {
+			return s.billingService.CalculateVideoCost(billingModel, resolution, videoCount, durationSeconds, groupConfig, multiplier)
 		}
 	}
-	return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+	if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved != nil &&
+		(resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage) {
+		// 渠道 per_request/image 定价保持"按请求次数"口径（价格由管理员按次配置），不乘视频时长。
+		gid := apiKey.Group.ID
+		cost, err := s.billingService.CalculateCostUnified(CostInput{
+			Ctx:            ctx,
+			Model:          billingModel,
+			GroupID:        &gid,
+			RequestCount:   videoCount,
+			SizeTier:       resolution,
+			RateMultiplier: multiplier,
+			Resolver:       s.resolver,
+			Resolved:       resolved,
+		})
+		if err == nil {
+			cost.BillingMode = string(BillingModeVideo)
+			return cost
+		}
+		logger.LegacyPrintf("service.openai_gateway", "Calculate video channel cost failed: %v", err)
+	}
+
+	return s.billingService.CalculateVideoCost(billingModel, resolution, videoCount, durationSeconds, groupConfig, multiplier)
+}
+
+func (s *OpenAIGatewayService) apiKeyWithFreshGroupMediaPricing(ctx context.Context, apiKey *APIKey) *APIKey {
+	if apiKey == nil || apiKey.GroupID == nil || *apiKey.GroupID <= 0 {
+		return apiKey
+	}
+	if !groupMediaPricingLooksIncomplete(apiKey.Group) {
+		return apiKey
+	}
+	if s == nil || s.channelService == nil || s.channelService.groupRepo == nil {
+		return apiKey
+	}
+	group, err := s.channelService.groupRepo.GetByIDLite(ctx, *apiKey.GroupID)
+	if err != nil || group == nil {
+		return apiKey
+	}
+	clone := *apiKey
+	clone.Group = group
+	return &clone
+}
+
+// groupMediaPricingLooksIncomplete 判断分组对象是否可能缺失媒体计费字段（例如由不含
+// 这些字段的旧快照或手工构造的上下文对象生成）。image/video 独立倍率在数据库中的
+// 默认值均为 1.0，正常加载的分组不可能两个倍率同时为 0 且未开启独立倍率、全部媒体
+// 价为 nil——只有这种情况才回源查库，避免对未配置覆盖价的分组每条媒体用量都多打一次 DB 查询。
+func groupMediaPricingLooksIncomplete(group *Group) bool {
+	if group == nil {
+		return true
+	}
+	if group.ImageRateIndependent || group.VideoRateIndependent {
+		return false
+	}
+	if group.ImageRateMultiplier != 0 || group.VideoRateMultiplier != 0 {
+		return false
+	}
+	return group.ImagePrice1K == nil && group.ImagePrice2K == nil && group.ImagePrice4K == nil &&
+		group.VideoPrice480P == nil && group.VideoPrice720P == nil && group.VideoPrice1080P == nil
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {
@@ -7018,7 +7404,7 @@ func (s *OpenAIGatewayService) UpdateCodexUsageSnapshotFromHeaders(ctx context.C
 	}
 }
 
-func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any) (value string, present bool) {
+func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel string) (value string, present bool) {
 	if reqBody == nil {
 		return "", false
 	}
@@ -7026,13 +7412,13 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any) (value string, 
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
-			return normalizeOpenAIReasoningEffort(effort), true
+			return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
 		}
 	}
 
 	// Fallback: some clients may use a flat field.
 	if effort, ok := reqBody["reasoning_effort"].(string); ok {
-		return normalizeOpenAIReasoningEffort(effort), true
+		return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
 	}
 
 	return "", false
@@ -7061,7 +7447,33 @@ func deriveOpenAIReasoningEffortFromModel(model string) string {
 		return ""
 	}
 
-	return normalizeOpenAIReasoningEffort(parts[len(parts)-1])
+	return normalizeOpenAIReasoningEffortForModel(parts[len(parts)-1], modelID)
+}
+
+func normalizeOpenAICodexCompactReasoningEffortForAccount(c *gin.Context, account *Account, body []byte) ([]byte, bool, error) {
+	if account == nil || !account.IsOpenAIOAuth() || !isOpenAIResponsesCompactPath(c) {
+		return body, false, nil
+	}
+
+	requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	effectiveModel := account.GetMappedModel(requestedModel)
+	return normalizeOpenAICodexCompactReasoningEffort(body, effectiveModel)
+}
+
+func normalizeOpenAICodexCompactReasoningEffort(body []byte, effectiveModel string) ([]byte, bool, error) {
+	if !isOpenAIGPT56Model(effectiveModel) ||
+		!strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()), "max") {
+		return body, false, nil
+	}
+
+	// Codex Ultra 在客户端编排层会下发 max；ChatGPT compact 端点目前只接受到
+	// xhigh。这里只降级 OpenAI OAuth 的 GPT-5.6 compact 子请求，普通 Responses、
+	// API Key 请求和其他平台的 OAuth 请求保留 max。
+	normalized, err := sjson.SetBytes(body, "reasoning.effort", "xhigh")
+	if err != nil {
+		return body, false, fmt.Errorf("normalize codex compact reasoning effort: %w", err)
+	}
+	return normalized, true, nil
 }
 
 type openAIRequestView struct {
@@ -7310,7 +7722,7 @@ func extractOpenAIReasoningEffortFromBody(body []byte, requestedModel string) *s
 		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
 	if reasoningEffort != "" {
-		normalized := normalizeOpenAIReasoningEffort(reasoningEffort)
+		normalized := normalizeOpenAIReasoningEffortForModel(reasoningEffort, requestedModel)
 		if normalized == "" {
 			return nil
 		}
@@ -7885,7 +8297,7 @@ func getOpenAIRequestBodyMap(_ *gin.Context, body []byte) (map[string]any, error
 }
 
 func extractOpenAIReasoningEffort(reqBody map[string]any, requestedModel string) *string {
-	if value, present := getOpenAIReasoningEffortFromReqBody(reqBody); present {
+	if value, present := getOpenAIReasoningEffortFromReqBody(reqBody, requestedModel); present {
 		if value == "" {
 			return nil
 		}
@@ -7919,4 +8331,21 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 		// Only store known effort levels for now to keep UI consistent.
 		return ""
 	}
+}
+
+func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "max") && isOpenAIGPT56Model(model) {
+		return "max"
+	}
+	return normalizeOpenAIReasoningEffort(raw)
+}
+
+func isOpenAIGPT56Model(model string) bool {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	for _, prefix := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if normalized == prefix || strings.HasPrefix(normalized, prefix+"-") {
+			return true
+		}
+	}
+	return false
 }

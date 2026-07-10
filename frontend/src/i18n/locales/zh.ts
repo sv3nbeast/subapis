@@ -4444,9 +4444,12 @@ export default {
         codexImageGenerationBridgeEnabledDesc: '允许 Codex /responses 请求获得图片工具注入。',
         codexImageGenerationBridgeDisabled: '强制关闭',
         codexImageGenerationBridgeDisabledDesc: '阻断 Codex /responses 的图片工具注入。',
+        codexImageGenerationBridgeBlock: '拦截显式工具',
+        codexImageGenerationBridgeBlockDesc: '移除客户端主动携带的 image_generation 工具，同时不写入桥接开关覆盖。',
         codexImageGenerationBridgeBadgeInherit: '渠道策略',
         codexImageGenerationBridgeBadgeEnabled: '账号开启',
         codexImageGenerationBridgeBadgeDisabled: '账号关闭',
+        codexImageGenerationBridgeBadgeBlock: '账号拦截',
         compactMode: 'Compact 模式',
         compactModeDesc:
           '控制本账号在 /responses/compact 调度中的参与方式。Auto 跟随探测结果，Force On 强制允许，Force Off 强制排除。',

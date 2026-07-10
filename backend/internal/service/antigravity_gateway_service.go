@@ -1933,6 +1933,14 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// - 缺少 project_id 时同步短超时补齐
 	// - 其余场景异步预热 loadCodeAssist/fetchAvailableModels/fetchUserInfo
 	projectID := strings.TrimSpace(s.ensureAntigravityBootstrapProbe(ctx, account, accessToken, proxyURL))
+	if projectID == "" {
+		var projectErr error
+		projectID, projectErr = resolveAntigravityProjectID(account)
+		if projectErr != nil {
+			_ = s.writeGoogleError(c, http.StatusBadRequest, projectErr.Error())
+			return nil, projectErr
+		}
+	}
 
 	requestIdentity := s.buildCloudCodeRequestIdentity(ctx, account, c, body, &claudeReq)
 	if _, err := normalizeClaudeToolProtocolForAntigravity(&claudeReq); err != nil {
@@ -2799,6 +2807,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	}
 
 	projectID := strings.TrimSpace(s.ensureAntigravityBootstrapProbe(ctx, account, accessToken, proxyURL))
+	if projectID == "" {
+		var projectErr error
+		projectID, projectErr = resolveAntigravityProjectID(account)
+		if projectErr != nil {
+			_ = s.writeGoogleError(c, http.StatusBadRequest, projectErr.Error())
+			return nil, projectErr
+		}
+	}
 
 	requestIdentity := s.buildCloudCodeRequestIdentity(ctx, account, c, body, nil)
 

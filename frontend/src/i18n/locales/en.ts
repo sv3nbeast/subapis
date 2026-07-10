@@ -4387,9 +4387,12 @@ export default {
         codexImageGenerationBridgeEnabledDesc: 'Allow image tool injection for Codex /responses requests.',
         codexImageGenerationBridgeDisabled: 'Force off',
         codexImageGenerationBridgeDisabledDesc: 'Block image tool injection for Codex /responses requests.',
+        codexImageGenerationBridgeBlock: 'Strip explicit tool',
+        codexImageGenerationBridgeBlockDesc: 'Remove client-provided image_generation tools without writing a bridge override.',
         codexImageGenerationBridgeBadgeInherit: 'Channel policy',
         codexImageGenerationBridgeBadgeEnabled: 'Account on',
         codexImageGenerationBridgeBadgeDisabled: 'Account off',
+        codexImageGenerationBridgeBadgeBlock: 'Account strip',
         compactMode: 'Compact mode',
         compactModeDesc:
           'Controls how this account participates in /responses/compact routing. Auto follows probe results, Force On always allows, Force Off always excludes.',

@@ -20,7 +20,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	pkgerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
-	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -193,7 +192,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	defer h.maybeLogCompatibilityFallbackMetrics(reqLog)
 
 	// 读取请求体
-	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
@@ -1211,6 +1210,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 
 	if len(availableModels) > 0 {
+		if platform == service.PlatformAnthropic && apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
+			availableModels = mergeGatewayModelIDs(availableModels, defaultModelIDsForPlatform(platform))
+		}
 		availableModels = filterGatewayModelsByGroupConfig(availableModels, apiKey)
 		returnGatewayModelIDs(c, availableModels, platform)
 		return
@@ -1227,6 +1229,14 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	if platform == service.PlatformDroid {
 		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(droid.DefaultModelIDs(), apiKey), platform)
+		return
+	}
+	if platform == service.PlatformAnthropic {
+		defaultModels := claude.DefaultModelIDs()
+		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
+			defaultModels = defaultModelIDsForPlatform(platform)
+		}
+		returnGatewayModelIDs(c, filterGatewayModelsByGroupConfig(defaultModels, apiKey), platform)
 		return
 	}
 
@@ -1329,6 +1339,18 @@ func defaultModelIDsForPlatform(platform string) []string {
 			ids = append(ids, model.ID)
 		}
 		return ids
+	case service.PlatformAnthropic:
+		ids := make([]string, 0, len(claude.DefaultModels)+len(antigravity.DefaultModels()))
+		for _, model := range claude.DefaultModels {
+			ids = append(ids, model.ID)
+		}
+		for _, model := range antigravity.DefaultModels() {
+			if !strings.HasPrefix(strings.TrimSpace(model.ID), "claude-") {
+				continue
+			}
+			ids = append(ids, model.ID)
+		}
+		return mergeGatewayModelIDs(ids, nil)
 	case service.PlatformGrok:
 		return xai.DefaultModelIDs()
 	default:
@@ -1338,6 +1360,25 @@ func defaultModelIDsForPlatform(platform string) []string {
 		}
 		return ids
 	}
+}
+
+func mergeGatewayModelIDs(primary, secondary []string) []string {
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	merged := make([]string, 0, len(primary)+len(secondary))
+	for _, models := range [][]string{primary, secondary} {
+		for _, model := range models {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			if _, ok := seen[model]; ok {
+				continue
+			}
+			seen[model] = struct{}{}
+			merged = append(merged, model)
+		}
+	}
+	return merged
 }
 
 // AntigravityModels 返回 Antigravity 支持的全部模型
@@ -1775,6 +1816,14 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 // handleStreamingAwareError handles errors that may occur after streaming has started
 func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
 	if streamStarted {
+		// 响应状态码已固化为 200（ping/部分数据已 flush），错误只能就地以 SSE 帧回传。
+		// 标记本次流内错误，供 ops_error_logger 补记——否则该中间件按 status>=400 采集，
+		// 这类挂在 200 流上的失败（如并发限流回退）不会进错误看板。
+		service.MarkOpsStreamError(c, errType, message, status)
+
+		// /v1/responses 的严格 SDK（Codex CLI）要求终止事件必须属于
+		// response.completed/failed/incomplete/cancelled 集合。
+		// Anthropic-backed Responses 路径同样会因为通用 error 帧被拒。
 		if inboundIsResponses(c) {
 			if writeResponsesFailedSSE(c, errType, message) {
 				return
@@ -1924,7 +1973,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	defer h.maybeLogCompatibilityFallbackMetrics(reqLog)
 
 	// 读取请求体
-	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))

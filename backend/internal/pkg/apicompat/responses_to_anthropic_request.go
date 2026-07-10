@@ -23,7 +23,7 @@ func ResponsesToAnthropicRequestForKiroContinuation(req *ResponsesRequest) (*Ant
 }
 
 func responsesToAnthropicRequestWithPairing(req *ResponsesRequest, repairPairing bool) (*AnthropicRequest, error) {
-	system, messages, err := convertResponsesInputToAnthropicWithPairing(req.Input, repairPairing)
+	system, messages, err := convertResponsesInputToAnthropicWithPairing(req.Instructions, req.Input, repairPairing)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func ResponsesInputToAnthropicForKiro(inputRaw json.RawMessage) (json.RawMessage
 	// 往往对应上一轮历史里的 function_call (tool_use)，跨轮配对在后续
 	// MergeAnthropicMessagesForKiro 拼接历史后才成立。因此这里必须保留"孤立"的
 	// tool_result，不能在单轮就被 normalizeAnthropicToolPairing 当 orphan 丢弃。
-	return convertResponsesInputToAnthropicWithPairing(inputRaw, false)
+	return convertResponsesInputToAnthropicWithPairing("", inputRaw, false)
 }
 
 // defaultThinkingBudget returns a sensible thinking budget based on effort level.
@@ -123,25 +123,38 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // convertResponsesInputToAnthropic extracts system prompt and messages from
 // a Responses API input array. Returns the system as raw JSON (for Anthropic's
 // polymorphic system field) and a list of Anthropic messages.
-func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
-	return convertResponsesInputToAnthropicWithPairing(inputRaw, true)
+func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+	return convertResponsesInputToAnthropicWithPairing(instructions, inputRaw, true)
 }
 
 // convertResponsesInputToAnthropicWithPairing 是核心实现。repairPairing=true 时执行
 // normalizeAnthropicToolPairing（丢弃本轮孤立 tool_result，满足 Anthropic 单请求
 // tool_use/tool_result 配对约束）；Kiro 历史展开走 false，保留孤立 tool_result 供
-// 跨轮历史合并。
-func convertResponsesInputToAnthropicWithPairing(inputRaw json.RawMessage, repairPairing bool) (json.RawMessage, []AnthropicMessage, error) {
+// 跨轮历史合并。instructions 会并入 Anthropic system 字段，developer/system item 同样并入。
+func convertResponsesInputToAnthropicWithPairing(instructions string, inputRaw json.RawMessage, repairPairing bool) (json.RawMessage, []AnthropicMessage, error) {
+	var systemParts []string
+	if strings.TrimSpace(instructions) != "" {
+		systemParts = append(systemParts, strings.TrimSpace(instructions))
+	}
+
 	trimmed := strings.TrimSpace(string(inputRaw))
 	if trimmed == "" || trimmed == "null" {
-		return nil, nil, nil
+		var system json.RawMessage
+		if len(systemParts) > 0 {
+			system, _ = json.Marshal(strings.Join(systemParts, "\n\n"))
+		}
+		return system, nil, nil
 	}
 
 	// Try as plain string input.
 	var inputStr string
 	if err := json.Unmarshal(inputRaw, &inputStr); err == nil {
 		content, _ := json.Marshal(inputStr)
-		return nil, []AnthropicMessage{{Role: "user", Content: content}}, nil
+		var system json.RawMessage
+		if len(systemParts) > 0 {
+			system, _ = json.Marshal(strings.Join(systemParts, "\n\n"))
+		}
+		return system, []AnthropicMessage{{Role: "user", Content: content}}, nil
 	}
 
 	var items []ResponsesInputItem
@@ -160,7 +173,6 @@ func convertResponsesInputToAnthropicWithPairing(inputRaw json.RawMessage, repai
 		return nil, nil, fmt.Errorf("unsupported responses input shape")
 	}
 
-	var system json.RawMessage
 	var messages []AnthropicMessage
 	var pendingUserBlocks []AnthropicContentBlock
 
@@ -178,15 +190,15 @@ func convertResponsesInputToAnthropicWithPairing(inputRaw json.RawMessage, repai
 
 	for _, item := range items {
 		switch {
-		case item.Role == "system":
+		case item.Role == "system" || item.Role == "developer":
 			flushPendingUser()
-			// System prompt → Anthropic system field
+			// System/developer prompt → Anthropic system field
 			text := extractTextFromContent(item.Content)
 			if text == "" {
 				text = strings.TrimSpace(item.Text)
 			}
 			if text != "" {
-				system, _ = json.Marshal(text)
+				systemParts = append(systemParts, text)
 			}
 
 		case item.Type == "function_call":
@@ -318,6 +330,11 @@ func convertResponsesInputToAnthropicWithPairing(inputRaw json.RawMessage, repai
 	if repairPairing {
 		messages = normalizeAnthropicToolPairing(messages)
 		messages = mergeConsecutiveMessages(messages)
+	}
+
+	var system json.RawMessage
+	if len(systemParts) > 0 {
+		system, _ = json.Marshal(strings.Join(systemParts, "\n\n"))
 	}
 
 	return system, messages, nil

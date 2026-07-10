@@ -514,9 +514,9 @@
         </div>
       </div>
 
-      <!-- OpenAI / Kiro OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
+      <!-- OpenAI / Kiro / Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'kiro') && account.type === 'oauth'"
+        v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok') && account.type === 'oauth'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -1560,12 +1560,12 @@
             </div>
           </div>
           <div class="border-t border-sky-100 bg-white/70 p-2 dark:border-sky-900/50 dark:bg-dark-800/70">
-            <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <button
                 v-for="option in codexImageGenerationBridgeOptions"
                 :key="option.value"
                 type="button"
-                :data-testid="`codex-image-bridge-${option.value}`"
+                :data-testid="`codex-image-tool-${option.value}`"
                 @click="codexImageGenerationBridgeMode = option.value"
                 :class="[
                   'group flex min-h-[68px] items-start gap-2 rounded-md border px-3 py-2 text-left transition-all',
@@ -2761,7 +2761,7 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
-type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled'
+type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
@@ -2846,6 +2846,11 @@ const codexImageGenerationBridgeOptions = computed<
     value: 'disabled',
     label: t('admin.accounts.openai.codexImageGenerationBridgeDisabled'),
     description: t('admin.accounts.openai.codexImageGenerationBridgeDisabledDesc')
+  },
+  {
+    value: 'block',
+    label: t('admin.accounts.openai.codexImageGenerationBridgeBlock'),
+    description: t('admin.accounts.openai.codexImageGenerationBridgeBlockDesc')
   }
 ])
 const codexImageGenerationBridgeBadgeLabel = computed(() => {
@@ -2854,6 +2859,8 @@ const codexImageGenerationBridgeBadgeLabel = computed(() => {
       return t('admin.accounts.openai.codexImageGenerationBridgeBadgeEnabled')
     case 'disabled':
       return t('admin.accounts.openai.codexImageGenerationBridgeBadgeDisabled')
+    case 'block':
+      return t('admin.accounts.openai.codexImageGenerationBridgeBadgeBlock')
     default:
       return t('admin.accounts.openai.codexImageGenerationBridgeBadgeInherit')
   }
@@ -2864,6 +2871,8 @@ const codexImageGenerationBridgeBadgeClass = computed(() => {
       return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
     case 'disabled':
       return 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+    case 'block':
+      return 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
     default:
       return 'bg-slate-100 text-slate-600 dark:bg-dark-600 dark:text-slate-300'
   }
@@ -3203,15 +3212,19 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         openAIResponsesMode.value = 'auto'
       }
     }
-    const codexImageGenerationBridgeValue =
-      typeof extra?.codex_image_generation_bridge === 'boolean'
-        ? extra.codex_image_generation_bridge
-        : extra?.codex_image_generation_bridge_enabled
+    if (extra?.codex_image_generation_explicit_tool_policy === 'strip') {
+      codexImageGenerationBridgeMode.value = 'block'
+    } else {
+      const codexImageGenerationBridgeValue =
+        typeof extra?.codex_image_generation_bridge === 'boolean'
+          ? extra.codex_image_generation_bridge
+          : extra?.codex_image_generation_bridge_enabled
 
-    if (codexImageGenerationBridgeValue === true) {
-      codexImageGenerationBridgeMode.value = 'enabled'
-    } else if (codexImageGenerationBridgeValue === false) {
-      codexImageGenerationBridgeMode.value = 'disabled'
+      if (codexImageGenerationBridgeValue === true) {
+        codexImageGenerationBridgeMode.value = 'enabled'
+      } else if (codexImageGenerationBridgeValue === false) {
+        codexImageGenerationBridgeMode.value = 'disabled'
+      }
     }
     openaiOAuthResponsesWebSocketV2Mode.value = resolveOpenAIWSModeFromExtra(extra, {
       modeKey: 'openai_oauth_responses_websockets_v2_mode',
@@ -3518,7 +3531,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       } else {
         loadDefaultKiroModelMappings()
       }
-    } else if ((newAccount.platform === 'openai' || newAccount.platform === 'anthropic') && newAccount.credentials) {
+    } else if (
+      (newAccount.platform === 'openai' ||
+        newAccount.platform === 'anthropic' ||
+        newAccount.platform === 'grok') &&
+      newAccount.credentials
+    ) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       const existingMappings = oauthCredentials.model_mapping as Record<string, string> | undefined
       if (existingMappings && typeof existingMappings === 'object') {
@@ -4305,6 +4323,22 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
+    // Grok OAuth: persist model mapping to credentials
+    if (props.account.platform === 'grok' && props.account.type === 'oauth') {
+      const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
+      }
+
+      updatePayload.credentials = newCredentials
+    }
+
     // Anthropic OAuth/SetupToken: persist model mapping to credentials.
     // For these account types, mappings only rewrite the upstream model; they do not restrict scheduling.
 
@@ -4576,7 +4610,12 @@ const handleSubmit = async () => {
       delete newExtra.codex_image_generation_bridge_enabled
       if (codexImageGenerationBridgeMode.value === 'inherit') {
         delete newExtra.codex_image_generation_bridge
+        delete newExtra.codex_image_generation_explicit_tool_policy
+      } else if (codexImageGenerationBridgeMode.value === 'block') {
+        delete newExtra.codex_image_generation_bridge
+        newExtra.codex_image_generation_explicit_tool_policy = 'strip'
       } else {
+        delete newExtra.codex_image_generation_explicit_tool_policy
         newExtra.codex_image_generation_bridge = codexImageGenerationBridgeMode.value === 'enabled'
       }
 

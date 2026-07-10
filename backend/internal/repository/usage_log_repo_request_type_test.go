@@ -80,6 +80,9 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // image_output_size
 			sqlmock.AnyArg(), // image_size_source
 			sqlmock.AnyArg(), // image_size_breakdown
+			sqlmock.AnyArg(), // video_count
+			sqlmock.AnyArg(), // video_resolution
+			sqlmock.AnyArg(), // video_duration_seconds
 			sqlmock.AnyArg(), // service_tier
 			sqlmock.AnyArg(), // reasoning_effort
 			sqlmock.AnyArg(), // inbound_endpoint
@@ -90,6 +93,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // kiro_credits
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
@@ -163,6 +167,9 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // image_output_size
 			sqlmock.AnyArg(), // image_size_source
 			sqlmock.AnyArg(), // image_size_breakdown
+			sqlmock.AnyArg(), // video_count
+			sqlmock.AnyArg(), // video_resolution
+			sqlmock.AnyArg(), // video_duration_seconds
 			serviceTier,
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -173,6 +180,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // kiro_credits
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
@@ -281,9 +289,14 @@ func TestAppendUsageLogBillingModeWhereCondition(t *testing.T) {
 		wantCondition string
 	}{
 		{
-			name:          "image includes legacy image rows",
+			name:          "image includes explicit image and legacy image rows",
 			billingMode:   string(service.BillingModeImage),
-			wantCondition: "(billing_mode = $1 OR COALESCE(image_count, 0) > 0)",
+			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(image_count, 0) > 0))",
+		},
+		{
+			name:          "video remains exact",
+			billingMode:   string(service.BillingModeVideo),
+			wantCondition: "billing_mode = $1",
 		},
 		{
 			name:          "token includes legacy non-image rows",
@@ -309,7 +322,7 @@ func TestAppendUsageLogBillingModeWhereCondition(t *testing.T) {
 func TestAppendUsageLogBillingModeWhereConditionWithAlias(t *testing.T) {
 	conditions, args := appendUsageLogBillingModeWhereConditionWithAlias(nil, nil, string(service.BillingModeImage), "ul")
 
-	require.Equal(t, []string{"(ul.billing_mode = $1 OR COALESCE(ul.image_count, 0) > 0)"}, conditions)
+	require.Equal(t, []string{"(ul.billing_mode = $1 OR ((ul.billing_mode IS NULL OR ul.billing_mode = '') AND COALESCE(ul.image_count, 0) > 0))"}, conditions)
 	require.Equal(t, []any{string(service.BillingModeImage)}, args)
 }
 
@@ -794,6 +807,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{Valid: true, String: "3840x2160"},
 			sql.NullString{Valid: true, String: "output"},
 			sql.NullString{Valid: true, String: `{"4K":2}`},
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
@@ -803,7 +819,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
-			sql.NullFloat64{},
+			sql.NullFloat64{}, // account_stats_cost
+			sql.NullFloat64{}, // kiro_credits
 			now,
 		}})
 		require.NoError(t, err)
@@ -862,16 +879,20 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // image_output_size
 			sql.NullString{}, // image_size_source
 			sql.NullString{}, // image_size_breakdown
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
 			false,
-			sql.NullInt64{},  // channel_id
-			sql.NullString{}, // model_mapping_chain
-			sql.NullString{}, // billing_tier
-			sql.NullString{}, // billing_mode
-			sql.NullFloat64{},
+			sql.NullInt64{},   // channel_id
+			sql.NullString{},  // model_mapping_chain
+			sql.NullString{},  // billing_tier
+			sql.NullString{},  // billing_mode
+			sql.NullFloat64{}, // account_stats_cost
+			sql.NullFloat64{}, // kiro_credits
 			now,
 		}})
 		require.NoError(t, err)
@@ -914,16 +935,20 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // image_output_size
 			sql.NullString{}, // image_size_source
 			sql.NullString{}, // image_size_breakdown
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{Valid: true, String: "flex"},
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
 			false,
-			sql.NullInt64{},  // channel_id
-			sql.NullString{}, // model_mapping_chain
-			sql.NullString{}, // billing_tier
-			sql.NullString{}, // billing_mode
-			sql.NullFloat64{},
+			sql.NullInt64{},   // channel_id
+			sql.NullString{},  // model_mapping_chain
+			sql.NullString{},  // billing_tier
+			sql.NullString{},  // billing_mode
+			sql.NullFloat64{}, // account_stats_cost
+			sql.NullFloat64{}, // kiro_credits
 			now,
 		}})
 		require.NoError(t, err)
@@ -966,16 +991,20 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // image_output_size
 			sql.NullString{}, // image_size_source
 			sql.NullString{}, // image_size_breakdown
+			0,                // video_count
+			sql.NullString{}, // video_resolution
+			sql.NullInt64{},  // video_duration_seconds
 			sql.NullString{Valid: true, String: "priority"},
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullString{},
 			false,
-			sql.NullInt64{},  // channel_id
-			sql.NullString{}, // model_mapping_chain
-			sql.NullString{}, // billing_tier
-			sql.NullString{}, // billing_mode
-			sql.NullFloat64{},
+			sql.NullInt64{},   // channel_id
+			sql.NullString{},  // model_mapping_chain
+			sql.NullString{},  // billing_tier
+			sql.NullString{},  // billing_mode
+			sql.NullFloat64{}, // account_stats_cost
+			sql.NullFloat64{}, // kiro_credits
 			now,
 		}})
 		require.NoError(t, err)
