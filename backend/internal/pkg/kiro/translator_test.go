@@ -1661,6 +1661,50 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseFragments(t *testing.T) {
 	require.Contains(t, output, `event: content_block_stop`)
 }
 
+func TestStreamEventStreamAsAnthropicPreservesToolStartAcrossInputOnlyFrames(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "I will inspect the files.",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_split",
+			"name":      "exec_command",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"input": `{"cmd":"git diff --stat"}`,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"stop": true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{
+			"unit":  "credit",
+			"usage": 0.17,
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 9, KiroRequestContext{
+		RequireTerminalEvent: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Contains(t, out.String(), `"id":"toolu_split"`)
+	require.Contains(t, out.String(), `"name":"exec_command"`)
+	require.Contains(t, out.String(), `"partial_json":"{\"cmd\":\"git diff --stat\"}"`)
+	require.Contains(t, out.String(), `"stop_reason":"tool_use"`)
+}
+
 func TestStreamEventStreamAsAnthropicStreamsIncompleteToolUseFragment(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
