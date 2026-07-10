@@ -635,7 +635,7 @@ func TestForwardKiroMessagesStreamMetadataOnlyExhaustionDoesNotAmplifySameAccoun
 	require.Len(t, upstream.requests, 2)
 }
 
-func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing.T) {
+func TestForwardKiroMessagesStreamFinalMeteringAllowsMissingTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -644,7 +644,10 @@ func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing
 	upstreamBody := bytes.NewBuffer(nil)
 	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
 		":event-type": "assistantResponseEvent",
-	}, []byte(`{"assistantResponseEvent":{"content":"partial answer from kiro"}}`)))
+	}, []byte(`{"assistantResponseEvent":{"content":"complete answer from kiro"}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "meteringEvent",
+	}, []byte(`{"meteringEvent":{"unit":"credit","usage":0.17}}`)))
 	upstream := &kiroStreamFailoverQueuedUpstream{
 		responses: []*http.Response{
 			newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes()),
@@ -679,9 +682,10 @@ func TestForwardKiroMessagesStreamMissingTerminalAfterContentSucceeds(t *testing
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
 	require.NotNil(t, result.FirstTokenMs)
-	require.Contains(t, rec.Body.String(), "partial answer")
+	require.Contains(t, rec.Body.String(), "complete answer")
 	require.Contains(t, rec.Body.String(), "from kiro")
 	require.Contains(t, rec.Body.String(), "event: message_stop")
+	require.NotContains(t, rec.Body.String(), "event: error")
 	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
 }
 
@@ -870,7 +874,7 @@ func TestOpenKiroAnthropicStreamResponseAllowsDirectAPIKey(t *testing.T) {
 	require.Contains(t, string(streamBytes), "hello from kiro api key")
 }
 
-func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testing.T) {
+func TestForwardKiroMessagesStreamMissingTerminalAfterPartialOutputReturnsSSEError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -910,13 +914,25 @@ func TestForwardKiroMessagesStreamMissingTerminalEventTriggersFailover(t *testin
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.True(t, result.Stream)
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr), "partial output cannot be retried into the same client stream")
+	require.Contains(t, err.Error(), "missing terminal event")
 	require.Contains(t, rec.Body.String(), `"text":"part"`)
 	require.Contains(t, rec.Body.String(), `"text":"ial answer"`)
 	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
-	require.Contains(t, rec.Body.String(), "event: message_stop")
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
+	require.Contains(t, rec.Body.String(), "event: error")
+	require.Contains(t, rec.Body.String(), `"type":"stream_read_error"`)
+	require.True(t, HasGatewaySSEErrorWritten(c))
+	rawOpsEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	opsEvents, ok := rawOpsEvents.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.NotEmpty(t, opsEvents)
+	require.Equal(t, "stream_partial_error", opsEvents[len(opsEvents)-1].Kind)
+	require.Equal(t, account.ID, opsEvents[len(opsEvents)-1].AccountID)
 }
 
 func TestForwardKiroMessagesAllowsAssistantTextPrefill(t *testing.T) {
