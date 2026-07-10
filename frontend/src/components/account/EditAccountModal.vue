@@ -2584,6 +2584,7 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import { applyAntigravityProjectID, applyInterceptWarmup } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { needsMixedChannelCheck as platformNeedsMixedChannelCheck } from '@/utils/mixedChannel'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
@@ -3942,8 +3943,7 @@ function toPositiveNumber(value: unknown) {
 
 const supportsMixedScheduling = computed(() => ['antigravity', 'kiro', 'droid'].includes(props.account?.platform || ''))
 
-const needsMixedChannelCheck = () =>
-  ['antigravity', 'anthropic', 'kiro', 'droid'].includes(props.account?.platform || '')
+const needsMixedChannelCheck = () => platformNeedsMixedChannelCheck(props.account?.platform)
 
 const buildMixedChannelDetails = (resp?: CheckMixedChannelResponse) => {
   const details = resp?.details

@@ -1339,6 +1339,7 @@ import {
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { needsMixedChannelCheck } from '@/utils/mixedChannel'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -1862,7 +1863,7 @@ const canPreCheck = () =>
   enableGroups.value &&
   groupIds.value.length > 0 &&
   targetSelectedPlatforms.value.length === 1 &&
-  (targetSelectedPlatforms.value[0] === 'antigravity' || targetSelectedPlatforms.value[0] === 'anthropic')
+  needsMixedChannelCheck(targetSelectedPlatforms.value[0])
 
 const handleClose = () => {
   showMixedChannelWarning.value = false
