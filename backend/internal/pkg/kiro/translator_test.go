@@ -2658,6 +2658,54 @@ func TestKiroCacheEmulationUsageInjectedIntoStreamAndResult(t *testing.T) {
 	require.Contains(t, output, `"ephemeral_1h_input_tokens":30`)
 }
 
+func TestKiroCacheEmulationUsageCapsToActualUpstreamInputTokens(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 119824,
+				"outputTokens":        5,
+				"totalTokens":         119829,
+			},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4.8", KiroRequestContext{
+		CacheEmulationUsage: &Usage{
+			InputTokens:                119824,
+			CacheReadInputTokens:       1078416,
+			CacheCreationInputTokens:   0,
+			CacheCreation5mInputTokens: 0,
+			CacheCreation1hInputTokens: 0,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 119824, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 119829, result.Usage.TotalTokens)
+	require.Greater(t, result.Usage.CacheReadInputTokens, 0)
+	require.Less(t, result.Usage.CacheReadInputTokens, 119824)
+	require.Greater(t, result.Usage.InputTokens, 0)
+	require.Equal(t, 119824, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())+
+		int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())+
+		int(gjson.GetBytes(result.ResponseBody, "usage.cache_creation_input_tokens").Int()))
+}
+
+func TestKiroCacheEmulationUsageUsesTotalTokensBudgetWhenInputMissing(t *testing.T) {
+	usage := mergeKiroCacheEmulationUsage(Usage{OutputTokens: 5, TotalTokens: 105}, &Usage{
+		InputTokens:                200,
+		CacheReadInputTokens:       700,
+		CacheCreationInputTokens:   100,
+		CacheCreation5mInputTokens: 100,
+	})
+
+	require.Equal(t, 100, usage.InputTokens+usage.CacheReadInputTokens+usage.CacheCreationInputTokens)
+	require.Equal(t, 105, usage.TotalTokens)
+	require.Greater(t, usage.CacheReadInputTokens, 0)
+	require.Less(t, usage.CacheReadInputTokens, 100)
+	require.LessOrEqual(t, usage.CacheCreation5mInputTokens, usage.CacheCreationInputTokens)
+}
+
 func TestRepairJSONKeepsStringBracesWhileRepairingTrailingComma(t *testing.T) {
 	raw := `{"key":"value with {nested}",}`
 	repaired := repairJSON(raw)

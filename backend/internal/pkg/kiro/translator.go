@@ -5158,13 +5158,109 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	if base.CacheReadInputTokens > 0 || base.CacheCreationInputTokens > 0 || base.CacheCreation5mInputTokens > 0 || base.CacheCreation1hInputTokens > 0 {
 		return base
 	}
-	base.InputTokens = simulated.InputTokens
-	base.CacheReadInputTokens = simulated.CacheReadInputTokens
-	base.CacheCreationInputTokens = simulated.CacheCreationInputTokens
-	base.CacheCreation5mInputTokens = simulated.CacheCreation5mInputTokens
-	base.CacheCreation1hInputTokens = simulated.CacheCreation1hInputTokens
+	normalized := normalizeKiroCacheEmulationUsage(base, *simulated)
+	base.InputTokens = normalized.InputTokens
+	base.CacheReadInputTokens = normalized.CacheReadInputTokens
+	base.CacheCreationInputTokens = normalized.CacheCreationInputTokens
+	base.CacheCreation5mInputTokens = normalized.CacheCreation5mInputTokens
+	base.CacheCreation1hInputTokens = normalized.CacheCreation1hInputTokens
 	base.TotalTokens = base.InputTokens + base.OutputTokens + base.CacheReadInputTokens + base.CacheCreationInputTokens
 	return base
+}
+
+func normalizeKiroCacheEmulationUsage(base Usage, simulated Usage) Usage {
+	budget := kiroActualInputTokenBudget(base)
+	if budget <= 0 {
+		return simulated
+	}
+	simulatedTotal := kiroUsageInputBucketTotal(simulated)
+	if simulatedTotal <= 0 {
+		simulated.InputTokens = budget
+		return simulated
+	}
+	if simulatedTotal <= budget {
+		// Upstream can report a slightly larger actual input than the local
+		// cache-profile estimate. Keep the emulated cache buckets and put the
+		// residual into normal input so total input accounting follows upstream.
+		simulated.InputTokens += budget - simulatedTotal
+		return simulated
+	}
+
+	normalized := Usage{}
+	normalized.CacheReadInputTokens = scaleKiroUsageBucket(simulated.CacheReadInputTokens, budget, simulatedTotal)
+	normalized.CacheCreationInputTokens = scaleKiroUsageBucket(simulated.CacheCreationInputTokens, budget, simulatedTotal)
+	if normalized.CacheReadInputTokens+normalized.CacheCreationInputTokens > budget {
+		overflow := normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens - budget
+		if normalized.CacheCreationInputTokens >= overflow {
+			normalized.CacheCreationInputTokens -= overflow
+		} else {
+			overflow -= normalized.CacheCreationInputTokens
+			normalized.CacheCreationInputTokens = 0
+			normalized.CacheReadInputTokens = max(normalized.CacheReadInputTokens-overflow, 0)
+		}
+	}
+	normalized.InputTokens = budget - normalized.CacheReadInputTokens - normalized.CacheCreationInputTokens
+	if normalized.InputTokens < 0 {
+		normalized.InputTokens = 0
+	}
+	normalized.CacheCreation5mInputTokens = scaleKiroUsageBucket(simulated.CacheCreation5mInputTokens, budget, simulatedTotal)
+	normalized.CacheCreation1hInputTokens = scaleKiroUsageBucket(simulated.CacheCreation1hInputTokens, budget, simulatedTotal)
+	normalizeKiroCacheCreationBreakdown(&normalized)
+	return normalized
+}
+
+func kiroActualInputTokenBudget(base Usage) int {
+	if base.InputTokens > 0 {
+		return base.InputTokens
+	}
+	if base.TotalTokens > base.OutputTokens {
+		return base.TotalTokens - base.OutputTokens
+	}
+	return 0
+}
+
+func kiroUsageInputBucketTotal(usage Usage) int {
+	return usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+}
+
+func scaleKiroUsageBucket(value int, budget int, total int) int {
+	if value <= 0 || budget <= 0 || total <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(value) * float64(budget) / float64(total)))
+}
+
+func normalizeKiroCacheCreationBreakdown(usage *Usage) {
+	if usage == nil {
+		return
+	}
+	if usage.CacheCreationInputTokens <= 0 {
+		usage.CacheCreation5mInputTokens = 0
+		usage.CacheCreation1hInputTokens = 0
+		return
+	}
+	breakdownTotal := usage.CacheCreation5mInputTokens + usage.CacheCreation1hInputTokens
+	if breakdownTotal == 0 {
+		return
+	}
+	if breakdownTotal < usage.CacheCreationInputTokens {
+		residual := usage.CacheCreationInputTokens - breakdownTotal
+		if usage.CacheCreation1hInputTokens > 0 {
+			usage.CacheCreation1hInputTokens += residual
+		} else {
+			usage.CacheCreation5mInputTokens += residual
+		}
+		return
+	}
+	if breakdownTotal > usage.CacheCreationInputTokens {
+		usage.CacheCreation5mInputTokens = scaleKiroUsageBucket(usage.CacheCreation5mInputTokens, usage.CacheCreationInputTokens, breakdownTotal)
+		usage.CacheCreation1hInputTokens = scaleKiroUsageBucket(usage.CacheCreation1hInputTokens, usage.CacheCreationInputTokens, breakdownTotal)
+	}
+	if total := usage.CacheCreation5mInputTokens + usage.CacheCreation1hInputTokens; total > usage.CacheCreationInputTokens {
+		usage.CacheCreation1hInputTokens = max(usage.CacheCreationInputTokens-usage.CacheCreation5mInputTokens, 0)
+	} else if total < usage.CacheCreationInputTokens && total > 0 {
+		usage.CacheCreation1hInputTokens += usage.CacheCreationInputTokens - total
+	}
 }
 
 func addKiroCacheUsageFields(usageMap map[string]any, usage Usage) {
