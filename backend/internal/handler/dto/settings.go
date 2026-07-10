@@ -189,6 +189,8 @@ type SystemSettings struct {
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
+	ProxyAutoSelectMaxGrokAccountsPerProxy        int    `json:"proxy_auto_select_max_grok_accounts_per_proxy"`
+	ProxyAutoSelectMaxKiroAccountsPerProxy        int    `json:"proxy_auto_select_max_kiro_accounts_per_proxy"`
 	EnableClaudeOAuthSystemPromptInjection        bool   `json:"enable_claude_oauth_system_prompt_injection"`
 	ClaudeOAuthSystemPrompt                       string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks                 string `json:"claude_oauth_system_prompt_blocks"`

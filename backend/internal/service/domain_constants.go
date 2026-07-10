@@ -528,6 +528,10 @@ const (
 	SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy = "proxy_auto_select_max_openai_accounts_per_proxy"
 	// SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy Antigravity 账号创建时每个代理/IP 的同平台账号容量（默认 5）
 	SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy = "proxy_auto_select_max_antigravity_accounts_per_proxy"
+	// SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy Grok 账号创建时每个代理/IP 的同平台账号容量（默认 1）
+	SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy = "proxy_auto_select_max_grok_accounts_per_proxy"
+	// SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy Kiro 账号创建时每个代理/IP 的同平台账号容量（默认 1）
+	SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy = "proxy_auto_select_max_kiro_accounts_per_proxy"
 
 	// Balance Low Notification
 	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关

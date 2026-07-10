@@ -207,6 +207,8 @@ type SystemSettings struct {
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    // Anthropic 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    // OpenAI 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    // Antigravity 账号创建自动选代理时的同平台容量（默认 5）
+	ProxyAutoSelectMaxGrokAccountsPerProxy        int    // Grok 账号创建自动选代理时的同平台容量（默认 1）
+	ProxyAutoSelectMaxKiroAccountsPerProxy        int    // Kiro 账号创建自动选代理时的同平台容量（默认 1）
 	EnableClaudeOAuthSystemPromptInjection        bool   // 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
 	ClaudeOAuthSystemPrompt                       string // Claude OAuth mimic 路径注入的通用扩展 system prompt；空值使用内置默认
 	ClaudeOAuthSystemPromptBlocks                 string // Claude OAuth mimic 路径注入的 system blocks JSON 配置；空值使用内置默认

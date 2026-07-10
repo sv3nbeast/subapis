@@ -1236,6 +1236,8 @@ const (
 	ProxyAutoSelectDefaultAnthropicAccountsPerProxy   = 1
 	ProxyAutoSelectDefaultOpenAIAccountsPerProxy      = 1
 	ProxyAutoSelectDefaultAntigravityAccountsPerProxy = 5
+	ProxyAutoSelectDefaultGrokAccountsPerProxy        = 1
+	ProxyAutoSelectDefaultKiroAccountsPerProxy        = 1
 )
 
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
@@ -2696,6 +2698,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxAnthropicAccountsPerProxy, ProxyAutoSelectDefaultAnthropicAccountsPerProxy))
 	updates[SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxOpenAIAccountsPerProxy, ProxyAutoSelectDefaultOpenAIAccountsPerProxy))
 	updates[SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxAntigravityAccountsPerProxy, ProxyAutoSelectDefaultAntigravityAccountsPerProxy))
+	updates[SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxGrokAccountsPerProxy, ProxyAutoSelectDefaultGrokAccountsPerProxy))
+	updates[SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy] = strconv.Itoa(NormalizeProxyAutoSelectLimit(settings.ProxyAutoSelectMaxKiroAccountsPerProxy, ProxyAutoSelectDefaultKiroAccountsPerProxy))
 	// codex_cli_only 加固
 	updates[SettingKeyMinCodexVersion] = strings.TrimSpace(settings.MinCodexVersion)
 	updates[SettingKeyMaxCodexVersion] = strings.TrimSpace(settings.MaxCodexVersion)
@@ -3750,6 +3754,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyProxyAutoSelectMaxAnthropicAccountsPerProxy:        strconv.Itoa(ProxyAutoSelectDefaultAnthropicAccountsPerProxy),
 		SettingKeyProxyAutoSelectMaxOpenAIAccountsPerProxy:           strconv.Itoa(ProxyAutoSelectDefaultOpenAIAccountsPerProxy),
 		SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy:      strconv.Itoa(ProxyAutoSelectDefaultAntigravityAccountsPerProxy),
+		SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy:             strconv.Itoa(ProxyAutoSelectDefaultGrokAccountsPerProxy),
+		SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy:             strconv.Itoa(ProxyAutoSelectDefaultKiroAccountsPerProxy),
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -4235,6 +4241,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.ProxyAutoSelectMaxAntigravityAccountsPerProxy = parseProxyAutoSelectLimit(
 		settings[SettingKeyProxyAutoSelectMaxAntigravityAccountsPerProxy],
 		ProxyAutoSelectDefaultAntigravityAccountsPerProxy,
+	)
+	result.ProxyAutoSelectMaxGrokAccountsPerProxy = parseProxyAutoSelectLimit(
+		settings[SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy],
+		ProxyAutoSelectDefaultGrokAccountsPerProxy,
+	)
+	result.ProxyAutoSelectMaxKiroAccountsPerProxy = parseProxyAutoSelectLimit(
+		settings[SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy],
+		ProxyAutoSelectDefaultKiroAccountsPerProxy,
 	)
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

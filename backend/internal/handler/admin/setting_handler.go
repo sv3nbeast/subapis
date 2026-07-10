@@ -337,6 +337,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 	payload.ProxyAutoSelectMaxAnthropicAccountsPerProxy = settings.ProxyAutoSelectMaxAnthropicAccountsPerProxy
 	payload.ProxyAutoSelectMaxOpenAIAccountsPerProxy = settings.ProxyAutoSelectMaxOpenAIAccountsPerProxy
 	payload.ProxyAutoSelectMaxAntigravityAccountsPerProxy = settings.ProxyAutoSelectMaxAntigravityAccountsPerProxy
+	payload.ProxyAutoSelectMaxGrokAccountsPerProxy = settings.ProxyAutoSelectMaxGrokAccountsPerProxy
+	payload.ProxyAutoSelectMaxKiroAccountsPerProxy = settings.ProxyAutoSelectMaxKiroAccountsPerProxy
 
 	// OpenAI fast policy (stored under a dedicated setting key)
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
@@ -611,6 +613,8 @@ type UpdateSettingsRequest struct {
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   *int    `json:"proxy_auto_select_max_anthropic_accounts_per_proxy"`
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      *int    `json:"proxy_auto_select_max_openai_accounts_per_proxy"`
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy *int    `json:"proxy_auto_select_max_antigravity_accounts_per_proxy"`
+	ProxyAutoSelectMaxGrokAccountsPerProxy        *int    `json:"proxy_auto_select_max_grok_accounts_per_proxy"`
+	ProxyAutoSelectMaxKiroAccountsPerProxy        *int    `json:"proxy_auto_select_max_kiro_accounts_per_proxy"`
 	EnableClaudeOAuthSystemPromptInjection        *bool   `json:"enable_claude_oauth_system_prompt_injection"`
 	ClaudeOAuthSystemPrompt                       *string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks                 *string `json:"claude_oauth_system_prompt_blocks"`
@@ -1710,6 +1714,16 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			previousSettings.ProxyAutoSelectMaxAntigravityAccountsPerProxy,
 			service.ProxyAutoSelectDefaultAntigravityAccountsPerProxy,
 		),
+		ProxyAutoSelectMaxGrokAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
+			req.ProxyAutoSelectMaxGrokAccountsPerProxy,
+			previousSettings.ProxyAutoSelectMaxGrokAccountsPerProxy,
+			service.ProxyAutoSelectDefaultGrokAccountsPerProxy,
+		),
+		ProxyAutoSelectMaxKiroAccountsPerProxy: normalizeProxyAutoSelectLimitFromRequest(
+			req.ProxyAutoSelectMaxKiroAccountsPerProxy,
+			previousSettings.ProxyAutoSelectMaxKiroAccountsPerProxy,
+			service.ProxyAutoSelectDefaultKiroAccountsPerProxy,
+		),
 		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
 		CodexCLIOnlyBlacklist: strings.TrimSpace(req.CodexCLIOnlyBlacklist),
@@ -2192,6 +2206,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	payload.ProxyAutoSelectMaxAnthropicAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxAnthropicAccountsPerProxy
 	payload.ProxyAutoSelectMaxOpenAIAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxOpenAIAccountsPerProxy
 	payload.ProxyAutoSelectMaxAntigravityAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxAntigravityAccountsPerProxy
+	payload.ProxyAutoSelectMaxGrokAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxGrokAccountsPerProxy
+	payload.ProxyAutoSelectMaxKiroAccountsPerProxy = updatedSettings.ProxyAutoSelectMaxKiroAccountsPerProxy
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
 		slog.Error("openai_fast_policy_settings_get_failed", "error", err)
 	} else if fastPolicy != nil {
@@ -2595,6 +2611,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.ProxyAutoSelectMaxAntigravityAccountsPerProxy != after.ProxyAutoSelectMaxAntigravityAccountsPerProxy {
 		changed = append(changed, "proxy_auto_select_max_antigravity_accounts_per_proxy")
+	}
+	if before.ProxyAutoSelectMaxGrokAccountsPerProxy != after.ProxyAutoSelectMaxGrokAccountsPerProxy {
+		changed = append(changed, "proxy_auto_select_max_grok_accounts_per_proxy")
+	}
+	if before.ProxyAutoSelectMaxKiroAccountsPerProxy != after.ProxyAutoSelectMaxKiroAccountsPerProxy {
+		changed = append(changed, "proxy_auto_select_max_kiro_accounts_per_proxy")
 	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")

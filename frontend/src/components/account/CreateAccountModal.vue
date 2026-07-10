@@ -4279,11 +4279,13 @@ const tlsFingerprintProfileId = ref<number | null>(null)
 const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
 
 // 代理自动分配：新建账号时按平台容量自动挑选负载最轻的可用代理，避免账号无代理直连上游。
-type ProxyAutoSelectPlatform = Extract<AccountPlatform, 'anthropic' | 'openai' | 'antigravity'>
+type ProxyAutoSelectPlatform = Extract<AccountPlatform, 'anthropic' | 'openai' | 'antigravity' | 'grok' | 'kiro'>
 const DEFAULT_PROXY_AUTO_SELECT_LIMITS: Record<ProxyAutoSelectPlatform, number> = {
   anthropic: 1,
   openai: 1,
-  antigravity: 5
+  antigravity: 5,
+  grok: 1,
+  kiro: 1
 }
 const autoSelectedProxyId = ref<number | null>(null)
 const proxyPlatformCounts = ref<Record<number, number>>({})
@@ -4293,7 +4295,13 @@ const proxyAutoSelectLimits = reactive<Record<ProxyAutoSelectPlatform, number>>(
 let proxyAutoSelectRun = 0
 
 const autoProxyPlatform = computed<ProxyAutoSelectPlatform | null>(() => {
-  if (form.platform === 'anthropic' || form.platform === 'openai' || form.platform === 'antigravity') {
+  if (
+    form.platform === 'anthropic' ||
+    form.platform === 'openai' ||
+    form.platform === 'antigravity' ||
+    form.platform === 'grok' ||
+    form.platform === 'kiro'
+  ) {
     return form.platform
   }
   return null
@@ -4322,10 +4330,20 @@ const loadProxyAutoSelectLimits = async () => {
       settings.proxy_auto_select_max_antigravity_accounts_per_proxy,
       DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
     )
+    proxyAutoSelectLimits.grok = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_grok_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.grok
+    )
+    proxyAutoSelectLimits.kiro = normalizeProxyAutoSelectLimit(
+      settings.proxy_auto_select_max_kiro_accounts_per_proxy,
+      DEFAULT_PROXY_AUTO_SELECT_LIMITS.kiro
+    )
   } catch {
     proxyAutoSelectLimits.anthropic = DEFAULT_PROXY_AUTO_SELECT_LIMITS.anthropic
     proxyAutoSelectLimits.openai = DEFAULT_PROXY_AUTO_SELECT_LIMITS.openai
     proxyAutoSelectLimits.antigravity = DEFAULT_PROXY_AUTO_SELECT_LIMITS.antigravity
+    proxyAutoSelectLimits.grok = DEFAULT_PROXY_AUTO_SELECT_LIMITS.grok
+    proxyAutoSelectLimits.kiro = DEFAULT_PROXY_AUTO_SELECT_LIMITS.kiro
   }
 }
 
@@ -4733,7 +4751,7 @@ watch(
       accountCategory.value = 'oauth-based'
       addMethod.value = 'oauth'
       modelRestrictionMode.value = 'mapping'
-      form.concurrency = 1
+      form.concurrency = 10
       form.load_factor = null
     }
     if (newPlatform === 'kiro') {
