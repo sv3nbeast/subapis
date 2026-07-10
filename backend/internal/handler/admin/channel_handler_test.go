@@ -493,3 +493,24 @@ func TestSyncPricingModels_ValidPlatform_EmptyService(t *testing.T) {
 		require.NotNil(t, body.Data.Models, "models must not be null for platform=%s", platform)
 	}
 }
+
+func TestSyncPricingModels_OpenAIIncludesStaticGPTFallbacks(t *testing.T) {
+	svc := service.NewPricingService(nil, nil)
+	router := setupSyncPricingModelsRouter(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models?platform=openai", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body struct {
+		Data struct {
+			Models []string `json:"models"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Contains(t, body.Data.Models, "gpt-5.6-sol")
+	require.Contains(t, body.Data.Models, "gpt-5.6-terra")
+	require.Contains(t, body.Data.Models, "gpt-5.6-luna")
+}

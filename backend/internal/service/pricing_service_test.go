@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -562,4 +563,46 @@ func TestListModelNamesByProvider_EmptyCatalog(t *testing.T) {
 	got := svc.ListModelNamesByProvider("openai")
 	require.NotNil(t, got)
 	require.Empty(t, got)
+}
+
+func TestListChannelPricingModelNamesByProvider_OpenAIMergesLocalStaticModels(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-4o":  {LiteLLMProvider: "openai", InputCostPerToken: 5e-6},
+			"gpt-5.5": {LiteLLMProvider: "openai", InputCostPerToken: 5e-6},
+		},
+	}
+
+	got := svc.ListChannelPricingModelNamesByProvider("openai")
+	require.Contains(t, got, "gpt-4o")
+	require.Contains(t, got, "gpt-5.5")
+	require.Contains(t, got, "gpt-5.6-sol")
+	require.Contains(t, got, "gpt-5.6-terra")
+	require.Contains(t, got, "gpt-5.6-luna")
+	require.Contains(t, got, "gpt-5.3-codex")
+	require.Contains(t, got, "gpt-5.4-mini")
+
+	seen := make(map[string]struct{}, len(got))
+	for _, model := range got {
+		if _, ok := seen[model]; ok {
+			t.Fatalf("duplicate model returned: %s", model)
+		}
+		seen[model] = struct{}{}
+	}
+
+	sorted := append([]string(nil), got...)
+	sort.Strings(sorted)
+	require.Equal(t, sorted, got)
+}
+
+func TestListChannelPricingModelNamesByProvider_NonOpenAIUnchanged(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"claude-sonnet-4-5": {LiteLLMProvider: "anthropic", InputCostPerToken: 3e-6},
+			"claude-opus-4-5":   {LiteLLMProvider: "anthropic", InputCostPerToken: 15e-6},
+		},
+	}
+
+	got := svc.ListChannelPricingModelNamesByProvider("anthropic")
+	require.Equal(t, []string{"claude-opus-4-5", "claude-sonnet-4-5"}, got)
 }

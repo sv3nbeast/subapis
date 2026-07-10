@@ -532,6 +532,6 @@ func (h *ChannelHandler) SyncPricingModels(c *gin.Context) {
 		return
 	}
 
-	models := h.pricingService.ListModelNamesByProvider(provider)
+	models := h.pricingService.ListChannelPricingModelNamesByProvider(provider)
 	response.Success(c, gin.H{"models": models})
 }

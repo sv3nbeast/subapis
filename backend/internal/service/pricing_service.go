@@ -1036,6 +1036,71 @@ func (s *PricingService) ListModelNamesByProvider(provider string) []string {
 	return names
 }
 
+// ListChannelPricingModelNamesByProvider returns the model list used by the
+// admin "sync upstream models" action for channel pricing.
+//
+// Besides LiteLLM catalog models, this also merges locally-supported static
+// fallback models that may not exist in the upstream pricing catalog yet.
+func (s *PricingService) ListChannelPricingModelNamesByProvider(provider string) []string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	models := s.ListModelNamesByProvider(provider)
+	extras := localChannelPricingModelNamesByProvider(provider)
+	if len(extras) == 0 {
+		return models
+	}
+
+	seen := make(map[string]struct{}, len(models)+len(extras))
+	merged := make([]string, 0, len(models)+len(extras))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		merged = append(merged, model)
+	}
+	for _, model := range extras {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		merged = append(merged, model)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
+func localChannelPricingModelNamesByProvider(provider string) []string {
+	switch provider {
+	case "openai":
+		return []string{
+			"gpt-5.1",
+			"gpt-5.1-codex",
+			"gpt-5.2",
+			"gpt-5.2-codex",
+			"gpt-5.3-codex",
+			"gpt-5.3-codex-spark",
+			"gpt-5.4",
+			"gpt-5.4-mini",
+			"gpt-5.4-nano",
+			"gpt-5.5",
+			"gpt-5.5-pro",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
+			"gpt-5.6-luna",
+		}
+	default:
+		return nil
+	}
+}
+
 // isNumeric 检查字符串是否为纯数字
 func isNumeric(s string) bool {
 	for _, c := range s {
