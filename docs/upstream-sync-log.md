@@ -2330,3 +2330,64 @@ dc64d597a 恢复dashboard cache metrics display
 67d09f7c5 Fix Kiro sticky account scheduling
 05f716672 Retry Kiro metadata-only stream turns
 883e2afff Fix Kiro group endpoint mode editing
+
+## 2026-07-10 13:55:24 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `faae31fa4ba3c665605719e0ba030a359dee9866`
+- 官方提交: `312ab1f0bdd00e7d155fa9af44349303886eb5c3`
+- 合并基线: `6f43986c376d76144cb39c7a562c179e19ac7439`
+- 官方领先数量: `95`
+- 本地领先数量: `462`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+312ab1f0b 合并拉取请求 #3926（来源：fengshao1227/fix/ws-passthrough-reasoning-effort-candidates）
+b9b013a08 修复（usage）：WS passthrough effort 提取补入映射后模型候选
+ddb1a210c 合并拉取请求 #3912（来源：superman2003/fix/audit-concurrency-and-recovery）
+301c99a26 合并拉取请求 #3916（来源：Wei-Shaw/fix/reasoning-effort-model-candidates）
+c3ae5fc3c 修复（usage）：effort 提取改用模型候选列表，修复后缀模型元数据丢失
+cddcf4904 合并拉取请求 #3884（来源：CHOS1N11111/codex/add-parallel-tool-calls-compat）
+9389503c5 合并拉取请求 #3913（来源：fengshao1227/fix/en-locale-missing-keys）
+72ef0b388 合并拉取请求 #3909（来源：githubbzxs/fix/gpt56-max-compact）
+fc66a30ff 修复：加固 billing concurrency 与 支付 recovery
+e984b4e2e 修复（i18n）：补齐 en 语言包 overview 和 resources 缺失 key
+066a85949 合并拉取请求 #3905（来源：fengshao1227/fix/codex-client-version-bump）
+309936207 合并拉取请求 #3906（来源：Wei-Shaw/fix/compact-sse-raw-output-item-preservation）
+80b3d4c1f 修复：兼容 GPT-5.6 max 推理强度
+000f6dc65 修复（compact）：终态 output 非空但缺 compaction 时从事件流补入（146 等价性收尾）
+ae9a01d85 修复（compact）：二轮审计加固——心跳字节不得污染 failover 判定与并发写安全
+2cffe1cf5 修复（compact）：SSE→JSON 保留 raw output_item.done 并为 unary 等待补下游心跳（修复 #3887）
+657c4f97d 修复（openai）：升级 Codex 客户端版本至 0.144.1，修复 gpt-5.6-luna 404
+12d811bd7 杂项：将VERSION同步到 0.1.149 [skip ci]
+ad8afc8a2 增加parallel_tool_calls 兼容性 mapping
+dd1a116f4 合并拉取请求 #3881（来源：Wei-Shaw/feat/version-rollback）
+
+### 本地领先
+
+faae31fa4 修复（前端）：localize missing i18n keys
+0ca1aa0af 修复：保留Grok OAuth account concurrency
+8d17c7827 Fix Kiro cache persistence 与 429 retry logs
+faee1d466 Exclude local backend binaries from prod sync
+6cc633203 Allow Kiro assistant text prefill
+60a70aca9 Fix Kiro non-stream empty response recovery
+b84f841fb Avoid Kiro empty stream retry amplification
+e329ad007 Fix Kiro metadata-only stream recovery
+a0f2583f0 Record official sync promote 针对 20260709
+52d6e9517 Merge official upstream through 20260709
+d0a8bf6f5 Record official sync analysis 针对 20260709
+0ab6d54f2 恢复usage cache ratio stats card
+f1e9b823a 恢复usage cache hit rate display
+dc64d597a 恢复dashboard cache metrics display
+9078c2fb0 Fix Anthropic thinking signature preflight
+49ca134f1 支持 Kiro explicit Claude 4.5 aliases
+6255c2ec8 Allow Kiro Haiku 4.5 short 别名
+67d09f7c5 Fix Kiro sticky account scheduling
+05f716672 Retry Kiro metadata-only stream turns
+883e2afff Fix Kiro group endpoint mode editing
