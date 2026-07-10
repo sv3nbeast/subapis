@@ -145,6 +145,7 @@ type ParseResult struct {
 
 type KiroRequestContext struct {
 	ToolNameMap         map[string]string
+	EmptyInputToolNames map[string]bool
 	ThinkingEnabled     bool
 	CacheEmulationUsage *Usage
 	// InputTokenBudget is a conservative estimate of the serialized Kiro
@@ -924,6 +925,14 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if toolUseID == "" {
 			return nil
 		}
+		if pendingStreamingTool != nil &&
+			pendingStreamingTool.ToolUseID == toolUseID &&
+			!streamingToolStarted[toolUseID] &&
+			requestCtx.EmptyInputToolNames[pendingStreamingTool.Name] {
+			if err := processStreamingToolInput(toolUseID, pendingStreamingTool.Name, "{}", nil); err != nil {
+				return err
+			}
+		}
 		processedIDs[toolUseID] = true
 		if stopReason == "" {
 			stopReason = "tool_use"
@@ -1425,7 +1434,8 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := closeOpenStreamingTool(); err != nil {
 		return nil, err
 	}
-	if pendingStreamingTool != nil && pendingStreamingTool.GeneratedID {
+	if pendingStreamingTool != nil &&
+		(pendingStreamingTool.GeneratedID || requestCtx.EmptyInputToolNames[pendingStreamingTool.Name]) {
 		if err := processStreamingToolStop(pendingStreamingTool.ToolUseID); err != nil {
 			return nil, err
 		}
@@ -2104,6 +2114,12 @@ func convertClaudeToolsToKiro(tools gjson.Result, requestCtx *KiroRequestContext
 		description = appendChunkedToolDescription(originalName, description)
 		description = truncateKiroToolDescription(description)
 		inputSchema := normalizeKiroJSONSchema(tool.Get("input_schema").Value())
+		if kiroToolSchemaAllowsEmptyInput(inputSchema) && requestCtx != nil {
+			if requestCtx.EmptyInputToolNames == nil {
+				requestCtx.EmptyInputToolNames = make(map[string]bool)
+			}
+			requestCtx.EmptyInputToolNames[name] = true
+		}
 		out = append(out, KiroToolWrapper{
 			ToolSpecification: KiroToolSpecification{
 				Name:        name,
@@ -2113,6 +2129,15 @@ func convertClaudeToolsToKiro(tools gjson.Result, requestCtx *KiroRequestContext
 		})
 	}
 	return out
+}
+
+func kiroToolSchemaAllowsEmptyInput(schema any) bool {
+	obj, ok := schema.(map[string]any)
+	if !ok || obj == nil {
+		return false
+	}
+	_, hasRequiredFields := obj["required"]
+	return !hasRequiredFields
 }
 
 func appendChunkedToolDescription(name, description string) string {
@@ -4252,9 +4277,11 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		toolUseID := firstKiroStringField(tu, "toolUseId", "toolUseID", "tool_use_id", "id")
 		name := firstKiroStringField(tu, "name", "toolName", "tool_name")
 		isStop := firstKiroBoolField(tu, "stop", "isStop", "done")
+		hasInput := false
 		if inputRaw, ok := tu["input"]; ok {
 			switch v := inputRaw.(type) {
 			case string:
+				hasInput = true
 				if name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
@@ -4274,6 +4301,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 					})
 				}
 			case map[string]any:
+				hasInput = true
 				if name != "" {
 					out = append(out, kiroSemanticEvent{
 						Type:             kiroSemanticToolUse,
@@ -4293,6 +4321,15 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 					})
 				}
 			}
+		}
+		if !hasInput && name != "" {
+			out = append(out, kiroSemanticEvent{
+				Type:             kiroSemanticToolUse,
+				ToolUseID:        toolUseID,
+				ToolName:         name,
+				ToolStop:         isStop,
+				SourceStopReason: sourceStopReason,
+			})
 		}
 		if isStop {
 			out = append(out, kiroSemanticEvent{

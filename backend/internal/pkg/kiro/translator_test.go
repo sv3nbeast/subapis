@@ -1793,6 +1793,41 @@ func TestStreamEventStreamAsAnthropicStreamsToolUseMapInput(t *testing.T) {
 	require.Contains(t, out.String(), `"partial_json":"{\"query\":\"golang\"}"`)
 }
 
+func TestStreamEventStreamAsAnthropicEmitsEmptyInputToolUse(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_enter_plan",
+			"name":      "enterPlanMode",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_enter_plan",
+			"stop":      true,
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(),
+		stream,
+		&out,
+		"claude-opus-4-8",
+		9,
+		KiroRequestContext{
+			ToolNameMap:         map[string]string{"enterPlanMode": "EnterPlanMode"},
+			EmptyInputToolNames: map[string]bool{"enterPlanMode": true},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Contains(t, out.String(), `"id":"toolu_enter_plan"`)
+	require.Contains(t, out.String(), `"name":"EnterPlanMode"`)
+	require.Contains(t, out.String(), `"partial_json":"{}"`)
+	require.Contains(t, out.String(), `event: content_block_stop`)
+}
+
 func TestStreamEventStreamAsAnthropicNormalizesAskUserQuestionInput(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
@@ -2321,6 +2356,22 @@ func TestBuildKiroPayloadDefaultsInvalidToolJSONSchemaToObject(t *testing.T) {
 	require.Equal(t, "object", schema.Get("type").String())
 	require.False(t, schema.Get("required").Exists())
 	require.False(t, schema.Get("additionalProperties").Exists())
+}
+
+func TestBuildKiroPayloadTracksToolsThatAllowEmptyInput(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[{"role":"user","content":"plan this"}],
+		"tools":[
+			{"name":"EnterPlanMode","input_schema":{"type":"object","properties":{}}},
+			{"name":"Bash","input_schema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}
+		]
+	}`)
+
+	kiroBuildResult, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.True(t, kiroBuildResult.Context.EmptyInputToolNames["enterPlanMode"])
+	require.False(t, kiroBuildResult.Context.EmptyInputToolNames["bash"])
 }
 
 func TestBuildKiroPayloadFiltersCurrentOrphanToolResult(t *testing.T) {
