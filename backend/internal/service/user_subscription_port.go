@@ -31,9 +31,10 @@ type UserSubscriptionRepository interface {
 	ResetUsageForQuotaCycle(ctx context.Context, subscriptionID int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error
 
 	ActivateWindows(ctx context.Context, id int64, start time.Time) error
-	ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
-	ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
-	ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
+	ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error
+	ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error
+	ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error
+	ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error
 	IncrementUsage(ctx context.Context, id int64, costUSD float64) error
 
 	BatchUpdateExpiredStatus(ctx context.Context) (int64, error)

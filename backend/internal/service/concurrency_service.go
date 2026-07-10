@@ -61,6 +61,10 @@ type APIKeyConcurrencyCache interface {
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
 }
 
+type accountSlotKeyCleanupCache interface {
+	CleanupExpiredAccountSlotKeys(ctx context.Context) error
+}
+
 var (
 	requestIDPrefix  = initRequestIDPrefix()
 	requestIDCounter atomic.Uint64
@@ -602,11 +606,23 @@ func (s *ConcurrencyService) CleanupExpiredAccountSlots(ctx context.Context, acc
 
 // StartSlotCleanupWorker starts a background cleanup worker for expired account slots.
 func (s *ConcurrencyService) StartSlotCleanupWorker(accountRepo AccountRepository, interval time.Duration) {
-	if s == nil || s.cache == nil || accountRepo == nil || interval <= 0 {
+	if s == nil || s.cache == nil || interval <= 0 {
 		return
 	}
 
 	runCleanup := func() {
+		if cacheWide, ok := s.cache.(accountSlotKeyCleanupCache); ok {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := cacheWide.CleanupExpiredAccountSlotKeys(cleanupCtx)
+			cancel()
+			if err != nil {
+				logger.LegacyPrintf("service.concurrency", "Warning: cleanup expired account slots failed: %v", err)
+			}
+			return
+		}
+		if accountRepo == nil {
+			return
+		}
 		listCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		accounts, err := accountRepo.ListSchedulable(listCtx)
 		cancel()

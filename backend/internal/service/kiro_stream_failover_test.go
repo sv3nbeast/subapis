@@ -392,7 +392,7 @@ func TestForwardKiroMessagesStreamCapturesMeteringCredits(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "_sub2api_kiro_credits")
 }
 
-func TestForwardKiroMessagesStreamThinkingOnlyDoesNotWritePartialBody(t *testing.T) {
+func TestForwardKiroMessagesStreamThinkingOnlyReturnsCompleteThinkingResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -434,14 +434,12 @@ func TestForwardKiroMessagesStreamThinkingOnlyDoesNotWritePartialBody(t *testing
 
 	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
 
-	require.Nil(t, result)
-	require.Error(t, err)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
-	require.True(t, failoverErr.SuppressTempUnschedule)
-	require.Empty(t, rec.Body.String(), "thinking-only empty stream must not write partial response body")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"type":"thinking_delta"`)
+	require.Contains(t, rec.Body.String(), `"thinking":"I should think first."`)
+	require.Contains(t, rec.Body.String(), `"type":"signature_delta"`)
+	require.Contains(t, rec.Body.String(), "event: message_stop")
 }
 
 func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(t *testing.T) {

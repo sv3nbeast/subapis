@@ -11,12 +11,49 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/dgraph-io/ristretto"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite"
 )
+
+func TestRunInTx_ReusesExistingTransaction(t *testing.T) {
+	existingTx := &dbent.Tx{}
+	ctx := dbent.NewTxContext(context.Background(), existingTx)
+	svc := &SubscriptionService{entClient: &dbent.Client{}}
+
+	called := false
+	err := svc.runInTx(ctx, func(txCtx context.Context) error {
+		called = true
+		require.Same(t, existingTx, dbent.TxFromContext(txCtx))
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
+func TestMaybeInvalidateAssignmentCaches_DefersForOuterTransactionOwner(t *testing.T) {
+	cache, err := ristretto.NewCache(&ristretto.Config{NumCounters: 1_000, MaxCost: 100, BufferItems: 64})
+	require.NoError(t, err)
+	t.Cleanup(cache.Close)
+
+	svc := &SubscriptionService{subCacheL1: cache}
+	key := subCacheKey(7, 9)
+	require.True(t, cache.Set(key, &UserSubscription{ID: 42}, 1))
+	cache.Wait()
+
+	svc.maybeInvalidateAssignmentCaches(7, 9, true)
+	_, cachedBeforeCommit := cache.Get(key)
+	require.True(t, cachedBeforeCommit, "outer transaction must retain caches until its owner commits")
+
+	svc.maybeInvalidateAssignmentCaches(7, 9, false)
+	cache.Wait()
+	_, cachedAfterCommit := cache.Get(key)
+	require.False(t, cachedAfterCommit, "post-commit invalidation must remove the cached subscription")
+}
 
 type groupRepoNoop struct{}
 
@@ -132,13 +169,16 @@ func (userSubRepoNoop) ResetUsageForQuotaCycle(context.Context, int64, time.Time
 func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
-func (userSubRepoNoop) ResetDailyUsage(context.Context, int64, time.Time) error {
+func (userSubRepoNoop) ResetUsageWindows(context.Context, int64, bool, bool, bool, time.Time) error {
+	panic("unexpected ResetUsageWindows call")
+}
+func (userSubRepoNoop) ResetDailyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetDailyUsage call")
 }
-func (userSubRepoNoop) ResetWeeklyUsage(context.Context, int64, time.Time) error {
+func (userSubRepoNoop) ResetWeeklyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetWeeklyUsage call")
 }
-func (userSubRepoNoop) ResetMonthlyUsage(context.Context, int64, time.Time) error {
+func (userSubRepoNoop) ResetMonthlyUsage(context.Context, int64, *time.Time, time.Time) error {
 	panic("unexpected ResetMonthlyUsage call")
 }
 func (userSubRepoNoop) IncrementUsage(context.Context, int64, float64) error {
@@ -299,7 +339,7 @@ func (s *subscriptionUserSubRepoStub) ResetUsageForQuotaCycle(_ context.Context,
 	return nil
 }
 
-func (s *subscriptionUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, windowStart time.Time) error {
+func (s *subscriptionUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, _ *time.Time, windowStart time.Time) error {
 	sub := s.byID[id]
 	if sub == nil {
 		return ErrSubscriptionNotFound
@@ -311,7 +351,7 @@ func (s *subscriptionUserSubRepoStub) ResetDailyUsage(_ context.Context, id int6
 	return nil
 }
 
-func (s *subscriptionUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, windowStart time.Time) error {
+func (s *subscriptionUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, _ *time.Time, windowStart time.Time) error {
 	sub := s.byID[id]
 	if sub == nil {
 		return ErrSubscriptionNotFound
@@ -323,7 +363,7 @@ func (s *subscriptionUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int
 	return nil
 }
 
-func (s *subscriptionUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, windowStart time.Time) error {
+func (s *subscriptionUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, _ *time.Time, windowStart time.Time) error {
 	sub := s.byID[id]
 	if sub == nil {
 		return ErrSubscriptionNotFound

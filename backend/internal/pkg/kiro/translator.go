@@ -1175,6 +1175,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if text != "" {
 			_, _ = outputTextBuf.WriteString(text)
 			_, _ = currentThinking.WriteString(text)
+			if err := markDeliverableOutput(); err != nil {
+				return err
+			}
 		}
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",

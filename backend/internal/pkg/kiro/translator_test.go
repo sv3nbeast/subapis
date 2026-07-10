@@ -1277,7 +1277,7 @@ func TestParseNonStreamingEventStreamThinkingOnlyResponse(t *testing.T) {
 	require.Contains(t, err.Error(), "no deliverable assistant output")
 }
 
-func TestStreamEventStreamAsAnthropicThinkingOnlyDoesNotReleasePartialOutput(t *testing.T) {
+func TestStreamEventStreamAsAnthropicThinkingOnlyReturnsCompleteOutput(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{
@@ -1294,11 +1294,13 @@ func TestStreamEventStreamAsAnthropicThinkingOnlyDoesNotReleasePartialOutput(t *
 		9,
 		KiroRequestContext{ThinkingEnabled: true},
 	)
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty kiro event stream")
-	require.Contains(t, err.Error(), "no deliverable assistant output")
-	require.Empty(t, out.String(), "thinking-only empty stream must not leak partial SSE frames")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), `"type":"thinking_delta"`)
+	require.Contains(t, out.String(), `"thinking":"I should think first."`)
+	require.Contains(t, out.String(), `"type":"signature_delta"`)
+	require.Contains(t, out.String(), "event: message_stop")
 }
 
 func TestParseNonStreamingEventStreamMergesManyReasoningFragments(t *testing.T) {
