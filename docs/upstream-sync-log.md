@@ -2413,3 +2413,12 @@ dc64d597a 恢复dashboard cache metrics display
 - `dda8f7873` 管理员用户明细使用 ParseUsageRequestType
 - `ea9f40b63` 前端 UserBreakdown request_type 类型对齐
 - `0dec1ad29` 统一 isOpenAIGPT56Model 声明
+
+## 2026-07-10 14:27:58 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 官方目标: `9a2f11b4e21763cb7003ea29921d9a672ab50b1f`
+- 增量基线: `0dec1ad2922ff8c9d27b67f8a31dfb35bce1902b`
+- 动作: 吸收官方版本号更新 `0.1.149 -> 0.1.150`，未提升到 `main`
+- 验证: `go test ./cmd/server -count=1` 通过
