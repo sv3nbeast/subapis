@@ -298,7 +298,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 	require.Equal(t, "resp_omit_model_1", gjson.Get(requestToJSONString(captureConn.writes[1]), "previous_response_id").String())
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImageBridge(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StripsCodexResponsesLiteImageTool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -407,7 +407,17 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.5","stream":false,"input":"draw a cat"}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":"draw a cat",
+		"tools":[
+			{"type":"function","name":"shell","parameters":{"type":"object"}},
+			{"type":"image_generation","output_format":"png"}
+		],
+		"tool_choice":{"type":"image_generation"}
+	}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -429,10 +439,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 
 	require.Len(t, captureConn.writes, 1)
 	upstreamPayload := requestToJSONString(captureConn.writes[0])
-	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
-	require.Equal(t, "png", gjson.Get(upstreamPayload, `tools.#(type=="image_generation").output_format`).String())
-	require.Equal(t, "auto", gjson.Get(upstreamPayload, "tool_choice").String())
-	require.Contains(t, gjson.Get(upstreamPayload, "instructions").String(), "image_generation")
+	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="function")`).Exists())
+	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
+	require.False(t, gjson.Get(upstreamPayload, "tool_choice").Exists())
+	require.NotContains(t, gjson.Get(upstreamPayload, "instructions").String(), "image_generation")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {

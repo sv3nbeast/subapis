@@ -8,6 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUsesCodexResponsesLite(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, usesCodexResponsesLite(true, &Account{Type: AccountTypeOAuth}))
+	require.False(t, usesCodexResponsesLite(false, &Account{Type: AccountTypeOAuth}))
+	require.False(t, usesCodexResponsesLite(true, &Account{Type: AccountTypeAPIKey}))
+	require.False(t, usesCodexResponsesLite(true, nil))
+}
+
 func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 	// 续链场景：保留 item_reference 与 id，但不再强制 store=true。
 

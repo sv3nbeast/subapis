@@ -133,6 +133,15 @@ type codexOAuthTransformOptions struct {
 	PreserveToolCallIDs     bool
 }
 
+// usesCodexResponsesLite reports whether a Codex client request is being
+// forwarded through the ChatGPT OAuth backend. That backend is currently
+// backed by Responses-Lite, which rejects the hosted image_generation tool.
+// Function tools (including the client-executed image_gen.imagegen function)
+// remain supported and must not be altered here.
+func usesCodexResponsesLite(isCodexCLI bool, account *Account) bool {
+	return isCodexCLI && account != nil && account.Type == AccountTypeOAuth
+}
+
 const (
 	codexImageGenerationBridgeMarker = "<sub2api-codex-image-generation>"
 	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n</sub2api-codex-image-generation>"
