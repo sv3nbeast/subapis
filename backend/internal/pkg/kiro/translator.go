@@ -129,6 +129,7 @@ type Usage struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
+	InputTokensFromUpstream    bool
 }
 
 type StreamResult struct {
@@ -152,6 +153,7 @@ type KiroRequestContext struct {
 	// payload actually sent upstream, after Kiro-history truncation. It keeps
 	// fallback/cache-emulation usage from billing omitted Anthropic history.
 	InputTokenBudget         int
+	PayloadTruncated         bool
 	RequireTerminalEvent     bool
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
@@ -657,7 +659,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		AdditionalModelRequestFields: additionalModelRequestFields,
 		InferenceConfig:              inferenceConfig,
 	}
-	truncateKiroPayloadToLimit(&payload, systemPrompt != "")
+	requestCtx.PayloadTruncated = truncateKiroPayloadToLimit(&payload, systemPrompt != "")
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -1523,6 +1525,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		"output_tokens":               usage.OutputTokens,
 		"cache_read_input_tokens":     usage.CacheReadInputTokens,
 		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"_sub2api_kiro_usage_final":   true,
 	}
 	addKiroCacheUsageFields(finalUsageMap, usage)
 	if err := writeEvent("message_delta", map[string]any{
@@ -1930,9 +1933,9 @@ func prependSystemHistory(history []KiroHistoryMessage, systemPrompt, modelID, o
 	return append(prefix, history...)
 }
 
-func truncateKiroPayloadToLimit(payload *KiroPayload, hasPriming bool) {
+func truncateKiroPayloadToLimit(payload *KiroPayload, hasPriming bool) bool {
 	if payload == nil || kiroPayloadByteSize(payload) <= kiroMaxPayloadBytes {
-		return
+		return false
 	}
 
 	history := payload.ConversationState.History
@@ -1980,6 +1983,7 @@ func truncateKiroPayloadToLimit(payload *KiroPayload, hasPriming bool) {
 	if kiroPayloadByteSize(payload) > kiroMaxPayloadBytes {
 		truncateKiroCurrentMessage(payload)
 	}
+	return true
 }
 
 func kiroHistoryEntryByteSize(entry KiroHistoryMessage) int {
@@ -5021,6 +5025,7 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok {
 		if value, ok := toInt(tokenUsage["uncachedInputTokens"]); ok {
 			usage.InputTokens = value
+			usage.InputTokensFromUpstream = true
 		}
 		if value, ok := toInt(tokenUsage["outputTokens"]); ok {
 			usage.OutputTokens = value
@@ -5037,6 +5042,7 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	updateKiroCreditsFromMap(usage, meta)
 	if value, ok := toInt(event["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
+		usage.InputTokensFromUpstream = true
 	}
 	if value, ok := toInt(event["outputTokens"]); ok && value > 0 {
 		usage.OutputTokens = value
@@ -5046,6 +5052,7 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	}
 	if value, ok := toInt(meta["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
+		usage.InputTokensFromUpstream = true
 	}
 	if value, ok := toInt(meta["outputTokens"]); ok && value > 0 {
 		usage.OutputTokens = value
@@ -5220,6 +5227,7 @@ func constrainKiroUsageToInputBudget(usage Usage, budget int) Usage {
 	normalized := normalizeKiroCacheEmulationUsage(Usage{InputTokens: budget}, usage)
 	normalized.OutputTokens = usage.OutputTokens
 	normalized.KiroCredits = usage.KiroCredits
+	normalized.InputTokensFromUpstream = usage.InputTokensFromUpstream
 	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
 	return normalized
 }

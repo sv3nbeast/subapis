@@ -87,6 +87,7 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 const (
 	claudeMimicDebugInfoKey   = "claude_mimic_debug_info"
 	gatewaySSEErrorWrittenKey = "gateway_sse_error_written"
+	kiroUsageFinalMarker      = "_sub2api_kiro_usage_final"
 )
 
 const (
@@ -6721,6 +6722,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 重试循环
 	var resp *http.Response
+	var cacheShadow *kiroCacheShadowEvaluation
 	lastWireBody := body
 	retryStart := time.Now()
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
@@ -6733,6 +6735,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 		// 记录本次实际发送的 wire body；只有请求成功后才写回 ParsedRequest，避免 400 retry 基于已签名 CCH 再改写。
 		lastWireBody = wireBody
+		attemptCacheShadow := s.beginKiroCacheShadow(ctx, account, parsed, wireBody, reqModel)
 
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
@@ -6838,6 +6841,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					retryReq, retryWireBody, buildErr := s.buildUpstreamRequest(retryCtx, c, account, filteredBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 					releaseRetryCtx()
 					if buildErr == nil {
+						retryCacheShadow := s.beginKiroCacheShadow(ctx, account, parsed, retryWireBody, reqModel)
 						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
@@ -6848,6 +6852,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									return nil, err
 								}
 								logger.LegacyPrintf("service.gateway", "Account %d: thinking block retry succeeded (blocks downgraded)", account.ID)
+								cacheShadow = retryCacheShadow
 								resp = retryResp
 								break
 							}
@@ -6879,6 +6884,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									retryReq2, retryWireBody2, buildErr2 := s.buildUpstreamRequest(retryCtx2, c, account, filteredBody2, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 									releaseRetryCtx2()
 									if buildErr2 == nil {
+										retryCacheShadow2 := s.beginKiroCacheShadow(ctx, account, parsed, retryWireBody2, reqModel)
 										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
 										if retryErr2 == nil {
 											if retryResp2.StatusCode < 400 {
@@ -6888,6 +6894,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 													_ = retryResp2.Body.Close()
 													return nil, err
 												}
+												cacheShadow = retryCacheShadow2
 											}
 											resp = retryResp2
 											break
@@ -6958,6 +6965,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						budgetRetryReq, budgetWireBody, buildErr := s.buildUpstreamRequest(budgetRetryCtx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
 						releaseBudgetRetryCtx()
 						if buildErr == nil {
+							budgetCacheShadow := s.beginKiroCacheShadow(ctx, account, parsed, budgetWireBody, reqModel)
 							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 							if retryErr == nil {
 								if budgetRetryResp.StatusCode < 400 {
@@ -6967,6 +6975,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 										_ = budgetRetryResp.Body.Close()
 										return nil, err
 									}
+									cacheShadow = budgetCacheShadow
 								}
 								resp = budgetRetryResp
 								break
@@ -7038,6 +7047,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			for k, v := range resp.Header {
 				logger.LegacyPrintf("service.gateway", "[DEBUG]   %s: %v", k, v)
 			}
+		}
+		if resp.StatusCode < 400 {
+			cacheShadow = attemptCacheShadow
 		}
 		break
 	}
@@ -7170,7 +7182,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, err
 		}
 	}
-
 	// 触发上游接受回调（提前释放串行锁，不等流完成）
 	if parsed.OnUpstreamAccepted != nil {
 		parsed.OnUpstreamAccepted()
@@ -7245,7 +7256,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 	}
 
-	return &ForwardResult{
+	result := &ForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            *usage,
 		Model:            originalModel, // 使用原始模型用于计费和日志
@@ -7254,7 +7265,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
 		ClientDisconnect: clientDisconnect,
-	}, nil
+	}
+	s.finishKiroCacheShadow(cacheShadow, result.RequestID, result.Usage)
+	return result, nil
 }
 
 type anthropicPassthroughForwardInput struct {
@@ -7943,7 +7956,7 @@ func extractAnthropicSSEDataLine(line string) (string, bool) {
 }
 
 func stripSub2apiInternalUsageFields(line string) string {
-	if !strings.Contains(line, "_sub2api_kiro_credits") {
+	if !strings.Contains(line, "_sub2api_kiro_credits") && !strings.Contains(line, kiroUsageFinalMarker) {
 		return line
 	}
 	data, ok := extractAnthropicSSEDataLine(line)
@@ -7951,6 +7964,10 @@ func stripSub2apiInternalUsageFields(line string) string {
 		return line
 	}
 	cleaned, err := sjson.Delete(data, "usage._sub2api_kiro_credits")
+	if err != nil {
+		return line
+	}
+	cleaned, err = sjson.Delete(cleaned, "usage."+kiroUsageFinalMarker)
 	if err != nil {
 		return line
 	}
@@ -7982,25 +7999,26 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 	case "message_delta":
 		deltaUsage := parsed.Get("usage")
 		if deltaUsage.Exists() {
-			if v := deltaUsage.Get("input_tokens").Int(); v > 0 {
-				usage.InputTokens = int(v)
+			authoritative := deltaUsage.Get(kiroUsageFinalMarker).Bool()
+			if v := deltaUsage.Get("input_tokens"); v.Exists() && (authoritative || v.Int() > 0) {
+				usage.InputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("output_tokens").Int(); v > 0 {
-				usage.OutputTokens = int(v)
+			if v := deltaUsage.Get("output_tokens"); v.Exists() && (authoritative || v.Int() > 0) {
+				usage.OutputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("cache_creation_input_tokens").Int(); v > 0 {
-				usage.CacheCreationInputTokens = int(v)
+			if v := deltaUsage.Get("cache_creation_input_tokens"); v.Exists() && (authoritative || v.Int() > 0) {
+				usage.CacheCreationInputTokens = int(v.Int())
 			}
-			if v := deltaUsage.Get("cache_read_input_tokens").Int(); v > 0 {
-				usage.CacheReadInputTokens = int(v)
+			if v := deltaUsage.Get("cache_read_input_tokens"); v.Exists() && (authoritative || v.Int() > 0) {
+				usage.CacheReadInputTokens = int(v.Int())
 			}
 
 			cc5m := deltaUsage.Get("cache_creation.ephemeral_5m_input_tokens")
 			cc1h := deltaUsage.Get("cache_creation.ephemeral_1h_input_tokens")
-			if cc5m.Exists() && cc5m.Int() > 0 {
+			if cc5m.Exists() && (authoritative || cc5m.Int() > 0) {
 				usage.CacheCreation5mTokens = int(cc5m.Int())
 			}
-			if cc1h.Exists() && cc1h.Int() > 0 {
+			if cc1h.Exists() && (authoritative || cc1h.Int() > 0) {
 				usage.CacheCreation1hTokens = int(cc1h.Int())
 			}
 			if v := deltaUsage.Get("_sub2api_kiro_credits"); v.Exists() && v.Float() > 0 {
@@ -10221,6 +10239,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		if eventType == "message_delta" {
 			if u, ok := event["usage"].(map[string]any); ok {
 				delete(u, "_sub2api_kiro_credits")
+				delete(u, kiroUsageFinalMarker)
 				eventChanged = true
 			}
 		}
@@ -10529,28 +10548,29 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 		}
 
 		patch := &sseUsagePatch{}
-		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && v > 0 {
+		authoritative, _ := usageObj[kiroUsageFinalMarker].(bool)
+		if v, ok := parseSSEUsageInt(usageObj["input_tokens"]); ok && (authoritative || v > 0) {
 			patch.inputTokens = v
 			patch.hasInputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["output_tokens"]); ok && (authoritative || v > 0) {
 			patch.outputTokens = v
 			patch.hasOutputTokens = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_creation_input_tokens"]); ok && (authoritative || v > 0) {
 			patch.cacheCreationInputTokens = v
 			patch.hasCacheCreationInput = true
 		}
-		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && v > 0 {
+		if v, ok := parseSSEUsageInt(usageObj["cache_read_input_tokens"]); ok && (authoritative || v > 0) {
 			patch.cacheReadInputTokens = v
 			patch.hasCacheReadInput = true
 		}
 		if cc, ok := usageObj["cache_creation"].(map[string]any); ok {
-			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && (authoritative || v > 0) {
 				patch.cacheCreation5mTokens = v
 				patch.hasCacheCreation5m = true
 			}
-			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && (authoritative || v > 0) {
 				patch.cacheCreation1hTokens = v
 				patch.hasCacheCreation1h = true
 			}

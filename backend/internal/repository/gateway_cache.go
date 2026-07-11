@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -13,10 +16,16 @@ import (
 
 const stickySessionPrefix = "sticky_session:"
 const kiroCacheFingerprintPrefix = "kiro_cache_emulation:"
+const kiroCacheShadowStreamKey = "kiro_cache_shadow_samples:v1"
+const kiroCacheShadowMetricsPrefix = "kiro_cache_shadow_metrics:v1:"
+const kiroCacheShadowRetention = 7 * 24 * time.Hour
+const kiroCacheShadowMaxSamples = 200000
 
 type gatewayCache struct {
 	rdb *redis.Client
 }
+
+var _ service.KiroCacheShadowStore = (*gatewayCache)(nil)
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 	return &gatewayCache{rdb: rdb}
@@ -128,6 +137,99 @@ func (c *gatewayCache) UpsertKiroCacheFingerprints(ctx context.Context, stableKe
 		}
 	}
 	return nil
+}
+
+func (c *gatewayCache) RecordKiroCacheShadowSample(ctx context.Context, sample *service.KiroCacheShadowSample) error {
+	if c == nil || c.rdb == nil || sample == nil {
+		return nil
+	}
+	raw, err := json.Marshal(sample)
+	if err != nil {
+		return err
+	}
+	createdAt := sample.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	metricsKey := fmt.Sprintf("%s%s:group_%d:%s:%s:%s",
+		kiroCacheShadowMetricsPrefix,
+		createdAt.Format("20060102"),
+		sample.GroupID,
+		kiroCacheShadowMetricKeyPart(sample.Model),
+		kiroCacheShadowMetricKeyPart(sample.UAForm),
+		kiroCacheShadowMetricKeyPart(sample.ContextBucket),
+	)
+
+	pipe := c.rdb.Pipeline()
+	pipe.XAdd(ctx, &redis.XAddArgs{
+		Stream: kiroCacheShadowStreamKey,
+		MaxLen: kiroCacheShadowMaxSamples,
+		Approx: true,
+		Values: map[string]any{"sample": string(raw)},
+	})
+	pipe.Expire(ctx, kiroCacheShadowStreamKey, kiroCacheShadowRetention)
+	pipe.HIncrBy(ctx, metricsKey, "requests", 1)
+	pipe.HIncrBy(ctx, metricsKey, "context_tokens", int64(sample.Actual.Usage.InputTokens+sample.Actual.Usage.CacheReadInputTokens+sample.Actual.Usage.CacheCreationInputTokens))
+	if sample.CurrentStateWarm {
+		pipe.HIncrBy(ctx, metricsKey, "current_warm_requests", 1)
+		pipe.HIncrBy(ctx, metricsKey, "current_warm_context_tokens", int64(sample.Actual.Usage.InputTokens+sample.Actual.Usage.CacheReadInputTokens+sample.Actual.Usage.CacheCreationInputTokens))
+		kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "current_warm_actual", sample.Actual, sample.Actual)
+		kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "current_warm_current_ratio_0_9", sample.CurrentRatio09, sample.Actual)
+		kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "current_warm_current_ratio_1", sample.CurrentRatio1, sample.Actual)
+	}
+	if sample.ProtocolStateWarm {
+		pipe.HIncrBy(ctx, metricsKey, "protocol_warm_requests", 1)
+		pipe.HIncrBy(ctx, metricsKey, "protocol_warm_context_tokens", int64(sample.Actual.Usage.InputTokens+sample.Actual.Usage.CacheReadInputTokens+sample.Actual.Usage.CacheCreationInputTokens))
+		kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "protocol_warm_actual", sample.Actual, sample.Actual)
+		kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "protocol_warm_protocol_v2", sample.ProtocolV2, sample.Actual)
+	}
+	kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "actual", sample.Actual, sample.Actual)
+	kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "current_ratio_0_9", sample.CurrentRatio09, sample.Actual)
+	kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "current_ratio_1", sample.CurrentRatio1, sample.Actual)
+	kiroCacheShadowAggregateCandidate(ctx, pipe, metricsKey, "protocol_v2", sample.ProtocolV2, sample.Actual)
+	pipe.Expire(ctx, metricsKey, kiroCacheShadowRetention)
+	_, err = pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	return nil
+}
+
+func kiroCacheShadowAggregateCandidate(ctx context.Context, pipe redis.Pipeliner, key, prefix string, candidate, actual service.KiroCacheShadowCandidate) {
+	usage := candidate.Usage
+	actualUsage := actual.Usage
+	pipe.HIncrBy(ctx, key, prefix+"_input_tokens", int64(usage.InputTokens))
+	pipe.HIncrBy(ctx, key, prefix+"_cache_read_tokens", int64(usage.CacheReadInputTokens))
+	pipe.HIncrBy(ctx, key, prefix+"_cache_creation_tokens", int64(usage.CacheCreationInputTokens))
+	pipe.HIncrBy(ctx, key, prefix+"_cache_creation_5m_tokens", int64(usage.CacheCreation5mInputTokens))
+	pipe.HIncrBy(ctx, key, prefix+"_cache_creation_1h_tokens", int64(usage.CacheCreation1hInputTokens))
+	pipe.HIncrByFloat(ctx, key, prefix+"_input_side_cost", candidate.InputSideCost)
+	if candidate.CacheHit {
+		pipe.HIncrBy(ctx, key, prefix+"_cache_hits", 1)
+	}
+	if prefix == "actual" || strings.HasSuffix(prefix, "_actual") {
+		return
+	}
+	pipe.HIncrBy(ctx, key, prefix+"_abs_input_error", int64(absInt(usage.InputTokens-actualUsage.InputTokens)))
+	pipe.HIncrBy(ctx, key, prefix+"_abs_cache_read_error", int64(absInt(usage.CacheReadInputTokens-actualUsage.CacheReadInputTokens)))
+	pipe.HIncrBy(ctx, key, prefix+"_abs_cache_creation_error", int64(absInt(usage.CacheCreationInputTokens-actualUsage.CacheCreationInputTokens)))
+	pipe.HIncrByFloat(ctx, key, prefix+"_abs_cost_error", math.Abs(candidate.InputSideCost-actual.InputSideCost))
+}
+
+func kiroCacheShadowMetricKeyPart(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "unknown"
+	}
+	replacer := strings.NewReplacer(":", "_", " ", "_", "/", "_", "\\", "_")
+	return replacer.Replace(value)
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.

@@ -154,6 +154,7 @@ type kiroCacheBlock struct {
 type kiroCacheBreakpoint struct {
 	blockIndex int
 	ttl        time.Duration
+	explicit   bool
 }
 
 type kiroResolvedBreakpoint struct {
@@ -226,7 +227,7 @@ func buildKiroCacheProfile(body []byte, model string, inputTokens int) (*kiroCac
 			activeTTL = &ttl
 			profile.hasExplicitTTL = true
 			if _, ok := seenBreakpoints[index]; !ok {
-				profile.breakpoints = append(profile.breakpoints, kiroCacheBreakpoint{blockIndex: index, ttl: ttl})
+				profile.breakpoints = append(profile.breakpoints, kiroCacheBreakpoint{blockIndex: index, ttl: ttl, explicit: true})
 				seenBreakpoints[index] = struct{}{}
 			}
 		}

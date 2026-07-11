@@ -84,7 +84,7 @@ func TestParseSSEUsage_DeltaOverwritesWithNonZero(t *testing.T) {
 	require.Equal(t, 60, usage.CacheReadInputTokens)
 }
 
-func TestParseSSEUsage_DeltaDoesNotResetCacheCreationBreakdown(t *testing.T) {
+func TestParseSSEUsage_DeltaExplicitZeroResetsCacheCreationBreakdown(t *testing.T) {
 	svc := newMinimalGatewayService()
 	usage := &ClaudeUsage{}
 
@@ -93,11 +93,38 @@ func TestParseSSEUsage_DeltaDoesNotResetCacheCreationBreakdown(t *testing.T) {
 	require.Equal(t, 30, usage.CacheCreation5mTokens)
 	require.Equal(t, 70, usage.CacheCreation1hTokens)
 
-	// 后续 delta 带默认 0，不应覆盖已有非零值
-	svc.parseSSEUsage(`{"type":"message_delta","usage":{"output_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}}`, usage)
-	require.Equal(t, 30, usage.CacheCreation5mTokens, "delta 的 0 值不应重置 5m 明细")
-	require.Equal(t, 70, usage.CacheCreation1hTokens, "delta 的 0 值不应重置 1h 明细")
+	// 最终 delta 明确给出 0 时必须覆盖 start，避免 Kiro 预算归一化后残留旧桶。
+	svc.parseSSEUsage(`{"type":"message_delta","usage":{"output_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"_sub2api_kiro_usage_final":true}}`, usage)
+	require.Zero(t, usage.CacheCreation5mTokens)
+	require.Zero(t, usage.CacheCreation1hTokens)
 	require.Equal(t, 12, usage.OutputTokens)
+}
+
+func TestParseSSEUsage_DeltaExplicitZeroResetsTopLevelCacheBuckets(t *testing.T) {
+	svc := newMinimalGatewayService()
+	usage := &ClaudeUsage{}
+
+	svc.parseSSEUsage(`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}}`, usage)
+	svc.parseSSEUsage(`{"type":"message_delta","usage":{"input_tokens":20,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":80,"_sub2api_kiro_usage_final":true}}`, usage)
+
+	require.Equal(t, 20, usage.InputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Equal(t, 80, usage.CacheReadInputTokens)
+	require.Equal(t, 12, usage.OutputTokens)
+}
+
+func TestParseSSEUsagePassthrough_DeltaExplicitZeroResetsCacheBuckets(t *testing.T) {
+	svc := newMinimalGatewayService()
+	usage := &ClaudeUsage{}
+
+	svc.parseSSEUsagePassthrough(`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":30,"cache_read_input_tokens":70,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":0}}}}`, usage)
+	svc.parseSSEUsagePassthrough(`{"type":"message_delta","usage":{"input_tokens":20,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"_sub2api_kiro_usage_final":true}}`, usage)
+
+	require.Equal(t, 20, usage.InputTokens)
+	require.Zero(t, usage.CacheCreationInputTokens)
+	require.Equal(t, 80, usage.CacheReadInputTokens)
+	require.Zero(t, usage.CacheCreation5mTokens)
+	require.Zero(t, usage.CacheCreation1hTokens)
 }
 
 func TestParseSSEUsage_InvalidJSON(t *testing.T) {

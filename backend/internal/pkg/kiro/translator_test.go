@@ -169,6 +169,7 @@ func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.True(t, result.Context.PayloadTruncated)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
 	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.InputTokenBudget)
 	require.Less(t, result.Context.InputTokenBudget, anthropictokenizer.CountTokens(string(body)))
@@ -1002,6 +1003,18 @@ func TestUpdateUsageFromEventAccumulatesMeteringCredits(t *testing.T) {
 	})
 
 	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
+}
+
+func TestUpdateUsageFromEventMarksUpstreamInputTokens(t *testing.T) {
+	var usage Usage
+	updateUsageFromEvent(&usage, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 123},
+		},
+	})
+
+	require.Equal(t, 123, usage.InputTokens)
+	require.True(t, usage.InputTokensFromUpstream)
 }
 
 func TestExtractThinkingBlocksIgnoresLiteralTags(t *testing.T) {
@@ -2786,6 +2799,7 @@ func TestKiroInputBudgetCapsNonStreamingCacheUsageWithoutUpstreamInputTokens(t *
 	require.NoError(t, err)
 	require.Equal(t, budget, kiroUsageInputBucketTotal(result.Usage))
 	require.Equal(t, budget+5, result.Usage.TotalTokens)
+	require.False(t, result.Usage.InputTokensFromUpstream)
 	require.Less(t, result.Usage.CacheReadInputTokens, budget)
 	require.Equal(t, budget, int(gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())+
 		int(gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())+
@@ -2820,6 +2834,7 @@ func TestKiroInputBudgetCapsStreamingCacheUsageWithoutUpstreamInputTokens(t *tes
 	require.NoError(t, err)
 	require.Equal(t, budget, kiroUsageInputBucketTotal(result.Usage))
 	require.Equal(t, budget+5, result.Usage.TotalTokens)
+	require.Contains(t, out.String(), `"_sub2api_kiro_usage_final":true`)
 
 	var startUsage gjson.Result
 	for _, line := range strings.Split(out.String(), "\n") {
