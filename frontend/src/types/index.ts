@@ -205,6 +205,22 @@ export interface LoginAgreementDocument {
   content_md: string
 }
 
+export interface APIKeyUsageConfig {
+  claude_code_default_model: string
+  claude_code_disable_nonessential_traffic: boolean
+  claude_code_attribution_header: 0 | 1
+  gemini_cli_default_model: string
+  codex_model: string
+  codex_review_model: string
+  codex_reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  codex_disable_response_storage: boolean
+  codex_network_access: string
+  codex_goals_enabled: boolean
+  codex_websocket_enabled: boolean
+  codex_include_legacy_ws_feature: boolean
+  codex_extra_config: string
+}
+
 export interface PublicSettings {
   registration_enabled: boolean
   email_verify_enabled: boolean
@@ -235,6 +251,7 @@ export interface PublicSettings {
   table_page_size_options: number[]
   custom_menu_items: CustomMenuItem[]
   custom_endpoints: CustomEndpoint[]
+  api_key_usage_config?: APIKeyUsageConfig
   linuxdo_oauth_enabled: boolean
   dingtalk_oauth_enabled?: boolean
   wechat_oauth_enabled: boolean

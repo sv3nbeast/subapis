@@ -6743,6 +6743,28 @@ export default {
         backup: 'Backup',
         data: 'Sora Storage'
       },
+      apiKeyUsage: {
+        title: 'API Key Usage Configuration',
+        description: 'Manage the default Claude Code, Gemini CLI, and Codex snippets shown in the user Use Key dialog. This configuration is public; do not include secrets.',
+        claudeModel: 'Claude Code default model',
+        geminiModel: 'Gemini CLI default model',
+        disableClaudeTraffic: 'Disable nonessential Claude Code traffic',
+        attributionHeader: 'Claude attribution header',
+        codexModel: 'Codex default model',
+        codexReviewModel: 'Codex review model',
+        reasoningEffort: 'Default reasoning effort',
+        networkAccess: 'Network access',
+        disableStorage: 'Disable response storage',
+        goals: 'Enable Goals',
+        websocket: 'Show WebSocket configuration',
+        legacyWsFeature: 'Include legacy WS feature flag',
+        extraConfig: 'Additional Codex TOML',
+        extraConfigPlaceholder: 'Example: service_tier = "fast"',
+        extraConfigHint: 'Appended before the model provider section. Avoid redeclaring keys already configured above.',
+        saved: 'API key usage configuration saved',
+        loadFailed: 'Failed to load API key usage configuration',
+        saveFailed: 'Failed to save API key usage configuration'
+      },
       features: {
         channelMonitor: {
           title: 'Channel Monitor',

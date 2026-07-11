@@ -139,7 +139,7 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import type { GroupPlatform } from '@/types'
+import type { APIKeyUsageConfig, GroupPlatform } from '@/types'
 
 interface Props {
   show: boolean
@@ -147,6 +147,7 @@ interface Props {
   baseUrl: string
   platform: GroupPlatform | null
   allowMessagesDispatch?: boolean
+  usageConfig?: Partial<APIKeyUsageConfig>
 }
 
 interface Emits {
@@ -175,7 +176,25 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
-const CLAUDE_CODE_DEFAULT_MODEL = 'claude-opus-4-7'
+const DEFAULT_USAGE_CONFIG: APIKeyUsageConfig = {
+  claude_code_default_model: 'claude-opus-4-7',
+  claude_code_disable_nonessential_traffic: true,
+  claude_code_attribution_header: 0,
+  gemini_cli_default_model: 'gemini-2.0-flash',
+  codex_model: 'gpt-5.5',
+  codex_review_model: 'gpt-5.5',
+  codex_reasoning_effort: 'xhigh',
+  codex_disable_response_storage: true,
+  codex_network_access: 'enabled',
+  codex_goals_enabled: true,
+  codex_websocket_enabled: true,
+  codex_include_legacy_ws_feature: false,
+  codex_extra_config: ''
+}
+const usageConfig = computed<APIKeyUsageConfig>(() => ({
+  ...DEFAULT_USAGE_CONFIG,
+  ...(props.usageConfig || {})
+}))
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -269,9 +288,11 @@ const clientTabs = computed((): TabConfig[] => {
   switch (props.platform) {
     case 'openai': {
       const tabs: TabConfig[] = [
-        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon }
       ]
+      if (usageConfig.value.codex_websocket_enabled) {
+        tabs.push({ id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon })
+      }
       if (props.allowMessagesDispatch) {
         tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
       }
@@ -435,6 +456,9 @@ const currentFiles = computed((): FileConfig[] => {
 })
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  const config = usageConfig.value
+  const defaultModel = config.claude_code_default_model
+  const disableTraffic = config.claude_code_disable_nonessential_traffic
   let path: string
   let content: string
 
@@ -443,22 +467,19 @@ function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
       path = 'Terminal'
       content = `export ANTHROPIC_BASE_URL="${baseUrl}"
 export ANTHROPIC_AUTH_TOKEN="${apiKey}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+${disableTraffic ? 'export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n' : ''}export CLAUDE_CODE_ATTRIBUTION_HEADER=${config.claude_code_attribution_header}`
       break
     case 'cmd':
       path = 'Command Prompt'
       content = `set ANTHROPIC_BASE_URL=${baseUrl}
 set ANTHROPIC_AUTH_TOKEN=${apiKey}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-set CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+${disableTraffic ? 'set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n' : ''}set CLAUDE_CODE_ATTRIBUTION_HEADER=${config.claude_code_attribution_header}`
       break
     case 'powershell':
       path = 'PowerShell'
       content = `$env:ANTHROPIC_BASE_URL="${baseUrl}"
 $env:ANTHROPIC_AUTH_TOKEN="${apiKey}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-$env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
+${disableTraffic ? '$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n' : ''}$env:CLAUDE_CODE_ATTRIBUTION_HEADER=${config.claude_code_attribution_header}`
       break
     default:
       path = 'Terminal'
@@ -473,9 +494,9 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   "env": {
     "ANTHROPIC_BASE_URL": "${baseUrl}",
     "ANTHROPIC_AUTH_TOKEN": "${apiKey}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+${disableTraffic ? '    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",\n' : ''}    "CLAUDE_CODE_ATTRIBUTION_HEADER": "${config.claude_code_attribution_header}"
   }
-  //, "model": "${CLAUDE_CODE_DEFAULT_MODEL}" // 修改这里的模型名可指定使用模型，默认claude-opus-4-6
+  //, "model": "${defaultModel}" // 修改这里的模型名可指定使用模型，默认${defaultModel}
 }`
 
   return [
@@ -484,14 +505,14 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
       path: vscodeSettingsPath,
       content: vscodeContent,
       hint: t('keys.useKeyModal.claudeCode.settingsHint', {
-        model: CLAUDE_CODE_DEFAULT_MODEL
+        model: defaultModel
       })
     }
   ]
 }
 
 function generateGeminiCliContent(baseUrl: string, apiKey: string): FileConfig {
-  const model = 'gemini-2.0-flash'
+  const model = usageConfig.value.gemini_cli_default_model
   const modelComment = t('keys.useKeyModal.gemini.modelComment')
   let path: string
   let content: string
@@ -539,23 +560,7 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  // config.toml content
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-requires_openai_auth = true
-
-[features]
-goals = true`
+  const configContent = generateCodexConfig(baseUrl, false)
 
   // auth.json content
   const authContent = `{
@@ -579,25 +584,7 @@ function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  // config.toml content with WebSocket v2
-  const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-supports_websockets = true
-requires_openai_auth = true
-
-[features]
-responses_websockets_v2 = true
-goals = true`
+  const configContent = generateCodexConfig(baseUrl, true)
 
   // auth.json content
   const authContent = `{
@@ -615,6 +602,43 @@ goals = true`
       content: authContent
     }
   ]
+}
+
+function generateCodexConfig(baseUrl: string, websocket: boolean): string {
+  const config = usageConfig.value
+  const topLevel = [
+    'model_provider = "OpenAI"',
+    `model = ${JSON.stringify(config.codex_model)}`,
+    `review_model = ${JSON.stringify(config.codex_review_model || config.codex_model)}`,
+    `model_reasoning_effort = ${JSON.stringify(config.codex_reasoning_effort)}`,
+    `disable_response_storage = ${config.codex_disable_response_storage}`,
+    `network_access = ${JSON.stringify(config.codex_network_access)}`,
+    'windows_wsl_setup_acknowledged = true'
+  ]
+  const extraConfig = config.codex_extra_config.trim()
+  if (extraConfig) topLevel.push('', extraConfig)
+
+  const provider = [
+    '[model_providers.OpenAI]',
+    'name = "OpenAI"',
+    `base_url = ${JSON.stringify(baseUrl)}`,
+    'wire_api = "responses"',
+    ...(websocket ? ['supports_websockets = true'] : []),
+    'requires_openai_auth = true'
+  ]
+
+  const features: string[] = []
+  if (websocket && config.codex_include_legacy_ws_feature) {
+    features.push('responses_websockets_v2 = true')
+  }
+  if (config.codex_goals_enabled) features.push('goals = true')
+
+  return [
+    ...topLevel,
+    '',
+    ...provider,
+    ...(features.length ? ['', '[features]', ...features] : [])
+  ].join('\n')
 }
 
 function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: string, pathLabel?: string): FileConfig {

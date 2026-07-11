@@ -5,6 +5,7 @@
 
 import { apiClient } from "../client";
 import type {
+  APIKeyUsageConfig,
   CustomEndpoint,
   CustomMenuItem,
   LoginAgreementDocument,
@@ -955,6 +956,23 @@ export async function updateSettings(
   return normalizeSystemSettings(data);
 }
 
+export async function getAPIKeyUsageConfig(): Promise<APIKeyUsageConfig> {
+  const { data } = await apiClient.get<APIKeyUsageConfig>(
+    "/admin/settings/api-key-usage-config",
+  );
+  return data;
+}
+
+export async function updateAPIKeyUsageConfig(
+  config: APIKeyUsageConfig,
+): Promise<APIKeyUsageConfig> {
+  const { data } = await apiClient.put<APIKeyUsageConfig>(
+    "/admin/settings/api-key-usage-config",
+    config,
+  );
+  return data;
+}
+
 /**
  * Test SMTP connection request
  */
@@ -1454,6 +1472,8 @@ export async function updateStatusProbeSettings(
 export const settingsAPI = {
   getSettings,
   updateSettings,
+  getAPIKeyUsageConfig,
+  updateAPIKeyUsageConfig,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

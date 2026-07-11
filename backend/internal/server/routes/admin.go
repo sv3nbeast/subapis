@@ -497,6 +497,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.GET("/admin-api-key", h.Admin.Setting.GetAdminAPIKey)
 		adminSettings.POST("/admin-api-key/regenerate", h.Admin.Setting.RegenerateAdminAPIKey)
 		adminSettings.DELETE("/admin-api-key", h.Admin.Setting.DeleteAdminAPIKey)
+		// 用户“使用密钥”弹窗默认客户端配置
+		adminSettings.GET("/api-key-usage-config", h.Admin.Setting.GetAPIKeyUsageConfig)
+		adminSettings.PUT("/api-key-usage-config", h.Admin.Setting.UpdateAPIKeyUsageConfig)
 		// 529过载冷却配置
 		adminSettings.GET("/overload-cooldown", h.Admin.Setting.GetOverloadCooldownSettings)
 		adminSettings.PUT("/overload-cooldown", h.Admin.Setting.UpdateOverloadCooldownSettings)

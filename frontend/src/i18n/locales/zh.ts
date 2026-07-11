@@ -6737,6 +6737,28 @@ export default {
         backup: '数据备份',
         data: 'Sora 存储'
       },
+      apiKeyUsage: {
+        title: 'API 密钥使用配置',
+        description: '统一管理用户“使用密钥”弹窗中 Claude Code、Gemini CLI 和 Codex 的默认配置。该配置会公开下发，请勿填写密钥等敏感信息。',
+        claudeModel: 'Claude Code 默认模型',
+        geminiModel: 'Gemini CLI 默认模型',
+        disableClaudeTraffic: '关闭 Claude Code 非必要流量',
+        attributionHeader: 'Claude Attribution Header',
+        codexModel: 'Codex 默认模型',
+        codexReviewModel: 'Codex Review 模型',
+        reasoningEffort: '默认推理强度',
+        networkAccess: 'Network Access',
+        disableStorage: '禁用响应存储',
+        goals: '启用 Goals',
+        websocket: '展示 WebSocket 配置',
+        legacyWsFeature: '输出旧版 WS feature 开关',
+        extraConfig: '附加 Codex TOML',
+        extraConfigPlaceholder: '例如：service_tier = "fast"',
+        extraConfigHint: '追加到 model provider 配置之前；请避免重复声明上方已有的键。',
+        saved: 'API 密钥使用配置已保存',
+        loadFailed: '加载 API 密钥使用配置失败',
+        saveFailed: '保存 API 密钥使用配置失败'
+      },
       features: {
         channelMonitor: {
           title: '渠道监控',

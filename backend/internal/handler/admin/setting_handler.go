@@ -3143,6 +3143,35 @@ func (h *SettingHandler) GetOverloadCooldownSettings(c *gin.Context) {
 	})
 }
 
+// GetAPIKeyUsageConfig returns centrally managed defaults for user client snippets.
+func (h *SettingHandler) GetAPIKeyUsageConfig(c *gin.Context) {
+	cfg, err := h.settingService.GetAPIKeyUsageConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+
+// UpdateAPIKeyUsageConfig updates centrally managed defaults for user client snippets.
+func (h *SettingHandler) UpdateAPIKeyUsageConfig(c *gin.Context) {
+	var cfg service.APIKeyUsageConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.settingService.SetAPIKeyUsageConfig(c.Request.Context(), &cfg); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	updated, err := h.settingService.GetAPIKeyUsageConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, updated)
+}
+
 // UpdateOverloadCooldownSettingsRequest 更新529过载冷却配置请求
 type UpdateOverloadCooldownSettingsRequest struct {
 	Enabled         bool `json:"enabled"`

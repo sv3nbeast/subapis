@@ -303,6 +303,7 @@ type PublicSettings struct {
 	TablePageSizeOptions        []int
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
+	APIKeyUsageConfig           APIKeyUsageConfig
 
 	LinuxDoOAuthEnabled      bool
 	DingTalkOAuthEnabled     bool

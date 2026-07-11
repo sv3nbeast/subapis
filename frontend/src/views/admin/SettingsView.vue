@@ -5555,6 +5555,173 @@
               </button>
             </div>
           </div>
+
+          <div class="card" data-testid="api-key-usage-config-card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.apiKeyUsage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.apiKeyUsage.description") }}
+              </p>
+            </div>
+
+            <div v-if="apiKeyUsageLoading" class="flex items-center gap-2 p-6 text-gray-500">
+              <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+              {{ t("common.loading") }}
+            </div>
+
+            <div v-else class="space-y-6 p-6">
+              <div>
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                  Claude Code / Gemini CLI
+                </h3>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.claudeModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.claude_code_default_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.geminiModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.gemini_cli_default_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.disableClaudeTraffic") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.claude_code_disable_nonessential_traffic" />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.attributionHeader") }}
+                    </label>
+                    <select
+                      v-model.number="apiKeyUsageConfig.claude_code_attribution_header"
+                      class="input w-28 font-mono text-sm"
+                    >
+                      <option :value="0">0</option>
+                      <option :value="1">1</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-gray-100 pt-6 dark:border-dark-700">
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">Codex</h3>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.codexModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_model"
+                      data-testid="api-key-usage-codex-model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.codexReviewModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_review_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.reasoningEffort") }}
+                    </label>
+                    <Select
+                      v-model="apiKeyUsageConfig.codex_reasoning_effort"
+                      :options="codexReasoningEffortOptions"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.networkAccess") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_network_access"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.disableStorage") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_disable_response_storage" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.goals") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_goals_enabled" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.websocket") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_websocket_enabled" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.legacyWsFeature") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_include_legacy_ws_feature" />
+                  </div>
+                </div>
+
+                <div class="mt-5">
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.apiKeyUsage.extraConfig") }}
+                  </label>
+                  <textarea
+                    v-model="apiKeyUsageConfig.codex_extra_config"
+                    rows="5"
+                    class="input min-h-32 font-mono text-sm"
+                    :placeholder="t('admin.settings.apiKeyUsage.extraConfigPlaceholder')"
+                  ></textarea>
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.apiKeyUsage.extraConfigHint") }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  data-testid="api-key-usage-save"
+                  :disabled="apiKeyUsageSaving"
+                  @click="saveAPIKeyUsageConfig"
+                >
+                  {{ apiKeyUsageSaving ? t("common.saving") : t("common.save") }}
+                </button>
+              </div>
+            </div>
+          </div>
 	        </div>
 	        <!-- /Tab: General -->
 
@@ -7496,6 +7663,7 @@ import type {
   WebSearchTestResult,
 } from "@/api/admin/settings";
 import type {
+  APIKeyUsageConfig,
   AdminGroup,
   LoginAgreementDocument,
   NotifyEmailEntry,
@@ -8472,6 +8640,72 @@ const webSearchConfig = reactive<WebSearchEmulationConfig>({
   providers: [],
 });
 
+const DEFAULT_API_KEY_USAGE_CONFIG: APIKeyUsageConfig = {
+  claude_code_default_model: "claude-opus-4-7",
+  claude_code_disable_nonessential_traffic: true,
+  claude_code_attribution_header: 0,
+  gemini_cli_default_model: "gemini-2.0-flash",
+  codex_model: "gpt-5.5",
+  codex_review_model: "gpt-5.5",
+  codex_reasoning_effort: "xhigh",
+  codex_disable_response_storage: true,
+  codex_network_access: "enabled",
+  codex_goals_enabled: true,
+  codex_websocket_enabled: true,
+  codex_include_legacy_ws_feature: false,
+  codex_extra_config: "",
+};
+const apiKeyUsageConfig = reactive<APIKeyUsageConfig>({
+  ...DEFAULT_API_KEY_USAGE_CONFIG,
+});
+const apiKeyUsageLoading = ref(false);
+const apiKeyUsageSaving = ref(false);
+const codexReasoningEffortOptions = computed(() =>
+  ["none", "minimal", "low", "medium", "high", "xhigh"].map((value) => ({
+    value,
+    label: value,
+  })),
+);
+
+async function loadAPIKeyUsageConfig() {
+  apiKeyUsageLoading.value = true;
+  try {
+    const config = await adminAPI.settings.getAPIKeyUsageConfig();
+    Object.assign(apiKeyUsageConfig, DEFAULT_API_KEY_USAGE_CONFIG, config);
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.apiKeyUsage.loadFailed")),
+    );
+  } finally {
+    apiKeyUsageLoading.value = false;
+  }
+}
+
+async function saveAPIKeyUsageConfig() {
+  apiKeyUsageSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateAPIKeyUsageConfig({
+      ...apiKeyUsageConfig,
+      claude_code_default_model:
+        apiKeyUsageConfig.claude_code_default_model.trim(),
+      gemini_cli_default_model:
+        apiKeyUsageConfig.gemini_cli_default_model.trim(),
+      codex_model: apiKeyUsageConfig.codex_model.trim(),
+      codex_review_model: apiKeyUsageConfig.codex_review_model.trim(),
+      codex_network_access: apiKeyUsageConfig.codex_network_access.trim(),
+      codex_extra_config: apiKeyUsageConfig.codex_extra_config.trim(),
+    });
+    Object.assign(apiKeyUsageConfig, DEFAULT_API_KEY_USAGE_CONFIG, updated);
+    appStore.showSuccess(t("admin.settings.apiKeyUsage.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.apiKeyUsage.saveFailed")),
+    );
+  } finally {
+    apiKeyUsageSaving.value = false;
+  }
+}
+
 const expandedProviders = reactive<Record<number, boolean>>({});
 const apiKeyVisible = reactive<Record<number, boolean>>({});
 const wsTestQuery = ref("");
@@ -9362,7 +9596,7 @@ async function loadSettings() {
     }
 
     // Load web search emulation config separately
-    await loadWebSearchConfig();
+    await Promise.all([loadWebSearchConfig(), loadAPIKeyUsageConfig()]);
   } catch (error: unknown) {
     loadFailed.value = true;
     appStore.showError(

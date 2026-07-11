@@ -9,6 +9,8 @@ const {
   updateSettings,
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
+  getAPIKeyUsageConfig,
+  updateAPIKeyUsageConfig,
   getAdminApiKey,
   getOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
@@ -31,6 +33,8 @@ const {
   updateSettings: vi.fn(),
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
+  getAPIKeyUsageConfig: vi.fn(),
+  updateAPIKeyUsageConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
   getOverloadCooldownSettings: vi.fn(),
   getRateLimit429CooldownSettings: vi.fn(),
@@ -59,6 +63,8 @@ vi.mock("@/api", () => ({
       updateSettings,
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
+      getAPIKeyUsageConfig,
+      updateAPIKeyUsageConfig,
       getAdminApiKey,
       getOverloadCooldownSettings,
       getRateLimit429CooldownSettings,
@@ -524,6 +530,8 @@ describe("admin SettingsView payment visible method controls", () => {
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
+    getAPIKeyUsageConfig.mockReset();
+    updateAPIKeyUsageConfig.mockReset();
     getAdminApiKey.mockReset();
     getOverloadCooldownSettings.mockReset();
     getRateLimit429CooldownSettings.mockReset();
@@ -556,6 +564,22 @@ describe("admin SettingsView payment visible method controls", () => {
       enabled: false,
       providers: [],
     });
+    getAPIKeyUsageConfig.mockResolvedValue({
+      claude_code_default_model: "claude-opus-4-7",
+      claude_code_disable_nonessential_traffic: true,
+      claude_code_attribution_header: 0,
+      gemini_cli_default_model: "gemini-2.0-flash",
+      codex_model: "gpt-5.5",
+      codex_review_model: "gpt-5.5",
+      codex_reasoning_effort: "xhigh",
+      codex_disable_response_storage: true,
+      codex_network_access: "enabled",
+      codex_goals_enabled: true,
+      codex_websocket_enabled: true,
+      codex_include_legacy_ws_feature: false,
+      codex_extra_config: "",
+    });
+    updateAPIKeyUsageConfig.mockImplementation(async (payload) => payload);
     getAdminApiKey.mockResolvedValue({
       exists: false,
       masked_key: "",
@@ -595,6 +619,44 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it("loads and saves API key usage defaults through the dedicated endpoint", async () => {
+    getAPIKeyUsageConfig.mockResolvedValueOnce({
+      claude_code_default_model: "claude-opus-custom",
+      claude_code_disable_nonessential_traffic: true,
+      claude_code_attribution_header: 0,
+      gemini_cli_default_model: "gemini-custom",
+      codex_model: "gpt-custom",
+      codex_review_model: "gpt-review",
+      codex_reasoning_effort: "high",
+      codex_disable_response_storage: true,
+      codex_network_access: "enabled",
+      codex_goals_enabled: true,
+      codex_websocket_enabled: true,
+      codex_include_legacy_ws_feature: false,
+      codex_extra_config: "service_tier = \"fast\"",
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const modelInput = wrapper.get('[data-testid="api-key-usage-codex-model"]');
+    expect((modelInput.element as HTMLInputElement).value).toBe("gpt-custom");
+
+    await modelInput.setValue("  gpt-admin-default  ");
+    await wrapper.get('[data-testid="api-key-usage-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateAPIKeyUsageConfig).toHaveBeenCalledTimes(1);
+    expect(updateAPIKeyUsageConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codex_model: "gpt-admin-default",
+        codex_review_model: "gpt-review",
+        codex_extra_config: 'service_tier = "fast"',
+      }),
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 
   it("does not render legacy visible payment method controls", async () => {
@@ -967,6 +1029,8 @@ describe("admin SettingsView wechat connect controls", () => {
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
+    getAPIKeyUsageConfig.mockReset();
+    updateAPIKeyUsageConfig.mockReset();
     getAdminApiKey.mockReset();
     getOverloadCooldownSettings.mockReset();
     getRateLimit429CooldownSettings.mockReset();
@@ -1002,6 +1066,22 @@ describe("admin SettingsView wechat connect controls", () => {
       enabled: false,
       providers: [],
     });
+    getAPIKeyUsageConfig.mockResolvedValue({
+      claude_code_default_model: "claude-opus-4-7",
+      claude_code_disable_nonessential_traffic: true,
+      claude_code_attribution_header: 0,
+      gemini_cli_default_model: "gemini-2.0-flash",
+      codex_model: "gpt-5.5",
+      codex_review_model: "gpt-5.5",
+      codex_reasoning_effort: "xhigh",
+      codex_disable_response_storage: true,
+      codex_network_access: "enabled",
+      codex_goals_enabled: true,
+      codex_websocket_enabled: true,
+      codex_include_legacy_ws_feature: false,
+      codex_extra_config: "",
+    });
+    updateAPIKeyUsageConfig.mockImplementation(async (payload) => payload);
     getAdminApiKey.mockResolvedValue({
       exists: false,
       masked_key: "",
@@ -1213,6 +1293,8 @@ describe("admin SettingsView platform quota matrix", () => {
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
+    getAPIKeyUsageConfig.mockReset();
+    updateAPIKeyUsageConfig.mockReset();
     getAdminApiKey.mockReset();
     getOverloadCooldownSettings.mockReset();
     getRateLimit429CooldownSettings.mockReset();
@@ -1239,6 +1321,22 @@ describe("admin SettingsView platform quota matrix", () => {
     }));
     getWebSearchEmulationConfig.mockResolvedValue({ enabled: false, providers: [] });
     updateWebSearchEmulationConfig.mockResolvedValue({ enabled: false, providers: [] });
+    getAPIKeyUsageConfig.mockResolvedValue({
+      claude_code_default_model: "claude-opus-4-7",
+      claude_code_disable_nonessential_traffic: true,
+      claude_code_attribution_header: 0,
+      gemini_cli_default_model: "gemini-2.0-flash",
+      codex_model: "gpt-5.5",
+      codex_review_model: "gpt-5.5",
+      codex_reasoning_effort: "xhigh",
+      codex_disable_response_storage: true,
+      codex_network_access: "enabled",
+      codex_goals_enabled: true,
+      codex_websocket_enabled: true,
+      codex_include_legacy_ws_feature: false,
+      codex_extra_config: "",
+    });
+    updateAPIKeyUsageConfig.mockImplementation(async (payload) => payload);
     getAdminApiKey.mockResolvedValue({ exists: false, masked_key: "" });
     getOverloadCooldownSettings.mockResolvedValue({});
     getRateLimit429CooldownSettings.mockResolvedValue({});
