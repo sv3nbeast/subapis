@@ -92,6 +92,31 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 	}); err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_SNAPSHOT_SAVE_FAILED", "failed to save Grok billing snapshot: %v", err)
 	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	account.Extra[grokBillingSnapshotExtraKey] = billing
+	if isGrokBillingExhausted(billing) {
+		// Repair accounts affected by the legacy behavior that classified xAI's
+		// spending-limit 403 as a permanent account error.
+		legacyQuotaError := account.Status == StatusError && isLegacyGrokQuotaExhaustedError(account.ErrorMessage)
+		if legacyQuotaError {
+			if err := s.accountRepo.ClearError(ctx, account.ID); err != nil {
+				return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_RECOVERY_FAILED", "failed to recover exhausted Grok account: %v", err)
+			}
+			account.Status = StatusActive
+			account.ErrorMessage = ""
+			account.Schedulable = true
+		}
+		// Preserve unrelated real error states (for example a genuine account
+		// entitlement failure) even if an old billing snapshot also reads 100%.
+		if account.Status != StatusError || legacyQuotaError {
+			resetAt := resolveGrokQuotaResetAt(account, time.Now())
+			if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+				return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_RATE_LIMIT_SAVE_FAILED", "failed to save exhausted Grok quota state: %v", err)
+			}
+		}
+	}
 
 	result := &GrokQuotaProbeResult{
 		Source:         "billing",

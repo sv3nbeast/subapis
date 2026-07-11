@@ -89,6 +89,14 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 	case 429:
 		usage.ErrorCode = "rate_limited"
 	}
+	// xAI reports subscription credit exhaustion as 403 spending-limit. The
+	// billing snapshot is authoritative here: expose it as a recoverable rate
+	// limit rather than a forbidden/banned account state.
+	if isGrokBillingExhausted(usage.GrokBilling) {
+		usage.IsForbidden = false
+		usage.ForbiddenType = ""
+		usage.ErrorCode = "rate_limited"
+	}
 	return usage
 }
 

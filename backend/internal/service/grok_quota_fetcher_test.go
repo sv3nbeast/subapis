@@ -154,3 +154,31 @@ func TestGrokQuotaFetcherClassifiesForbiddenAndReauth(t *testing.T) {
 		})
 	}
 }
+
+func TestGrokQuotaFetcherTreatsBillingExhausted403AsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			grokBillingSnapshotExtraKey: &xai.BillingSnapshot{
+				CreditUsagePercent:     100,
+				CreditRemainingPercent: 0,
+				CurrentPeriodEnd:       "2030-01-01T00:00:00Z",
+				UpdatedAt:              "2029-12-25T00:00:00Z",
+			},
+			grokQuotaSnapshotExtraKey: &xai.QuotaSnapshot{
+				StatusCode:      http.StatusForbidden,
+				HeadersObserved: true,
+				UpdatedAt:       "2029-12-25T00:00:00Z",
+			},
+		},
+	}
+
+	usage := NewGrokQuotaFetcher().BuildUsageInfo(account)
+
+	require.False(t, usage.IsForbidden)
+	require.Empty(t, usage.ForbiddenType)
+	require.Equal(t, "rate_limited", usage.ErrorCode)
+}

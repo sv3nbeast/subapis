@@ -869,6 +869,21 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	if account.Platform == PlatformOpenAI {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
+	if account.Platform == PlatformGrok && isGrokQuotaExhausted403(account, responseBody) {
+		resetAt := resolveGrokQuotaResetAt(account, time.Now())
+		if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
+			if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+				slog.Warn("grok_quota_exhausted_set_rate_limited_failed", "account_id", account.ID, "error", err)
+				return true
+			}
+		}
+		rateLimitedAt := time.Now()
+		account.RateLimitedAt = &rateLimitedAt
+		account.RateLimitResetAt = &resetAt
+		s.notifyAccountSchedulingBlocked(account, resetAt, "grok_quota_exhausted")
+		slog.Info("grok_quota_exhausted", "account_id", account.ID, "reset_at", resetAt)
+		return true
+	}
 	// 非 Antigravity 平台：保持原有行为
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",

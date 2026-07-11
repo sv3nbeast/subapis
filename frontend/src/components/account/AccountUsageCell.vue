@@ -478,6 +478,11 @@
             {{ t('admin.accounts.needsReauth') }}
           </span>
         </div>
+        <div v-else-if="grokBillingExhausted">
+          <span class="inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+            {{ t('admin.accounts.rateLimited') }}
+          </span>
+        </div>
         <div v-else-if="isForbidden">
           <span class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
             {{ grokEntitlementLabel || t('admin.accounts.forbidden') }}
@@ -1228,6 +1233,11 @@ const makeGrokQuotaBar = (quota?: { limit?: number | null; remaining?: number | 
 const grokRequestQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_request_quota))
 const grokTokenQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_token_quota))
 const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
+const grokBillingExhausted = computed(() => {
+  if (!grokBilling.value) return false
+  return grokBilling.value.credit_usage_percent >= 100 ||
+    (grokBilling.value.credit_usage_percent > 0 && grokBilling.value.credit_remaining_percent <= 0)
+})
 const grokCreditUsageBar = computed(() => {
   if (!grokBilling.value) return null
   return {

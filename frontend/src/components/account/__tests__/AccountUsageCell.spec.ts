@@ -761,7 +761,7 @@ describe('AccountUsageCell', () => {
     expect(badges.some(node => node.attributes('title') === 'usage.userBilled')).toBe(true)
   })
 
-  it('Grok 账号额度耗尽并被禁用时仍展示 100% Billing 用量', async () => {
+  it('Grok 账号额度耗尽时展示限流中而不是已封禁，并保留 100% Billing 用量', async () => {
     getUsage.mockResolvedValue({
       is_forbidden: true,
       forbidden_type: 'forbidden',
@@ -800,7 +800,8 @@ describe('AccountUsageCell', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('admin.accounts.forbidden')
+    expect(wrapper.text()).toContain('admin.accounts.rateLimited')
+    expect(wrapper.text()).not.toContain('admin.accounts.forbidden')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklyCredits|100|2026-07-14T20:04:22Z')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklySummary')
   })

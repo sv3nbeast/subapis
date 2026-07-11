@@ -663,6 +663,21 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	case http.StatusUnauthorized:
 		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok oauth token unauthorized")
 	case http.StatusForbidden:
+		if isGrokQuotaExhausted403(account, responseBody) {
+			resetAt := resolveGrokQuotaResetAt(account, time.Now())
+			if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
+				if s.accountRepo != nil {
+					stateCtx, cancel := openAIAccountStateContext(ctx)
+					defer cancel()
+					_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
+				}
+			}
+			rateLimitedAt := time.Now()
+			account.RateLimitedAt = &rateLimitedAt
+			account.RateLimitResetAt = &resetAt
+			s.BlockAccountScheduling(account, resetAt, "grok quota exhausted")
+			return
+		}
 		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
 	case http.StatusTooManyRequests:
 		cooldown := 2 * time.Minute
@@ -675,7 +690,6 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
-	_ = responseBody
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

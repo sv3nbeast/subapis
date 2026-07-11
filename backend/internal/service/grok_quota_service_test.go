@@ -25,6 +25,10 @@ type grokQuotaAccountRepo struct {
 	lastTempUnschedID     int64
 	lastTempUnschedUntil  time.Time
 	lastTempUnschedReason string
+	rateLimitedCalls      int
+	lastRateLimitedID     int64
+	lastRateLimitResetAt  time.Time
+	clearErrorCalls       int
 }
 
 func (r *grokQuotaAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -52,6 +56,23 @@ func (r *grokQuotaAccountRepo) SetTempUnschedulable(_ context.Context, id int64,
 	r.lastTempUnschedID = id
 	r.lastTempUnschedUntil = until
 	r.lastTempUnschedReason = reason
+	return nil
+}
+
+func (r *grokQuotaAccountRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
+	r.rateLimitedCalls++
+	r.lastRateLimitedID = id
+	r.lastRateLimitResetAt = resetAt
+	return nil
+}
+
+func (r *grokQuotaAccountRepo) ClearError(_ context.Context, id int64) error {
+	r.clearErrorCalls++
+	if account := r.accounts[id]; account != nil {
+		account.Status = StatusActive
+		account.ErrorMessage = ""
+		account.Schedulable = true
+	}
 	return nil
 }
 
@@ -145,6 +166,82 @@ func TestGrokQuotaServiceProbeUsageStoresOfficialBillingSnapshot(t *testing.T) {
 	require.Equal(t, "Bearer access-token", upstream.requests[0].Header.Get("Authorization"))
 	require.Equal(t, xai.CLITokenAuthHeader, upstream.requests[0].Header.Get("X-XAI-Token-Auth"))
 	require.NotNil(t, repo.updates[42][grokBillingSnapshotExtraKey])
+}
+
+func TestGrokQuotaServiceProbeUsageRepairsLegacySpendingLimitErrorAsRateLimited(t *testing.T) {
+	resetAt := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
+	startAt := resetAt.Add(-7 * 24 * time.Hour)
+	billingBody := fmt.Sprintf(
+		`{"config":{"creditUsagePercent":100,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":%q,"end":%q},"isUnifiedBillingUser":true}}`,
+		startAt.Format(time.RFC3339),
+		resetAt.Format(time.RFC3339),
+	)
+	account := &Account{
+		ID:           43,
+		Platform:     PlatformGrok,
+		Type:         AccountTypeOAuth,
+		Status:       StatusError,
+		Schedulable:  false,
+		ErrorMessage: `Access forbidden (403): {"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}`,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &grokQuotaAccountRepo{accounts: map[int64]*Account{43: account}}
+	upstream := &grokQuotaHTTPUpstream{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(billingBody))},
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`))},
+	}}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+
+	result, err := svc.ProbeUsage(context.Background(), 43)
+
+	require.NoError(t, err)
+	require.Equal(t, 100.0, result.Billing.CreditUsagePercent)
+	require.Equal(t, 1, repo.clearErrorCalls)
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.Equal(t, int64(43), repo.lastRateLimitedID)
+	require.WithinDuration(t, resetAt, repo.lastRateLimitResetAt, time.Second)
+	require.Equal(t, StatusActive, account.Status)
+	require.True(t, account.Schedulable)
+}
+
+func TestGrokQuotaServiceProbeUsagePreservesUnrelatedErrorAtHundredPercent(t *testing.T) {
+	resetAt := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
+	startAt := resetAt.Add(-7 * 24 * time.Hour)
+	billingBody := fmt.Sprintf(
+		`{"config":{"creditUsagePercent":100,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":%q,"end":%q},"isUnifiedBillingUser":true}}`,
+		startAt.Format(time.RFC3339),
+		resetAt.Format(time.RFC3339),
+	)
+	account := &Account{
+		ID:           44,
+		Platform:     PlatformGrok,
+		Type:         AccountTypeOAuth,
+		Status:       StatusError,
+		Schedulable:  false,
+		ErrorMessage: "Access forbidden (403): account is not entitled to use Grok",
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &grokQuotaAccountRepo{accounts: map[int64]*Account{44: account}}
+	upstream := &grokQuotaHTTPUpstream{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(billingBody))},
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`))},
+	}}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+
+	result, err := svc.ProbeUsage(context.Background(), 44)
+
+	require.NoError(t, err)
+	require.Equal(t, 100.0, result.Billing.CreditUsagePercent)
+	require.Zero(t, repo.clearErrorCalls)
+	require.Zero(t, repo.rateLimitedCalls)
+	require.Equal(t, StatusError, account.Status)
+	require.False(t, account.Schedulable)
 }
 
 func TestGrokQuotaServiceProbeUsageDoesNotSendInferenceRequest(t *testing.T) {
