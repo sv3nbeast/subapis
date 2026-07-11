@@ -328,4 +328,16 @@ describe('admin GroupsView column settings', () => {
     expect(getUsageSummary).toHaveBeenCalledTimes(1)
     expect(getCapacitySummary).toHaveBeenCalledTimes(1)
   })
+
+  it('shows Claude Code restriction for Grok groups without an Anthropic fallback selector', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+    await wrapper.get('select[data-tour="group-form-platform"]').setValue('grok')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.groups.claudeCode.title')
+    expect(wrapper.text()).toContain('admin.groups.claudeCode.grokTooltip')
+    expect(wrapper.text()).not.toContain('admin.groups.claudeCode.fallbackGroup')
+  })
 })

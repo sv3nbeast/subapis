@@ -3034,6 +3034,7 @@ export default {
       claudeCode: {
         title: 'Claude Code 客户端限制',
         tooltip: '启用后，此分组仅允许 Claude Code 官方客户端访问。非 Claude Code 请求将被拒绝或降级到指定分组。',
+        grokTooltip: '启用后，此 Grok 分组只允许通过 /v1/messages 发起并通过严格识别的 Claude Code 请求。其他对话、图片和视频入口将直接拒绝。',
         enabled: '仅限 Claude Code',
         disabled: '允许所有客户端',
         fallbackGroup: '降级分组',

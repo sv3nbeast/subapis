@@ -3035,6 +3035,8 @@ export default {
         title: 'Claude Code Client Restriction',
         tooltip:
           'When enabled, this group only allows official Claude Code clients. Non-Claude Code requests will be rejected or fallback to the specified group.',
+        grokTooltip:
+          'When enabled, this Grok group only accepts strictly validated Claude Code requests through /v1/messages. Other chat, image, and video endpoints are rejected.',
         enabled: 'Claude Code Only',
         disabled: 'Allow All Clients',
         fallbackGroup: 'Fallback Group',

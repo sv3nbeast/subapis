@@ -509,6 +509,74 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	})
 }
 
+func TestValidateClaudeCodeOnlyMessagesRequestForGrok(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newContext := func(body string, restricted bool, userAgent string) (*gin.Context, *service.APIKey) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		c.Request.Header.Set("User-Agent", userAgent)
+		groupID := int64(4201)
+		return c, &service.APIKey{
+			GroupID: &groupID,
+			Group: &service.Group{
+				ID:             groupID,
+				Platform:       service.PlatformGrok,
+				ClaudeCodeOnly: restricted,
+			},
+		}
+	}
+
+	validBody := `{
+		"model":"claude-sonnet-4-5",
+		"stream":true,
+		"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],
+		"messages":[{"role":"user","content":"hi"}],
+		"metadata":{"user_id":"user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	}`
+
+	t.Run("official Claude Code request is allowed", func(t *testing.T) {
+		c, apiKey := newContext(validBody, true, "claude-cli/2.1.156 (Claude Code)")
+		c.Request.Header.Set("X-App", "cli")
+		c.Request.Header.Set("anthropic-beta", "claude-code-20250219")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+
+		allowed, err := validateClaudeCodeOnlyMessagesRequest(c, apiKey, []byte(validBody))
+		require.NoError(t, err)
+		require.True(t, allowed)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+	})
+
+	t.Run("spoofed non-Claude CLI request is rejected", func(t *testing.T) {
+		c, apiKey := newContext(validBody, true, "curl/8.0.0")
+		c.Request.Header.Set("X-App", "cli")
+		c.Request.Header.Set("anthropic-beta", "claude-code-20250219")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+
+		allowed, err := validateClaudeCodeOnlyMessagesRequest(c, apiKey, []byte(validBody))
+		require.NoError(t, err)
+		require.False(t, allowed)
+	})
+
+	t.Run("official connection probe is allowed", func(t *testing.T) {
+		probeBody := `{"model":"claude-haiku-4-5","stream":false,"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
+		c, apiKey := newContext(probeBody, true, "claude-cli/2.1.156 (Claude Code)")
+
+		allowed, err := validateClaudeCodeOnlyMessagesRequest(c, apiKey, []byte(probeBody))
+		require.NoError(t, err)
+		require.True(t, allowed)
+	})
+
+	t.Run("unrestricted Grok group is unchanged", func(t *testing.T) {
+		c, apiKey := newContext(validBody, false, "curl/8.0.0")
+
+		allowed, err := validateClaudeCodeOnlyMessagesRequest(c, apiKey, []byte(validBody))
+		require.NoError(t, err)
+		require.True(t, allowed)
+	})
+}
+
 func TestOpenAIModelMappedBody(t *testing.T) {
 	body := []byte(`{"model":"alias","input":"hello"}`)
 	calls := 0

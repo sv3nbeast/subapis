@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -123,6 +124,31 @@ func allowOpenAICompatibleMessagesDispatch(apiKey *service.APIKey) bool {
 		return true
 	}
 	return apiKey.Group.AllowMessagesDispatch
+}
+
+func validateClaudeCodeOnlyMessagesRequest(c *gin.Context, apiKey *service.APIKey, body []byte) (bool, error) {
+	if apiKey == nil || apiKey.Group == nil || !apiKey.Group.ClaudeCodeOnly {
+		return true, nil
+	}
+	if c == nil || c.Request == nil {
+		return false, errors.New("request context is unavailable")
+	}
+
+	parsedReq, err := service.ParseGatewayRequest(service.NewRequestBodyRef(body), domain.PlatformAnthropic)
+	if err != nil {
+		return false, err
+	}
+	if isClaudeCodeConnectionProbeRequest(parsedReq.MaxTokens, parsedReq.Stream) {
+		ctx := service.WithIsClaudeCodeConnectionProbeRequest(c.Request.Context(), true, false)
+		c.Request = c.Request.WithContext(ctx)
+	}
+	if isMaxTokensOneHaikuRequest(parsedReq.Model, parsedReq.MaxTokens) {
+		ctx := service.WithIsMaxTokensOneHaikuRequest(c.Request.Context(), true, false)
+		c.Request = c.Request.WithContext(ctx)
+	}
+
+	SetClaudeCodeClientContext(c, body, parsedReq)
+	return service.IsClaudeCodeClient(c.Request.Context()), nil
 }
 
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
@@ -805,6 +831,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
+
+	claudeCodeAllowed, validationErr := validateClaudeCodeOnlyMessagesRequest(c, apiKey, body)
+	if validationErr != nil {
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to validate Claude Code request")
+		return
+	}
+	if !claudeCodeAllowed {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error",
+			"This group is restricted to Claude Code clients")
+		return
+	}
 
 	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && decision.Blocked {
 		h.anthropicErrorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)

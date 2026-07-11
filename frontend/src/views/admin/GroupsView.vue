@@ -1143,8 +1143,8 @@
           </div>
         </div>
 
-        <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
-        <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
+        <!-- Claude Code 客户端限制（Anthropic / Grok） -->
+        <div v-if="supportsClaudeCodeRestriction(createForm.platform)" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.claudeCode.title") }}
@@ -1164,7 +1164,13 @@
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
                 >
                   <p class="text-xs leading-relaxed text-gray-300">
-                    {{ t("admin.groups.claudeCode.tooltip") }}
+                    {{
+                      t(
+                        createForm.platform === "grok"
+                          ? "admin.groups.claudeCode.grokTooltip"
+                          : "admin.groups.claudeCode.tooltip",
+                      )
+                    }}
                   </p>
                   <div
                     class="absolute -bottom-1.5 left-3 h-3 w-3 rotate-45 bg-gray-900 dark:bg-gray-800"
@@ -1204,7 +1210,13 @@
             </span>
           </div>
           <!-- 降级分组选择（仅当启用 claude_code_only 时显示） -->
-          <div v-if="createForm.claude_code_only" class="mt-3">
+          <div
+            v-if="
+              createForm.platform === 'anthropic' &&
+              createForm.claude_code_only
+            "
+            class="mt-3"
+          >
             <label class="input-label">{{
               t("admin.groups.claudeCode.fallbackGroup")
             }}</label>
@@ -2646,8 +2658,8 @@
           </div>
         </div>
 
-        <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
-        <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
+        <!-- Claude Code 客户端限制（Anthropic / Grok） -->
+        <div v-if="supportsClaudeCodeRestriction(editForm.platform)" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.groups.claudeCode.title") }}
@@ -2667,7 +2679,13 @@
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
                 >
                   <p class="text-xs leading-relaxed text-gray-300">
-                    {{ t("admin.groups.claudeCode.tooltip") }}
+                    {{
+                      t(
+                        editForm.platform === "grok"
+                          ? "admin.groups.claudeCode.grokTooltip"
+                          : "admin.groups.claudeCode.tooltip",
+                      )
+                    }}
                   </p>
                   <div
                     class="absolute -bottom-1.5 left-3 h-3 w-3 rotate-45 bg-gray-900 dark:bg-gray-800"
@@ -2703,7 +2721,13 @@
             </span>
           </div>
           <!-- 降级分组选择（仅当启用 claude_code_only 时显示） -->
-          <div v-if="editForm.claude_code_only" class="mt-3">
+          <div
+            v-if="
+              editForm.platform === 'anthropic' &&
+              editForm.claude_code_only
+            "
+            class="mt-3"
+          >
             <label class="input-label">{{
               t("admin.groups.claudeCode.fallbackGroup")
             }}</label>
@@ -3761,6 +3785,9 @@ const supportsNonStreamMessages = (platform: string) =>
     String(platform || ""),
   );
 
+const supportsClaudeCodeRestriction = (platform: string) =>
+  ["anthropic", "grok"].includes(String(platform || ""));
+
 // 降级分组选项（创建时）- 仅包含 anthropic 平台且未启用 claude_code_only 的分组
 const fallbackGroupOptions = computed(() => {
   const options: { value: number | null; label: string }[] = [
@@ -3979,7 +4006,7 @@ const createForm = reactive({
   peak_start: "",
   peak_end: "",
   peak_rate_multiplier: 1.0,
-  // Claude Code 客户端限制（仅 anthropic 平台使用）
+  // Claude Code 客户端限制（Anthropic / Grok）
   claude_code_only: false,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
@@ -4285,7 +4312,7 @@ const editForm = reactive({
   peak_start: "",
   peak_end: "",
   peak_rate_multiplier: 1.0,
-  // Claude Code 客户端限制（仅 anthropic 平台使用）
+  // Claude Code 客户端限制（Anthropic / Grok）
   claude_code_only: false,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
@@ -5114,6 +5141,12 @@ watch(
 watch(
   () => createForm.platform,
   (newVal) => {
+    if (newVal !== "anthropic") {
+      createForm.fallback_group_id = null;
+    }
+    if (!supportsClaudeCodeRestriction(newVal)) {
+      createForm.claude_code_only = false;
+    }
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
     }
@@ -5134,6 +5167,12 @@ watch(
 watch(
   () => editForm.platform,
   (newVal) => {
+    if (newVal !== "anthropic") {
+      editForm.fallback_group_id = null;
+    }
+    if (!supportsClaudeCodeRestriction(newVal)) {
+      editForm.claude_code_only = false;
+    }
     if (!["anthropic", "antigravity"].includes(newVal)) {
       editForm.fallback_group_id_on_invalid_request = null;
     }
