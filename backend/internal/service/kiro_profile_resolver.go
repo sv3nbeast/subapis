@@ -180,24 +180,26 @@ func (s *GatewayService) resolveKiroProfileArnFromAvailableProfiles(ctx context.
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= kiroProfileResolveMaxAttempts; attempt++ {
-		profileArn, err := s.listKiroAvailableProfileArn(ctx, account, token, attempt)
-		if err == nil {
-			return profileArn, nil
-		}
-		lastErr = err
-		if !isTransientKiroProfileFetchError(err) || attempt == kiroProfileResolveMaxAttempts {
-			return "", err
-		}
-		if sleepErr := sleepKiroRetry(ctx, attempt-1); sleepErr != nil {
-			return "", sleepErr
+	for _, region := range kiroAPIRegionCandidates(account) {
+		for attempt := 1; attempt <= kiroProfileResolveMaxAttempts; attempt++ {
+			profileArn, err := s.listKiroAvailableProfileArn(ctx, account, token, region, attempt)
+			if err == nil {
+				return profileArn, nil
+			}
+			lastErr = err
+			if !isTransientKiroProfileFetchError(err) || attempt == kiroProfileResolveMaxAttempts {
+				break
+			}
+			if sleepErr := sleepKiroRetry(ctx, attempt-1); sleepErr != nil {
+				return "", sleepErr
+			}
 		}
 	}
 	return "", lastErr
 }
 
-func (s *GatewayService) listKiroAvailableProfileArn(ctx context.Context, account *Account, accessToken string, attempt int) (string, error) {
-	endpointURL := fmt.Sprintf("https://q.%s.amazonaws.com/", kiroAPIRegion(account))
+func (s *GatewayService) listKiroAvailableProfileArn(ctx context.Context, account *Account, accessToken, region string, attempt int) (string, error) {
+	endpointURL := fmt.Sprintf("https://q.%s.amazonaws.com/", strings.TrimSpace(region))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader([]byte(`{"maxResults":10}`)))
 	if err != nil {
 		return "", err

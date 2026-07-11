@@ -101,7 +101,7 @@ func TestAccountTestService_Kiro429FallsBackToCodeWhispererEndpoint(t *testing.T
 	require.Contains(t, err.Error(), "API returned 401")
 }
 
-func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaultRuntimeRegion(t *testing.T) {
+func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesOIDCRegion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 
@@ -135,7 +135,7 @@ func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaul
 	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-6", "", AccountTestModeDefault)
 	require.Error(t, err)
 	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "q.ap-northeast-2.amazonaws.com", upstream.requests[0].URL.Host)
 	body, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
 	require.NotContains(t, string(body), `"profileArn":`)

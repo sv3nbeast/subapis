@@ -147,6 +147,68 @@ func TestKiroProfileResolverResolvesAndCachesMissingProfileArn(t *testing.T) {
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RESOLVED", gjson.GetBytes(buildResult.Payload, "profileArn").String())
 }
 
+func TestKiroProfileResolverUsesOIDCRegionBeforeDefault(t *testing.T) {
+	account := &Account{
+		ID:          206,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"auth_method":  "idc",
+			"region":       "eu-central-1",
+		},
+	}
+	repo := &kiroProfileRepo{account: account}
+	upstream := &kiroProfileHTTPUpstream{
+		responses: []*http.Response{
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:eu-central-1:123456789012:profile/EU"}]}`),
+		},
+	}
+	svc := &GatewayService{accountRepo: repo, httpUpstream: upstream}
+
+	profileArn := svc.resolveAndPersistKiroProfileArnOnly(context.Background(), account, "access-token")
+
+	require.Equal(t, "arn:aws:codewhisperer:eu-central-1:123456789012:profile/EU", profileArn)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "q.eu-central-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "eu-central-1", kiroAPIRegion(account))
+}
+
+func TestKiroProfileResolverFallsBackFromOIDCRegionToDefault(t *testing.T) {
+	account := &Account{
+		ID:          207,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"auth_method":  "idc",
+			"region":       "eu-central-1",
+		},
+	}
+	repo := &kiroProfileRepo{account: account}
+	upstream := &kiroProfileHTTPUpstream{
+		responses: []*http.Response{
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[]}`),
+			newKiroProfileJSONResponse(http.StatusOK, `{"profiles":[{"arn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/US"}]}`),
+		},
+	}
+	svc := &GatewayService{accountRepo: repo, httpUpstream: upstream}
+
+	profileArn := svc.resolveAndPersistKiroProfileArnOnly(context.Background(), account, "access-token")
+
+	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/US", profileArn)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "q.eu-central-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "us-east-1", kiroAPIRegion(account))
+}
+
 func TestKiroProfileResolverFallsBackToRefreshProfileArn(t *testing.T) {
 	account := &Account{
 		ID:          202,

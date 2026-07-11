@@ -577,7 +577,7 @@ func TestAccountUsageService_GetUsage_KiroUsesAPIRegionForUsageRequest(t *testin
 	require.Equal(t, []string{"eu-west-1"}, gotRegions)
 }
 
-func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWithoutAPIRegionOrProfileArn(t *testing.T) {
+func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesOIDCRegionWithoutAPIRegionOrProfileArn(t *testing.T) {
 	account := Account{
 		ID:       710,
 		Platform: PlatformKiro,
@@ -621,7 +621,7 @@ func TestAccountUsageService_GetUsage_KiroOmitsProfileArnAndUsesDefaultRegionWit
 	usage, err := svc.GetUsage(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
-	require.Equal(t, []string{kiroDefaultRegion}, gotRegions)
+	require.Equal(t, []string{"ap-northeast-2"}, gotRegions)
 }
 
 func TestAccountUsageService_GetUsage_KiroIncludesRuntimeCooldownState(t *testing.T) {

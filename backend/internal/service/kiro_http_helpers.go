@@ -142,14 +142,41 @@ func kiroProxyURL(account *Account) string {
 }
 
 func kiroAPIRegion(account *Account) string {
-	if account == nil {
+	regions := kiroAPIRegionCandidates(account)
+	if len(regions) == 0 {
 		return kiroDefaultRegion
 	}
-	region := strings.TrimSpace(account.GetCredential("api_region"))
-	if region == "" {
-		region = kiroDefaultRegion
+	return regions[0]
+}
+
+// kiroAPIRegionCandidates returns regions in descending confidence order.
+// api_region is an explicit administrator override. A resolved profile ARN is
+// the next-best source because CodeWhisperer profiles are regional. IDC token
+// responses may omit profileArn, so the OIDC region must be tried before the
+// historical us-east-1 default during profile discovery.
+func kiroAPIRegionCandidates(account *Account) []string {
+	regions := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	add := func(region string) {
+		region = strings.TrimSpace(region)
+		if region == "" {
+			return
+		}
+		key := strings.ToLower(region)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		regions = append(regions, region)
 	}
-	return region
+
+	if account != nil {
+		add(account.GetCredential("api_region"))
+		add(kiroRegionFromProfileArn(account.GetCredential("profile_arn")))
+		add(account.GetCredential("region"))
+	}
+	add(kiroDefaultRegion)
+	return regions
 }
 
 func isKiroCLIWireMode(account *Account) bool {

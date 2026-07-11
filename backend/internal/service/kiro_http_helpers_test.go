@@ -309,24 +309,36 @@ func TestKiroAPIRegionPrefersAPIRegionOverProfileARN(t *testing.T) {
 	require.Equal(t, "eu-west-1", kiroAPIRegion(account))
 }
 
-func TestKiroAPIRegionIgnoresProfileARNRegionFallback(t *testing.T) {
+func TestKiroAPIRegionFallsBackToProfileARNRegion(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{
 			"profile_arn": "arn:aws:codewhisperer:us-west-2:123456789012:profile/test",
 		},
 	}
 
-	require.Equal(t, kiroDefaultRegion, kiroAPIRegion(account))
+	require.Equal(t, "us-west-2", kiroAPIRegion(account))
 }
 
-func TestKiroAPIRegionIgnoresOIDCRegionFallback(t *testing.T) {
+func TestKiroAPIRegionFallsBackToOIDCRegion(t *testing.T) {
 	account := &Account{
 		Credentials: map[string]any{
 			"region": "ap-northeast-2",
 		},
 	}
 
-	require.Equal(t, kiroDefaultRegion, kiroAPIRegion(account))
+	require.Equal(t, "ap-northeast-2", kiroAPIRegion(account))
+}
+
+func TestKiroAPIRegionCandidatesDeduplicateInPriorityOrder(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{
+			"api_region":  "eu-central-1",
+			"profile_arn": "arn:aws:codewhisperer:eu-central-1:123456789012:profile/test",
+			"region":      "us-east-1",
+		},
+	}
+
+	require.Equal(t, []string{"eu-central-1", "us-east-1"}, kiroAPIRegionCandidates(account))
 }
 
 func TestBuildKiroEndpointsUsesKiroGoDefaultFallbackOrder(t *testing.T) {
