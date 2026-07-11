@@ -48,11 +48,15 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { GrokQuotaProbeResult, GrokQuotaWindow } from '@/api/admin/grok'
-import type { Account } from '@/types'
+import type { GrokQuotaProbeResult } from '@/api/admin/grok'
+import type { Account, GrokBillingSnapshot } from '@/types'
 
 const props = defineProps<{
   account: Account
+}>()
+
+const emit = defineEmits<{
+  (e: 'updated', result: GrokQuotaProbeResult): void
 }>()
 
 const { t } = useI18n()
@@ -77,33 +81,41 @@ const extractErrorMessage = (e: unknown): string => {
   )
 }
 
-const formatWindow = (label: string, window?: GrokQuotaWindow | null): string | null => {
-  if (!window || window.limit == null || window.remaining == null) return null
-  return `${label} ${window.remaining}/${window.limit}`
+const formatAmount = (value: number): string => {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
 }
 
-const retryAfterLabel = computed(() => {
-  const seconds = data.value?.snapshot?.retry_after_seconds
-  if (seconds == null || seconds <= 0) return null
-  if (seconds < 60) return `${seconds}s`
-  return `${Math.ceil(seconds / 60)}m`
-})
+const formatPercent = (value: number): string => `${Math.round(value * 10) / 10}%`
+
+const billingSummary = (billing: GrokBillingSnapshot): string[] => {
+  const parts = [
+    t('admin.accounts.usageWindow.grokWeeklySummary', {
+      used: formatPercent(billing.credit_usage_percent),
+      remaining: formatPercent(billing.credit_remaining_percent)
+    })
+  ]
+  if (billing.on_demand_cap > 0) {
+    parts.push(t('admin.accounts.usageWindow.grokOnDemandSummary', {
+      used: formatAmount(billing.on_demand_used),
+      remaining: formatAmount(billing.on_demand_remaining),
+      cap: formatAmount(billing.on_demand_cap)
+    }))
+  } else {
+    parts.push(t('admin.accounts.usageWindow.grokOnDemandDisabled'))
+  }
+  if (billing.prepaid_balance > 0) {
+    parts.push(t('admin.accounts.usageWindow.grokPrepaidBalance', {
+      balance: formatAmount(billing.prepaid_balance)
+    }))
+  }
+  return parts
+}
 
 const summary = computed(() => {
-  const snapshot = data.value?.snapshot
   if (!data.value) return ''
-  if (!snapshot) return t('admin.accounts.usageWindow.grokNoHeaders')
-  const parts = [
-    formatWindow(t('admin.accounts.usageWindow.grokRequests'), snapshot.requests),
-    formatWindow(t('admin.accounts.usageWindow.grokTokens'), snapshot.tokens)
-  ].filter(Boolean)
-  if (retryAfterLabel.value) {
-    parts.push(t('admin.accounts.usageWindow.grokRetryAfter', { time: retryAfterLabel.value }))
-  }
-  if (snapshot.entitlement_status) {
-    parts.push(snapshot.entitlement_status)
-  }
-  return parts.length > 0 ? parts.join(' | ') : t('admin.accounts.usageWindow.grokNoHeaders')
+  const billing = data.value.billing
+  if (!billing) return t('admin.accounts.usageWindow.grokBillingUnknown')
+  return billingSummary(billing).join(' | ')
 })
 
 const truncatedError = computed(() => {
@@ -117,6 +129,7 @@ const handleProbe = async () => {
   error.value = null
   try {
     data.value = await adminAPI.grok.queryQuota(props.account.id)
+    emit('updated', data.value)
   } catch (e) {
     error.value = extractErrorMessage(e)
   } finally {

@@ -258,7 +258,7 @@
       </div>
 
       <!-- Needs reauth (401) -->
-      <div v-else-if="needsReauth" class="space-y-1">
+      <div v-else-if="needsReauth && !grokBilling" class="space-y-1">
         <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
           {{ t('admin.accounts.needsReauth') }}
         </span>
@@ -467,15 +467,25 @@
           {{ t('admin.accounts.needsReauth') }}
         </span>
       </div>
-      <div v-else-if="isForbidden" class="space-y-1">
+      <div v-else-if="isForbidden && !grokBilling" class="space-y-1">
         <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
           {{ grokEntitlementLabel || t('admin.accounts.forbidden') }}
         </span>
       </div>
       <div v-else-if="usageInfo" class="space-y-1">
-        <div v-if="grokEntitlementLabel" class="mb-0.5">
+        <div v-if="needsReauth">
+          <span class="inline-block rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+            {{ t('admin.accounts.needsReauth') }}
+          </span>
+        </div>
+        <div v-else-if="isForbidden">
+          <span class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
+            {{ grokEntitlementLabel || t('admin.accounts.forbidden') }}
+          </span>
+        </div>
+        <div v-if="grokSubscriptionLabel" class="mb-0.5">
           <span class="inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
-            {{ grokEntitlementLabel }}
+            {{ grokSubscriptionLabel }}
           </span>
         </div>
         <div v-if="grokLocalUsage" class="mb-0.5 flex items-center">
@@ -499,15 +509,45 @@
           </div>
         </div>
         <UsageProgressBar
+          v-if="grokCreditUsageBar"
+          :label="t('admin.accounts.usageWindow.grokWeeklyCredits')"
+          :utilization="grokCreditUsageBar.utilization"
+          :resets-at="grokCreditUsageBar.resetsAt"
+          color="amber"
+        />
+        <div v-if="grokBilling" class="text-[10px] text-gray-600 dark:text-gray-300">
+          {{ t('admin.accounts.usageWindow.grokWeeklySummary', {
+            used: formatGrokPercent(grokBilling.credit_usage_percent),
+            remaining: formatGrokPercent(grokBilling.credit_remaining_percent)
+          }) }}
+        </div>
+        <div v-if="grokBilling" class="text-[10px] text-gray-500 dark:text-gray-400">
+          <template v-if="grokBilling.on_demand_cap > 0">
+            {{ t('admin.accounts.usageWindow.grokOnDemandSummary', {
+              used: formatGrokAmount(grokBilling.on_demand_used),
+              remaining: formatGrokAmount(grokBilling.on_demand_remaining),
+              cap: formatGrokAmount(grokBilling.on_demand_cap)
+            }) }}
+          </template>
+          <template v-else>
+            {{ t('admin.accounts.usageWindow.grokOnDemandDisabled') }}
+          </template>
+          <span v-if="grokBilling.prepaid_balance > 0">
+            · {{ t('admin.accounts.usageWindow.grokPrepaidBalance', {
+              balance: formatGrokAmount(grokBilling.prepaid_balance)
+            }) }}
+          </span>
+        </div>
+        <UsageProgressBar
           v-if="grokRequestQuotaBar"
-          :label="t('admin.accounts.usageWindow.grokRequests')"
+          :label="t('admin.accounts.usageWindow.grokRequestsRate')"
           :utilization="grokRequestQuotaBar.utilization"
           :resets-at="grokRequestQuotaBar.resetsAt"
           color="indigo"
         />
         <UsageProgressBar
           v-if="grokTokenQuotaBar"
-          :label="t('admin.accounts.usageWindow.grokTokens')"
+          :label="t('admin.accounts.usageWindow.grokTokensRate')"
           :utilization="grokTokenQuotaBar.utilization"
           :resets-at="grokTokenQuotaBar.resetsAt"
           color="emerald"
@@ -524,7 +564,7 @@
         <div v-if="grokQuotaStatusLine" class="text-[10px] text-gray-500 dark:text-gray-400">
           {{ grokQuotaStatusLine }}
         </div>
-        <GrokQuotaProbeCell :account="account" />
+        <GrokQuotaProbeCell :account="account" @updated="handleGrokQuotaUpdated" />
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
     </template>
@@ -1187,19 +1227,31 @@ const makeGrokQuotaBar = (quota?: { limit?: number | null; remaining?: number | 
 
 const grokRequestQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_request_quota))
 const grokTokenQuotaBar = computed(() => makeGrokQuotaBar(usageInfo.value?.grok_token_quota))
+const grokBilling = computed(() => usageInfo.value?.grok_billing || null)
+const grokCreditUsageBar = computed(() => {
+  if (!grokBilling.value) return null
+  return {
+    utilization: grokBilling.value.credit_usage_percent,
+    resetsAt: grokBilling.value.current_period_end || null
+  }
+})
 const grokQuotaUnknown = computed(() => {
   if (props.account.platform !== 'grok') return false
-  if (grokRequestQuotaBar.value || grokTokenQuotaBar.value) return false
-  return usageInfo.value?.grok_quota_snapshot_state !== 'observed'
+  return !grokBilling.value
 })
 const grokQuotaUnknownLabel = computed(() => {
-  return usageInfo.value?.grok_quota_snapshot_state === 'no_headers'
-    ? t('admin.accounts.usageWindow.grokNoHeaders')
-    : t('admin.accounts.usageWindow.grokUnknown')
+  return usageInfo.value?.grok_billing_state === 'error'
+    ? t('admin.accounts.usageWindow.grokBillingFailed')
+    : t('admin.accounts.usageWindow.grokBillingUnknown')
 })
 const grokQuotaStatusLine = computed(() => {
   if (props.account.platform !== 'grok') return null
   const parts: string[] = []
+  if (grokBilling.value?.updated_at) {
+    parts.push(t('admin.accounts.usageWindow.grokBillingUpdated', {
+      time: formatRelativeTime(grokBilling.value.updated_at)
+    }))
+  }
   const status = usageInfo.value?.grok_last_status_code
   if (status) {
     parts.push(t('admin.accounts.usageWindow.grokLastStatus', { status }))
@@ -1221,6 +1273,10 @@ const grokQuotaStatusLine = computed(() => {
   return parts.length > 0 ? parts.join(' | ') : null
 })
 const grokLocalUsage = computed(() => usageInfo.value?.grok_local_usage || props.todayStats || null)
+const grokSubscriptionLabel = computed(() => {
+  const tier = (grokBilling.value?.subscription_tier || usageInfo.value?.subscription_tier || '').trim()
+  return tier || null
+})
 const grokEntitlementLabel = computed(() => {
   const status = (usageInfo.value?.grok_entitlement_status || '').trim()
   return status || null
@@ -1237,6 +1293,8 @@ const formatWindowRequests = (stats: WindowStats) => formatCompactNumber(stats.r
 const formatWindowTokens = (stats: WindowStats) => formatCompactNumber(stats.tokens)
 const formatWindowCost = (stats: WindowStats) => stats.cost.toFixed(2)
 const formatWindowUserCost = (stats: WindowStats) => (stats.user_cost ?? 0).toFixed(2)
+const formatGrokAmount = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(2)
+const formatGrokPercent = (value: number) => `${Math.round(value * 10) / 10}%`
 
 const kiroPlanLabel = computed(() => {
   if (props.account.platform !== 'kiro') return null
@@ -1486,6 +1544,11 @@ const loadActiveUsage = async () => {
   } finally {
     activeQueryLoading.value = false
   }
+}
+
+const handleGrokQuotaUpdated = async () => {
+  _usageCache.delete(props.account.id)
+  await loadUsage({ source: 'active', bypassCache: true })
 }
 
 // ===== API Key quota progress bars =====

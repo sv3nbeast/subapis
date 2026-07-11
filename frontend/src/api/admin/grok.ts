@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from '../client'
+import type { GrokBillingSnapshot } from '@/types'
 
 export interface GrokAuthUrlResponse {
   auth_url: string
@@ -62,11 +63,9 @@ export interface GrokQuotaSnapshot {
 }
 
 export interface GrokQuotaProbeResult {
-  source: 'active_probe'
-  model: string
-  snapshot?: GrokQuotaSnapshot | null
+  source: 'billing'
+  billing?: GrokBillingSnapshot | null
   status_code?: number
-  headers_observed: boolean
   reset_supported: boolean
   fetched_at: number
 }

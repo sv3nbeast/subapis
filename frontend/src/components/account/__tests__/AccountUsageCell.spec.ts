@@ -689,7 +689,7 @@ describe('AccountUsageCell', () => {
 		expect(badges.some(node => node.attributes('title') === 'usage.userBilled')).toBe(true)
   })
 
-  it('Grok OAuth 会展示本地 user billed 用量并保留超限百分比', async () => {
+  it('Grok OAuth 会展示官方 Billing 剩余额度、本地用量和速率限制', async () => {
     getUsage.mockResolvedValue({
       grok_local_usage: {
         requests: 4,
@@ -703,7 +703,22 @@ describe('AccountUsageCell', () => {
         remaining: -2,
         reset_at: '2026-07-09T16:00:00Z'
       },
-      grok_quota_snapshot_state: 'observed'
+      grok_quota_snapshot_state: 'observed',
+      grok_billing_state: 'observed',
+      grok_billing: {
+        credit_usage_percent: 49,
+        credit_remaining_percent: 51,
+        current_period_type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        current_period_start: '2026-07-09T18:40:47Z',
+        current_period_end: '2026-07-16T18:40:47Z',
+        on_demand_cap: 2500,
+        on_demand_used: 125,
+        on_demand_remaining: 2375,
+        prepaid_balance: 30,
+        unified_billing_user: true,
+        subscription_tier: 'SuperGrok',
+        updated_at: '2026-07-11T00:00:00Z'
+      }
     })
 
     const wrapper = mount(AccountUsageCell, {
@@ -734,11 +749,60 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('1.2K')
     expect(wrapper.text()).toContain('A $0.12')
     expect(wrapper.text()).toContain('U $0.34')
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRequests|120|2026-07-09T16:00:00Z')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklyCredits|49|2026-07-16T18:40:47Z')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklySummary')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokOnDemandSummary')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokPrepaidBalance')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRequestsRate|120|2026-07-09T16:00:00Z')
+    expect(wrapper.text()).toContain('SuperGrok')
 
     const badges = wrapper.findAll('span[title]')
     expect(badges.some(node => node.attributes('title') === 'usage.accountBilled')).toBe(true)
     expect(badges.some(node => node.attributes('title') === 'usage.userBilled')).toBe(true)
+  })
+
+  it('Grok 账号额度耗尽并被禁用时仍展示 100% Billing 用量', async () => {
+    getUsage.mockResolvedValue({
+      is_forbidden: true,
+      forbidden_type: 'forbidden',
+      grok_billing_state: 'observed',
+      grok_billing: {
+        credit_usage_percent: 100,
+        credit_remaining_percent: 0,
+        current_period_type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        current_period_start: '2026-07-07T20:04:22Z',
+        current_period_end: '2026-07-14T20:04:22Z',
+        on_demand_cap: 0,
+        on_demand_used: 0,
+        on_demand_remaining: 0,
+        prepaid_balance: 0,
+        unified_billing_user: true,
+        subscription_tier: 'SuperGrok',
+        updated_at: '2026-07-11T00:00:00Z'
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 3862, platform: 'grok', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+          },
+          AccountQuotaInfo: true,
+          GrokQuotaProbeCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.accounts.forbidden')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklyCredits|100|2026-07-14T20:04:22Z')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklySummary')
   })
 
   it('Key 账号在 today stats loading 时显示骨架屏', async () => {

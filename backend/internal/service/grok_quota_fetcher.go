@@ -8,7 +8,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
-const grokQuotaSnapshotExtraKey = "grok_usage_snapshot"
+const (
+	grokQuotaSnapshotExtraKey   = "grok_usage_snapshot"
+	grokBillingSnapshotExtraKey = "grok_billing_snapshot"
+)
 
 type GrokQuotaFetcher struct{}
 
@@ -23,26 +26,45 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		UpdatedAt: &now,
 	}
 	if account == nil {
-		usage.ErrorCode = "quota_unknown"
-		usage.Error = "Grok quota is unknown until the first upstream response includes xAI rate-limit headers"
+		usage.ErrorCode = "billing_unknown"
+		usage.Error = "Grok billing usage has not been queried"
+		usage.GrokBillingState = "unknown"
 		return usage
 	}
 
-	snapshot, err := grokQuotaSnapshotFromExtra(account.Extra)
-	if err != nil || snapshot == nil {
-		usage.ErrorCode = "quota_unknown"
-		usage.Error = "Grok quota is unknown until the first upstream response includes xAI rate-limit headers"
+	billing, billingErr := grokBillingSnapshotFromExtra(account.Extra)
+	if billingErr == nil && billing != nil {
+		usage.GrokBilling = billing
+		usage.GrokBillingState = "observed"
+		usage.SubscriptionTier = billing.SubscriptionTier
+		usage.SubscriptionTierRaw = billing.SubscriptionTier
+		if parsedAt, err := time.Parse(time.RFC3339, billing.UpdatedAt); err == nil {
+			usage.UpdatedAt = &parsedAt
+		}
+	} else {
+		usage.GrokBillingState = "unknown"
+		usage.ErrorCode = "billing_unknown"
+		usage.Error = "Grok billing usage has not been queried"
+	}
+
+	snapshot, snapshotErr := grokQuotaSnapshotFromExtra(account.Extra)
+	if snapshotErr != nil || snapshot == nil {
+		usage.GrokQuotaSnapshotState = "unknown_until_first_response"
 		return usage
 	}
 
-	if parsedAt, err := time.Parse(time.RFC3339, snapshot.UpdatedAt); err == nil {
-		usage.UpdatedAt = &parsedAt
+	if usage.GrokBilling == nil {
+		if parsedAt, err := time.Parse(time.RFC3339, snapshot.UpdatedAt); err == nil {
+			usage.UpdatedAt = &parsedAt
+		}
 	}
 	usage.GrokRequestQuota = snapshot.Requests
 	usage.GrokTokenQuota = snapshot.Tokens
 	usage.GrokRetryAfterSeconds = snapshot.RetryAfterSeconds
-	usage.SubscriptionTier = snapshot.SubscriptionTier
-	usage.SubscriptionTierRaw = snapshot.SubscriptionTier
+	if usage.SubscriptionTier == "" {
+		usage.SubscriptionTier = snapshot.SubscriptionTier
+		usage.SubscriptionTierRaw = snapshot.SubscriptionTier
+	}
 	usage.GrokEntitlementStatus = snapshot.EntitlementStatus
 	usage.GrokLastQuotaProbeAt = snapshot.LastProbeAt
 	usage.GrokLastHeadersSeenAt = snapshot.LastHeadersSeenAt
@@ -51,8 +73,6 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		usage.GrokQuotaSnapshotState = "observed"
 	} else {
 		usage.GrokQuotaSnapshotState = "no_headers"
-		usage.ErrorCode = "quota_unknown"
-		usage.Error = "No xAI quota headers observed on the latest Grok probe"
 	}
 
 	switch snapshot.StatusCode {
@@ -101,6 +121,42 @@ func grokQuotaSnapshotFromExtra(extra map[string]any) (*xai.QuotaSnapshot, error
 			return nil, fmt.Errorf("marshal grok quota snapshot: %w", err)
 		}
 		var out xai.QuotaSnapshot
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, err
+		}
+		return &out, nil
+	}
+}
+
+func grokBillingSnapshotFromExtra(extra map[string]any) (*xai.BillingSnapshot, error) {
+	if extra == nil {
+		return nil, nil
+	}
+	raw, ok := extra[grokBillingSnapshotExtraKey]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	switch snapshot := raw.(type) {
+	case *xai.BillingSnapshot:
+		return snapshot, nil
+	case xai.BillingSnapshot:
+		return &snapshot, nil
+	case map[string]any:
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		var out xai.BillingSnapshot
+		if err := json.Unmarshal(data, &out); err != nil {
+			return nil, err
+		}
+		return &out, nil
+	default:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("marshal grok billing snapshot: %w", err)
+		}
+		var out xai.BillingSnapshot
 		if err := json.Unmarshal(data, &out); err != nil {
 			return nil, err
 		}

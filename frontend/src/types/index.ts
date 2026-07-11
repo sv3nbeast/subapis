@@ -1101,6 +1101,25 @@ export interface GrokQuotaWindow {
   reset_at?: string
 }
 
+export interface GrokBillingSnapshot {
+  credit_usage_percent: number
+  credit_remaining_percent: number
+  current_period_type: string
+  current_period_start: string
+  current_period_end: string
+  on_demand_cap: number
+  on_demand_used: number
+  on_demand_remaining: number
+  prepaid_balance: number
+  unified_billing_user: boolean
+  top_up_method?: string
+  billing_period_start?: string
+  billing_period_end?: string
+  subscription_tier?: string
+  status_code?: number
+  updated_at: string
+}
+
 export interface AccountUsageInfo {
   source?: 'passive' | 'active'
   updated_at: string | null
@@ -1124,6 +1143,10 @@ export interface AccountUsageInfo {
   grok_last_headers_seen_at?: string
   grok_last_status_code?: number
   grok_local_usage?: WindowStats | null
+  grok_billing?: GrokBillingSnapshot | null
+  grok_billing_state?: 'observed' | 'unknown' | 'error' | string
+  subscription_tier?: string
+  subscription_tier_raw?: string
   ai_credits?: Array<{
     credit_type?: string
     amount?: number

@@ -19,8 +19,9 @@ func TestGrokQuotaFetcherBuildUsageInfoUnknownUntilFirstSnapshot(t *testing.T) {
 
 	usage := NewGrokQuotaFetcher().BuildUsageInfo(&Account{Platform: PlatformGrok, Type: AccountTypeOAuth})
 	require.Equal(t, "passive", usage.Source)
-	require.Equal(t, "quota_unknown", usage.ErrorCode)
-	require.Contains(t, usage.Error, "unknown until the first upstream response")
+	require.Equal(t, "billing_unknown", usage.ErrorCode)
+	require.Equal(t, "unknown", usage.GrokBillingState)
+	require.Contains(t, usage.Error, "billing usage has not been queried")
 }
 
 func TestGrokQuotaFetcherBuildUsageInfoFromSnapshot(t *testing.T) {
@@ -31,6 +32,20 @@ func TestGrokQuotaFetcherBuildUsageInfoFromSnapshot(t *testing.T) {
 		Platform: PlatformGrok,
 		Type:     AccountTypeOAuth,
 		Extra: map[string]any{
+			grokBillingSnapshotExtraKey: &xai.BillingSnapshot{
+				CreditUsagePercent:     49,
+				CreditRemainingPercent: 51,
+				CurrentPeriodType:      "USAGE_PERIOD_TYPE_WEEKLY",
+				CurrentPeriodStart:     "2029-12-25T00:00:00Z",
+				CurrentPeriodEnd:       updatedAt,
+				OnDemandCap:            2500,
+				OnDemandUsed:           125,
+				OnDemandRemaining:      2375,
+				PrepaidBalance:         30,
+				UnifiedBillingUser:     true,
+				SubscriptionTier:       "SuperGrok",
+				UpdatedAt:              updatedAt,
+			},
 			grokQuotaSnapshotExtraKey: &xai.QuotaSnapshot{
 				Requests: &xai.QuotaWindow{
 					Limit:     grokInt64PtrForTest(100),
@@ -56,7 +71,11 @@ func TestGrokQuotaFetcherBuildUsageInfoFromSnapshot(t *testing.T) {
 	require.Equal(t, "passive", usage.Source)
 	require.Equal(t, "rate_limited", usage.ErrorCode)
 	require.Equal(t, "observed", usage.GrokQuotaSnapshotState)
-	require.Equal(t, "supergrok", usage.SubscriptionTier)
+	require.Equal(t, "SuperGrok", usage.SubscriptionTier)
+	require.Equal(t, "observed", usage.GrokBillingState)
+	require.NotNil(t, usage.GrokBilling)
+	require.Equal(t, 49.0, usage.GrokBilling.CreditUsagePercent)
+	require.Equal(t, 51.0, usage.GrokBilling.CreditRemainingPercent)
 	require.Equal(t, "active", usage.GrokEntitlementStatus)
 	require.Equal(t, int64(100), *usage.GrokRequestQuota.Limit)
 	require.Equal(t, int64(12), *usage.GrokRequestQuota.Remaining)
@@ -87,9 +106,10 @@ func TestGrokQuotaFetcherBuildUsageInfoFromNoHeadersProbe(t *testing.T) {
 	}
 
 	usage := NewGrokQuotaFetcher().BuildUsageInfo(account)
-	require.Equal(t, "quota_unknown", usage.ErrorCode)
+	require.Equal(t, "billing_unknown", usage.ErrorCode)
+	require.Equal(t, "unknown", usage.GrokBillingState)
 	require.Equal(t, "no_headers", usage.GrokQuotaSnapshotState)
-	require.Contains(t, usage.Error, "No xAI quota headers observed")
+	require.Contains(t, usage.Error, "billing usage has not been queried")
 	require.Equal(t, probedAt, usage.GrokLastQuotaProbeAt)
 	require.Empty(t, usage.GrokLastHeadersSeenAt)
 	require.Equal(t, http.StatusOK, usage.GrokLastStatusCode)

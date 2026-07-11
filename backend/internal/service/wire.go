@@ -378,6 +378,7 @@ func ProvideAccountUsageService(
 	geminiQuotaService *GeminiQuotaService,
 	antigravityQuotaFetcher *AntigravityQuotaFetcher,
 	grokQuotaFetcher *GrokQuotaFetcher,
+	grokQuotaService *GrokQuotaService,
 	openAIQuotaService *OpenAIQuotaService,
 	cache *UsageCache,
 	identityCache IdentityCache,
@@ -396,7 +397,7 @@ func ProvideAccountUsageService(
 		cache,
 		identityCache,
 		tlsFPProfileService,
-	).SetSettingService(settingService).SetKiroTokenProvider(kiroTokenProvider)
+	).SetSettingService(settingService).SetKiroTokenProvider(kiroTokenProvider).SetGrokQuotaService(grokQuotaService)
 }
 
 // ProvideOpsMetricsCollector creates and starts OpsMetricsCollector.

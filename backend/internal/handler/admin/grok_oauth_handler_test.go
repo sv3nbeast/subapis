@@ -79,11 +79,8 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	}}
 	upstream := &grokQuotaHandlerUpstream{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header: http.Header{
-			"X-Ratelimit-Limit-Requests":     []string{"10"},
-			"X-Ratelimit-Remaining-Requests": []string{"8"},
-		},
-		Body: io.NopCloser(strings.NewReader(`{"id":"resp_probe"}`)),
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"config":{"creditUsagePercent":49,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-09T18:40:47Z","end":"2026-07-16T18:40:47Z"},"isUnifiedBillingUser":true}}`)),
 	}}
 	quotaService := service.NewGrokQuotaService(repo, nil, service.NewGrokTokenProvider(repo, nil), upstream)
 	handler := NewGrokOAuthHandler(nil, nil, quotaService)
@@ -95,12 +92,13 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), `"source":"active_probe"`)
-	require.Contains(t, rec.Body.String(), `"headers_observed":true`)
+	require.Contains(t, rec.Body.String(), `"source":"billing"`)
+	require.Contains(t, rec.Body.String(), `"credit_usage_percent":49`)
+	require.Contains(t, rec.Body.String(), `"credit_remaining_percent":51`)
 	require.NotContains(t, rec.Body.String(), "access-token")
-	require.Equal(t, xai.DefaultBaseURL+"/responses", upstream.lastReq.URL.String())
+	require.Equal(t, xai.SettingsURL, upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Contains(t, string(upstream.lastBody), `"store":false`)
+	require.Empty(t, upstream.lastBody)
 	require.NotNil(t, repo.updates[42])
 }
 
