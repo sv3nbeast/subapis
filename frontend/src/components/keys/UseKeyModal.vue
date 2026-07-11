@@ -139,13 +139,21 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import type { APIKeyUsageConfig, GroupPlatform } from '@/types'
+import type {
+  APIKeyUsageClientTemplate,
+  APIKeyUsageConfig,
+  APIKeyUsageTemplateProfile,
+  GroupPlatform
+} from '@/types'
 
 interface Props {
   show: boolean
   apiKey: string
   baseUrl: string
   platform: GroupPlatform | null
+  groupId?: number | null
+  groupName?: string
+  claudeCodeOnly?: boolean
   allowMessagesDispatch?: boolean
   usageConfig?: Partial<APIKeyUsageConfig>
 }
@@ -158,6 +166,12 @@ interface TabConfig {
   id: string
   label: string
   icon: Component
+}
+
+interface ClientTabConfig extends TabConfig {
+  kind: string
+  sortOrder: number
+  custom?: APIKeyUsageClientTemplate
 }
 
 interface FileConfig {
@@ -189,7 +203,8 @@ const DEFAULT_USAGE_CONFIG: APIKeyUsageConfig = {
   codex_goals_enabled: true,
   codex_websocket_enabled: true,
   codex_include_legacy_ws_feature: false,
-  codex_extra_config: ''
+  codex_extra_config: '',
+  template_profiles: []
 }
 const usageConfig = computed<APIKeyUsageConfig>(() => ({
   ...DEFAULT_USAGE_CONFIG,
@@ -210,7 +225,7 @@ const defaultClientTab = computed(() => {
   }
 })
 
-watch(() => props.platform, () => {
+watch(() => [props.platform, props.groupId, props.claudeCodeOnly], () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
 }, { immediate: true })
@@ -283,40 +298,92 @@ const SparkleIcon = {
   }
 }
 
-const clientTabs = computed((): TabConfig[] => {
+const builtInClientTabs = computed((): ClientTabConfig[] => {
   if (!props.platform) return []
   switch (props.platform) {
     case 'openai': {
-      const tabs: TabConfig[] = [
-        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon }
+      const tabs: ClientTabConfig[] = [
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon, kind: 'codex', sortOrder: 10 }
       ]
       if (usageConfig.value.codex_websocket_enabled) {
-        tabs.push({ id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon })
+        tabs.push({ id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon, kind: 'codex', sortOrder: 20 })
       }
       if (props.allowMessagesDispatch) {
-        tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
+        tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 30 })
       }
-      tabs.push({ id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon })
+      tabs.push({ id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 40 })
       return tabs
     }
     case 'gemini':
       return [
-        { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon },
-        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+        { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon, kind: 'gemini_cli', sortOrder: 10 },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 20 }
       ]
     case 'antigravity':
       return [
-        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
-        { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon },
-        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 10 },
+        { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon, kind: 'gemini_cli', sortOrder: 20 },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 30 }
       ]
     default:
       return [
-        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
-        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon, kind: 'claude_code', sortOrder: 10 },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon, kind: 'opencode', sortOrder: 20 }
       ]
   }
 })
+
+function profileMatches(profile: APIKeyUsageTemplateProfile): boolean {
+  if (!profile.enabled || !props.platform) return false
+  const platforms = profile.match?.platforms || []
+  const groupIds = profile.match?.group_ids || []
+  const claudeCondition = profile.match?.claude_code_only || 'any'
+  if (platforms.length && !platforms.some((value) => value.toLowerCase() === props.platform?.toLowerCase())) return false
+  if (groupIds.length && (!props.groupId || !groupIds.includes(props.groupId))) return false
+  if (claudeCondition === 'required' && !props.claudeCodeOnly) return false
+  if (claudeCondition === 'forbidden' && props.claudeCodeOnly) return false
+  return true
+}
+
+const clientTabs = computed((): ClientTabConfig[] => {
+  const tabs = new Map<string, ClientTabConfig>()
+  builtInClientTabs.value.forEach((tab) => tabs.set(tab.id, tab))
+
+  const profiles = (usageConfig.value.template_profiles || [])
+    .map((profile, index) => ({ profile, index }))
+    .filter(({ profile }) => profileMatches(profile))
+    .sort((left, right) => left.profile.priority - right.profile.priority || left.index - right.index)
+
+  profiles.forEach(({ profile }) => {
+    if (profile.mode === 'replace') tabs.clear()
+    profile.templates.forEach((template) => {
+      if (!template.enabled) {
+        tabs.delete(template.id)
+        return
+      }
+      tabs.set(template.id, {
+        id: template.id,
+        label: template.label,
+        icon: template.kind === 'gemini_cli' ? SparkleIcon : TerminalIcon,
+        kind: template.kind,
+        sortOrder: template.sort_order,
+        custom: template
+      })
+    })
+  })
+
+  const resolved = [...tabs.values()]
+    .filter((tab) => !props.claudeCodeOnly || tab.kind === 'claude_code')
+  return resolved.sort((left, right) => left.sortOrder - right.sortOrder)
+})
+
+const activeClient = computed(() => clientTabs.value.find((tab) => tab.id === activeClientTab.value))
+
+watch(clientTabs, (tabs) => {
+  if (!tabs.some((tab) => tab.id === activeClientTab.value)) {
+    activeClientTab.value = tabs.find((tab) => tab.id === defaultClientTab.value)?.id || tabs[0]?.id || ''
+  }
+}, { immediate: true })
 
 // Shell tabs (3 types for environment variable based configs)
 const shellTabs: TabConfig[] = [
@@ -331,17 +398,62 @@ const openaiTabs: TabConfig[] = [
   { id: 'windows', label: 'Windows', icon: WindowsIcon }
 ]
 
-const showShellTabs = computed(() => activeClientTab.value !== 'opencode')
+const showShellTabs = computed(() => {
+  if (activeClient.value?.custom) return activeClient.value.custom.variants.length > 1
+  return activeClientTab.value !== 'opencode'
+})
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
+  if (activeClient.value?.custom) {
+    return activeClient.value.custom.variants.map((variant) => ({
+      id: variant.id,
+      label: variant.label,
+      icon: TerminalIcon
+    }))
+  }
   if (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws') {
     return openaiTabs
   }
   return shellTabs
 })
 
+watch(activeClient, (client) => {
+  const variants = client?.custom?.variants
+  if (variants?.length && !variants.some((variant) => variant.id === activeTab.value)) {
+    activeTab.value = variants[0].id
+  }
+})
+
+function customTemplateVariables(): Record<string, string> {
+  const configuredBase = (props.baseUrl || window.location.origin).replace(/\/+$/, '')
+  const baseRoot = configuredBase.replace(/\/v1(?:beta)?\/?$/, '').replace(/\/+$/, '')
+  return {
+    api_key: props.apiKey,
+    base_url: configuredBase,
+    base_url_v1: `${baseRoot}/v1`,
+    base_url_v1beta: `${baseRoot}/v1beta`,
+    group_id: props.groupId ? String(props.groupId) : '',
+    group_name: props.groupName || '',
+    platform: props.platform || '',
+    claude_code_default_model: usageConfig.value.claude_code_default_model,
+    gemini_cli_default_model: usageConfig.value.gemini_cli_default_model,
+    codex_model: usageConfig.value.codex_model,
+    codex_review_model: usageConfig.value.codex_review_model,
+    codex_reasoning_effort: usageConfig.value.codex_reasoning_effort,
+    codex_network_access: usageConfig.value.codex_network_access
+  }
+}
+
+function renderCustomTemplateValue(value: string): string {
+  const variables = customTemplateVariables()
+  return value.replace(/\{\{([a-z0-9_]+)\}\}/gi, (placeholder, name: string) => (
+    Object.prototype.hasOwnProperty.call(variables, name) ? variables[name] : placeholder
+  ))
+}
+
 const platformDescription = computed(() => {
+  if (activeClient.value?.custom?.description) return renderCustomTemplateValue(activeClient.value.custom.description)
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -358,6 +470,7 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (activeClient.value?.custom?.note) return renderCustomTemplateValue(activeClient.value.custom.note)
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -377,7 +490,9 @@ const platformNote = computed(() => {
   }
 })
 
-const showPlatformNote = computed(() => activeClientTab.value !== 'opencode')
+const showPlatformNote = computed(() => activeClient.value?.custom
+  ? Boolean(activeClient.value.custom.note)
+  : activeClientTab.value !== 'opencode')
 
 const escapeHtml = (value: string) => value
   .replace(/&/g, '&amp;')
@@ -415,6 +530,17 @@ const currentFiles = computed((): FileConfig[] => {
     const trimmed = baseRoot.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
+
+  if (activeClient.value?.custom) {
+    const variants = activeClient.value.custom.variants
+    const variant = variants.find((item) => item.id === activeTab.value) || variants[0]
+    if (!variant) return []
+    return variant.files.map((file) => ({
+      path: renderCustomTemplateValue(file.path),
+      content: renderCustomTemplateValue(file.content),
+      hint: file.hint ? renderCustomTemplateValue(file.hint) : undefined
+    }))
+  }
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {

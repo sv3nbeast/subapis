@@ -315,4 +315,150 @@ describe('UseKeyModal', () => {
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })
     expect(fable.options.thinking).not.toHaveProperty('budgetTokens')
   })
+
+  const customTemplateProfile = (overrides: Record<string, unknown> = {}) => ({
+    id: 'grok-tools',
+    name: 'Grok tools',
+    enabled: true,
+    priority: 100,
+    mode: 'append' as const,
+    match: {
+      platforms: ['grok'],
+      group_ids: [],
+      claude_code_only: 'any' as const
+    },
+    templates: [{
+      id: 'grok-curl',
+      label: 'Grok cURL',
+      description: 'Grok compatible endpoint',
+      note: 'Group {{group_name}}',
+      kind: 'generic',
+      enabled: true,
+      sort_order: 1,
+      variants: [{
+        id: 'default',
+        label: 'Default',
+        files: [{
+          path: '{{platform}}-{{group_id}}.sh',
+          content: 'curl {{base_url_v1}}/chat/completions -H "Authorization: Bearer {{api_key}}" # {{group_name}} {{codex_model}}'
+        }]
+      }]
+    }],
+    ...overrides
+  })
+
+  it('matches an arbitrary Grok platform and renders controlled placeholders', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-grok',
+        baseUrl: 'https://gateway.example.com',
+        platform: 'grok',
+        groupId: 42,
+        groupName: 'Grok public',
+        usageConfig: { template_profiles: [customTemplateProfile()] }
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+
+    const tab = wrapper.findAll('button').find((button) => button.text().includes('Grok cURL'))
+    expect(tab).toBeDefined()
+    await tab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('.font-mono').text()).toContain('grok-42.sh')
+    expect(wrapper.find('pre code').text()).toContain('https://gateway.example.com/v1/chat/completions')
+    expect(wrapper.find('pre code').text()).toContain('Bearer sk-grok')
+    expect(wrapper.find('pre code').text()).toContain('Grok public gpt-5.5')
+  })
+
+  it('only applies a group-ID profile to the selected group', () => {
+    const profile = customTemplateProfile({
+      match: { platforms: [], group_ids: [99], claude_code_only: 'any' }
+    })
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'grok',
+        groupId: 42,
+        usageConfig: { template_profiles: [profile] }
+      },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: { template: '<span />' } } }
+    })
+
+    expect(wrapper.text()).not.toContain('Grok cURL')
+    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+  })
+
+  it('replace mode removes built-in templates while append mode preserves them', () => {
+    const replaceWrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'grok',
+        usageConfig: { template_profiles: [customTemplateProfile({ mode: 'replace' })] }
+      },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: { template: '<span />' } } }
+    })
+    expect(replaceWrapper.text()).toContain('Grok cURL')
+    expect(replaceWrapper.text()).not.toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(replaceWrapper.text()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+
+    const appendWrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'grok',
+        usageConfig: { template_profiles: [customTemplateProfile()] }
+      },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: { template: '<span />' } } }
+    })
+    expect(appendWrapper.text()).toContain('Grok cURL')
+    expect(appendWrapper.text()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(appendWrapper.text()).toContain('keys.useKeyModal.cliTabs.opencode')
+  })
+
+  it('enforces claude_code_only after all custom profile rules', () => {
+    const claudeProfile = customTemplateProfile({
+      match: { platforms: ['openai'], group_ids: [], claude_code_only: 'any' },
+      templates: [
+        customTemplateProfile().templates[0],
+        {
+          id: 'custom-claude',
+          label: 'Custom Claude',
+          kind: 'claude_code',
+          enabled: true,
+          sort_order: 2,
+          variants: [{ id: 'default', label: 'Default', files: [{ path: 'Terminal', content: 'claude {{api_key}}' }] }]
+        }
+      ]
+    })
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'openai',
+        allowMessagesDispatch: true,
+        claudeCodeOnly: true,
+        usageConfig: { template_profiles: [claudeProfile] }
+      },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: { template: '<span />' } } }
+    })
+
+    expect(wrapper.text()).toContain('Custom Claude')
+    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(wrapper.text()).not.toContain('Grok cURL')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+  })
 })

@@ -5709,12 +5709,18 @@
                 </div>
               </div>
 
+              <APIKeyTemplateProfilesEditor
+                v-model="apiKeyUsageConfig.template_profiles"
+                :groups="apiKeyTemplateGroups"
+                @validity="apiKeyTemplateProfilesValid = $event"
+              />
+
               <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
                 <button
                   type="button"
                   class="btn btn-primary btn-sm"
                   data-testid="api-key-usage-save"
-                  :disabled="apiKeyUsageSaving"
+                  :disabled="apiKeyUsageSaving || !apiKeyTemplateProfilesValid"
                   @click="saveAPIKeyUsageConfig"
                 >
                   {{ apiKeyUsageSaving ? t("common.saving") : t("common.save") }}
@@ -7679,6 +7685,7 @@ import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vu
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
+import APIKeyTemplateProfilesEditor from "@/components/admin/APIKeyTemplateProfilesEditor.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
@@ -8654,12 +8661,15 @@ const DEFAULT_API_KEY_USAGE_CONFIG: APIKeyUsageConfig = {
   codex_websocket_enabled: true,
   codex_include_legacy_ws_feature: false,
   codex_extra_config: "",
+  template_profiles: [],
 };
 const apiKeyUsageConfig = reactive<APIKeyUsageConfig>({
   ...DEFAULT_API_KEY_USAGE_CONFIG,
 });
 const apiKeyUsageLoading = ref(false);
 const apiKeyUsageSaving = ref(false);
+const apiKeyTemplateProfilesValid = ref(true);
+const apiKeyTemplateGroups = ref<AdminGroup[]>([]);
 const codexReasoningEffortOptions = computed(() =>
   ["none", "minimal", "low", "medium", "high", "xhigh"].map((value) => ({
     value,
@@ -9610,11 +9620,13 @@ async function loadSettings() {
 async function loadSubscriptionGroups() {
   try {
     const groups = await adminAPI.groups.getAll();
+    apiKeyTemplateGroups.value = groups;
     subscriptionGroups.value = groups.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
     );
   } catch (_error: unknown) {
+    apiKeyTemplateGroups.value = [];
     subscriptionGroups.value = [];
   }
 }

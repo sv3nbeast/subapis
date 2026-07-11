@@ -636,6 +636,22 @@ describe("admin SettingsView payment visible method controls", () => {
       codex_websocket_enabled: true,
       codex_include_legacy_ws_feature: false,
       codex_extra_config: "service_tier = \"fast\"",
+      template_profiles: [{
+        id: "grok-custom",
+        name: "Grok custom",
+        enabled: true,
+        priority: 100,
+        mode: "append",
+        match: { platforms: ["grok"], group_ids: [], claude_code_only: "any" },
+        templates: [{
+          id: "grok-curl",
+          label: "Grok cURL",
+          kind: "generic",
+          enabled: true,
+          sort_order: 1,
+          variants: [{ id: "default", label: "Default", files: [{ path: "Terminal", content: "curl {{base_url_v1}}" }] }],
+        }],
+      }],
     });
 
     const wrapper = mountView();
@@ -643,6 +659,7 @@ describe("admin SettingsView payment visible method controls", () => {
 
     const modelInput = wrapper.get('[data-testid="api-key-usage-codex-model"]');
     expect((modelInput.element as HTMLInputElement).value).toBe("gpt-custom");
+    expect(wrapper.get('[data-testid="api-key-template-profiles"]').text()).toContain("Grok custom");
 
     await modelInput.setValue("  gpt-admin-default  ");
     await wrapper.get('[data-testid="api-key-usage-save"]').trigger("click");
@@ -654,6 +671,9 @@ describe("admin SettingsView payment visible method controls", () => {
         codex_model: "gpt-admin-default",
         codex_review_model: "gpt-review",
         codex_extra_config: 'service_tier = "fast"',
+        template_profiles: expect.arrayContaining([
+          expect.objectContaining({ id: "grok-custom" }),
+        ]),
       }),
     );
     expect(updateSettings).not.toHaveBeenCalled();

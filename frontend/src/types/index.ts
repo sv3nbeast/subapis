@@ -205,6 +205,45 @@ export interface LoginAgreementDocument {
   content_md: string
 }
 
+export interface APIKeyUsageTemplateFile {
+  path: string
+  content: string
+  hint?: string
+}
+
+export interface APIKeyUsageTemplateVariant {
+  id: string
+  label: string
+  files: APIKeyUsageTemplateFile[]
+}
+
+export interface APIKeyUsageClientTemplate {
+  id: string
+  label: string
+  description?: string
+  note?: string
+  kind: string
+  enabled: boolean
+  sort_order: number
+  variants: APIKeyUsageTemplateVariant[]
+}
+
+export interface APIKeyUsageTemplateMatch {
+  platforms: string[]
+  group_ids: number[]
+  claude_code_only: 'any' | 'required' | 'forbidden'
+}
+
+export interface APIKeyUsageTemplateProfile {
+  id: string
+  name: string
+  enabled: boolean
+  priority: number
+  mode: 'append' | 'replace'
+  match: APIKeyUsageTemplateMatch
+  templates: APIKeyUsageClientTemplate[]
+}
+
 export interface APIKeyUsageConfig {
   claude_code_default_model: string
   claude_code_disable_nonessential_traffic: boolean
@@ -219,6 +258,7 @@ export interface APIKeyUsageConfig {
   codex_websocket_enabled: boolean
   codex_include_legacy_ws_feature: boolean
   codex_extra_config: string
+  template_profiles: APIKeyUsageTemplateProfile[]
 }
 
 export interface PublicSettings {
@@ -530,7 +570,10 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok'
+export type KnownGroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok'
+// Keep known values discoverable while allowing newly added backend platforms
+// to work with template profiles before the frontend is released again.
+export type GroupPlatform = KnownGroupPlatform | (string & {})
 
 export type SubscriptionType = 'standard' | 'subscription'
 
