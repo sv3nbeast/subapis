@@ -431,6 +431,30 @@ func TestSettingService_UpdateSettings_ClaudeUpstreamUserAgent(t *testing.T) {
 	require.Equal(t, "claude-cli/2.1.156 (external, cli)", repo.updates[SettingKeyClaudeUpstreamUserAgent])
 }
 
+func TestSettingService_ProxyAutoSelectGrokAndKiroSettings(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		ProxyAutoSelectMaxGrokAccountsPerProxy: 7,
+		ProxyAutoSelectMaxKiroAccountsPerProxy: 9,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "7", repo.updates[SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy])
+	require.Equal(t, "9", repo.updates[SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy])
+
+	parsed := svc.parseSettings(map[string]string{
+		SettingKeyProxyAutoSelectMaxGrokAccountsPerProxy: "11",
+		SettingKeyProxyAutoSelectMaxKiroAccountsPerProxy: "13",
+	})
+	require.Equal(t, 11, parsed.ProxyAutoSelectMaxGrokAccountsPerProxy)
+	require.Equal(t, 13, parsed.ProxyAutoSelectMaxKiroAccountsPerProxy)
+
+	defaults := svc.parseSettings(map[string]string{})
+	require.Equal(t, ProxyAutoSelectDefaultGrokAccountsPerProxy, defaults.ProxyAutoSelectMaxGrokAccountsPerProxy)
+	require.Equal(t, ProxyAutoSelectDefaultKiroAccountsPerProxy, defaults.ProxyAutoSelectMaxKiroAccountsPerProxy)
+}
+
 func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(t *testing.T) {
 	repo := &settingUpdateRepoStub{}
 	cfg := &config.Config{}

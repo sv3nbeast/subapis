@@ -679,6 +679,34 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
+  it("loads and saves Grok and Kiro proxy auto-select capacities", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      proxy_auto_select_max_grok_accounts_per_proxy: 2,
+      proxy_auto_select_max_kiro_accounts_per_proxy: 3,
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const grokInput = wrapper.get('[data-testid="proxy-auto-select-grok"]');
+    const kiroInput = wrapper.get('[data-testid="proxy-auto-select-kiro"]');
+    expect((grokInput.element as HTMLInputElement).value).toBe("2");
+    expect((kiroInput.element as HTMLInputElement).value).toBe("3");
+
+    await grokInput.setValue("7");
+    await kiroInput.setValue("9");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxy_auto_select_max_grok_accounts_per_proxy: 7,
+        proxy_auto_select_max_kiro_accounts_per_proxy: 9,
+      }),
+    );
+  });
+
   it("does not render legacy visible payment method controls", async () => {
     const wrapper = mountView();
 

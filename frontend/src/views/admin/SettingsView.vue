@@ -4435,6 +4435,7 @@
                     </label>
                     <input
                       v-model.number="form.proxy_auto_select_max_grok_accounts_per_proxy"
+                      data-testid="proxy-auto-select-grok"
                       type="number"
                       min="1"
                       max="100"
@@ -4447,6 +4448,7 @@
                     </label>
                     <input
                       v-model.number="form.proxy_auto_select_max_kiro_accounts_per_proxy"
+                      data-testid="proxy-auto-select-kiro"
                       type="number"
                       min="1"
                       max="100"
