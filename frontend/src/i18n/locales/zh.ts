@@ -1583,6 +1583,25 @@ export default {
     extraModelsEmpty: '无附加模型',
     latencyEmpty: '-',
     availabilityPrefix: '可用性',
+    availability: {
+      level: {
+        excellent: '极佳',
+        stable: '稳定',
+        unstable: '波动',
+        critical: '异常',
+        noData: '暂无数据'
+      },
+      description: {
+        excellent: '服务质量极佳',
+        stable: '服务保持稳定',
+        unstable: '近期存在波动',
+        critical: '可用性需要关注',
+        noData: '暂无可用样本'
+      },
+      noSamples: '暂无可用样本',
+      target: '目标 {n}%',
+      ariaLabel: '{label}：{value}，{level}'
+    },
     dialogLatency: '对话延迟',
     endpointPing: '端点 PING',
     history60pts: '近 {n} 次记录',
