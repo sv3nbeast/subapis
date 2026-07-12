@@ -3325,6 +3325,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
+				if isCodexCLI {
+					if normalized, changed, oldPhase := normalizeCodexProposedPlanPhase(eventType, upstreamMessage); changed {
+						upstreamMessage = normalized
+						logOpenAIWSModeInfo(
+							"ingress_ws_codex_proposed_plan_phase_normalized account_id=%d turn=%d conn_id=%s event=%s old_phase=%s new_phase=final_answer",
+							account.ID,
+							turn,
+							truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
+							normalizeOpenAIWSLogValue(eventType),
+							normalizeOpenAIWSLogValue(oldPhase),
+						)
+					}
+				}
 				if correctToolCalls && s.toolCorrector != nil && openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {
 					if corrected, changed := s.toolCorrector.CorrectToolCallsInSSEBytes(upstreamMessage); changed {
 						upstreamMessage = corrected
@@ -4235,6 +4248,74 @@ func isOpenAIWSTerminalEvent(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func isCodexProposedPlanText(text string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n")
+	return strings.HasPrefix(normalized, "<proposed_plan>\n") &&
+		strings.HasSuffix(normalized, "\n</proposed_plan>")
+}
+
+// normalizeCodexProposedPlanPhase repairs terminal Responses events where the
+// model emitted a valid proposed-plan block but mislabeled the assistant message
+// as commentary (or omitted phase). Codex only consolidates the XML wrapper into
+// its Plan UI for a final_answer item. The text and all streaming deltas remain
+// untouched; non-Codex clients and ordinary messages are never modified.
+func normalizeCodexProposedPlanPhase(eventType string, payload []byte) ([]byte, bool, string) {
+	if len(payload) == 0 {
+		return payload, false, ""
+	}
+	eventType = strings.TrimSpace(eventType)
+	updated := payload
+	switch eventType {
+	case "response.output_item.done":
+		item := gjson.GetBytes(payload, "item")
+		if strings.TrimSpace(item.Get("type").String()) != "message" {
+			return payload, false, ""
+		}
+		for _, content := range item.Get("content").Array() {
+			if strings.TrimSpace(content.Get("type").String()) != "output_text" || !isCodexProposedPlanText(content.Get("text").String()) {
+				continue
+			}
+			oldPhase := strings.TrimSpace(item.Get("phase").String())
+			if oldPhase == "final_answer" {
+				return payload, false, oldPhase
+			}
+			if oldPhase != "" && oldPhase != "commentary" {
+				return payload, false, oldPhase
+			}
+			next, err := sjson.SetBytes(updated, "item.phase", "final_answer")
+			if err != nil {
+				return payload, false, oldPhase
+			}
+			return next, true, oldPhase
+		}
+	case "response.completed", "response.done":
+		for index, item := range gjson.GetBytes(payload, "response.output").Array() {
+			if strings.TrimSpace(item.Get("type").String()) != "message" {
+				continue
+			}
+			for _, content := range item.Get("content").Array() {
+				if strings.TrimSpace(content.Get("type").String()) != "output_text" || !isCodexProposedPlanText(content.Get("text").String()) {
+					continue
+				}
+				oldPhase := strings.TrimSpace(item.Get("phase").String())
+				if oldPhase == "final_answer" {
+					return payload, false, oldPhase
+				}
+				if oldPhase != "" && oldPhase != "commentary" {
+					return payload, false, oldPhase
+				}
+				path := fmt.Sprintf("response.output.%d.phase", index)
+				next, err := sjson.SetBytes(updated, path, "final_answer")
+				if err != nil {
+					return payload, false, oldPhase
+				}
+				return next, true, oldPhase
+			}
+		}
+	}
+	return payload, false, ""
 }
 
 func isOpenAIWSTokenEvent(eventType string) bool {

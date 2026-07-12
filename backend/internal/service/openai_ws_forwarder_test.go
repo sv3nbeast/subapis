@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // TestIsOpenAIWSTokenEvent_TerminalEventsExcluded 覆盖 isOpenAIWSTokenEvent 的回归用例。
@@ -126,4 +127,33 @@ func TestIsOpenAIWSTokenEvent_DisjointWithTerminal(t *testing.T) {
 			require.False(t, isOpenAIWSTokenEvent(ev), "terminal event %q must NOT be classified as token event (issue #2651)", ev)
 		})
 	}
+}
+
+func TestNormalizeCodexProposedPlanPhase(t *testing.T) {
+	plan := "<proposed_plan>\n# xxxx\n</proposed_plan>"
+
+	outputDone := []byte(`{"type":"response.output_item.done","item":{"type":"message","phase":"commentary","content":[{"type":"output_text","text":"<proposed_plan>\n# xxxx\n</proposed_plan>"}]}}`)
+	normalized, changed, oldPhase := normalizeCodexProposedPlanPhase("response.output_item.done", outputDone)
+	require.True(t, changed)
+	require.Equal(t, "commentary", oldPhase)
+	require.Equal(t, "final_answer", gjson.GetBytes(normalized, "item.phase").String())
+	require.Equal(t, plan, gjson.GetBytes(normalized, "item.content.0.text").String(), "plan text must remain byte-for-byte equivalent after JSON decoding")
+
+	completed := []byte(`{"type":"response.completed","response":{"output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"<proposed_plan>\r\n# xxxx\r\n</proposed_plan>"}]}]}}`)
+	normalized, changed, oldPhase = normalizeCodexProposedPlanPhase("response.completed", completed)
+	require.True(t, changed)
+	require.Empty(t, oldPhase)
+	require.Equal(t, "final_answer", gjson.GetBytes(normalized, "response.output.1.phase").String())
+
+	alreadyFinal := []byte(`{"type":"response.output_item.done","item":{"type":"message","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>\n# xxxx\n</proposed_plan>"}]}}`)
+	normalized, changed, oldPhase = normalizeCodexProposedPlanPhase("response.output_item.done", alreadyFinal)
+	require.False(t, changed)
+	require.Equal(t, "final_answer", oldPhase)
+	require.Equal(t, alreadyFinal, normalized)
+
+	ordinaryText := []byte(`{"type":"response.output_item.done","item":{"type":"message","phase":"commentary","content":[{"type":"output_text","text":"The literal tag <proposed_plan> is documented here."}]}}`)
+	normalized, changed, oldPhase = normalizeCodexProposedPlanPhase("response.output_item.done", ordinaryText)
+	require.False(t, changed)
+	require.Empty(t, oldPhase)
+	require.Equal(t, ordinaryText, normalized)
 }
