@@ -971,6 +971,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				accountReleaseFunc()
 			}
 			if err != nil {
+				if isOpenAIForwardClientCanceled(c, err) {
+					markOpenAIClientClosedRequest(c)
+					return
+				}
 				// Beta policy block: return 400 immediately, no failover
 				var betaBlockedErr *service.BetaBlockedError
 				if errors.As(err, &betaBlockedErr) {

@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestApplyErrorPassthroughRule_NoBoundService(t *testing.T) {
@@ -116,6 +117,44 @@ func TestOpenAIHandleErrorResponse_ContextWindow502KeepsMessageWithoutFailover(t
 	require.True(t, ok)
 	assert.Equal(t, "upstream_error", errField["type"])
 	assert.Equal(t, "Your input exceeds the context window of this model. Please adjust your input and try again.", errField["message"])
+}
+
+func TestGrokHandleErrorResponsePromptLimitReturnsResponses400AndMarksSLAExcluded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	svc := &OpenAIGatewayService{}
+	respBody := []byte(`{"code":"invalid-argument","error":"This model's maximum prompt length is 500000 but the request contains 500553 tokens."}`)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(respBody)), Header: http.Header{}}
+	account := &Account{ID: 15, Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+	_, err := svc.handleErrorResponse(context.Background(), resp, c, account, []byte(`{"input":"hi"}`))
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "context_length_exceeded", gjson.Get(rec.Body.String(), "error.code").String())
+	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), "prompt is too long")
+	require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+}
+
+func TestGrokCompatPromptLimitReturnsAnthropic400AndMarksSLAExcluded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &OpenAIGatewayService{}
+	respBody := []byte(`{"code":"invalid-argument","error":"This model's maximum prompt length is 500000 but the request contains 500553 tokens."}`)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(bytes.NewReader(respBody)), Header: http.Header{}}
+	account := &Account{ID: 16, Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+	_, err := svc.handleCompatErrorResponse(resp, c, account, writeAnthropicError)
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), "prompt is too long")
+	require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
 }
 
 func TestGeminiWriteGeminiMappedError_NoRuleKeepsDefault(t *testing.T) {

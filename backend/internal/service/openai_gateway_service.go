@@ -1233,6 +1233,10 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 		if strings.Contains(lower, "maximum context length") || strings.Contains(lower, "max context length") {
 			return true
 		}
+		if strings.Contains(lower, "maximum prompt length") &&
+			(strings.Contains(lower, "request contains") || strings.Contains(lower, "token")) {
+			return true
+		}
 		hasExceeded := strings.Contains(lower, "exceed") || strings.Contains(lower, "too large") || strings.Contains(lower, "too long")
 		if strings.Contains(lower, "context window") && hasExceeded {
 			return true
@@ -4834,6 +4838,29 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
+	if account.Platform == PlatformGrok && isOpenAIContextWindowError(upstreamMsg, body) {
+		clientMessage := grokContextWindowClientMessage(upstreamMsg)
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+			Kind:               "client_context_limit",
+			Message:            clientMessage,
+			Detail:             upstreamDetail,
+		})
+		MarkResponseCommitted(c)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"code":    "context_length_exceeded",
+				"message": clientMessage,
+			},
+		})
+		return nil, fmt.Errorf("grok context length exceeded: %s", clientMessage)
+	}
 
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.openai_gateway",
@@ -5028,6 +5055,23 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	if account.Platform == PlatformGrok && isOpenAIContextWindowError(upstreamMsg, body) {
+		clientMessage := grokContextWindowClientMessage(upstreamMsg)
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+			Kind:               "client_context_limit",
+			Message:            clientMessage,
+			Detail:             upstreamDetail,
+		})
+		MarkResponseCommitted(c)
+		writeError(c, http.StatusBadRequest, "invalid_request_error", clientMessage)
+		return nil, fmt.Errorf("grok context length exceeded: %s", clientMessage)
+	}
 
 	// Apply error passthrough rules
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(

@@ -228,6 +228,17 @@ func isGrokModelInputSchemaError(body []byte) bool {
 		strings.Contains(message, "modelinput")
 }
 
+func grokContextWindowClientMessage(upstreamMessage string) string {
+	message := strings.TrimSpace(sanitizeUpstreamErrorMessage(upstreamMessage))
+	if message == "" {
+		return "prompt is too long for the selected model"
+	}
+	if strings.Contains(strings.ToLower(message), "prompt is too long") {
+		return message
+	}
+	return "prompt is too long: " + message
+}
+
 // normalizeGrokResponsesModelInput converts only output-shaped Responses
 // history that xAI cannot deserialize back into canonical input-shaped items.
 // It is intentionally called only after the exact xAI ModelInput 422 above, so

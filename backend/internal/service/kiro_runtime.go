@@ -409,6 +409,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		currentRequestCtx = nextRequestCtx
 	}
 	if err != nil {
+		if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
+			return nil, newOpenAIClientCanceledError(err)
+		}
 		if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,

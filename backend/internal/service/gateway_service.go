@@ -9545,6 +9545,16 @@ func extractUpstreamErrorMessage(body []byte) string {
 		return m
 	}
 
+	// xAI and some OpenAI-compatible providers use a top-level string instead
+	// of the nested OpenAI error object: {"code":"...","error":"..."}.
+	// Only accept an actual JSON string here; object-shaped `error` values are
+	// handled above and must not be returned as raw JSON.
+	if result := gjson.GetBytes(body, "error"); result.Type == gjson.String {
+		if message := strings.TrimSpace(result.String()); message != "" {
+			return message
+		}
+	}
+
 	// ChatGPT 内部 API 风格：{"detail":"..."}
 	if d := gjson.GetBytes(body, "detail").String(); strings.TrimSpace(d) != "" {
 		return d

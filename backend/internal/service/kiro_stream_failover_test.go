@@ -57,6 +57,19 @@ type kiroStreamFailoverQueuedUpstream struct {
 	errs      []error
 }
 
+type kiroCancelingReadCloser struct {
+	cancel context.CancelFunc
+}
+
+func (r *kiroCancelingReadCloser) Read(_ []byte) (int, error) {
+	if r.cancel != nil {
+		r.cancel()
+	}
+	return 0, context.Canceled
+}
+
+func (r *kiroCancelingReadCloser) Close() error { return nil }
+
 func (u *kiroStreamFailoverQueuedUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	return nil, fmt.Errorf("unexpected Do call")
 }
@@ -195,6 +208,44 @@ func TestForwardKiroMessagesNonStreamingExceptionReturnsKiro429Failover(t *testi
 	require.True(t, failoverErr.KiroRateLimited)
 	require.False(t, failoverErr.RetryableOnSameAccount)
 	require.Equal(t, http.StatusOK, rec.Code, "parse failover should not write a plain 502 before handler can retry")
+}
+
+func TestForwardKiroMessagesNonStreamingClientCancelDoesNotWrite502(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	requestCtx, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(requestCtx)
+
+	account := &Account{
+		ID: 43, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+		},
+	}
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       &kiroCancelingReadCloser{cancel: cancel},
+	}}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	parsed := &ParsedRequest{
+		Model: "claude-opus-4-8",
+		Body:  NewRequestBodyRef([]byte(`{"model":"claude-opus-4-8","max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)),
+	}
+
+	result, err := svc.forwardKiroMessages(requestCtx, c, account, parsed, time.Now())
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.True(t, IsOpenAIClientCanceledError(err), "got %v", err)
+	require.False(t, rec.Result().StatusCode == http.StatusBadGateway)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestForwardKiroMessagesNonStreamingMetadataOnlyRetriesWithFreshConversationAndEndpoint(t *testing.T) {

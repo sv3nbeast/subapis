@@ -308,6 +308,9 @@ func TestIsOpenAIContextWindowError(t *testing.T) {
 		"maximum context length exceeded",
 		nil,
 	))
+	xaiBody := []byte(`{"code":"invalid-argument","error":"This model's maximum prompt length is 500000 but the request contains 500553 tokens."}`)
+	require.Equal(t, "This model's maximum prompt length is 500000 but the request contains 500553 tokens.", ExtractUpstreamErrorMessage(xaiBody))
+	require.True(t, isOpenAIContextWindowError("", xaiBody))
 	require.False(t, isOpenAIContextWindowError(
 		"context canceled",
 		nil,

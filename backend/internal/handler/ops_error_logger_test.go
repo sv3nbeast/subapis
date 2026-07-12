@@ -469,6 +469,27 @@ func TestClassifyOpsUpstreamRateLimitRemainsSLAError(t *testing.T) {
 	require.Equal(t, "upstream_http", classifyOpsErrorSource(phase, msg))
 }
 
+func TestClassifyOpsUpstreamConfirmedClientContextLimitIsExcludedFromSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, http.StatusBadRequest, "maximum prompt length exceeded", "")
+	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonContextLimit)
+
+	phase, limited, owner, source := classifyOpsErrorLog(
+		c,
+		"invalid_request_error",
+		"prompt is too long",
+		"context_length_exceeded",
+		http.StatusBadRequest,
+	)
+
+	require.Equal(t, "request", phase)
+	require.True(t, limited)
+	require.Equal(t, "client", owner)
+	require.Equal(t, "client_request", source)
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

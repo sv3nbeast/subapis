@@ -60,6 +60,7 @@ const (
 	OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned  = "api_key_group_unassigned"
 	OpsClientBusinessLimitedReasonLocalFeatureGate       = "local_feature_gate"
 	OpsClientBusinessLimitedReasonLocalPolicyDenied      = "local_policy_denied"
+	OpsClientBusinessLimitedReasonContextLimit           = "client_context_limit"
 )
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
@@ -108,6 +109,18 @@ func HasOpsClientBusinessLimited(c *gin.Context) bool {
 	}
 	marked, _ := v.(bool)
 	return marked
+}
+
+func HasOpsClientBusinessLimitedReason(c *gin.Context, reason string) bool {
+	if c == nil || strings.TrimSpace(reason) == "" || !HasOpsClientBusinessLimited(c) {
+		return false
+	}
+	value, ok := c.Get(OpsClientBusinessLimitedReasonKey)
+	if !ok {
+		return false
+	}
+	markedReason, _ := value.(string)
+	return strings.TrimSpace(markedReason) == strings.TrimSpace(reason)
 }
 
 // OpsStreamError 描述网关在「响应状态已固化为 200」之后（keepalive ping 或部分数据

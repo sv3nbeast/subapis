@@ -1437,11 +1437,14 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	phase = classifyOpsPhase(errType, message, code)
 	routingCapacityLimited := isOpsRoutingCapacityLimited(c)
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)
+	clientContextLimited := service.HasOpsClientBusinessLimitedReason(c, service.OpsClientBusinessLimitedReasonContextLimit)
 	upstreamError := hasOpsUpstreamErrorContext(c)
-	if upstreamError && !routingCapacityLimited {
+	if upstreamError && !routingCapacityLimited && !clientContextLimited {
 		phase = "upstream"
 	}
-	if clientBusinessLimited && !upstreamError && !routingCapacityLimited {
+	if clientContextLimited && !routingCapacityLimited {
+		phase = "request"
+	} else if clientBusinessLimited && !upstreamError && !routingCapacityLimited {
 		phase = "auth"
 	}
 	if routingCapacityLimited {
@@ -1450,7 +1453,7 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	msg := strings.ToLower(message)
 	localClientAuthError := !upstreamError && phase == "auth" && isOpsClientAuthError(code, msg)
 	localBusinessLimited := !upstreamError && classifyOpsIsBusinessLimited(errType, phase, code, status, message, localClientAuthError)
-	isBusinessLimited = routingCapacityLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
+	isBusinessLimited = routingCapacityLimited || clientContextLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
 	errorOwner = classifyOpsErrorOwner(phase, message)
 	errorSource = classifyOpsErrorSource(phase, message)
 	return phase, isBusinessLimited, errorOwner, errorSource
