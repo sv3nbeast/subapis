@@ -52,6 +52,7 @@ const (
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
 	editToolDescriptionSuffix  = "IMPORTANT: If new content exceeds 50 lines, split it into multiple Edit calls, replacing or appending no more than 50 lines per call. If appending, use a unique placeholder and remove it in the final chunk."
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
+	systemNativeToolCallPolicy = "When tools are available and you decide to use one, invoke it through the native tool interface. Never narrate, announce, simulate, or emit a placeholder for a tool call in assistant text (for example, `call ...`, `Calling ...`, `[Called ...]`, or `<invoke ...>`). Do not end the turn after merely saying that you will call a tool. Either issue the real tool call now or provide a complete answer without claiming that a tool was called."
 	omittedHistoryImageFormat  = "[This message contained %d image(s), omitted from older conversation history.]"
 	kiroTruncationPlaceholder  = "[Earlier conversation history was truncated to fit the model's input limit. Older messages and tool activity have been omitted.]"
 	kiroDefaultMaxOutputTokens = 32000
@@ -549,7 +550,11 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	}
 	requestCtx.StopSequences = extractClaudeStopSequences(claudeBody)
 	structuredOutputTool, structuredOutputHint := buildStructuredOutputTool(claudeBody, &requestCtx)
-	toolChoiceHint := joinPromptHints(extractClaudeToolChoiceHint(claudeBody, &requestCtx), structuredOutputHint)
+	toolChoiceHint := joinPromptHints(
+		extractClaudeToolChoiceHint(claudeBody, &requestCtx),
+		buildKiroNativeToolCallHint(claudeBody, structuredOutputTool != nil),
+		structuredOutputHint,
+	)
 	baseSystem := extractSystemPrompt(claudeBody)
 	if inlineSystem != "" {
 		if strings.TrimSpace(baseSystem) != "" {
@@ -1780,6 +1785,17 @@ func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestConte
 	}
 
 	return ""
+}
+
+func buildKiroNativeToolCallHint(claudeBody []byte, hasSyntheticTool bool) string {
+	if isToolChoiceNone(claudeBody) {
+		return ""
+	}
+	tools := gjson.GetBytes(claudeBody, "tools")
+	if !hasSyntheticTool && (!tools.IsArray() || len(tools.Array()) == 0) {
+		return ""
+	}
+	return "[TOOL CALLING PROTOCOL: " + systemNativeToolCallPolicy + "]"
 }
 
 func extractClaudeStopSequences(claudeBody []byte) []string {

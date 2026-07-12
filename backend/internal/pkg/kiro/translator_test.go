@@ -60,6 +60,8 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Contains(t, systemContent, "You must never say that you are Kiro")
 	require.Contains(t, systemContent, "<identity>")
 	require.Contains(t, systemContent, "You are a test system prompt.")
+	require.Contains(t, systemContent, systemNativeToolCallPolicy)
+	require.Contains(t, systemContent, "Never narrate, announce, simulate, or emit a placeholder for a tool call")
 	require.NotContains(t, systemContent, "[Context: Current date is ")
 	require.NotContains(t, systemContent, "[Context: Current time is ")
 	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "You are a test system prompt."))
@@ -741,6 +743,7 @@ func TestBuildKiroPayloadAddsStructuredOutputTool(t *testing.T) {
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "MUST call the 'result' tool")
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "respond by calling the 'result' tool")
+	require.Contains(t, systemContent, systemNativeToolCallPolicy)
 }
 
 func TestBuildKiroPayloadInjectsThinkingForThinkingAliasModel(t *testing.T) {
@@ -820,7 +823,21 @@ func TestBuildKiroPayloadToolChoiceNoneOmitsTools(t *testing.T) {
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "Do not use any tools. Respond with text only.")
+	require.NotContains(t, systemContent, systemNativeToolCallPolicy)
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
+}
+
+func TestBuildKiroPayloadWithoutToolsOmitsNativeToolCallPolicy(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[{"role":"user","content":"explain the result"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.NotContains(t, systemContent, systemNativeToolCallPolicy)
 }
 
 func TestParseNonStreamingEventStream(t *testing.T) {
