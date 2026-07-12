@@ -204,7 +204,15 @@ func (r *webChatDocumentRepository) SearchDocumentChunks(ctx context.Context, us
 	if limit <= 0 {
 		limit = 8
 	}
-	rows, err := r.db.QueryContext(ctx, `WITH ranked AS (SELECT c.id,c.document_id,c.chunk_index,c.page_number,c.location_label,c.content,d.original_name,row_number() OVER(PARTITION BY d.id ORDER BY (CASE WHEN c.search_vector @@ plainto_tsquery('simple',$4) THEN ts_rank_cd(c.search_vector,plainto_tsquery('simple',$4)) ELSE 0 END)+similarity(c.content,$4) DESC,c.chunk_index) per_doc,(CASE WHEN c.search_vector @@ plainto_tsquery('simple',$4) THEN ts_rank_cd(c.search_vector,plainto_tsquery('simple',$4)) ELSE 0 END)+similarity(c.content,$4) score FROM web_chat_document_chunks c JOIN web_chat_documents d ON d.id=c.document_id WHERE d.user_id=$1 AND d.deleted_at IS NULL AND d.status='ready' AND d.enabled AND (($2>0 AND d.project_id=$2) OR d.id=ANY($3))) SELECT id,document_id,chunk_index,page_number,location_label,content,original_name FROM ranked WHERE per_doc<=3 ORDER BY score DESC,id LIMIT $5`, userID, projectID, pq.Array(ids), strings.TrimSpace(query), limit)
+	query = truncateDocumentSearchQuery(strings.TrimSpace(query), 512)
+	if query == "" {
+		return []service.WebChatDocumentChunk{}, nil
+	}
+	var hasTrigram bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_trgm')`).Scan(&hasTrigram); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, webChatDocumentSearchQuery(hasTrigram), userID, projectID, pq.Array(ids), query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +225,43 @@ func (r *webChatDocumentRepository) SearchDocumentChunks(ctx context.Context, us
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func truncateDocumentSearchQuery(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		runes = runes[:maxRunes]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
+func webChatDocumentSearchQuery(hasTrigram bool) string {
+	const baseFilter = `d.user_id=$1 AND d.deleted_at IS NULL AND d.status='ready' AND d.enabled AND (($2>0 AND d.project_id=$2) OR d.id=ANY($3))`
+	if !hasTrigram {
+		return `WITH candidates AS (
+			SELECT c.id,c.document_id,c.chunk_index,c.page_number,c.location_label,c.content,d.original_name,
+				ts_rank_cd(c.search_vector,plainto_tsquery('simple',$4)) score
+			FROM web_chat_document_chunks c JOIN web_chat_documents d ON d.id=c.document_id
+			WHERE ` + baseFilter + ` AND c.search_vector @@ plainto_tsquery('simple',$4)
+		), ranked AS (
+			SELECT *,row_number() OVER(PARTITION BY document_id ORDER BY score DESC,chunk_index) per_doc FROM candidates
+		)
+		SELECT id,document_id,chunk_index,page_number,location_label,content,original_name
+		FROM ranked WHERE per_doc<=3 ORDER BY score DESC,id LIMIT $5`
+	}
+	return `WITH candidates AS (
+		SELECT c.id,c.document_id,c.chunk_index,c.page_number,c.location_label,c.content,d.original_name,
+			(CASE WHEN c.search_vector @@ plainto_tsquery('simple',$4) THEN ts_rank_cd(c.search_vector,plainto_tsquery('simple',$4)) ELSE 0 END)+word_similarity($4,c.content) score
+		FROM web_chat_document_chunks c JOIN web_chat_documents d ON d.id=c.document_id
+		WHERE ` + baseFilter + ` AND (c.search_vector @@ plainto_tsquery('simple',$4) OR word_similarity($4,c.content)>=0.1)
+	), ranked AS (
+		SELECT *,row_number() OVER(PARTITION BY document_id ORDER BY score DESC,chunk_index) per_doc FROM candidates
+	)
+	SELECT id,document_id,chunk_index,page_number,location_label,content,original_name
+	FROM ranked WHERE per_doc<=3 AND score>0 ORDER BY score DESC,id LIMIT $5`
 }
 
 func (r *webChatDocumentRepository) LinkMessageDocuments(ctx context.Context, userID, messageID int64, ids []int64) error {

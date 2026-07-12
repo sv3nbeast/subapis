@@ -92,8 +92,19 @@ func (r *webChatRepository) UpdateSessionTarget(ctx context.Context, userID, ses
 	return webChatAffected(err, res, service.ErrWebChatSessionNotFound)
 }
 func (r *webChatRepository) DeleteSession(ctx context.Context, userID, sessionID int64) error {
-	res, err := r.sql.ExecContext(ctx, `UPDATE web_chat_sessions SET deleted_at=now(),updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, sessionID, userID)
-	return webChatAffected(err, res, service.ErrWebChatSessionNotFound)
+	tx, err := r.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE web_chat_sessions SET deleted_at=now(),updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, sessionID, userID)
+	if err = webChatAffected(err, res, service.ErrWebChatSessionNotFound); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE web_chat_documents SET status='deleting',attempt_count=0,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=now(),updated_at=now() WHERE user_id=$1 AND session_id=$2 AND deleted_at IS NULL`, userID, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const webChatMessageColumns = `m.id,m.session_id,m.user_id,m.role,m.content,m.status,COALESCE(m.error_message,''),m.request_id,m.input_tokens,m.output_tokens,m.cache_read_tokens,m.cache_creation_tokens,m.logical_id,m.parent_message_id,m.version_index,(SELECT count(*) FROM web_chat_messages v WHERE v.session_id=m.session_id AND v.logical_id=m.logical_id AND v.deleted_at IS NULL),m.version_reason,m.template_id,m.sources,m.created_at,m.updated_at`
@@ -349,6 +360,9 @@ func (r *webChatRepository) DeleteProject(ctx context.Context, userID, projectID
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE web_chat_projects SET deleted_at=now(),updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, projectID, userID)
 	if err = webChatAffected(err, res, service.ErrWebChatSessionNotFound); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE web_chat_documents SET status='deleting',attempt_count=0,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=now(),updated_at=now() WHERE user_id=$1 AND project_id=$2 AND deleted_at IS NULL`, userID, projectID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE web_chat_sessions SET project_id=NULL,updated_at=now() WHERE project_id=$1 AND user_id=$2 AND deleted_at IS NULL`, projectID, userID); err != nil {

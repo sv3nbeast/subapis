@@ -280,11 +280,6 @@ func (s *WebChatService) DeleteSession(ctx context.Context, userID, sessionID in
 	if !s.FeatureEnabled(ctx) {
 		return ErrWebChatDisabled
 	}
-	if s.documents != nil && s.documents.repo != nil {
-		if err := s.documents.repo.MarkSessionDocumentsDeleting(ctx, userID, sessionID); err != nil {
-			return err
-		}
-	}
 	return s.repo.DeleteSession(ctx, userID, sessionID)
 }
 
@@ -422,12 +417,13 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		return nil, err
 	}
 	var assistant *WebChatMessage
+	var revisedUser *WebChatMessage
 	var requestedDocuments []int64
 	if s.documents != nil && s.documents.repo != nil {
 		requestedDocuments, _ = s.documents.repo.MessageDocumentIDs(ctx, userID, messageID)
 	}
 	if revise {
-		_, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content))
+		revisedUser, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content))
 	} else {
 		assistant, err = s.repo.RegenerateTurn(ctx, userID, sessionID, messageID)
 	}
@@ -443,7 +439,11 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 	if s.documents != nil && session.KnowledgeEnabled {
 		query := lastUserContent(messages)
 		var knowledge string
-		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, 0, assistant.ID, query, requestedDocuments, true)
+		userMessageID := int64(0)
+		if revisedUser != nil {
+			userMessageID = revisedUser.ID
+		}
+		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, userMessageID, assistant.ID, query, requestedDocuments, true)
 		if err != nil {
 			_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistant.ID, "", err.Error(), "", WebChatUsage{})
 			return nil, err
@@ -529,11 +529,6 @@ func (s *WebChatService) DeleteProject(ctx context.Context, userID, projectID in
 	}
 	if _, err := s.projectByID(ctx, userID, projectID); err != nil {
 		return err
-	}
-	if s.documents != nil && s.documents.repo != nil {
-		if err := s.documents.repo.MarkProjectDocumentsDeleting(ctx, userID, projectID); err != nil {
-			return err
-		}
 	}
 	return s.repo.DeleteProject(ctx, userID, projectID)
 }
