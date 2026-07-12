@@ -1381,7 +1381,7 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 	effectiveBudget := requestCtx.InputTokenBudget
 	finalInputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	budgetExceeded := effectiveBudget > 0 && finalInputTokens > effectiveBudget
-	if !requestCtx.PayloadTruncated && originalInputTokens < 500_000 && !budgetExceeded {
+	if originalInputTokens < 500_000 && !budgetExceeded {
 		return
 	}
 	accountID := int64(0)
@@ -1405,7 +1405,6 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 		zap.Int("original_input_estimate", originalInputTokens),
 		zap.Int("effective_input_budget", effectiveBudget),
 		zap.Int("final_input_tokens", finalInputTokens),
-		zap.Bool("payload_truncated", requestCtx.PayloadTruncated),
 		zap.Bool("budget_exceeded", budgetExceeded),
 	}
 	if budgetExceeded {

@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -60,13 +59,12 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Contains(t, systemContent, "You must never say that you are Kiro")
 	require.Contains(t, systemContent, "<identity>")
 	require.Contains(t, systemContent, "You are a test system prompt.")
-	require.Contains(t, systemContent, systemNativeToolCallPolicy)
-	require.Contains(t, systemContent, "Never narrate, announce, simulate, or emit a placeholder for a tool call")
+	require.NotContains(t, systemContent, "TOOL CALLING PROTOCOL")
+	require.NotContains(t, systemContent, "Never narrate, announce, simulate")
 	require.NotContains(t, systemContent, "[Context: Current date is ")
 	require.NotContains(t, systemContent, "[Context: Current time is ")
 	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "You are a test system prompt."))
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
-	require.True(t, kiroBuildResult.Context.NativeToolsAvailable)
 }
 
 func TestBuildKiroTemporalContextDefaultIsEmpty(t *testing.T) {
@@ -149,7 +147,7 @@ func TestBuildKiroPayloadUsesRandomConversationIDForSyntheticAnchor(t *testing.T
 	require.NotEqual(t, firstConversationID, secondConversationID)
 }
 
-func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {
+func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 	big := strings.Repeat("lorem ipsum dolor sit amet ", 80)
 	messages := []map[string]string{
 		{"role": "user", "content": "start the long task"},
@@ -171,26 +169,70 @@ func TestBuildKiroPayloadTruncatesOversizedHistory(t *testing.T) {
 
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
-	require.True(t, result.Context.PayloadTruncated)
+	require.Greater(t, len(result.Payload), 900*1024)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
 	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.InputTokenBudget)
-	require.Less(t, result.Context.InputTokenBudget, anthropictokenizer.CountTokens(string(body)))
-	require.Less(t, result.Context.InputTokenBudget, 1_000_000)
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
-	require.GreaterOrEqual(t, len(history), 3)
+	require.Len(t, history, len(messages), "system priming offsets the merged adjacent final user messages and currentMessage extraction")
 	require.Contains(t, history[0].Get("userInputMessage.content").String(), "helpful assistant")
+	require.Equal(t, "start the long task", history[2].Get("userInputMessage.content").String())
 
-	foundPlaceholder := false
 	for _, item := range history {
-		if strings.Contains(item.Get("userInputMessage.content").String(), "truncated to fit") {
-			foundPlaceholder = true
-			break
+		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
+	}
+}
+
+func TestBuildKiroPayloadPreservesNativeToolHistoryLargerThanLegacyWireCap(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "user", "content": "inspect the workspace"},
+		{"role": "assistant", "content": []map[string]any{
+			{"type": "tool_use", "id": "toolu_legacy", "name": "exec_command", "input": map[string]any{"cmd": "pwd"}},
+		}},
+		{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_legacy", "content": "/workspace"},
+		}},
+		{"role": "assistant", "content": "workspace located"},
+		{"role": "user", "content": strings.Repeat("preserved context block ", 50000)},
+		{"role": "assistant", "content": "context acknowledged"},
+		{"role": "user", "content": "finish the task"},
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-8",
+		"messages": messages,
+		"tools": []map[string]any{
+			{"name": "exec_command", "description": "run a command", "input_schema": map[string]any{"type": "object"}},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Greater(t, len(result.Payload), 900*1024)
+
+	foundToolUse := false
+	foundToolResult := false
+	for _, message := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
+		for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
+			if toolUse.Get("toolUseId").String() == "toolu_legacy" {
+				foundToolUse = true
+				require.Equal(t, "execCommand", toolUse.Get("name").String())
+			}
+		}
+		for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+			if toolResult.Get("toolUseId").String() == "toolu_legacy" {
+				foundToolResult = true
+				require.Equal(t, "/workspace", toolResult.Get("content.0.text").String())
+			}
 		}
 	}
-	require.True(t, foundPlaceholder)
+	require.True(t, foundToolUse)
+	require.True(t, foundToolResult)
+	require.Equal(t, "finish the task", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.NotContains(t, string(result.Payload), "Tool results:")
+	require.NotContains(t, string(result.Payload), "truncated to fit")
 }
 
 func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testing.T) {
@@ -744,7 +786,6 @@ func TestBuildKiroPayloadAddsStructuredOutputTool(t *testing.T) {
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "MUST call the 'result' tool")
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "respond by calling the 'result' tool")
-	require.Contains(t, systemContent, systemNativeToolCallPolicy)
 }
 
 func TestBuildKiroPayloadInjectsThinkingForThinkingAliasModel(t *testing.T) {
@@ -824,56 +865,7 @@ func TestBuildKiroPayloadToolChoiceNoneOmitsTools(t *testing.T) {
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "Do not use any tools. Respond with text only.")
-	require.NotContains(t, systemContent, systemNativeToolCallPolicy)
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
-}
-
-func TestBuildKiroPayloadWithoutToolsOmitsNativeToolCallPolicy(t *testing.T) {
-	body := []byte(`{
-		"model":"claude-opus-4-8",
-		"messages":[{"role":"user","content":"explain the result"}]
-	}`)
-
-	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
-	require.NoError(t, err)
-
-	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.NotContains(t, systemContent, systemNativeToolCallPolicy)
-	require.False(t, result.Context.NativeToolsAvailable)
-}
-
-func TestParseNonStreamingRejectsNarratedToolTranscriptForTruncatedToolRequest(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{
-			"content": "先检查列表结构。\n\ncall 找后台 ProductManager 的商品列表渲染。\n\nuser Tool results provided.\n\nTool results:",
-		},
-	}))
-
-	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4-8", KiroRequestContext{
-		NativeToolsAvailable: true,
-		PayloadTruncated:     true,
-	})
-
-	require.Nil(t, result)
-	require.EqualError(t, err, "empty kiro event stream: narrated tool call without native invocation")
-}
-
-func TestParseNonStreamingAllowsNarratedCallExampleInsideCodeFence(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{
-			"content": "Use this DSL syntax:\n```text\ncall build_product_list\n```",
-		},
-	}))
-
-	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4-8", KiroRequestContext{
-		NativeToolsAvailable: true,
-		PayloadTruncated:     true,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
 }
 
 func TestParseNonStreamingEventStream(t *testing.T) {
@@ -2651,7 +2643,7 @@ func TestBuildKiroPayloadRemovesHistoryOrphanToolUse(t *testing.T) {
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
 }
 
-func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
+func TestBuildKiroPayloadPreservesCompletedHistoryToolCycles(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-8",
 		"messages":[
@@ -2677,25 +2669,37 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
 	require.NoError(t, err)
 	payload := result.Payload
 
+	foundT1ToolUse := false
+	foundT1ToolResult := false
+	foundT2ToolUse := false
 	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
-		require.Equal(t, int64(0), msg.Get("assistantResponseMessage.toolUses.#").Int())
-		require.False(t, msg.Get("userInputMessage.userInputMessageContext.toolResults").Exists())
+		for _, toolUse := range msg.Get("assistantResponseMessage.toolUses").Array() {
+			switch toolUse.Get("toolUseId").String() {
+			case "t1":
+				foundT1ToolUse = true
+				require.Equal(t, "execCommand", toolUse.Get("name").String())
+			case "t2":
+				foundT2ToolUse = true
+				require.Equal(t, "execCommand", toolUse.Get("name").String())
+			}
+		}
+		for _, toolResult := range msg.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+			if toolResult.Get("toolUseId").String() == "t1" {
+				foundT1ToolResult = true
+				require.Equal(t, "build ok", toolResult.Get("content.0.text").String())
+			}
+		}
 		require.NotContains(t, msg.Get("assistantResponseMessage.content").String(), "[Called tool")
 	}
-	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Exists())
+	require.True(t, foundT1ToolUse)
+	require.True(t, foundT1ToolResult)
+	require.True(t, foundT2ToolUse)
+	require.Equal(t, "t2", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "tests pass", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
 	require.Contains(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String(), "Summarize everything")
-
-	var historyText strings.Builder
-	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
-		historyText.WriteString(msg.Get("assistantResponseMessage.content").String())
-		historyText.WriteString("\n")
-		historyText.WriteString(msg.Get("userInputMessage.content").String())
-		historyText.WriteString("\n")
-	}
-	historyText.WriteString(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
-	combined := historyText.String()
-	require.Contains(t, combined, "[exec_command]")
-	require.Contains(t, combined, "tests pass")
+	require.Equal(t, "execCommand", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.Equal(t, "exec_command", result.Context.ToolNameMap["execCommand"])
+	require.NotContains(t, string(payload), "Tool results:")
 }
 
 func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
@@ -2845,15 +2849,20 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 	require.Equal(t, shortName, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String(), "MUST use the tool named '"+shortName+"'")
 
-	var historyText strings.Builder
+	found := false
 	for _, msg := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
-		require.Equal(t, int64(0), msg.Get("assistantResponseMessage.toolUses.#").Int())
-		historyText.WriteString(msg.Get("userInputMessage.content").String())
-		historyText.WriteString("\n")
+		for _, toolUse := range msg.Get("assistantResponseMessage.toolUses").Array() {
+			if toolUse.Get("toolUseId").String() == "toolu_01" {
+				found = true
+				require.Equal(t, shortName, toolUse.Get("name").String())
+			}
+		}
 	}
-	historyText.WriteString(gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
-	require.Contains(t, historyText.String(), "["+longName+"] ok")
-	require.NotContains(t, historyText.String(), "["+shortName+"] ok")
+	require.True(t, found)
+	require.Equal(t, "toolu_01", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "ok", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "continue")
+	require.NotContains(t, string(result.Payload), "Tool results:")
 }
 
 func TestParseNonStreamingEventStreamRestoresShortToolName(t *testing.T) {
@@ -3309,97 +3318,6 @@ func TestStreamEventStreamAsAnthropicRejectsEmptyKiroStream(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty kiro event stream")
 	require.Empty(t, out.String())
-}
-
-func TestStreamEventStreamAsAnthropicRejectsNarratedToolTranscriptBeforeRelease(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{
-			"content": "先检查列表结构。\n\ncall 找后台 ProductManager 的商品列表渲染。\n\nuser Tool results provided.\n\nTool results:",
-		},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
-		"messageMetadataEvent": map[string]any{
-			"tokenUsage": map[string]any{
-				"uncachedInputTokens": 10,
-				"outputTokens":        20,
-				"totalTokens":         30,
-			},
-		},
-	}))
-
-	var out bytes.Buffer
-	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
-		NativeToolsAvailable: true,
-		PayloadTruncated:     true,
-	})
-
-	require.Nil(t, result)
-	require.EqualError(t, err, "empty kiro event stream: narrated tool call without native invocation")
-	require.Empty(t, out.String(), "invalid narrated transcript must not leak partial assistant output")
-}
-
-func TestStreamEventStreamAsAnthropicReleasesNormalTextForTruncatedToolRequest(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{"content": "The implementation is complete."},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
-		"messageMetadataEvent": map[string]any{
-			"tokenUsage": map[string]any{
-				"uncachedInputTokens": 10,
-				"outputTokens":        5,
-				"totalTokens":         15,
-			},
-		},
-	}))
-
-	var out bytes.Buffer
-	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
-		NativeToolsAvailable: true,
-		PayloadTruncated:     true,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Contains(t, out.String(), "The implementation is complete.")
-	require.Contains(t, out.String(), "event: message_stop")
-}
-
-func TestStreamEventStreamAsAnthropicReleasesNativeToolForTruncatedRequest(t *testing.T) {
-	stream := bytes.NewBuffer(nil)
-	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
-		"assistantResponseEvent": map[string]any{"content": "I will inspect the file."},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
-		"toolUseEvent": map[string]any{
-			"toolUseId": "toolu_bash",
-			"name":      "Bash",
-			"input":     `{"command":"grep ProductManager app.js"}`,
-			"stop":      true,
-		},
-	}))
-	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
-		"messageMetadataEvent": map[string]any{
-			"tokenUsage": map[string]any{
-				"uncachedInputTokens": 10,
-				"outputTokens":        8,
-				"totalTokens":         18,
-			},
-		},
-	}))
-
-	var out bytes.Buffer
-	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
-		NativeToolsAvailable: true,
-		PayloadTruncated:     true,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "tool_use", result.StopReason)
-	require.Contains(t, out.String(), `"name":"Bash"`)
-	require.Contains(t, out.String(), `grep ProductManager app.js`)
 }
 
 func TestStreamEventStreamAsAnthropicRejectsMetadataOnlyKiroTurn(t *testing.T) {
