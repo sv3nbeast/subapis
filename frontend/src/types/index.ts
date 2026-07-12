@@ -315,6 +315,9 @@ export interface PublicSettings {
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
   web_chat_enabled: boolean
+  web_chat_projects_enabled?: boolean
+  web_chat_templates_enabled?: boolean
+  web_chat_history_enabled?: boolean
   affiliate_enabled: boolean
   risk_control_enabled: boolean
   service_quota_enabled: boolean

@@ -6267,6 +6267,11 @@
               </div>
               <Toggle v-model="form.web_chat_enabled" />
             </div>
+            <div v-for="flag in webChatAdvancedFlags" :key="flag.key" class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700">
+              <div><label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ flag.label }}</label><p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ flag.hint }}</p></div>
+              <Toggle v-model="form[flag.key]" :disabled="!form.web_chat_enabled" />
+            </div>
+            <WebChatSystemTemplatesEditor v-if="form.web_chat_templates_enabled" />
           </div>
         </div>
 
@@ -7712,6 +7717,7 @@ import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
 import APIKeyTemplateProfilesEditor from "@/components/admin/APIKeyTemplateProfilesEditor.vue";
+import WebChatSystemTemplatesEditor from "@/components/admin/WebChatSystemTemplatesEditor.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
@@ -8600,11 +8606,20 @@ const form = reactive<SettingsForm>({
   // Available Channels feature switch
   available_channels_enabled: false,
   web_chat_enabled: false,
+  web_chat_projects_enabled: false,
+  web_chat_templates_enabled: false,
+  web_chat_history_enabled: false,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
   // Allow user view error requests
   allow_user_view_error_requests: false,
 });
+
+const webChatAdvancedFlags = computed(() => [
+  { key: "web_chat_projects_enabled" as const, label: t("admin.settings.features.webChat.projects"), hint: t("admin.settings.features.webChat.projectsHint") },
+  { key: "web_chat_templates_enabled" as const, label: t("admin.settings.features.webChat.templates"), hint: t("admin.settings.features.webChat.templatesHint") },
+  { key: "web_chat_history_enabled" as const, label: t("admin.settings.features.webChat.history"), hint: t("admin.settings.features.webChat.historyHint") },
+]);
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
   buildAuthSourceDefaultsState({}),
@@ -10118,6 +10133,9 @@ async function saveSettings() {
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
       web_chat_enabled: form.web_chat_enabled,
+      web_chat_projects_enabled: form.web_chat_projects_enabled,
+      web_chat_templates_enabled: form.web_chat_templates_enabled,
+      web_chat_history_enabled: form.web_chat_history_enabled,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
       allow_user_view_error_requests: form.allow_user_view_error_requests,

@@ -653,6 +653,9 @@ export interface SystemSettings {
 
   // Web Chat feature switch
   web_chat_enabled: boolean;
+  web_chat_projects_enabled: boolean;
+  web_chat_templates_enabled: boolean;
+  web_chat_history_enabled: boolean;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -896,6 +899,9 @@ export interface UpdateSettingsRequest {
 
   // Web Chat feature switch
   web_chat_enabled?: boolean;
+  web_chat_projects_enabled?: boolean;
+  web_chat_templates_enabled?: boolean;
+  web_chat_history_enabled?: boolean;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

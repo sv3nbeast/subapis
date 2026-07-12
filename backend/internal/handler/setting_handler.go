@@ -99,7 +99,10 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
 
-		WebChatEnabled: settings.WebChatEnabled,
+		WebChatEnabled:          settings.WebChatEnabled,
+		WebChatProjectsEnabled:  settings.WebChatProjectsEnabled,
+		WebChatTemplatesEnabled: settings.WebChatTemplatesEnabled,
+		WebChatHistoryEnabled:   settings.WebChatHistoryEnabled,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 

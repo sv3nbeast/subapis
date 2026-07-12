@@ -394,7 +394,10 @@ const (
 	// SettingKeyWebChatEnabled is a DB-backed soft switch for the user-facing web chat
 	// workbench. Defaults to false because it creates managed hidden API keys and can
 	// incur normal gateway usage charges.
-	SettingKeyWebChatEnabled = "web_chat_enabled"
+	SettingKeyWebChatEnabled          = "web_chat_enabled"
+	SettingKeyWebChatProjectsEnabled  = "web_chat_projects_enabled"
+	SettingKeyWebChatTemplatesEnabled = "web_chat_templates_enabled"
+	SettingKeyWebChatHistoryEnabled   = "web_chat_history_enabled"
 
 	// =========================
 	// Overload Cooldown (529)

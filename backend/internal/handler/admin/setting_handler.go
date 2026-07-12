@@ -328,7 +328,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
 
-		WebChatEnabled: settings.WebChatEnabled,
+		WebChatEnabled:          settings.WebChatEnabled,
+		WebChatProjectsEnabled:  settings.WebChatProjectsEnabled,
+		WebChatTemplatesEnabled: settings.WebChatTemplatesEnabled,
+		WebChatHistoryEnabled:   settings.WebChatHistoryEnabled,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
@@ -686,7 +689,10 @@ type UpdateSettingsRequest struct {
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
 	// Web Chat feature switch (user-facing)
-	WebChatEnabled *bool `json:"web_chat_enabled"`
+	WebChatEnabled          *bool `json:"web_chat_enabled"`
+	WebChatProjectsEnabled  *bool `json:"web_chat_projects_enabled"`
+	WebChatTemplatesEnabled *bool `json:"web_chat_templates_enabled"`
+	WebChatHistoryEnabled   *bool `json:"web_chat_history_enabled"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1841,6 +1847,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WebChatEnabled
 		}(),
+		WebChatProjectsEnabled: func() bool {
+			if req.WebChatProjectsEnabled != nil {
+				return *req.WebChatProjectsEnabled
+			}
+			return previousSettings.WebChatProjectsEnabled
+		}(),
+		WebChatTemplatesEnabled: func() bool {
+			if req.WebChatTemplatesEnabled != nil {
+				return *req.WebChatTemplatesEnabled
+			}
+			return previousSettings.WebChatTemplatesEnabled
+		}(),
+		WebChatHistoryEnabled: func() bool {
+			if req.WebChatHistoryEnabled != nil {
+				return *req.WebChatHistoryEnabled
+			}
+			return previousSettings.WebChatHistoryEnabled
+		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
 				return *req.AffiliateEnabled
@@ -2194,7 +2218,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
 
-		WebChatEnabled: updatedSettings.WebChatEnabled,
+		WebChatEnabled:          updatedSettings.WebChatEnabled,
+		WebChatProjectsEnabled:  updatedSettings.WebChatProjectsEnabled,
+		WebChatTemplatesEnabled: updatedSettings.WebChatTemplatesEnabled,
+		WebChatHistoryEnabled:   updatedSettings.WebChatHistoryEnabled,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2696,6 +2723,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.WebChatEnabled != after.WebChatEnabled {
 		changed = append(changed, "web_chat_enabled")
+	}
+	if before.WebChatProjectsEnabled != after.WebChatProjectsEnabled {
+		changed = append(changed, "web_chat_projects_enabled")
+	}
+	if before.WebChatTemplatesEnabled != after.WebChatTemplatesEnabled {
+		changed = append(changed, "web_chat_templates_enabled")
+	}
+	if before.WebChatHistoryEnabled != after.WebChatHistoryEnabled {
+		changed = append(changed, "web_chat_history_enabled")
 	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")

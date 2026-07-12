@@ -1100,6 +1100,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyWebChatEnabled,
+		SettingKeyWebChatProjectsEnabled,
+		SettingKeyWebChatTemplatesEnabled,
+		SettingKeyWebChatHistoryEnabled,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
 		SettingKeyAllowUserViewErrorRequests,
@@ -1213,7 +1216,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 
-		WebChatEnabled: settings[SettingKeyWebChatEnabled] == "true",
+		WebChatEnabled:          settings[SettingKeyWebChatEnabled] == "true",
+		WebChatProjectsEnabled:  settings[SettingKeyWebChatProjectsEnabled] == "true",
+		WebChatTemplatesEnabled: settings[SettingKeyWebChatTemplatesEnabled] == "true",
+		WebChatHistoryEnabled:   settings[SettingKeyWebChatHistoryEnabled] == "true",
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
@@ -1333,19 +1339,25 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 
 // WebChatRuntime is the lightweight view of the web-chat feature switch.
 type WebChatRuntime struct {
-	Enabled bool
+	Enabled          bool
+	ProjectsEnabled  bool
+	TemplatesEnabled bool
+	HistoryEnabled   bool
 }
 
 // GetWebChatRuntime reads the web-chat feature switch directly from the
 // settings store. Fail-closed: unknown state must not expose chat or create
 // managed hidden keys.
 func (s *SettingService) GetWebChatRuntime(ctx context.Context) WebChatRuntime {
-	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled})
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled, SettingKeyWebChatProjectsEnabled, SettingKeyWebChatTemplatesEnabled, SettingKeyWebChatHistoryEnabled})
 	if err != nil {
 		return WebChatRuntime{Enabled: false}
 	}
 	return WebChatRuntime{
-		Enabled: vals[SettingKeyWebChatEnabled] == "true",
+		Enabled:          vals[SettingKeyWebChatEnabled] == "true",
+		ProjectsEnabled:  vals[SettingKeyWebChatProjectsEnabled] == "true",
+		TemplatesEnabled: vals[SettingKeyWebChatTemplatesEnabled] == "true",
+		HistoryEnabled:   vals[SettingKeyWebChatHistoryEnabled] == "true",
 	}
 }
 
@@ -1928,6 +1940,9 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
 	WebChatEnabled                       bool `json:"web_chat_enabled"`
+	WebChatProjectsEnabled               bool `json:"web_chat_projects_enabled"`
+	WebChatTemplatesEnabled              bool `json:"web_chat_templates_enabled"`
+	WebChatHistoryEnabled                bool `json:"web_chat_history_enabled"`
 	AffiliateEnabled                     bool `json:"affiliate_enabled"`
 	RiskControlEnabled                   bool `json:"risk_control_enabled"`
 	AllowUserViewErrorRequests           bool `json:"allow_user_view_error_requests"`
@@ -1995,6 +2010,9 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
 		WebChatEnabled:                       settings.WebChatEnabled,
+		WebChatProjectsEnabled:               settings.WebChatProjectsEnabled,
+		WebChatTemplatesEnabled:              settings.WebChatTemplatesEnabled,
+		WebChatHistoryEnabled:                settings.WebChatHistoryEnabled,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,
@@ -2660,6 +2678,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Web chat feature switch
 	updates[SettingKeyWebChatEnabled] = strconv.FormatBool(settings.WebChatEnabled)
+	updates[SettingKeyWebChatProjectsEnabled] = strconv.FormatBool(settings.WebChatProjectsEnabled)
+	updates[SettingKeyWebChatTemplatesEnabled] = strconv.FormatBool(settings.WebChatTemplatesEnabled)
+	updates[SettingKeyWebChatHistoryEnabled] = strconv.FormatBool(settings.WebChatHistoryEnabled)
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
@@ -3726,7 +3747,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAvailableChannelsEnabled: "false",
 
 		// Web chat feature (default disabled; opt-in)
-		SettingKeyWebChatEnabled: "false",
+		SettingKeyWebChatEnabled:          "false",
+		SettingKeyWebChatProjectsEnabled:  "false",
+		SettingKeyWebChatTemplatesEnabled: "false",
+		SettingKeyWebChatHistoryEnabled:   "false",
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
@@ -4187,6 +4211,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Web chat feature (default: disabled; strict true)
 	result.WebChatEnabled = settings[SettingKeyWebChatEnabled] == "true"
+	result.WebChatProjectsEnabled = settings[SettingKeyWebChatProjectsEnabled] == "true"
+	result.WebChatTemplatesEnabled = settings[SettingKeyWebChatTemplatesEnabled] == "true"
+	result.WebChatHistoryEnabled = settings[SettingKeyWebChatHistoryEnabled] == "true"
 
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"

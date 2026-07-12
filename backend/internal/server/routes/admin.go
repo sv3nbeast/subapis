@@ -493,6 +493,10 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.GET("/email-templates/:event/:locale", h.Admin.Setting.GetEmailTemplate)
 		adminSettings.PUT("/email-templates/:event/:locale", h.Admin.Setting.UpdateEmailTemplate)
 		adminSettings.POST("/email-templates/:event/:locale/restore-official", h.Admin.Setting.RestoreOfficialEmailTemplate)
+		adminSettings.GET("/web-chat-templates", h.WebChat.AdminListTemplates)
+		adminSettings.POST("/web-chat-templates", h.WebChat.AdminCreateTemplate)
+		adminSettings.PATCH("/web-chat-templates/:id", h.WebChat.AdminUpdateTemplate)
+		adminSettings.DELETE("/web-chat-templates/:id", h.WebChat.AdminDeleteTemplate)
 		// Admin API Key 管理
 		adminSettings.GET("/admin-api-key", h.Admin.Setting.GetAdminAPIKey)
 		adminSettings.POST("/admin-api-key/regenerate", h.Admin.Setting.RegenerateAdminAPIKey)

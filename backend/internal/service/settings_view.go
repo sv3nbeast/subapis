@@ -182,7 +182,10 @@ type SystemSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Web Chat feature (user-facing chat workbench)
-	WebChatEnabled bool `json:"web_chat_enabled"`
+	WebChatEnabled          bool `json:"web_chat_enabled"`
+	WebChatProjectsEnabled  bool `json:"web_chat_projects_enabled"`
+	WebChatTemplatesEnabled bool `json:"web_chat_templates_enabled"`
+	WebChatHistoryEnabled   bool `json:"web_chat_history_enabled"`
 
 	// Claude Code version check
 	MinClaudeCodeVersion string
@@ -334,7 +337,10 @@ type PublicSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Web Chat feature (user-facing chat workbench)
-	WebChatEnabled bool `json:"web_chat_enabled"`
+	WebChatEnabled          bool `json:"web_chat_enabled"`
+	WebChatProjectsEnabled  bool `json:"web_chat_projects_enabled"`
+	WebChatTemplatesEnabled bool `json:"web_chat_templates_enabled"`
+	WebChatHistoryEnabled   bool `json:"web_chat_history_enabled"`
 
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`

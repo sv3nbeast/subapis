@@ -90,3 +90,40 @@ func TestAPIKeyRepositoryEnsureWebChatKeyCreatesHiddenKeyWhenMissing(t *testing.
 	require.True(t, got.IsHidden)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestWebChatRepositoryCreateTurnRejectsActiveGeneration(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := newWebChatRepositoryWithSQL(db)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT active_leaf_message_id FROM web_chat_sessions").WithArgs(int64(88), int64(7)).WillReturnRows(sqlmock.NewRows([]string{"active_leaf_message_id"}).AddRow(nil))
+	mock.ExpectExec("UPDATE web_chat_messages SET status='partial'").WithArgs(int64(88), int64(7)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT EXISTS").WithArgs(int64(88), int64(7)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+	_, _, err := repo.CreateTurn(context.Background(), 7, 88, "hello", "hello", nil)
+	require.ErrorIs(t, err, service.ErrWebChatSessionBusy)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWebChatRepositoryListProjectsScopesByOwner(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := newWebChatRepositoryWithSQL(db)
+	now := time.Now()
+	mock.ExpectQuery("FROM web_chat_projects p WHERE p.user_id=\\$1").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "name", "description", "color", "sort_order", "default_group_id", "default_model", "default_template_id", "session_count", "created_at", "updated_at"}).AddRow(1, 7, "Work", "", "#14b8a6", 0, nil, "", nil, 2, now, now))
+	items, err := repo.ListProjects(context.Background(), 7)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(7), items[0].UserID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWebChatRepositoryListTemplatesOnlyReturnsOwnedPersonalOrSystem(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := newWebChatRepositoryWithSQL(db)
+	now := time.Now()
+	mock.ExpectQuery("scope='personal' AND t.user_id=\\$1").WithArgs(int64(9), false).WillReturnRows(sqlmock.NewRows([]string{"id", "scope", "user_id", "source_template_id", "name", "category", "description", "body", "variables", "language", "enabled", "sort_order", "created_at", "updated_at"}).AddRow(2, "personal", 9, nil, "Memo", "office", "", "{{content}}", []byte(`[]`), "en", true, 0, now, now))
+	items, err := repo.ListTemplates(context.Background(), 9, false)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(9), *items[0].UserID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
