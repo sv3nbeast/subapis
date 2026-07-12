@@ -171,6 +171,10 @@ type providerAdapter struct {
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerAdapters = map[string]providerAdapter{
 	MonitorProviderOpenAI: providerOpenAIChatAdapter,
+	// xAI exposes an OpenAI-compatible Chat Completions API. Keep Grok as a
+	// distinct monitor provider for filtering and presentation while reusing
+	// the proven wire protocol adapter.
+	MonitorProviderGrok: providerOpenAIChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -537,8 +541,9 @@ func buildRequestBody(adapter providerAdapter, provider, apiMode, model, prompt 
 var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI + ":" + MonitorAPIModeChatCompletions: {"model": true, "messages": true, "stream": true},
 	MonitorProviderOpenAI + ":" + MonitorAPIModeResponses:       {"model": true, "instructions": true, "input": true, "stream": true},
-	MonitorProviderAnthropic:                                    {"model": true, "messages": true, "stream": true},
-	MonitorProviderGemini:                                       {"contents": true},
+	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
+	MonitorProviderAnthropic: {"model": true, "messages": true, "stream": true},
+	MonitorProviderGemini:    {"contents": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -556,7 +561,7 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 }
 
 func validateReplaceRequestBody(provider, apiMode string, body map[string]any) error {
-	if provider != MonitorProviderOpenAI {
+	if provider != MonitorProviderOpenAI && provider != MonitorProviderGrok {
 		return nil
 	}
 	switch defaultAPIMode(apiMode) {

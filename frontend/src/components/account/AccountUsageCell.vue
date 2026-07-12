@@ -526,7 +526,7 @@
             remaining: formatGrokPercent(grokBilling.credit_remaining_percent)
           }) }}
         </div>
-        <div v-if="grokBilling" class="text-[10px] text-gray-500 dark:text-gray-400">
+        <div v-if="grokBilling && grokBillingExtrasVisible" class="text-[10px] text-gray-500 dark:text-gray-400">
           <template v-if="grokBilling.on_demand_cap > 0">
             {{ t('admin.accounts.usageWindow.grokOnDemandSummary', {
               used: formatGrokAmount(grokBilling.on_demand_used),
@@ -534,11 +534,9 @@
               cap: formatGrokAmount(grokBilling.on_demand_cap)
             }) }}
           </template>
-          <template v-else>
-            {{ t('admin.accounts.usageWindow.grokOnDemandDisabled') }}
-          </template>
           <span v-if="grokBilling.prepaid_balance > 0">
-            · {{ t('admin.accounts.usageWindow.grokPrepaidBalance', {
+            <template v-if="grokBilling.on_demand_cap > 0">· </template>
+            {{ t('admin.accounts.usageWindow.grokPrepaidBalance', {
               balance: formatGrokAmount(grokBilling.prepaid_balance)
             }) }}
           </span>
@@ -565,9 +563,6 @@
         </div>
         <div v-else-if="usageInfo.error" class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]" :title="usageInfo.error">
           {{ usageErrorLabel }}
-        </div>
-        <div v-if="grokQuotaStatusLine" class="text-[10px] text-gray-500 dark:text-gray-400">
-          {{ grokQuotaStatusLine }}
         </div>
         <GrokQuotaProbeCell :account="account" @updated="handleGrokQuotaUpdated" />
       </div>
@@ -765,7 +760,7 @@ import { adminAPI } from '@/api/admin'
 import type { Account, AccountUsageInfo, GeminiCredentials, KiroCreditProgress, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
-import { formatCompactNumber, formatRelativeTime } from '@/utils/format'
+import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
@@ -1224,6 +1219,10 @@ interface GrokQuotaBarInfo {
 const makeGrokQuotaBar = (quota?: { limit?: number | null; remaining?: number | null; reset_at?: string | null } | null): GrokQuotaBarInfo | null => {
   if (!quota || quota.limit == null || quota.remaining == null || quota.limit <= 0) return null
   const used = Math.max(0, quota.limit - quota.remaining)
+  // Healthy xAI responses normally report a completely unused short rate
+  // window. Showing 0% Req/Tok bars on every account adds noise without
+  // helping operators; retain the bars only when the window has real usage.
+  if (used <= 0) return null
   return {
     utilization: (used / quota.limit) * 100,
     resetsAt: quota.reset_at || null
@@ -1245,6 +1244,10 @@ const grokCreditUsageBar = computed(() => {
     resetsAt: grokBilling.value.current_period_end || null
   }
 })
+const grokBillingExtrasVisible = computed(() => {
+  if (!grokBilling.value) return false
+  return grokBilling.value.on_demand_cap > 0 || grokBilling.value.prepaid_balance > 0
+})
 const grokQuotaUnknown = computed(() => {
   if (props.account.platform !== 'grok') return false
   return !grokBilling.value
@@ -1253,34 +1256,6 @@ const grokQuotaUnknownLabel = computed(() => {
   return usageInfo.value?.grok_billing_state === 'error'
     ? t('admin.accounts.usageWindow.grokBillingFailed')
     : t('admin.accounts.usageWindow.grokBillingUnknown')
-})
-const grokQuotaStatusLine = computed(() => {
-  if (props.account.platform !== 'grok') return null
-  const parts: string[] = []
-  if (grokBilling.value?.updated_at) {
-    parts.push(t('admin.accounts.usageWindow.grokBillingUpdated', {
-      time: formatRelativeTime(grokBilling.value.updated_at)
-    }))
-  }
-  const status = usageInfo.value?.grok_last_status_code
-  if (status) {
-    parts.push(t('admin.accounts.usageWindow.grokLastStatus', { status }))
-  }
-  if (usageInfo.value?.grok_last_quota_probe_at) {
-    parts.push(
-      t('admin.accounts.usageWindow.grokLastProbe', {
-        time: formatRelativeTime(usageInfo.value.grok_last_quota_probe_at)
-      })
-    )
-  }
-  if (usageInfo.value?.grok_last_headers_seen_at) {
-    parts.push(
-      t('admin.accounts.usageWindow.grokLastHeadersSeen', {
-        time: formatRelativeTime(usageInfo.value.grok_last_headers_seen_at)
-      })
-    )
-  }
-  return parts.length > 0 ? parts.join(' | ') : null
 })
 const grokLocalUsage = computed(() => usageInfo.value?.grok_local_usage || props.todayStats || null)
 const grokSubscriptionLabel = computed(() => {

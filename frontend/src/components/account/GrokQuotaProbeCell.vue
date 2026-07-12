@@ -25,18 +25,6 @@
         {{ t('admin.accounts.usageWindow.grokProbe') }}
       </button>
 
-      <button
-        type="button"
-        class="inline-flex cursor-not-allowed items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-400 opacity-70 dark:text-gray-500"
-        disabled
-        :title="t('admin.accounts.usageWindow.grokResetUnsupportedTooltip')"
-      >
-        {{ t('admin.accounts.usageWindow.grokResetUnsupported') }}
-      </button>
-    </div>
-
-    <div v-if="summary" class="text-[10px] text-gray-600 dark:text-gray-300">
-      {{ summary }}
     </div>
     <div v-if="error" class="truncate text-[10px] text-red-600 dark:text-red-400" :title="error">
       {{ truncatedError }}
@@ -49,7 +37,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { GrokQuotaProbeResult } from '@/api/admin/grok'
-import type { Account, GrokBillingSnapshot } from '@/types'
+import type { Account } from '@/types'
 
 const props = defineProps<{
   account: Account
@@ -64,7 +52,6 @@ const { t } = useI18n()
 const visible = computed(() => props.account.platform === 'grok' && props.account.type === 'oauth')
 const loading = ref(false)
 const error = ref<string | null>(null)
-const data = ref<GrokQuotaProbeResult | null>(null)
 
 const extractErrorMessage = (e: unknown): string => {
   const err = e as {
@@ -81,43 +68,6 @@ const extractErrorMessage = (e: unknown): string => {
   )
 }
 
-const formatAmount = (value: number): string => {
-  return Number.isInteger(value) ? String(value) : value.toFixed(2)
-}
-
-const formatPercent = (value: number): string => `${Math.round(value * 10) / 10}%`
-
-const billingSummary = (billing: GrokBillingSnapshot): string[] => {
-  const parts = [
-    t('admin.accounts.usageWindow.grokWeeklySummary', {
-      used: formatPercent(billing.credit_usage_percent),
-      remaining: formatPercent(billing.credit_remaining_percent)
-    })
-  ]
-  if (billing.on_demand_cap > 0) {
-    parts.push(t('admin.accounts.usageWindow.grokOnDemandSummary', {
-      used: formatAmount(billing.on_demand_used),
-      remaining: formatAmount(billing.on_demand_remaining),
-      cap: formatAmount(billing.on_demand_cap)
-    }))
-  } else {
-    parts.push(t('admin.accounts.usageWindow.grokOnDemandDisabled'))
-  }
-  if (billing.prepaid_balance > 0) {
-    parts.push(t('admin.accounts.usageWindow.grokPrepaidBalance', {
-      balance: formatAmount(billing.prepaid_balance)
-    }))
-  }
-  return parts
-}
-
-const summary = computed(() => {
-  if (!data.value) return ''
-  const billing = data.value.billing
-  if (!billing) return t('admin.accounts.usageWindow.grokBillingUnknown')
-  return billingSummary(billing).join(' | ')
-})
-
 const truncatedError = computed(() => {
   if (!error.value) return ''
   return error.value.length > 80 ? `${error.value.slice(0, 80)}...` : error.value
@@ -128,8 +78,8 @@ const handleProbe = async () => {
   loading.value = true
   error.value = null
   try {
-    data.value = await adminAPI.grok.queryQuota(props.account.id)
-    emit('updated', data.value)
+    const result = await adminAPI.grok.queryQuota(props.account.id)
+    emit('updated', result)
   } catch (e) {
     error.value = extractErrorMessage(e)
   } finally {
@@ -140,7 +90,6 @@ const handleProbe = async () => {
 watch(
   () => props.account.id,
   () => {
-    data.value = null
     error.value = null
     loading.value = false
   }

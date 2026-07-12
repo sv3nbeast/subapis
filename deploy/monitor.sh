@@ -199,6 +199,9 @@ platform_display_name() {
     kiro)
       echo "Kiro"
       ;;
+    grok)
+      echo "Grok"
+      ;;
     *)
       echo "$1"
       ;;
@@ -739,7 +742,7 @@ check_channel_availability() {
   local query_result
   query_result=$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -t -A -F $'\t' -v ON_ERROR_STOP=1 -c "
     WITH platforms(platform) AS (
-      VALUES ('anthropic'), ('openai'), ('gemini'), ('antigravity'), ('kiro')
+      VALUES ('anthropic'), ('openai'), ('gemini'), ('antigravity'), ('kiro'), ('grok')
     ),
     counts AS (
       SELECT

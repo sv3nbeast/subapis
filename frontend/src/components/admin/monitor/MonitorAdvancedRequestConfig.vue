@@ -109,6 +109,7 @@ import { useI18n } from 'vue-i18n'
 import type { APIMode, BodyOverrideMode, Provider } from '@/api/admin/channelMonitor'
 import {
   API_MODE_RESPONSES,
+  PROVIDER_GROK,
   PROVIDER_OPENAI,
 } from '@/constants/channelMonitor'
 
@@ -310,6 +311,12 @@ const bodyPlaceholder = computed(() => {
       return '{\n  "max_tokens": 20\n}'
     }
     return '{\n  "model": "gpt-4o-mini",\n  "messages": [{"role":"user","content":"Reply with exactly: ok"}],\n  "max_tokens": 20,\n  "stream": false\n}'
+  }
+  if (props.provider === PROVIDER_GROK) {
+    if (props.bodyOverrideMode === 'merge') {
+      return '{\n  "max_tokens": 20\n}'
+    }
+    return '{\n  "model": "grok-4",\n  "messages": [{"role":"user","content":"Reply with exactly: ok"}],\n  "max_tokens": 20,\n  "stream": false\n}'
   }
   if (props.bodyOverrideMode === 'merge') {
     return '{\n  "system": "You are Claude Code..."\n}'

@@ -689,7 +689,7 @@ describe('AccountUsageCell', () => {
 		expect(badges.some(node => node.attributes('title') === 'usage.userBilled')).toBe(true)
   })
 
-  it('Grok OAuth 会展示官方 Billing 剩余额度、本地用量和速率限制', async () => {
+  it('Grok OAuth 会展示官方 Billing、本地用量和有实际消耗的速率限制', async () => {
     getUsage.mockResolvedValue({
       grok_local_usage: {
         requests: 4,
@@ -761,6 +761,73 @@ describe('AccountUsageCell', () => {
     expect(badges.some(node => node.attributes('title') === 'usage.userBilled')).toBe(true)
   })
 
+  it('Grok OAuth 会隐藏无操作价值的 0% 速率条和成功诊断信息', async () => {
+    getUsage.mockResolvedValue({
+      grok_local_usage: {
+        requests: 0,
+        tokens: 0,
+        cost: 0,
+        standard_cost: 0,
+        user_cost: 0
+      },
+      grok_request_quota: {
+        limit: 100,
+        remaining: 100,
+        reset_at: '2026-07-12T06:00:00Z'
+      },
+      grok_token_quota: {
+        limit: 100000,
+        remaining: 100000,
+        reset_at: '2026-07-12T06:00:00Z'
+      },
+      grok_last_status_code: 200,
+      grok_last_quota_probe_at: '2026-07-12T05:30:00Z',
+      grok_last_headers_seen_at: '2026-07-12T05:30:00Z',
+      grok_billing_state: 'observed',
+      grok_billing: {
+        credit_usage_percent: 56,
+        credit_remaining_percent: 44,
+        current_period_type: 'USAGE_PERIOD_TYPE_WEEKLY',
+        current_period_start: '2026-07-09T18:40:47Z',
+        current_period_end: '2026-07-16T18:40:47Z',
+        on_demand_cap: 0,
+        on_demand_used: 0,
+        on_demand_remaining: 0,
+        prepaid_balance: 0,
+        unified_billing_user: true,
+        subscription_tier: 'SuperGrok',
+        updated_at: '2026-07-12T05:30:00Z'
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 3863, platform: 'grok', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+          },
+          AccountQuotaInfo: true,
+          GrokQuotaProbeCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklyCredits|56|2026-07-16T18:40:47Z')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklySummary')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokOnDemandDisabled')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokRequestsRate')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokTokensRate')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokLastStatus')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokLastProbe')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokLastHeadersSeen')
+  })
+
   it('Grok 账号额度耗尽时展示限流中而不是已封禁，并保留 100% Billing 用量', async () => {
     getUsage.mockResolvedValue({
       is_forbidden: true,
@@ -804,6 +871,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.forbidden')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklyCredits|100|2026-07-14T20:04:22Z')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokWeeklySummary')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.grokOnDemandDisabled')
   })
 
   it('Key 账号在 today stats loading 时显示骨架屏', async () => {
