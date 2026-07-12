@@ -44,6 +44,10 @@ const (
 	embeddedInvokeEndTag       = "</invoke>"
 	embeddedParameterEndTag    = "</parameter>"
 	kiroInternalPingEvent      = "sub2api_internal_kiro_ping"
+	kiroDefaultContextTokens   = 200_000
+	kiroExtendedContextTokens  = 1_000_000
+	kiroContextLimitReason     = "CONTENT_LENGTH_EXCEEDS_THRESHOLD"
+	kiroPromptTooLongMessage   = "prompt is too long"
 	minFrameSize               = 16
 	maxEventMsgSize            = 10 << 20
 	writeToolDescriptionSuffix = "IMPORTANT: If the content to write exceeds 150 lines, write only the first 50 lines with this tool, then append the remaining content using Edit calls in chunks of no more than 50 lines. Use a unique placeholder if needed. Do not write the whole file in one call."
@@ -126,6 +130,9 @@ type Usage struct {
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
 	InputTokensFromUpstream    bool
+	InputTokensFromContext     bool
+	HasContextUsage            bool
+	ContextUsagePercentage     float64
 }
 
 type StreamResult struct {
@@ -146,9 +153,14 @@ type KiroRequestContext struct {
 	ThinkingEnabled     bool
 	CacheEmulationUsage *Usage
 	// InputTokenBudget estimates the complete serialized Kiro payload sent
-	// upstream. It keeps fallback/cache-emulation usage aligned with the wire
-	// request without silently removing caller-provided conversation history.
-	InputTokenBudget         int
+	// upstream, bounded by ContextWindowTokens. It keeps fallback/cache-emulation
+	// usage aligned with the wire request without silently removing any
+	// caller-provided conversation history.
+	InputTokenBudget int
+	// ContextWindowTokens is the model's actual Kiro context capacity. It is
+	// used only for usage reconciliation and hard billing bounds; it never
+	// causes local conversation truncation.
+	ContextWindowTokens      int
 	RequireTerminalEvent     bool
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
@@ -297,6 +309,27 @@ type UpstreamExceptionError struct {
 	Message       string
 }
 
+// ContextLimitError is returned when Kiro confirms that the complete prompt
+// exceeds the model context. The client-facing methods intentionally use the
+// exact Anthropic wording recognized by Claude Code's reactive autocompaction.
+type ContextLimitError struct {
+	Reason          string
+	Message         string
+	ResponseStarted bool
+}
+
+func (e *ContextLimitError) Error() string {
+	return kiroPromptTooLongMessage
+}
+
+func (e *ContextLimitError) ClientErrorType() string {
+	return "invalid_request_error"
+}
+
+func (e *ContextLimitError) ClientErrorMessage() string {
+	return kiroPromptTooLongMessage
+}
+
 type IncompleteStreamError struct {
 	Message string
 }
@@ -355,6 +388,23 @@ func MapModel(model string) string {
 		return normalized
 	}
 	return ""
+}
+
+func contextWindowTokensForModel(model string) int {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimSuffix(normalized, "-thinking")
+	if strings.Contains(normalized, "[1m]") || strings.HasSuffix(normalized, "-1m") {
+		return kiroExtendedContextTokens
+	}
+	switch normalizeModelAlias(normalized) {
+	case "claude-sonnet-5", "claude-sonnet-5.0",
+		"claude-opus-4-6", "claude-opus-4.6",
+		"claude-opus-4-7", "claude-opus-4.7",
+		"claude-opus-4-8", "claude-opus-4.8":
+		return kiroExtendedContextTokens
+	default:
+		return kiroDefaultContextTokens
+	}
 }
 
 func isRejectedKiroModelVariant(model string) bool {
@@ -490,7 +540,11 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
-	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
+	contextWindowTokens := contextWindowTokensForModel(modelID)
+	requestCtx := KiroRequestContext{
+		ToolNameMap:         map[string]string{},
+		ContextWindowTokens: contextWindowTokens,
+	}
 	origin := strings.TrimSpace(options.Origin)
 	if origin == "" {
 		origin = "AI_EDITOR"
@@ -652,6 +706,11 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 		return nil, err
 	}
 	requestCtx.InputTokenBudget = estimateKiroPayloadInputTokens(payloadBytes)
+	if requestCtx.ContextWindowTokens > 0 && requestCtx.InputTokenBudget > requestCtx.ContextWindowTokens {
+		// This is a billing/usage bound only. The complete payload above remains
+		// untouched and Kiro decides whether it fits the real model context.
+		requestCtx.InputTokenBudget = requestCtx.ContextWindowTokens
+	}
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
 }
 
@@ -660,6 +719,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
+	usage = reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
@@ -749,7 +809,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if messageStartSent {
 			return nil
 		}
-		startUsage := usage
+		startUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 		if requestCtx.CacheEmulationUsage != nil {
 			startUsage = mergeKiroCacheEmulationUsage(startUsage, requestCtx.CacheEmulationUsage)
 		}
@@ -1391,7 +1451,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil, err
 		}
 		if err := msg.ExceptionError(); err != nil {
-			return nil, err
+			return nil, markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
@@ -1400,6 +1460,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		var event map[string]any
 		if err := json.Unmarshal(msg.Payload, &event); err != nil {
 			continue
+		}
+		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
+			return nil, markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
 		}
 		sawKiroEvent = true
 
@@ -1515,6 +1578,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	usage = reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
@@ -3280,6 +3344,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		if err := json.Unmarshal(msg.Payload, &event); err != nil {
 			continue
 		}
+		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
+			return "", nil, usage, stopReason, err
+		}
 		if sr := readStopReason(event); sr != "" {
 			stopReason = sr
 		}
@@ -3899,10 +3966,64 @@ func (m *eventStreamMessage) ExceptionError() error {
 	if exceptionType == "" {
 		exceptionType = "Exception"
 	}
+	if isKiroContextLimitSignal(exceptionType, msg) {
+		return &ContextLimitError{Reason: exceptionType, Message: msg}
+	}
 	return &UpstreamExceptionError{
 		ExceptionType: exceptionType,
 		Message:       msg,
 	}
+}
+
+func contextLimitErrorFromEvent(eventType string, event map[string]any) error {
+	if !strings.EqualFold(strings.TrimSpace(eventType), "invalidStateEvent") || len(event) == 0 {
+		return nil
+	}
+	state := nestedEvent(event, "invalidStateEvent")
+	reason := firstKiroStringField(state, "reason", "code", "errorCode")
+	message := firstKiroStringField(state, "message", "error", "detail")
+	if reason == "" {
+		reason = firstKiroStringField(event, "reason", "code", "errorCode")
+	}
+	if message == "" {
+		message = firstKiroStringField(event, "message", "error", "detail")
+	}
+	if !isKiroContextLimitSignal(reason, message) {
+		return nil
+	}
+	return &ContextLimitError{Reason: reason, Message: message}
+}
+
+func markKiroContextResponseStarted(err error, started bool) error {
+	if !started || err == nil {
+		return err
+	}
+	var contextErr *ContextLimitError
+	if errors.As(err, &contextErr) {
+		contextErr.ResponseStarted = true
+	}
+	return err
+}
+
+func isKiroContextLimitSignal(values ...string) bool {
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		switch {
+		case strings.Contains(normalized, strings.ToLower(kiroContextLimitReason)),
+			strings.Contains(normalized, "contentlengthexceeded"),
+			strings.Contains(normalized, "content length exceeds threshold"),
+			strings.Contains(normalized, "context_length_exceeded"),
+			strings.Contains(normalized, "prompt is too long"),
+			strings.Contains(normalized, "input length and max_tokens exceed context limit"),
+			strings.Contains(normalized, "input exceeds the context window"),
+			strings.Contains(normalized, "maximum prompt length exceeded"):
+			return true
+		}
+	}
+	return false
 }
 
 func (e *UpstreamExceptionError) Error() string {
@@ -4901,6 +5022,15 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	if len(meta) == 0 {
 		meta = event
 	}
+	if strings.EqualFold(strings.TrimSpace(eventType), "contextUsageEvent") {
+		if value, ok := toPositiveFiniteFloat(meta["contextUsagePercentage"]); ok {
+			usage.HasContextUsage = true
+			usage.ContextUsagePercentage = value
+		} else if value, ok := toPositiveFiniteFloat(event["contextUsagePercentage"]); ok {
+			usage.HasContextUsage = true
+			usage.ContextUsagePercentage = value
+		}
+	}
 	if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok {
 		if value, ok := toInt(tokenUsage["uncachedInputTokens"]); ok {
 			usage.InputTokens = value
@@ -5107,6 +5237,32 @@ func constrainKiroUsageToInputBudget(usage Usage, budget int) Usage {
 	normalized.OutputTokens = usage.OutputTokens
 	normalized.KiroCredits = usage.KiroCredits
 	normalized.InputTokensFromUpstream = usage.InputTokensFromUpstream
+	normalized.InputTokensFromContext = usage.InputTokensFromContext
+	normalized.HasContextUsage = usage.HasContextUsage
+	normalized.ContextUsagePercentage = usage.ContextUsagePercentage
+	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
+	return normalized
+}
+
+func reconcileKiroUsageWithContext(usage Usage, contextWindowTokens int) Usage {
+	if usage.InputTokensFromUpstream || !usage.HasContextUsage || contextWindowTokens <= 0 {
+		return usage
+	}
+	percentage := math.Max(0, math.Min(100, usage.ContextUsagePercentage))
+	if percentage <= 0 {
+		return usage
+	}
+	contextTotal := int(math.Round(percentage / 100 * float64(contextWindowTokens)))
+	inputTokens := max(contextTotal-usage.OutputTokens, 0)
+	if inputTokens <= 0 {
+		return usage
+	}
+	normalized := normalizeKiroCacheEmulationUsage(Usage{InputTokens: inputTokens}, usage)
+	normalized.OutputTokens = usage.OutputTokens
+	normalized.KiroCredits = usage.KiroCredits
+	normalized.InputTokensFromContext = true
+	normalized.HasContextUsage = true
+	normalized.ContextUsagePercentage = usage.ContextUsagePercentage
 	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
 	return normalized
 }

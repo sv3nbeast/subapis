@@ -15,6 +15,11 @@ func TestClassifyKiroHTTPErrorBadRequestCategories(t *testing.T) {
 		want string
 	}{
 		{
+			name: "context limit",
+			body: `{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Content length exceeds threshold"}`,
+			want: kiroErrorBadRequestContextLimit,
+		},
+		{
 			name: "schema",
 			body: `{"message":"Improperly formed request: inputSchema.properties must be an object"}`,
 			want: kiroErrorBadRequestSchema,

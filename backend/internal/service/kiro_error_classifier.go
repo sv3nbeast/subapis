@@ -21,6 +21,7 @@ const (
 	kiroErrorUpstreamTransient      = "upstream_transient"
 	kiroErrorBadRequestSchema       = "bad_request_schema"
 	kiroErrorBadRequestToolPairing  = "bad_request_tool_pairing"
+	kiroErrorBadRequestContextLimit = "bad_request_context_limit"
 	kiroErrorBadRequestInvalidModel = "bad_request_invalid_model"
 	kiroErrorBadRequestAuth         = "bad_request_auth"
 	kiroErrorBadRequestQuota        = "bad_request_quota"
@@ -105,6 +106,8 @@ func classifyKiroError(err error) kiroErrorClassification {
 
 func classifyKiroBadRequest(trimmed, lower string) kiroErrorClassification {
 	switch {
+	case looksLikeKiroBadRequestContextLimitError(lower):
+		return kiroErrorClassification{Category: kiroErrorBadRequestContextLimit, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestSchemaError(lower):
 		return kiroErrorClassification{Category: kiroErrorBadRequestSchema, StatusCode: http.StatusBadRequest, Message: trimmed}
 	case looksLikeKiroBadRequestToolPairingError(lower):
@@ -118,6 +121,20 @@ func classifyKiroBadRequest(trimmed, lower string) kiroErrorClassification {
 	default:
 		return kiroErrorClassification{Category: kiroErrorBadRequestUnknown, StatusCode: http.StatusBadRequest, Message: trimmed}
 	}
+}
+
+func looksLikeKiroBadRequestContextLimitError(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "content_length_exceeds_threshold") ||
+		strings.Contains(lower, "contentlengthexceeded") ||
+		strings.Contains(lower, "content length exceeds threshold") ||
+		strings.Contains(lower, "context_length_exceeded") ||
+		strings.Contains(lower, "prompt is too long") ||
+		strings.Contains(lower, "input length and max_tokens exceed context limit") ||
+		strings.Contains(lower, "input exceeds the context window") ||
+		strings.Contains(lower, "maximum prompt length exceeded")
 }
 
 func looksLikeKiroBadRequestSchemaError(lower string) bool {

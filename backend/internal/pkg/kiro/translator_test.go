@@ -171,7 +171,8 @@ func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(result.Payload), 900*1024)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
-	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.InputTokenBudget)
+	require.Equal(t, min(estimateKiroPayloadInputTokens(result.Payload), kiroExtendedContextTokens), result.Context.InputTokenBudget)
+	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
@@ -3089,6 +3090,148 @@ func TestKiroInputBudgetCapsStreamingCacheUsageWithoutUpstreamInputTokens(t *tes
 	require.Equal(t, budget, int(startUsage.Get("input_tokens").Int())+
 		int(startUsage.Get("cache_read_input_tokens").Int())+
 		int(startUsage.Get("cache_creation_input_tokens").Int()))
+}
+
+func TestKiroContextUsageReconcilesOverestimatedNonStreamingInput(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsagePercentage": 32.5,
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"outputTokens": 5, "totalTokens": 5},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4.8", KiroRequestContext{
+		InputTokenBudget:    968_000,
+		ContextWindowTokens: kiroExtendedContextTokens,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 324_995, result.Usage.InputTokens)
+	require.Equal(t, 325_000, result.Usage.TotalTokens)
+	require.True(t, result.Usage.InputTokensFromContext)
+	require.False(t, result.Usage.InputTokensFromUpstream)
+	require.Equal(t, 32.5, result.Usage.ContextUsagePercentage)
+	require.Equal(t, int64(324_995), gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())
+}
+
+func TestKiroExactUpstreamUsageTakesPriorityOverContextPercentage(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsagePercentage": 90.0,
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 123,
+				"outputTokens":        5,
+				"totalTokens":         128,
+			},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4.8", KiroRequestContext{
+		InputTokenBudget:    968_000,
+		ContextWindowTokens: kiroExtendedContextTokens,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 123, result.Usage.InputTokens)
+	require.True(t, result.Usage.InputTokensFromUpstream)
+	require.False(t, result.Usage.InputTokensFromContext)
+}
+
+func TestKiroContextUsageReconcilesStreamingUsage(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsagePercentage": 32.5,
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"outputTokens": 5, "totalTokens": 5},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.8", 968_000, KiroRequestContext{
+		InputTokenBudget:    968_000,
+		ContextWindowTokens: kiroExtendedContextTokens,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 324_995, result.Usage.InputTokens)
+	require.True(t, result.Usage.InputTokensFromContext)
+	// Kiro emits contextUsageEvent near the tail. message_start can therefore
+	// carry the bounded fallback, while the terminal message_delta corrects it.
+	// Anthropic clients treat the terminal usage as authoritative.
+	require.Contains(t, out.String(), `"input_tokens":968000`)
+	require.Contains(t, out.String(), `"input_tokens":324995`)
+}
+
+func TestKiroContextLimitEventReturnsReactiveCompactionError(t *testing.T) {
+	buildStream := func(t *testing.T) *bytes.Buffer {
+		t.Helper()
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "invalidStateEvent", map[string]any{
+			"reason":  kiroContextLimitReason,
+			"message": "Content length exceeds threshold",
+		}))
+		return stream
+	}
+
+	t.Run("non-streaming", func(t *testing.T) {
+		result, err := ParseNonStreamingEventStreamWithContext(buildStream(t), "claude-opus-4.8", KiroRequestContext{})
+		require.Nil(t, result)
+		var contextErr *ContextLimitError
+		require.ErrorAs(t, err, &contextErr)
+		require.Equal(t, "invalid_request_error", contextErr.ClientErrorType())
+		require.Equal(t, "prompt is too long", contextErr.ClientErrorMessage())
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		var out bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), buildStream(t), &out, "claude-opus-4.8", 1_000_000, KiroRequestContext{})
+		require.Nil(t, result)
+		var contextErr *ContextLimitError
+		require.ErrorAs(t, err, &contextErr)
+		require.Empty(t, out.String(), "pre-response context errors must not leak a partial Anthropic stream")
+		require.False(t, contextErr.ResponseStarted)
+	})
+
+	t.Run("streaming after visible output", func(t *testing.T) {
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "partial"},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "invalidStateEvent", map[string]any{
+			"reason":  kiroContextLimitReason,
+			"message": "Content length exceeds threshold",
+		}))
+
+		var out bytes.Buffer
+		result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.8", 1_000_000, KiroRequestContext{})
+		require.Nil(t, result)
+		var contextErr *ContextLimitError
+		require.ErrorAs(t, err, &contextErr)
+		require.True(t, contextErr.ResponseStarted)
+		require.Contains(t, out.String(), `"type":"message_start"`)
+		require.Contains(t, out.String(), `"text":"partial"`)
+	})
+}
+
+func TestKiroContextWindowResolution(t *testing.T) {
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4.6-1m"))
+	require.Equal(t, kiroDefaultContextTokens, contextWindowTokensForModel("claude-sonnet-4.5"))
 }
 
 func TestRepairJSONKeepsStringBracesWhileRepairingTrailingComma(t *testing.T) {

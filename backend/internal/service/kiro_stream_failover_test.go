@@ -26,6 +26,185 @@ type kiroStreamFailoverCooldownStore struct {
 	mark429Calls int
 }
 
+func TestKiroContextLimitErrorReturnsClaudeCodeCompactionSignal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	svc := &GatewayService{}
+	err := &kiropkg.ContextLimitError{Reason: "CONTENT_LENGTH_EXCEEDS_THRESHOLD"}
+
+	require.True(t, svc.handleKiroContextLimitError(c, &Account{ID: 9, Platform: PlatformKiro, Name: "kiro"}, err))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "error", gjson.Get(rec.Body.String(), "type").String())
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
+	require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+	require.True(t, IsResponseCommitted(c))
+}
+
+func TestKiroContextLimitErrorUsesSSEAfterResponseStarted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	_, _ = c.Writer.WriteString(": keepalive\n\n")
+	svc := &GatewayService{}
+	err := &kiropkg.ContextLimitError{Reason: "CONTENT_LENGTH_EXCEEDS_THRESHOLD"}
+
+	require.True(t, svc.handleKiroContextLimitError(c, &Account{ID: 9, Platform: PlatformKiro}, err))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "event: error")
+	require.Contains(t, rec.Body.String(), `"type":"invalid_request_error"`)
+	require.Contains(t, rec.Body.String(), `"message":"prompt is too long"`)
+	require.True(t, HasGatewaySSEErrorWritten(c))
+}
+
+func TestKiroContextLimitErrorIsEligibleForOneConversationRetry(t *testing.T) {
+	err := &kiropkg.ContextLimitError{Reason: "CONTENT_LENGTH_EXCEEDS_THRESHOLD"}
+	require.Equal(t, "prompt is too long", kiroEmptyEventStreamMessage(err))
+	require.True(t, isKiroContextLimitError(&kiroStreamBodyRetriesExhaustedError{Attempts: 2, Cause: err}))
+}
+
+func TestHandleKiroHTTPContextLimitNormalizesClientResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	svc := &GatewayService{}
+	account := &Account{ID: 9, Platform: PlatformKiro, Name: "kiro"}
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Content length exceeds threshold"}`)),
+	}
+
+	err := svc.handleKiroHTTPError(context.Background(), resp, c, account, "claude-opus-4.8", nil)
+	var contextErr *kiropkg.ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	var failoverErr *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
+	require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+}
+
+func TestForwardKiroMessagesStreamContextLimitRetriesConversationThenSignalsCompaction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	oldSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	defer func() { kiroRetrySleep = oldSleep }()
+
+	contextLimitBody := func() []byte {
+		body := bytes.NewBuffer(nil)
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "invalidStateEvent",
+		}, []byte(`{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Content length exceeds threshold"}`)))
+		return body.Bytes()
+	}
+	metadataOnlyBody := func() []byte {
+		body := bytes.NewBuffer(nil)
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "messageMetadataEvent",
+		}, []byte(`{"conversationId":"retry-still-failed"}`)))
+		return body.Bytes()
+	}
+	successBody := func() []byte {
+		body := bytes.NewBuffer(nil)
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "assistantResponseEvent",
+		}, []byte(`{"content":"must not reach a third attempt"}`)))
+		return body.Bytes()
+	}
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, contextLimitBody()),
+			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody()),
+			newKiroEventStreamResponse(http.StatusOK, successBody()),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 88, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/CONTEXT",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Nil(t, result)
+	var contextErr *kiropkg.ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
+	require.NotContains(t, rec.Body.String(), "stream_read_error")
+	require.Len(t, upstream.requests, 2, "context invalid-state must get exactly one fresh-conversation retry")
+
+	firstPayload, readErr := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, readErr)
+	secondPayload, readErr := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, readErr)
+	require.NotEqual(t,
+		gjson.GetBytes(firstPayload, "conversationState.conversationId").String(),
+		gjson.GetBytes(secondPayload, "conversationState.conversationId").String(),
+	)
+}
+
+func TestForwardKiroMessagesMidStreamContextLimitDoesNotRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := bytes.NewBuffer(nil)
+	_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"content":"this partial response is already visible to the client"}`)))
+	_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "invalidStateEvent",
+	}, []byte(`{"reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD","message":"Content length exceeds threshold"}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{newKiroEventStreamResponse(http.StatusOK, body.Bytes())},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 89, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/CONTEXT-MIDSTREAM",
+		},
+	}
+	requestBody := []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(requestBody), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+	require.Nil(t, result)
+	var contextErr *kiropkg.ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.True(t, contextErr.ResponseStarted)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"text":"this partial response`)
+	require.Contains(t, rec.Body.String(), `"type":"invalid_request_error"`)
+	require.Contains(t, rec.Body.String(), `"message":"prompt is too long"`)
+	require.Len(t, upstream.requests, 1, "a visible partial response must never be replayed into the same SSE stream")
+}
+
 func (s *kiroStreamFailoverCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
 	return 0, nil
 }

@@ -193,6 +193,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
+			if s.handleKiroContextLimitError(c, account, err) {
+				return nil, err
+			}
 			// handleStreamingResponse already emitted a standards-compliant SSE
 			// error after partial client output. Do not reclassify it as failover:
 			// the handler must not append a second error event or retry into the
@@ -336,6 +339,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	currentRequestCtx := requestCtx
 	maxBodyRetries := kiroStreamBodyRetryMax()
 	var parseResult *kiropkg.ParseResult
+	var contextRetryCause error
 	for bodyAttempt := 0; ; bodyAttempt++ {
 		currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 		parseResult, err = kiropkg.ParseNonStreamingEventStreamWithContext(currentResp.Body, mappedModel, currentRequestCtx)
@@ -344,8 +348,22 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			resp = currentResp
 			break
 		}
+		if contextRetryCause != nil {
+			err = &kiroStreamBodyRetriesExhaustedError{
+				Attempts: bodyAttempt + 1,
+				Cause:    contextRetryCause,
+			}
+			break
+		}
 		emptyStreamMsg := kiroEmptyEventStreamMessage(err)
 		if emptyStreamMsg == "" || maxBodyRetries <= 0 {
+			break
+		}
+		if isKiroContextLimitError(err) && bodyAttempt >= 1 {
+			err = &kiroStreamBodyRetriesExhaustedError{
+				Attempts: bodyAttempt + 1,
+				Cause:    err,
+			}
 			break
 		}
 		if bodyAttempt >= maxBodyRetries {
@@ -354,6 +372,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				Cause:    err,
 			}
 			break
+		}
+		if isKiroContextLimitError(err) {
+			contextRetryCause = err
 		}
 		retryAttempt := bodyAttempt + 1
 		requestID := buildKiroClientRequestID(currentResp)
@@ -409,6 +430,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		currentRequestCtx = nextRequestCtx
 	}
 	if err != nil {
+		if s.handleKiroContextLimitError(c, account, err) {
+			return nil, err
+		}
 		if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
 			return nil, newOpenAIClientCanceledError(err)
 		}
@@ -547,6 +571,9 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 }
 
 func kiroEmptyEventStreamMessage(err error) string {
+	if isKiroContextLimitError(err) {
+		return "prompt is too long"
+	}
 	for err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "empty kiro event stream") {
 			return err.Error()
@@ -554,6 +581,77 @@ func kiroEmptyEventStreamMessage(err error) string {
 		err = errors.Unwrap(err)
 	}
 	return ""
+}
+
+func isKiroContextLimitError(err error) bool {
+	var contextErr *kiropkg.ContextLimitError
+	return errors.As(err, &contextErr)
+}
+
+func kiroContextLimitResponseStarted(err error) bool {
+	var contextErr *kiropkg.ContextLimitError
+	return errors.As(err, &contextErr) && contextErr.ResponseStarted
+}
+
+func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Account, err error) bool {
+	var contextErr *kiropkg.ContextLimitError
+	if c == nil || !errors.As(err, &contextErr) {
+		return false
+	}
+
+	const clientMessage = "prompt is too long"
+	MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
+	setOpsUpstreamError(c, http.StatusBadRequest, clientMessage, "")
+	accountID := int64(0)
+	accountName := ""
+	platform := PlatformKiro
+	if account != nil {
+		accountID = account.ID
+		accountName = account.Name
+		platform = account.Platform
+	}
+	detail := ""
+	if reason := strings.TrimSpace(contextErr.Reason); reason != "" {
+		detail = "reason=" + reason
+	}
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           platform,
+		AccountID:          accountID,
+		AccountName:        accountName,
+		UpstreamStatusCode: http.StatusBadRequest,
+		Kind:               "client_context_limit",
+		Message:            clientMessage,
+		Detail:             detail,
+	})
+
+	if c.Writer.Written() {
+		if HasGatewaySSEErrorWritten(c) {
+			return true
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "invalid_request_error",
+				"message": clientMessage,
+			},
+		})
+		MarkGatewaySSEErrorWritten(c)
+		_, _ = fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", payload)
+		if flusher, ok := c.Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	MarkResponseCommitted(c)
+	c.JSON(http.StatusBadRequest, gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    "invalid_request_error",
+			"message": clientMessage,
+		},
+	})
+	return true
 }
 
 func (s *GatewayService) shouldPrepareKiroCacheEmulationProfile(ctx context.Context, account *Account, body []byte) bool {
@@ -677,6 +775,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		currentResp := resp
 		currentRequestCtx := requestCtx
 		maxBodyRetries := kiroStreamBodyRetryMax()
+		var contextRetryCause error
 		for bodyAttempt := 0; ; bodyAttempt++ {
 			currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 			currentRequestCtx.RequireTerminalEvent = true
@@ -689,6 +788,13 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				_ = pw.Close()
 				return
 			}
+			if contextRetryCause != nil {
+				_ = pw.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
+					Attempts: bodyAttempt + 1,
+					Cause:    contextRetryCause,
+				})
+				return
+			}
 			emptyStreamMsg := kiroEmptyEventStreamMessage(streamErr)
 			if emptyStreamMsg == "" {
 				_ = pw.CloseWithError(streamErr)
@@ -698,12 +804,29 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				_ = pw.CloseWithError(streamErr)
 				return
 			}
+			// A fresh conversation retry is safe only before any Anthropic response
+			// bytes were exposed. Retrying after message_start/content would splice
+			// two independent assistant responses into one invalid SSE stream.
+			if kiroContextLimitResponseStarted(streamErr) {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			if isKiroContextLimitError(streamErr) && bodyAttempt >= 1 {
+				_ = pw.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
+					Attempts: bodyAttempt + 1,
+					Cause:    streamErr,
+				})
+				return
+			}
 			if bodyAttempt >= maxBodyRetries {
 				_ = pw.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
 					Attempts: bodyAttempt + 1,
 					Cause:    streamErr,
 				})
 				return
+			}
+			if isKiroContextLimitError(streamErr) {
+				contextRetryCause = streamErr
 			}
 			retryAttempt := bodyAttempt + 1
 			retryNonce := buildKiroStreamBodyRetryNonce(account, requestID, retryAttempt)
@@ -1395,6 +1518,8 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 	inputSource := "effective_payload_estimate"
 	if usage.InputTokensFromUpstream {
 		inputSource = "upstream_token_usage"
+	} else if usage.InputTokensFromContext {
+		inputSource = "upstream_context_usage"
 	}
 	fields := []zap.Field{
 		zap.Int64("account_id", accountID),
@@ -1405,6 +1530,8 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 		zap.Int("original_input_estimate", originalInputTokens),
 		zap.Int("effective_input_budget", effectiveBudget),
 		zap.Int("final_input_tokens", finalInputTokens),
+		zap.Int("context_window_tokens", requestCtx.ContextWindowTokens),
+		zap.Float64("context_usage_percentage", usage.ContextUsagePercentage),
 		zap.Bool("budget_exceeded", budgetExceeded),
 	}
 	if budgetExceeded {
@@ -1464,6 +1591,14 @@ func (s *GatewayService) handleKiroHTTPError(ctx context.Context, resp *http.Res
 	}
 	if classification.Category == kiroErrorMonthlyRequest {
 		s.markKiroMonthlyRequestCountRateLimited(ctx, account, string(respBody))
+	}
+	if classification.Category == kiroErrorBadRequestContextLimit {
+		contextErr := &kiropkg.ContextLimitError{
+			Reason:  kiroErrorBadRequestContextLimit,
+			Message: upstreamMsg,
+		}
+		s.handleKiroContextLimitError(c, account, contextErr)
+		return contextErr
 	}
 	if classification.Category == kiroErrorBadRequestInvalidModel && account != nil && account.Type == AccountTypeOAuth {
 		s.markKiroInvalidModelRateLimited(ctx, account, mappedModel)
