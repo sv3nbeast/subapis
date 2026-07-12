@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 const (
@@ -66,6 +68,47 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	}
+
+	// Codex can replay Responses output items (most notably `reasoning` items and
+	// assistant `output_text` content) as the next request's input. OpenAI accepts
+	// those output-shaped items, while xAI currently rejects some of them with a
+	// 422 ModelInput deserialization error. Keep the normal, already-working path
+	// byte-for-byte unchanged and only perform one narrowly-scoped compatibility
+	// retry after xAI has positively identified this schema mismatch.
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		originalResponseBody := resp.Body
+		firstBody := s.readUpstreamErrorBody(resp)
+		_ = originalResponseBody.Close()
+		retried := false
+		if isGrokModelInputSchemaError(firstBody) {
+			retryBody, changed, normalizeErr := normalizeGrokResponsesModelInput(patchedBody)
+			if normalizeErr != nil {
+				logger.FromContext(ctx).Warn("grok.responses_model_input_normalize_failed",
+					zap.Int64("account_id", account.ID),
+					zap.Error(normalizeErr),
+				)
+			} else if changed {
+				retryReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, retryBody, token)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				resp, err = s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+				SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+				if err != nil {
+					return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+				}
+				patchedBody = retryBody
+				retried = true
+				logger.FromContext(ctx).Info("grok.responses_model_input_compat_retry",
+					zap.Int64("account_id", account.ID),
+					zap.Int("status_code", resp.StatusCode),
+				)
+			}
+		}
+		if !retried {
+			resp.Body = io.NopCloser(bytes.NewReader(firstBody))
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -172,6 +215,203 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func isGrokModelInputSchemaError(body []byte) bool {
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(body, "error.message").String(),
+		gjson.GetBytes(body, "error").String(),
+		gjson.GetBytes(body, "message").String(),
+		string(body),
+	)))
+	return strings.Contains(message, "failed to deserialize") &&
+		strings.Contains(message, "modelinput")
+}
+
+// normalizeGrokResponsesModelInput converts only output-shaped Responses
+// history that xAI cannot deserialize back into canonical input-shaped items.
+// It is intentionally called only after the exact xAI ModelInput 422 above, so
+// successful Grok traffic is never rewritten.
+func normalizeGrokResponsesModelInput(body []byte) ([]byte, bool, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, false, err
+	}
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) == 0 {
+		return body, false, nil
+	}
+
+	normalized := make([]any, 0, len(input))
+	changed := false
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			normalized = append(normalized, rawItem)
+			continue
+		}
+
+		itemType := strings.ToLower(strings.TrimSpace(grokJSONText(item["type"])))
+		if itemType == "reasoning" {
+			// Reasoning output is provider-specific opaque state. It is safe to
+			// omit when replaying the visible conversation to another provider.
+			changed = true
+			continue
+		}
+		if itemType == "item_reference" {
+			// A response/item ID issued by OpenAI cannot be resolved by xAI.
+			// Codex normally sends the concrete history alongside the reference,
+			// so discard only the unusable reference during the fallback retry.
+			changed = true
+			continue
+		}
+		if isGrokCodexToolCallType(itemType) {
+			item = normalizeGrokCodexToolCall(item, itemType)
+			itemType = "function_call"
+			changed = true
+		} else if isGrokCodexToolOutputType(itemType) {
+			item = normalizeGrokCodexToolOutput(item)
+			itemType = "function_call_output"
+			changed = true
+		}
+		if itemType == "" && strings.TrimSpace(grokJSONText(item["role"])) != "" {
+			item["type"] = "message"
+			itemType = "message"
+			changed = true
+		}
+
+		if itemType == "message" {
+			for _, outputOnlyField := range []string{"id", "status"} {
+				if _, exists := item[outputOnlyField]; exists {
+					delete(item, outputOnlyField)
+					changed = true
+				}
+			}
+			if content, ok := item["content"].([]any); ok {
+				for _, rawPart := range content {
+					part, ok := rawPart.(map[string]any)
+					if !ok {
+						continue
+					}
+					if strings.EqualFold(strings.TrimSpace(grokJSONText(part["type"])), "output_text") {
+						part["type"] = "input_text"
+						changed = true
+					}
+					for _, outputOnlyField := range []string{"annotations", "logprobs"} {
+						if _, exists := part[outputOnlyField]; exists {
+							delete(part, outputOnlyField)
+							changed = true
+						}
+					}
+				}
+			}
+		}
+
+		normalized = append(normalized, item)
+	}
+	if !changed || len(normalized) == 0 {
+		return body, false, nil
+	}
+	payload["input"] = normalized
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func isGrokCodexToolCallType(itemType string) bool {
+	switch itemType {
+	case "tool_call", "local_shell_call", "tool_search_call", "custom_tool_call", "mcp_tool_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGrokCodexToolOutputType(itemType string) bool {
+	switch itemType {
+	case "local_shell_call_output", "tool_search_output", "custom_tool_call_output", "mcp_tool_call_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeGrokCodexToolCall(item map[string]any, itemType string) map[string]any {
+	callID := strings.TrimSpace(grokJSONText(item["call_id"]))
+	if callID == "" {
+		callID = strings.TrimSpace(grokJSONText(item["id"]))
+	}
+	name := strings.TrimSpace(grokJSONText(item["name"]))
+	if name == "" {
+		name = strings.TrimSpace(grokJSONText(item["tool_name"]))
+	}
+	if name == "" {
+		if function, ok := item["function"].(map[string]any); ok {
+			name = strings.TrimSpace(grokJSONText(function["name"]))
+		}
+	}
+	if name == "" {
+		name = strings.TrimSuffix(itemType, "_call")
+	}
+
+	arguments := item["arguments"]
+	if arguments == nil {
+		arguments = item["input"]
+	}
+	if arguments == nil {
+		arguments = item["action"]
+	}
+	return map[string]any{
+		"type":      "function_call",
+		"call_id":   callID,
+		"name":      name,
+		"arguments": grokJSONString(arguments),
+	}
+}
+
+func normalizeGrokCodexToolOutput(item map[string]any) map[string]any {
+	callID := strings.TrimSpace(grokJSONText(item["call_id"]))
+	if callID == "" {
+		callID = strings.TrimSpace(grokJSONText(item["id"]))
+	}
+	output := item["output"]
+	if output == nil {
+		output = item["result"]
+	}
+	if _, ok := output.(string); !ok {
+		output = grokJSONString(output)
+	}
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": callID,
+		"output":  output,
+	}
+}
+
+func grokJSONString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(encoded)
+}
+
+func grokJSONText(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
 }
 
 var grokResponsesUnsupportedRecursiveFields = map[string]struct{}{
