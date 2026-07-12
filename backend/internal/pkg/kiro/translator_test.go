@@ -66,6 +66,7 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.NotContains(t, systemContent, "[Context: Current time is ")
 	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "You are a test system prompt."))
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
+	require.True(t, kiroBuildResult.Context.NativeToolsAvailable)
 }
 
 func TestBuildKiroTemporalContextDefaultIsEmpty(t *testing.T) {
@@ -838,6 +839,41 @@ func TestBuildKiroPayloadWithoutToolsOmitsNativeToolCallPolicy(t *testing.T) {
 
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
 	require.NotContains(t, systemContent, systemNativeToolCallPolicy)
+	require.False(t, result.Context.NativeToolsAvailable)
+}
+
+func TestParseNonStreamingRejectsNarratedToolTranscriptForTruncatedToolRequest(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "先检查列表结构。\n\ncall 找后台 ProductManager 的商品列表渲染。\n\nuser Tool results provided.\n\nTool results:",
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4-8", KiroRequestContext{
+		NativeToolsAvailable: true,
+		PayloadTruncated:     true,
+	})
+
+	require.Nil(t, result)
+	require.EqualError(t, err, "empty kiro event stream: narrated tool call without native invocation")
+}
+
+func TestParseNonStreamingAllowsNarratedCallExampleInsideCodeFence(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "Use this DSL syntax:\n```text\ncall build_product_list\n```",
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4-8", KiroRequestContext{
+		NativeToolsAvailable: true,
+		PayloadTruncated:     true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
 }
 
 func TestParseNonStreamingEventStream(t *testing.T) {
@@ -3273,6 +3309,97 @@ func TestStreamEventStreamAsAnthropicRejectsEmptyKiroStream(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty kiro event stream")
 	require.Empty(t, out.String())
+}
+
+func TestStreamEventStreamAsAnthropicRejectsNarratedToolTranscriptBeforeRelease(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "先检查列表结构。\n\ncall 找后台 ProductManager 的商品列表渲染。\n\nuser Tool results provided.\n\nTool results:",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        20,
+				"totalTokens":         30,
+			},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
+		NativeToolsAvailable: true,
+		PayloadTruncated:     true,
+	})
+
+	require.Nil(t, result)
+	require.EqualError(t, err, "empty kiro event stream: narrated tool call without native invocation")
+	require.Empty(t, out.String(), "invalid narrated transcript must not leak partial assistant output")
+}
+
+func TestStreamEventStreamAsAnthropicReleasesNormalTextForTruncatedToolRequest(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "The implementation is complete."},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        5,
+				"totalTokens":         15,
+			},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
+		NativeToolsAvailable: true,
+		PayloadTruncated:     true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), "The implementation is complete.")
+	require.Contains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamEventStreamAsAnthropicReleasesNativeToolForTruncatedRequest(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "I will inspect the file."},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_bash",
+			"name":      "Bash",
+			"input":     `{"command":"grep ProductManager app.js"}`,
+			"stop":      true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        8,
+				"totalTokens":         18,
+			},
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
+		NativeToolsAvailable: true,
+		PayloadTruncated:     true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Contains(t, out.String(), `"name":"Bash"`)
+	require.Contains(t, out.String(), `grep ProductManager app.js`)
 }
 
 func TestStreamEventStreamAsAnthropicRejectsMetadataOnlyKiroTurn(t *testing.T) {

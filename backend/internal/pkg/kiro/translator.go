@@ -146,10 +146,11 @@ type ParseResult struct {
 }
 
 type KiroRequestContext struct {
-	ToolNameMap         map[string]string
-	EmptyInputToolNames map[string]bool
-	ThinkingEnabled     bool
-	CacheEmulationUsage *Usage
+	ToolNameMap          map[string]string
+	EmptyInputToolNames  map[string]bool
+	NativeToolsAvailable bool
+	ThinkingEnabled      bool
+	CacheEmulationUsage  *Usage
 	// InputTokenBudget is a conservative estimate of the serialized Kiro
 	// payload actually sent upstream, after Kiro-history truncation. It keeps
 	// fallback/cache-emulation usage from billing omitted Anthropic history.
@@ -585,6 +586,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
 	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
+	requestCtx.NativeToolsAvailable = len(kiroTools) > 0
 	if currentUserMsg != nil {
 		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
 			currentUserMsg.Content = " "
@@ -678,6 +680,9 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
+	if shouldRejectKiroNarratedToolTranscript(requestCtx, content, toolUses) {
+		return nil, errors.New("empty kiro event stream: narrated tool call without native invocation")
+	}
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
@@ -726,7 +731,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	sawFinalUsageEvidence := false
 	sawExplicitCompletionReason := false
 	streamOutputReleased := false
+	holdToolTranscriptValidation := requestCtx.NativeToolsAvailable && requestCtx.PayloadTruncated
 	var bufferedStreamOutput bytes.Buffer
+	var visibleTextBuf strings.Builder
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -761,6 +768,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	markDeliverableOutput := func() error {
 		sawDeliverableOutput = true
+		if holdToolTranscriptValidation {
+			return nil
+		}
 		return releaseStreamOutput()
 	}
 	ensureMessageStart := func() error {
@@ -1042,6 +1052,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 		}
 		_, _ = outputTextBuf.WriteString(text)
+		_, _ = visibleTextBuf.WriteString(text)
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": contentBlockIndex,
@@ -1091,6 +1102,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if !shouldEmitToolUse(tool, emittedToolContents) {
 			return nil
 		}
+		holdToolTranscriptValidation = false
 		if isStructuredOutputToolName(tool.Name, requestCtx) {
 			inputJSON, err := json.Marshal(tool.Input)
 			if err != nil {
@@ -1518,6 +1530,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return nil, errors.New("empty kiro event stream: no assistant output")
 	}
+	if holdToolTranscriptValidation && looksLikeKiroNarratedToolTranscript(visibleTextBuf.String()) {
+		return nil, errors.New("empty kiro event stream: narrated tool call without native invocation")
+	}
 	hasCompletionEvidence := sawTerminalEvent ||
 		sawExplicitCompletionReason ||
 		stopSequenceMatched != "" ||
@@ -1577,6 +1592,34 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		StopReason:    stopReason,
 		FirstDeltaDur: firstDelta,
 	}, nil
+}
+
+func shouldRejectKiroNarratedToolTranscript(requestCtx KiroRequestContext, content string, toolUses []KiroToolUse) bool {
+	return requestCtx.NativeToolsAvailable && requestCtx.PayloadTruncated &&
+		!hasUsableToolUses(toolUses) && looksLikeKiroNarratedToolTranscript(content)
+}
+
+func looksLikeKiroNarratedToolTranscript(text string) bool {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	inFence := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "call ") ||
+			lower == "user tool results provided." ||
+			lower == "tool results:" ||
+			strings.HasPrefix(lower, "assistant to=") {
+			return true
+		}
+	}
+	return false
 }
 
 func extractSystemPrompt(claudeBody []byte) string {

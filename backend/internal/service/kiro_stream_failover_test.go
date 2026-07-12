@@ -26,6 +26,11 @@ type kiroStreamFailoverCooldownStore struct {
 	mark429Calls int
 }
 
+func TestKiroEmptyEventStreamMessageAcceptsNarratedToolRetrySignal(t *testing.T) {
+	err := errors.New("empty kiro event stream: narrated tool call without native invocation")
+	require.Equal(t, err.Error(), kiroEmptyEventStreamMessage(err))
+}
+
 func (s *kiroStreamFailoverCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
 	return 0, nil
 }
