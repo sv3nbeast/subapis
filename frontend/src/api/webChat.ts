@@ -48,6 +48,9 @@ export interface WebChatOptions {
   projects_enabled: boolean
   templates_enabled: boolean
   history_enabled: boolean
+  files_enabled: boolean
+  file_formats?: string[]
+  file_limits: WebChatDocumentLimits
 }
 
 export interface WebChatSession {
@@ -66,6 +69,7 @@ export interface WebChatSession {
   project_name?: string
   default_template_id?: number | null
   active_leaf_message_id?: number | null
+  knowledge_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -89,6 +93,7 @@ export interface WebChatMessage {
   version_count: number
   version_reason: 'original' | 'regenerate' | 'edit'
   template_id?: number | null
+  sources: WebChatSource[]
   created_at: string
   updated_at: string
 }
@@ -104,6 +109,7 @@ export interface WebChatStreamHandlers {
   signal?: AbortSignal
   onMeta?: (meta: WebChatStreamMeta) => void
   onDelta?: (text: string) => void
+  onSources?: (sources: WebChatSource[]) => void
   onDone?: (result: WebChatStreamDone) => void
   onError?: (message: string, persisted?: WebChatMessage) => void
 }
@@ -130,7 +136,14 @@ export interface WebChatSessionPatch {
   max_output_tokens?: number
   project_id?: number | null
   default_template_id?: number | null
+  knowledge_enabled?: boolean
 }
+
+export interface WebChatDocumentLimits { max_file_bytes: number; max_files_per_project: number; max_bytes_per_user: number }
+export interface WebChatDocument { id:number;user_id:number;project_id?:number|null;session_id?:number|null;original_name:string;content_type:string;extension:string;size_bytes:number;sha256:string;status:'uploaded'|'processing'|'ready'|'failed'|'deleting';enabled:boolean;error_message?:string;extracted_chars:number;chunk_count:number;attempt_count:number;created_at:string;updated_at:string }
+export interface WebChatSource { index:number;document_id:number;document_name:string;page_number?:number|null;location_label?:string;excerpt:string }
+export interface WebChatDocumentS3Config { endpoint:string;region:string;bucket:string;access_key_id:string;secret_access_key?:string;prefix:string;force_path_style:boolean }
+export interface WebChatDocumentAdminConfig { enabled:boolean;limits:WebChatDocumentLimits;s3:WebChatDocumentS3Config }
 
 export interface WebChatProject {
   id: number
@@ -216,7 +229,7 @@ export async function deleteSession(sessionID: number): Promise<void> {
 
 export async function streamMessage(
   sessionID: number,
-  payload: { content: string; group_id?: number | null; model?: string; template_id?: number | null },
+  payload: { content: string; group_id?: number | null; model?: string; template_id?: number | null; knowledge_enabled?:boolean; document_ids?:number[] },
   handlers: WebChatStreamHandlers = {},
 ): Promise<void> {
 	return streamRequest(`/web-chat/sessions/${sessionID}/messages`, payload, handlers)
@@ -245,6 +258,18 @@ export async function adminListTemplates(): Promise<WebChatTemplate[]> { const {
 export async function adminCreateTemplate(payload: WebChatTemplateInput): Promise<WebChatTemplate> { const { data } = await apiClient.post<WebChatTemplate>('/admin/settings/web-chat-templates', payload); return data }
 export async function adminPatchTemplate(id: number, payload: WebChatTemplateInput): Promise<WebChatTemplate> { const { data } = await apiClient.patch<WebChatTemplate>(`/admin/settings/web-chat-templates/${id}`, payload); return data }
 export async function adminDeleteTemplate(id: number): Promise<void> { await apiClient.delete(`/admin/settings/web-chat-templates/${id}`) }
+export async function listProjectDocuments(projectID:number):Promise<WebChatDocument[]>{const{data}=await apiClient.get<WebChatDocument[]>(`/web-chat/projects/${projectID}/documents`);return data}
+async function uploadDocument(path:string,file:File,onProgress?:(percent:number)=>void):Promise<WebChatDocument>{const form=new FormData();form.append('file',file);const{data}=await apiClient.post<WebChatDocument>(path,form,{headers:{'Content-Type':'multipart/form-data'},onUploadProgress:e=>{if(e.total)onProgress?.(Math.round(e.loaded/e.total*100))}});return data}
+export function uploadProjectDocument(projectID:number,file:File,onProgress?:(percent:number)=>void){return uploadDocument(`/web-chat/projects/${projectID}/documents`,file,onProgress)}
+export function uploadSessionDocument(sessionID:number,file:File,onProgress?:(percent:number)=>void){return uploadDocument(`/web-chat/sessions/${sessionID}/documents`,file,onProgress)}
+export async function patchDocument(id:number,enabled:boolean):Promise<WebChatDocument>{const{data}=await apiClient.patch<WebChatDocument>(`/web-chat/documents/${id}`,{enabled});return data}
+export async function retryDocument(id:number):Promise<WebChatDocument>{const{data}=await apiClient.patch<WebChatDocument>(`/web-chat/documents/${id}`,{retry:true});return data}
+export async function getDocument(id:number):Promise<WebChatDocument>{const{data}=await apiClient.get<WebChatDocument>(`/web-chat/documents/${id}`);return data}
+export async function deleteDocument(id:number):Promise<void>{await apiClient.delete(`/web-chat/documents/${id}`)}
+export async function downloadDocument(id:number,name:string):Promise<void>{const{data}=await apiClient.get(`/web-chat/documents/${id}/download`,{responseType:'blob'});const url=URL.createObjectURL(data);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)}
+export async function adminGetDocumentConfig():Promise<WebChatDocumentAdminConfig>{const{data}=await apiClient.get('/admin/settings/web-chat-documents');return data}
+export async function adminUpdateDocumentConfig(payload:WebChatDocumentAdminConfig):Promise<WebChatDocumentAdminConfig>{const{data}=await apiClient.put('/admin/settings/web-chat-documents',payload);return data}
+export async function adminTestDocumentS3(payload:WebChatDocumentS3Config):Promise<void>{await apiClient.post('/admin/settings/web-chat-documents/test-s3',payload)}
 
 async function streamRequest(path: string, payload: unknown, handlers: WebChatStreamHandlers): Promise<void> {
   const token = localStorage.getItem('auth_token')
@@ -316,6 +341,8 @@ function dispatchSSEChunk(chunk: string, handlers: WebChatStreamHandlers): strin
     handlers.onMeta?.(payload as WebChatStreamMeta)
   } else if (event === 'delta') {
     handlers.onDelta?.(typeof payload === 'string' ? payload : payload?.text || '')
+  } else if (event === 'sources') {
+    handlers.onSources?.(payload as WebChatSource[])
   } else if (event === 'done') {
     handlers.onDone?.(payload as WebChatStreamDone)
   } else if (event === 'error') {
@@ -340,6 +367,8 @@ export const webChatAPI = {
   listTemplates, createTemplate, patchTemplate, deleteTemplate, copyTemplate,
   listMessageVersions, activateMessageVersion,
   adminListTemplates, adminCreateTemplate, adminPatchTemplate, adminDeleteTemplate,
+  listProjectDocuments, uploadProjectDocument, uploadSessionDocument, getDocument, patchDocument, retryDocument, deleteDocument, downloadDocument,
+  adminGetDocumentConfig, adminUpdateDocumentConfig, adminTestDocumentS3,
 }
 
 export default webChatAPI

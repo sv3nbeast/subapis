@@ -68,6 +68,7 @@ var ProviderSet = wire.NewSet(
 	NewAPIKeyRepository,
 	NewWebChatAPIKeyRepository,
 	NewWebChatRepository,
+	NewWebChatDocumentRepository,
 	NewGroupRepository,
 	NewAccountRepository,
 	NewScheduledTestPlanRepository,   // 定时测试计划仓储
@@ -137,6 +138,7 @@ var ProviderSet = wire.NewSet(
 	// Backup infrastructure
 	NewPgDumper,
 	NewS3BackupStoreFactory,
+	NewWebChatDocumentStoreFactory,
 
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,

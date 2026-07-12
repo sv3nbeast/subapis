@@ -822,6 +822,8 @@ export default {
     filter: 'Filter',
     export: 'Export',
     import: 'Import',
+    download: 'Download',
+    test: 'Test connection',
     actions: 'Actions',
     status: 'Status',
     name: 'Name',
@@ -1882,6 +1884,8 @@ export default {
     maxOutputTokens: 'Max output tokens',
     invalidTemperature: 'Temperature must be between 0 and 2.',
     invalidMaxTokens: 'Max output tokens must be between 1 and 32768.',
+    knowledgeLibrary: 'Project knowledge', dropDocuments: 'Choose or drop documents here', noDocuments: 'No documents yet', attach: 'Attach', uploading: 'Uploading', documentProcessing: 'Processing', documentReady: 'Ready', documentFailed: 'Failed', documentProcessingTimeout: 'Document processing timed out. Try again later.', deleteDocumentConfirm: 'Delete this document? Its object will be cleaned up asynchronously.', useProjectKnowledge: 'Use project knowledge automatically', knowledgeSources: 'Knowledge sources', source: 'Source', page: 'Page', body: 'Body', maxFileMB: 'Max file size (MB)', maxProjectFiles: 'Files per project', maxUserMB: 'Storage per user (MB)', keepExistingSecret: 'Leave blank to keep the saved secret', s3TestSuccess: 'Object storage connection succeeded',
+    documentStatus: { uploaded: 'Queued', processing: 'Processing', ready: 'Ready', failed: 'Failed', deleting: 'Deleting' },
     promptSummarize: 'Summarize and distill the content I provide next',
     promptExplain: 'Explain a complex concept with simple examples',
     promptPlan: 'Turn my goal into an actionable plan',
@@ -6893,7 +6897,8 @@ export default {
           history: 'Enable message history',
           historyHint: 'Preserve switchable versions when regenerating or editing messages.',
           systemTemplates: 'System prompt templates',
-          systemTemplatesHint: 'Manage built-in office templates available to all users.'
+          systemTemplatesHint: 'Manage built-in office templates available to all users.',
+          documents: 'File knowledge workspace', documentsHint: 'Configure independent object storage, quotas, and knowledge Q&A. Backup storage is never reused.'
         },
         riskControl: {
           title: 'Risk Control',

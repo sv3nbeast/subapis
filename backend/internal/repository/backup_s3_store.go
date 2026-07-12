@@ -55,6 +55,24 @@ func NewS3BackupStoreFactory() service.BackupObjectStoreFactory {
 	}
 }
 
+// NewWebChatDocumentStoreFactory creates a store from the independent web-chat
+// document configuration. It deliberately does not read or reuse backup S3
+// settings; only the transport implementation is shared.
+func NewWebChatDocumentStoreFactory() service.WebChatDocumentStoreFactory {
+	return func(ctx context.Context, cfg *service.WebChatDocumentS3Config) (service.WebChatDocumentStore, error) {
+		backupCfg := &service.BackupS3Config{
+			Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
+			AccessKeyID: cfg.AccessKeyID, SecretAccessKey: cfg.SecretAccessKey,
+			Prefix: cfg.Prefix, ForcePathStyle: cfg.ForcePathStyle,
+		}
+		store, err := NewS3BackupStoreFactory()(ctx, backupCfg)
+		if err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+}
+
 func (s *S3BackupStore) Upload(ctx context.Context, key string, body io.Reader, contentType string) (int64, error) {
 	// 读取全部内容以获取大小（S3 PutObject 需要知道内容长度）
 	// 注意：阿里云 OSS 不兼容 s3manager 分片上传的签名方式，因此使用 PutObject

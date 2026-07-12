@@ -102,8 +102,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	channelService := service.NewChannelService(channelRepository, groupRepository, apiKeyAuthCacheInvalidator, pricingService)
-	webChatService := service.NewWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService)
-	webChatHandler := handler.NewWebChatHandler(webChatService, configConfig)
+	webChatDocumentRepository := repository.NewWebChatDocumentRepository(db)
+	webChatDocumentStoreFactory := repository.NewWebChatDocumentStoreFactory()
+	webChatDocumentService := service.ProvideWebChatDocumentService(webChatDocumentRepository, settingRepository, secretEncryptor, webChatDocumentStoreFactory)
+	webChatService := service.ProvideWebChatService(webChatRepository, webChatAPIKeyRepository, apiKeyService, channelService, settingService, webChatDocumentService)
+	webChatHandler := handler.NewWebChatHandler(webChatService, webChatDocumentService, configConfig)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
 	usageService := service.NewUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator)
 	opsRepository := repository.NewOpsRepository(db)
@@ -305,7 +308,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, antigravityGatewayService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, invoiceService, statusProbeService, channelMonitorRunner, userPlatformQuotaUsageFlusher)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, kiroOAuthService, antigravityGatewayService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, invoiceService, statusProbeService, channelMonitorRunner, webChatDocumentService, userPlatformQuotaUsageFlusher)
 	application := &Application{
 		Server:  httpServer,
 		Cleanup: v,
@@ -368,6 +371,7 @@ func provideCleanup(
 	invoiceService *service.InvoiceService,
 	statusProbeService *service.StatusProbeService,
 	channelMonitorRunner *service.ChannelMonitorRunner,
+	webChatDocuments *service.WebChatDocumentService,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 ) func() {
 	return func() {
@@ -380,6 +384,12 @@ func provideCleanup(
 		}
 
 		parallelSteps := []cleanupStep{
+			{"WebChatDocumentService", func() error {
+				if webChatDocuments != nil {
+					webChatDocuments.Stop()
+				}
+				return nil
+			}},
 			{"OpsScheduledReportService", func() error {
 				if opsScheduledReport != nil {
 					opsScheduledReport.Stop()

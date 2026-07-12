@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -24,13 +25,15 @@ import (
 
 type WebChatHandler struct {
 	webChatService *service.WebChatService
+	documents      *service.WebChatDocumentService
 	cfg            *config.Config
 	httpClient     *http.Client
 }
 
-func NewWebChatHandler(webChatService *service.WebChatService, cfg *config.Config) *WebChatHandler {
+func NewWebChatHandler(webChatService *service.WebChatService, documents *service.WebChatDocumentService, cfg *config.Config) *WebChatHandler {
 	return &WebChatHandler{
 		webChatService: webChatService,
+		documents:      documents,
 		cfg:            cfg,
 		httpClient:     &http.Client{},
 	}
@@ -44,10 +47,12 @@ type webChatCreateSessionRequest struct {
 }
 
 type webChatSendMessageRequest struct {
-	Content    string `json:"content" binding:"required"`
-	GroupID    int64  `json:"group_id"`
-	Model      string `json:"model"`
-	TemplateID *int64 `json:"template_id"`
+	Content          string  `json:"content" binding:"required"`
+	GroupID          int64   `json:"group_id"`
+	Model            string  `json:"model"`
+	TemplateID       *int64  `json:"template_id"`
+	KnowledgeEnabled *bool   `json:"knowledge_enabled"`
+	DocumentIDs      []int64 `json:"document_ids"`
 }
 
 type webChatReviseMessageRequest struct {
@@ -164,6 +169,14 @@ func (h *WebChatHandler) PatchSession(c *gin.Context) {
 			req.DefaultTemplateID = &value
 		}
 	}
+	if v, ok := raw["knowledge_enabled"]; ok {
+		var value bool
+		if json.Unmarshal(v, &value) != nil {
+			response.BadRequest(c, "Invalid knowledge enabled state")
+			return
+		}
+		req.KnowledgeEnabled = &value
+	}
 	session, err := h.webChatService.UpdateSession(c.Request.Context(), subject.UserID, sessionID, req)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -233,10 +246,12 @@ func (h *WebChatHandler) SendMessage(c *gin.Context) {
 	}
 
 	generation, err := h.webChatService.PrepareSend(c.Request.Context(), subject.UserID, sessionID, service.WebChatSendMessageRequest{
-		Content:    req.Content,
-		GroupID:    req.GroupID,
-		Model:      req.Model,
-		TemplateID: req.TemplateID,
+		Content:          req.Content,
+		GroupID:          req.GroupID,
+		Model:            req.Model,
+		TemplateID:       req.TemplateID,
+		KnowledgeEnabled: req.KnowledgeEnabled,
+		DocumentIDs:      req.DocumentIDs,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -482,6 +497,190 @@ func (h *WebChatHandler) CopyTemplate(c *gin.Context) {
 	response.Created(c, item)
 }
 
+func (h *WebChatHandler) ListProjectDocuments(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	projectID, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	items, err := h.documents.ListProject(c.Request.Context(), subject.UserID, projectID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
+func (h *WebChatHandler) UploadProjectDocument(c *gin.Context) {
+	h.uploadDocument(c, true)
+}
+func (h *WebChatHandler) UploadSessionDocument(c *gin.Context) {
+	h.uploadDocument(c, false)
+}
+func (h *WebChatHandler) uploadDocument(c *gin.Context, project bool) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	if !h.documents.FeatureEnabled(c.Request.Context()) {
+		response.ErrorFrom(c, service.ErrWebChatFilesDisabled)
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		response.BadRequest(c, "file is required")
+		return
+	}
+	defer file.Close()
+	limit := h.documents.Limits(c.Request.Context()).MaxFileBytes
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	var projectID, sessionID *int64
+	if project {
+		projectID = &id
+	} else {
+		sessionID = &id
+	}
+	item, err := h.documents.Upload(c.Request.Context(), subject.UserID, projectID, sessionID, header.Filename, header.Header.Get("Content-Type"), data)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, item)
+}
+func (h *WebChatHandler) GetDocument(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	item, err := h.documents.Get(c.Request.Context(), subject.UserID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, item)
+}
+func (h *WebChatHandler) PatchDocument(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Enabled *bool `json:"enabled"`
+		Retry   bool  `json:"retry"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	var item *service.WebChatDocument
+	var err error
+	if req.Retry {
+		item, err = h.documents.Retry(c.Request.Context(), subject.UserID, id)
+	} else if req.Enabled != nil {
+		item, err = h.documents.SetEnabled(c.Request.Context(), subject.UserID, id, *req.Enabled)
+	} else {
+		response.BadRequest(c, "enabled or retry is required")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, item)
+}
+func (h *WebChatHandler) DeleteDocument(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.documents.Delete(c.Request.Context(), subject.UserID, id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": true})
+}
+func (h *WebChatHandler) DownloadDocument(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, ok := positiveParam(c, "id")
+	if !ok {
+		return
+	}
+	doc, body, err := h.documents.OpenDownload(c.Request.Context(), subject.UserID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	defer body.Close()
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.QueryEscape(doc.OriginalName)))
+	c.DataFromReader(http.StatusOK, doc.SizeBytes, doc.ContentType, body, nil)
+}
+
+func (h *WebChatHandler) AdminGetDocumentConfig(c *gin.Context) {
+	cfg, err := h.documents.AdminConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+func (h *WebChatHandler) AdminUpdateDocumentConfig(c *gin.Context) {
+	var in service.WebChatDocumentAdminConfig
+	if c.ShouldBindJSON(&in) != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	cfg, err := h.documents.UpdateAdminConfig(c.Request.Context(), in)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+func (h *WebChatHandler) AdminTestDocumentS3(c *gin.Context) {
+	var in service.WebChatDocumentS3Config
+	if c.ShouldBindJSON(&in) != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	if err := h.documents.TestS3(c.Request.Context(), in); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"ok": true})
+}
+
 func (h *WebChatHandler) AdminListTemplates(c *gin.Context) {
 	subject, ok := middleware.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -566,6 +765,10 @@ func (h *WebChatHandler) streamGeneration(c *gin.Context, userID int64, generati
 		"model":      session.Model,
 	})
 	flushSSE(c.Writer)
+	if len(generation.Sources) > 0 {
+		writeSSE(c.Writer, "sources", generation.Sources)
+		flushSSE(c.Writer)
+	}
 
 	result, streamErr := h.forwardStreamingChat(c.Request.Context(), c.Writer, managedKey.Key, session, messages)
 	if streamErr != nil {

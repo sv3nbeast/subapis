@@ -43,13 +43,16 @@ type WebChatGroupOption struct {
 }
 
 type WebChatOptions struct {
-	Enabled          bool                 `json:"enabled"`
-	Groups           []WebChatGroupOption `json:"groups"`
-	DefaultGroupID   *int64               `json:"default_group_id,omitempty"`
-	DefaultModel     string               `json:"default_model,omitempty"`
-	ProjectsEnabled  bool                 `json:"projects_enabled"`
-	TemplatesEnabled bool                 `json:"templates_enabled"`
-	HistoryEnabled   bool                 `json:"history_enabled"`
+	Enabled          bool                  `json:"enabled"`
+	Groups           []WebChatGroupOption  `json:"groups"`
+	DefaultGroupID   *int64                `json:"default_group_id,omitempty"`
+	DefaultModel     string                `json:"default_model,omitempty"`
+	ProjectsEnabled  bool                  `json:"projects_enabled"`
+	TemplatesEnabled bool                  `json:"templates_enabled"`
+	HistoryEnabled   bool                  `json:"history_enabled"`
+	FilesEnabled     bool                  `json:"files_enabled"`
+	FileFormats      []string              `json:"file_formats,omitempty"`
+	FileLimits       WebChatDocumentLimits `json:"file_limits"`
 }
 
 type WebChatSession struct {
@@ -68,32 +71,34 @@ type WebChatSession struct {
 	ProjectName         string     `json:"project_name,omitempty"`
 	DefaultTemplateID   *int64     `json:"default_template_id,omitempty"`
 	ActiveLeafMessageID *int64     `json:"active_leaf_message_id,omitempty"`
+	KnowledgeEnabled    bool       `json:"knowledge_enabled"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 	DeletedAt           *time.Time `json:"deleted_at,omitempty"`
 }
 
 type WebChatMessage struct {
-	ID                  int64     `json:"id"`
-	SessionID           int64     `json:"session_id"`
-	UserID              int64     `json:"user_id"`
-	Role                string    `json:"role"`
-	Content             string    `json:"content"`
-	Status              string    `json:"status"`
-	ErrorMessage        string    `json:"error_message,omitempty"`
-	RequestID           string    `json:"request_id,omitempty"`
-	InputTokens         int64     `json:"input_tokens"`
-	OutputTokens        int64     `json:"output_tokens"`
-	CacheReadTokens     int64     `json:"cache_read_tokens"`
-	CacheCreationTokens int64     `json:"cache_creation_tokens"`
-	LogicalID           int64     `json:"logical_id"`
-	ParentMessageID     *int64    `json:"parent_message_id,omitempty"`
-	VersionIndex        int       `json:"version_index"`
-	VersionCount        int       `json:"version_count"`
-	VersionReason       string    `json:"version_reason"`
-	TemplateID          *int64    `json:"template_id,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                  int64           `json:"id"`
+	SessionID           int64           `json:"session_id"`
+	UserID              int64           `json:"user_id"`
+	Role                string          `json:"role"`
+	Content             string          `json:"content"`
+	Status              string          `json:"status"`
+	ErrorMessage        string          `json:"error_message,omitempty"`
+	RequestID           string          `json:"request_id,omitempty"`
+	InputTokens         int64           `json:"input_tokens"`
+	OutputTokens        int64           `json:"output_tokens"`
+	CacheReadTokens     int64           `json:"cache_read_tokens"`
+	CacheCreationTokens int64           `json:"cache_creation_tokens"`
+	LogicalID           int64           `json:"logical_id"`
+	ParentMessageID     *int64          `json:"parent_message_id,omitempty"`
+	VersionIndex        int             `json:"version_index"`
+	VersionCount        int             `json:"version_count"`
+	VersionReason       string          `json:"version_reason"`
+	TemplateID          *int64          `json:"template_id,omitempty"`
+	Sources             []WebChatSource `json:"sources"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 type WebChatCreateSessionRequest struct {
@@ -104,10 +109,12 @@ type WebChatCreateSessionRequest struct {
 }
 
 type WebChatSendMessageRequest struct {
-	Content    string
-	GroupID    int64
-	Model      string
-	TemplateID *int64
+	Content          string
+	GroupID          int64
+	Model            string
+	TemplateID       *int64
+	KnowledgeEnabled *bool
+	DocumentIDs      []int64
 }
 
 type WebChatPatchSessionRequest struct {
@@ -121,6 +128,7 @@ type WebChatPatchSessionRequest struct {
 	ProjectIDSet         bool
 	DefaultTemplateID    *int64
 	DefaultTemplateIDSet bool
+	KnowledgeEnabled     *bool
 }
 
 type WebChatProject struct {
@@ -196,4 +204,5 @@ type WebChatGeneration struct {
 	APIKey           *APIKey
 	Messages         []OpenAIChatMessage
 	AssistantMessage *WebChatMessage
+	Sources          []WebChatSource
 }

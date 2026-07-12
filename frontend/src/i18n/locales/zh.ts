@@ -751,6 +751,8 @@ export default {
     filter: '筛选',
     export: '导出',
     import: '导入',
+    download: '下载',
+    test: '测试连接',
     actions: '操作',
     status: '状态',
     name: '名称',
@@ -1810,6 +1812,8 @@ export default {
     maxOutputTokens: '最大输出 Token',
     invalidTemperature: 'Temperature 必须在 0 到 2 之间。',
     invalidMaxTokens: '最大输出 Token 必须在 1 到 32768 之间。',
+    knowledgeLibrary: '项目资料库', dropDocuments: '点击选择或拖拽上传资料', noDocuments: '暂无资料', attach: '添加附件', uploading: '正在上传', documentProcessing: '正在解析', documentReady: '已就绪', documentFailed: '解析失败', documentProcessingTimeout: '文档解析超时，请稍后重试。', deleteDocumentConfirm: '删除这份资料？原件将在后台清理。', useProjectKnowledge: '自动使用项目资料', knowledgeSources: '知识来源', source: '资料', page: '第', body: '正文', maxFileMB: '单文件上限（MB）', maxProjectFiles: '每项目文件数', maxUserMB: '每用户容量（MB）', keepExistingSecret: '留空保留现有密钥', s3TestSuccess: '对象存储连接成功',
+    documentStatus: { uploaded: '等待解析', processing: '正在解析', ready: '已就绪', failed: '解析失败', deleting: '正在删除' },
     promptSummarize: '总结并提炼我接下来提供的内容',
     promptExplain: '用简单示例解释一个复杂概念',
     promptPlan: '将我的目标拆解为可执行计划',
@@ -6881,7 +6885,8 @@ export default {
           history: '启用消息版本历史',
           historyHint: '重新生成和编辑重发时保留可切换的历史版本。',
           systemTemplates: '系统提示词模板',
-          systemTemplatesHint: '维护所有用户可见的预置办公模板。'
+          systemTemplatesHint: '维护所有用户可见的预置办公模板。',
+          documents: '文件知识工作台', documentsHint: '配置独立对象存储、文件配额和资料问答开关；不会复用备份桶。'
         },
         riskControl: {
           title: '风控中心',

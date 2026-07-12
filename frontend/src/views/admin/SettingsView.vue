@@ -6272,6 +6272,7 @@
               <Toggle v-model="form[flag.key]" :disabled="!form.web_chat_enabled" />
             </div>
             <WebChatSystemTemplatesEditor v-if="form.web_chat_templates_enabled" />
+            <WebChatDocumentSettings />
           </div>
         </div>
 
@@ -7718,6 +7719,7 @@ import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
 import APIKeyTemplateProfilesEditor from "@/components/admin/APIKeyTemplateProfilesEditor.vue";
 import WebChatSystemTemplatesEditor from "@/components/admin/WebChatSystemTemplatesEditor.vue";
+import WebChatDocumentSettings from "@/components/admin/WebChatDocumentSettings.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";

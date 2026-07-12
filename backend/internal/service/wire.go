@@ -41,6 +41,18 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
 }
 
+func ProvideWebChatDocumentService(repo WebChatDocumentRepository, settings SettingRepository, encryptor SecretEncryptor, factory WebChatDocumentStoreFactory) *WebChatDocumentService {
+	svc := NewWebChatDocumentService(repo, settings, encryptor, factory)
+	svc.Start()
+	return svc
+}
+
+func ProvideWebChatService(repo WebChatRepository, keyRepo WebChatAPIKeyRepository, keys webChatAPIKeyManager, catalog webChatModelCatalog, settings webChatRuntimeReader, documents *WebChatDocumentService) *WebChatService {
+	svc := NewWebChatService(repo, keyRepo, keys, catalog, settings)
+	svc.SetDocumentService(documents)
+	return svc
+}
+
 // ProvideAuthService wires AuthService with a concrete user-platform quota repo.
 func ProvideAuthService(
 	entClient *dbent.Client,
@@ -680,7 +692,8 @@ var ProviderSet = wire.NewSet(
 	NewRedeemService,
 	NewPromoService,
 	NewUsageService,
-	NewWebChatService,
+	ProvideWebChatService,
+	ProvideWebChatDocumentService,
 	wire.Bind(new(webChatAPIKeyManager), new(*APIKeyService)),
 	wire.Bind(new(webChatModelCatalog), new(*ChannelService)),
 	wire.Bind(new(webChatRuntimeReader), new(*SettingService)),

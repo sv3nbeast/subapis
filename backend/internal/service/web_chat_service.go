@@ -93,6 +93,11 @@ type WebChatService struct {
 	apiKeyService  webChatAPIKeyManager
 	channelService webChatModelCatalog
 	settingService webChatRuntimeReader
+	documents      *WebChatDocumentService
+}
+
+func (s *WebChatService) SetDocumentService(documents *WebChatDocumentService) {
+	s.documents = documents
 }
 
 func NewWebChatService(
@@ -141,6 +146,11 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 		ProjectsEnabled:  runtime.ProjectsEnabled,
 		TemplatesEnabled: runtime.TemplatesEnabled,
 		HistoryEnabled:   runtime.HistoryEnabled,
+		FilesEnabled:     runtime.FilesEnabled,
+		FileFormats:      []string{"pdf", "docx", "txt", "md", "csv"},
+	}
+	if s.documents != nil {
+		options.FileLimits = s.documents.Limits(ctx)
 	}
 	for i := range groups {
 		if len(groups[i].Models) == 0 {
@@ -190,6 +200,7 @@ func (s *WebChatService) CreateSession(ctx context.Context, userID int64, req We
 		Model:             model.Name,
 		Title:             "",
 		MaxOutputTokens:   8192,
+		KnowledgeEnabled:  true,
 		ProjectID:         req.ProjectID,
 		DefaultTemplateID: req.DefaultTemplateID,
 	}
@@ -252,6 +263,9 @@ func (s *WebChatService) UpdateSession(ctx context.Context, userID, sessionID in
 			}
 		}
 	}
+	if req.KnowledgeEnabled != nil && !s.runtime(ctx).FilesEnabled && *req.KnowledgeEnabled {
+		return nil, ErrWebChatFilesDisabled
+	}
 	return s.repo.UpdateSession(ctx, userID, sessionID, req)
 }
 
@@ -265,6 +279,11 @@ func (s *WebChatService) GetSession(ctx context.Context, userID, sessionID int64
 func (s *WebChatService) DeleteSession(ctx context.Context, userID, sessionID int64) error {
 	if !s.FeatureEnabled(ctx) {
 		return ErrWebChatDisabled
+	}
+	if s.documents != nil && s.documents.repo != nil {
+		if err := s.documents.repo.MarkSessionDocumentsDeleting(ctx, userID, sessionID); err != nil {
+			return err
+		}
 	}
 	return s.repo.DeleteSession(ctx, userID, sessionID)
 }
@@ -328,7 +347,7 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 			return nil, ErrWebChatTemplateNotFound
 		}
 	}
-	_, assistantMessage, err := s.repo.CreateTurn(ctx, userID, session.ID, content, buildWebChatTitle(content), req.TemplateID)
+	userMessage, assistantMessage, err := s.repo.CreateTurn(ctx, userID, session.ID, content, buildWebChatTitle(content), req.TemplateID)
 	if err != nil {
 		return nil, err
 	}
@@ -338,9 +357,25 @@ func (s *WebChatService) PrepareSend(ctx context.Context, userID, sessionID int6
 		_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistantMessage.ID, "", err.Error(), "", WebChatUsage{})
 		return nil, err
 	}
+	knowledgeEnabled := session.KnowledgeEnabled
+	if req.KnowledgeEnabled != nil {
+		knowledgeEnabled = *req.KnowledgeEnabled
+	}
+	var sources []WebChatSource
+	if s.documents != nil {
+		var knowledge string
+		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, userMessage.ID, assistantMessage.ID, content, req.DocumentIDs, knowledgeEnabled)
+		if err != nil {
+			_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistantMessage.ID, "", err.Error(), "", WebChatUsage{})
+			return nil, err
+		}
+		if knowledge != "" {
+			appendKnowledgeToLastUser(messages, knowledge)
+		}
+	}
 	session.GroupName = group.Name
 	session.Platform = group.Platform
-	return &WebChatGeneration{Session: session, APIKey: managedKey, Messages: messages, AssistantMessage: assistantMessage}, nil
+	return &WebChatGeneration{Session: session, APIKey: managedKey, Messages: messages, AssistantMessage: assistantMessage, Sources: sources}, nil
 }
 
 func (s *WebChatService) CompleteAssistantMessage(ctx context.Context, userID, messageID int64, content, requestID string, usage WebChatUsage) (*WebChatMessage, error) {
@@ -387,6 +422,10 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		return nil, err
 	}
 	var assistant *WebChatMessage
+	var requestedDocuments []int64
+	if s.documents != nil && s.documents.repo != nil {
+		requestedDocuments, _ = s.documents.repo.MessageDocumentIDs(ctx, userID, messageID)
+	}
 	if revise {
 		_, assistant, err = s.repo.ReviseTurn(ctx, userID, sessionID, messageID, content, buildWebChatTitle(content))
 	} else {
@@ -400,7 +439,37 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistant.ID, "", err.Error(), "", WebChatUsage{})
 		return nil, err
 	}
-	return &WebChatGeneration{Session: session, APIKey: key, Messages: messages, AssistantMessage: assistant}, nil
+	var sources []WebChatSource
+	if s.documents != nil && session.KnowledgeEnabled {
+		query := lastUserContent(messages)
+		var knowledge string
+		sources, knowledge, err = s.documents.PrepareKnowledge(ctx, userID, session, 0, assistant.ID, query, requestedDocuments, true)
+		if err != nil {
+			_, _ = s.FailAssistantMessage(context.WithoutCancel(ctx), userID, assistant.ID, "", err.Error(), "", WebChatUsage{})
+			return nil, err
+		}
+		if knowledge != "" {
+			appendKnowledgeToLastUser(messages, knowledge)
+		}
+	}
+	return &WebChatGeneration{Session: session, APIKey: key, Messages: messages, AssistantMessage: assistant, Sources: sources}, nil
+}
+
+func lastUserContent(messages []OpenAIChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == WebChatMessageRoleUser {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+func appendKnowledgeToLastUser(messages []OpenAIChatMessage, knowledge string) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == WebChatMessageRoleUser {
+			messages[i].Content += knowledge
+			return
+		}
+	}
 }
 
 func (s *WebChatService) ListMessageVersions(ctx context.Context, userID, sessionID, messageID int64) ([]WebChatMessage, error) {
@@ -460,6 +529,11 @@ func (s *WebChatService) DeleteProject(ctx context.Context, userID, projectID in
 	}
 	if _, err := s.projectByID(ctx, userID, projectID); err != nil {
 		return err
+	}
+	if s.documents != nil && s.documents.repo != nil {
+		if err := s.documents.repo.MarkProjectDocumentsDeleting(ctx, userID, projectID); err != nil {
+			return err
+		}
 	}
 	return s.repo.DeleteProject(ctx, userID, projectID)
 }

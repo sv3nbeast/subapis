@@ -398,6 +398,10 @@ const (
 	SettingKeyWebChatProjectsEnabled  = "web_chat_projects_enabled"
 	SettingKeyWebChatTemplatesEnabled = "web_chat_templates_enabled"
 	SettingKeyWebChatHistoryEnabled   = "web_chat_history_enabled"
+	SettingKeyWebChatFilesEnabled     = "web_chat_files_enabled"
+	SettingKeyWebChatFileMaxBytes     = "web_chat_file_max_bytes"
+	SettingKeyWebChatProjectFileLimit = "web_chat_project_file_limit"
+	SettingKeyWebChatUserStorageBytes = "web_chat_user_storage_bytes"
 
 	// =========================
 	// Overload Cooldown (529)

@@ -29,10 +29,10 @@ func newWebChatRepositoryWithSQL(q sqlExecutor) *webChatRepository {
 	return r
 }
 
-const webChatSessionColumns = `s.id,s.user_id,s.group_id,COALESCE(g.name,''),COALESCE(g.platform,''),s.model,s.title,s.pinned_at,s.system_prompt,s.temperature,s.max_output_tokens,s.project_id,COALESCE(p.name,''),s.default_template_id,s.active_leaf_message_id,s.created_at,s.updated_at,s.deleted_at`
+const webChatSessionColumns = `s.id,s.user_id,s.group_id,COALESCE(g.name,''),COALESCE(g.platform,''),s.model,s.title,s.pinned_at,s.system_prompt,s.temperature,s.max_output_tokens,s.project_id,COALESCE(p.name,''),s.default_template_id,s.active_leaf_message_id,s.knowledge_enabled,s.created_at,s.updated_at,s.deleted_at`
 
 func scanWebChatSession(row interface{ Scan(...any) error }, s *service.WebChatSession) error {
-	return row.Scan(&s.ID, &s.UserID, &s.GroupID, &s.GroupName, &s.Platform, &s.Model, &s.Title, &s.PinnedAt, &s.SystemPrompt, &s.Temperature, &s.MaxOutputTokens, &s.ProjectID, &s.ProjectName, &s.DefaultTemplateID, &s.ActiveLeafMessageID, &s.CreatedAt, &s.UpdatedAt, &s.DeletedAt)
+	return row.Scan(&s.ID, &s.UserID, &s.GroupID, &s.GroupName, &s.Platform, &s.Model, &s.Title, &s.PinnedAt, &s.SystemPrompt, &s.Temperature, &s.MaxOutputTokens, &s.ProjectID, &s.ProjectName, &s.DefaultTemplateID, &s.ActiveLeafMessageID, &s.KnowledgeEnabled, &s.CreatedAt, &s.UpdatedAt, &s.DeletedAt)
 }
 
 func (r *webChatRepository) CreateSession(ctx context.Context, s *service.WebChatSession) error {
@@ -81,7 +81,7 @@ func (r *webChatRepository) UpdateSession(ctx context.Context, userID, sessionID
 	if req.Temperature != nil {
 		temperature = *req.Temperature
 	}
-	res, err := r.sql.ExecContext(ctx, `UPDATE web_chat_sessions SET title=CASE WHEN $3 THEN $4 ELSE title END,pinned_at=CASE WHEN $5 THEN CASE WHEN $6 THEN now() ELSE NULL END ELSE pinned_at END,system_prompt=CASE WHEN $7 THEN $8 ELSE system_prompt END,temperature=CASE WHEN $9 THEN $10::double precision ELSE temperature END,max_output_tokens=CASE WHEN $11 THEN $12 ELSE max_output_tokens END,project_id=CASE WHEN $13 THEN $14::bigint ELSE project_id END,default_template_id=CASE WHEN $15 THEN $16::bigint ELSE default_template_id END,updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, sessionID, userID, req.Title != nil, valueOrEmpty(req.Title), req.Pinned != nil, valueOrFalse(req.Pinned), req.SystemPrompt != nil, valueOrEmpty(req.SystemPrompt), req.TemperatureSet, temperature, req.MaxOutputTokens != nil, valueOrInt(req.MaxOutputTokens, 8192), req.ProjectIDSet, nullableInt(req.ProjectID), req.DefaultTemplateIDSet, nullableInt(req.DefaultTemplateID))
+	res, err := r.sql.ExecContext(ctx, `UPDATE web_chat_sessions SET title=CASE WHEN $3 THEN $4 ELSE title END,pinned_at=CASE WHEN $5 THEN CASE WHEN $6 THEN now() ELSE NULL END ELSE pinned_at END,system_prompt=CASE WHEN $7 THEN $8 ELSE system_prompt END,temperature=CASE WHEN $9 THEN $10::double precision ELSE temperature END,max_output_tokens=CASE WHEN $11 THEN $12 ELSE max_output_tokens END,project_id=CASE WHEN $13 THEN $14::bigint ELSE project_id END,default_template_id=CASE WHEN $15 THEN $16::bigint ELSE default_template_id END,knowledge_enabled=CASE WHEN $17 THEN $18 ELSE knowledge_enabled END,updated_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, sessionID, userID, req.Title != nil, valueOrEmpty(req.Title), req.Pinned != nil, valueOrFalse(req.Pinned), req.SystemPrompt != nil, valueOrEmpty(req.SystemPrompt), req.TemperatureSet, temperature, req.MaxOutputTokens != nil, valueOrInt(req.MaxOutputTokens, 8192), req.ProjectIDSet, nullableInt(req.ProjectID), req.DefaultTemplateIDSet, nullableInt(req.DefaultTemplateID), req.KnowledgeEnabled != nil, valueOrFalse(req.KnowledgeEnabled))
 	if err = webChatAffected(err, res, service.ErrWebChatSessionNotFound); err != nil {
 		return nil, err
 	}
@@ -96,10 +96,20 @@ func (r *webChatRepository) DeleteSession(ctx context.Context, userID, sessionID
 	return webChatAffected(err, res, service.ErrWebChatSessionNotFound)
 }
 
-const webChatMessageColumns = `m.id,m.session_id,m.user_id,m.role,m.content,m.status,COALESCE(m.error_message,''),m.request_id,m.input_tokens,m.output_tokens,m.cache_read_tokens,m.cache_creation_tokens,m.logical_id,m.parent_message_id,m.version_index,(SELECT count(*) FROM web_chat_messages v WHERE v.session_id=m.session_id AND v.logical_id=m.logical_id AND v.deleted_at IS NULL),m.version_reason,m.template_id,m.created_at,m.updated_at`
+const webChatMessageColumns = `m.id,m.session_id,m.user_id,m.role,m.content,m.status,COALESCE(m.error_message,''),m.request_id,m.input_tokens,m.output_tokens,m.cache_read_tokens,m.cache_creation_tokens,m.logical_id,m.parent_message_id,m.version_index,(SELECT count(*) FROM web_chat_messages v WHERE v.session_id=m.session_id AND v.logical_id=m.logical_id AND v.deleted_at IS NULL),m.version_reason,m.template_id,m.sources,m.created_at,m.updated_at`
 
 func scanWebChatMessage(row interface{ Scan(...any) error }, m *service.WebChatMessage) error {
-	return row.Scan(&m.ID, &m.SessionID, &m.UserID, &m.Role, &m.Content, &m.Status, &m.ErrorMessage, &m.RequestID, &m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.CacheCreationTokens, &m.LogicalID, &m.ParentMessageID, &m.VersionIndex, &m.VersionCount, &m.VersionReason, &m.TemplateID, &m.CreatedAt, &m.UpdatedAt)
+	var sources []byte
+	if err := row.Scan(&m.ID, &m.SessionID, &m.UserID, &m.Role, &m.Content, &m.Status, &m.ErrorMessage, &m.RequestID, &m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.CacheCreationTokens, &m.LogicalID, &m.ParentMessageID, &m.VersionIndex, &m.VersionCount, &m.VersionReason, &m.TemplateID, &sources, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		return err
+	}
+	if len(sources) > 0 {
+		_ = json.Unmarshal(sources, &m.Sources)
+	}
+	if m.Sources == nil {
+		m.Sources = []service.WebChatSource{}
+	}
+	return nil
 }
 
 func (r *webChatRepository) CreateTurn(ctx context.Context, userID, sessionID int64, content, title string, templateID *int64) (*service.WebChatMessage, *service.WebChatMessage, error) {

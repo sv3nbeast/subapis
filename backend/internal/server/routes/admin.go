@@ -497,6 +497,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.POST("/web-chat-templates", h.WebChat.AdminCreateTemplate)
 		adminSettings.PATCH("/web-chat-templates/:id", h.WebChat.AdminUpdateTemplate)
 		adminSettings.DELETE("/web-chat-templates/:id", h.WebChat.AdminDeleteTemplate)
+		adminSettings.GET("/web-chat-documents", h.WebChat.AdminGetDocumentConfig)
+		adminSettings.PUT("/web-chat-documents", h.WebChat.AdminUpdateDocumentConfig)
+		adminSettings.POST("/web-chat-documents/test-s3", h.WebChat.AdminTestDocumentS3)
 		// Admin API Key 管理
 		adminSettings.GET("/admin-api-key", h.Admin.Setting.GetAdminAPIKey)
 		adminSettings.POST("/admin-api-key/regenerate", h.Admin.Setting.RegenerateAdminAPIKey)

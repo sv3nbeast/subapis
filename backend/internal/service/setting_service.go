@@ -1343,13 +1343,14 @@ type WebChatRuntime struct {
 	ProjectsEnabled  bool
 	TemplatesEnabled bool
 	HistoryEnabled   bool
+	FilesEnabled     bool
 }
 
 // GetWebChatRuntime reads the web-chat feature switch directly from the
 // settings store. Fail-closed: unknown state must not expose chat or create
 // managed hidden keys.
 func (s *SettingService) GetWebChatRuntime(ctx context.Context) WebChatRuntime {
-	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled, SettingKeyWebChatProjectsEnabled, SettingKeyWebChatTemplatesEnabled, SettingKeyWebChatHistoryEnabled})
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyWebChatEnabled, SettingKeyWebChatProjectsEnabled, SettingKeyWebChatTemplatesEnabled, SettingKeyWebChatHistoryEnabled, SettingKeyWebChatFilesEnabled})
 	if err != nil {
 		return WebChatRuntime{Enabled: false}
 	}
@@ -1358,6 +1359,7 @@ func (s *SettingService) GetWebChatRuntime(ctx context.Context) WebChatRuntime {
 		ProjectsEnabled:  vals[SettingKeyWebChatProjectsEnabled] == "true",
 		TemplatesEnabled: vals[SettingKeyWebChatTemplatesEnabled] == "true",
 		HistoryEnabled:   vals[SettingKeyWebChatHistoryEnabled] == "true",
+		FilesEnabled:     vals[SettingKeyWebChatFilesEnabled] == "true",
 	}
 }
 
@@ -3751,6 +3753,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyWebChatProjectsEnabled:  "false",
 		SettingKeyWebChatTemplatesEnabled: "false",
 		SettingKeyWebChatHistoryEnabled:   "false",
+		SettingKeyWebChatFilesEnabled:     "false",
+		SettingKeyWebChatFileMaxBytes:     "20971520",
+		SettingKeyWebChatProjectFileLimit: "50",
+		SettingKeyWebChatUserStorageBytes: "524288000",
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",

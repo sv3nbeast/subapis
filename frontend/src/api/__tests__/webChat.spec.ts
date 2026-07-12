@@ -41,6 +41,16 @@ describe('web chat stream client', () => {
     expect(status).toBe('partial')
   })
 
+  it('dispatches retrieved knowledge sources', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'event: sources\ndata: [{"index":1,"document_id":7,"document_name":"notes.pdf","page_number":2,"excerpt":"fact"}]\n\n',
+      'event: done\ndata: {"message_id":9}\n\n',
+    ])))
+    let name = ''
+    await streamMessage(1, { content: 'hi', knowledge_enabled: true }, { onSources(sources) { name = sources[0]?.document_name || '' } })
+    expect(name).toBe('notes.pdf')
+  })
+
   it('passes AbortController signals to fetch', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError'))
     vi.stubGlobal('fetch', fetchMock)
