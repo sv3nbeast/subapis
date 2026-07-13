@@ -129,6 +129,26 @@ describe('public ModelsView', () => {
     expect(wrapper.text()).toContain('modelMarket.saves:86')
   })
 
+  it('shows the full group name above wrapping metadata badges', async () => {
+    const longGroupName = 'Claude最新模型-AWS企业专属高可用渠道'
+    const response = await getPublicModels()
+    response.groups[0].name = longGroupName
+    getPublicModels.mockResolvedValueOnce(response)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.viewDetails'))
+    await offerButton!.trigger('click')
+
+    const groupName = wrapper.findAll('[data-testid="model-market-group-name"]')
+      .find((item) => item.text() === longGroupName)!
+    expect(groupName.text()).toBe(longGroupName)
+    expect(groupName.classes()).toContain('break-words')
+    expect(groupName.classes()).not.toContain('truncate')
+    expect(groupName.attributes('title')).toBe(longGroupName)
+  })
+
   it('filters models by search text', async () => {
     const wrapper = mountView()
     await flushPromises()

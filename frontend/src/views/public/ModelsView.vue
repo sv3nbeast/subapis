@@ -147,18 +147,24 @@
             </button>
 
             <div v-if="expandedKeys.has(entry.key)" class="mt-2.5 space-y-2 border-t border-gray-100 pt-2.5 dark:border-dark-700">
-              <div v-for="(offer, index) in entry.offers" :key="`${entry.key}-${offer.group.name}-${index}`" class="rounded-lg bg-gray-50/90 p-2.5 dark:bg-dark-900/65">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="min-w-0">
-                    <p class="truncate text-xs font-black">{{ offer.group.name }}</p>
-                    <p class="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">{{ subscriptionLabel(offer.group.subscription_type) }}</p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <span v-if="offerSavings(offer) !== null" class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                      {{ t('modelMarket.saves', { percent: offerSavings(offer) }) }}
+              <div v-for="(offer, index) in entry.offers" :key="`${entry.key}-${offer.group.name}-${index}`" class="rounded-lg border border-gray-100 bg-gray-50/90 p-2.5 dark:border-dark-700 dark:bg-dark-900/65">
+                <div class="border-b border-gray-200/80 pb-2 dark:border-dark-700">
+                  <p
+                    class="break-words text-xs font-black leading-[1.125rem] [overflow-wrap:anywhere]"
+                    data-testid="model-market-group-name"
+                    :title="offer.group.name"
+                  >
+                    {{ offer.group.name }}
+                  </p>
+                  <div class="mt-1.5 flex flex-wrap items-center gap-1">
+                    <span class="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-semibold text-gray-500 ring-1 ring-inset ring-gray-200 dark:bg-dark-800 dark:text-gray-400 dark:ring-dark-700">
+                      {{ subscriptionLabel(offer.group.subscription_type) }}
                     </span>
                     <span class="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-black text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
                       {{ t('modelMarket.billingRate', { rate: formatRate(offer.group.rate_multiplier) }) }}
+                    </span>
+                    <span v-if="offerSavings(offer) !== null" class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                      {{ t('modelMarket.saves', { percent: offerSavings(offer) }) }}
                     </span>
                   </div>
                 </div>
