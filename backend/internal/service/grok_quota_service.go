@@ -160,6 +160,9 @@ func setGrokBillingHeaders(req *http.Request, token string) {
 	req.Header.Set("X-XAI-Token-Auth", xai.CLITokenAuthHeader)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "sub2api-grok-billing/1.0")
+	// Billing endpoints live on cli-chat-proxy; include full CLI identity so
+	// version checks (if any) do not see "none".
+	xai.ApplyCLIChatProxyHeaders(req, xai.DefaultCLIBaseURL)
 }
 
 func (s *GrokQuotaService) ResetQuota(ctx context.Context, accountID int64) (*GrokQuotaResetResult, error) {

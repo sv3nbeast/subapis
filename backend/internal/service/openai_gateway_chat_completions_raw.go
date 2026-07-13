@@ -152,7 +152,8 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	customUA := account.GetOpenAIUserAgent()
 	if customUA == "" && account.Platform == PlatformGrok {
-		customUA = "sub2api-grok/1.0"
+		// Free Build needs grok-shell UA; official api.x.ai keeps gateway UA.
+		customUA = xai.CLIChatProxyUserAgent(account.GetGrokBaseURL(), "sub2api-grok/1.0")
 	}
 	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, token, customUA)
 	if err != nil {

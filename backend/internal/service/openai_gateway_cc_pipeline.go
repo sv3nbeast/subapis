@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -186,6 +187,11 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	}
 	if userAgent != "" {
 		upstreamReq.Header.Set("user-agent", userAgent)
+	}
+	// Free Grok Build (cli-chat-proxy) requires CLI identity headers.
+	// Official api.x.ai accounts are unaffected (helper is a no-op).
+	if account != nil && account.Platform == PlatformGrok {
+		xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL())
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效）

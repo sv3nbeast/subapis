@@ -1006,6 +1006,8 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("User-Agent", "sub2api-grok/1.0")
+	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
+	xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL())
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

@@ -886,6 +886,10 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("User-Agent", "sub2api-grok/1.0")
+	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
+	if account != nil {
+		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL())
+	}
 	if c != nil {
 		if v := c.GetHeader("OpenAI-Beta"); strings.TrimSpace(v) != "" {
 			req.Header.Set("OpenAI-Beta", v)
