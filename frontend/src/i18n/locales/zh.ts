@@ -1688,7 +1688,11 @@ export default {
     filters: {
       search: '搜索模型、系列或分组...',
       allFamilies: '全部模型系列',
-      allBillingModes: '全部计费方式'
+      allBillingModes: '全部计费方式',
+      sortNewest: '新模型优先',
+      sortOldest: '老模型优先',
+      sortNameAsc: '名称 A–Z',
+      sortNameDesc: '名称 Z–A'
     },
     families: {
       other: '其他模型'

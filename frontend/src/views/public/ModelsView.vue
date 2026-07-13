@@ -67,8 +67,8 @@
       </section>
 
       <section class="sticky top-[53px] z-30 mt-4 rounded-xl border border-white/70 bg-white/90 p-3 shadow-sm backdrop-blur-xl dark:border-dark-700 dark:bg-dark-800/90">
-        <div class="grid gap-2.5 lg:grid-cols-[minmax(18rem,1fr)_12rem_12rem_auto]">
-          <div class="relative">
+        <div class="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-[minmax(16rem,1fr)_10.5rem_10.5rem_10.5rem_auto]">
+          <div class="relative sm:col-span-2 lg:col-span-1">
             <Icon name="search" size="md" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input v-model="searchQuery" class="input h-10 pl-10" :placeholder="t('modelMarket.filters.search')" />
           </div>
@@ -81,6 +81,12 @@
             <option value="token">{{ t('modelMarket.billing.token') }}</option>
             <option value="per_request">{{ t('modelMarket.billing.perRequest') }}</option>
             <option value="image">{{ t('modelMarket.billing.image') }}</option>
+          </select>
+          <select v-model="sortMode" class="input h-10" data-testid="model-market-sort">
+            <option value="newest">{{ t('modelMarket.filters.sortNewest') }}</option>
+            <option value="oldest">{{ t('modelMarket.filters.sortOldest') }}</option>
+            <option value="name_asc">{{ t('modelMarket.filters.sortNameAsc') }}</option>
+            <option value="name_desc">{{ t('modelMarket.filters.sortNameDesc') }}</option>
           </select>
           <button type="button" class="btn btn-secondary h-10 px-3" :disabled="loading" @click="loadCatalog">
             <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
@@ -209,6 +215,7 @@ interface ModelOffer { group: PublicModelGroup; model: PublicModel }
 interface ModelEntry { key: string; name: string; family: PublicModelFamily; billingMode: string; offers: ModelOffer[] }
 interface PricePair { actual: number | null; official: number | null }
 interface PriceSummaryItem { label: string; value: string; official?: string }
+type ModelSortMode = 'newest' | 'oldest' | 'name_asc' | 'name_desc'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -219,6 +226,7 @@ const loadError = ref('')
 const searchQuery = ref('')
 const familyFilter = ref('')
 const billingFilter = ref('')
+const sortMode = ref<ModelSortMode>('newest')
 const expandedKeys = ref(new Set<string>())
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
@@ -252,7 +260,7 @@ const modelEntries = computed<ModelEntry[]>(() => {
 const familyOptions = computed<PublicModelFamily[]>(() => [...new Set(modelEntries.value.map((entry) => entry.family))].sort((a, b) => familyLabel(a).localeCompare(familyLabel(b))))
 const filteredModels = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  return modelEntries.value.filter((entry) => {
+  const entries = modelEntries.value.filter((entry) => {
     if (familyFilter.value && entry.family !== familyFilter.value) return false
     if (billingFilter.value && !entry.offers.some((offer) => offer.model.pricing?.billing_mode === billingFilter.value)) return false
     if (!query) return true
@@ -260,7 +268,37 @@ const filteredModels = computed(() => {
       || familyLabel(entry.family).toLowerCase().includes(query)
       || entry.offers.some((offer) => offer.group.name.toLowerCase().includes(query))
   })
+  return entries.sort(compareModelEntries)
 })
+
+function modelVersionParts(name: string): number[] {
+  return (name.match(/\d+/g) || []).map((part) => Number(part))
+}
+
+function compareVersionParts(a: number[], b: number[]): number {
+  const length = Math.max(a.length, b.length)
+  for (let index = 0; index < length; index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+function compareModelEntries(a: ModelEntry, b: ModelEntry): number {
+  if (sortMode.value === 'name_asc') return a.name.localeCompare(b.name, undefined, { numeric: true })
+  if (sortMode.value === 'name_desc') return b.name.localeCompare(a.name, undefined, { numeric: true })
+
+  const aVersion = modelVersionParts(a.name)
+  const bVersion = modelVersionParts(b.name)
+  // Aliases such as "grok" and "grok-latest" do not expose a comparable
+  // version. Keep them after concrete versions in both recency directions.
+  if (aVersion.length === 0 && bVersion.length > 0) return 1
+  if (bVersion.length === 0 && aVersion.length > 0) return -1
+
+  const versionOrder = compareVersionParts(aVersion, bVersion)
+  if (versionOrder !== 0) return sortMode.value === 'oldest' ? versionOrder : -versionOrder
+  return a.name.localeCompare(b.name, undefined, { numeric: true })
+}
 
 function positiveRate(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback

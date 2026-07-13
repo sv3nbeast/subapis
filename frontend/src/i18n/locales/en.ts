@@ -1758,7 +1758,11 @@ export default {
     filters: {
       search: 'Search models, families, or groups...',
       allFamilies: 'All model families',
-      allBillingModes: 'All billing modes'
+      allBillingModes: 'All billing modes',
+      sortNewest: 'Newest models first',
+      sortOldest: 'Oldest models first',
+      sortNameAsc: 'Name A–Z',
+      sortNameDesc: 'Name Z–A'
     },
     families: {
       other: 'Other models'

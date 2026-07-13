@@ -149,6 +149,43 @@ describe('public ModelsView', () => {
     expect(groupName.attributes('title')).toBe(longGroupName)
   })
 
+  it('sorts concrete model versions newest-first by default and supports oldest-first', async () => {
+    const response = await getPublicModels()
+    const template = response.groups[0].models[0]
+    response.groups = [{
+      ...response.groups[0],
+      models: [
+        { ...template, name: 'claude-opus-4-5' },
+        { ...template, name: 'claude-sonnet-5' },
+        { ...template, name: 'claude-opus-4-8' },
+        { ...template, name: 'claude-sonnet-4-6' },
+        { ...template, name: 'claude-latest' },
+      ],
+    }]
+    getPublicModels.mockResolvedValueOnce(response)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const modelNames = () => wrapper.findAll('article h2').map((heading) => heading.text())
+    expect(modelNames()).toEqual([
+      'claude-sonnet-5',
+      'claude-opus-4-8',
+      'claude-sonnet-4-6',
+      'claude-opus-4-5',
+      'claude-latest',
+    ])
+
+    await wrapper.get('[data-testid="model-market-sort"]').setValue('oldest')
+    expect(modelNames()).toEqual([
+      'claude-opus-4-5',
+      'claude-sonnet-4-6',
+      'claude-opus-4-8',
+      'claude-sonnet-5',
+      'claude-latest',
+    ])
+  })
+
   it('filters models by search text', async () => {
     const wrapper = mountView()
     await flushPromises()
