@@ -40,15 +40,9 @@
               </span>
             </td>
             <td class="py-2 pr-3 text-gray-700 dark:text-gray-300">{{ formatLatency(m.latest_latency_ms) }}</td>
-            <td class="py-2.5 pr-3">
-              <MonitorAvailabilityMeter :value="m.availability_7d" compact :show-status="false" />
-            </td>
-            <td class="py-2.5 pr-3">
-              <MonitorAvailabilityMeter :value="m.availability_15d" compact :show-status="false" />
-            </td>
-            <td class="py-2.5 pr-3">
-              <MonitorAvailabilityMeter :value="m.availability_30d" compact :show-status="false" />
-            </td>
+            <td class="py-2 pr-3 text-gray-700 dark:text-gray-300">{{ formatPercent(m.availability_7d) }}</td>
+            <td class="py-2 pr-3 text-gray-700 dark:text-gray-300">{{ formatPercent(m.availability_15d) }}</td>
+            <td class="py-2 pr-3 text-gray-700 dark:text-gray-300">{{ formatPercent(m.availability_30d) }}</td>
             <td class="py-2 pr-3 text-gray-700 dark:text-gray-300">{{ formatLatency(m.avg_latency_7d_ms) }}</td>
           </tr>
         </tbody>
@@ -75,7 +69,6 @@ import {
   type PublicMonitorDetail as UserMonitorDetail,
 } from '@/api/publicChannelMonitor'
 import BaseDialog from '@/components/common/BaseDialog.vue'
-import MonitorAvailabilityMeter from '@/components/user/monitor/MonitorAvailabilityMeter.vue'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 
 const props = defineProps<{
@@ -90,7 +83,7 @@ defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const { statusLabel, statusBadgeClass, formatLatency } = useChannelMonitorFormat()
+const { statusLabel, statusBadgeClass, formatLatency, formatPercent } = useChannelMonitorFormat()
 
 const detail = ref<UserMonitorDetail | null>(null)
 const loading = ref(false)

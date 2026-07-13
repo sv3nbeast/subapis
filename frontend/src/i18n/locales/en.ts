@@ -1653,25 +1653,6 @@ export default {
     extraModelsEmpty: 'No extra models',
     latencyEmpty: '-',
     availabilityPrefix: 'Availability',
-    availability: {
-      level: {
-        excellent: 'Excellent',
-        stable: 'Stable',
-        unstable: 'Unstable',
-        critical: 'Critical',
-        noData: 'No data'
-      },
-      description: {
-        excellent: 'Excellent service quality',
-        stable: 'Service remains stable',
-        unstable: 'Recent availability fluctuations',
-        critical: 'Availability needs attention',
-        noData: 'No availability samples'
-      },
-      noSamples: 'No availability samples',
-      target: 'Target {n}%',
-      ariaLabel: '{label}: {value}, {level}'
-    },
     dialogLatency: 'Dialog Latency',
     endpointPing: 'Endpoint PING',
     history60pts: 'HISTORY ({n} PTS)',
