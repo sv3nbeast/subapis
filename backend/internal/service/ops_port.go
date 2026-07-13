@@ -108,6 +108,9 @@ type OpsInsertErrorLogInput struct {
 
 	ErrorSource string
 	ErrorOwner  string
+	// NetworkErrorType identifies transport failures such as proxy_connect,
+	// dns, timeout, tls, or upstream_disconnect.
+	NetworkErrorType string
 
 	UpstreamStatusCode   *int
 	UpstreamErrorMessage *string

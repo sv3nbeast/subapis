@@ -236,6 +236,139 @@ type kiroStreamFailoverQueuedUpstream struct {
 	errs      []error
 }
 
+type kiroScriptedUpstreamOutcome struct {
+	resp *http.Response
+	err  error
+}
+
+type kiroScriptedUpstream struct {
+	outcomes []kiroScriptedUpstreamOutcome
+	requests []*http.Request
+}
+
+func (u *kiroScriptedUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	return nil, errors.New("unexpected Do call")
+}
+
+func (u *kiroScriptedUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.requests = append(u.requests, req)
+	if len(u.outcomes) == 0 {
+		return nil, errors.New("no scripted Kiro upstream outcome")
+	}
+	outcome := u.outcomes[0]
+	u.outcomes = u.outcomes[1:]
+	return outcome.resp, outcome.err
+}
+
+func newKiroJSONTestResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestExecuteKiroUpstreamRegional429ThenProxyFailurePreservesRateLimit(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	proxyID := int64(50)
+	account := &Account{
+		ID:          1723,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 10,
+		ProxyID:     &proxyID,
+		Proxy:       &Proxy{ID: proxyID, Protocol: "http", Host: "proxy.test", Port: 8080, Status: StatusActive},
+		Credentials: map[string]any{
+			"api_region": "eu-central-1",
+		},
+	}
+	proxyErr := errors.New("Post https://q.eu-central-1.amazonaws.com/generateAssistantResponse: proxy CONNECT failed: 503 Service Unavailable")
+	upstream := &kiroScriptedUpstream{outcomes: []kiroScriptedUpstreamOutcome{
+		{resp: newKiroJSONTestResponse(http.StatusTooManyRequests, `{"message":"slow down"}`)},
+		{err: proxyErr},
+		{err: proxyErr},
+		{err: proxyErr},
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	payload, err := createTestPayload("claude-opus-4-8")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-opus-4-8", "claude-opus-4-8", "test-token", nil)
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.KiroRateLimited, "the original 429 must drive account failover/cooldown")
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	var transportErr *kiroEndpointTransportError
+	require.ErrorAs(t, failoverErr.Cause, &transportErr)
+	require.Equal(t, "AmazonQ", transportErr.EndpointName)
+	require.Equal(t, "proxy_connect", transportErr.NetworkType)
+
+	require.Len(t, upstream.requests, 4)
+	for _, req := range upstream.requests {
+		require.Equal(t, "q.eu-central-1.amazonaws.com", req.URL.Host)
+		require.NotContains(t, req.URL.Host, "codewhisperer")
+	}
+	require.Empty(t, upstream.requests[0].Header.Get("X-Amz-Target"))
+	for _, req := range upstream.requests[1:] {
+		require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", req.Header.Get("X-Amz-Target"))
+	}
+}
+
+func TestExecuteKiroUpstreamTransportFailureContinuesToDistinctEndpoint(t *testing.T) {
+	originalSleep := kiroRetrySleep
+	kiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { kiroRetrySleep = originalSleep })
+
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_region": "us-east-1",
+		},
+	}
+	upstream := &kiroScriptedUpstream{outcomes: []kiroScriptedUpstreamOutcome{
+		{err: io.ErrUnexpectedEOF},
+		{err: io.ErrUnexpectedEOF},
+		{err: io.ErrUnexpectedEOF},
+		{resp: newKiroJSONTestResponse(http.StatusOK, `{"ok":true}`)},
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstream(context.Background(), account, payloadBytes, "claude-sonnet-4-6", "claude-sonnet-4-6", "test-token", nil)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 4)
+	for _, req := range upstream.requests[:3] {
+		require.Equal(t, "q.us-east-1.amazonaws.com", req.URL.Host)
+	}
+	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[3].URL.Host)
+}
+
 type kiroCancelingReadCloser struct {
 	cancel context.CancelFunc
 }
@@ -987,7 +1120,7 @@ func TestForwardKiroMessagesStreamOpenNetworkErrorTriggersFailover(t *testing.T)
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token": "test-token",
-			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST",
+			"profile_arn":  "arn:aws:codewhisperer:eu-central-1:123456789012:profile/TEST",
 		},
 	}
 	parsed := &ParsedRequest{
@@ -1003,8 +1136,16 @@ func TestForwardKiroMessagesStreamOpenNetworkErrorTriggersFailover(t *testing.T)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
-	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "upstream request disconnected before response")
+	require.False(t, failoverErr.RetryableOnSameAccount, "all distinct endpoint transports were already exhausted")
+	require.Equal(t, "Upstream request failed", ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
+	require.Len(t, upstream.requests, 3, "same-host AmazonQ fallback must be skipped after q host transport failure")
+	require.Equal(t, "upstream_disconnect", GetOpsNetworkErrorType(c))
+	value, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := value.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.NotEmpty(t, events)
+	require.Equal(t, "network_failover", events[len(events)-1].Kind)
 	require.False(t, c.Writer.Written(), "pre-response failover must not write before handler retry")
 	require.Empty(t, rec.Body.String())
 }

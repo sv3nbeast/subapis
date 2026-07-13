@@ -57,7 +57,7 @@ func TestAccountTestService_KiroUsesKiroUpstreamInsteadOfAnthropic(t *testing.T)
 	require.NotContains(t, req.URL.Host, "api.anthropic.com")
 }
 
-func TestAccountTestService_Kiro429FallsBackToCodeWhispererEndpoint(t *testing.T) {
+func TestAccountTestService_Kiro429FallsBackToRegionalAmazonQEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
 
@@ -95,8 +95,8 @@ func TestAccountTestService_Kiro429FallsBackToCodeWhispererEndpoint(t *testing.T
 	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[0].URL.Host)
 	require.Empty(t, upstream.requests[0].Header.Get("X-Amz-Target"))
 	require.Equal(t, "application/json", upstream.requests[0].Header.Get("Content-Type"))
-	require.Equal(t, "codewhisperer.us-west-2.amazonaws.com", upstream.requests[1].URL.Host)
-	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", upstream.requests[1].Header.Get("X-Amz-Target"))
+	require.Equal(t, "q.us-west-2.amazonaws.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", upstream.requests[1].Header.Get("X-Amz-Target"))
 	require.Equal(t, "application/json", upstream.requests[1].Header.Get("Content-Type"))
 	require.Contains(t, err.Error(), "API returned 401")
 }

@@ -962,6 +962,9 @@ func TestIsRetryablePreResponseNetworkError(t *testing.T) {
 		{"context_canceled", context.Canceled, false},
 		{"proxy_407_not_retryable_network", errors.New("proxy CONNECT failed: 407 Unauthorized"), false},
 		{"wrapped_proxy_407_not_retryable_network", errors.New("read CONNECT response: proxy CONNECT failed: 407 Unauthorized"), false},
+		{"proxy_503_retryable_network", errors.New("proxy CONNECT failed: 503 Service Unavailable"), true},
+		{"wrapped_service_unavailable_retryable_network", errors.New(`Post "https://example.invalid": Service Unavailable`), true},
+		{"dns_not_found_retryable_network", errors.New("dial tcp: lookup example.invalid: no such host"), true},
 		{"ordinary_error", errors.New("invalid request"), false},
 	}
 	for _, tc := range cases {

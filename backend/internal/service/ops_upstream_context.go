@@ -15,6 +15,7 @@ const (
 	OpsUpstreamErrorMessageKey = "ops_upstream_error_message"
 	OpsUpstreamErrorDetailKey  = "ops_upstream_error_detail"
 	OpsUpstreamErrorsKey       = "ops_upstream_errors"
+	OpsNetworkErrorTypeKey     = "ops_network_error_type"
 
 	// Best-effort capture of the current upstream request body so ops can
 	// retry the specific upstream attempt (not just the client request).
@@ -87,6 +88,27 @@ func SetOpsLatencyMs(c *gin.Context, key string, value int64) {
 		return
 	}
 	c.Set(key, value)
+}
+
+func MarkOpsNetworkError(c *gin.Context, networkErrorType string) {
+	if c == nil {
+		return
+	}
+	if networkErrorType = strings.ToLower(strings.TrimSpace(networkErrorType)); networkErrorType != "" {
+		c.Set(OpsNetworkErrorTypeKey, networkErrorType)
+	}
+}
+
+func GetOpsNetworkErrorType(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, ok := c.Get(OpsNetworkErrorTypeKey)
+	if !ok {
+		return ""
+	}
+	networkType, _ := value.(string)
+	return strings.ToLower(strings.TrimSpace(networkType))
 }
 
 func MarkOpsClientBusinessLimited(c *gin.Context, reason string) {

@@ -713,11 +713,18 @@ func isRetryablePreResponseNetworkError(err error) bool {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
 	if strings.Contains(msg, "unexpected eof") ||
 		strings.Contains(msg, "connection reset by peer") ||
 		strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection timed out") ||
-		strings.Contains(msg, "read connect response") {
+		strings.Contains(msg, "read connect response") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "proxy connect failed: 5") ||
+		strings.Contains(msg, "service unavailable") {
 		return true
 	}
 	return false

@@ -223,6 +223,7 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 	if entry.ErrorType == "" {
 		entry.ErrorType = "api_error"
 	}
+	entry.NetworkErrorType = truncateString(strings.ToLower(strings.TrimSpace(entry.NetworkErrorType)), 50)
 
 	// Sanitize + truncate error_body to avoid storing sensitive data.
 	if strings.TrimSpace(entry.ErrorBody) != "" {

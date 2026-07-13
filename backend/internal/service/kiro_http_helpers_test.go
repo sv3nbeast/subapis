@@ -349,21 +349,29 @@ func TestBuildKiroEndpointsUsesKiroGoDefaultFallbackOrder(t *testing.T) {
 	}
 
 	endpoints := buildKiroEndpoints(account)
-	require.Len(t, endpoints, 3)
+	require.Len(t, endpoints, 2)
 	require.Equal(t, "KiroIDE", endpoints[0].Name)
 	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[0].URL[8:])
 	require.Equal(t, "AI_EDITOR", endpoints[0].Origin)
 	require.Empty(t, endpoints[0].AmzTarget)
 
-	require.Equal(t, "CodeWhisperer", endpoints[1].Name)
-	require.Equal(t, "codewhisperer.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[1].URL[8:])
+	require.Equal(t, "AmazonQ", endpoints[1].Name)
+	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[1].URL[8:])
 	require.Equal(t, "AI_EDITOR", endpoints[1].Origin)
-	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", endpoints[1].AmzTarget)
+	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[1].AmzTarget)
+}
 
-	require.Equal(t, "AmazonQ", endpoints[2].Name)
-	require.Equal(t, "q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[2].URL[8:])
-	require.Equal(t, "AI_EDITOR", endpoints[2].Origin)
-	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[2].AmzTarget)
+func TestBuildKiroEndpointsKeepsLegacyCodeWhispererOnlyInUSEast1(t *testing.T) {
+	account := &Account{Credentials: map[string]any{"api_region": "us-east-1"}}
+
+	endpoints := buildKiroEndpoints(account)
+	require.Len(t, endpoints, 3)
+	require.Equal(t, []string{"KiroIDE", "CodeWhisperer", "AmazonQ"}, []string{
+		endpoints[0].Name,
+		endpoints[1].Name,
+		endpoints[2].Name,
+	})
+	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", kiroEndpointURLHost(endpoints[1].URL))
 }
 
 func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {
@@ -383,7 +391,7 @@ func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {
 		t.Run(tt.preferred, func(t *testing.T) {
 			account := &Account{
 				Credentials: map[string]any{
-					"api_region":         "us-west-2",
+					"api_region":         "us-east-1",
 					"preferred_endpoint": tt.preferred,
 				},
 			}
@@ -392,6 +400,20 @@ func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {
 			require.Len(t, endpoints, 3)
 			require.Equal(t, tt.want, []string{endpoints[0].Name, endpoints[1].Name, endpoints[2].Name})
 		})
+	}
+}
+
+func TestBuildKiroEndpointsIgnoresUnavailableLegacyPreferenceOutsideUSEast1(t *testing.T) {
+	account := &Account{Credentials: map[string]any{
+		"api_region":         "eu-central-1",
+		"preferred_endpoint": "codewhisperer",
+	}}
+
+	endpoints := buildKiroEndpoints(account)
+	require.Len(t, endpoints, 2)
+	require.Equal(t, []string{"KiroIDE", "AmazonQ"}, []string{endpoints[0].Name, endpoints[1].Name})
+	for _, endpoint := range endpoints {
+		require.NotContains(t, endpoint.URL, "codewhisperer.eu-central-1.amazonaws.com")
 	}
 }
 
@@ -412,14 +434,13 @@ func TestBuildKiroEndpointsForModeAutoAppendsKRSAfterLocalFallbacks(t *testing.T
 	}
 
 	endpoints := buildKiroEndpointsForMode(account, KiroEndpointModeAuto)
-	require.Len(t, endpoints, 4)
-	require.Equal(t, []string{"KiroIDE", "CodeWhisperer", "AmazonQ", "KiroRuntime"}, []string{
+	require.Len(t, endpoints, 3)
+	require.Equal(t, []string{"KiroIDE", "AmazonQ", "KiroRuntime"}, []string{
 		endpoints[0].Name,
 		endpoints[1].Name,
 		endpoints[2].Name,
-		endpoints[3].Name,
 	})
-	require.Equal(t, kiroKRSEndpointURL, endpoints[3].URL)
+	require.Equal(t, kiroKRSEndpointURL, endpoints[2].URL)
 }
 
 func TestKiroEndpointModeForRequestRespectsAccountExplicitPreference(t *testing.T) {

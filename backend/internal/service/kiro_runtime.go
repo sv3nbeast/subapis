@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	mathrand "math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +35,130 @@ type kiroEndpointConfig struct {
 type kiroUpstreamRequestOptions struct {
 	ConversationRetryNonce string
 	EndpointStartOffset    int
+}
+
+// kiroEndpointTransportError preserves which endpoint failed before an HTTP
+// response existed. The marker lets the gateway fail over accounts and lets
+// Ops classify proxy/DNS/TCP failures as network errors instead of provider
+// HTTP failures.
+type kiroEndpointTransportError struct {
+	EndpointName string
+	EndpointURL  string
+	NetworkType  string
+	Cause        error
+}
+
+func (e *kiroEndpointTransportError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "kiro endpoint transport failed"
+	}
+	if strings.TrimSpace(e.EndpointName) == "" {
+		return "kiro endpoint transport failed: " + e.Cause.Error()
+	}
+	return fmt.Sprintf("kiro endpoint %s transport failed: %v", e.EndpointName, e.Cause)
+}
+
+func (e *kiroEndpointTransportError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func classifyKiroEndpointNetworkError(err error, proxyEnabled bool) string {
+	if err == nil {
+		return ""
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "no such host"):
+		return "dns"
+	case proxyEnabled && (strings.Contains(msg, "proxy connect") || strings.Contains(msg, "service unavailable")):
+		return "proxy_connect"
+	case errors.Is(err, io.ErrUnexpectedEOF), strings.Contains(msg, "unexpected eof"):
+		return "upstream_disconnect"
+	case strings.Contains(msg, "connection reset"), strings.Contains(msg, "broken pipe"):
+		return "connection_reset"
+	case strings.Contains(msg, "tls"), strings.Contains(msg, "certificate"):
+		return "tls"
+	default:
+		return "transport"
+	}
+}
+
+func kiroEndpointURLHost(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(u.Hostname()))
+}
+
+func newKiroEndpointTransportFailover(err error) *UpstreamFailoverError {
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "upstream_error",
+			"message": "Upstream request failed",
+		},
+	})
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           body,
+		RetryableOnSameAccount: false,
+		Cause:                  err,
+	}
+}
+
+func recordKiroFailoverOps(c *gin.Context, account *Account, failoverErr *UpstreamFailoverError) {
+	if c == nil || failoverErr == nil {
+		return
+	}
+	accountID := int64(0)
+	accountName := ""
+	platform := PlatformKiro
+	if account != nil {
+		accountID = account.ID
+		accountName = account.Name
+		platform = account.Platform
+	}
+
+	message := strings.TrimSpace(ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
+	if message == "" {
+		message = failoverErr.Error()
+	}
+	event := OpsUpstreamErrorEvent{
+		Platform:           platform,
+		AccountID:          accountID,
+		AccountName:        accountName,
+		UpstreamStatusCode: failoverErr.StatusCode,
+		Kind:               "failover",
+		Message:            message,
+	}
+
+	var transportErr *kiroEndpointTransportError
+	if errors.As(failoverErr.Cause, &transportErr) && transportErr != nil {
+		event.UpstreamURL = transportErr.EndpointURL
+		event.Detail = "network_error_type=" + transportErr.NetworkType
+		if failoverErr.KiroRateLimited {
+			event.Detail += "; fallback_transport_error=" + sanitizeUpstreamErrorMessage(transportErr.Error())
+		} else {
+			event.UpstreamStatusCode = 0
+			event.Kind = "network_failover"
+			event.Message = sanitizeUpstreamErrorMessage(transportErr.Error())
+			MarkOpsNetworkError(c, transportErr.NetworkType)
+			setOpsUpstreamError(c, 0, event.Message, event.Detail)
+		}
+	}
+	appendOpsUpstreamError(c, event)
 }
 
 type kiroStreamBodyRetriesExhaustedError struct {
@@ -149,18 +275,20 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		if err != nil {
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-					Platform:           account.Platform,
-					AccountID:          account.ID,
-					AccountName:        account.Name,
-					UpstreamStatusCode: failoverErr.StatusCode,
-					Kind:               "failover",
-					Message:            sanitizeUpstreamErrorMessage(err.Error()),
-				})
+				recordKiroFailoverOps(c, account, failoverErr)
 				return nil, failoverErr
 			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			setOpsUpstreamError(c, 0, safeErr, "")
+			networkErrorType := ""
+			if isRetryablePreResponseNetworkError(err) {
+				networkErrorType = classifyKiroEndpointNetworkError(err, kiroProxyURL(account) != "")
+				MarkOpsNetworkError(c, networkErrorType)
+			}
+			detail := ""
+			if networkErrorType != "" {
+				detail = "network_error_type=" + networkErrorType
+			}
+			setOpsUpstreamError(c, 0, safeErr, detail)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -168,8 +296,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				UpstreamStatusCode: 0,
 				Kind:               "request_error",
 				Message:            safeErr,
+				Detail:             detail,
 			})
-			if isRetryablePreResponseNetworkError(err) {
+			if networkErrorType != "" {
 				body, _ := json.Marshal(map[string]any{
 					"type": "error",
 					"error": map[string]string{
@@ -308,14 +437,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: failoverErr.StatusCode,
-				Kind:               "failover",
-				Message:            sanitizeUpstreamErrorMessage(err.Error()),
-			})
+			recordKiroFailoverOps(c, account, failoverErr)
 			return nil, failoverErr
 		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -923,8 +1045,21 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	maxRetries := 2
 	var lastKiro429 *UpstreamFailoverError
+	var lastTransportErr *kiroEndpointTransportError
+	transportFailedHosts := make(map[string]struct{})
 
 	for idx, endpoint := range endpoints {
+		endpointHost := kiroEndpointURLHost(endpoint.URL)
+		if endpointHost != "" {
+			if _, failed := transportFailedHosts[endpointHost]; failed {
+				logger.L().Warn("kiro endpoint skipped after transport failure on same host",
+					zap.Int64("account_id", account.ID),
+					zap.String("endpoint", endpoint.Name),
+					zap.String("host", endpointHost),
+				)
+				continue
+			}
+		}
 		buildResult, err := s.buildKiroPayloadForParsedAccountEndpoint(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, endpoint)
 		if err != nil {
 			return nil, requestCtx, err
@@ -942,13 +1077,34 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 
 			resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return nil, requestCtx, err
+				}
 				if attempt < maxRetries {
 					if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 						return nil, requestCtx, sleepErr
 					}
 					continue
 				}
-				return nil, requestCtx, err
+				lastTransportErr = &kiroEndpointTransportError{
+					EndpointName: endpoint.Name,
+					EndpointURL:  endpoint.URL,
+					NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
+					Cause:        err,
+				}
+				if endpointHost != "" {
+					transportFailedHosts[endpointHost] = struct{}{}
+				}
+				if idx+1 < len(endpoints) {
+					logger.L().Warn("kiro endpoint transport failed; trying next endpoint",
+						zap.Int64("account_id", account.ID),
+						zap.String("endpoint", endpoint.Name),
+						zap.String("next_endpoint", endpoints[idx+1].Name),
+						zap.String("network_error_type", lastTransportErr.NetworkType),
+						zap.Error(err),
+					)
+				}
+				break
 			}
 
 			if resp.StatusCode == http.StatusTooManyRequests {
@@ -1082,7 +1238,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 		}
 	}
 	if lastKiro429 != nil {
+		if lastTransportErr != nil && lastKiro429.Cause == nil {
+			lastKiro429.Cause = lastTransportErr
+		}
 		return nil, requestCtx, lastKiro429
+	}
+	if lastTransportErr != nil {
+		return nil, requestCtx, newKiroEndpointTransportFailover(lastTransportErr)
 	}
 	return nil, requestCtx, fmt.Errorf("kiro upstream endpoints exhausted")
 }
@@ -1128,19 +1290,26 @@ func buildKiroEndpointsForMode(account *Account, mode string) []kiroEndpointConf
 			AmzTarget: "",
 			Name:      "KiroIDE",
 		},
-		{
-			URL:       fmt.Sprintf("https://codewhisperer.%s.amazonaws.com/generateAssistantResponse", region),
+	}
+	// The legacy codewhisperer.<region>.amazonaws.com service only publishes a
+	// us-east-1 endpoint. Constructing it with an IDC/profile region such as
+	// eu-central-1 produces NXDOMAIN; HTTP proxies surface that as CONNECT 503.
+	// Keep the proven us-east-1 fallback order unchanged, but never synthesize a
+	// nonexistent regional CodeWhisperer host.
+	if strings.EqualFold(strings.TrimSpace(region), kiroDefaultRegion) {
+		endpoints = append(endpoints, kiroEndpointConfig{
+			URL:       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
 			Origin:    "AI_EDITOR",
 			AmzTarget: kiroGenerateAssistantResponseTarget,
 			Name:      "CodeWhisperer",
-		},
-		{
-			URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
-			Origin:    "AI_EDITOR",
-			AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
-			Name:      "AmazonQ",
-		},
+		})
 	}
+	endpoints = append(endpoints, kiroEndpointConfig{
+		URL:       fmt.Sprintf("https://q.%s.amazonaws.com/generateAssistantResponse", region),
+		Origin:    "AI_EDITOR",
+		AmzTarget: "AmazonQDeveloperStreamingService.SendMessage",
+		Name:      "AmazonQ",
+	})
 	endpoints = sortKiroEndpointsByPreference(endpoints, account)
 	if mode == KiroEndpointModeAuto {
 		endpoints = append(endpoints, kiroKRSEndpointConfig())

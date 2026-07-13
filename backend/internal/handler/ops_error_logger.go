@@ -827,6 +827,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				CreatedAt: time.Now(),
 			}
 			applyOpsLatencyFieldsFromContext(c, entry)
+			applyOpsNetworkFieldsFromContext(c, entry)
 
 			applyOpsIdentityFieldsFromContext(c, entry, apiKey)
 
@@ -953,6 +954,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			CreatedAt: time.Now(),
 		}
 		applyOpsLatencyFieldsFromContext(c, entry)
+		applyOpsNetworkFieldsFromContext(c, entry)
 
 		// Capture upstream error context set by gateway services (if present).
 		// This does NOT affect the client response; it enriches Ops troubleshooting data.
@@ -1146,6 +1148,7 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 		CreatedAt: time.Now(),
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
+	applyOpsNetworkFieldsFromContext(c, entry)
 
 	if apiKey != nil {
 		entry.APIKeyID = &apiKey.ID
@@ -1185,6 +1188,13 @@ func applyOpsLatencyFieldsFromContext(c *gin.Context, entry *service.OpsInsertEr
 	entry.UpstreamLatencyMs = getContextLatencyMs(c, service.OpsUpstreamLatencyMsKey)
 	entry.ResponseLatencyMs = getContextLatencyMs(c, service.OpsResponseLatencyMsKey)
 	entry.TimeToFirstTokenMs = getContextLatencyMs(c, service.OpsTimeToFirstTokenMsKey)
+}
+
+func applyOpsNetworkFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	entry.NetworkErrorType = service.GetOpsNetworkErrorType(c)
 }
 
 func getContextLatencyMs(c *gin.Context, key string) *int64 {
@@ -1441,6 +1451,9 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	upstreamError := hasOpsUpstreamErrorContext(c)
 	if upstreamError && !routingCapacityLimited && !clientContextLimited {
 		phase = "upstream"
+	}
+	if service.GetOpsNetworkErrorType(c) != "" && !routingCapacityLimited && !clientContextLimited {
+		phase = "network"
 	}
 	if clientContextLimited && !routingCapacityLimited {
 		phase = "request"

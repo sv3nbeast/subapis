@@ -490,6 +490,30 @@ func TestClassifyOpsUpstreamConfirmedClientContextLimitIsExcludedFromSLA(t *test
 	require.Equal(t, "client_request", source)
 }
 
+func TestClassifyOpsMarkedTransportFailureAsNetwork(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, 0, `Post "https://example.invalid": Service Unavailable`, "network_error_type=proxy_connect")
+	service.MarkOpsNetworkError(c, "proxy_connect")
+
+	phase, limited, owner, source := classifyOpsErrorLog(
+		c,
+		"upstream_error",
+		"Upstream request failed",
+		"",
+		http.StatusBadGateway,
+	)
+
+	require.Equal(t, "network", phase)
+	require.False(t, limited)
+	require.Equal(t, "provider", owner)
+	require.Equal(t, "gateway", source)
+	entry := &service.OpsInsertErrorLogInput{}
+	applyOpsNetworkFieldsFromContext(c, entry)
+	require.Equal(t, "proxy_connect", entry.NetworkErrorType)
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

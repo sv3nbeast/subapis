@@ -148,16 +148,13 @@ func TestKiroRuntimeEndpointModeRequiresProfileArn(t *testing.T) {
 	}
 
 	endpoints := buildKiroEndpoints(account)
-	require.Len(t, endpoints, 3)
+	require.Len(t, endpoints, 2)
 	require.Equal(t, "KiroIDE", endpoints[0].Name)
 	require.Equal(t, "https://q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[0].URL)
 	require.Empty(t, endpoints[0].AmzTarget)
-	require.Equal(t, "CodeWhisperer", endpoints[1].Name)
-	require.Equal(t, "https://codewhisperer.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[1].URL)
-	require.Equal(t, kiroGenerateAssistantResponseTarget, endpoints[1].AmzTarget)
-	require.Equal(t, "AmazonQ", endpoints[2].Name)
-	require.Equal(t, "https://q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[2].URL)
-	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[2].AmzTarget)
+	require.Equal(t, "AmazonQ", endpoints[1].Name)
+	require.Equal(t, "https://q.us-west-2.amazonaws.com/generateAssistantResponse", endpoints[1].URL)
+	require.Equal(t, "AmazonQDeveloperStreamingService.SendMessage", endpoints[1].AmzTarget)
 }
 
 func TestKiroRuntimeEndpointModeUsesRuntimeHostWithProfileArn(t *testing.T) {

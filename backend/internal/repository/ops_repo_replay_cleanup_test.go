@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"database/sql"
 	"reflect"
 	"strings"
 	"testing"
@@ -40,5 +41,19 @@ func TestOpsErrorLogInsertDoesNotPersistRequestReplayFields(t *testing.T) {
 		if _, ok := inputType.FieldByName(field); ok {
 			t.Fatalf("OpsInsertErrorLogInput still carries replay field %q", field)
 		}
+	}
+}
+
+func TestOpsErrorLogInsertPersistsNetworkErrorType(t *testing.T) {
+	if !strings.Contains(strings.ToLower(insertOpsErrorLogSQL), "network_error_type") {
+		t.Fatal("ops error insert must persist network_error_type")
+	}
+	args := opsInsertErrorLogArgs(&service.OpsInsertErrorLogInput{NetworkErrorType: "proxy_connect"})
+	if len(args) != 42 {
+		t.Fatalf("ops insert arg count = %d, want 42", len(args))
+	}
+	value, ok := args[len(args)-1].(sql.NullString)
+	if !ok || !value.Valid || value.String != "proxy_connect" {
+		t.Fatalf("network_error_type arg = %#v", args[len(args)-1])
 	}
 }
