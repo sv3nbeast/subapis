@@ -651,6 +651,9 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
+  // Public Model Market feature switch
+  public_model_market_enabled: boolean;
+
   // Web Chat feature switch
   web_chat_enabled: boolean;
   web_chat_projects_enabled: boolean;
@@ -896,6 +899,9 @@ export interface UpdateSettingsRequest {
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+
+  // Public Model Market feature switch
+  public_model_market_enabled?: boolean;
 
   // Web Chat feature switch
   web_chat_enabled?: boolean;

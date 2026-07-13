@@ -98,6 +98,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled: settings.PublicModelMarketEnabled,
 
 		WebChatEnabled:          settings.WebChatEnabled,
 		WebChatProjectsEnabled:  settings.WebChatProjectsEnabled,

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -117,6 +118,131 @@ type userAvailableChannel struct {
 	Name        string                       `json:"name"`
 	Description string                       `json:"description"`
 	Platforms   []userChannelPlatformSection `json:"platforms"`
+}
+
+// publicModelMarketResponse is intentionally group-first: prices are scoped to
+// a group/channel configuration, while the frontend can safely invert this
+// catalog into a model-first view without exposing channel identities.
+type publicModelMarketResponse struct {
+	Groups []publicModelMarketGroup `json:"groups"`
+}
+
+type publicModelMarketGroup struct {
+	Name               string               `json:"name"`
+	Platform           string               `json:"platform"`
+	SubscriptionType   string               `json:"subscription_type"`
+	RateMultiplier     float64              `json:"rate_multiplier"`
+	PeakRateEnabled    bool                 `json:"peak_rate_enabled"`
+	PeakStart          string               `json:"peak_start"`
+	PeakEnd            string               `json:"peak_end"`
+	PeakRateMultiplier float64              `json:"peak_rate_multiplier"`
+	Models             []userSupportedModel `json:"models"`
+}
+
+// ListPublicModels returns the anonymous model and pricing catalog.
+// GET /api/v1/public/models
+//
+// The response deliberately omits channel names/IDs and group IDs. Only active
+// channels and active, non-exclusive groups contribute entries.
+func (h *AvailableChannelHandler) ListPublicModels(c *gin.Context) {
+	empty := publicModelMarketResponse{Groups: []publicModelMarketGroup{}}
+	if h.settingService == nil || !h.settingService.GetPublicModelMarketRuntime(c.Request.Context()).Enabled {
+		response.Success(c, empty)
+		return
+	}
+
+	channels, err := h.channelService.ListAvailable(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, publicModelMarketResponse{
+		Groups: buildPublicModelMarketGroups(channels),
+	})
+}
+
+type publicModelMarketGroupAccumulator struct {
+	group  service.AvailableGroupRef
+	models map[string]userSupportedModel
+}
+
+func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicModelMarketGroup {
+	byGroupID := make(map[int64]*publicModelMarketGroupAccumulator)
+
+	for _, ch := range channels {
+		if ch.Status != service.StatusActive {
+			continue
+		}
+		for _, group := range ch.Groups {
+			if group.IsExclusive || strings.TrimSpace(group.Platform) == "" {
+				continue
+			}
+
+			entry := byGroupID[group.ID]
+			if entry == nil {
+				entry = &publicModelMarketGroupAccumulator{
+					group:  group,
+					models: make(map[string]userSupportedModel),
+				}
+				byGroupID[group.ID] = entry
+			}
+
+			for _, model := range ch.SupportedModels {
+				name := strings.TrimSpace(model.Name)
+				if name == "" || model.Platform != group.Platform {
+					continue
+				}
+				key := model.Platform + "\x00" + strings.ToLower(name)
+				candidate := userSupportedModel{
+					Name:     name,
+					Platform: model.Platform,
+					Pricing:  toUserPricing(model.Pricing),
+				}
+				// ListAvailable is stably sorted by channel name. Keep the first
+				// configured price, but prefer a priced entry over an empty one.
+				current, exists := entry.models[key]
+				if !exists || (current.Pricing == nil && candidate.Pricing != nil) {
+					entry.models[key] = candidate
+				}
+			}
+		}
+	}
+
+	out := make([]publicModelMarketGroup, 0, len(byGroupID))
+	for _, entry := range byGroupID {
+		models := make([]userSupportedModel, 0, len(entry.models))
+		for _, model := range entry.models {
+			models = append(models, model)
+		}
+		sort.SliceStable(models, func(i, j int) bool {
+			return strings.ToLower(models[i].Name) < strings.ToLower(models[j].Name)
+		})
+		if len(models) == 0 {
+			continue
+		}
+
+		group := entry.group
+		out = append(out, publicModelMarketGroup{
+			Name:               group.Name,
+			Platform:           group.Platform,
+			SubscriptionType:   group.SubscriptionType,
+			RateMultiplier:     group.RateMultiplier,
+			PeakRateEnabled:    group.PeakRateEnabled,
+			PeakStart:          group.PeakStart,
+			PeakEnd:            group.PeakEnd,
+			PeakRateMultiplier: group.PeakRateMultiplier,
+			Models:             models,
+		})
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Platform != out[j].Platform {
+			return out[i].Platform < out[j].Platform
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
 }
 
 // List 列出当前用户可见的「可用渠道」。

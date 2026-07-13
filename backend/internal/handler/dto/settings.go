@@ -273,6 +273,9 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Public Model Market feature switch (anonymous model and pricing catalog)
+	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
+
 	// Web Chat feature switch (user-facing chat workbench)
 	WebChatEnabled          bool `json:"web_chat_enabled"`
 	WebChatProjectsEnabled  bool `json:"web_chat_projects_enabled"`
@@ -362,6 +365,7 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
 
 	WebChatEnabled          bool `json:"web_chat_enabled"`
 	WebChatProjectsEnabled  bool `json:"web_chat_projects_enabled"`

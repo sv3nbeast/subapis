@@ -27,6 +27,85 @@ func TestUserAvailableChannel_Unauthenticated401(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestPublicModelMarket_DisabledAllowsAnonymousAndReturnsEmptyCatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &AvailableChannelHandler{} // nil setting service is the fail-closed path
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/public/models", nil)
+
+	h.ListPublicModels(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"groups":[]}}`, w.Body.String())
+}
+
+func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
+	inputPrice := 3.0
+	publicStandard := service.AvailableGroupRef{
+		ID: 1, Name: "Claude Standard", Platform: "anthropic",
+		SubscriptionType: service.SubscriptionTypeStandard, RateMultiplier: 1,
+	}
+	publicSubscription := service.AvailableGroupRef{
+		ID: 2, Name: "OpenAI Plan", Platform: "openai",
+		SubscriptionType: service.SubscriptionTypeSubscription, RateMultiplier: 0.8,
+		PeakRateEnabled: true, PeakStart: "14:00", PeakEnd: "18:00", PeakRateMultiplier: 1.2,
+	}
+	exclusive := service.AvailableGroupRef{
+		ID: 3, Name: "Internal", Platform: "anthropic", IsExclusive: true,
+	}
+
+	channels := []service.AvailableChannel{
+		{
+			Name: "internal-source-a", Status: service.StatusActive,
+			Groups: []service.AvailableGroupRef{publicStandard, exclusive},
+			SupportedModels: []service.SupportedModel{
+				{Name: "claude-sonnet-4-6", Platform: "anthropic", Pricing: &service.ChannelModelPricing{InputPrice: &inputPrice}},
+				{Name: "gpt-5", Platform: "openai"}, // platform isolation
+			},
+		},
+		{
+			Name: "internal-source-b", Status: service.StatusActive,
+			Groups: []service.AvailableGroupRef{publicStandard, publicSubscription},
+			SupportedModels: []service.SupportedModel{
+				{Name: "Claude-Sonnet-4-6", Platform: "anthropic"}, // case-insensitive duplicate
+				{Name: "gpt-5", Platform: "openai"},
+			},
+		},
+		{
+			Name: "disabled-source", Status: service.StatusDisabled,
+			Groups:          []service.AvailableGroupRef{publicStandard},
+			SupportedModels: []service.SupportedModel{{Name: "hidden-model", Platform: "anthropic"}},
+		},
+	}
+
+	groups := buildPublicModelMarketGroups(channels)
+	require.Len(t, groups, 2)
+	require.Equal(t, "Claude Standard", groups[0].Name)
+	require.Len(t, groups[0].Models, 1)
+	require.Equal(t, "claude-sonnet-4-6", groups[0].Models[0].Name)
+	require.NotNil(t, groups[0].Models[0].Pricing)
+	require.Equal(t, &inputPrice, groups[0].Models[0].Pricing.InputPrice)
+	require.Equal(t, "OpenAI Plan", groups[1].Name)
+	require.Equal(t, service.SubscriptionTypeSubscription, groups[1].SubscriptionType)
+	require.True(t, groups[1].PeakRateEnabled)
+	require.Len(t, groups[1].Models, 1)
+	require.Equal(t, "gpt-5", groups[1].Models[0].Name)
+}
+
+func TestPublicModelMarket_FieldWhitelist(t *testing.T) {
+	row := publicModelMarketResponse{Groups: []publicModelMarketGroup{{
+		Name: "Public", Platform: "anthropic", Models: []userSupportedModel{},
+	}}}
+	raw, err := json.Marshal(row)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "channel")
+	require.NotContains(t, string(raw), "is_exclusive")
+	require.NotContains(t, string(raw), `"id"`)
+	require.Contains(t, string(raw), `"groups"`)
+	require.Contains(t, string(raw), `"models"`)
+}
+
 func TestFilterUserVisibleGroups_IntersectionOnly(t *testing.T) {
 	// 渠道挂在 {g1, g2, g3}，用户只允许 {g1, g3} —— 响应必须仅含 g1/g3。
 	groups := []service.AvailableGroupRef{

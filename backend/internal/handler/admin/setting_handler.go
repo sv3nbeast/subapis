@@ -327,6 +327,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled: settings.PublicModelMarketEnabled,
 
 		WebChatEnabled:          settings.WebChatEnabled,
 		WebChatProjectsEnabled:  settings.WebChatProjectsEnabled,
@@ -687,6 +688,9 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Public Model Market feature switch (anonymous)
+	PublicModelMarketEnabled *bool `json:"public_model_market_enabled"`
 
 	// Web Chat feature switch (user-facing)
 	WebChatEnabled          *bool `json:"web_chat_enabled"`
@@ -1841,6 +1845,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		PublicModelMarketEnabled: func() bool {
+			if req.PublicModelMarketEnabled != nil {
+				return *req.PublicModelMarketEnabled
+			}
+			return previousSettings.PublicModelMarketEnabled
+		}(),
 		WebChatEnabled: func() bool {
 			if req.WebChatEnabled != nil {
 				return *req.WebChatEnabled
@@ -2217,6 +2227,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled: updatedSettings.PublicModelMarketEnabled,
 
 		WebChatEnabled:          updatedSettings.WebChatEnabled,
 		WebChatProjectsEnabled:  updatedSettings.WebChatProjectsEnabled,
@@ -2720,6 +2731,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.PublicModelMarketEnabled != after.PublicModelMarketEnabled {
+		changed = append(changed, "public_model_market_enabled")
 	}
 	if before.WebChatEnabled != after.WebChatEnabled {
 		changed = append(changed, "web_chat_enabled")

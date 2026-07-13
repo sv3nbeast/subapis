@@ -38,6 +38,13 @@
         </router-link>
 
         <div class="flex items-center gap-3">
+          <router-link
+            v-if="publicModelMarketEnabled"
+            to="/models"
+            class="hidden rounded-lg px-3 py-2 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-100 hover:text-primary-700 dark:text-dark-300 dark:hover:bg-dark-800 dark:hover:text-primary-300 sm:inline-flex"
+          >
+            {{ t('modelMarket.navLabel') }}
+          </router-link>
           <button
             type="button"
             class="home-nav-action home-announcement-trigger"
@@ -300,6 +307,14 @@
                 <Icon name="book" size="md" />
                 {{ t('home.guide') }}
               </router-link>
+              <router-link
+                v-if="publicModelMarketEnabled"
+                to="/models"
+                class="btn btn-secondary min-w-[8rem] px-5 py-2.5 text-sm"
+              >
+                <Icon name="sparkles" size="md" />
+                {{ t('modelMarket.viewModelsAndPricing') }}
+              </router-link>
             </div>
 
             <div class="home-stats-grid mt-6 grid max-w-[24rem] grid-cols-3 gap-3">
@@ -547,6 +562,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { formatRelativeWithDateTime } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import type { UserAnnouncement } from '@/types' 
 
 const { t } = useI18n()
@@ -588,6 +604,7 @@ const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?
 const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const publicModelMarketEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.publicModelMarket))
 const apiBaseUrl = computed(() => {
   const configured = appStore.cachedPublicSettings?.api_base_url || appStore.apiBaseUrl
   return normalizeBaseUrl(configured || 'https://subapis.com')

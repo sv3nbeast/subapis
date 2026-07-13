@@ -43,6 +43,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/models',
+    name: 'PublicModels',
+    component: () => import('@/views/public/ModelsView.vue'),
+    meta: {
+      requiresAuth: false,
+      requiresPublicModelMarket: true,
+      title: 'Model Market',
+      titleKey: 'modelMarket.title'
+    }
+  },
+  {
     path: '/login',
     name: 'Login',
     component: () => import('@/views/auth/LoginView.vue'),
@@ -826,6 +837,20 @@ router.beforeEach(async (to, _from, next) => {
       }
     } catch {
       // If setup status cannot be determined, keep the setup page reachable.
+    }
+  }
+
+  if (to.meta.requiresPublicModelMarket) {
+    if (!appStore.publicSettingsLoaded) {
+      try {
+        await appStore.fetchPublicSettings()
+      } catch (error) {
+        console.warn('Failed to load public settings for model market route', error)
+      }
+    }
+    if (!isFeatureFlagEnabled(FeatureFlags.publicModelMarket)) {
+      next('/home')
+      return
     }
   }
 

@@ -314,6 +314,7 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  public_model_market_enabled: boolean
   web_chat_enabled: boolean
   web_chat_projects_enabled?: boolean
   web_chat_templates_enabled?: boolean

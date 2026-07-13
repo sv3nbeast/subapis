@@ -104,6 +104,11 @@ export const FeatureFlags = {
     mode: 'opt-in',
     label: 'Available Channels',
   }),
+  publicModelMarket: defineFlag({
+    key: 'public_model_market_enabled',
+    mode: 'opt-in',
+    label: 'Public Model Market',
+  }),
   webChat: defineFlag({
     key: 'web_chat_enabled',
     mode: 'opt-in',

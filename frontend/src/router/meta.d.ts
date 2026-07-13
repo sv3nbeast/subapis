@@ -56,6 +56,12 @@ declare module 'vue-router' {
     requiresWebChat?: boolean
 
     /**
+     * Whether this route requires the anonymous model market to be enabled
+     * @default false
+     */
+    requiresPublicModelMarket?: boolean
+
+    /**
      * 是否要求风控中心功能开关已启用
      * @default false
      */

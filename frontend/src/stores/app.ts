@@ -371,6 +371,7 @@ export const useAppStore = defineStore('app', () => {
         channel_monitor_enabled: true,
         channel_monitor_default_interval_seconds: 60,
         available_channels_enabled: false,
+        public_model_market_enabled: false,
         web_chat_enabled: false,
         web_chat_projects_enabled: false,
         web_chat_templates_enabled: false,

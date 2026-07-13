@@ -181,6 +181,9 @@ type SystemSettings struct {
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Public Model Market feature (anonymous model and pricing catalog)
+	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
+
 	// Web Chat feature (user-facing chat workbench)
 	WebChatEnabled          bool `json:"web_chat_enabled"`
 	WebChatProjectsEnabled  bool `json:"web_chat_projects_enabled"`
@@ -335,6 +338,9 @@ type PublicSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Public Model Market feature (anonymous model and pricing catalog)
+	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
 
 	// Web Chat feature (user-facing chat workbench)
 	WebChatEnabled          bool `json:"web_chat_enabled"`

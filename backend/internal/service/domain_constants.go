@@ -391,6 +391,11 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyPublicModelMarketEnabled controls the anonymous model catalog.
+	// It is intentionally separate from Available Channels because the latter is
+	// account-scoped while this switch publishes prices to unauthenticated users.
+	SettingKeyPublicModelMarketEnabled = "public_model_market_enabled"
+
 	// SettingKeyWebChatEnabled is a DB-backed soft switch for the user-facing web chat
 	// workbench. Defaults to false because it creates managed hidden API keys and can
 	// incur normal gateway usage charges.

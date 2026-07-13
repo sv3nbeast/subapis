@@ -1099,6 +1099,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyPublicModelMarketEnabled,
 		SettingKeyWebChatEnabled,
 		SettingKeyWebChatProjectsEnabled,
 		SettingKeyWebChatTemplatesEnabled,
@@ -1215,6 +1216,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
+		PublicModelMarketEnabled: settings[SettingKeyPublicModelMarketEnabled] == "true",
 
 		WebChatEnabled:          settings[SettingKeyWebChatEnabled] == "true",
 		WebChatProjectsEnabled:  settings[SettingKeyWebChatProjectsEnabled] == "true",
@@ -1334,6 +1336,24 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 	}
 	return AvailableChannelsRuntime{
 		Enabled: vals[SettingKeyAvailableChannelsEnabled] == "true",
+	}
+}
+
+// PublicModelMarketRuntime is the lightweight view of the anonymous model
+// catalog switch. The feature is opt-in and therefore fails closed.
+type PublicModelMarketRuntime struct {
+	Enabled bool
+}
+
+// GetPublicModelMarketRuntime reads the public model market switch directly
+// from the settings store. Unknown or failed reads are treated as disabled.
+func (s *SettingService) GetPublicModelMarketRuntime(ctx context.Context) PublicModelMarketRuntime {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyPublicModelMarketEnabled})
+	if err != nil {
+		return PublicModelMarketRuntime{Enabled: false}
+	}
+	return PublicModelMarketRuntime{
+		Enabled: vals[SettingKeyPublicModelMarketEnabled] == "true",
 	}
 }
 
@@ -1941,6 +1961,7 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
+	PublicModelMarketEnabled             bool `json:"public_model_market_enabled"`
 	WebChatEnabled                       bool `json:"web_chat_enabled"`
 	WebChatProjectsEnabled               bool `json:"web_chat_projects_enabled"`
 	WebChatTemplatesEnabled              bool `json:"web_chat_templates_enabled"`
@@ -2011,6 +2032,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled:             settings.PublicModelMarketEnabled,
 		WebChatEnabled:                       settings.WebChatEnabled,
 		WebChatProjectsEnabled:               settings.WebChatProjectsEnabled,
 		WebChatTemplatesEnabled:              settings.WebChatTemplatesEnabled,
@@ -2677,6 +2699,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+
+	// Public model market feature switch
+	updates[SettingKeyPublicModelMarketEnabled] = strconv.FormatBool(settings.PublicModelMarketEnabled)
 
 	// Web chat feature switch
 	updates[SettingKeyWebChatEnabled] = strconv.FormatBool(settings.WebChatEnabled)
@@ -3748,6 +3773,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
 
+		// Public model market feature (default disabled; opt-in)
+		SettingKeyPublicModelMarketEnabled: "false",
+
 		// Web chat feature (default disabled; opt-in)
 		SettingKeyWebChatEnabled:          "false",
 		SettingKeyWebChatProjectsEnabled:  "false",
@@ -4214,6 +4242,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
+
+	// Public model market feature (default: disabled; strict true)
+	result.PublicModelMarketEnabled = settings[SettingKeyPublicModelMarketEnabled] == "true"
 
 	// Web chat feature (default: disabled; strict true)
 	result.WebChatEnabled = settings[SettingKeyWebChatEnabled] == "true"

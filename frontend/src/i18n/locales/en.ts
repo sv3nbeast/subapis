@@ -1726,6 +1726,62 @@ export default {
     }
   },
 
+  modelMarket: {
+    navLabel: 'Model Market',
+    viewModelsAndPricing: 'Models & pricing',
+    home: 'Home',
+    eyebrow: 'Public models and reference pricing',
+    title: 'Model Market',
+    description: 'Explore publicly available models, billing modes, reference pricing, and service groups before creating an account.',
+    referencePriceHint: 'Prices and group multipliers are references. Usage tiers and peak multipliers may affect the final charge; the final bill prevails.',
+    retry: 'Retry',
+    loadError: 'Failed to load the model market',
+    actions: {
+      login: 'Sign in to use',
+      register: 'Create account',
+      myGroups: 'View my available groups'
+    },
+    stats: {
+      models: 'Public models',
+      groups: 'Public groups',
+      platforms: 'Platforms'
+    },
+    filters: {
+      search: 'Search models, platforms, or groups...',
+      allPlatforms: 'All platforms',
+      allBillingModes: 'All billing modes'
+    },
+    billing: {
+      token: 'Per token',
+      perRequest: 'Per request',
+      image: 'Per image',
+      unconfigured: 'Price unavailable'
+    },
+    prices: {
+      status: 'Price status',
+      input: 'Input reference',
+      output: 'Output reference',
+      cacheRead: 'Cache read',
+      cacheWrite: 'Cache write',
+      perRequest: 'Per request',
+      perImage: 'Per image'
+    },
+    groupOffers: '{count} public groups',
+    subscription: 'Subscription group',
+    payAsYouGo: 'Pay-as-you-go group',
+    peakRate: 'Peak multiplier: {window}',
+    offerPrice: {
+      token: 'Reference: input {input} / output {output} per 1M tokens',
+      perRequest: 'Reference: {price} per request',
+      perImage: 'Reference: {price} per image'
+    },
+    tieredPricing: 'Tiered pricing (input / output)',
+    empty: {
+      title: 'No matching public models',
+      description: 'Adjust your search or filters, or try again later.'
+    }
+  },
+
   // Available Groups (user-facing)
   availableChannels: {
     eyebrow: 'Use by API key group',
@@ -6882,6 +6938,13 @@ export default {
           configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
           enabled: 'Enable Available Channels',
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.'
+        },
+        publicModelMarket: {
+          title: 'Public Model Market',
+          description: 'Publish models, reference prices, and default multipliers from non-exclusive groups to signed-out visitors. Disabled by default.',
+          configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
+          enabled: 'Enable Public Model Market',
+          enabledHint: 'When enabled, the home page links to an anonymous catalog. Exclusive groups and internal channel details remain private.'
         },
         webChat: {
           title: 'Web Chat',

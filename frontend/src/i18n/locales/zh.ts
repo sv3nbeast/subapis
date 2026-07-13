@@ -1656,6 +1656,62 @@ export default {
     }
   },
 
+  modelMarket: {
+    navLabel: '模型广场',
+    viewModelsAndPricing: '查看模型与价格',
+    home: '首页',
+    eyebrow: '公开模型与参考价格',
+    title: '模型广场',
+    description: '浏览当前公开提供的模型、计费方式、参考单价与可选分组。注册前即可了解服务范围。',
+    referencePriceHint: '页面展示配置的参考单价与分组倍率，实际费用还可能受到用量区间和高峰倍率影响，请以最终账单为准。',
+    retry: '重试',
+    loadError: '加载模型广场失败',
+    actions: {
+      login: '登录使用',
+      register: '注册账号',
+      myGroups: '查看我的可用分组'
+    },
+    stats: {
+      models: '公开模型',
+      groups: '公开分组',
+      platforms: '支持平台'
+    },
+    filters: {
+      search: '搜索模型、平台或分组...',
+      allPlatforms: '全部平台',
+      allBillingModes: '全部计费方式'
+    },
+    billing: {
+      token: '按 Token',
+      perRequest: '按次',
+      image: '按图片',
+      unconfigured: '未配置价格'
+    },
+    prices: {
+      status: '价格状态',
+      input: '输入参考价',
+      output: '输出参考价',
+      cacheRead: '缓存读取',
+      cacheWrite: '缓存写入',
+      perRequest: '每次请求',
+      perImage: '每张图片'
+    },
+    groupOffers: '{count} 个公开分组',
+    subscription: '订阅分组',
+    payAsYouGo: '标准计费分组',
+    peakRate: '高峰倍率：{window}',
+    offerPrice: {
+      token: '参考单价：输入 {input} / 输出 {output}（每 1M Token）',
+      perRequest: '参考单价：{price} / 次',
+      perImage: '参考单价：{price} / 张'
+    },
+    tieredPricing: '阶梯价格（输入 / 输出）',
+    empty: {
+      title: '暂无匹配的公开模型',
+      description: '请调整搜索或筛选条件，或稍后再试。'
+    }
+  },
+
   // Available Groups (user-facing)
   availableChannels: {
     eyebrow: '按 API Key 分组使用',
@@ -6872,6 +6928,13 @@ export default {
           configureLink: '前往 渠道管理 > 渠道定价 配置模型价格',
           enabled: '启用可用渠道',
           enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。'
+        },
+        publicModelMarket: {
+          title: '公开模型广场',
+          description: '向未登录访客公开展示非专属分组关联的模型、参考价格和默认倍率。默认关闭。',
+          configureLink: '前往 渠道管理 > 渠道定价 配置模型价格',
+          enabled: '启用公开模型广场',
+          enabledHint: '启用后首页显示入口，匿名用户可访问公开模型目录；专属分组和内部渠道信息不会公开。'
         },
         webChat: {
           title: '网页对话',
