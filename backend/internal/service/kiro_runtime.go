@@ -454,7 +454,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if resp.StatusCode >= 400 {
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 	}
-	inputTokens = kiroInputTokenBudget(requestCtx, inputTokens)
+	inputTokens = kiroInputTokenBudgetForBody(&requestCtx, body, inputTokens)
 
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, parsed.Group, body, mappedModel, inputTokens)
 	currentResp := resp
@@ -463,6 +463,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	var parseResult *kiropkg.ParseResult
 	var contextRetryCause error
 	for bodyAttempt := 0; ; bodyAttempt++ {
+		currentRequestCtx.BodyAttempt = bodyAttempt
 		currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 		parseResult, err = kiropkg.ParseNonStreamingEventStreamWithContext(currentResp.Body, mappedModel, currentRequestCtx)
 		_ = currentResp.Body.Close()
@@ -548,6 +549,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			_ = nextResp.Body.Close()
 			break
 		}
+		_ = kiroInputTokenBudgetForBody(&nextRequestCtx, body, originalInputTokens)
 		currentResp = nextResp
 		currentRequestCtx = nextRequestCtx
 	}
@@ -578,6 +580,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		})
 		return nil, err
 	}
+	s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
 	c.Header("Content-Type", "application/json")
 	requestID := buildKiroClientRequestID(resp)
 	s.logKiroUsageBudget(account, parsed.Group, requestID, mappedModel, originalInputTokens, currentRequestCtx, parseResult.Usage)
@@ -851,7 +854,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		headers := make(http.Header)
 		headers.Set("Content-Type", "text/event-stream")
 		go func() {
-			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, account, group, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw)
+			streamErr := s.streamKiroWebSearchAsAnthropic(ctx, account, group, anthropicBody, mappedModel, requestModel, token, headers, pw)
 			if streamErr != nil {
 				_ = pw.CloseWithError(streamErr)
 				return
@@ -878,7 +881,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	inputTokens = kiroInputTokenBudget(requestCtx, inputTokens)
+	inputTokens = kiroInputTokenBudgetForBody(&requestCtx, anthropicBody, inputTokens)
 	cacheUsage := s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 
 	pr, pw := io.Pipe()
@@ -899,6 +902,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		maxBodyRetries := kiroStreamBodyRetryMax()
 		var contextRetryCause error
 		for bodyAttempt := 0; ; bodyAttempt++ {
+			currentRequestCtx.BodyAttempt = bodyAttempt
 			currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 			currentRequestCtx.RequireTerminalEvent = true
 			streamResult, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(streamCtx, currentResp.Body, pw, mappedModel, inputTokens, currentRequestCtx)
@@ -907,6 +911,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				if streamResult != nil {
 					s.logKiroUsageBudget(account, group, requestID, mappedModel, originalInputTokens, currentRequestCtx, streamResult.Usage)
 				}
+				s.commitKiroCacheEmulationUsage(streamCtx, cacheUsage)
 				_ = pw.Close()
 				return
 			}
@@ -1003,6 +1008,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				_ = pw.CloseWithError(streamErr)
 				return
 			}
+			_ = kiroInputTokenBudgetForBody(&nextRequestCtx, anthropicBody, originalInputTokens)
 			currentResp = nextResp
 			currentRequestCtx = nextRequestCtx
 		}
@@ -1039,6 +1045,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
+	contextWindowTokens, contextWindowSource := s.resolveKiroModelContextWindow(ctx, account, currentToken, modelID)
 	endpoints := buildKiroEndpointsForMode(account, mode)
 	endpoints = rotateKiroEndpoints(endpoints, options.EndpointStartOffset)
 	proxyURL := kiroProxyURL(account)
@@ -1064,6 +1071,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 		if err != nil {
 			return nil, requestCtx, err
 		}
+		applyKiroContextWindowResolution(&buildResult.Context, contextWindowTokens, contextWindowSource)
 		applyKiroUpstreamRequestOptions(buildResult, options)
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
@@ -1193,6 +1201,11 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 						if err != nil {
 							return nil, requestCtx, err
 						}
+						if contextWindowTokens <= 0 {
+							s.clearKiroModelLimitsFailure(account)
+							contextWindowTokens, contextWindowSource = s.resolveKiroModelContextWindow(ctx, account, currentToken, modelID)
+						}
+						applyKiroContextWindowResolution(&buildResult.Context, contextWindowTokens, contextWindowSource)
 						applyKiroUpstreamRequestOptions(buildResult, options)
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
@@ -1662,18 +1675,86 @@ func estimateKiroInputTokens(body []byte) int {
 	return tokens
 }
 
-func kiroInputTokenBudget(requestCtx kiropkg.KiroRequestContext, fallback int) int {
-	if requestCtx.InputTokenBudget > 0 {
-		return requestCtx.InputTokenBudget
+func kiroInputTokenBudget(requestCtx *kiropkg.KiroRequestContext, semanticEstimate int) int {
+	if requestCtx == nil {
+		return max(semanticEstimate, 0)
 	}
-	return fallback
+	if semanticEstimate > 0 {
+		requestCtx.SemanticInputTokenBudget = semanticEstimate
+	}
+	return effectiveKiroFallbackInputBudget(*requestCtx)
+}
+
+func kiroInputTokenBudgetForBody(requestCtx *kiropkg.KiroRequestContext, body []byte, semanticEstimate int) int {
+	if requestCtx == nil {
+		return max(semanticEstimate, 0)
+	}
+	if hasKiroNonTextPrompt(body) {
+		// The semantic text counter intentionally ignores binary image/document
+		// bytes. Do not turn that partial count into a hard billing cap; retain the
+		// serialized bound until Kiro supplies exact/context usage.
+		requestCtx.SemanticInputTokenBudget = 0
+		if requestCtx.InputTokenBudget > 0 {
+			return requestCtx.InputTokenBudget
+		}
+		return max(semanticEstimate, 0)
+	}
+	return kiroInputTokenBudget(requestCtx, semanticEstimate)
+}
+
+func hasKiroNonTextPrompt(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	found := false
+	messages.ForEach(func(_, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			switch strings.ToLower(strings.TrimSpace(part.Get("type").String())) {
+			case "image", "image_url", "input_image", "file", "input_file", "document":
+				found = true
+				return false
+			default:
+				return true
+			}
+		})
+		return !found
+	})
+	return found
+}
+
+func effectiveKiroFallbackInputBudget(requestCtx kiropkg.KiroRequestContext) int {
+	wireBudget := requestCtx.InputTokenBudget
+	semanticBudget := requestCtx.SemanticInputTokenBudget
+	switch {
+	case semanticBudget > 0 && wireBudget > 0:
+		return min(semanticBudget, wireBudget)
+	case semanticBudget > 0:
+		return semanticBudget
+	default:
+		return max(wireBudget, 0)
+	}
 }
 
 func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requestID, model string, originalInputTokens int, requestCtx kiropkg.KiroRequestContext, usage kiropkg.Usage) {
-	effectiveBudget := requestCtx.InputTokenBudget
+	fallbackBudget := effectiveKiroFallbackInputBudget(requestCtx)
+	wireBudget := requestCtx.InputTokenBudget
+	effectiveBudget := fallbackBudget
+	if usage.InputTokensFromContext && requestCtx.ContextWindowTokens > 0 {
+		effectiveBudget = requestCtx.ContextWindowTokens
+	} else if usage.InputTokensFromUpstream && wireBudget > 0 {
+		effectiveBudget = wireBudget
+	}
 	finalInputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	budgetExceeded := effectiveBudget > 0 && finalInputTokens > effectiveBudget
-	if originalInputTokens < 500_000 && !budgetExceeded {
+	if originalInputTokens < 500_000 && !budgetExceeded && !usage.InputTokensFromContext && requestCtx.BodyAttempt <= 0 {
 		return
 	}
 	accountID := int64(0)
@@ -1684,23 +1765,32 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 	if group != nil {
 		groupID = group.ID
 	}
-	inputSource := "effective_payload_estimate"
+	usageSource := "effective_payload_estimate"
 	if usage.InputTokensFromUpstream {
-		inputSource = "upstream_token_usage"
+		usageSource = "upstream_uncached_input_tokens"
 	} else if usage.InputTokensFromContext {
-		inputSource = "upstream_context_usage"
+		usageSource = "upstream_context_usage_percentage"
 	}
 	fields := []zap.Field{
 		zap.Int64("account_id", accountID),
 		zap.Int64("group_id", groupID),
 		zap.String("request_id", strings.TrimSpace(requestID)),
 		zap.String("model", strings.TrimSpace(model)),
-		zap.String("input_source", inputSource),
+		zap.String("usage_source", usageSource),
+		zap.String("input_source", usageSource),
 		zap.Int("original_input_estimate", originalInputTokens),
+		zap.Int("payload_input_estimate", requestCtx.PayloadInputTokenEstimate),
+		zap.Int("semantic_input_estimate", requestCtx.SemanticInputTokenBudget),
 		zap.Int("effective_input_budget", effectiveBudget),
+		zap.Int("fallback_input_budget", fallbackBudget),
+		zap.Int("wire_input_budget", wireBudget),
+		zap.Int("semantic_input_budget", requestCtx.SemanticInputTokenBudget),
 		zap.Int("final_input_tokens", finalInputTokens),
 		zap.Int("context_window_tokens", requestCtx.ContextWindowTokens),
+		zap.String("context_window_source", requestCtx.ContextWindowSource),
 		zap.Float64("context_usage_percentage", usage.ContextUsagePercentage),
+		zap.Bool("cache_emulated", requestCtx.CacheEmulationUsage != nil),
+		zap.Int("body_attempt", requestCtx.BodyAttempt),
 		zap.Bool("budget_exceeded", budgetExceeded),
 	}
 	if budgetExceeded {
@@ -1712,7 +1802,11 @@ func (s *GatewayService) logKiroUsageBudget(account *Account, group *Group, requ
 
 func kiroUsageToClaude(usage kiropkg.Usage, fallbackInput int) ClaudeUsage {
 	inputTokens := usage.InputTokens
-	if inputTokens == 0 {
+	// A cache-only response legitimately has zero uncached input. Applying the
+	// fallback in that case would add the whole prompt a second time and inflate
+	// total_input (and therefore billing). Fallback is allowed only when every
+	// input bucket is absent.
+	if inputTokens == 0 && usage.CacheReadInputTokens == 0 && usage.CacheCreationInputTokens == 0 {
 		inputTokens = fallbackInput
 	}
 	return ClaudeUsage{

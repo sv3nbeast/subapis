@@ -788,6 +788,8 @@ type GatewayService struct {
 	userGroupRateSF            singleflight.Group
 	modelsListCache            *gocache.Cache
 	modelsListCacheTTL         time.Duration
+	kiroModelLimitsCache       *gocache.Cache
+	kiroModelLimitsSF          singleflight.Group
 	settingService             *SettingService
 	responseHeaderFilter       *responseheaders.CompiledHeaderFilter
 	debugModelRouting          atomic.Bool
@@ -869,6 +871,7 @@ func NewGatewayService(
 		settingService:             settingService,
 		modelsListCache:            gocache.New(modelsListTTL, time.Minute),
 		modelsListCacheTTL:         modelsListTTL,
+		kiroModelLimitsCache:       newKiroModelLimitsCache(),
 		responseHeaderFilter:       compileResponseHeaderFilter(cfg),
 		tlsFPProfileService:        tlsFPProfileService,
 		channelService:             channelService,

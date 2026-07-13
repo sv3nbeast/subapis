@@ -38,6 +38,14 @@ type kiroCacheEmulationUsage struct {
 	CacheCreationInputTokens   int
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
+	pendingCommit              *kiroCachePendingCommit
+}
+
+type kiroCachePendingCommit struct {
+	once      sync.Once
+	cacheKey  uint64
+	stableKey string
+	profile   *kiroCacheProfile
 }
 
 type kiroCacheEntry struct {
@@ -54,7 +62,14 @@ type kiroCacheTracker struct {
 var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
 
 func (s *GatewayService) buildKiroCacheEmulationUsage(account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
-	return s.buildKiroCacheEmulationUsageWithContext(context.Background(), account, group, body, model, inputTokens)
+	ctx := context.Background()
+	usage := s.buildKiroCacheEmulationUsageWithContext(ctx, account, group, body, model, inputTokens)
+	// This compatibility helper is used by deterministic estimators/tests where
+	// a completed request is implied. Live gateway paths use the deferred
+	// buildKiroCacheEmulationUsageForRequest helper and commit only after a full
+	// successful upstream response.
+	s.commitKiroCacheEmulationUsage(ctx, usage)
+	return usage
 }
 
 func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
@@ -80,10 +95,11 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 	stableKey := strings.TrimSpace(kiroCacheCredentialIdentity(account))
 	persistence := s.kiroCachePersistenceStore()
 	match := globalKiroCacheTracker.match(ctx, stableKey, cacheKey, profile, persistence)
-	if persistEntries := globalKiroCacheTracker.update(cacheKey, profile); persistence != nil && stableKey != "" && len(persistEntries) > 0 {
-		_ = persistence.UpsertKiroCacheFingerprints(ctx, stableKey, persistEntries)
-	}
-	result := &kiroCacheEmulationUsage{}
+	result := &kiroCacheEmulationUsage{pendingCommit: &kiroCachePendingCommit{
+		cacheKey:  cacheKey,
+		stableKey: stableKey,
+		profile:   profile,
+	}}
 	if match != nil {
 		result.CacheReadInputTokens = min(match.cumulativeTokens, profile.totalInputTokens)
 	}
@@ -106,6 +122,25 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 		return nil
 	}
 	return result
+}
+
+// commitKiroCacheEmulationUsage publishes cache fingerprints only after the
+// upstream response has completed successfully. HTTP 429/5xx responses, empty
+// streams, parse failures and abandoned retries must not warm the simulated
+// cache for a later request.
+func (s *GatewayService) commitKiroCacheEmulationUsage(ctx context.Context, usage *kiroCacheEmulationUsage) {
+	if usage == nil || usage.pendingCommit == nil {
+		return
+	}
+	pending := usage.pendingCommit
+	pending.once.Do(func() {
+		persistEntries := globalKiroCacheTracker.update(pending.cacheKey, pending.profile)
+		persistence := s.kiroCachePersistenceStore()
+		if persistence == nil || pending.stableKey == "" || len(persistEntries) == 0 {
+			return
+		}
+		_ = persistence.UpsertKiroCacheFingerprints(ctx, pending.stableKey, persistEntries)
+	})
 }
 
 func (s *GatewayService) kiroCachePersistenceStore() KiroCachePersistenceStore {
@@ -594,19 +629,10 @@ func (t *kiroCacheTracker) match(ctx context.Context, stableKey string, cacheKey
 		if !hits[candidate.fingerprintHex] {
 			continue
 		}
-		t.mu.Lock()
-		t.pruneLocked(now)
-		accountEntries := t.entries[cacheKey]
-		if accountEntries == nil {
-			accountEntries = make(map[[32]byte]kiroCacheEntry)
-			t.entries[cacheKey] = accountEntries
-		}
-		accountEntries[candidate.fingerprint] = kiroCacheEntry{
-			tokens:    candidate.cumulativeTokens,
-			ttl:       candidate.ttl,
-			expiresAt: now.Add(candidate.ttl),
-		}
-		t.mu.Unlock()
+		// Redis confirms that this prefix was created by an earlier successful
+		// request. Do not mirror/refresh it in memory yet: a failed current
+		// attempt must not extend the simulated lifetime. The terminal-success
+		// commit below publishes the in-memory refresh.
 		matched := candidate
 		return &matched
 	}
@@ -626,8 +652,9 @@ func (t *kiroCacheTracker) matchInMemoryLocked(cacheKey uint64, candidates []kir
 		if !ok || !entry.expiresAt.After(now) {
 			continue
 		}
-		entry.expiresAt = now.Add(maxDuration(entry.ttl, candidate.ttl))
-		accountEntries[candidate.fingerprint] = entry
+		// A lookup is only a preview. Refreshing the entry here would let a
+		// later-failed upstream attempt extend simulated cache lifetime. The
+		// success-only commit path refreshes it after a terminal response.
 		matched := candidate
 		return &matched
 	}

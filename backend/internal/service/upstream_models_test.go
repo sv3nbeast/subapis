@@ -227,7 +227,7 @@ func TestBuildKiroUpstreamModelsRequest(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR&profileArn=arn%3Aaws%3Acodewhisperer%3Aeu-central-1%3A123456789012%3Aprofile%2FKIRO", req.URL.String())
+	require.Equal(t, "https://q.eu-central-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR&profileArn=arn%3Aaws%3Acodewhisperer%3Aeu-central-1%3A123456789012%3Aprofile%2FKIRO", req.URL.String())
 	require.Equal(t, req.URL.Host, req.Host)
 	require.Equal(t, "Bearer kiro-access-token", req.Header.Get("Authorization"))
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
@@ -255,11 +255,11 @@ func TestBuildKiroUpstreamModelsRequestUsesProfileArnRegionWhenAPIRegionMissing(
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", req.URL.Host)
+	require.Equal(t, "q.eu-west-1.amazonaws.com", req.URL.Host)
 	require.Equal(t, "arn:aws:codewhisperer:eu-west-1:123456789012:profile/KIRO", req.URL.Query().Get("profileArn"))
 }
 
-func TestBuildKiroUpstreamModelsRequestUsesCodeWhispererRestBaseRegardlessOfAPIRegion(t *testing.T) {
+func TestBuildKiroUpstreamModelsRequestUsesExplicitAPIRegion(t *testing.T) {
 	t.Parallel()
 
 	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
@@ -274,7 +274,7 @@ func TestBuildKiroUpstreamModelsRequestUsesCodeWhispererRestBaseRegardlessOfAPIR
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", req.URL.Host)
+	require.Equal(t, "q.us-west-2.amazonaws.com", req.URL.Host)
 	require.Equal(t, "arn:aws:codewhisperer:eu-west-1:123456789012:profile/KIRO", req.URL.Query().Get("profileArn"))
 }
 
@@ -302,7 +302,7 @@ func TestFetchUpstreamSupportedModelsParsesKiroListAvailableModels(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"claude-opus-4.8", "claude-sonnet-4.6"}, models)
-	require.Equal(t, "https://codewhisperer.us-east-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR", upstream.lastReq.URL.String())
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer kiro-access-token", upstream.lastReq.Header.Get("Authorization"))
 }
 

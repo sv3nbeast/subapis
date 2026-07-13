@@ -171,8 +171,10 @@ func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(result.Payload), 900*1024)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
+	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.PayloadInputTokenEstimate)
 	require.Equal(t, min(estimateKiroPayloadInputTokens(result.Payload), kiroExtendedContextTokens), result.Context.InputTokenBudget)
 	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
+	require.Equal(t, "static_fallback", result.Context.ContextWindowSource)
 	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
@@ -3119,6 +3121,150 @@ func TestKiroContextUsageReconcilesOverestimatedNonStreamingInput(t *testing.T) 
 	require.Equal(t, int64(324_995), gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())
 }
 
+func TestKiroContextUsageRescalesCacheBucketsProportionally(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		// 5.2926% of a 1M context would report 52,926 input tokens.
+		"contextUsagePercentage": 5.2926,
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"outputTokens": 5, "totalTokens": 5},
+		},
+	}))
+
+	const semanticEstimate = 31_181
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-5", KiroRequestContext{
+		InputTokenBudget:         52_921, // serialized JSON envelope estimate
+		SemanticInputTokenBudget: semanticEstimate,
+		ContextWindowTokens:      kiroExtendedContextTokens,
+		CacheEmulationUsage: &Usage{
+			InputTokens:              3_118,
+			CacheReadInputTokens:     26_287,
+			CacheCreationInputTokens: 1_776,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 52_921, kiroUsageInputBucketTotal(result.Usage))
+	require.Equal(t, 52_926, result.Usage.TotalTokens)
+	require.Equal(t, 5_292, result.Usage.InputTokens)
+	require.Equal(t, 44_615, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 3_014, result.Usage.CacheCreationInputTokens)
+	require.True(t, result.Usage.InputTokensFromContext)
+}
+
+func TestKiroStreamingContextUsageRescalesCacheBucketsProportionally(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsagePercentage": 5.2926,
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"outputTokens": 5, "totalTokens": 5},
+		},
+	}))
+
+	const semanticEstimate = 31_181
+	requestCtx := KiroRequestContext{
+		InputTokenBudget:         52_921,
+		SemanticInputTokenBudget: semanticEstimate,
+		ContextWindowTokens:      kiroExtendedContextTokens,
+		CacheEmulationUsage: &Usage{
+			InputTokens:              3_118,
+			CacheReadInputTokens:     26_287,
+			CacheCreationInputTokens: 1_776,
+		},
+	}
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-5", semanticEstimate, requestCtx)
+
+	require.NoError(t, err)
+	require.Equal(t, 52_921, kiroUsageInputBucketTotal(result.Usage))
+	require.Equal(t, 5_292, result.Usage.InputTokens)
+	require.Equal(t, 44_615, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 3_014, result.Usage.CacheCreationInputTokens)
+	require.Contains(t, out.String(), `"input_tokens":5292`)
+	require.NotContains(t, out.String(), `"input_tokens":24858`)
+}
+
+func TestKiroContextUsageTakesPriorityOverLowerLocalEstimates(t *testing.T) {
+	usage := Usage{
+		InputTokens:              3_118,
+		CacheReadInputTokens:     26_287,
+		CacheCreationInputTokens: 1_776,
+		OutputTokens:             5,
+		HasContextUsage:          true,
+		ContextUsagePercentage:   5.2926,
+	}
+	requestCtx := KiroRequestContext{
+		InputTokenBudget:         31_181,
+		SemanticInputTokenBudget: 31_181,
+		ContextWindowTokens:      kiroExtendedContextTokens,
+	}
+
+	result := finalizeKiroUsageForRequest(usage, requestCtx)
+
+	require.Equal(t, 52_921, kiroUsageInputBucketTotal(result))
+	require.Equal(t, 52_926, result.TotalTokens)
+	require.True(t, result.InputTokensFromContext)
+}
+
+func TestKiroContextUsageShrinkPreservesCacheAndCreationBreakdownRatios(t *testing.T) {
+	usage := Usage{
+		InputTokens:                2_000,
+		CacheReadInputTokens:       6_000,
+		CacheCreationInputTokens:   2_000,
+		CacheCreation5mInputTokens: 500,
+		CacheCreation1hInputTokens: 1_500,
+		OutputTokens:               10,
+		HasContextUsage:            true,
+		ContextUsagePercentage:     0.501,
+	}
+
+	result := reconcileKiroUsageWithContext(usage, 1_000_000)
+
+	require.Equal(t, 5_000, kiroUsageInputBucketTotal(result))
+	require.Equal(t, 1_000, result.InputTokens)
+	require.Equal(t, 3_000, result.CacheReadInputTokens)
+	require.Equal(t, 1_000, result.CacheCreationInputTokens)
+	require.Equal(t, 250, result.CacheCreation5mInputTokens)
+	require.Equal(t, 750, result.CacheCreation1hInputTokens)
+	require.Equal(t, 5_010, result.TotalTokens)
+	require.True(t, result.InputTokensFromContext)
+}
+
+func TestKiroExactUpstreamInputCanExceedSemanticFallbackButNotWireBound(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "done"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 40_000,
+				"outputTokens":        5,
+				"totalTokens":         40_005,
+			},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-5", KiroRequestContext{
+		InputTokenBudget:         52_921,
+		SemanticInputTokenBudget: 31_181,
+		ContextWindowTokens:      kiroExtendedContextTokens,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 40_000, result.Usage.InputTokens)
+	require.True(t, result.Usage.InputTokensFromUpstream)
+}
+
 func TestKiroExactUpstreamUsageTakesPriorityOverContextPercentage(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
@@ -3230,6 +3376,8 @@ func TestKiroContextLimitEventReturnsReactiveCompactionError(t *testing.T) {
 func TestKiroContextWindowResolution(t *testing.T) {
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4-6"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4.6"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4.6-1m"))
 	require.Equal(t, kiroDefaultContextTokens, contextWindowTokensForModel("claude-sonnet-4.5"))
 }

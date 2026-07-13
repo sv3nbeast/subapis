@@ -365,6 +365,7 @@ func TestKiroCacheEmulationRecoversFromPersistentStoreAfterTrackerReset(t *testi
 	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
 		t.Fatalf("expected first request to seed persistent store, got %+v", first)
 	}
+	svc.commitKiroCacheEmulationUsage(ctx, first)
 
 	resetKiroCacheTracker()
 
@@ -471,12 +472,40 @@ func TestBuildKiroCacheEmulationUsageForRequestPlainCLIUsesProfileOnly(t *testin
 	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
 		t.Fatalf("plain CLI first request should write stable profile cache, got %+v", first)
 	}
+	svc.commitKiroCacheEmulationUsage(ctx, first)
 	if strings.Contains(string(body), "cache_control") {
 		t.Fatalf("cache emulation profile must not be written back into upstream body: %s", body)
 	}
 	second := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
 	if second == nil || second.CacheReadInputTokens <= 0 {
 		t.Fatalf("plain CLI second request should read stable profile cache, got %+v", second)
+	}
+}
+
+func TestBuildKiroCacheEmulationUsageForRequestCommitsOnlyAfterSuccess(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	account := &Account{ID: 1733, Platform: PlatformKiro, Type: AccountTypeOAuth}
+	group := kiroCacheGroup(1)
+	body := kiroCacheManyMessageBodyWithoutControl("success-only-commit", 12, 0)
+
+	failedAttempt := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if failedAttempt == nil || failedAttempt.CacheCreationInputTokens <= 0 || failedAttempt.CacheReadInputTokens != 0 {
+		t.Fatalf("first prepared attempt should be a cache creation, got %+v", failedAttempt)
+	}
+
+	// Simulate a 429/empty stream by deliberately not committing the first
+	// attempt. The next attempt must not observe a synthetic cache hit.
+	retryAttempt := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if retryAttempt == nil || retryAttempt.CacheCreationInputTokens <= 0 || retryAttempt.CacheReadInputTokens != 0 {
+		t.Fatalf("failed attempt must not warm cache, got %+v", retryAttempt)
+	}
+
+	svc.commitKiroCacheEmulationUsage(ctx, retryAttempt)
+	afterSuccess := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 20000)
+	if afterSuccess == nil || afterSuccess.CacheReadInputTokens <= 0 {
+		t.Fatalf("successful terminal response should warm cache, got %+v", afterSuccess)
 	}
 }
 

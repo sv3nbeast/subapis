@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	kiroRestAPIBaseURL              = "https://codewhisperer.us-east-1.amazonaws.com"
 	kiroListAvailableProfilesTarget = "AmazonCodeWhispererService.ListAvailableProfiles"
 	kiroProfileResolveMaxAttempts   = 3
 	kiroProfileResolveBodyByteSize  = 2 << 20

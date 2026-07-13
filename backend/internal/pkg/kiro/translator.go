@@ -152,15 +152,32 @@ type KiroRequestContext struct {
 	EmptyInputToolNames map[string]bool
 	ThinkingEnabled     bool
 	CacheEmulationUsage *Usage
-	// InputTokenBudget estimates the complete serialized Kiro payload sent
-	// upstream, bounded by ContextWindowTokens. It keeps fallback/cache-emulation
-	// usage aligned with the wire request without silently removing any
-	// caller-provided conversation history.
+	// PayloadInputTokenEstimate is the unbounded tokenizer estimate of the exact
+	// serialized Kiro payload. Keep it separate from InputTokenBudget so a
+	// dynamically discovered context window can replace a stale static fallback
+	// without losing the original estimate.
+	PayloadInputTokenEstimate int
+	// InputTokenBudget is the local serialized-payload bound, capped by
+	// ContextWindowTokens. Exact tokenUsage keeps the existing protection and
+	// fallback estimates use it, while upstream contextUsagePercentage may
+	// override it because the local tokenizer cannot observe all model context.
 	InputTokenBudget int
+	// SemanticInputTokenBudget is the model-facing estimate calculated from the
+	// Anthropic prompt content. It is a fallback only when Kiro supplies neither
+	// exact input usage nor contextUsagePercentage; it must not override either
+	// upstream-derived source.
+	SemanticInputTokenBudget int
 	// ContextWindowTokens is the model's actual Kiro context capacity. It is
 	// used only for usage reconciliation and hard billing bounds; it never
 	// causes local conversation truncation.
-	ContextWindowTokens      int
+	ContextWindowTokens int
+	// ContextWindowSource is "upstream_model_metadata" when the limit came from
+	// ListAvailableModels and "static_fallback" otherwise.
+	ContextWindowSource string
+	// BodyAttempt is zero for the first response body and increments only when an
+	// empty/invalid stream is reopened. It is diagnostic metadata and never
+	// participates in usage arithmetic.
+	BodyAttempt              int
 	RequireTerminalEvent     bool
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
@@ -398,6 +415,7 @@ func contextWindowTokensForModel(model string) int {
 	}
 	switch normalizeModelAlias(normalized) {
 	case "claude-sonnet-5", "claude-sonnet-5.0",
+		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
 		"claude-opus-4-7", "claude-opus-4.7",
 		"claude-opus-4-8", "claude-opus-4.8":
@@ -544,6 +562,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	requestCtx := KiroRequestContext{
 		ToolNameMap:         map[string]string{},
 		ContextWindowTokens: contextWindowTokens,
+		ContextWindowSource: "static_fallback",
 	}
 	origin := strings.TrimSpace(options.Origin)
 	if origin == "" {
@@ -705,7 +724,8 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	if err != nil {
 		return nil, err
 	}
-	requestCtx.InputTokenBudget = estimateKiroPayloadInputTokens(payloadBytes)
+	requestCtx.PayloadInputTokenEstimate = estimateKiroPayloadInputTokens(payloadBytes)
+	requestCtx.InputTokenBudget = requestCtx.PayloadInputTokenEstimate
 	if requestCtx.ContextWindowTokens > 0 && requestCtx.InputTokenBudget > requestCtx.ContextWindowTokens {
 		// This is a billing/usage bound only. The complete payload above remains
 		// untouched and Kiro decides whether it fits the real model context.
@@ -719,11 +739,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
-	usage = reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
-	}
-	usage = constrainKiroUsageToInputBudget(usage, requestCtx.InputTokenBudget)
+	usage = finalizeKiroUsageForRequest(usage, requestCtx)
 	return &ParseResult{
 		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
 		Usage:        usage,
@@ -809,11 +825,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if messageStartSent {
 			return nil
 		}
-		startUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
-		if requestCtx.CacheEmulationUsage != nil {
-			startUsage = mergeKiroCacheEmulationUsage(startUsage, requestCtx.CacheEmulationUsage)
-		}
-		startUsage = constrainKiroUsageToInputBudget(startUsage, requestCtx.InputTokenBudget)
+		startUsage := finalizeKiroUsageForRequest(usage, requestCtx)
 		usageMap := map[string]any{
 			"input_tokens":  startUsage.InputTokens,
 			"output_tokens": 0,
@@ -1578,11 +1590,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
-	usage = reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
-	if requestCtx.CacheEmulationUsage != nil {
-		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
-	}
-	usage = constrainKiroUsageToInputBudget(usage, requestCtx.InputTokenBudget)
+	usage = finalizeKiroUsageForRequest(usage, requestCtx)
 	if stopReason == "" {
 		if len(emittedToolContents) > 0 {
 			stopReason = "tool_use"
@@ -5229,6 +5237,19 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	return base
 }
 
+// finalizeKiroUsageForRequest deliberately merges the locally simulated cache
+// buckets before applying contextUsagePercentage. Kiro reports the percentage
+// for the complete model context, so any resulting increase or decrease must be
+// distributed across the existing uncached/read/creation buckets instead of
+// being assigned entirely to ordinary input tokens.
+func finalizeKiroUsageForRequest(usage Usage, requestCtx KiroRequestContext) Usage {
+	if requestCtx.CacheEmulationUsage != nil {
+		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
+	}
+	usage = reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
+	return constrainKiroUsageToRequestBudget(usage, requestCtx)
+}
+
 func constrainKiroUsageToInputBudget(usage Usage, budget int) Usage {
 	if budget <= 0 || kiroUsageInputBucketTotal(usage) <= budget {
 		return usage
@@ -5244,6 +5265,23 @@ func constrainKiroUsageToInputBudget(usage Usage, budget int) Usage {
 	return normalized
 }
 
+func constrainKiroUsageToRequestBudget(usage Usage, requestCtx KiroRequestContext) Usage {
+	budget := requestCtx.InputTokenBudget
+	// Exact tokenUsage and contextUsagePercentage are upstream-derived sources.
+	// The semantic counter is only a fallback when both are absent; applying it
+	// to context-derived usage would recreate the 200K/1M undercounting defect.
+	if usage.InputTokensFromContext {
+		// contextUsagePercentage has already been clamped to the upstream model's
+		// context window. A local tokenizer estimate is lower priority and must not
+		// shrink it back to the stale value that dynamic model metadata corrected.
+		budget = requestCtx.ContextWindowTokens
+	} else if !usage.InputTokensFromUpstream && requestCtx.SemanticInputTokenBudget > 0 &&
+		(budget <= 0 || requestCtx.SemanticInputTokenBudget < budget) {
+		budget = requestCtx.SemanticInputTokenBudget
+	}
+	return constrainKiroUsageToInputBudget(usage, budget)
+}
+
 func reconcileKiroUsageWithContext(usage Usage, contextWindowTokens int) Usage {
 	if usage.InputTokensFromUpstream || !usage.HasContextUsage || contextWindowTokens <= 0 {
 		return usage
@@ -5257,14 +5295,98 @@ func reconcileKiroUsageWithContext(usage Usage, contextWindowTokens int) Usage {
 	if inputTokens <= 0 {
 		return usage
 	}
-	normalized := normalizeKiroCacheEmulationUsage(Usage{InputTokens: inputTokens}, usage)
+	normalized := rescaleKiroUsageInputBuckets(usage, inputTokens)
 	normalized.OutputTokens = usage.OutputTokens
 	normalized.KiroCredits = usage.KiroCredits
+	normalized.InputTokensFromUpstream = false
 	normalized.InputTokensFromContext = true
 	normalized.HasContextUsage = true
 	normalized.ContextUsagePercentage = usage.ContextUsagePercentage
 	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
 	return normalized
+}
+
+// rescaleKiroUsageInputBuckets preserves the simulated cache proportions while
+// making the three input buckets sum exactly to target. Integer allocation uses
+// largest remainders so rounding never creates or loses a billable token.
+func rescaleKiroUsageInputBuckets(usage Usage, target int) Usage {
+	normalized := usage
+	if target <= 0 {
+		normalized.InputTokens = 0
+		normalized.CacheReadInputTokens = 0
+		normalized.CacheCreationInputTokens = 0
+		normalized.CacheCreation5mInputTokens = 0
+		normalized.CacheCreation1hInputTokens = 0
+		normalized.TotalTokens = normalized.OutputTokens
+		return normalized
+	}
+
+	scaled := proportionalKiroUsageBuckets([]int{
+		usage.InputTokens,
+		usage.CacheReadInputTokens,
+		usage.CacheCreationInputTokens,
+	}, target)
+	normalized.InputTokens = scaled[0]
+	normalized.CacheReadInputTokens = scaled[1]
+	normalized.CacheCreationInputTokens = scaled[2]
+
+	if normalized.CacheCreationInputTokens <= 0 {
+		normalized.CacheCreation5mInputTokens = 0
+		normalized.CacheCreation1hInputTokens = 0
+	} else if usage.CacheCreation5mInputTokens > 0 || usage.CacheCreation1hInputTokens > 0 {
+		creation := proportionalKiroUsageBuckets([]int{
+			usage.CacheCreation5mInputTokens,
+			usage.CacheCreation1hInputTokens,
+		}, normalized.CacheCreationInputTokens)
+		normalized.CacheCreation5mInputTokens = creation[0]
+		normalized.CacheCreation1hInputTokens = creation[1]
+	} else {
+		normalized.CacheCreation5mInputTokens = 0
+		normalized.CacheCreation1hInputTokens = 0
+	}
+	normalized.TotalTokens = target + normalized.OutputTokens
+	return normalized
+}
+
+func proportionalKiroUsageBuckets(values []int, target int) []int {
+	result := make([]int, len(values))
+	if len(values) == 0 || target <= 0 {
+		return result
+	}
+	total := int64(0)
+	for _, value := range values {
+		if value > 0 {
+			total += int64(value)
+		}
+	}
+	if total <= 0 {
+		result[0] = target
+		return result
+	}
+
+	remainders := make([]int64, len(values))
+	allocated := 0
+	for index, value := range values {
+		if value <= 0 {
+			remainders[index] = -1
+			continue
+		}
+		product := int64(value) * int64(target)
+		result[index] = int(product / total)
+		remainders[index] = product % total
+		allocated += result[index]
+	}
+	for remaining := target - allocated; remaining > 0; remaining-- {
+		best := 0
+		for index := 1; index < len(remainders); index++ {
+			if remainders[index] > remainders[best] {
+				best = index
+			}
+		}
+		result[best]++
+		remainders[best] = -1
+	}
+	return result
 }
 
 func estimateKiroPayloadInputTokens(payload []byte) int {

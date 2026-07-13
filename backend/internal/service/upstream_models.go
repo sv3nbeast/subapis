@@ -118,15 +118,33 @@ func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Cont
 		return nil, newUpstreamModelSyncConfigError("No Kiro access token is available", nil)
 	}
 
-	endpoint := strings.TrimRight(resolveKiroRestEndpoint(), "/")
+	req, err := newKiroAvailableModelsRequest(ctx, account, token, nextToken)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list request", err)
+	}
+	return req, nil
+}
+
+// newKiroAvailableModelsRequest is shared by admin model sync and gateway
+// context-window discovery. ListAvailableModels is regional on Amazon Q; using
+// the historical fixed CodeWhisperer us-east-1 REST host returns 400/403 for
+// IDC/profile accounts in regions such as eu-central-1.
+func newKiroAvailableModelsRequest(ctx context.Context, account *Account, token, nextToken string) (*http.Request, error) {
+	if account == nil {
+		return nil, fmt.Errorf("Kiro account is required")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("Kiro access token is required")
+	}
+	endpoint := strings.TrimRight(kiroRuntimeEndpoint(kiroUpstreamModelsRegion(account)), "/")
 	reqURL, err := url.Parse(endpoint + "/ListAvailableModels")
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list URL", err)
+		return nil, err
 	}
 	q := reqURL.Query()
 	q.Set("origin", kiroUsageOrigin)
 	q.Set("maxResults", "50")
-	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" {
+	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
 		q.Set("profileArn", profileArn)
 	}
 	if nextToken = strings.TrimSpace(nextToken); nextToken != "" {
@@ -136,7 +154,7 @@ func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Cont
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Kiro model list request", err)
+		return nil, err
 	}
 	applyKiroRestHeaders(req, account, token)
 	return req, nil
@@ -150,6 +168,9 @@ func kiroUpstreamModelsRegion(account *Account) string {
 		return region
 	}
 	if region := kiroRegionFromProfileArn(account.GetCredential("profile_arn")); region != "" {
+		return region
+	}
+	if region := strings.TrimSpace(account.GetCredential("region")); region != "" {
 		return region
 	}
 	return kiroDefaultRegion
@@ -617,10 +638,15 @@ func buildGeminiModelsURL(base string) string {
 }
 
 type upstreamModelEntry struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ModelID   string `json:"modelId"`
-	ModelName string `json:"modelName"`
+	ID          string                   `json:"id"`
+	Name        string                   `json:"name"`
+	ModelID     string                   `json:"modelId"`
+	ModelName   string                   `json:"modelName"`
+	TokenLimits upstreamModelTokenLimits `json:"tokenLimits"`
+}
+
+type upstreamModelTokenLimits struct {
+	MaxInputTokens int `json:"maxInputTokens"`
 }
 
 type upstreamModelPage struct {

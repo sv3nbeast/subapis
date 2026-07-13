@@ -26,7 +26,6 @@ const (
 
 var (
 	resolveKiroRuntimeEndpoint = kiroRuntimeEndpoint
-	resolveKiroRestEndpoint    = func() string { return kiroRestAPIBaseURL }
 )
 
 type kiroUsageLimitsResponse struct {

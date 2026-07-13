@@ -106,7 +106,7 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 }
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
-	ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer,
+	ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, w io.Writer,
 ) error {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
@@ -145,7 +145,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return &kiroWebSearchHTTPError{Response: resp}
 		}
-		effectiveInputTokens := kiroInputTokenBudget(requestCtx, inputTokens)
+		semanticInputTokens := estimateKiroInputTokens(currentBody)
+		effectiveInputTokens := kiroInputTokenBudgetForBody(&requestCtx, currentBody, semanticInputTokens)
 		if !messageStartSent {
 			cacheUsage = s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, effectiveInputTokens)
 			if err := writeAnthropicMessageStart(w, "", mappedModel, effectiveInputTokens, cacheUsage); err != nil {
@@ -196,6 +197,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				return err
 			}
 		}
+		s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
 		return nil
 	}
 
@@ -249,7 +251,8 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, &kiroWebSearchHTTPError{Response: resp}
 		}
-		effectiveInputTokens = kiroInputTokenBudget(requestCtx, inputTokens)
+		semanticInputTokens := estimateKiroInputTokens(currentBody)
+		effectiveInputTokens = kiroInputTokenBudgetForBody(&requestCtx, currentBody, semanticInputTokens)
 
 		parseResult, parseErr := func() (*kiropkg.ParseResult, error) {
 			defer func() { _ = resp.Body.Close() }()
@@ -273,6 +276,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			if injectErr == nil {
 				parseResult.ResponseBody = finalBody
 			}
+			s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
 			return &kiroWebSearchExecution{
 				ResponseBody: parseResult.ResponseBody,
 				Usage:        kiroUsageToClaude(parseResult.Usage, effectiveInputTokens),
