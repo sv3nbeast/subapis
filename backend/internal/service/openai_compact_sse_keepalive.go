@@ -34,7 +34,9 @@ type openAICompactSSEKeepalive struct {
 }
 
 // StartOpenAICompactSSEKeepalive 为已标记 body-signal 客户端流式的 compact
-// 请求启动下游心跳，返回幂等的停止函数。interval<=0 或请求未标记时为 no-op。
+// 请求启动下游心跳，返回幂等的停止函数。停止函数同时恢复原 ResponseWriter，
+// 避免外层中间件在内层池化 writer 释放后仍通过本包装器访问它。
+// interval<=0 或请求未标记时为 no-op。
 //
 // 同时把 c.Writer 替换为 openAICompactKeepaliveWriter：请求 goroutine 的任何
 // 响应构造都会先在心跳互斥锁下停拍，未被显式拦截的写回路径（如 Forward
@@ -48,7 +50,8 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 		stop:   make(chan struct{}),
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
-	c.Writer = &openAICompactKeepaliveWriter{ResponseWriter: c.Writer, k: k}
+	w := &openAICompactKeepaliveWriter{ResponseWriter: c.Writer, k: k}
+	c.Writer = w
 
 	var reqDone <-chan struct{}
 	if c.Request != nil {
@@ -71,7 +74,15 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 			timer.Reset(interval)
 		}
 	}()
-	return k.Stop
+	return func() {
+		k.Stop()
+		// Only undo our own wrapper. A later response writer replacement must
+		// remain intact, while the normal handler defer path restores the writer
+		// before outer middlewares resume after c.Next().
+		if c.Writer == w {
+			c.Writer = w.ResponseWriter
+		}
+	}
 }
 
 // beat 在锁内提交（首次）响应头并写出一条 SSE 注释行；返回 false 表示心跳已

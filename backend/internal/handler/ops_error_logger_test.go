@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -13,6 +14,29 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpsCaptureWriterIsRestoredAfterCompactKeepalive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	outerStatus := 0
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		outerStatus = c.Writer.Status()
+	})
+	router.Use(OpsErrorLoggerMiddleware(nil))
+	router.GET("/compact", func(c *gin.Context) {
+		service.MarkOpenAICompactClientStream(c)
+		stop := service.StartOpenAICompactSSEKeepalive(c, time.Hour)
+		defer stop()
+		c.Status(http.StatusNoContent)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/compact", nil)
+	require.NotPanics(t, func() { router.ServeHTTP(rec, req) })
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Equal(t, http.StatusNoContent, outerStatus)
+}
 
 func TestApplyOpsIdentityFieldsFromContext_PrefersAPIKeyAndFallsBackToSubject(t *testing.T) {
 	gin.SetMode(gin.TestMode)

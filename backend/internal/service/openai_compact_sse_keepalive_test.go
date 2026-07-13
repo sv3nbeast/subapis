@@ -63,11 +63,25 @@ func TestOpenAICompactSSEKeepalive_CommitsHeadersAndComments(t *testing.T) {
 
 func TestOpenAICompactSSEKeepalive_StopBeforeFirstBeatKeepsWriterUntouched(t *testing.T) {
 	c, rec := newCompactBridgeTestContext(t, true)
+	originalWriter := c.Writer
 	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
+	require.NotSame(t, originalWriter, c.Writer)
 	stop()
 	waitForKeepaliveBeats()
+	require.Same(t, originalWriter, c.Writer, "stop must restore the writer before outer middlewares resume")
 	require.Zero(t, rec.Body.Len())
 	require.False(t, StopOpenAICompactSSEKeepaliveCommitted(c))
+}
+
+func TestOpenAICompactSSEKeepalive_StopDoesNotOverwriteLaterWriter(t *testing.T) {
+	c, _ := newCompactBridgeTestContext(t, true)
+	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
+	laterWriter := &openAICompactKeepaliveWriter{ResponseWriter: c.Writer, k: &openAICompactSSEKeepalive{stop: make(chan struct{})}}
+	c.Writer = laterWriter
+
+	stop()
+
+	require.Same(t, laterWriter, c.Writer, "stop must not replace a writer installed after the keepalive wrapper")
 }
 
 // 心跳已提交后，2xx 桥接续写事件而不重复提交响应头。
