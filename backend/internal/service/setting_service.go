@@ -1100,6 +1100,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyPublicModelMarketEnabled,
+		SettingKeyPublicModelMarketReferenceUSDCNYRate,
+		SettingKeyPublicModelMarketSettlementUSDCNYRate,
 		SettingKeyWebChatEnabled,
 		SettingKeyWebChatProjectsEnabled,
 		SettingKeyWebChatTemplatesEnabled,
@@ -1215,8 +1217,10 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorEnabled:                !isFalseSettingValue(settings[SettingKeyChannelMonitorEnabled]),
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
-		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
-		PublicModelMarketEnabled: settings[SettingKeyPublicModelMarketEnabled] == "true",
+		AvailableChannelsEnabled:              settings[SettingKeyAvailableChannelsEnabled] == "true",
+		PublicModelMarketEnabled:              settings[SettingKeyPublicModelMarketEnabled] == "true",
+		PublicModelMarketReferenceUSDCNYRate:  parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketReferenceUSDCNYRate], publicModelMarketReferenceUSDCNYRateDefault),
+		PublicModelMarketSettlementUSDCNYRate: parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketSettlementUSDCNYRate], publicModelMarketSettlementUSDCNYRateDefault),
 
 		WebChatEnabled:          settings[SettingKeyWebChatEnabled] == "true",
 		WebChatProjectsEnabled:  settings[SettingKeyWebChatProjectsEnabled] == "true",
@@ -1238,6 +1242,27 @@ const (
 	channelMonitorIntervalMax      = 3600
 	channelMonitorIntervalFallback = 60
 )
+
+const (
+	publicModelMarketReferenceUSDCNYRateDefault  = 7.2
+	publicModelMarketSettlementUSDCNYRateDefault = 1.0
+	publicModelMarketRateMax                     = 100.0
+)
+
+func parsePublicModelMarketRate(raw string, fallback float64) float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return fallback
+	}
+	return normalizePublicModelMarketRate(value, fallback)
+}
+
+func normalizePublicModelMarketRate(value, fallback float64) float64 {
+	if value <= 0 || value > publicModelMarketRateMax || math.IsNaN(value) || math.IsInf(value, 0) {
+		return fallback
+	}
+	return value
+}
 
 const (
 	proxyAutoSelectLimitMin = 1
@@ -1958,17 +1983,19 @@ type PublicSettingsInjectionPayload struct {
 	// Feature flags — MUST match the opt-in/opt-out registry in
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
 	// that hid the "可用渠道" menu on page refresh.
-	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
-	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
-	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
-	PublicModelMarketEnabled             bool `json:"public_model_market_enabled"`
-	WebChatEnabled                       bool `json:"web_chat_enabled"`
-	WebChatProjectsEnabled               bool `json:"web_chat_projects_enabled"`
-	WebChatTemplatesEnabled              bool `json:"web_chat_templates_enabled"`
-	WebChatHistoryEnabled                bool `json:"web_chat_history_enabled"`
-	AffiliateEnabled                     bool `json:"affiliate_enabled"`
-	RiskControlEnabled                   bool `json:"risk_control_enabled"`
-	AllowUserViewErrorRequests           bool `json:"allow_user_view_error_requests"`
+	ChannelMonitorEnabled                 bool    `json:"channel_monitor_enabled"`
+	ChannelMonitorDefaultIntervalSeconds  int     `json:"channel_monitor_default_interval_seconds"`
+	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
+	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
+	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
+	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
+	WebChatEnabled                        bool    `json:"web_chat_enabled"`
+	WebChatProjectsEnabled                bool    `json:"web_chat_projects_enabled"`
+	WebChatTemplatesEnabled               bool    `json:"web_chat_templates_enabled"`
+	WebChatHistoryEnabled                 bool    `json:"web_chat_history_enabled"`
+	AffiliateEnabled                      bool    `json:"affiliate_enabled"`
+	RiskControlEnabled                    bool    `json:"risk_control_enabled"`
+	AllowUserViewErrorRequests            bool    `json:"allow_user_view_error_requests"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -2029,17 +2056,19 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		BalanceLowNotifyThreshold:        settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:      settings.BalanceLowNotifyRechargeURL,
 
-		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
-		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
-		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
-		PublicModelMarketEnabled:             settings.PublicModelMarketEnabled,
-		WebChatEnabled:                       settings.WebChatEnabled,
-		WebChatProjectsEnabled:               settings.WebChatProjectsEnabled,
-		WebChatTemplatesEnabled:              settings.WebChatTemplatesEnabled,
-		WebChatHistoryEnabled:                settings.WebChatHistoryEnabled,
-		AffiliateEnabled:                     settings.AffiliateEnabled,
-		RiskControlEnabled:                   settings.RiskControlEnabled,
-		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,
+		ChannelMonitorEnabled:                 settings.ChannelMonitorEnabled,
+		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
+		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
+		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
+		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
+		WebChatEnabled:                        settings.WebChatEnabled,
+		WebChatProjectsEnabled:                settings.WebChatProjectsEnabled,
+		WebChatTemplatesEnabled:               settings.WebChatTemplatesEnabled,
+		WebChatHistoryEnabled:                 settings.WebChatHistoryEnabled,
+		AffiliateEnabled:                      settings.AffiliateEnabled,
+		RiskControlEnabled:                    settings.RiskControlEnabled,
+		AllowUserViewErrorRequests:            settings.AllowUserViewErrorRequests,
 	}, nil
 }
 
@@ -2702,6 +2731,12 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Public model market feature switch
 	updates[SettingKeyPublicModelMarketEnabled] = strconv.FormatBool(settings.PublicModelMarketEnabled)
+	updates[SettingKeyPublicModelMarketReferenceUSDCNYRate] = strconv.FormatFloat(
+		normalizePublicModelMarketRate(settings.PublicModelMarketReferenceUSDCNYRate, publicModelMarketReferenceUSDCNYRateDefault), 'f', -1, 64,
+	)
+	updates[SettingKeyPublicModelMarketSettlementUSDCNYRate] = strconv.FormatFloat(
+		normalizePublicModelMarketRate(settings.PublicModelMarketSettlementUSDCNYRate, publicModelMarketSettlementUSDCNYRateDefault), 'f', -1, 64,
+	)
 
 	// Web chat feature switch
 	updates[SettingKeyWebChatEnabled] = strconv.FormatBool(settings.WebChatEnabled)
@@ -3774,7 +3809,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAvailableChannelsEnabled: "false",
 
 		// Public model market feature (default disabled; opt-in)
-		SettingKeyPublicModelMarketEnabled: "false",
+		SettingKeyPublicModelMarketEnabled:              "false",
+		SettingKeyPublicModelMarketReferenceUSDCNYRate:  "7.2",
+		SettingKeyPublicModelMarketSettlementUSDCNYRate: "1",
 
 		// Web chat feature (default disabled; opt-in)
 		SettingKeyWebChatEnabled:          "false",
@@ -4245,6 +4282,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Public model market feature (default: disabled; strict true)
 	result.PublicModelMarketEnabled = settings[SettingKeyPublicModelMarketEnabled] == "true"
+	result.PublicModelMarketReferenceUSDCNYRate = parsePublicModelMarketRate(
+		settings[SettingKeyPublicModelMarketReferenceUSDCNYRate], publicModelMarketReferenceUSDCNYRateDefault,
+	)
+	result.PublicModelMarketSettlementUSDCNYRate = parsePublicModelMarketRate(
+		settings[SettingKeyPublicModelMarketSettlementUSDCNYRate], publicModelMarketSettlementUSDCNYRateDefault,
+	)
 
 	// Web chat feature (default: disabled; strict true)
 	result.WebChatEnabled = settings[SettingKeyWebChatEnabled] == "true"

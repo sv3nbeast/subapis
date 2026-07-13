@@ -326,8 +326,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
-		PublicModelMarketEnabled: settings.PublicModelMarketEnabled,
+		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
+		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
+		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
 
 		WebChatEnabled:          settings.WebChatEnabled,
 		WebChatProjectsEnabled:  settings.WebChatProjectsEnabled,
@@ -690,7 +692,9 @@ type UpdateSettingsRequest struct {
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
 
 	// Public Model Market feature switch (anonymous)
-	PublicModelMarketEnabled *bool `json:"public_model_market_enabled"`
+	PublicModelMarketEnabled              *bool    `json:"public_model_market_enabled"`
+	PublicModelMarketReferenceUSDCNYRate  *float64 `json:"public_model_market_reference_usd_cny_rate"`
+	PublicModelMarketSettlementUSDCNYRate *float64 `json:"public_model_market_settlement_usd_cny_rate"`
 
 	// Web Chat feature switch (user-facing)
 	WebChatEnabled          *bool `json:"web_chat_enabled"`
@@ -1851,6 +1855,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.PublicModelMarketEnabled
 		}(),
+		PublicModelMarketReferenceUSDCNYRate: func() float64 {
+			if req.PublicModelMarketReferenceUSDCNYRate != nil {
+				return *req.PublicModelMarketReferenceUSDCNYRate
+			}
+			return previousSettings.PublicModelMarketReferenceUSDCNYRate
+		}(),
+		PublicModelMarketSettlementUSDCNYRate: func() float64 {
+			if req.PublicModelMarketSettlementUSDCNYRate != nil {
+				return *req.PublicModelMarketSettlementUSDCNYRate
+			}
+			return previousSettings.PublicModelMarketSettlementUSDCNYRate
+		}(),
 		WebChatEnabled: func() bool {
 			if req.WebChatEnabled != nil {
 				return *req.WebChatEnabled
@@ -2226,8 +2242,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
-		PublicModelMarketEnabled: updatedSettings.PublicModelMarketEnabled,
+		AvailableChannelsEnabled:              updatedSettings.AvailableChannelsEnabled,
+		PublicModelMarketEnabled:              updatedSettings.PublicModelMarketEnabled,
+		PublicModelMarketReferenceUSDCNYRate:  updatedSettings.PublicModelMarketReferenceUSDCNYRate,
+		PublicModelMarketSettlementUSDCNYRate: updatedSettings.PublicModelMarketSettlementUSDCNYRate,
 
 		WebChatEnabled:          updatedSettings.WebChatEnabled,
 		WebChatProjectsEnabled:  updatedSettings.WebChatProjectsEnabled,
@@ -2734,6 +2752,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.PublicModelMarketEnabled != after.PublicModelMarketEnabled {
 		changed = append(changed, "public_model_market_enabled")
+	}
+	if before.PublicModelMarketReferenceUSDCNYRate != after.PublicModelMarketReferenceUSDCNYRate {
+		changed = append(changed, "public_model_market_reference_usd_cny_rate")
+	}
+	if before.PublicModelMarketSettlementUSDCNYRate != after.PublicModelMarketSettlementUSDCNYRate {
+		changed = append(changed, "public_model_market_settlement_usd_cny_rate")
 	}
 	if before.WebChatEnabled != after.WebChatEnabled {
 		changed = append(changed, "web_chat_enabled")

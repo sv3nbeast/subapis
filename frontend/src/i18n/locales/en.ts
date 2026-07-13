@@ -1730,12 +1730,21 @@ export default {
     navLabel: 'Model Market',
     viewModelsAndPricing: 'Models & pricing',
     home: 'Home',
-    eyebrow: 'Public models and reference pricing',
+    eyebrow: 'Public models and USD-equivalent pricing',
     title: 'Model Market',
-    description: 'Explore publicly available models, billing modes, reference pricing, and service groups before creating an account.',
-    referencePriceHint: 'Prices and group multipliers are references. Usage tiers and peak multipliers may affect the final charge; the final bill prevails.',
+    description: 'Browse public models by model family with USD-equivalent prices, billing multipliers, and available groups. Internal upstream routes stay private.',
+    referencePriceHint: 'Site prices are settlement costs converted to USD equivalents using reference rate {reference} and settlement ratio {settlement}. These settings affect display only; the final bill prevails.',
     retry: 'Retry',
     loadError: 'Failed to load the model market',
+    usdEquivalent: 'USD equivalent',
+    officialShort: 'Official {price}',
+    maxSavings: 'Save up to ~{percent}%',
+    saves: 'Save ~{percent}%',
+    savingsHint: 'Calculated consistently from reference rate {reference} and settlement ratio {settlement}; this is separate from the group multiplier.',
+    billingRate: 'Billing {rate}',
+    billingRateRange: 'Rates {min}–{max}',
+    viewDetails: 'Group prices',
+    collapseDetails: 'Hide group prices',
     actions: {
       login: 'Sign in to use',
       register: 'Create account',
@@ -1744,12 +1753,15 @@ export default {
     stats: {
       models: 'Public models',
       groups: 'Public groups',
-      platforms: 'Platforms'
+      families: 'Model families'
     },
     filters: {
-      search: 'Search models, platforms, or groups...',
-      allPlatforms: 'All platforms',
+      search: 'Search models, families, or groups...',
+      allFamilies: 'All model families',
       allBillingModes: 'All billing modes'
+    },
+    families: {
+      other: 'Other models'
     },
     billing: {
       token: 'Per token',
@@ -1759,8 +1771,8 @@ export default {
     },
     prices: {
       status: 'Price status',
-      input: 'Input reference',
-      output: 'Output reference',
+      input: 'Site input / 1M',
+      output: 'Site output / 1M',
       cacheRead: 'Cache read',
       cacheWrite: 'Cache write',
       perRequest: 'Per request',
@@ -1769,11 +1781,20 @@ export default {
     groupOffers: '{count} public groups',
     subscription: 'Subscription group',
     payAsYouGo: 'Pay-as-you-go group',
-    peakRate: 'Peak multiplier: {window}',
+    peakRateEffective: 'Peak rule: {window} · effective rate {rate}',
     offerPrice: {
-      token: 'Reference: input {input} / output {output} per 1M tokens',
-      perRequest: 'Reference: {price} per request',
-      perImage: 'Reference: {price} per image'
+      token: 'Site equivalent: input {input} / output {output} per 1M tokens',
+      perRequest: 'Site equivalent: {price} per request',
+      perImage: 'Site equivalent: {price} per image'
+    },
+    officialPrice: {
+      token: 'Official reference: input {input} / output {output} per 1M tokens',
+      perRequest: 'Official reference: {price} per request',
+      perImage: 'Official reference: {price} per image'
+    },
+    cache: {
+      read: 'Cache read {price}/1M',
+      write: 'Cache write {price}/1M'
     },
     tieredPricing: 'Tiered pricing (input / output)',
     empty: {
@@ -6944,7 +6965,11 @@ export default {
           description: 'Publish models, reference prices, and default multipliers from non-exclusive groups to signed-out visitors. Disabled by default.',
           configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
           enabled: 'Enable Public Model Market',
-          enabledHint: 'When enabled, the home page links to an anonymous catalog. Exclusive groups and internal channel details remain private.'
+          enabledHint: 'When enabled, the home page links to an anonymous catalog. Exclusive groups and internal channel details remain private.',
+          referenceRate: 'Reference USD/CNY rate',
+          referenceRateHint: 'Converts settlement cost into a USD-equivalent catalog price and savings percentage. Display only.',
+          settlementRate: 'Settlement USD/CNY ratio',
+          settlementRateHint: 'CNY settlement cost represented by each USD billing unit. Enter 1 for the current 1:1 settlement rule.'
         },
         webChat: {
           title: 'Web Chat',

@@ -182,7 +182,9 @@ type SystemSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Public Model Market feature (anonymous model and pricing catalog)
-	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
+	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
+	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
+	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
 
 	// Web Chat feature (user-facing chat workbench)
 	WebChatEnabled          bool `json:"web_chat_enabled"`
@@ -340,7 +342,9 @@ type PublicSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Public Model Market feature (anonymous model and pricing catalog)
-	PublicModelMarketEnabled bool `json:"public_model_market_enabled"`
+	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
+	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
+	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
 
 	// Web Chat feature (user-facing chat workbench)
 	WebChatEnabled          bool `json:"web_chat_enabled"`

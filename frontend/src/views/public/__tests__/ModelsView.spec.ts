@@ -16,6 +16,8 @@ const { getPublicModels, authStore, appStore } = vi.hoisted(() => ({
       site_name: 'Sub2API',
       site_logo: '',
       server_utc_offset: '+08:00',
+      public_model_market_reference_usd_cny_rate: 7.2,
+      public_model_market_settlement_usd_cny_rate: 1,
     },
   },
 }))
@@ -68,7 +70,6 @@ describe('public ModelsView', () => {
       groups: [
         {
           name: 'Claude Standard',
-          platform: 'anthropic',
           subscription_type: 'standard',
           rate_multiplier: 1,
           peak_rate_enabled: false,
@@ -77,7 +78,7 @@ describe('public ModelsView', () => {
           peak_rate_multiplier: 1,
           models: [{
             name: 'claude-sonnet-4-6',
-            platform: 'anthropic',
+            family: 'claude',
             pricing: {
               billing_mode: 'token', input_price: 0.000003, output_price: 0.000015,
               cache_write_price: null, cache_write_5m_price: null, cache_write_1h_price: null,
@@ -87,7 +88,6 @@ describe('public ModelsView', () => {
         },
         {
           name: 'Claude Subscription',
-          platform: 'anthropic',
           subscription_type: 'subscription',
           rate_multiplier: 0.8,
           peak_rate_enabled: true,
@@ -96,7 +96,7 @@ describe('public ModelsView', () => {
           peak_rate_multiplier: 1.2,
           models: [{
             name: 'claude-sonnet-4-6',
-            platform: 'anthropic',
+            family: 'claude',
             pricing: {
               billing_mode: 'token', input_price: 0.000003, output_price: 0.000015,
               cache_write_price: null, cache_write_5m_price: null, cache_write_1h_price: null,
@@ -116,13 +116,17 @@ describe('public ModelsView', () => {
     expect(wrapper.findAll('article')).toHaveLength(1)
     expect(wrapper.text()).toContain('claude-sonnet-4-6')
     expect(wrapper.text()).toContain('modelMarket.groupOffers:2')
+    expect(wrapper.text()).toContain('modelMarket.maxSavings:89')
+    expect(wrapper.text()).toContain('$0.33')
+    expect(wrapper.text()).not.toContain('Kiro')
 
-    const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.groupOffers'))
+    const offerButton = wrapper.findAll('button').find((button) => button.text().includes('modelMarket.viewDetails'))
     expect(offerButton).toBeTruthy()
     await offerButton!.trigger('click')
     expect(wrapper.text()).toContain('Claude Standard')
     expect(wrapper.text()).toContain('Claude Subscription')
     expect(wrapper.text()).toContain('UTC+08:00')
+    expect(wrapper.text()).toContain('modelMarket.saves:86')
   })
 
   it('filters models by search text', async () => {

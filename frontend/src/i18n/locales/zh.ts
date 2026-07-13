@@ -1660,12 +1660,21 @@ export default {
     navLabel: '模型广场',
     viewModelsAndPricing: '查看模型与价格',
     home: '首页',
-    eyebrow: '公开模型与参考价格',
+    eyebrow: '公开模型与 USD 等值价格',
     title: '模型广场',
-    description: '浏览当前公开提供的模型、计费方式、参考单价与可选分组。注册前即可了解服务范围。',
-    referencePriceHint: '页面展示配置的参考单价与分组倍率，实际费用还可能受到用量区间和高峰倍率影响，请以最终账单为准。',
+    description: '按模型系列浏览公开模型、USD 等值价格、计费倍率与可选分组；内部上游线路不会公开。',
+    referencePriceHint: '本站价为结算成本按参考换算率 {reference} 折算后的 USD 等值价，站内结算比例为 {settlement}；两项设置仅影响展示，实际费用以账单为准。',
     retry: '重试',
     loadError: '加载模型广场失败',
+    usdEquivalent: 'USD 等值价',
+    officialShort: '官方参考 {price}',
+    maxSavings: '最高约省 {percent}%',
+    saves: '约省 {percent}%',
+    savingsHint: '基于参考换算率 {reference} 与站内结算比例 {settlement} 统一计算，不等同于分组倍率。',
+    billingRate: '计费倍率 {rate}',
+    billingRateRange: '倍率 {min}–{max}',
+    viewDetails: '查看分组价格',
+    collapseDetails: '收起分组价格',
     actions: {
       login: '登录使用',
       register: '注册账号',
@@ -1674,12 +1683,15 @@ export default {
     stats: {
       models: '公开模型',
       groups: '公开分组',
-      platforms: '支持平台'
+      families: '模型系列'
     },
     filters: {
-      search: '搜索模型、平台或分组...',
-      allPlatforms: '全部平台',
+      search: '搜索模型、系列或分组...',
+      allFamilies: '全部模型系列',
       allBillingModes: '全部计费方式'
+    },
+    families: {
+      other: '其他模型'
     },
     billing: {
       token: '按 Token',
@@ -1689,8 +1701,8 @@ export default {
     },
     prices: {
       status: '价格状态',
-      input: '输入参考价',
-      output: '输出参考价',
+      input: '输入本站价 / 1M',
+      output: '输出本站价 / 1M',
       cacheRead: '缓存读取',
       cacheWrite: '缓存写入',
       perRequest: '每次请求',
@@ -1699,11 +1711,20 @@ export default {
     groupOffers: '{count} 个公开分组',
     subscription: '订阅分组',
     payAsYouGo: '标准计费分组',
-    peakRate: '高峰倍率：{window}',
+    peakRateEffective: '高峰规则：{window} · 有效倍率 {rate}',
     offerPrice: {
-      token: '参考单价：输入 {input} / 输出 {output}（每 1M Token）',
-      perRequest: '参考单价：{price} / 次',
-      perImage: '参考单价：{price} / 张'
+      token: '本站折算价：输入 {input} / 输出 {output}（每 1M Token）',
+      perRequest: '本站折算价：{price} / 次',
+      perImage: '本站折算价：{price} / 张'
+    },
+    officialPrice: {
+      token: '官方参考：输入 {input} / 输出 {output}（每 1M Token）',
+      perRequest: '官方参考：{price} / 次',
+      perImage: '官方参考：{price} / 张'
+    },
+    cache: {
+      read: '缓存读取 {price}/1M',
+      write: '缓存写入 {price}/1M'
     },
     tieredPricing: '阶梯价格（输入 / 输出）',
     empty: {
@@ -6934,7 +6955,11 @@ export default {
           description: '向未登录访客公开展示非专属分组关联的模型、参考价格和默认倍率。默认关闭。',
           configureLink: '前往 渠道管理 > 渠道定价 配置模型价格',
           enabled: '启用公开模型广场',
-          enabledHint: '启用后首页显示入口，匿名用户可访问公开模型目录；专属分组和内部渠道信息不会公开。'
+          enabledHint: '启用后首页显示入口，匿名用户可访问公开模型目录；专属分组和内部渠道信息不会公开。',
+          referenceRate: '参考 USD/CNY 汇率',
+          referenceRateHint: '用于把站内结算成本折算为 USD 等值价并计算节省比例，只影响模型广场展示。',
+          settlementRate: '站内结算 USD/CNY 比例',
+          settlementRateHint: '站内每 1 USD 计费单位对应的人民币结算成本。当前 1:1 结算请填写 1。'
         },
         webChat: {
           title: '网页对话',

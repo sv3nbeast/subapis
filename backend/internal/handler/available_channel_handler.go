@@ -128,15 +128,23 @@ type publicModelMarketResponse struct {
 }
 
 type publicModelMarketGroup struct {
-	Name               string               `json:"name"`
-	Platform           string               `json:"platform"`
-	SubscriptionType   string               `json:"subscription_type"`
-	RateMultiplier     float64              `json:"rate_multiplier"`
-	PeakRateEnabled    bool                 `json:"peak_rate_enabled"`
-	PeakStart          string               `json:"peak_start"`
-	PeakEnd            string               `json:"peak_end"`
-	PeakRateMultiplier float64              `json:"peak_rate_multiplier"`
-	Models             []userSupportedModel `json:"models"`
+	Name               string                   `json:"name"`
+	SubscriptionType   string                   `json:"subscription_type"`
+	RateMultiplier     float64                  `json:"rate_multiplier"`
+	PeakRateEnabled    bool                     `json:"peak_rate_enabled"`
+	PeakStart          string                   `json:"peak_start"`
+	PeakEnd            string                   `json:"peak_end"`
+	PeakRateMultiplier float64                  `json:"peak_rate_multiplier"`
+	Models             []publicModelMarketModel `json:"models"`
+}
+
+// publicModelMarketModel exposes the customer-facing model family rather than
+// the internal scheduling platform. In particular, Kiro/Droid/Antigravity are
+// implementation details and must never become anonymous catalog filters.
+type publicModelMarketModel struct {
+	Name    string                     `json:"name"`
+	Family  string                     `json:"family"`
+	Pricing *userSupportedModelPricing `json:"pricing"`
 }
 
 // ListPublicModels returns the anonymous model and pricing catalog.
@@ -164,7 +172,7 @@ func (h *AvailableChannelHandler) ListPublicModels(c *gin.Context) {
 
 type publicModelMarketGroupAccumulator struct {
 	group  service.AvailableGroupRef
-	models map[string]userSupportedModel
+	models map[string]publicModelMarketModel
 }
 
 func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicModelMarketGroup {
@@ -183,7 +191,7 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 			if entry == nil {
 				entry = &publicModelMarketGroupAccumulator{
 					group:  group,
-					models: make(map[string]userSupportedModel),
+					models: make(map[string]publicModelMarketModel),
 				}
 				byGroupID[group.ID] = entry
 			}
@@ -193,11 +201,12 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 				if name == "" || model.Platform != group.Platform {
 					continue
 				}
-				key := model.Platform + "\x00" + strings.ToLower(name)
-				candidate := userSupportedModel{
-					Name:     name,
-					Platform: model.Platform,
-					Pricing:  toUserPricing(model.Pricing),
+				family := publicModelFamily(name, model.Platform)
+				key := family + "\x00" + strings.ToLower(name)
+				candidate := publicModelMarketModel{
+					Name:    name,
+					Family:  family,
+					Pricing: toUserPricing(model.Pricing),
 				}
 				// ListAvailable is stably sorted by channel name. Keep the first
 				// configured price, but prefer a priced entry over an empty one.
@@ -211,11 +220,14 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 
 	out := make([]publicModelMarketGroup, 0, len(byGroupID))
 	for _, entry := range byGroupID {
-		models := make([]userSupportedModel, 0, len(entry.models))
+		models := make([]publicModelMarketModel, 0, len(entry.models))
 		for _, model := range entry.models {
 			models = append(models, model)
 		}
 		sort.SliceStable(models, func(i, j int) bool {
+			if models[i].Family != models[j].Family {
+				return models[i].Family < models[j].Family
+			}
 			return strings.ToLower(models[i].Name) < strings.ToLower(models[j].Name)
 		})
 		if len(models) == 0 {
@@ -225,7 +237,6 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 		group := entry.group
 		out = append(out, publicModelMarketGroup{
 			Name:               group.Name,
-			Platform:           group.Platform,
 			SubscriptionType:   group.SubscriptionType,
 			RateMultiplier:     group.RateMultiplier,
 			PeakRateEnabled:    group.PeakRateEnabled,
@@ -237,12 +248,41 @@ func buildPublicModelMarketGroups(channels []service.AvailableChannel) []publicM
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Platform != out[j].Platform {
-			return out[i].Platform < out[j].Platform
-		}
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
+}
+
+func publicModelFamily(modelName, internalPlatform string) string {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case strings.HasPrefix(name, "claude"):
+		return "claude"
+	case strings.HasPrefix(name, "gemini"), strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "veo"):
+		return "gemini"
+	case strings.HasPrefix(name, "grok"):
+		return "grok"
+	case strings.HasPrefix(name, "gpt"), strings.HasPrefix(name, "chatgpt"),
+		strings.HasPrefix(name, "codex"), strings.HasPrefix(name, "dall-e"),
+		strings.HasPrefix(name, "sora"), strings.HasPrefix(name, "o1"),
+		strings.HasPrefix(name, "o3"), strings.HasPrefix(name, "o4"):
+		return "openai"
+	}
+
+	// Safe fallbacks for models whose names do not identify a well-known
+	// family. Never return the raw platform: it can disclose upstream routing.
+	switch internalPlatform {
+	case service.PlatformAnthropic, service.PlatformKiro, service.PlatformDroid:
+		return "claude"
+	case service.PlatformOpenAI:
+		return "openai"
+	case service.PlatformGemini:
+		return "gemini"
+	case service.PlatformGrok:
+		return "grok"
+	default:
+		return "other"
+	}
 }
 
 // List 列出当前用户可见的「可用渠道」。

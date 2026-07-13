@@ -1,16 +1,23 @@
 import { apiClient } from './client'
-import type { UserSupportedModel } from './channels'
+import type { UserSupportedModelPricing } from './channels'
+
+export type PublicModelFamily = 'claude' | 'openai' | 'gemini' | 'grok' | 'other'
+
+export interface PublicModel {
+  name: string
+  family: PublicModelFamily
+  pricing: UserSupportedModelPricing | null
+}
 
 export interface PublicModelGroup {
   name: string
-  platform: string
   subscription_type: string
   rate_multiplier: number
   peak_rate_enabled: boolean
   peak_start: string
   peak_end: string
   peak_rate_multiplier: number
-  models: UserSupportedModel[]
+  models: PublicModel[]
 }
 
 export interface PublicModelCatalog {

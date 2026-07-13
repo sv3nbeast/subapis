@@ -6276,6 +6276,40 @@
               </div>
               <Toggle v-model="form.public_model_market_enabled" />
             </div>
+            <div class="grid gap-4 border-t border-gray-100 pt-5 dark:border-dark-700 sm:grid-cols-2">
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.publicModelMarket.referenceRate') }}
+                </label>
+                <input
+                  v-model.number="form.public_model_market_reference_usd_cny_rate"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  class="input"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.publicModelMarket.referenceRateHint') }}
+                </p>
+              </div>
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.publicModelMarket.settlementRate') }}
+                </label>
+                <input
+                  v-model.number="form.public_model_market_settlement_usd_cny_rate"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  class="input"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.publicModelMarket.settlementRateHint') }}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -8642,6 +8676,8 @@ const form = reactive<SettingsForm>({
   available_channels_enabled: false,
   // Public Model Market feature switch
   public_model_market_enabled: false,
+  public_model_market_reference_usd_cny_rate: 7.2,
+  public_model_market_settlement_usd_cny_rate: 1,
   web_chat_enabled: false,
   web_chat_projects_enabled: false,
   web_chat_templates_enabled: false,
@@ -10171,6 +10207,10 @@ async function saveSettings() {
       available_channels_enabled: form.available_channels_enabled,
       // Public Model Market feature switch
       public_model_market_enabled: form.public_model_market_enabled,
+      public_model_market_reference_usd_cny_rate:
+        Number(form.public_model_market_reference_usd_cny_rate) || 7.2,
+      public_model_market_settlement_usd_cny_rate:
+        Number(form.public_model_market_settlement_usd_cny_rate) || 1,
       web_chat_enabled: form.web_chat_enabled,
       web_chat_projects_enabled: form.web_chat_projects_enabled,
       web_chat_templates_enabled: form.web_chat_templates_enabled,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -84,6 +85,7 @@ func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
 	require.Equal(t, "Claude Standard", groups[0].Name)
 	require.Len(t, groups[0].Models, 1)
 	require.Equal(t, "claude-sonnet-4-6", groups[0].Models[0].Name)
+	require.Equal(t, "claude", groups[0].Models[0].Family)
 	require.NotNil(t, groups[0].Models[0].Pricing)
 	require.Equal(t, &inputPrice, groups[0].Models[0].Pricing.InputPrice)
 	require.Equal(t, "OpenAI Plan", groups[1].Name)
@@ -91,19 +93,44 @@ func TestBuildPublicModelMarketGroups_FiltersAndAggregates(t *testing.T) {
 	require.True(t, groups[1].PeakRateEnabled)
 	require.Len(t, groups[1].Models, 1)
 	require.Equal(t, "gpt-5", groups[1].Models[0].Name)
+	require.Equal(t, "openai", groups[1].Models[0].Family)
 }
 
 func TestPublicModelMarket_FieldWhitelist(t *testing.T) {
 	row := publicModelMarketResponse{Groups: []publicModelMarketGroup{{
-		Name: "Public", Platform: "anthropic", Models: []userSupportedModel{},
+		Name: "Public", Models: []publicModelMarketModel{{Name: "claude-sonnet-4-6", Family: "claude"}},
 	}}}
 	raw, err := json.Marshal(row)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "channel")
 	require.NotContains(t, string(raw), "is_exclusive")
 	require.NotContains(t, string(raw), `"id"`)
+	require.NotContains(t, string(raw), `"platform"`)
 	require.Contains(t, string(raw), `"groups"`)
 	require.Contains(t, string(raw), `"models"`)
+	require.Contains(t, string(raw), `"family":"claude"`)
+}
+
+func TestBuildPublicModelMarketGroups_HidesKiroAsClaudeFamily(t *testing.T) {
+	kiroGroup := service.AvailableGroupRef{
+		ID: 9, Name: "AWS Claude", Platform: service.PlatformKiro,
+		SubscriptionType: service.SubscriptionTypeStandard, RateMultiplier: 1,
+	}
+	groups := buildPublicModelMarketGroups([]service.AvailableChannel{{
+		Name: "private-kiro-route", Status: service.StatusActive,
+		Groups: []service.AvailableGroupRef{kiroGroup},
+		SupportedModels: []service.SupportedModel{{
+			Name: "claude-sonnet-4-6", Platform: service.PlatformKiro,
+		}},
+	}})
+	require.Len(t, groups, 1)
+	require.Equal(t, "AWS Claude", groups[0].Name)
+	require.Len(t, groups[0].Models, 1)
+	require.Equal(t, "claude", groups[0].Models[0].Family)
+
+	raw, err := json.Marshal(groups)
+	require.NoError(t, err)
+	require.NotContains(t, strings.ToLower(string(raw)), "kiro")
 }
 
 func TestFilterUserVisibleGroups_IntersectionOnly(t *testing.T) {

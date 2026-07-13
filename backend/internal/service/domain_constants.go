@@ -395,6 +395,10 @@ const (
 	// It is intentionally separate from Available Channels because the latter is
 	// account-scoped while this switch publishes prices to unauthenticated users.
 	SettingKeyPublicModelMarketEnabled = "public_model_market_enabled"
+	// Public model market price display parameters. These affect only the
+	// anonymous USD-equivalent presentation and never the billing ledger.
+	SettingKeyPublicModelMarketReferenceUSDCNYRate  = "public_model_market_reference_usd_cny_rate"
+	SettingKeyPublicModelMarketSettlementUSDCNYRate = "public_model_market_settlement_usd_cny_rate"
 
 	// SettingKeyWebChatEnabled is a DB-backed soft switch for the user-facing web chat
 	// workbench. Defaults to false because it creates managed hidden API keys and can

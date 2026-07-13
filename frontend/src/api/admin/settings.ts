@@ -653,6 +653,8 @@ export interface SystemSettings {
 
   // Public Model Market feature switch
   public_model_market_enabled: boolean;
+  public_model_market_reference_usd_cny_rate: number;
+  public_model_market_settlement_usd_cny_rate: number;
 
   // Web Chat feature switch
   web_chat_enabled: boolean;
@@ -902,6 +904,8 @@ export interface UpdateSettingsRequest {
 
   // Public Model Market feature switch
   public_model_market_enabled?: boolean;
+  public_model_market_reference_usd_cny_rate?: number;
+  public_model_market_settlement_usd_cny_rate?: number;
 
   // Web Chat feature switch
   web_chat_enabled?: boolean;
