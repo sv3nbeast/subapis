@@ -15,10 +15,10 @@
         </RouterLink>
 
         <div class="flex items-center gap-1.5 sm:gap-2.5">
-          <RouterLink to="/home" class="hidden rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-600 hover:bg-white hover:text-primary-700 dark:text-gray-300 dark:hover:bg-dark-800 dark:hover:text-primary-300 sm:inline-flex">
+          <RouterLink to="/home" class="models-nav-link hidden sm:inline-flex">
             {{ t('modelMarket.home') }}
           </RouterLink>
-          <RouterLink to="/docs" class="hidden rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-600 hover:bg-white hover:text-primary-700 dark:text-gray-300 dark:hover:bg-dark-800 dark:hover:text-primary-300 sm:inline-flex">
+          <RouterLink to="/docs" class="models-nav-link hidden sm:inline-flex">
             {{ t('home.guide') }}
           </RouterLink>
           <LocaleSwitcher />
@@ -507,3 +507,38 @@ onMounted(() => {
   void loadCatalog()
 })
 </script>
+
+<style scoped>
+.models-nav-link {
+  align-items: center;
+  border-radius: 9999px;
+  color: #475569;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 2.25rem;
+  padding: 0 0.8rem;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.models-nav-link:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+:global(.dark) .models-nav-link {
+  color: #cbd5e1;
+}
+
+:global(.dark) .models-nav-link:hover {
+  background: rgba(15, 23, 42, 0.72);
+  color: #5eead4;
+}
+</style>

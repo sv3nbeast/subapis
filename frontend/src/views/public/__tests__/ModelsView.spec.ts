@@ -203,4 +203,12 @@ describe('public ModelsView', () => {
     expect(wrapper.find('[data-to="/register"]').exists()).toBe(true)
     expect(wrapper.find('[data-to="/available-channels"]').exists()).toBe(false)
   })
+
+  it('uses the shared public navigation typography', () => {
+    const wrapper = mountView()
+
+    const homeLinks = wrapper.findAll('[data-to="/home"]')
+    expect(homeLinks.some((link) => link.classes().includes('models-nav-link'))).toBe(true)
+    expect(wrapper.find('[data-to="/docs"]').classes()).toContain('models-nav-link')
+  })
 })
