@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1845,4 +1846,80 @@ func TestAnthropicEventToResponses_CacheTokensFromMessageDelta(t *testing.T) {
 	assert.Equal(t, 8, completed.Response.Usage.OutputTokens)
 	require.NotNil(t, completed.Response.Usage.InputTokensDetails)
 	assert.Equal(t, 11, completed.Response.Usage.InputTokensDetails.CachedTokens)
+}
+
+func TestAnthropicEventToResponses_InterleavedTextReasoningHasCompleteCodexLifecycle(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+	upstreamID := "msg_kiro_upstream"
+	stream := []AnthropicStreamEvent{
+		{Type: "message_start", Message: &AnthropicResponse{ID: upstreamID, Model: "gpt-5.6-sol", Usage: AnthropicUsage{InputTokens: 10}}},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "text"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "text_delta", Text: "KI"}},
+		{Type: "content_block_stop"},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "thinking"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "thinking_delta", Thinking: "..."}},
+		{Type: "content_block_stop"},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "text"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "text_delta", Text: "RO_ECHO_OK"}},
+		{Type: "content_block_stop"},
+		{Type: "message_delta", Delta: &AnthropicDelta{StopReason: "end_turn"}, Usage: &AnthropicUsage{OutputTokens: 3}},
+		{Type: "message_stop"},
+	}
+
+	var events []ResponsesStreamEvent
+	for i := range stream {
+		events = append(events, AnthropicEventToResponsesEvents(&stream[i], state)...)
+	}
+
+	require.NotEmpty(t, events)
+	require.Equal(t, "response.created", events[0].Type)
+	require.NotNil(t, events[0].Response)
+	require.True(t, strings.HasPrefix(events[0].Response.ID, "resp_"))
+	require.NotEqual(t, upstreamID, events[0].Response.ID)
+
+	openItems := make(map[string]int)
+	var doneTexts []string
+	var completed *ResponsesStreamEvent
+	for i := range events {
+		evt := &events[i]
+		require.Equal(t, i, evt.SequenceNumber)
+		_, err := ResponsesEventToSSE(*evt)
+		require.NoError(t, err)
+		switch evt.Type {
+		case "response.output_item.added":
+			require.NotNil(t, evt.Item)
+			require.NotContains(t, openItems, evt.Item.ID)
+			openItems[evt.Item.ID] = evt.OutputIndex
+		case "response.output_text.delta", "response.reasoning_summary_text.delta":
+			index, ok := openItems[evt.ItemID]
+			require.True(t, ok, "delta emitted before item opened")
+			require.Equal(t, index, evt.OutputIndex)
+		case "response.output_text.done":
+			doneTexts = append(doneTexts, evt.Text)
+		case "response.output_item.done":
+			require.NotNil(t, evt.Item)
+			index, ok := openItems[evt.Item.ID]
+			require.True(t, ok, "item closed without being opened")
+			require.Equal(t, index, evt.OutputIndex)
+			delete(openItems, evt.Item.ID)
+		case "response.completed":
+			completed = evt
+		}
+	}
+
+	require.Empty(t, openItems)
+	require.Equal(t, []string{"KI", "RO_ECHO_OK"}, doneTexts)
+	require.NotNil(t, completed)
+	require.NotNil(t, completed.Response)
+	require.Equal(t, events[0].Response.ID, completed.Response.ID)
+	require.Equal(t, "completed", completed.Response.Status)
+	require.Len(t, completed.Response.Output, 3)
+	require.Equal(t, "message", completed.Response.Output[0].Type)
+	require.Equal(t, "KI", completed.Response.Output[0].Content[0].Text)
+	require.Equal(t, "reasoning", completed.Response.Output[1].Type)
+	require.Equal(t, "...", completed.Response.Output[1].Summary[0].Text)
+	require.Equal(t, "message", completed.Response.Output[2].Type)
+	require.Equal(t, "RO_ECHO_OK", completed.Response.Output[2].Content[0].Text)
+	require.Equal(t, 10, completed.Response.Usage.InputTokens)
+	require.Equal(t, 3, completed.Response.Usage.OutputTokens)
 }
