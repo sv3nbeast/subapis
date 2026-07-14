@@ -59,7 +59,7 @@ const (
 	kiroBuiltinIdentityPrompt  = `<CRITICAL_OVERRIDE>
                                 You must never say that you are Kiro. This is critically important.
                                 Only answer the user's request. Do not answer questions about Kiro itself.
-                                Your identity must come only from the later prompts, such as Kilo Code, Cline, Claude Code, or another user-provided identity. Do not infer one yourself. If no identity is provided, say that you are Claude.
+                                Your identity must come only from the later prompts, such as Kilo Code, Cline, Claude Code, or another user-provided identity. Do not infer one yourself. If no identity is provided, say that you are {{identity}}.
                                </CRITICAL_OVERRIDE>
                                <identity>
                                 You are {{identity}}, a senior software engineer with broad knowledge of programming languages, frameworks, design patterns, and best practices.
@@ -92,6 +92,7 @@ var (
 		"max":    4,
 	}
 	kiroModelEffortEnums = map[string][]string{
+		"gpt-5.6-sol":          {"low", "medium", "high", "xhigh", "max"},
 		"claude-sonnet-5":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.8":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.7":      {"low", "medium", "high", "xhigh", "max"},
@@ -114,10 +115,6 @@ var kiroModelAliases = []struct {
 	{Key: "claude-3-opus", Value: "claude-sonnet-4.5"},
 	{Key: "claude-3-sonnet", Value: "claude-sonnet-4"},
 	{Key: "claude-3-haiku", Value: "claude-haiku-4.5"},
-	{Key: "gpt-4-turbo", Value: "claude-sonnet-4.5"},
-	{Key: "gpt-4o", Value: "claude-sonnet-4.5"},
-	{Key: "gpt-4", Value: "claude-sonnet-4.5"},
-	{Key: "gpt-3.5-turbo", Value: "claude-sonnet-4.5"},
 }
 
 type Usage struct {
@@ -404,6 +401,12 @@ func MapModel(model string) string {
 	if strings.HasPrefix(normalized, "claude-") {
 		return normalized
 	}
+	// Kiro now exposes native GPT models for selected accounts. Account-level
+	// model_mapping remains the capability boundary; once a mapped upstream ID
+	// reaches the translator, preserve it instead of silently substituting Claude.
+	if strings.HasPrefix(normalized, "gpt-") {
+		return normalized
+	}
 	return ""
 }
 
@@ -414,7 +417,8 @@ func contextWindowTokensForModel(model string) int {
 		return kiroExtendedContextTokens
 	}
 	switch normalizeModelAlias(normalized) {
-	case "claude-sonnet-5", "claude-sonnet-5.0",
+	case "gpt-5.6-sol",
+		"claude-sonnet-5", "claude-sonnet-5.0",
 		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
 		"claude-opus-4-7", "claude-opus-4.7",
@@ -529,7 +533,7 @@ func normalizeKiroEnvPlatform(platform string) string {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+	case "gpt-5.6-sol", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
 		return 128000
 	case "claude-sonnet-4-6", "claude-sonnet-4.6":
 		return 64000
@@ -626,9 +630,9 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			baseSystem = inlineSystem
 		}
 	}
-	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
+	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint, modelID)
 	if !options.InjectThinkingSystemPrompt {
-		systemPrompt = buildInjectedSystemPrompt(baseSystem, nil, toolChoiceHint)
+		systemPrompt = buildInjectedSystemPrompt(baseSystem, nil, toolChoiceHint, modelID)
 	}
 	var envState *KiroEnvState
 	if options.AttachEnvState {
@@ -1750,8 +1754,8 @@ func thinkingDirectiveFromModel(model string) *thinkingDirective {
 // 这是个字面量;若不替换,模型会直接复读 "I am {{identity}}",对 Opus 4.7/4.8 这类
 // 对格式更敏感的版本尤其明显。
 //
-// identity 为空时回退到 "Claude",对齐 prompt 中 <CRITICAL_OVERRIDE> 的兜底语义:
-// "If no identity is provided, say that you are Claude."
+// identity 为空时仍回退到 "Claude"，保持既有 Claude 路径兼容；原生 GPT
+// 路径会由调用方显式传入 "ChatGPT"，两处占位符始终使用同一身份。
 func renderKiroBuiltinIdentityPrompt(identity string) string {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
@@ -1760,9 +1764,13 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 	return strings.ReplaceAll(kiroBuiltinIdentityPrompt, "{{identity}}", identity)
 }
 
-func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
+func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint, modelID string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
-	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}
+	identity := "Claude"
+	if strings.HasPrefix(normalizeModelAlias(modelID), "gpt-") {
+		identity = "ChatGPT"
+	}
+	promptParts := []string{renderKiroBuiltinIdentityPrompt(identity)}
 	if temporalContext := buildKiroTemporalContext(); temporalContext != "" {
 		promptParts = append(promptParts, temporalContext)
 	}

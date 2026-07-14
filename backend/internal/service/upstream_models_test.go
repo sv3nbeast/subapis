@@ -284,7 +284,7 @@ func TestFetchUpstreamSupportedModelsParsesKiroListAvailableModels(t *testing.T)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-4.6"},{"modelId":"claude-opus-4.8"},{"modelId":"claude-sonnet-4.6"}]}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"models":[{"modelId":"claude-sonnet-4.6"},{"modelId":"gpt-5.6-sol"},{"modelId":"claude-opus-4.8"},{"modelId":"claude-sonnet-4.6"}]}`)),
 	}}
 	svc := &AccountTestService{
 		httpUpstream: upstream,
@@ -301,7 +301,7 @@ func TestFetchUpstreamSupportedModelsParsesKiroListAvailableModels(t *testing.T)
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"claude-opus-4.8", "claude-sonnet-4.6"}, models)
+	require.Equal(t, []string{"claude-opus-4.8", "claude-sonnet-4.6", "gpt-5.6-sol"}, models)
 	require.Equal(t, "https://q.us-east-1.amazonaws.com/ListAvailableModels?maxResults=50&origin=AI_EDITOR", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer kiro-access-token", upstream.lastReq.Header.Get("Authorization"))
 }

@@ -705,6 +705,32 @@ func TestBuildKiroPayloadOptionsSupportsSonnet5NativeEffort(t *testing.T) {
 	require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
 }
 
+func TestBuildKiroPayloadOptionsSupportsNativeGPTModel(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"max_tokens":999999,
+		"output_config":{"effort":"max"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, int64(128000), gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int())
+	require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
+	require.Equal(t, 128000, result.Context.MaxOutputTokens)
+
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "You are ChatGPT,")
+	require.Contains(t, systemContent, "say that you are ChatGPT")
+	require.NotContains(t, systemContent, "say that you are Claude")
+}
+
 func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffort(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-8",
@@ -3374,6 +3400,7 @@ func TestKiroContextLimitEventReturnsReactiveCompactionError(t *testing.T) {
 }
 
 func TestKiroContextWindowResolution(t *testing.T) {
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-sol"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4-6"))
@@ -3408,10 +3435,11 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-3-opus":                       "claude-sonnet-4.5",
 		"claude-3-sonnet":                     "claude-sonnet-4",
 		"claude-3-haiku":                      "claude-haiku-4.5",
-		"gpt-4-turbo":                         "claude-sonnet-4.5",
-		"gpt-4o":                              "claude-sonnet-4.5",
-		"gpt-4":                               "claude-sonnet-4.5",
-		"gpt-3.5-turbo":                       "claude-sonnet-4.5",
+		"gpt-5.6-sol":                         "gpt-5.6-sol",
+		"gpt-4-turbo":                         "gpt-4-turbo",
+		"gpt-4o":                              "gpt-4o",
+		"gpt-4":                               "gpt-4",
+		"gpt-3.5-turbo":                       "gpt-3.5-turbo",
 		"claude-sonnet-5":                     "claude-sonnet-5",
 		"claude-sonnet-4-6":                   "claude-sonnet-4.6",
 		"claude-sonnet-4-6-thinking":          "claude-sonnet-4.6",

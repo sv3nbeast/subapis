@@ -14,6 +14,7 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	account := &Account{Platform: PlatformKiro}
 
 	require.False(t, account.IsModelSupported("gpt-4o"))
+	require.False(t, account.IsModelSupported("gpt-5.6-sol"))
 	require.False(t, account.IsModelSupported("kiro-gpt-4o"))
 	require.False(t, account.IsModelSupported("auto"))
 	require.Equal(t, "claude-sonnet-4.6", account.GetMappedModel("claude-sonnet-4-6"))
@@ -21,6 +22,21 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	require.True(t, account.IsModelSupported("claude-haiku-4-5-20251001"))
 	require.Equal(t, "claude-haiku-4.5", account.GetMappedModel("claude-haiku-4-5"))
 	require.Equal(t, "claude-haiku-4.5", account.GetMappedModel("claude-haiku-4-5-20251001"))
+}
+
+func TestAccountKiroExplicitMappingSupportsNativeGPTWithoutChangingDefaults(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.6-sol": "gpt-5.6-sol",
+			},
+		},
+	}
+
+	require.True(t, account.IsModelSupported("gpt-5.6-sol"))
+	require.Equal(t, "gpt-5.6-sol", account.GetMappedModel("gpt-5.6-sol"))
+	require.False(t, account.IsModelSupported("gpt-4o"))
 }
 
 func TestAccountKiroExplicitMappingAddsClaude45ShortAliases(t *testing.T) {
