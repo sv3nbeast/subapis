@@ -37,3 +37,22 @@ func TestBuildSchedulerMetadataAccount_PreservesModelRateLimitsForSelection(t *t
 	require.False(t, metadata.IsSchedulableForModelWithContext(context.Background(), "claude-sonnet-4-6"))
 	require.True(t, metadata.IsSchedulableForModelWithContext(context.Background(), "claude-opus-4-6"))
 }
+
+func TestBuildSchedulerMetadataAccount_PreservesOpenAIKiroBridgeFlag(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		account := service.Account{
+			ID:       102,
+			Platform: service.PlatformKiro,
+			Type:     service.AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_kiro_bridge_enabled": enabled,
+				"unused_large_field":         "drop-me",
+			},
+		}
+
+		metadata := buildSchedulerMetadataAccount(account)
+
+		require.Equal(t, enabled, metadata.Extra["openai_kiro_bridge_enabled"])
+		require.NotContains(t, metadata.Extra, "unused_large_field")
+	}
+}

@@ -539,6 +539,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"model_rate_limits",
 		"model_capacity_cooldowns",
 		"mixed_scheduling",
+		"openai_kiro_bridge_enabled",
 		"window_cost_limit",
 		"window_cost_sticky_reserve",
 		"max_sessions",
