@@ -292,11 +292,12 @@ func TestAccountHandlerGetAvailableModels_KiroOAuthFallsBackToDefaults(t *testin
 	require.True(t, slices.Contains(ids, "claude-opus-4-7"))
 	require.True(t, slices.Contains(ids, "claude-sonnet-4-6"))
 	require.True(t, slices.Contains(ids, "claude-sonnet-4-6-thinking"))
+	require.True(t, slices.Contains(ids, "gpt-5.6-sol"))
 	require.False(t, slices.Contains(ids, "kiro-claude-opus-4-7"))
 	require.False(t, slices.Contains(ids, "gpt-4o"))
 }
 
-func TestAccountHandlerGetAvailableModels_KiroOAuthUsesExplicitModelMapping(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_KiroOAuthAddsNativeGPTDefault(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -326,11 +327,13 @@ func TestAccountHandlerGetAvailableModels_KiroOAuthUsesExplicitModelMapping(t *t
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Len(t, resp.Data, 1)
-	require.Equal(t, "custom-kiro-model", resp.Data[0].ID)
+	require.Len(t, resp.Data, 2)
+	ids := []string{resp.Data[0].ID, resp.Data[1].ID}
+	require.Contains(t, ids, "custom-kiro-model")
+	require.Contains(t, ids, "gpt-5.6-sol")
 }
 
-func TestAccountHandlerGetAvailableModels_KiroAPIKeyUsesExplicitModelMapping(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_KiroAPIKeyAddsNativeGPTDefault(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -361,7 +364,7 @@ func TestAccountHandlerGetAvailableModels_KiroAPIKeyUsesExplicitModelMapping(t *
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Len(t, resp.Data, 2)
+	require.Len(t, resp.Data, 3)
 
 	ids := make([]string, 0, len(resp.Data))
 	for _, model := range resp.Data {
@@ -369,6 +372,7 @@ func TestAccountHandlerGetAvailableModels_KiroAPIKeyUsesExplicitModelMapping(t *
 	}
 	require.True(t, slices.Contains(ids, "claude-sonnet-4-6"))
 	require.True(t, slices.Contains(ids, "custom-model"))
+	require.True(t, slices.Contains(ids, "gpt-5.6-sol"))
 	require.False(t, slices.Contains(ids, "claude-opus-4-7"))
 }
 

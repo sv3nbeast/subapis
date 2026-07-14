@@ -15,6 +15,9 @@ Environment variables:
                                    Default: 1.23.2
   ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
                                    Default: true
+  GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
+                                   true/false. When unset, preserve the current
+                                   sub2api container value; default false.
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -39,6 +42,7 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
+OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -53,6 +57,19 @@ fi
 
 require_cmd docker
 require_cmd sed
+
+if [[ -z "${OPENAI_KIRO_BRIDGE_ENABLED}" ]] && docker inspect "${SERVICE_NAME}" >/dev/null 2>&1; then
+  OPENAI_KIRO_BRIDGE_ENABLED="$(
+    docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+      | sed -n 's/^GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=//p' \
+      | head -n 1
+  )"
+fi
+OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED:-false}"
+if [[ "${OPENAI_KIRO_BRIDGE_ENABLED}" != "true" && "${OPENAI_KIRO_BRIDGE_ENABLED}" != "false" ]]; then
+  echo "GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED must be true or false" >&2
+  exit 1
+fi
 
 if [[ ! -d "${REPO_ROOT}" ]]; then
   echo "Repo root not found: ${REPO_ROOT}" >&2
@@ -85,6 +102,7 @@ services:
     environment:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
+      - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
@@ -124,6 +142,8 @@ docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps
 echo "--- antigravity env ---"
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_USER_AGENT_VERSION
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
+echo "--- OpenAI Kiro bridge env ---"
+docker exec "${CONTAINER_ID}" printenv GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
 echo "--- antigravity worker files ---"
 docker exec "${CONTAINER_ID}" sh -lc 'ls -l /app/antigravityworker*'
 if ! docker exec "${CONTAINER_ID}" test -x /app/antigravityworker-boringcrypto; then

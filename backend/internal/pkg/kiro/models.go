@@ -7,8 +7,8 @@ type Model struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// DefaultModels supplies display metadata for the admin UI. Kiro account
-// model_mapping remains the source of truth for per-account availability.
+// DefaultModels supplies display metadata for Kiro's platform defaults and the
+// admin UI. Account mappings may still override individual model targets.
 var DefaultModels = []Model{
 	{ID: "gpt-5.6-sol", Type: "model", DisplayName: "GPT-5.6 Sol"},
 	{ID: "claude-sonnet-5", Type: "model", DisplayName: "Claude Sonnet 5"},

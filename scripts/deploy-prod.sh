@@ -45,6 +45,7 @@ REMOTE_SRC_DIR="${REMOTE_SRC_DIR:-/root/sub2api-src}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
+OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 IMAGE_TAG=""
 SKIP_SYNC=0
 DRY_RUN=0
@@ -185,6 +186,7 @@ echo "Remote source dir:  ${REMOTE_SRC_DIR}"
 echo "Remote deploy dir:  ${REMOTE_DEPLOY_DIR}"
 echo "Image ref:          ${IMAGE_REF}"
 echo "Antigravity ver:    ${ANTIGRAVITY_VERSION}"
+echo "OpenAI Kiro bridge: ${OPENAI_KIRO_BRIDGE_ENABLED:-preserve-current}"
 
 if [[ "${SKIP_SYNC}" -eq 0 ]]; then
   ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_SRC_DIR}'"
@@ -219,4 +221,5 @@ ssh "${REMOTE_HOST}" \
     IMAGE_TAG="${IMAGE_TAG}" \
     DEPLOY_DIR="${REMOTE_DEPLOY_DIR}" \
     ANTIGRAVITY_USER_AGENT_VERSION="${ANTIGRAVITY_VERSION}" \
+    GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED}" \
     bash "${REMOTE_SRC_DIR}/scripts/rebuild-prod-sub2api.sh"

@@ -59,6 +59,14 @@ func TestDefaultKiroModelMapping_DefaultsSonnet5(t *testing.T) {
 	}
 }
 
+func TestDefaultKiroModelMapping_DefaultsNativeGPT(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := DefaultKiroModelMapping[KiroNativeGPTModel]; !ok || got != KiroNativeGPTModel {
+		t.Fatalf("unexpected default Kiro native GPT mapping: got %q exists=%v", got, ok)
+	}
+}
+
 func TestDefaultKiroModelMapping_ContainsClaude45ShortAliases(t *testing.T) {
 	t.Parallel()
 

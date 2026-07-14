@@ -55,13 +55,22 @@ func TestAccountOpenAIKiroBridgeEligibilityRequiresEveryGate(t *testing.T) {
 	base := bridgeTestAccount(1, PlatformKiro, 1, 7)
 	require.True(t, base.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
 
+	withoutAccountMapping := base
+	withoutAccountMapping.Credentials = map[string]any{}
+	require.True(t, withoutAccountMapping.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+
+	customClaudeMapping := base
+	customClaudeMapping.Credentials = map[string]any{
+		"model_mapping": map[string]any{"claude-sonnet-5": "claude-sonnet-5"},
+	}
+	require.True(t, customClaudeMapping.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+
 	tests := []struct {
 		name   string
 		mutate func(*Account)
 	}{
 		{name: "account opt-in disabled", mutate: func(a *Account) { a.Extra["openai_kiro_bridge_enabled"] = false }},
 		{name: "not OAuth", mutate: func(a *Account) { a.Type = AccountTypeAPIKey }},
-		{name: "mapping missing", mutate: func(a *Account) { delete(a.Credentials, "model_mapping") }},
 		{name: "mapping target differs", mutate: func(a *Account) { a.Credentials["model_mapping"] = map[string]any{OpenAIKiroBridgeModel: "auto"} }},
 		{name: "different model", mutate: func(a *Account) {}},
 	}

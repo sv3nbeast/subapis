@@ -306,7 +306,7 @@ func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
-const OpenAIKiroBridgeModel = "gpt-5.6-sol"
+const OpenAIKiroBridgeModel = domain.KiroNativeGPTModel
 
 // IsOpenAIKiroBridgeEnabled is the account-level opt-in for serving OpenAI groups.
 func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
@@ -317,29 +317,20 @@ func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
 	return enabled
 }
 
-// HasExplicitOpenAIKiroBridgeModelMapping requires an exact identity mapping.
-// Default mappings and wildcards are intentionally excluded from this trust boundary.
-func (a *Account) HasExplicitOpenAIKiroBridgeModelMapping(model string) bool {
-	if a == nil || strings.TrimSpace(model) != OpenAIKiroBridgeModel || a.Credentials == nil {
+// SupportsOpenAIKiroBridgeModel requires Kiro's native GPT model to resolve to
+// itself. Platform defaults cover existing and future Kiro accounts while an
+// explicit account or wildcard override remains authoritative.
+func (a *Account) SupportsOpenAIKiroBridgeModel(model string) bool {
+	model = strings.TrimSpace(model)
+	if a == nil || model != OpenAIKiroBridgeModel {
 		return false
 	}
-	raw, ok := a.Credentials["model_mapping"]
-	if !ok {
-		return false
-	}
-	switch mapping := raw.(type) {
-	case map[string]any:
-		mapped, _ := mapping[OpenAIKiroBridgeModel].(string)
-		return strings.TrimSpace(mapped) == OpenAIKiroBridgeModel
-	case map[string]string:
-		return strings.TrimSpace(mapping[OpenAIKiroBridgeModel]) == OpenAIKiroBridgeModel
-	default:
-		return false
-	}
+	mapped, matched := a.ResolveMappedModel(model)
+	return matched && strings.TrimSpace(mapped) == model
 }
 
 func (a *Account) IsEligibleForOpenAIKiroBridge(model string) bool {
-	return a.IsOpenAIKiroBridgeEnabled() && a.HasExplicitOpenAIKiroBridgeModelMapping(model)
+	return a.IsOpenAIKiroBridgeEnabled() && a.SupportsOpenAIKiroBridgeModel(model)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -693,6 +684,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
 		if a.Platform == domain.PlatformKiro {
+			ensureKiroNativeGPTDefault(result)
 			ensureKiroVersionAliases(result)
 		}
 		return result
@@ -800,6 +792,22 @@ func ensureKiroVersionAliases(mapping map[string]string) {
 	for _, alias := range aliases {
 		ensureKiroVersionAlias(mapping, alias.Alias, alias.Canonical)
 	}
+}
+
+func ensureKiroNativeGPTDefault(mapping map[string]string) {
+	if mapping == nil {
+		return
+	}
+	model := domain.KiroNativeGPTModel
+	if _, exists := mapping[model]; exists {
+		return
+	}
+	for pattern := range mapping {
+		if matchWildcard(pattern, model) {
+			return
+		}
+	}
+	mapping[model] = model
 }
 
 func ensureKiroVersionAlias(mapping map[string]string, alias, canonical string) {

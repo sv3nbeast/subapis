@@ -4804,7 +4804,7 @@ export default {
       mixedSchedulingTooltip:
         '!! WARNING !! Antigravity Claude and Anthropic Claude cannot be used in the same context. If you have both Anthropic and Antigravity accounts, enabling this option will cause frequent 400 errors. When enabled, please use the group feature to isolate Antigravity accounts from Anthropic accounts. Make sure you understand this before enabling!!',
       openAIKiroBridge: 'Use in OpenAI groups',
-      openAIKiroBridgeHint: 'Only forwards gpt-5.6-sol and requires an explicit gpt-5.6-sol identity model mapping.',
+      openAIKiroBridgeHint: 'Forwards gpt-5.6-sol through Kiro\'s native GPT model when this account is linked to an OpenAI group.',
       aiCreditsBalance: 'AI Credits',
       allowOverages: 'Allow Overages (AI Credits)',
       allowOveragesTooltip:
