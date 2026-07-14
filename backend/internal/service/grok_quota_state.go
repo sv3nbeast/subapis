@@ -8,7 +8,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const grokQuotaExhaustedFallbackCooldown = 30 * time.Minute
+const (
+	grokQuotaExhaustedFallbackCooldown = 30 * time.Minute
+	grokFreeUsageExhaustedCooldown     = 24 * time.Hour
+)
 
 func isGrokBillingExhausted(billing *xai.BillingSnapshot) bool {
 	if billing == nil {
@@ -20,9 +23,9 @@ func isGrokBillingExhausted(billing *xai.BillingSnapshot) bool {
 
 // isGrokQuotaExhausted distinguishes xAI's quota/spending-limit exhaustion from a
 // real entitlement or account ban. xAI reports exhausted subscription credits as
-// HTTP 403 on api.x.ai and as HTTP 402 (personal-team-blocked:spending-limit) on
-// the free Build / cli-chat-proxy path, so the status code alone is not
-// sufficient — detection is body-based and status-agnostic.
+// HTTP 403 on api.x.ai, HTTP 402 (personal-team-blocked:spending-limit), or HTTP
+// 429 (subscription:free-usage-exhausted) on the free Build path, so detection
+// is body-based and status-agnostic.
 func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 	if account == nil || account.Platform != PlatformGrok {
 		return false
@@ -32,7 +35,9 @@ func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 		gjson.GetBytes(responseBody, "code").String(),
 		gjson.GetBytes(responseBody, "error.code").String(),
 	)))
-	if strings.Contains(code, "spending-limit") || strings.Contains(code, "credit-limit") {
+	if strings.Contains(code, "spending-limit") ||
+		strings.Contains(code, "credit-limit") ||
+		strings.Contains(code, "free-usage-exhausted") {
 		return true
 	}
 
@@ -45,6 +50,7 @@ func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 	for _, marker := range []string{
 		"run out of credits",
 		"used all available credits",
+		"used all the included free usage",
 		"reached its monthly spending limit",
 		"purchase more credits",
 		"raise your spending limit",
@@ -61,6 +67,38 @@ func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 		return isGrokBillingExhausted(billing)
 	}
 	return false
+}
+
+func isGrokFreeUsageExhausted(responseBody []byte) bool {
+	code := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "code").String(),
+		gjson.GetBytes(responseBody, "error.code").String(),
+	)))
+	if strings.Contains(code, "free-usage-exhausted") {
+		return true
+	}
+
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "error").String(),
+		gjson.GetBytes(responseBody, "message").String(),
+		gjson.GetBytes(responseBody, "error.message").String(),
+		string(responseBody),
+	)))
+	return strings.Contains(message, "used all the included free usage") ||
+		(strings.Contains(message, "included free usage") && strings.Contains(message, "rolling 24-hour window"))
+}
+
+// resolveGrokQuotaResetAtForResponse keeps rolling free usage separate from the
+// billing period. The billing endpoint can report 100% remaining while the
+// model-specific rolling token allowance is exhausted.
+func resolveGrokQuotaResetAtForResponse(account *Account, responseBody []byte, now time.Time) time.Time {
+	if !isGrokFreeUsageExhausted(responseBody) {
+		return resolveGrokQuotaResetAt(account, now)
+	}
+	if account != nil && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now) {
+		return *account.RateLimitResetAt
+	}
+	return now.Add(grokFreeUsageExhaustedCooldown)
 }
 
 // resolveGrokQuotaResetAt uses the observed xAI billing period whenever

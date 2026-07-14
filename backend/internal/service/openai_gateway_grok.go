@@ -932,6 +932,11 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		}
 		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
 	case http.StatusTooManyRequests:
+		// Free Build reports its rolling 24-hour token allowance exhaustion as
+		// 429 subscription:free-usage-exhausted. This is not a short burst limit.
+		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
+			return
+		}
 		cooldown := 2 * time.Minute
 		if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil && snapshot.RetryAfterSeconds != nil && *snapshot.RetryAfterSeconds > 0 {
 			cooldown = time.Duration(*snapshot.RetryAfterSeconds) * time.Second
@@ -944,16 +949,16 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	}
 }
 
-// markGrokQuotaExhaustedIfDetected rate-limits a Grok account (until its billing
-// period resets) when the upstream body indicates subscription-credit exhaustion.
-// xAI reports this as a 403 on api.x.ai and as a 402
-// (personal-team-blocked:spending-limit) on the free Build / cli-chat-proxy path;
-// both must stop scheduling instead of retrying. Returns true when handled.
+// markGrokQuotaExhaustedIfDetected rate-limits a Grok account until its
+// applicable quota window resets.
+// xAI reports this as a 403 on api.x.ai, a 402 spending-limit error, or a 429
+// free-usage-exhausted error on the free Build path. All must stop scheduling
+// instead of retrying. Returns true when handled.
 func (s *OpenAIGatewayService) markGrokQuotaExhaustedIfDetected(ctx context.Context, account *Account, responseBody []byte) bool {
 	if !isGrokQuotaExhausted(account, responseBody) {
 		return false
 	}
-	resetAt := resolveGrokQuotaResetAt(account, time.Now())
+	resetAt := resolveGrokQuotaResetAtForResponse(account, responseBody, time.Now())
 	if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
 		if s.accountRepo != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
