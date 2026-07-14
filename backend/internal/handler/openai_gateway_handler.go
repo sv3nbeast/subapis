@@ -29,6 +29,7 @@ import (
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
 	gatewayService           *service.OpenAIGatewayService
+	kiroBridgeService        *service.GatewayService
 	billingCacheService      *service.BillingCacheService
 	apiKeyService            *service.APIKeyService
 	usageRecordWorkerPool    *service.UsageRecordWorkerPool
@@ -154,6 +155,7 @@ func validateClaudeCodeOnlyMessagesRequest(c *gin.Context, apiKey *service.APIKe
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
 func NewOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
+	kiroBridgeService *service.GatewayService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
@@ -173,6 +175,7 @@ func NewOpenAIGatewayHandler(
 	}
 	return &OpenAIGatewayHandler{
 		gatewayService:           gatewayService,
+		kiroBridgeService:        kiroBridgeService,
 		billingCacheService:      billingCacheService,
 		apiKeyService:            apiKeyService,
 		usageRecordWorkerPool:    usageRecordWorkerPool,
@@ -320,6 +323,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
+	kiroBridgeRequested := isOpenAIKiroBridgeResponsesRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	var kiroBridgeParsed *service.ParsedRequest
+	if kiroBridgeRequested {
+		kiroBridgeParsed, err = parseOpenAIKiroBridgeRequest(c, apiKey, forwardBody, "responses")
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			return
+		}
+	}
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
 	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
@@ -370,23 +383,35 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
+	kiroFailoverState.FailedAccountIDs = failedAccountIDs
 
 	for {
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-			reqModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
-			requireCompact,
-			false,
-			requestPlatform,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		if kiroBridgeRequested {
+			kiroFailoverState.SwitchCount = switchCount
+			selectionCtx := kiroFailoverState.SelectionContext(c.Request.Context(), apiKey.GroupID, false)
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForKiroBridge(
+				selectionCtx, apiKey.GroupID, sessionHash, reqModel, kiroBridgeModel, failedAccountIDs,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				requireCompact,
+				false,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			reqLog.Warn("openai.account_select_failed",
 				zap.Error(err),
@@ -409,6 +434,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
+			}
+			if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil && kiroFailoverState.LastFailoverErr.KiroRateLimited {
+				switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context()) {
+				case FailoverContinue:
+					continue
+				case FailoverCanceled:
+					return
+				}
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -459,7 +492,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(c.Request.Context(), c, account, forwardBody)
+			return h.forwardOpenAIResponses(c.Request.Context(), c, account, forwardBody, kiroBridgeParsed)
 		}()
 		cyberBlockKeyHTTP := ""
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -499,6 +532,24 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+					if account.Platform == service.PlatformKiro {
+						kiroFailoverState.SwitchCount = switchCount
+						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
+						if action == FailoverContinue && failoverErr.RetryableOnSameAccount && !failoverErr.KiroRateLimited {
+							kiroFailoverState.ForceAccountID = account.ID
+						}
+						switchCount = kiroFailoverState.SwitchCount
+						lastFailoverErr = failoverErr
+						switch action {
+						case FailoverContinue:
+							continue
+						case FailoverCanceled:
+							return
+						default:
+							h.handleFailoverExhausted(c, failoverErr, streamStarted)
+							return
+						}
+					}
 					// 池模式：同账号重试
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
@@ -569,7 +620,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		if result != nil {
 			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
+			if account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)

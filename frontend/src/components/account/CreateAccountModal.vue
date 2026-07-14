@@ -3394,6 +3394,21 @@
             </div>
           </div>
         </div>
+        <div v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'" class="mt-3">
+          <label class="flex cursor-pointer items-center gap-2">
+            <input
+              v-model="openAIKiroBridgeEnabled"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.accounts.openAIKiroBridge') }}
+            </span>
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openAIKiroBridgeHint') }}
+          </p>
+        </div>
         <div v-if="form.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
             <input
@@ -3429,6 +3444,7 @@
           :groups="groups"
           :platform="form.platform"
           :mixed-scheduling="mixedScheduling"
+          :openai-kiro-bridge-enabled="openAIKiroBridgeEnabled"
           data-tour="account-form-groups"
         />
       </div>
@@ -4090,6 +4106,7 @@ adminAPI.settings
 
 loadQuotaNotifyGlobal()
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
+const openAIKiroBridgeEnabled = ref(false)
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
 const antigravityProjectId = ref('')
@@ -4220,6 +4237,11 @@ function buildKiroExtra(base?: Record<string, unknown>): Record<string, unknown>
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
+  if (openAIKiroBridgeEnabled.value) {
+    extra.openai_kiro_bridge_enabled = true
+  } else {
+    delete extra.openai_kiro_bridge_enabled
+  }
   if (kiroCacheEmulationEnabled.value) {
     extra.kiro_cache_emulation_enabled = true
     extra.kiro_cache_emulation_ratio = kiroCacheEmulationRatio.value
@@ -4814,6 +4836,9 @@ watch(
     }
     if (!['antigravity', 'kiro', 'droid'].includes(newPlatform)) {
       mixedScheduling.value = false
+    }
+    if (newPlatform !== 'kiro') {
+      openAIKiroBridgeEnabled.value = false
     }
     // Reset OAuth states
     oauth.resetState()

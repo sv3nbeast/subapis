@@ -70,6 +70,7 @@ interface Props {
   groups: AdminGroup[]
   platform?: GroupPlatform // Optional platform filter
   mixedScheduling?: boolean // Allow cross-platform Claude groups for supported account platforms
+  openaiKiroBridgeEnabled?: boolean // Allow opted-in Kiro accounts to bind OpenAI groups
   searchable?: boolean | 'auto'
 }
 
@@ -91,18 +92,19 @@ const isSearchable = computed(() => {
 const filteredGroups = computed(() => {
   let result: AdminGroup[] = props.groups
   if (props.platform) {
+    const allowedPlatforms = new Set<GroupPlatform>([props.platform])
     if (props.mixedScheduling) {
-      const allowedPlatforms: GroupPlatform[] =
-        props.platform === 'antigravity'
-          ? ['antigravity', 'anthropic', 'gemini']
-          : props.platform === 'kiro' || props.platform === 'droid'
-            ? [props.platform, 'anthropic']
-            : [props.platform]
-      result = result.filter((g) => allowedPlatforms.includes(g.platform))
-    } else {
-      // 默认：只能选择同 platform 的分组
-      result = result.filter((g) => g.platform === props.platform)
+      if (props.platform === 'antigravity') {
+        allowedPlatforms.add('anthropic')
+        allowedPlatforms.add('gemini')
+      } else if (props.platform === 'kiro' || props.platform === 'droid') {
+        allowedPlatforms.add('anthropic')
+      }
     }
+    if (props.platform === 'kiro' && props.openaiKiroBridgeEnabled) {
+      allowedPlatforms.add('openai')
+    }
+    result = result.filter((g) => allowedPlatforms.has(g.platform))
   }
   if (isSearchable.value && searchText.value) {
     const q = searchText.value.toLowerCase()

@@ -95,6 +95,20 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
+	kiroBridgeRequested := isOpenAIKiroBridgeChatRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	forwardBody := body
+	if channelMapping.Mapped {
+		forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+	}
+	var kiroBridgeParsed *service.ParsedRequest
+	if kiroBridgeRequested {
+		kiroBridgeParsed, err = parseOpenAIKiroBridgeRequest(c, apiKey, forwardBody, "chat_completions")
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			return
+		}
+	}
 
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -132,22 +146,34 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
+	kiroFailoverState.FailedAccountIDs = failedAccountIDs
 
 	for {
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
-			apiKey.GroupID,
-			"",
-			sessionHash,
-			reqModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
-			false,
-			false,
-			requestPlatform,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		if kiroBridgeRequested {
+			kiroFailoverState.SwitchCount = switchCount
+			selectionCtx := kiroFailoverState.SelectionContext(c.Request.Context(), apiKey.GroupID, false)
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForKiroBridge(
+				selectionCtx, apiKey.GroupID, sessionHash, reqModel, kiroBridgeModel, failedAccountIDs,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				"",
+				sessionHash,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+				false,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			reqLog.Warn("openai_chat_completions.account_select_failed",
 				zap.Error(err),
@@ -161,6 +187,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			} else {
+				if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil && kiroFailoverState.LastFailoverErr.KiroRateLimited {
+					switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context()) {
+					case FailoverContinue:
+						continue
+					case FailoverCanceled:
+						return
+					}
+				}
 				if lastFailoverErr != nil {
 					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
 				} else {
@@ -191,10 +225,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 
-		forwardBody := body
-		if channelMapping.Mapped {
-			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
-		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -202,7 +232,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, promptCacheKey, "")
+			return h.forwardOpenAIChatCompletions(c.Request.Context(), c, account, forwardBody, kiroBridgeParsed, promptCacheKey)
 		}()
 		cyberBlockKeyChat := ""
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -235,6 +265,24 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						return
 					}
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+					if account.Platform == service.PlatformKiro {
+						kiroFailoverState.SwitchCount = switchCount
+						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
+						if action == FailoverContinue && failoverErr.RetryableOnSameAccount && !failoverErr.KiroRateLimited {
+							kiroFailoverState.ForceAccountID = account.ID
+						}
+						switchCount = kiroFailoverState.SwitchCount
+						lastFailoverErr = failoverErr
+						switch action {
+						case FailoverContinue:
+							continue
+						case FailoverCanceled:
+							return
+						default:
+							h.handleFailoverExhausted(c, failoverErr, streamStarted)
+							return
+						}
+					}
 					// Pool mode: retry on the same account
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()

@@ -5112,6 +5112,8 @@ func mixedSchedulingQueryPlatforms(nativePlatform string) []string {
 		return []string{PlatformAnthropic, PlatformAntigravity, PlatformKiro, PlatformDroid}
 	case PlatformGemini:
 		return []string{PlatformGemini, PlatformAntigravity}
+	case PlatformOpenAI:
+		return []string{PlatformOpenAI, PlatformKiro}
 	default:
 		return []string{nativePlatform}
 	}
@@ -5123,6 +5125,9 @@ func isAccountAllowedInMixedScheduling(account *Account, nativePlatform string) 
 	}
 	if account.Platform == nativePlatform {
 		return true
+	}
+	if nativePlatform == PlatformOpenAI {
+		return account.Platform == PlatformKiro && account.IsOpenAIKiroBridgeEnabled()
 	}
 	if !account.IsMixedSchedulingEnabled() {
 		return false

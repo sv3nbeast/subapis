@@ -306,6 +306,42 @@ func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
+const OpenAIKiroBridgeModel = "gpt-5.6-sol"
+
+// IsOpenAIKiroBridgeEnabled is the account-level opt-in for serving OpenAI groups.
+func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
+	if a == nil || a.Platform != PlatformKiro || a.Type != AccountTypeOAuth || a.Extra == nil {
+		return false
+	}
+	enabled, _ := a.Extra["openai_kiro_bridge_enabled"].(bool)
+	return enabled
+}
+
+// HasExplicitOpenAIKiroBridgeModelMapping requires an exact identity mapping.
+// Default mappings and wildcards are intentionally excluded from this trust boundary.
+func (a *Account) HasExplicitOpenAIKiroBridgeModelMapping(model string) bool {
+	if a == nil || strings.TrimSpace(model) != OpenAIKiroBridgeModel || a.Credentials == nil {
+		return false
+	}
+	raw, ok := a.Credentials["model_mapping"]
+	if !ok {
+		return false
+	}
+	switch mapping := raw.(type) {
+	case map[string]any:
+		mapped, _ := mapping[OpenAIKiroBridgeModel].(string)
+		return strings.TrimSpace(mapped) == OpenAIKiroBridgeModel
+	case map[string]string:
+		return strings.TrimSpace(mapping[OpenAIKiroBridgeModel]) == OpenAIKiroBridgeModel
+	default:
+		return false
+	}
+}
+
+func (a *Account) IsEligibleForOpenAIKiroBridge(model string) bool {
+	return a.IsOpenAIKiroBridgeEnabled() && a.HasExplicitOpenAIKiroBridgeModelMapping(model)
+}
+
 func (a *Account) GeminiOAuthType() string {
 	if a.Platform != PlatformGemini || a.Type != AccountTypeOAuth {
 		return ""

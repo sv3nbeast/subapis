@@ -97,6 +97,25 @@ function mountSelector(platform: GroupPlatform, mixedScheduling: boolean) {
   })
 }
 
+function mountKiroBridgeSelector(enabled: boolean) {
+  return mount(GroupSelector, {
+    props: {
+      modelValue: [],
+      groups,
+      platform: 'kiro',
+      mixedScheduling: false,
+      openaiKiroBridgeEnabled: enabled,
+      searchable: false
+    },
+    global: {
+      stubs: {
+        GroupBadge: GroupBadgeStub,
+        Icon: IconStub
+      }
+    }
+  })
+}
+
 describe('GroupSelector mixed scheduling filtering', () => {
   it('shows Anthropic groups for Kiro when mixed scheduling is enabled', () => {
     const wrapper = mountSelector('kiro', true)
@@ -135,5 +154,14 @@ describe('GroupSelector mixed scheduling filtering', () => {
     expect(wrapper.text()).toContain('Kiro Native')
     expect(wrapper.text()).not.toContain('Claude AWS')
     expect(wrapper.text()).not.toContain('Droid Native')
+  })
+
+  it('shows OpenAI groups only when the Kiro bridge is explicitly enabled', () => {
+    expect(mountKiroBridgeSelector(false).text()).not.toContain('OpenAI')
+
+    const wrapper = mountKiroBridgeSelector(true)
+    expect(wrapper.text()).toContain('Kiro Native')
+    expect(wrapper.text()).toContain('OpenAI')
+    expect(wrapper.text()).not.toContain('Claude AWS')
   })
 })

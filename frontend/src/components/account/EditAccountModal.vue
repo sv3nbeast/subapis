@@ -2480,6 +2480,21 @@
             </div>
           </div>
         </div>
+        <div v-if="account?.platform === 'kiro' && account?.type === 'oauth'" class="mt-3">
+          <label class="flex cursor-pointer items-center gap-2">
+            <input
+              v-model="openAIKiroBridgeEnabled"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.accounts.openAIKiroBridge') }}
+            </span>
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openAIKiroBridgeHint') }}
+          </p>
+        </div>
         <div v-if="account?.platform === 'antigravity'" class="mt-3 flex items-center gap-2">
           <label class="flex cursor-pointer items-center gap-2">
             <input
@@ -2516,6 +2531,7 @@
         :groups="groups"
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
+        :openai-kiro-bridge-enabled="openAIKiroBridgeEnabled"
         data-tour="account-form-groups"
       />
     </form>
@@ -2698,6 +2714,7 @@ const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const mixedScheduling = ref(false) // Enable cross-platform mixed scheduling for supported Claude-compatible accounts
+const openAIKiroBridgeEnabled = ref(false)
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityProjectId = ref('')
 const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
@@ -3171,9 +3188,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load mixed scheduling setting (only for antigravity accounts)
   mixedScheduling.value = false
+  openAIKiroBridgeEnabled.value = false
   allowOverages.value = false
   const extra = newAccount.extra as Record<string, unknown> | undefined
   mixedScheduling.value = extra?.mixed_scheduling === true
+  openAIKiroBridgeEnabled.value = extra?.openai_kiro_bridge_enabled === true
   allowOverages.value = extra?.allow_overages === true
   autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
@@ -4411,6 +4430,13 @@ const handleSubmit = async () => {
         } else {
           delete newExtra.enable_tls_fingerprint
           delete newExtra.tls_fingerprint_profile_id
+        }
+      }
+      if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
+        if (openAIKiroBridgeEnabled.value) {
+          newExtra.openai_kiro_bridge_enabled = true
+        } else {
+          delete newExtra.openai_kiro_bridge_enabled
         }
       }
       updatePayload.extra = newExtra

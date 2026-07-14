@@ -2375,6 +2375,103 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	return accounts, nil
 }
 
+func (s *OpenAIGatewayService) listSchedulableAccountsForSchedule(ctx context.Context, groupID *int64, platform string, allowKiroBridge bool) ([]Account, error) {
+	if !allowKiroBridge || normalizeOpenAICompatiblePlatform(platform) != PlatformOpenAI {
+		return s.listSchedulableAccounts(ctx, groupID, platform)
+	}
+	if s.schedulerSnapshot != nil {
+		return s.schedulerSnapshot.ListSchedulableAccountsWithMixedMode(ctx, groupID, PlatformOpenAI, true)
+	}
+	platforms := mixedSchedulingQueryPlatforms(PlatformOpenAI)
+	var accounts []Account
+	var err error
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
+	} else if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, *groupID, platforms)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query OpenAI/Kiro bridge accounts failed: %w", err)
+	}
+	filtered := make([]Account, 0, len(accounts))
+	for i := range accounts {
+		if isAccountAllowedInMixedScheduling(&accounts[i], PlatformOpenAI) {
+			filtered = append(filtered, accounts[i])
+		}
+	}
+	return filtered, nil
+}
+
+func (s *OpenAIGatewayService) openAIKiroBridgeEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIKiroBridgeEnabled
+}
+
+func (s *OpenAIGatewayService) isAccountEligibleForOpenAISchedule(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform != PlatformKiro {
+		return isOpenAICompatibleAccountEligibleForRequest(ctx, account, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
+	}
+	if !req.AllowKiroBridge || !s.openAIKiroBridgeEnabled() || normalizeOpenAICompatiblePlatform(req.Platform) != PlatformOpenAI || req.RequireCompact {
+		return false
+	}
+	if req.RequiredTransport != OpenAIUpstreamTransportAny && req.RequiredTransport != OpenAIUpstreamTransportHTTPSSE {
+		return false
+	}
+	if req.RequiredCapability != "" && req.RequiredCapability != OpenAIEndpointCapabilityChatCompletions {
+		return false
+	}
+	return account.IsSchedulableForModelWithContext(ctx, req.KiroBridgeModel) && account.IsEligibleForOpenAIKiroBridge(req.KiroBridgeModel)
+}
+
+func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountForSchedule(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) *Account {
+	if account == nil {
+		return nil
+	}
+	fresh := account
+	if s.schedulerSnapshot != nil || account.Platform == PlatformKiro {
+		if s.accountRepo == nil {
+			return nil
+		}
+		latest, err := s.accountRepo.GetByID(ctx, account.ID)
+		if err != nil || latest == nil {
+			return nil
+		}
+		fresh = latest
+	}
+	if !s.isAccountEligibleForOpenAISchedule(ctx, fresh, req) || s.isOpenAIAccountRuntimeBlocked(fresh) {
+		return nil
+	}
+	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
+		return nil
+	}
+	return fresh
+}
+
+func (s *OpenAIGatewayService) resolveFreshOpenAIAccountForSchedule(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) *Account {
+	if account == nil {
+		return nil
+	}
+	fresh := account
+	if s.schedulerSnapshot != nil {
+		current, err := s.getSchedulableAccount(ctx, account.ID)
+		if err != nil || current == nil {
+			return nil
+		}
+		fresh = current
+	}
+	if !s.isAccountEligibleForOpenAISchedule(ctx, fresh, req) || s.isOpenAIAccountRuntimeBlocked(fresh) {
+		return nil
+	}
+	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
+		return nil
+	}
+	return fresh
+}
+
 func (s *OpenAIGatewayService) tryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (*AcquireResult, error) {
 	if s.concurrencyService == nil {
 		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
