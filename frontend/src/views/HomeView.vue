@@ -41,9 +41,21 @@
           <router-link
             v-if="publicModelMarketEnabled"
             to="/models"
-            class="hidden rounded-lg px-3 py-2 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-100 hover:text-primary-700 dark:text-dark-300 dark:hover:bg-dark-800 dark:hover:text-primary-300 sm:inline-flex"
+            class="home-nav-text-link hidden sm:inline-flex"
           >
             {{ t('modelMarket.navLabel') }}
+          </router-link>
+          <router-link
+            to="/monitor"
+            class="home-nav-text-link hidden lg:inline-flex"
+          >
+            {{ t('nav.modelStatus') }}
+          </router-link>
+          <router-link
+            to="/docs"
+            class="home-nav-text-link hidden lg:inline-flex"
+          >
+            {{ t('nav.docs') }}
           </router-link>
           <button
             type="button"

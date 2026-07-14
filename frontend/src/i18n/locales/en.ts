@@ -1727,7 +1727,7 @@ export default {
   },
 
   modelMarket: {
-    navLabel: 'Model Market',
+    navLabel: 'Pricing & Models',
     viewModelsAndPricing: 'Models & pricing',
     home: 'Home',
     eyebrow: 'Public models and USD-equivalent pricing',

@@ -1657,7 +1657,7 @@ export default {
   },
 
   modelMarket: {
-    navLabel: '模型广场',
+    navLabel: '价格与模型',
     viewModelsAndPricing: '查看模型与价格',
     home: '首页',
     eyebrow: '公开模型与 USD 等值价格',
