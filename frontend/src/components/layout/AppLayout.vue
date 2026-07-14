@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-gray-50 dark:bg-dark-950">
+  <div class="app-shell min-h-screen bg-gray-50 dark:bg-dark-950">
     <!-- Background Decoration -->
     <div class="pointer-events-none fixed inset-0 bg-mesh-gradient"></div>
 
@@ -15,7 +15,7 @@
       <AppHeader />
 
       <!-- Main Content -->
-      <main class="app-content-shell p-4 md:p-6 lg:p-8">
+      <main class="app-content-shell p-3 md:p-4 lg:p-5">
         <slot />
       </main>
     </div>
@@ -24,7 +24,7 @@
 
 <script setup lang="ts">
 import '@/styles/onboarding.css'
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeMount, onBeforeUnmount, onMounted } from 'vue'
 import { useAppStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { useOnboardingTour } from '@/composables/useOnboardingTour'
@@ -43,6 +43,14 @@ const { replayTour } = useOnboardingTour({
 })
 
 const onboardingStore = useOnboardingStore()
+
+onBeforeMount(() => {
+  document.documentElement.classList.add('app-density-compact')
+})
+
+onBeforeUnmount(() => {
+  document.documentElement.classList.remove('app-density-compact')
+})
 
 onMounted(() => {
   onboardingStore.setReplayCallback(replayTour)

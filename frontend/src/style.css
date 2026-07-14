@@ -11,6 +11,10 @@
     @apply scroll-smooth antialiased;
   }
 
+  html.app-density-compact {
+    font-size: 15px;
+  }
+
   body {
     @apply bg-gray-50 text-gray-900 dark:bg-dark-950 dark:text-gray-100;
     @apply min-h-screen;
@@ -541,7 +545,7 @@
   }
 
   .sidebar-header {
-    @apply h-16 px-6;
+    @apply h-14 px-5;
     @apply flex items-center gap-3;
     @apply border-b border-gray-100 dark:border-dark-800;
     transition:
@@ -550,12 +554,12 @@
   }
 
   .sidebar-nav {
-    @apply flex-1 overflow-y-auto px-3 py-4;
+    @apply flex-1 overflow-y-auto px-3 py-3;
   }
 
   .sidebar-link {
     position: relative;
-    @apply flex items-center gap-3 rounded-xl py-2.5;
+    @apply flex items-center gap-2.5 rounded-lg py-2;
     @apply overflow-hidden;
     @apply text-sm font-medium;
     @apply text-gray-600 dark:text-dark-300;
@@ -596,7 +600,7 @@
   }
 
   .sidebar-section {
-    @apply mb-6;
+    @apply mb-4;
   }
 
   .sidebar-section-title {

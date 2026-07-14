@@ -172,11 +172,12 @@
 
           <template #cell-current_concurrency="{ value }">
             <span
+              data-testid="key-current-concurrency"
               :class="[
-                'inline-flex min-w-8 items-center justify-center rounded px-2 py-1 text-sm font-semibold tabular-nums',
+                'inline-flex min-w-6 items-center justify-center rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-4 tabular-nums ring-1 ring-inset transition-colors duration-150',
                 (value ?? 0) > 0
-                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-900/25 dark:text-emerald-300 dark:ring-emerald-800'
-                  : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-400'
+                  ? 'bg-emerald-50/80 text-emerald-700 ring-emerald-200/80 dark:bg-emerald-900/20 dark:text-emerald-300 dark:ring-emerald-800/80'
+                  : 'bg-gray-50 text-gray-500 ring-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:ring-dark-600'
               ]"
             >
               {{ value ?? 0 }}

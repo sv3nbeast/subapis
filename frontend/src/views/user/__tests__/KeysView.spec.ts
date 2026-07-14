@@ -371,6 +371,10 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+    const badge = wrapper.get('[data-testid="key-current-concurrency"]')
+    expect(badge.classes()).toContain('text-[11px]')
+    expect(badge.classes()).toContain('min-w-6')
+    expect(badge.classes()).not.toContain('text-sm')
   })
 
   it('marks current concurrency as sortable', async () => {
