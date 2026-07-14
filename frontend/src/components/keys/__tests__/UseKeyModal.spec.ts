@@ -124,6 +124,89 @@ describe('UseKeyModal', () => {
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
   })
 
+  it('renders a Grok OpenCode provider instead of the OpenAI GPT catalog', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-grok',
+        baseUrl: 'https://gateway.example.com',
+        platform: 'grok',
+        groupId: 42,
+        groupName: 'Grok'
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const config = JSON.parse(wrapper.find('pre code').text())
+    expect(config.provider.openai).toBeUndefined()
+    expect(config.provider.grok).toMatchObject({
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Grok',
+      options: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-grok'
+      }
+    })
+    expect(config.provider.grok.models['grok-4.5'].name).toBe('Grok 4.5')
+    expect(config.provider.grok.models['grok-build-0.1'].name).toBe('Grok Build 0.1')
+    expect(config.provider.grok.models['gpt-5.5']).toBeUndefined()
+  })
+
+  it('renders AWS-compatible Claude aliases in the Anthropic OpenCode provider', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-aws',
+        baseUrl: 'https://gateway.example.com/v1',
+        platform: 'anthropic',
+        groupId: 88,
+        groupName: 'Claude latest models - AWS'
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const config = JSON.parse(wrapper.find('pre code').text())
+    expect(config.provider.anthropic).toMatchObject({
+      npm: '@ai-sdk/anthropic',
+      options: {
+        baseURL: 'https://gateway.example.com/v1',
+        apiKey: 'sk-aws'
+      }
+    })
+    expect(config.provider.anthropic.models['claude-opus-4-8'].limit).toEqual({ context: 200000, output: 128000 })
+    expect(config.provider.anthropic.models['claude-sonnet-5'].limit).toEqual({ context: 1000000, output: 128000 })
+    expect(config.provider.anthropic.models['claude-sonnet-4-6'].limit).toEqual({ context: 200000, output: 64000 })
+    expect(config.provider.anthropic.models['claude-haiku-4-5'].limit).toEqual({ context: 200000, output: 64000 })
+    expect(config.provider.anthropic.models['claude-opus-4-8-thinking'].options.thinking).toEqual({
+      type: 'enabled',
+      budgetTokens: 24576
+    })
+  })
+
   it('includes Claude Code default model in anthropic settings config', () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -345,6 +428,81 @@ describe('UseKeyModal', () => {
       }]
     }],
     ...overrides
+  })
+
+  it('uses an enabled exact-group template as the authoritative client list', async () => {
+    const enabledTemplate = {
+      ...customTemplateProfile().templates[0],
+      id: 'group-opencode',
+      label: 'Group OpenCode',
+      kind: 'opencode',
+      variants: [{
+        id: 'default',
+        label: 'Default',
+        files: [{ path: 'opencode.json', content: '{{group_name}} {{base_url_v1}} {{api_key}}' }]
+      }]
+    }
+    const disabledTemplate = {
+      ...enabledTemplate,
+      id: 'hidden-client',
+      label: 'Hidden client',
+      enabled: false
+    }
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-group',
+        baseUrl: 'https://gateway.example.com',
+        platform: 'grok',
+        groupId: 42,
+        groupName: 'Grok fixed',
+        usageConfig: {
+          group_templates: [{
+            group_id: 42,
+            enabled: true,
+            templates: [enabledTemplate, disabledTemplate]
+          }],
+          template_profiles: [customTemplateProfile()]
+        }
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Group OpenCode')
+    expect(wrapper.text()).not.toContain('Hidden client')
+    expect(wrapper.text()).not.toContain('Grok cURL')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+    expect(wrapper.find('pre code').text()).toContain('Grok fixed https://gateway.example.com/v1 sk-group')
+  })
+
+  it('keeps built-in clients when the exact-group template belongs to another group', () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'grok',
+        groupId: 42,
+        usageConfig: {
+          group_templates: [{
+            group_id: 99,
+            enabled: true,
+            templates: customTemplateProfile().templates
+          }]
+        }
+      },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: { template: '<span />' } } }
+    })
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.opencode')
   })
 
   it('matches an arbitrary Grok platform and renders controlled placeholders', async () => {

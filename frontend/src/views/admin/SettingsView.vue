@@ -5735,6 +5735,12 @@
                 </div>
               </div>
 
+              <APIKeyGroupTemplatesEditor
+                v-model="apiKeyUsageConfig.group_templates"
+                :groups="apiKeyTemplateGroups"
+                @validity="apiKeyGroupTemplatesValid = $event"
+              />
+
               <APIKeyTemplateProfilesEditor
                 v-model="apiKeyUsageConfig.template_profiles"
                 :groups="apiKeyTemplateGroups"
@@ -5746,7 +5752,7 @@
                   type="button"
                   class="btn btn-primary btn-sm"
                   data-testid="api-key-usage-save"
-                  :disabled="apiKeyUsageSaving || !apiKeyTemplateProfilesValid"
+                  :disabled="apiKeyUsageSaving || !apiKeyGroupTemplatesValid || !apiKeyTemplateProfilesValid"
                   @click="saveAPIKeyUsageConfig"
                 >
                   {{ apiKeyUsageSaving ? t("common.saving") : t("common.save") }}
@@ -7784,6 +7790,7 @@ import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vu
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
+import APIKeyGroupTemplatesEditor from "@/components/admin/APIKeyGroupTemplatesEditor.vue";
 import APIKeyTemplateProfilesEditor from "@/components/admin/APIKeyTemplateProfilesEditor.vue";
 import WebChatSystemTemplatesEditor from "@/components/admin/WebChatSystemTemplatesEditor.vue";
 import WebChatDocumentSettings from "@/components/admin/WebChatDocumentSettings.vue";
@@ -8777,6 +8784,7 @@ const DEFAULT_API_KEY_USAGE_CONFIG: APIKeyUsageConfig = {
   codex_websocket_enabled: true,
   codex_include_legacy_ws_feature: false,
   codex_extra_config: "",
+  group_templates: [],
   template_profiles: [],
 };
 const apiKeyUsageConfig = reactive<APIKeyUsageConfig>({
@@ -8784,6 +8792,7 @@ const apiKeyUsageConfig = reactive<APIKeyUsageConfig>({
 });
 const apiKeyUsageLoading = ref(false);
 const apiKeyUsageSaving = ref(false);
+const apiKeyGroupTemplatesValid = ref(true);
 const apiKeyTemplateProfilesValid = ref(true);
 const apiKeyTemplateGroups = ref<AdminGroup[]>([]);
 const codexReasoningEffortOptions = computed(() =>

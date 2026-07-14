@@ -16,6 +16,7 @@ const maxAPIKeyUsageExtraConfigBytes = 16 * 1024
 
 const (
 	maxAPIKeyUsageTemplateProfiles     = 50
+	maxAPIKeyUsageGroupTemplates       = 50
 	maxAPIKeyUsageTemplatesPerProfile  = 20
 	maxAPIKeyUsageVariantsPerTemplate  = 10
 	maxAPIKeyUsageFilesPerVariant      = 10
@@ -83,6 +84,16 @@ type APIKeyUsageTemplateProfile struct {
 	Templates []APIKeyUsageClientTemplate `json:"templates"`
 }
 
+// APIKeyUsageGroupTemplate stores an exact-group template selection. When an
+// enabled entry matches a key's group, its enabled templates replace the
+// built-in client tabs. This is the simple path for group-specific snippets;
+// TemplateProfiles remains available for advanced matching and composition.
+type APIKeyUsageGroupTemplate struct {
+	GroupID   int64                       `json:"group_id"`
+	Enabled   bool                        `json:"enabled"`
+	Templates []APIKeyUsageClientTemplate `json:"templates"`
+}
+
 // APIKeyUsageConfig controls defaults rendered in the user-facing "Use key" dialog.
 type APIKeyUsageConfig struct {
 	ClaudeCodeDefaultModel               string                       `json:"claude_code_default_model"`
@@ -98,6 +109,7 @@ type APIKeyUsageConfig struct {
 	CodexWebSocketEnabled                bool                         `json:"codex_websocket_enabled"`
 	CodexIncludeLegacyWSFeature          bool                         `json:"codex_include_legacy_ws_feature"`
 	CodexExtraConfig                     string                       `json:"codex_extra_config"`
+	GroupTemplates                       []APIKeyUsageGroupTemplate   `json:"group_templates"`
 	TemplateProfiles                     []APIKeyUsageTemplateProfile `json:"template_profiles"`
 }
 
@@ -115,6 +127,7 @@ func DefaultAPIKeyUsageConfig() *APIKeyUsageConfig {
 		CodexGoalsEnabled:                    true,
 		CodexWebSocketEnabled:                true,
 		CodexIncludeLegacyWSFeature:          false,
+		GroupTemplates:                       []APIKeyUsageGroupTemplate{},
 		TemplateProfiles:                     []APIKeyUsageTemplateProfile{},
 	}
 }
@@ -143,9 +156,72 @@ func normalizeAPIKeyUsageConfig(cfg *APIKeyUsageConfig) *APIKeyUsageConfig {
 		normalized.ClaudeCodeAttributionHeader = 0
 	}
 	normalized.CodexExtraConfig = strings.TrimSpace(normalized.CodexExtraConfig)
+	groupTemplates, _ := normalizeAPIKeyUsageGroupTemplates(normalized.GroupTemplates, false)
+	normalized.GroupTemplates = groupTemplates
 	profiles, _ := normalizeAPIKeyUsageTemplateProfiles(normalized.TemplateProfiles, false)
 	normalized.TemplateProfiles = profiles
 	return &normalized
+}
+
+func normalizeAPIKeyUsageGroupTemplates(configs []APIKeyUsageGroupTemplate, strict bool) ([]APIKeyUsageGroupTemplate, error) {
+	if len(configs) > maxAPIKeyUsageGroupTemplates {
+		if strict {
+			return nil, fmt.Errorf("group_templates exceeds %d entries", maxAPIKeyUsageGroupTemplates)
+		}
+		configs = configs[:maxAPIKeyUsageGroupTemplates]
+	}
+
+	profiles := make([]APIKeyUsageTemplateProfile, 0, len(configs))
+	enabledByProfileID := make(map[string]bool, len(configs))
+	groupIDByProfileID := make(map[string]int64, len(configs))
+	seenGroupIDs := make(map[int64]struct{}, len(configs))
+	for index, config := range configs {
+		if config.GroupID <= 0 {
+			if strict {
+				return nil, fmt.Errorf("group_templates[%d].group_id must be positive", index)
+			}
+			continue
+		}
+		if _, exists := seenGroupIDs[config.GroupID]; exists {
+			if strict {
+				return nil, fmt.Errorf("group_templates[%d]: duplicate group_id %d", index, config.GroupID)
+			}
+			continue
+		}
+
+		profileID := fmt.Sprintf("group-%d", config.GroupID)
+		seenGroupIDs[config.GroupID] = struct{}{}
+		enabledByProfileID[profileID] = config.Enabled
+		groupIDByProfileID[profileID] = config.GroupID
+		profiles = append(profiles, APIKeyUsageTemplateProfile{
+			ID:        profileID,
+			Name:      profileID,
+			Enabled:   true,
+			Priority:  0,
+			Mode:      APIKeyUsageTemplateModeAppend,
+			Match:     APIKeyUsageTemplateMatch{ClaudeCodeOnly: APIKeyUsageClaudeCodeOnlyAny},
+			Templates: config.Templates,
+		})
+	}
+
+	normalizedProfiles, err := normalizeAPIKeyUsageTemplateProfiles(profiles, strict)
+	if err != nil {
+		return nil, fmt.Errorf("group_templates: %s", strings.ReplaceAll(err.Error(), "template_profiles", "templates"))
+	}
+
+	normalized := make([]APIKeyUsageGroupTemplate, 0, len(normalizedProfiles))
+	for _, profile := range normalizedProfiles {
+		groupID, exists := groupIDByProfileID[profile.ID]
+		if !exists {
+			continue
+		}
+		normalized = append(normalized, APIKeyUsageGroupTemplate{
+			GroupID:   groupID,
+			Enabled:   enabledByProfileID[profile.ID],
+			Templates: profile.Templates,
+		})
+	}
+	return normalized, nil
 }
 
 func normalizeAPIKeyUsageTemplateProfiles(profiles []APIKeyUsageTemplateProfile, strict bool) ([]APIKeyUsageTemplateProfile, error) {
@@ -402,10 +478,15 @@ func (s *SettingService) SetAPIKeyUsageConfig(ctx context.Context, cfg *APIKeyUs
 			fmt.Sprintf("codex_extra_config exceeds %d bytes", maxAPIKeyUsageExtraConfigBytes),
 		)
 	}
+	groupTemplates, err := normalizeAPIKeyUsageGroupTemplates(cfg.GroupTemplates, true)
+	if err != nil {
+		return infraerrors.BadRequest("API_KEY_USAGE_GROUP_TEMPLATE_CONFIG_INVALID", err.Error())
+	}
 	profiles, err := normalizeAPIKeyUsageTemplateProfiles(cfg.TemplateProfiles, true)
 	if err != nil {
 		return infraerrors.BadRequest("API_KEY_USAGE_TEMPLATE_CONFIG_INVALID", err.Error())
 	}
+	normalized.GroupTemplates = groupTemplates
 	normalized.TemplateProfiles = profiles
 	data, err := json.Marshal(normalized)
 	if err != nil {

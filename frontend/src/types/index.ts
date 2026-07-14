@@ -244,6 +244,12 @@ export interface APIKeyUsageTemplateProfile {
   templates: APIKeyUsageClientTemplate[]
 }
 
+export interface APIKeyUsageGroupTemplate {
+  group_id: number
+  enabled: boolean
+  templates: APIKeyUsageClientTemplate[]
+}
+
 export interface APIKeyUsageConfig {
   claude_code_default_model: string
   claude_code_disable_nonessential_traffic: boolean
@@ -258,6 +264,7 @@ export interface APIKeyUsageConfig {
   codex_websocket_enabled: boolean
   codex_include_legacy_ws_feature: boolean
   codex_extra_config: string
+  group_templates: APIKeyUsageGroupTemplate[]
   template_profiles: APIKeyUsageTemplateProfile[]
 }
 

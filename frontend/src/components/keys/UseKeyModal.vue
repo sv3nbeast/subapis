@@ -204,6 +204,7 @@ const DEFAULT_USAGE_CONFIG: APIKeyUsageConfig = {
   codex_websocket_enabled: true,
   codex_include_legacy_ws_feature: false,
   codex_extra_config: '',
+  group_templates: [],
   template_profiles: []
 }
 const usageConfig = computed<APIKeyUsageConfig>(() => ({
@@ -347,20 +348,13 @@ function profileMatches(profile: APIKeyUsageTemplateProfile): boolean {
 
 const clientTabs = computed((): ClientTabConfig[] => {
   const tabs = new Map<string, ClientTabConfig>()
-  builtInClientTabs.value.forEach((tab) => tabs.set(tab.id, tab))
+  const groupTemplate = (usageConfig.value.group_templates || []).find((config) => (
+    config.enabled && props.groupId && config.group_id === props.groupId
+  ))
 
-  const profiles = (usageConfig.value.template_profiles || [])
-    .map((profile, index) => ({ profile, index }))
-    .filter(({ profile }) => profileMatches(profile))
-    .sort((left, right) => left.profile.priority - right.profile.priority || left.index - right.index)
-
-  profiles.forEach(({ profile }) => {
-    if (profile.mode === 'replace') tabs.clear()
-    profile.templates.forEach((template) => {
-      if (!template.enabled) {
-        tabs.delete(template.id)
-        return
-      }
+  if (groupTemplate) {
+    groupTemplate.templates.forEach((template) => {
+      if (!template.enabled) return
       tabs.set(template.id, {
         id: template.id,
         label: template.label,
@@ -370,7 +364,32 @@ const clientTabs = computed((): ClientTabConfig[] => {
         custom: template
       })
     })
-  })
+  } else {
+    builtInClientTabs.value.forEach((tab) => tabs.set(tab.id, tab))
+
+    const profiles = (usageConfig.value.template_profiles || [])
+      .map((profile, index) => ({ profile, index }))
+      .filter(({ profile }) => profileMatches(profile))
+      .sort((left, right) => left.profile.priority - right.profile.priority || left.index - right.index)
+
+    profiles.forEach(({ profile }) => {
+      if (profile.mode === 'replace') tabs.clear()
+      profile.templates.forEach((template) => {
+        if (!template.enabled) {
+          tabs.delete(template.id)
+          return
+        }
+        tabs.set(template.id, {
+          id: template.id,
+          label: template.label,
+          icon: template.kind === 'gemini_cli' ? SparkleIcon : TerminalIcon,
+          kind: template.kind,
+          sortOrder: template.sort_order,
+          custom: template
+        })
+      })
+    })
+  }
 
   const resolved = [...tabs.values()]
     .filter((tab) => !props.claudeCodeOnly || tab.kind === 'claude_code')
@@ -550,6 +569,8 @@ const currentFiles = computed((): FileConfig[] => {
         return [generateOpenCodeConfig('openai', apiBase, apiKey)]
       case 'gemini':
         return [generateOpenCodeConfig('gemini', geminiBase, apiKey)]
+      case 'grok':
+        return [generateOpenCodeConfig('grok', apiBase, apiKey)]
       case 'antigravity':
         return [
           generateOpenCodeConfig('antigravity-claude', antigravityBase, apiKey, 'opencode.json (Claude)'),
@@ -921,6 +942,30 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const grokModels = {
+    'grok-4.5': {
+      name: 'Grok 4.5'
+    },
+    'grok-4.3': {
+      name: 'Grok 4.3'
+    },
+    'grok-build-0.1': {
+      name: 'Grok Build 0.1'
+    },
+    'grok-composer-2.5-fast': {
+      name: 'Grok Composer 2.5 Fast'
+    },
+    'grok-4.20-0309-reasoning': {
+      name: 'Grok 4.20 Reasoning',
+      reasoning: true
+    },
+    'grok-4.20-0309-non-reasoning': {
+      name: 'Grok 4.20 Non Reasoning'
+    },
+    'grok-4.20-multi-agent-0309': {
+      name: 'Grok 4.20 Multi Agent'
+    }
+  }
   const geminiModels = {
     'gemini-2.0-flash': {
       name: 'Gemini 2.0 Flash',
@@ -1157,57 +1202,37 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const claudeModel = (
+    name: string,
+    context: number,
+    output: number,
+    thinking?: { type: 'adaptive' | 'enabled'; budgetTokens?: number }
+  ) => ({
+    name,
+    limit: { context, output },
+    modalities: {
+      input: ['text', 'image', 'pdf'],
+      output: ['text']
+    },
+    ...(thinking ? { options: { thinking } } : {})
+  })
   const claudeModels = {
-    'claude-fable-5': {
-      name: 'Claude Fable 5',
-      limit: {
-        context: 1048576,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          type: 'adaptive'
-        }
-      }
-    },
-    'claude-opus-4-6-thinking': {
-      name: 'Claude 4.6 Opus (Thinking)',
-      limit: {
-        context: 200000,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'claude-sonnet-4-6': {
-      name: 'Claude 4.6 Sonnet',
-      limit: {
-        context: 200000,
-        output: 64000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
+    'claude-fable-5': claudeModel('Claude Fable 5', 1048576, 128000, { type: 'adaptive' }),
+    'claude-sonnet-5': claudeModel('Claude Sonnet 5', 1000000, 128000),
+    'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
+    'claude-opus-4-8-thinking': claudeModel('Claude Opus 4.8 (Thinking)', 200000, 128000, { type: 'enabled', budgetTokens: 24576 }),
+    'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),
+    'claude-opus-4-6': claudeModel('Claude Opus 4.6', 200000, 128000),
+    'claude-opus-4-6-thinking': claudeModel('Claude Opus 4.6 (Thinking)', 200000, 128000, { type: 'enabled', budgetTokens: 24576 }),
+    'claude-sonnet-4-6': claudeModel('Claude Sonnet 4.6', 200000, 64000),
+    'claude-sonnet-4-6-thinking': claudeModel('Claude Sonnet 4.6 (Thinking)', 200000, 64000, { type: 'enabled', budgetTokens: 24576 }),
+    'claude-opus-4-5-20251101': claudeModel('Claude Opus 4.5', 200000, 64000),
+    'claude-opus-4-5-thinking': claudeModel('Claude Opus 4.5 (Thinking)', 200000, 64000, { type: 'enabled', budgetTokens: 24576 }),
+    'claude-sonnet-4-5': claudeModel('Claude Sonnet 4.5', 200000, 64000),
+    'claude-sonnet-4-5-thinking': claudeModel('Claude Sonnet 4.5 (Thinking)', 200000, 64000, { type: 'enabled', budgetTokens: 24576 }),
+    'claude-sonnet-4-5-20250929': claudeModel('Claude Sonnet 4.5 (Versioned)', 200000, 64000),
+    'claude-haiku-4-5': claudeModel('Claude Haiku 4.5', 200000, 64000),
+    'claude-haiku-4-5-20251001': claudeModel('Claude Haiku 4.5 (Versioned)', 200000, 64000)
   }
 
   if (platform === 'gemini') {
@@ -1215,6 +1240,11 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].models = geminiModels
   } else if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
+    provider[platform].models = claudeModels
+  } else if (platform === 'grok') {
+    provider[platform].npm = '@ai-sdk/openai-compatible'
+    provider[platform].name = 'Grok'
+    provider[platform].models = grokModels
   } else if (platform === 'antigravity-claude') {
     provider[platform].npm = '@ai-sdk/anthropic'
     provider[platform].name = 'Antigravity (Claude)'

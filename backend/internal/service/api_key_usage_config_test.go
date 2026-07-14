@@ -182,8 +182,63 @@ func validAPIKeyUsageTemplateProfile() APIKeyUsageTemplateProfile {
 func TestParseAPIKeyUsageConfigSupportsMissingTemplateProfiles(t *testing.T) {
 	cfg := parseAPIKeyUsageConfig(`{"codex_model":"gpt-compatible"}`)
 
+	require.NotNil(t, cfg.GroupTemplates)
+	require.Empty(t, cfg.GroupTemplates)
 	require.NotNil(t, cfg.TemplateProfiles)
 	require.Empty(t, cfg.TemplateProfiles)
+}
+
+func validAPIKeyUsageGroupTemplate(groupID int64) APIKeyUsageGroupTemplate {
+	profile := validAPIKeyUsageTemplateProfile()
+	return APIKeyUsageGroupTemplate{
+		GroupID:   groupID,
+		Enabled:   true,
+		Templates: profile.Templates,
+	}
+}
+
+func TestNormalizeAPIKeyUsageGroupTemplatesRejectsDuplicateGroups(t *testing.T) {
+	_, err := normalizeAPIKeyUsageGroupTemplates([]APIKeyUsageGroupTemplate{
+		validAPIKeyUsageGroupTemplate(7),
+		validAPIKeyUsageGroupTemplate(7),
+	}, true)
+
+	require.ErrorContains(t, err, "duplicate group_id 7")
+}
+
+func TestSetAPIKeyUsageConfigRejectsInvalidGroupTemplate(t *testing.T) {
+	repo := &apiKeyUsageSettingRepoStub{values: map[string]string{}}
+	service := NewSettingService(repo, &config.Config{})
+	groupTemplate := validAPIKeyUsageGroupTemplate(0)
+
+	err := service.SetAPIKeyUsageConfig(context.Background(), &APIKeyUsageConfig{
+		GroupTemplates: []APIKeyUsageGroupTemplate{groupTemplate},
+	})
+
+	require.ErrorContains(t, err, "group_id must be positive")
+	require.NotContains(t, repo.values, SettingKeyAPIKeyUsageConfig)
+}
+
+func TestAPIKeyUsageGroupTemplatesPersistAndArePublic(t *testing.T) {
+	repo := &apiKeyUsageSettingRepoStub{values: map[string]string{}}
+	service := NewSettingService(repo, &config.Config{})
+
+	err := service.SetAPIKeyUsageConfig(context.Background(), &APIKeyUsageConfig{
+		GroupTemplates: []APIKeyUsageGroupTemplate{validAPIKeyUsageGroupTemplate(42)},
+	})
+	require.NoError(t, err)
+
+	stored, err := service.GetAPIKeyUsageConfig(context.Background())
+	require.NoError(t, err)
+	require.Len(t, stored.GroupTemplates, 1)
+	require.Equal(t, int64(42), stored.GroupTemplates[0].GroupID)
+	require.True(t, stored.GroupTemplates[0].Enabled)
+	require.Equal(t, "claude_code", stored.GroupTemplates[0].Templates[0].Kind)
+
+	settings, err := service.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.Len(t, settings.APIKeyUsageConfig.GroupTemplates, 1)
+	require.Contains(t, settings.APIKeyUsageConfig.GroupTemplates[0].Templates[0].Variants[0].Files[0].Content, "{{api_key}}")
 }
 
 func TestNormalizeAPIKeyUsageTemplateProfilesNormalizesMatchValues(t *testing.T) {

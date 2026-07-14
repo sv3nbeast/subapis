@@ -636,6 +636,18 @@ describe("admin SettingsView payment visible method controls", () => {
       codex_websocket_enabled: true,
       codex_include_legacy_ws_feature: false,
       codex_extra_config: "service_tier = \"fast\"",
+      group_templates: [{
+        group_id: 42,
+        enabled: true,
+        templates: [{
+          id: "opencode",
+          label: "AWS OpenCode",
+          kind: "opencode",
+          enabled: true,
+          sort_order: 10,
+          variants: [{ id: "default", label: "Default", files: [{ path: "opencode.json", content: "{\"provider\":{}}" }] }],
+        }],
+      }],
       template_profiles: [{
         id: "grok-custom",
         name: "Grok custom",
@@ -659,6 +671,7 @@ describe("admin SettingsView payment visible method controls", () => {
 
     const modelInput = wrapper.get('[data-testid="api-key-usage-codex-model"]');
     expect((modelInput.element as HTMLInputElement).value).toBe("gpt-custom");
+    expect(wrapper.get('[data-testid="api-key-group-templates"]').text()).toContain("AWS OpenCode");
     expect(wrapper.get('[data-testid="api-key-template-profiles"]').text()).toContain("Grok custom");
 
     await modelInput.setValue("  gpt-admin-default  ");
@@ -671,6 +684,9 @@ describe("admin SettingsView payment visible method controls", () => {
         codex_model: "gpt-admin-default",
         codex_review_model: "gpt-review",
         codex_extra_config: 'service_tier = "fast"',
+        group_templates: expect.arrayContaining([
+          expect.objectContaining({ group_id: 42 }),
+        ]),
         template_profiles: expect.arrayContaining([
           expect.objectContaining({ id: "grok-custom" }),
         ]),
