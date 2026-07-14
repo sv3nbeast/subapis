@@ -129,10 +129,22 @@ var DefaultAntigravityModelMapping = map[string]string{
 
 // DefaultKiroModelMapping 是 Kiro 平台的默认模型映射。
 // 键为对外暴露/允许请求的模型名，值为实际发送到 Kiro 上游的模型名。
-const KiroNativeGPTModel = "gpt-5.6-sol"
+const (
+	KiroNativeGPTModel      = "gpt-5.6-sol"
+	KiroNativeGPTTerraModel = "gpt-5.6-terra"
+	KiroNativeGPTLunaModel  = "gpt-5.6-luna"
+)
+
+var KiroNativeGPTModels = [...]string{
+	KiroNativeGPTModel,
+	KiroNativeGPTTerraModel,
+	KiroNativeGPTLunaModel,
+}
 
 var DefaultKiroModelMapping = map[string]string{
 	KiroNativeGPTModel:                    KiroNativeGPTModel,
+	KiroNativeGPTTerraModel:               KiroNativeGPTTerraModel,
+	KiroNativeGPTLunaModel:                KiroNativeGPTLunaModel,
 	"claude-sonnet-5":                     "claude-sonnet-5",
 	"claude-opus-4-8":                     "claude-opus-4.8",
 	"claude-opus-4-8-thinking":            "claude-opus-4.8",

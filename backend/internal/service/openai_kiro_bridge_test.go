@@ -29,6 +29,10 @@ func (r openAIKiroBridgeAccountRepo) ListSchedulableByGroupIDAndPlatforms(_ cont
 }
 
 func bridgeTestAccount(id int64, platform string, priority int, groupID int64) Account {
+	modelMapping := make(map[string]any, len(OpenAIKiroBridgeModels))
+	for _, model := range OpenAIKiroBridgeModels {
+		modelMapping[model] = model
+	}
 	account := Account{
 		ID:          id,
 		Name:        platform,
@@ -39,7 +43,7 @@ func bridgeTestAccount(id int64, platform string, priority int, groupID int64) A
 		Priority:    priority,
 		GroupIDs:    []int64{groupID},
 		Credentials: map[string]any{
-			"model_mapping": map[string]any{OpenAIKiroBridgeModel: OpenAIKiroBridgeModel},
+			"model_mapping": modelMapping,
 		},
 	}
 	if platform == PlatformKiro {
@@ -53,17 +57,23 @@ func bridgeTestAccount(id int64, platform string, priority int, groupID int64) A
 
 func TestAccountOpenAIKiroBridgeEligibilityRequiresEveryGate(t *testing.T) {
 	base := bridgeTestAccount(1, PlatformKiro, 1, 7)
-	require.True(t, base.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+	for _, model := range OpenAIKiroBridgeModels {
+		require.True(t, base.IsEligibleForOpenAIKiroBridge(model), model)
+	}
 
 	withoutAccountMapping := base
 	withoutAccountMapping.Credentials = map[string]any{}
-	require.True(t, withoutAccountMapping.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+	for _, model := range OpenAIKiroBridgeModels {
+		require.True(t, withoutAccountMapping.IsEligibleForOpenAIKiroBridge(model), model)
+	}
 
 	customClaudeMapping := base
 	customClaudeMapping.Credentials = map[string]any{
 		"model_mapping": map[string]any{"claude-sonnet-5": "claude-sonnet-5"},
 	}
-	require.True(t, customClaudeMapping.IsEligibleForOpenAIKiroBridge(OpenAIKiroBridgeModel))
+	for _, model := range OpenAIKiroBridgeModels {
+		require.True(t, customClaudeMapping.IsEligibleForOpenAIKiroBridge(model), model)
+	}
 
 	tests := []struct {
 		name   string
@@ -112,13 +122,16 @@ func TestSelectAccountWithSchedulerForKiroBridgeUsesSharedPriority(t *testing.T)
 		RequiredCapability: OpenAIEndpointCapabilityChatCompletions, AllowKiroBridge: true, KiroBridgeModel: OpenAIKiroBridgeModel,
 	}))
 
-	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
-		context.Background(), &groupID, "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, selection)
-	require.NotNil(t, selection.Account)
-	require.Equal(t, kiroAccount.ID, selection.Account.ID)
+	var selection *AccountSelectionResult
+	for _, model := range OpenAIKiroBridgeModels {
+		selection, _, err = svc.SelectAccountWithSchedulerForKiroBridge(
+			context.Background(), &groupID, "", model, model, nil,
+		)
+		require.NoError(t, err, model)
+		require.NotNil(t, selection, model)
+		require.NotNil(t, selection.Account, model)
+		require.Equal(t, kiroAccount.ID, selection.Account.ID, model)
+	}
 
 	kiroAccount.Extra["openai_kiro_bridge_enabled"] = false
 	repo.accounts = []Account{openAIAccount, kiroAccount}

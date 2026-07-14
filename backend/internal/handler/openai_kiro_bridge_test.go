@@ -60,9 +60,11 @@ func TestOpenAIKiroBridgeEndpointScope(t *testing.T) {
 		t.Run(tt.path, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest("POST", tt.path, nil)
-			require.Equal(t, tt.responses, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformOpenAI, service.OpenAIKiroBridgeModel))
-			require.Equal(t, tt.chat, isOpenAIKiroBridgeChatRequest(c, service.PlatformOpenAI, service.OpenAIKiroBridgeModel))
-			require.False(t, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformGrok, service.OpenAIKiroBridgeModel))
+			for _, model := range service.OpenAIKiroBridgeModels {
+				require.Equal(t, tt.responses, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformOpenAI, model), model)
+				require.Equal(t, tt.chat, isOpenAIKiroBridgeChatRequest(c, service.PlatformOpenAI, model), model)
+				require.False(t, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformGrok, model), model)
+			}
 			require.False(t, isOpenAIKiroBridgeChatRequest(c, service.PlatformOpenAI, "gpt-5.4"))
 		})
 	}

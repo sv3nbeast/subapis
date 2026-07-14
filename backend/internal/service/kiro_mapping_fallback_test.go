@@ -14,8 +14,10 @@ func TestAccountKiroDefaultMappingRestrictsUnsupportedModels(t *testing.T) {
 	account := &Account{Platform: PlatformKiro}
 
 	require.False(t, account.IsModelSupported("gpt-4o"))
-	require.True(t, account.IsModelSupported("gpt-5.6-sol"))
-	require.Equal(t, "gpt-5.6-sol", account.GetMappedModel("gpt-5.6-sol"))
+	for _, model := range OpenAIKiroBridgeModels {
+		require.True(t, account.IsModelSupported(model), model)
+		require.Equal(t, model, account.GetMappedModel(model), model)
+	}
 	require.False(t, account.IsModelSupported("kiro-gpt-4o"))
 	require.False(t, account.IsModelSupported("auto"))
 	require.Equal(t, "claude-sonnet-4.6", account.GetMappedModel("claude-sonnet-4-6"))
@@ -35,8 +37,10 @@ func TestAccountKiroCustomMappingIncludesNativeGPTDefault(t *testing.T) {
 		},
 	}
 
-	require.True(t, account.IsModelSupported("gpt-5.6-sol"))
-	require.Equal(t, "gpt-5.6-sol", account.GetMappedModel("gpt-5.6-sol"))
+	for _, model := range OpenAIKiroBridgeModels {
+		require.True(t, account.IsModelSupported(model), model)
+		require.Equal(t, model, account.GetMappedModel(model), model)
+	}
 	require.False(t, account.IsModelSupported("gpt-4o"))
 }
 
@@ -53,6 +57,24 @@ func TestAccountKiroExplicitGPTOverrideRemainsAuthoritative(t *testing.T) {
 	require.True(t, account.IsModelSupported("gpt-5.6-sol"))
 	require.Equal(t, "claude-sonnet-5", account.GetMappedModel("gpt-5.6-sol"))
 	require.False(t, account.SupportsOpenAIKiroBridgeModel("gpt-5.6-sol"))
+	require.True(t, account.SupportsOpenAIKiroBridgeModel("gpt-5.6-terra"))
+	require.True(t, account.SupportsOpenAIKiroBridgeModel("gpt-5.6-luna"))
+}
+
+func TestAccountKiroWildcardGPTOverrideRemainsAuthoritative(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.6-*": "auto",
+			},
+		},
+	}
+
+	for _, model := range OpenAIKiroBridgeModels {
+		require.Equal(t, "auto", account.GetMappedModel(model), model)
+		require.False(t, account.SupportsOpenAIKiroBridgeModel(model), model)
+	}
 }
 
 func TestAccountKiroExplicitMappingAddsClaude45ShortAliases(t *testing.T) {

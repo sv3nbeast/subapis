@@ -308,6 +308,18 @@ func (a *Account) IsOpenAICompatible() bool {
 
 const OpenAIKiroBridgeModel = domain.KiroNativeGPTModel
 
+var OpenAIKiroBridgeModels = domain.KiroNativeGPTModels
+
+func IsOpenAIKiroBridgeModel(model string) bool {
+	model = strings.TrimSpace(model)
+	for _, supported := range OpenAIKiroBridgeModels {
+		if model == supported {
+			return true
+		}
+	}
+	return false
+}
+
 // IsOpenAIKiroBridgeEnabled is the account-level opt-in for serving OpenAI groups.
 func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
 	if a == nil || a.Platform != PlatformKiro || a.Type != AccountTypeOAuth || a.Extra == nil {
@@ -322,7 +334,7 @@ func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
 // explicit account or wildcard override remains authoritative.
 func (a *Account) SupportsOpenAIKiroBridgeModel(model string) bool {
 	model = strings.TrimSpace(model)
-	if a == nil || model != OpenAIKiroBridgeModel {
+	if a == nil || !IsOpenAIKiroBridgeModel(model) {
 		return false
 	}
 	mapped, matched := a.ResolveMappedModel(model)
@@ -684,7 +696,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
 		if a.Platform == domain.PlatformKiro {
-			ensureKiroNativeGPTDefault(result)
+			ensureKiroNativeGPTDefaults(result)
 			ensureKiroVersionAliases(result)
 		}
 		return result
@@ -794,20 +806,25 @@ func ensureKiroVersionAliases(mapping map[string]string) {
 	}
 }
 
-func ensureKiroNativeGPTDefault(mapping map[string]string) {
+func ensureKiroNativeGPTDefaults(mapping map[string]string) {
 	if mapping == nil {
 		return
 	}
-	model := domain.KiroNativeGPTModel
-	if _, exists := mapping[model]; exists {
-		return
-	}
-	for pattern := range mapping {
-		if matchWildcard(pattern, model) {
-			return
+	for _, model := range domain.KiroNativeGPTModels {
+		if _, exists := mapping[model]; exists {
+			continue
+		}
+		matched := false
+		for pattern := range mapping {
+			if matchWildcard(pattern, model) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			mapping[model] = model
 		}
 	}
-	mapping[model] = model
 }
 
 func ensureKiroVersionAlias(mapping map[string]string, alias, canonical string) {

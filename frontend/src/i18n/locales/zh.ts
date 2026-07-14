@@ -4857,7 +4857,7 @@ export default {
       mixedSchedulingTooltip:
         '！！注意！！ Antigravity Claude 和 Anthropic Claude 无法在同个上下文中使用，如果你同时有 Anthropic 账号和 Antigravity 账号，开启此选项会导致经常 400 报错。开启后，请用分组功能做好 Antigravity 账号和 Anthropic 账号的隔离。一定要弄明白再开启！！',
       openAIKiroBridge: '用于 OpenAI 分组',
-      openAIKiroBridgeHint: '账号绑定 OpenAI 分组后，可通过 Kiro 原生 GPT 模型转发 gpt-5.6-sol。',
+      openAIKiroBridgeHint: '账号绑定 OpenAI 分组后，可通过 Kiro 转发 gpt-5.6-sol、gpt-5.6-terra 和 gpt-5.6-luna。',
       aiCreditsBalance: 'AI Credits',
       allowOverages: '允许超量请求 (AI Credits)',
       allowOveragesTooltip: '仅在免费配额被明确判定为耗尽后才会使用 AI Credits。普通并发 429 限流不会切换到超量请求。',

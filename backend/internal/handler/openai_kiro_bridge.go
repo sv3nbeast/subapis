@@ -18,11 +18,11 @@ func openAIKiroBridgeModel(requestedModel string, mapping service.ChannelMapping
 }
 
 func isOpenAIKiroBridgeResponsesRequest(c *gin.Context, requestPlatform string, model string) bool {
-	return requestPlatform == service.PlatformOpenAI && model == service.OpenAIKiroBridgeModel && isBareOpenAIResponsesPath(c)
+	return requestPlatform == service.PlatformOpenAI && service.IsOpenAIKiroBridgeModel(model) && isBareOpenAIResponsesPath(c)
 }
 
 func isOpenAIKiroBridgeChatRequest(c *gin.Context, requestPlatform string, model string) bool {
-	if requestPlatform != service.PlatformOpenAI || model != service.OpenAIKiroBridgeModel || c == nil || c.Request == nil || c.Request.URL == nil {
+	if requestPlatform != service.PlatformOpenAI || !service.IsOpenAIKiroBridgeModel(model) || c == nil || c.Request == nil || c.Request.URL == nil {
 		return false
 	}
 	path := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")

@@ -1747,7 +1747,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	platform = normalizeOpenAICompatiblePlatform(platform)
 	decision := OpenAIAccountScheduleDecision{}
-	allowKiroBridge = allowKiroBridge && s.openAIKiroBridgeEnabled() && platform == PlatformOpenAI && !requireCompact && strings.TrimSpace(kiroBridgeModel) == OpenAIKiroBridgeModel
+	allowKiroBridge = allowKiroBridge && s.openAIKiroBridgeEnabled() && platform == PlatformOpenAI && !requireCompact && IsOpenAIKiroBridgeModel(kiroBridgeModel)
 	scheduler := s.getOpenAIAccountScheduler(ctx)
 	if scheduler == nil && allowKiroBridge {
 		scheduler = s.getOrCreateOpenAIAccountScheduler()

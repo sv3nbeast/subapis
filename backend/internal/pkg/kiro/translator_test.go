@@ -705,30 +705,34 @@ func TestBuildKiroPayloadOptionsSupportsSonnet5NativeEffort(t *testing.T) {
 	require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
 }
 
-func TestBuildKiroPayloadOptionsSupportsNativeGPTModel(t *testing.T) {
-	body := []byte(`{
-		"model":"gpt-5.6-sol",
-		"max_tokens":999999,
-		"output_config":{"effort":"max"},
-		"messages":[{"role":"user","content":"hello kiro"}]
-	}`)
+func TestBuildKiroPayloadOptionsSupportsNativeGPTModels(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		t.Run(model, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{
+				"model":%q,
+				"max_tokens":999999,
+				"output_config":{"effort":"max"},
+				"messages":[{"role":"user","content":"hello kiro"}]
+			}`, model))
 
-	result, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
-		UseNativeEffort:            true,
-		InjectThinkingSystemPrompt: false,
-	})
-	require.NoError(t, err)
+			result, err := BuildKiroPayloadWithOptions(body, model, "", nil, KiroPayloadOptions{
+				UseNativeEffort:            true,
+				InjectThinkingSystemPrompt: false,
+			})
+			require.NoError(t, err)
 
-	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
-	require.Equal(t, int64(128000), gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int())
-	require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
-	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
-	require.Equal(t, 128000, result.Context.MaxOutputTokens)
+			require.Equal(t, model, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+			require.Equal(t, int64(128000), gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int())
+			require.Equal(t, "max", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+			require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
+			require.Equal(t, 128000, result.Context.MaxOutputTokens)
 
-	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "You are ChatGPT,")
-	require.Contains(t, systemContent, "say that you are ChatGPT")
-	require.NotContains(t, systemContent, "say that you are Claude")
+			systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+			require.Contains(t, systemContent, "You are ChatGPT,")
+			require.Contains(t, systemContent, "say that you are ChatGPT")
+			require.NotContains(t, systemContent, "say that you are Claude")
+		})
+	}
 }
 
 func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffort(t *testing.T) {
@@ -3401,6 +3405,8 @@ func TestKiroContextLimitEventReturnsReactiveCompactionError(t *testing.T) {
 
 func TestKiroContextWindowResolution(t *testing.T) {
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-sol"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-terra"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-luna"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4-6"))
@@ -3436,6 +3442,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"claude-3-sonnet":                     "claude-sonnet-4",
 		"claude-3-haiku":                      "claude-haiku-4.5",
 		"gpt-5.6-sol":                         "gpt-5.6-sol",
+		"gpt-5.6-terra":                       "gpt-5.6-terra",
+		"gpt-5.6-luna":                        "gpt-5.6-luna",
 		"gpt-4-turbo":                         "gpt-4-turbo",
 		"gpt-4o":                              "gpt-4o",
 		"gpt-4":                               "gpt-4",

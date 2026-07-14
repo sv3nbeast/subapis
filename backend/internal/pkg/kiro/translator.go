@@ -93,6 +93,8 @@ var (
 	}
 	kiroModelEffortEnums = map[string][]string{
 		"gpt-5.6-sol":          {"low", "medium", "high", "xhigh", "max"},
+		"gpt-5.6-terra":        {"low", "medium", "high", "xhigh", "max"},
+		"gpt-5.6-luna":         {"low", "medium", "high", "xhigh", "max"},
 		"claude-sonnet-5":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.8":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.7":      {"low", "medium", "high", "xhigh", "max"},
@@ -417,7 +419,7 @@ func contextWindowTokensForModel(model string) int {
 		return kiroExtendedContextTokens
 	}
 	switch normalizeModelAlias(normalized) {
-	case "gpt-5.6-sol",
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"claude-sonnet-5", "claude-sonnet-5.0",
 		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
@@ -533,7 +535,7 @@ func normalizeKiroEnvPlatform(platform string) string {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	case "gpt-5.6-sol", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
 		return 128000
 	case "claude-sonnet-4-6", "claude-sonnet-4.6":
 		return 64000
