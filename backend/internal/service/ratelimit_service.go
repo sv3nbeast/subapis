@@ -361,6 +361,13 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			shouldDisable = true
 			break
 		}
+		// Grok free (cli-chat-proxy) 计费额度耗尽以 402 personal-team-blocked:spending-limit
+		// 返回；按额度耗尽限流到计费周期结束，避免反复重试同一账号。
+		if account.Platform == PlatformGrok && isGrokQuotaExhausted(account, responseBody) {
+			s.markGrokQuotaExhausted(ctx, account)
+			shouldDisable = true
+			break
+		}
 		// 支付要求：余额不足或计费问题，停止调度
 		msg := "Payment required (402): insufficient balance or billing issue"
 		if upstreamMsg != "" {
@@ -869,19 +876,8 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	if account.Platform == PlatformOpenAI {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
-	if account.Platform == PlatformGrok && isGrokQuotaExhausted403(account, responseBody) {
-		resetAt := resolveGrokQuotaResetAt(account, time.Now())
-		if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
-			if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
-				slog.Warn("grok_quota_exhausted_set_rate_limited_failed", "account_id", account.ID, "error", err)
-				return true
-			}
-		}
-		rateLimitedAt := time.Now()
-		account.RateLimitedAt = &rateLimitedAt
-		account.RateLimitResetAt = &resetAt
-		s.notifyAccountSchedulingBlocked(account, resetAt, "grok_quota_exhausted")
-		slog.Info("grok_quota_exhausted", "account_id", account.ID, "reset_at", resetAt)
+	if account.Platform == PlatformGrok && isGrokQuotaExhausted(account, responseBody) {
+		s.markGrokQuotaExhausted(ctx, account)
 		return true
 	}
 	// 非 Antigravity 平台：保持原有行为
@@ -893,6 +889,26 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	)
 	s.handleAuthError(ctx, account, msg)
 	return true
+}
+
+// markGrokQuotaExhausted rate-limits (rather than permanently disables) a Grok
+// account whose subscription credits are exhausted. xAI surfaces this as a 403
+// on api.x.ai and as a 402 (personal-team-blocked:spending-limit) on the free
+// Build / cli-chat-proxy path; both must stop scheduling until the billing
+// period resets instead of retrying the same account.
+func (s *RateLimitService) markGrokQuotaExhausted(ctx context.Context, account *Account) {
+	resetAt := resolveGrokQuotaResetAt(account, time.Now())
+	if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
+		if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+			slog.Warn("grok_quota_exhausted_set_rate_limited_failed", "account_id", account.ID, "error", err)
+			return
+		}
+	}
+	rateLimitedAt := time.Now()
+	account.RateLimitedAt = &rateLimitedAt
+	account.RateLimitResetAt = &resetAt
+	s.notifyAccountSchedulingBlocked(account, resetAt, "grok_quota_exhausted")
+	slog.Info("grok_quota_exhausted", "account_id", account.ID, "reset_at", resetAt)
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {

@@ -118,6 +118,39 @@ func TestRateLimitServiceGrokGeneric403StillMarksRealEntitlementError(t *testing
 	require.Zero(t, repo.rateLimitedCalls)
 }
 
+func TestOpenAIGatewayGrokSpendingLimit402RateLimitsFreeAccount(t *testing.T) {
+	resetAt := time.Now().Add(36 * time.Hour).UTC().Truncate(time.Second)
+	repo := &grokRateLimitAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{
+		ID:       505,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			grokBillingSnapshotExtraKey: &xai.BillingSnapshot{
+				CreditUsagePercent:     100,
+				CreditRemainingPercent: 0,
+				CurrentPeriodEnd:       resetAt.Format(time.RFC3339Nano),
+			},
+		},
+	}
+
+	svc.handleGrokAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusPaymentRequired,
+		http.Header{},
+		[]byte(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits or need a Grok subscription."}`),
+	)
+
+	require.Zero(t, repo.setErrorCalls, "402 quota exhaustion must not permanently disable a healthy free Grok account")
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.WithinDuration(t, resetAt, repo.lastRateLimitResetAt, time.Second)
+	require.NotNil(t, account.RateLimitResetAt)
+	require.WithinDuration(t, resetAt, *account.RateLimitResetAt, time.Second)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account), "account must be blocked from re-scheduling")
+}
+
 func TestResolveGrokQuotaResetAtFallsBackToShortCooldown(t *testing.T) {
 	now := time.Now().UTC()
 	resetAt := resolveGrokQuotaResetAt(&Account{Platform: PlatformGrok}, now)

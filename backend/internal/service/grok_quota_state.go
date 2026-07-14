@@ -18,10 +18,12 @@ func isGrokBillingExhausted(billing *xai.BillingSnapshot) bool {
 		(billing.CreditUsagePercent > 0 && billing.CreditRemainingPercent <= 0)
 }
 
-// isGrokQuotaExhausted403 distinguishes xAI's quota/spending-limit 403 from a
-// real entitlement or account ban. xAI reports exhausted subscription credits
-// as HTTP 403 (rather than 429), so status code alone is not sufficient.
-func isGrokQuotaExhausted403(account *Account, responseBody []byte) bool {
+// isGrokQuotaExhausted distinguishes xAI's quota/spending-limit exhaustion from a
+// real entitlement or account ban. xAI reports exhausted subscription credits as
+// HTTP 403 on api.x.ai and as HTTP 402 (personal-team-blocked:spending-limit) on
+// the free Build / cli-chat-proxy path, so the status code alone is not
+// sufficient — detection is body-based and status-agnostic.
+func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 	if account == nil || account.Platform != PlatformGrok {
 		return false
 	}

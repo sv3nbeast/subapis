@@ -938,6 +938,13 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesReadinessStates(t *testing
 			wantMaxCooldown: 30*time.Minute + time.Second,
 		},
 		{
+			name:            "payment required billing issue",
+			status:          http.StatusPaymentRequired,
+			wantReason:      "grok payment required (402): billing issue",
+			wantMinCooldown: 30*time.Minute - time.Second,
+			wantMaxCooldown: 30*time.Minute + time.Second,
+		},
+		{
 			name:            "rate limited retry after",
 			status:          http.StatusTooManyRequests,
 			headers:         http.Header{"Retry-After": []string{"45"}},

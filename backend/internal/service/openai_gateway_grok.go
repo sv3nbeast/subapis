@@ -917,20 +917,17 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	switch statusCode {
 	case http.StatusUnauthorized:
 		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok oauth token unauthorized")
+	case http.StatusPaymentRequired:
+		// Grok free (cli-chat-proxy) 计费额度耗尽以 402
+		// personal-team-blocked:spending-limit 返回。必须识别为额度耗尽并限流到
+		// 计费周期结束，否则账号会被反复选中重试。
+		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
+			return
+		}
+		// 其它 402（真实余额/计费问题）：短暂停调度，等待人工处理。
+		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok payment required (402): billing issue")
 	case http.StatusForbidden:
-		if isGrokQuotaExhausted403(account, responseBody) {
-			resetAt := resolveGrokQuotaResetAt(account, time.Now())
-			if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
-				if s.accountRepo != nil {
-					stateCtx, cancel := openAIAccountStateContext(ctx)
-					defer cancel()
-					_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
-				}
-			}
-			rateLimitedAt := time.Now()
-			account.RateLimitedAt = &rateLimitedAt
-			account.RateLimitResetAt = &resetAt
-			s.BlockAccountScheduling(account, resetAt, "grok quota exhausted")
+		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
 			return
 		}
 		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
@@ -945,6 +942,30 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
+}
+
+// markGrokQuotaExhaustedIfDetected rate-limits a Grok account (until its billing
+// period resets) when the upstream body indicates subscription-credit exhaustion.
+// xAI reports this as a 403 on api.x.ai and as a 402
+// (personal-team-blocked:spending-limit) on the free Build / cli-chat-proxy path;
+// both must stop scheduling instead of retrying. Returns true when handled.
+func (s *OpenAIGatewayService) markGrokQuotaExhaustedIfDetected(ctx context.Context, account *Account, responseBody []byte) bool {
+	if !isGrokQuotaExhausted(account, responseBody) {
+		return false
+	}
+	resetAt := resolveGrokQuotaResetAt(account, time.Now())
+	if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
+		if s.accountRepo != nil {
+			stateCtx, cancel := openAIAccountStateContext(ctx)
+			defer cancel()
+			_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
+		}
+	}
+	rateLimitedAt := time.Now()
+	account.RateLimitedAt = &rateLimitedAt
+	account.RateLimitResetAt = &resetAt
+	s.BlockAccountScheduling(account, resetAt, "grok quota exhausted")
+	return true
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
