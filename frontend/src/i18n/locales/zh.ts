@@ -3212,6 +3212,15 @@ export default {
         targetModelPlaceholder: '例如: gpt-5.4',
         removeExactMapping: '删除精确映射'
       },
+      grokChatRouting: {
+        title: 'Grok Chat 上游路由',
+        hint: '仅影响 /v1/chat/completions。默认走 Grok Chat；Responses 适配可按会话稳定灰度。',
+        mode: '上游模式',
+        raw: 'Chat Completions（/v1/chat/completions）',
+        responses: 'Responses（/v1/responses）',
+        gray: '稳定灰度',
+        grayPercent: 'Responses 灰度比例（%）'
+      },
       nonStreamMessages: {
         title: '非流式 /v1/messages',
         allow: '允许非流式请求',

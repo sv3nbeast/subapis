@@ -1231,6 +1231,26 @@
           </div>
         </div>
 
+        <!-- Grok Chat 上游路由配置 -->
+        <div v-if="createForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            {{ t("admin.groups.grokChatRouting.title") }}
+          </h4>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.grokChatRouting.hint") }}
+          </p>
+          <label class="input-label">{{ t("admin.groups.grokChatRouting.mode") }}</label>
+          <select v-model="createForm.grok_chat_upstream_mode" class="input">
+            <option value="raw">{{ t("admin.groups.grokChatRouting.raw") }}</option>
+            <option value="responses">{{ t("admin.groups.grokChatRouting.responses") }}</option>
+            <option value="gray">{{ t("admin.groups.grokChatRouting.gray") }}</option>
+          </select>
+          <div v-if="createForm.grok_chat_upstream_mode === 'gray'" class="mt-3">
+            <label class="input-label">{{ t("admin.groups.grokChatRouting.grayPercent") }}</label>
+            <input v-model.number="createForm.grok_chat_responses_gray_percent" type="number" min="0" max="100" step="1" class="input" />
+          </div>
+        </div>
+
         <!-- OpenAI Messages 调度配置（仅 openai 平台） -->
         <div
           v-if="createForm.platform === 'openai'"
@@ -2742,6 +2762,26 @@
           </div>
         </div>
 
+        <!-- Grok Chat 上游路由配置 -->
+        <div v-if="editForm.platform === 'grok'" class="border-t pt-4">
+          <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            {{ t("admin.groups.grokChatRouting.title") }}
+          </h4>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            {{ t("admin.groups.grokChatRouting.hint") }}
+          </p>
+          <label class="input-label">{{ t("admin.groups.grokChatRouting.mode") }}</label>
+          <select v-model="editForm.grok_chat_upstream_mode" class="input">
+            <option value="raw">{{ t("admin.groups.grokChatRouting.raw") }}</option>
+            <option value="responses">{{ t("admin.groups.grokChatRouting.responses") }}</option>
+            <option value="gray">{{ t("admin.groups.grokChatRouting.gray") }}</option>
+          </select>
+          <div v-if="editForm.grok_chat_upstream_mode === 'gray'" class="mt-3">
+            <label class="input-label">{{ t("admin.groups.grokChatRouting.grayPercent") }}</label>
+            <input v-model.number="editForm.grok_chat_responses_gray_percent" type="number" min="0" max="100" step="1" class="input" />
+          </div>
+        </div>
+
         <!-- OpenAI Messages 调度配置（仅 openai 平台） -->
         <div
           v-if="editForm.platform === 'openai'"
@@ -4008,6 +4048,8 @@ const createForm = reactive({
   peak_rate_multiplier: 1.0,
   // Claude Code 客户端限制（Anthropic / Grok）
   claude_code_only: false,
+  grok_chat_upstream_mode: "raw" as "raw" | "responses" | "gray",
+  grok_chat_responses_gray_percent: 0,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
@@ -4314,6 +4356,8 @@ const editForm = reactive({
   peak_rate_multiplier: 1.0,
   // Claude Code 客户端限制（Anthropic / Grok）
   claude_code_only: false,
+  grok_chat_upstream_mode: "raw" as "raw" | "responses" | "gray",
+  grok_chat_responses_gray_percent: 0,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
@@ -4694,6 +4738,8 @@ const closeCreateModal = () => {
   createForm.peak_end = "";
   createForm.peak_rate_multiplier = 1.0;
   createForm.claude_code_only = false;
+  createForm.grok_chat_upstream_mode = "raw";
+  createForm.grok_chat_responses_gray_percent = 0;
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
   createForm.allow_non_stream_messages = false;
@@ -4883,6 +4929,8 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.peak_end = group.peak_end ?? "";
   editForm.peak_rate_multiplier = group.peak_rate_multiplier ?? 1.0;
   editForm.claude_code_only = group.claude_code_only || false;
+  editForm.grok_chat_upstream_mode = group.grok_chat_upstream_mode ?? "raw";
+  editForm.grok_chat_responses_gray_percent = group.grok_chat_responses_gray_percent ?? 0;
   editForm.fallback_group_id = group.fallback_group_id;
   editForm.fallback_group_id_on_invalid_request =
     group.fallback_group_id_on_invalid_request;

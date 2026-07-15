@@ -879,6 +879,41 @@ func (_u *GroupUpdate) SetNillableModelsListConfig(v *domain.GroupModelsListConf
 	return _u
 }
 
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (_u *GroupUpdate) SetGrokChatUpstreamMode(v string) *GroupUpdate {
+	_u.mutation.SetGrokChatUpstreamMode(v)
+	return _u
+}
+
+// SetNillableGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableGrokChatUpstreamMode(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetGrokChatUpstreamMode(*v)
+	}
+	return _u
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (_u *GroupUpdate) SetGrokChatResponsesGrayPercent(v int) *GroupUpdate {
+	_u.mutation.ResetGrokChatResponsesGrayPercent()
+	_u.mutation.SetGrokChatResponsesGrayPercent(v)
+	return _u
+}
+
+// SetNillableGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableGrokChatResponsesGrayPercent(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetGrokChatResponsesGrayPercent(*v)
+	}
+	return _u
+}
+
+// AddGrokChatResponsesGrayPercent adds value to the "grok_chat_responses_gray_percent" field.
+func (_u *GroupUpdate) AddGrokChatResponsesGrayPercent(v int) *GroupUpdate {
+	_u.mutation.AddGrokChatResponsesGrayPercent(v)
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *GroupUpdate) SetRpmLimit(v int) *GroupUpdate {
 	_u.mutation.ResetRpmLimit()
@@ -1284,6 +1319,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GrokChatUpstreamMode(); ok {
+		if err := group.GrokChatUpstreamModeValidator(v); err != nil {
+			return &ValidationError{Name: "grok_chat_upstream_mode", err: fmt.Errorf(`ent: validator failed for field "Group.grok_chat_upstream_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.KiroEndpointMode(); ok {
 		if err := group.KiroEndpointModeValidator(v); err != nil {
 			return &ValidationError{Name: "kiro_endpoint_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_endpoint_mode": %w`, err)}
@@ -1545,6 +1585,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.ModelsListConfig(); ok {
 		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.GrokChatUpstreamMode(); ok {
+		_spec.SetField(group.FieldGrokChatUpstreamMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GrokChatResponsesGrayPercent(); ok {
+		_spec.SetField(group.FieldGrokChatResponsesGrayPercent, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedGrokChatResponsesGrayPercent(); ok {
+		_spec.AddField(group.FieldGrokChatResponsesGrayPercent, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2730,6 +2779,41 @@ func (_u *GroupUpdateOne) SetNillableModelsListConfig(v *domain.GroupModelsListC
 	return _u
 }
 
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (_u *GroupUpdateOne) SetGrokChatUpstreamMode(v string) *GroupUpdateOne {
+	_u.mutation.SetGrokChatUpstreamMode(v)
+	return _u
+}
+
+// SetNillableGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableGrokChatUpstreamMode(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetGrokChatUpstreamMode(*v)
+	}
+	return _u
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (_u *GroupUpdateOne) SetGrokChatResponsesGrayPercent(v int) *GroupUpdateOne {
+	_u.mutation.ResetGrokChatResponsesGrayPercent()
+	_u.mutation.SetGrokChatResponsesGrayPercent(v)
+	return _u
+}
+
+// SetNillableGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableGrokChatResponsesGrayPercent(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetGrokChatResponsesGrayPercent(*v)
+	}
+	return _u
+}
+
+// AddGrokChatResponsesGrayPercent adds value to the "grok_chat_responses_gray_percent" field.
+func (_u *GroupUpdateOne) AddGrokChatResponsesGrayPercent(v int) *GroupUpdateOne {
+	_u.mutation.AddGrokChatResponsesGrayPercent(v)
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *GroupUpdateOne) SetRpmLimit(v int) *GroupUpdateOne {
 	_u.mutation.ResetRpmLimit()
@@ -3148,6 +3232,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GrokChatUpstreamMode(); ok {
+		if err := group.GrokChatUpstreamModeValidator(v); err != nil {
+			return &ValidationError{Name: "grok_chat_upstream_mode", err: fmt.Errorf(`ent: validator failed for field "Group.grok_chat_upstream_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.KiroEndpointMode(); ok {
 		if err := group.KiroEndpointModeValidator(v); err != nil {
 			return &ValidationError{Name: "kiro_endpoint_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_endpoint_mode": %w`, err)}
@@ -3426,6 +3515,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.ModelsListConfig(); ok {
 		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.GrokChatUpstreamMode(); ok {
+		_spec.SetField(group.FieldGrokChatUpstreamMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GrokChatResponsesGrayPercent(); ok {
+		_spec.SetField(group.FieldGrokChatResponsesGrayPercent, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedGrokChatResponsesGrayPercent(); ok {
+		_spec.AddField(group.FieldGrokChatResponsesGrayPercent, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)

@@ -20973,6 +20973,9 @@ type GroupMutation struct {
 	default_mapped_model                    *string
 	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
 	models_list_config                      *domain.GroupModelsListConfig
+	grok_chat_upstream_mode                 *string
+	grok_chat_responses_gray_percent        *int
+	addgrok_chat_responses_gray_percent     *int
 	rpm_limit                               *int
 	addrpm_limit                            *int
 	kiro_cache_emulation_enabled            *bool
@@ -23384,6 +23387,98 @@ func (m *GroupMutation) ResetModelsListConfig() {
 	m.models_list_config = nil
 }
 
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (m *GroupMutation) SetGrokChatUpstreamMode(s string) {
+	m.grok_chat_upstream_mode = &s
+}
+
+// GrokChatUpstreamMode returns the value of the "grok_chat_upstream_mode" field in the mutation.
+func (m *GroupMutation) GrokChatUpstreamMode() (r string, exists bool) {
+	v := m.grok_chat_upstream_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGrokChatUpstreamMode returns the old "grok_chat_upstream_mode" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldGrokChatUpstreamMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGrokChatUpstreamMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGrokChatUpstreamMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGrokChatUpstreamMode: %w", err)
+	}
+	return oldValue.GrokChatUpstreamMode, nil
+}
+
+// ResetGrokChatUpstreamMode resets all changes to the "grok_chat_upstream_mode" field.
+func (m *GroupMutation) ResetGrokChatUpstreamMode() {
+	m.grok_chat_upstream_mode = nil
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (m *GroupMutation) SetGrokChatResponsesGrayPercent(i int) {
+	m.grok_chat_responses_gray_percent = &i
+	m.addgrok_chat_responses_gray_percent = nil
+}
+
+// GrokChatResponsesGrayPercent returns the value of the "grok_chat_responses_gray_percent" field in the mutation.
+func (m *GroupMutation) GrokChatResponsesGrayPercent() (r int, exists bool) {
+	v := m.grok_chat_responses_gray_percent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGrokChatResponsesGrayPercent returns the old "grok_chat_responses_gray_percent" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldGrokChatResponsesGrayPercent(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGrokChatResponsesGrayPercent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGrokChatResponsesGrayPercent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGrokChatResponsesGrayPercent: %w", err)
+	}
+	return oldValue.GrokChatResponsesGrayPercent, nil
+}
+
+// AddGrokChatResponsesGrayPercent adds i to the "grok_chat_responses_gray_percent" field.
+func (m *GroupMutation) AddGrokChatResponsesGrayPercent(i int) {
+	if m.addgrok_chat_responses_gray_percent != nil {
+		*m.addgrok_chat_responses_gray_percent += i
+	} else {
+		m.addgrok_chat_responses_gray_percent = &i
+	}
+}
+
+// AddedGrokChatResponsesGrayPercent returns the value that was added to the "grok_chat_responses_gray_percent" field in this mutation.
+func (m *GroupMutation) AddedGrokChatResponsesGrayPercent() (r int, exists bool) {
+	v := m.addgrok_chat_responses_gray_percent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetGrokChatResponsesGrayPercent resets all changes to the "grok_chat_responses_gray_percent" field.
+func (m *GroupMutation) ResetGrokChatResponsesGrayPercent() {
+	m.grok_chat_responses_gray_percent = nil
+	m.addgrok_chat_responses_gray_percent = nil
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (m *GroupMutation) SetRpmLimit(i int) {
 	m.rpm_limit = &i
@@ -24018,7 +24113,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 53)
+	fields := make([]string, 0, 55)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -24160,6 +24255,12 @@ func (m *GroupMutation) Fields() []string {
 	if m.models_list_config != nil {
 		fields = append(fields, group.FieldModelsListConfig)
 	}
+	if m.grok_chat_upstream_mode != nil {
+		fields = append(fields, group.FieldGrokChatUpstreamMode)
+	}
+	if m.grok_chat_responses_gray_percent != nil {
+		fields = append(fields, group.FieldGrokChatResponsesGrayPercent)
+	}
 	if m.rpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
 	}
@@ -24280,6 +24381,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.MessagesDispatchModelConfig()
 	case group.FieldModelsListConfig:
 		return m.ModelsListConfig()
+	case group.FieldGrokChatUpstreamMode:
+		return m.GrokChatUpstreamMode()
+	case group.FieldGrokChatResponsesGrayPercent:
+		return m.GrokChatResponsesGrayPercent()
 	case group.FieldRpmLimit:
 		return m.RpmLimit()
 	case group.FieldKiroCacheEmulationEnabled:
@@ -24395,6 +24500,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldMessagesDispatchModelConfig(ctx)
 	case group.FieldModelsListConfig:
 		return m.OldModelsListConfig(ctx)
+	case group.FieldGrokChatUpstreamMode:
+		return m.OldGrokChatUpstreamMode(ctx)
+	case group.FieldGrokChatResponsesGrayPercent:
+		return m.OldGrokChatResponsesGrayPercent(ctx)
 	case group.FieldRpmLimit:
 		return m.OldRpmLimit(ctx)
 	case group.FieldKiroCacheEmulationEnabled:
@@ -24745,6 +24854,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetModelsListConfig(v)
 		return nil
+	case group.FieldGrokChatUpstreamMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGrokChatUpstreamMode(v)
+		return nil
+	case group.FieldGrokChatResponsesGrayPercent:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGrokChatResponsesGrayPercent(v)
+		return nil
 	case group.FieldRpmLimit:
 		v, ok := value.(int)
 		if !ok {
@@ -24852,6 +24975,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addsort_order != nil {
 		fields = append(fields, group.FieldSortOrder)
 	}
+	if m.addgrok_chat_responses_gray_percent != nil {
+		fields = append(fields, group.FieldGrokChatResponsesGrayPercent)
+	}
 	if m.addrpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
 	}
@@ -24907,6 +25033,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedFallbackGroupIDOnInvalidRequest()
 	case group.FieldSortOrder:
 		return m.AddedSortOrder()
+	case group.FieldGrokChatResponsesGrayPercent:
+		return m.AddedGrokChatResponsesGrayPercent()
 	case group.FieldRpmLimit:
 		return m.AddedRpmLimit()
 	case group.FieldKiroStickySessionTTLSeconds:
@@ -25054,6 +25182,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddSortOrder(v)
+		return nil
+	case group.FieldGrokChatResponsesGrayPercent:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddGrokChatResponsesGrayPercent(v)
 		return nil
 	case group.FieldRpmLimit:
 		v, ok := value.(int)
@@ -25330,6 +25465,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldModelsListConfig:
 		m.ResetModelsListConfig()
+		return nil
+	case group.FieldGrokChatUpstreamMode:
+		m.ResetGrokChatUpstreamMode()
+		return nil
+	case group.FieldGrokChatResponsesGrayPercent:
+		m.ResetGrokChatResponsesGrayPercent()
 		return nil
 	case group.FieldRpmLimit:
 		m.ResetRpmLimit()

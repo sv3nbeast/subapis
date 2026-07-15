@@ -942,28 +942,52 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const grokModelLimit = {
+    context: 500000,
+    input: 450000,
+    output: 50000
+  }
   const grokModels = {
     'grok-4.5': {
-      name: 'Grok 4.5'
+      name: 'Grok 4.5',
+      limit: grokModelLimit
     },
     'grok-4.3': {
-      name: 'Grok 4.3'
+      name: 'Grok 4.3',
+      limit: grokModelLimit
     },
     'grok-build-0.1': {
-      name: 'Grok Build 0.1'
+      name: 'Grok Build 0.1',
+      limit: grokModelLimit
     },
     'grok-composer-2.5-fast': {
-      name: 'Grok Composer 2.5 Fast'
+      name: 'Grok Composer 2.5 Fast',
+      limit: grokModelLimit
     },
     'grok-4.20-0309-reasoning': {
       name: 'Grok 4.20 Reasoning',
-      reasoning: true
+      reasoning: true,
+      limit: grokModelLimit
     },
     'grok-4.20-0309-non-reasoning': {
-      name: 'Grok 4.20 Non Reasoning'
+      name: 'Grok 4.20 Non Reasoning',
+      limit: grokModelLimit
     },
     'grok-4.20-multi-agent-0309': {
-      name: 'Grok 4.20 Multi Agent'
+      name: 'Grok 4.20 Multi Agent',
+      limit: grokModelLimit
+    },
+    grok: {
+      name: 'Grok',
+      limit: grokModelLimit
+    },
+    'grok-latest': {
+      name: 'Grok Latest',
+      limit: grokModelLimit
+    },
+    'grok-4.5-latest': {
+      name: 'Grok 4.5 Latest',
+      limit: grokModelLimit
     }
   }
   const geminiModels = {
@@ -1277,6 +1301,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     {
       provider,
       ...(agent ? { agent } : {}),
+      ...(platform === 'grok' ? { compaction: { auto: true, prune: true } } : {}),
       $schema: 'https://opencode.ai/config.json'
     },
     null,

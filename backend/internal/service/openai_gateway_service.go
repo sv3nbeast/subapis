@@ -227,8 +227,11 @@ type OpenAIUsage struct {
 type OpenAIForwardResult struct {
 	RequestID  string
 	ResponseID string
-	Usage      OpenAIUsage
-	Model      string // 原始模型（用于响应和日志显示）
+	// UpstreamEndpoint is the concrete endpoint used for the successful attempt.
+	// It avoids reconstructing the route from account metadata after forwarding.
+	UpstreamEndpoint string
+	Usage            OpenAIUsage
+	Model            string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -4583,7 +4586,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				line = "data: " + string(sanitizedData)
 			}
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
-			if firstTokenMs == nil && lineStartsClientOutput && trimmedData != "[DONE]" {
+			if firstTokenMs == nil && responsesStreamPayloadHasMeaningfulOutput(dataBytes, eventType) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
 			}
@@ -5668,7 +5671,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 
 			// Record first token time
-			if firstTokenMs == nil && startsClientOutput {
+			if firstTokenMs == nil && responsesStreamPayloadHasMeaningfulOutput(dataBytes, eventType) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
 			}

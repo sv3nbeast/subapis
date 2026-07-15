@@ -270,6 +270,16 @@ func DefaultMappedModel(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDefaultMappedModel, v))
 }
 
+// GrokChatUpstreamMode applies equality check predicate on the "grok_chat_upstream_mode" field. It's identical to GrokChatUpstreamModeEQ.
+func GrokChatUpstreamMode(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatResponsesGrayPercent applies equality check predicate on the "grok_chat_responses_gray_percent" field. It's identical to GrokChatResponsesGrayPercentEQ.
+func GrokChatResponsesGrayPercent(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldGrokChatResponsesGrayPercent, v))
+}
+
 // RpmLimit applies equality check predicate on the "rpm_limit" field. It's identical to RpmLimitEQ.
 func RpmLimit(v int) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRpmLimit, v))
@@ -1968,6 +1978,111 @@ func DefaultMappedModelEqualFold(v string) predicate.Group {
 // DefaultMappedModelContainsFold applies the ContainsFold predicate on the "default_mapped_model" field.
 func DefaultMappedModelContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldDefaultMappedModel, v))
+}
+
+// GrokChatUpstreamModeEQ applies the EQ predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeNEQ applies the NEQ predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeIn applies the In predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldGrokChatUpstreamMode, vs...))
+}
+
+// GrokChatUpstreamModeNotIn applies the NotIn predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldGrokChatUpstreamMode, vs...))
+}
+
+// GrokChatUpstreamModeGT applies the GT predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeGTE applies the GTE predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeLT applies the LT predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeLTE applies the LTE predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeContains applies the Contains predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeHasPrefix applies the HasPrefix predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeHasSuffix applies the HasSuffix predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeEqualFold applies the EqualFold predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatUpstreamModeContainsFold applies the ContainsFold predicate on the "grok_chat_upstream_mode" field.
+func GrokChatUpstreamModeContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldGrokChatUpstreamMode, v))
+}
+
+// GrokChatResponsesGrayPercentEQ applies the EQ predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldGrokChatResponsesGrayPercent, v))
+}
+
+// GrokChatResponsesGrayPercentNEQ applies the NEQ predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldGrokChatResponsesGrayPercent, v))
+}
+
+// GrokChatResponsesGrayPercentIn applies the In predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldGrokChatResponsesGrayPercent, vs...))
+}
+
+// GrokChatResponsesGrayPercentNotIn applies the NotIn predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldGrokChatResponsesGrayPercent, vs...))
+}
+
+// GrokChatResponsesGrayPercentGT applies the GT predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldGrokChatResponsesGrayPercent, v))
+}
+
+// GrokChatResponsesGrayPercentGTE applies the GTE predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldGrokChatResponsesGrayPercent, v))
+}
+
+// GrokChatResponsesGrayPercentLT applies the LT predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldGrokChatResponsesGrayPercent, v))
+}
+
+// GrokChatResponsesGrayPercentLTE applies the LTE predicate on the "grok_chat_responses_gray_percent" field.
+func GrokChatResponsesGrayPercentLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldGrokChatResponsesGrayPercent, v))
 }
 
 // RpmLimitEQ applies the EQ predicate on the "rpm_limit" field.

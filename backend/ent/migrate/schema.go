@@ -882,6 +882,8 @@ var (
 		{Name: "default_mapped_model", Type: field.TypeString, Size: 100, Default: ""},
 		{Name: "messages_dispatch_model_config", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "models_list_config", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "grok_chat_upstream_mode", Type: field.TypeString, Size: 16, Default: "raw"},
+		{Name: "grok_chat_responses_gray_percent", Type: field.TypeInt, Default: 0},
 		{Name: "rpm_limit", Type: field.TypeInt, Default: 0},
 		{Name: "kiro_cache_emulation_enabled", Type: field.TypeBool, Default: false},
 		{Name: "kiro_auto_sticky_enabled", Type: field.TypeBool, Default: true},

@@ -120,13 +120,15 @@ type CreateGroupRequest struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes []string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool                                      `json:"allow_messages_dispatch"`
-	AllowNonStreamMessages      bool                                      `json:"allow_non_stream_messages"`
-	RequireOAuthOnly            bool                                      `json:"require_oauth_only"`
-	RequirePrivacySet           bool                                      `json:"require_privacy_set"`
-	DefaultMappedModel          string                                    `json:"default_mapped_model"`
-	MessagesDispatchModelConfig service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
-	ModelsListConfig            service.GroupModelsListConfig             `json:"models_list_config"`
+	AllowMessagesDispatch        bool                                      `json:"allow_messages_dispatch"`
+	AllowNonStreamMessages       bool                                      `json:"allow_non_stream_messages"`
+	RequireOAuthOnly             bool                                      `json:"require_oauth_only"`
+	RequirePrivacySet            bool                                      `json:"require_privacy_set"`
+	DefaultMappedModel           string                                    `json:"default_mapped_model"`
+	MessagesDispatchModelConfig  service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
+	ModelsListConfig             service.GroupModelsListConfig             `json:"models_list_config"`
+	GrokChatUpstreamMode         string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
+	GrokChatResponsesGrayPercent int                                       `json:"grok_chat_responses_gray_percent" binding:"min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）
 	RPMLimit int `json:"rpm_limit"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）
@@ -180,13 +182,15 @@ type UpdateGroupRequest struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes *[]string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       *bool                                      `json:"allow_messages_dispatch"`
-	AllowNonStreamMessages      *bool                                      `json:"allow_non_stream_messages"`
-	RequireOAuthOnly            *bool                                      `json:"require_oauth_only"`
-	RequirePrivacySet           *bool                                      `json:"require_privacy_set"`
-	DefaultMappedModel          *string                                    `json:"default_mapped_model"`
-	MessagesDispatchModelConfig *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
-	ModelsListConfig            *service.GroupModelsListConfig             `json:"models_list_config"`
+	AllowMessagesDispatch        *bool                                      `json:"allow_messages_dispatch"`
+	AllowNonStreamMessages       *bool                                      `json:"allow_non_stream_messages"`
+	RequireOAuthOnly             *bool                                      `json:"require_oauth_only"`
+	RequirePrivacySet            *bool                                      `json:"require_privacy_set"`
+	DefaultMappedModel           *string                                    `json:"default_mapped_model"`
+	MessagesDispatchModelConfig  *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
+	ModelsListConfig             *service.GroupModelsListConfig             `json:"models_list_config"`
+	GrokChatUpstreamMode         *string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
+	GrokChatResponsesGrayPercent *int                                       `json:"grok_chat_responses_gray_percent" binding:"omitempty,min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
 	RPMLimit *int `json:"rpm_limit"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）；nil 表示未提供不改动
@@ -362,6 +366,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		DefaultMappedModel:              req.DefaultMappedModel,
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
+		GrokChatUpstreamMode:            req.GrokChatUpstreamMode,
+		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,
@@ -436,6 +442,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		DefaultMappedModel:              req.DefaultMappedModel,
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
+		GrokChatUpstreamMode:            req.GrokChatUpstreamMode,
+		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,

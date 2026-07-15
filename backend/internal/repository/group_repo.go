@@ -77,6 +77,8 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
+		SetGrokChatUpstreamMode(groupIn.GrokChatUpstreamMode).
+		SetGrokChatResponsesGrayPercent(groupIn.GrokChatResponsesGrayPercent).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
 		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
 		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).
@@ -172,6 +174,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
+		SetGrokChatUpstreamMode(groupIn.GrokChatUpstreamMode).
+		SetGrokChatResponsesGrayPercent(groupIn.GrokChatResponsesGrayPercent).
 		SetKiroCacheEmulationEnabled(groupIn.KiroCacheEmulationEnabled).
 		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
 		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).

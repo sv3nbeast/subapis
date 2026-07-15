@@ -74,13 +74,15 @@ type Group struct {
 	SortOrder int
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool
-	AllowNonStreamMessages      bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
-	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
-	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
-	DefaultMappedModel          string
-	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
-	ModelsListConfig            GroupModelsListConfig
+	AllowMessagesDispatch        bool
+	AllowNonStreamMessages       bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
+	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
+	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	DefaultMappedModel           string
+	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
+	ModelsListConfig             GroupModelsListConfig
+	GrokChatUpstreamMode         string
+	GrokChatResponsesGrayPercent int
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）。
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
@@ -238,6 +240,53 @@ func NormalizeGroupRuntimeFields(g *Group) {
 	normalizeKiroCacheEmulationFields(g)
 	normalizeKiroEndpointFields(g)
 	normalizeGatewayNonStreamMessagesFields(g)
+	normalizeGrokChatUpstreamFields(g)
+}
+
+const (
+	GrokChatUpstreamModeRaw       = "raw"
+	GrokChatUpstreamModeResponses = "responses"
+	GrokChatUpstreamModeGray      = "gray"
+)
+
+func (g *Group) EffectiveGrokChatUpstreamMode() string {
+	if g == nil || g.Platform != PlatformGrok {
+		return GrokChatUpstreamModeRaw
+	}
+	switch strings.ToLower(strings.TrimSpace(g.GrokChatUpstreamMode)) {
+	case GrokChatUpstreamModeResponses:
+		return GrokChatUpstreamModeResponses
+	case GrokChatUpstreamModeGray:
+		return GrokChatUpstreamModeGray
+	default:
+		return GrokChatUpstreamModeRaw
+	}
+}
+
+func (g *Group) EffectiveGrokChatResponsesGrayPercent() int {
+	if g == nil || g.Platform != PlatformGrok || g.EffectiveGrokChatUpstreamMode() != GrokChatUpstreamModeGray {
+		return 0
+	}
+	if g.GrokChatResponsesGrayPercent < 0 {
+		return 0
+	}
+	if g.GrokChatResponsesGrayPercent > 100 {
+		return 100
+	}
+	return g.GrokChatResponsesGrayPercent
+}
+
+func normalizeGrokChatUpstreamFields(g *Group) {
+	if g == nil {
+		return
+	}
+	if g.Platform != PlatformGrok {
+		g.GrokChatUpstreamMode = GrokChatUpstreamModeRaw
+		g.GrokChatResponsesGrayPercent = 0
+		return
+	}
+	g.GrokChatUpstreamMode = g.EffectiveGrokChatUpstreamMode()
+	g.GrokChatResponsesGrayPercent = g.EffectiveGrokChatResponsesGrayPercent()
 }
 
 func (g *Group) IsActive() bool {

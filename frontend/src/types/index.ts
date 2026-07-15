@@ -646,6 +646,8 @@ export interface Group {
   kiro_sticky_session_ttl_seconds: number
   kiro_cache_emulation_ratio: number
   kiro_endpoint_mode: 'q' | 'krs' | 'auto'
+  grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
+  grok_chat_responses_gray_percent?: number
   created_at: string
   updated_at: string
 }
@@ -788,6 +790,8 @@ export interface CreateGroupRequest {
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
+  grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
+  grok_chat_responses_gray_percent?: number
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -841,6 +845,8 @@ export interface UpdateGroupRequest {
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
+  grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
+  grok_chat_responses_gray_percent?: number
   copy_accounts_from_group_ids?: number[]
 }
 

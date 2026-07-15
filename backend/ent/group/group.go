@@ -110,6 +110,10 @@ const (
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
 	// FieldModelsListConfig holds the string denoting the models_list_config field in the database.
 	FieldModelsListConfig = "models_list_config"
+	// FieldGrokChatUpstreamMode holds the string denoting the grok_chat_upstream_mode field in the database.
+	FieldGrokChatUpstreamMode = "grok_chat_upstream_mode"
+	// FieldGrokChatResponsesGrayPercent holds the string denoting the grok_chat_responses_gray_percent field in the database.
+	FieldGrokChatResponsesGrayPercent = "grok_chat_responses_gray_percent"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// FieldKiroCacheEmulationEnabled holds the string denoting the kiro_cache_emulation_enabled field in the database.
@@ -244,6 +248,8 @@ var Columns = []string{
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldModelsListConfig,
+	FieldGrokChatUpstreamMode,
+	FieldGrokChatResponsesGrayPercent,
 	FieldRpmLimit,
 	FieldKiroCacheEmulationEnabled,
 	FieldKiroAutoStickyEnabled,
@@ -359,6 +365,12 @@ var (
 	DefaultMessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig
 	// DefaultModelsListConfig holds the default value on creation for the "models_list_config" field.
 	DefaultModelsListConfig domain.GroupModelsListConfig
+	// DefaultGrokChatUpstreamMode holds the default value on creation for the "grok_chat_upstream_mode" field.
+	DefaultGrokChatUpstreamMode string
+	// GrokChatUpstreamModeValidator is a validator for the "grok_chat_upstream_mode" field. It is called by the builders before save.
+	GrokChatUpstreamModeValidator func(string) error
+	// DefaultGrokChatResponsesGrayPercent holds the default value on creation for the "grok_chat_responses_gray_percent" field.
+	DefaultGrokChatResponsesGrayPercent int
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 	// DefaultKiroCacheEmulationEnabled holds the default value on creation for the "kiro_cache_emulation_enabled" field.
@@ -596,6 +608,16 @@ func ByRequirePrivacySet(opts ...sql.OrderTermOption) OrderOption {
 // ByDefaultMappedModel orders the results by the default_mapped_model field.
 func ByDefaultMappedModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDefaultMappedModel, opts...).ToFunc()
+}
+
+// ByGrokChatUpstreamMode orders the results by the grok_chat_upstream_mode field.
+func ByGrokChatUpstreamMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGrokChatUpstreamMode, opts...).ToFunc()
+}
+
+// ByGrokChatResponsesGrayPercent orders the results by the grok_chat_responses_gray_percent field.
+func ByGrokChatResponsesGrayPercent(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGrokChatResponsesGrayPercent, opts...).ToFunc()
 }
 
 // ByRpmLimit orders the results by the rpm_limit field.

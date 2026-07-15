@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -347,7 +348,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
@@ -391,7 +392,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 // whose upstream is forced or probed to not support the Responses API are
 // served directly via /v1/chat/completions (the raw chat path) regardless of
 // the inbound endpoint; everything else goes through the Responses API.
-func resolveOpenAIUpstreamEndpoint(c *gin.Context, account *service.Account) string {
+func resolveOpenAIUpstreamEndpoint(c *gin.Context, account *service.Account, results ...*service.OpenAIForwardResult) string {
+	for _, result := range results {
+		if result != nil && strings.TrimSpace(result.UpstreamEndpoint) != "" {
+			return strings.TrimSpace(result.UpstreamEndpoint)
+		}
+	}
 	if account != nil && account.Type == service.AccountTypeAPIKey &&
 		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return "/v1/chat/completions"

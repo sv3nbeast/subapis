@@ -166,17 +166,18 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = &OpenAIUsage{}
 	}
 	return &OpenAIForwardResult{
-		RequestID:       firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
-		ResponseID:      responseID,
-		Usage:           *usage,
-		Model:           originalModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: ptrStringOrNil(normalizeOpenAIReasoningEffort(gjson.GetBytes(patchedBody, "reasoning.effort").String())),
-		Stream:          reqStream,
-		OpenAIWSMode:    false,
-		ResponseHeaders: resp.Header.Clone(),
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
+		RequestID:        firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+		UpstreamEndpoint: OpenAIUpstreamEndpointResponses,
+		ResponseID:       responseID,
+		Usage:            *usage,
+		Model:            originalModel,
+		UpstreamModel:    upstreamModel,
+		ReasoningEffort:  ptrStringOrNil(normalizeOpenAIReasoningEffort(gjson.GetBytes(patchedBody, "reasoning.effort").String())),
+		Stream:           reqStream,
+		OpenAIWSMode:     false,
+		ResponseHeaders:  resp.Header.Clone(),
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     firstTokenMs,
 	}, nil
 }
 

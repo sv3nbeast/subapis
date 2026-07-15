@@ -3216,6 +3216,15 @@ export default {
         targetModelPlaceholder: 'e.g., gpt-5.4',
         removeExactMapping: 'Remove Exact Mapping'
       },
+      grokChatRouting: {
+        title: 'Grok Chat upstream routing',
+        hint: 'Applies only to /v1/chat/completions. Raw Chat is the default; Responses can be enabled per session or by stable gray rollout.',
+        mode: 'Upstream mode',
+        raw: 'Chat Completions (/v1/chat/completions)',
+        responses: 'Responses (/v1/responses)',
+        gray: 'Stable gray rollout',
+        grayPercent: 'Responses gray percentage (%)'
+      },
       nonStreamMessages: {
         title: 'Non-stream /v1/messages',
         allow: 'Allow synchronous requests',

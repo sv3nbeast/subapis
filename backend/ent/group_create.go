@@ -663,6 +663,34 @@ func (_c *GroupCreate) SetNillableModelsListConfig(v *domain.GroupModelsListConf
 	return _c
 }
 
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (_c *GroupCreate) SetGrokChatUpstreamMode(v string) *GroupCreate {
+	_c.mutation.SetGrokChatUpstreamMode(v)
+	return _c
+}
+
+// SetNillableGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableGrokChatUpstreamMode(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetGrokChatUpstreamMode(*v)
+	}
+	return _c
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (_c *GroupCreate) SetGrokChatResponsesGrayPercent(v int) *GroupCreate {
+	_c.mutation.SetGrokChatResponsesGrayPercent(v)
+	return _c
+}
+
+// SetNillableGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableGrokChatResponsesGrayPercent(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetGrokChatResponsesGrayPercent(*v)
+	}
+	return _c
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_c *GroupCreate) SetRpmLimit(v int) *GroupCreate {
 	_c.mutation.SetRpmLimit(v)
@@ -1008,6 +1036,14 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultModelsListConfig
 		_c.mutation.SetModelsListConfig(v)
 	}
+	if _, ok := _c.mutation.GrokChatUpstreamMode(); !ok {
+		v := group.DefaultGrokChatUpstreamMode
+		_c.mutation.SetGrokChatUpstreamMode(v)
+	}
+	if _, ok := _c.mutation.GrokChatResponsesGrayPercent(); !ok {
+		v := group.DefaultGrokChatResponsesGrayPercent
+		_c.mutation.SetGrokChatResponsesGrayPercent(v)
+	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		v := group.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
@@ -1170,6 +1206,17 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ModelsListConfig(); !ok {
 		return &ValidationError{Name: "models_list_config", err: errors.New(`ent: missing required field "Group.models_list_config"`)}
+	}
+	if _, ok := _c.mutation.GrokChatUpstreamMode(); !ok {
+		return &ValidationError{Name: "grok_chat_upstream_mode", err: errors.New(`ent: missing required field "Group.grok_chat_upstream_mode"`)}
+	}
+	if v, ok := _c.mutation.GrokChatUpstreamMode(); ok {
+		if err := group.GrokChatUpstreamModeValidator(v); err != nil {
+			return &ValidationError{Name: "grok_chat_upstream_mode", err: fmt.Errorf(`ent: validator failed for field "Group.grok_chat_upstream_mode": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.GrokChatResponsesGrayPercent(); !ok {
+		return &ValidationError{Name: "grok_chat_responses_gray_percent", err: errors.New(`ent: missing required field "Group.grok_chat_responses_gray_percent"`)}
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "Group.rpm_limit"`)}
@@ -1408,6 +1455,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ModelsListConfig(); ok {
 		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
 		_node.ModelsListConfig = value
+	}
+	if value, ok := _c.mutation.GrokChatUpstreamMode(); ok {
+		_spec.SetField(group.FieldGrokChatUpstreamMode, field.TypeString, value)
+		_node.GrokChatUpstreamMode = value
+	}
+	if value, ok := _c.mutation.GrokChatResponsesGrayPercent(); ok {
+		_spec.SetField(group.FieldGrokChatResponsesGrayPercent, field.TypeInt, value)
+		_node.GrokChatResponsesGrayPercent = value
 	}
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2336,6 +2391,36 @@ func (u *GroupUpsert) SetModelsListConfig(v domain.GroupModelsListConfig) *Group
 // UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateModelsListConfig() *GroupUpsert {
 	u.SetExcluded(group.FieldModelsListConfig)
+	return u
+}
+
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (u *GroupUpsert) SetGrokChatUpstreamMode(v string) *GroupUpsert {
+	u.Set(group.FieldGrokChatUpstreamMode, v)
+	return u
+}
+
+// UpdateGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateGrokChatUpstreamMode() *GroupUpsert {
+	u.SetExcluded(group.FieldGrokChatUpstreamMode)
+	return u
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsert) SetGrokChatResponsesGrayPercent(v int) *GroupUpsert {
+	u.Set(group.FieldGrokChatResponsesGrayPercent, v)
+	return u
+}
+
+// UpdateGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateGrokChatResponsesGrayPercent() *GroupUpsert {
+	u.SetExcluded(group.FieldGrokChatResponsesGrayPercent)
+	return u
+}
+
+// AddGrokChatResponsesGrayPercent adds v to the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsert) AddGrokChatResponsesGrayPercent(v int) *GroupUpsert {
+	u.Add(group.FieldGrokChatResponsesGrayPercent, v)
 	return u
 }
 
@@ -3346,6 +3431,41 @@ func (u *GroupUpsertOne) SetModelsListConfig(v domain.GroupModelsListConfig) *Gr
 func (u *GroupUpsertOne) UpdateModelsListConfig() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelsListConfig()
+	})
+}
+
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (u *GroupUpsertOne) SetGrokChatUpstreamMode(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetGrokChatUpstreamMode(v)
+	})
+}
+
+// UpdateGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateGrokChatUpstreamMode() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateGrokChatUpstreamMode()
+	})
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsertOne) SetGrokChatResponsesGrayPercent(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetGrokChatResponsesGrayPercent(v)
+	})
+}
+
+// AddGrokChatResponsesGrayPercent adds v to the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsertOne) AddGrokChatResponsesGrayPercent(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddGrokChatResponsesGrayPercent(v)
+	})
+}
+
+// UpdateGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateGrokChatResponsesGrayPercent() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateGrokChatResponsesGrayPercent()
 	})
 }
 
@@ -4537,6 +4657,41 @@ func (u *GroupUpsertBulk) SetModelsListConfig(v domain.GroupModelsListConfig) *G
 func (u *GroupUpsertBulk) UpdateModelsListConfig() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateModelsListConfig()
+	})
+}
+
+// SetGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field.
+func (u *GroupUpsertBulk) SetGrokChatUpstreamMode(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetGrokChatUpstreamMode(v)
+	})
+}
+
+// UpdateGrokChatUpstreamMode sets the "grok_chat_upstream_mode" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateGrokChatUpstreamMode() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateGrokChatUpstreamMode()
+	})
+}
+
+// SetGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsertBulk) SetGrokChatResponsesGrayPercent(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetGrokChatResponsesGrayPercent(v)
+	})
+}
+
+// AddGrokChatResponsesGrayPercent adds v to the "grok_chat_responses_gray_percent" field.
+func (u *GroupUpsertBulk) AddGrokChatResponsesGrayPercent(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddGrokChatResponsesGrayPercent(v)
+	})
+}
+
+// UpdateGrokChatResponsesGrayPercent sets the "grok_chat_responses_gray_percent" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateGrokChatResponsesGrayPercent() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateGrokChatResponsesGrayPercent()
 	})
 }
 

@@ -288,11 +288,10 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload != "[DONE]" {
-				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
 					usage = *u
 				}
-				if firstTokenMs == nil && !usageOnlyChunk {
+				if firstTokenMs == nil && chatCompletionsPayloadHasMeaningfulOutput([]byte(payload)) {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
 				}
@@ -342,16 +341,17 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          true,
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
+		RequestID:        requestID,
+		UpstreamEndpoint: OpenAIUpstreamEndpointChatCompletions,
+		Usage:            usage,
+		Model:            originalModel,
+		BillingModel:     billingModel,
+		UpstreamModel:    upstreamModel,
+		ReasoningEffort:  reasoningEffort,
+		ServiceTier:      serviceTier,
+		Stream:           true,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     firstTokenMs,
 	}, nil
 }
 
@@ -436,15 +436,16 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	_, _ = c.Writer.Write(respBody)
 
 	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		RequestID:        requestID,
+		UpstreamEndpoint: OpenAIUpstreamEndpointChatCompletions,
+		Usage:            usage,
+		Model:            originalModel,
+		BillingModel:     billingModel,
+		UpstreamModel:    upstreamModel,
+		ReasoningEffort:  reasoningEffort,
+		ServiceTier:      serviceTier,
+		Stream:           false,
+		Duration:         time.Since(startTime),
 	}, nil
 }
 

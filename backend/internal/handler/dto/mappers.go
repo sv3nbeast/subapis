@@ -211,6 +211,8 @@ func groupFromServiceBase(g *service.Group) Group {
 		KiroStickySessionTTLSeconds:     g.EffectiveKiroStickySessionTTLSeconds(),
 		KiroCacheEmulationRatio:         g.EffectiveKiroCacheEmulationRatio(),
 		KiroEndpointMode:                g.EffectiveKiroEndpointMode(),
+		GrokChatUpstreamMode:            g.EffectiveGrokChatUpstreamMode(),
+		GrokChatResponsesGrayPercent:    g.EffectiveGrokChatResponsesGrayPercent(),
 		RPMLimit:                        g.RPMLimit,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,

@@ -251,13 +251,15 @@ type CreateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes []string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool
-	AllowNonStreamMessages      bool
-	DefaultMappedModel          string
-	RequireOAuthOnly            bool
-	RequirePrivacySet           bool
-	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
-	ModelsListConfig            GroupModelsListConfig
+	AllowMessagesDispatch        bool
+	AllowNonStreamMessages       bool
+	DefaultMappedModel           string
+	RequireOAuthOnly             bool
+	RequirePrivacySet            bool
+	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
+	ModelsListConfig             GroupModelsListConfig
+	GrokChatUpstreamMode         string
+	GrokChatResponsesGrayPercent int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
@@ -312,13 +314,15 @@ type UpdateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes *[]string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       *bool
-	AllowNonStreamMessages      *bool
-	DefaultMappedModel          *string
-	RequireOAuthOnly            *bool
-	RequirePrivacySet           *bool
-	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
-	ModelsListConfig            *GroupModelsListConfig
+	AllowMessagesDispatch        *bool
+	AllowNonStreamMessages       *bool
+	DefaultMappedModel           *string
+	RequireOAuthOnly             *bool
+	RequirePrivacySet            *bool
+	MessagesDispatchModelConfig  *OpenAIMessagesDispatchModelConfig
+	ModelsListConfig             *GroupModelsListConfig
+	GrokChatUpstreamMode         *string
+	GrokChatResponsesGrayPercent *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效），nil 表示未提供不改动。
@@ -2211,6 +2215,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
+		GrokChatUpstreamMode:            input.GrokChatUpstreamMode,
+		GrokChatResponsesGrayPercent:    input.GrokChatResponsesGrayPercent,
 		RPMLimit:                        input.RPMLimit,
 		KiroCacheEmulationEnabled:       input.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           kiroAutoStickyEnabled,
@@ -2509,6 +2515,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.ModelsListConfig != nil {
 		group.ModelsListConfig = normalizeGroupModelsListConfig(*input.ModelsListConfig)
+	}
+	if input.GrokChatUpstreamMode != nil {
+		group.GrokChatUpstreamMode = *input.GrokChatUpstreamMode
+	}
+	if input.GrokChatResponsesGrayPercent != nil {
+		group.GrokChatResponsesGrayPercent = *input.GrokChatResponsesGrayPercent
 	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit

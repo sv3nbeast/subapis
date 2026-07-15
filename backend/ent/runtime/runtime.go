@@ -1105,28 +1105,38 @@ func init() {
 	groupDescModelsListConfig := groupFields[43].Descriptor()
 	// group.DefaultModelsListConfig holds the default value on creation for the models_list_config field.
 	group.DefaultModelsListConfig = groupDescModelsListConfig.Default.(domain.GroupModelsListConfig)
+	// groupDescGrokChatUpstreamMode is the schema descriptor for grok_chat_upstream_mode field.
+	groupDescGrokChatUpstreamMode := groupFields[44].Descriptor()
+	// group.DefaultGrokChatUpstreamMode holds the default value on creation for the grok_chat_upstream_mode field.
+	group.DefaultGrokChatUpstreamMode = groupDescGrokChatUpstreamMode.Default.(string)
+	// group.GrokChatUpstreamModeValidator is a validator for the "grok_chat_upstream_mode" field. It is called by the builders before save.
+	group.GrokChatUpstreamModeValidator = groupDescGrokChatUpstreamMode.Validators[0].(func(string) error)
+	// groupDescGrokChatResponsesGrayPercent is the schema descriptor for grok_chat_responses_gray_percent field.
+	groupDescGrokChatResponsesGrayPercent := groupFields[45].Descriptor()
+	// group.DefaultGrokChatResponsesGrayPercent holds the default value on creation for the grok_chat_responses_gray_percent field.
+	group.DefaultGrokChatResponsesGrayPercent = groupDescGrokChatResponsesGrayPercent.Default.(int)
 	// groupDescRpmLimit is the schema descriptor for rpm_limit field.
-	groupDescRpmLimit := groupFields[44].Descriptor()
+	groupDescRpmLimit := groupFields[46].Descriptor()
 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
 	// groupDescKiroCacheEmulationEnabled is the schema descriptor for kiro_cache_emulation_enabled field.
-	groupDescKiroCacheEmulationEnabled := groupFields[45].Descriptor()
+	groupDescKiroCacheEmulationEnabled := groupFields[47].Descriptor()
 	// group.DefaultKiroCacheEmulationEnabled holds the default value on creation for the kiro_cache_emulation_enabled field.
 	group.DefaultKiroCacheEmulationEnabled = groupDescKiroCacheEmulationEnabled.Default.(bool)
 	// groupDescKiroAutoStickyEnabled is the schema descriptor for kiro_auto_sticky_enabled field.
-	groupDescKiroAutoStickyEnabled := groupFields[46].Descriptor()
+	groupDescKiroAutoStickyEnabled := groupFields[48].Descriptor()
 	// group.DefaultKiroAutoStickyEnabled holds the default value on creation for the kiro_auto_sticky_enabled field.
 	group.DefaultKiroAutoStickyEnabled = groupDescKiroAutoStickyEnabled.Default.(bool)
 	// groupDescKiroStickySessionTTLSeconds is the schema descriptor for kiro_sticky_session_ttl_seconds field.
-	groupDescKiroStickySessionTTLSeconds := groupFields[47].Descriptor()
+	groupDescKiroStickySessionTTLSeconds := groupFields[49].Descriptor()
 	// group.DefaultKiroStickySessionTTLSeconds holds the default value on creation for the kiro_sticky_session_ttl_seconds field.
 	group.DefaultKiroStickySessionTTLSeconds = groupDescKiroStickySessionTTLSeconds.Default.(int)
 	// groupDescKiroCacheEmulationRatio is the schema descriptor for kiro_cache_emulation_ratio field.
-	groupDescKiroCacheEmulationRatio := groupFields[48].Descriptor()
+	groupDescKiroCacheEmulationRatio := groupFields[50].Descriptor()
 	// group.DefaultKiroCacheEmulationRatio holds the default value on creation for the kiro_cache_emulation_ratio field.
 	group.DefaultKiroCacheEmulationRatio = groupDescKiroCacheEmulationRatio.Default.(float64)
 	// groupDescKiroEndpointMode is the schema descriptor for kiro_endpoint_mode field.
-	groupDescKiroEndpointMode := groupFields[49].Descriptor()
+	groupDescKiroEndpointMode := groupFields[51].Descriptor()
 	// group.DefaultKiroEndpointMode holds the default value on creation for the kiro_endpoint_mode field.
 	group.DefaultKiroEndpointMode = groupDescKiroEndpointMode.Default.(string)
 	// group.KiroEndpointModeValidator is a validator for the "kiro_endpoint_mode" field. It is called by the builders before save.

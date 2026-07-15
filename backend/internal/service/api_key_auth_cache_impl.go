@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 17 // v17: include group video/batch pricing fields, peak rate fields, Kiro sticky/cache settings, and Kiro endpoint mode
+const apiKeyAuthSnapshotVersion = 18 // v18: include Grok Chat Completions upstream routing fields
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -289,6 +289,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			KiroStickySessionTTLSeconds:     groupForSnapshot.EffectiveKiroStickySessionTTLSeconds(),
 			KiroCacheEmulationRatio:         groupForSnapshot.KiroCacheEmulationRatio,
 			KiroEndpointMode:                groupForSnapshot.EffectiveKiroEndpointMode(),
+			GrokChatUpstreamMode:            groupForSnapshot.EffectiveGrokChatUpstreamMode(),
+			GrokChatResponsesGrayPercent:    groupForSnapshot.EffectiveGrokChatResponsesGrayPercent(),
 			RPMLimit:                        groupForSnapshot.RPMLimit,
 			PeakRateEnabled:                 groupForSnapshot.PeakRateEnabled,
 			PeakStart:                       groupForSnapshot.PeakStart,
@@ -378,6 +380,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
+			GrokChatUpstreamMode:            snapshot.Group.GrokChatUpstreamMode,
+			GrokChatResponsesGrayPercent:    snapshot.Group.GrokChatResponsesGrayPercent,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 			PeakRateEnabled:                 snapshot.Group.PeakRateEnabled,
 			PeakStart:                       snapshot.Group.PeakStart,

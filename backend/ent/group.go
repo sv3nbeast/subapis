@@ -113,6 +113,10 @@ type Group struct {
 	MessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config,omitempty"`
 	// 自定义 /v1/models 展示列表配置；仅影响模型列表响应，不影响调度
 	ModelsListConfig domain.GroupModelsListConfig `json:"models_list_config,omitempty"`
+	// Grok Chat 上游协议：raw、responses、gray
+	GrokChatUpstreamMode string `json:"grok_chat_upstream_mode,omitempty"`
+	// Grok Chat Responses 稳定灰度百分比，范围 0-100
+	GrokChatResponsesGrayPercent int `json:"grok_chat_responses_gray_percent,omitempty"`
 	// 分组 RPM 上限，0 表示不限制；设置后接管该分组用户的限流
 	RpmLimit int `json:"rpm_limit,omitempty"`
 	// 是否启用 Kiro 模拟缓存（仅 kiro 分组生效）
@@ -237,9 +241,9 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldKiroCacheEmulationRatio:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit, group.FieldKiroStickySessionTTLSeconds:
+		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldGrokChatResponsesGrayPercent, group.FieldRpmLimit, group.FieldKiroStickySessionTTLSeconds:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldKiroEndpointMode:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldGrokChatUpstreamMode, group.FieldKiroEndpointMode:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -567,6 +571,18 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field models_list_config: %w", err)
 				}
 			}
+		case group.FieldGrokChatUpstreamMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field grok_chat_upstream_mode", values[i])
+			} else if value.Valid {
+				_m.GrokChatUpstreamMode = value.String
+			}
+		case group.FieldGrokChatResponsesGrayPercent:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field grok_chat_responses_gray_percent", values[i])
+			} else if value.Valid {
+				_m.GrokChatResponsesGrayPercent = int(value.Int64)
+			}
 		case group.FieldRpmLimit:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field rpm_limit", values[i])
@@ -845,6 +861,12 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("models_list_config=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ModelsListConfig))
+	builder.WriteString(", ")
+	builder.WriteString("grok_chat_upstream_mode=")
+	builder.WriteString(_m.GrokChatUpstreamMode)
+	builder.WriteString(", ")
+	builder.WriteString("grok_chat_responses_gray_percent=")
+	builder.WriteString(fmt.Sprintf("%v", _m.GrokChatResponsesGrayPercent))
 	builder.WriteString(", ")
 	builder.WriteString("rpm_limit=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RpmLimit))

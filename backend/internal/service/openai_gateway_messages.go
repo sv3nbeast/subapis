@@ -354,6 +354,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
+	if result != nil {
+		result.UpstreamEndpoint = OpenAIUpstreamEndpointResponses
+	}
 
 	// cyber_policy：标记已设、error 已按 Anthropic 格式发给客户端。丢弃 result、返回哨兵，
 	// 使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），不计费、不 failover。
@@ -724,7 +727,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var usage OpenAIUsage
 	responseID := ""
 	var firstTokenMs *int
-	firstChunk := true
 	clientDisconnected := false
 	clientOutputStarted := false
 	var streamFailoverErr error
@@ -764,12 +766,6 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// processDataLine handles a single "data: ..." SSE line from upstream.
 	processDataLine := func(payload string) bool {
-		if firstChunk {
-			firstChunk = false
-			ms := int(time.Since(startTime).Milliseconds())
-			firstTokenMs = &ms
-		}
-
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("openai messages stream: failed to parse event",
@@ -777,6 +773,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 			return false
+		}
+		if firstTokenMs == nil && responsesStreamPayloadHasMeaningfulOutput([]byte(payload), event.Type) {
+			ms := int(time.Since(startTime).Milliseconds())
+			firstTokenMs = &ms
 		}
 
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)

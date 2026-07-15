@@ -160,8 +160,17 @@ describe('UseKeyModal', () => {
       }
     })
     expect(config.provider.grok.models['grok-4.5'].name).toBe('Grok 4.5')
+    expect(config.provider.grok.models['grok-4.5'].limit).toEqual({
+      context: 500000,
+      input: 450000,
+      output: 50000
+    })
+    expect(config.provider.grok.models.grok.limit).toEqual(config.provider.grok.models['grok-4.5'].limit)
+    expect(config.provider.grok.models['grok-latest'].limit).toEqual(config.provider.grok.models['grok-4.5'].limit)
+    expect(config.provider.grok.models['grok-4.5-latest'].limit).toEqual(config.provider.grok.models['grok-4.5'].limit)
     expect(config.provider.grok.models['grok-build-0.1'].name).toBe('Grok Build 0.1')
     expect(config.provider.grok.models['gpt-5.5']).toBeUndefined()
+    expect(config.compaction).toEqual({ auto: true, prune: true })
   })
 
   it('renders AWS-compatible Claude aliases in the Anthropic OpenCode provider', async () => {

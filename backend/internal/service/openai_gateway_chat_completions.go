@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -71,13 +72,14 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
-	if account.Platform == PlatformGrok {
+	useGrokResponses := account.Platform == PlatformGrok && shouldUseGrokResponsesForChat(c, body)
+	if account.Platform == PlatformGrok && !useGrokResponses {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
 	// 入口分流：APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
 	// 自动模式下标记缺失（未探测）按"现状即证据"原则继续走下方原 Responses 转换路径。
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	if account.Platform != PlatformGrok && account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -176,7 +178,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
-	if account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
 		var reqBody map[string]any
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
@@ -228,6 +230,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	if useGrokResponses {
+		patchedBody, patchErr := patchGrokResponsesBody(responsesBody, upstreamModel)
+		if patchErr != nil {
+			return nil, patchErr
+		}
+		responsesBody = patchedBody
+	}
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -291,7 +300,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// 6. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
+	var upstreamReq *http.Request
+	if useGrokResponses {
+		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token)
+	} else {
+		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
+	}
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -319,6 +333,18 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if useGrokResponses {
+			s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+				logger.L().Info("grok chat_completions: /responses unsupported, falling back to raw chat completions",
+					zap.Int64("account_id", account.ID),
+					zap.Int("upstream_status", resp.StatusCode),
+					zap.String("upstream_message", upstreamMsg),
+				)
+				return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+			}
+		}
 		if account.Type == AccountTypeAPIKey &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
@@ -342,6 +368,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		result, handleErr = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	if result != nil {
+		result.UpstreamEndpoint = OpenAIUpstreamEndpointResponses
 	}
 
 	// cyber_policy：标记已设、error 已按 Chat Completions 格式发给客户端。丢弃 result、
@@ -367,7 +396,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-	if handleErr == nil && account.Type == AccountTypeOAuth && !account.IsShadow() {
+	if handleErr == nil && useGrokResponses {
+		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+	} else if handleErr == nil && account.Type == AccountTypeOAuth && !account.IsShadow() {
 		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 		}
@@ -543,7 +574,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	var usage OpenAIUsage
 	var firstTokenMs *int
-	firstChunk := true
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
@@ -581,12 +611,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 
 	processDataLine := func(payload string) bool {
-		if firstChunk {
-			firstChunk = false
-			ms := int(time.Since(startTime).Milliseconds())
-			firstTokenMs = &ms
-		}
-
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("openai chat_completions stream: failed to parse event",
@@ -594,6 +618,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 			return false
+		}
+		if firstTokenMs == nil && responsesStreamPayloadHasMeaningfulOutput([]byte(payload), event.Type) {
+			ms := int(time.Since(startTime).Milliseconds())
+			firstTokenMs = &ms
 		}
 		refusalDetector.ObservePayload([]byte(payload))
 

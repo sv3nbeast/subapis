@@ -105,6 +105,10 @@ type APIKeyAuthGroupSnapshot struct {
 	KiroCacheEmulationRatio     float64 `json:"kiro_cache_emulation_ratio"`
 	KiroEndpointMode            string  `json:"kiro_endpoint_mode"`
 
+	// Grok Chat Completions 上游路由配置（仅 Grok 平台生效）
+	GrokChatUpstreamMode         string `json:"grok_chat_upstream_mode"`
+	GrokChatResponsesGrayPercent int    `json:"grok_chat_responses_gray_percent"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 级联判断。
 	RPMLimit int `json:"rpm_limit"`
 

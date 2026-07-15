@@ -209,6 +209,15 @@ func (Group) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("自定义 /v1/models 展示列表配置；仅影响模型列表响应，不影响调度"),
 
+		// Grok Chat Completions 上游协议灰度配置（仅 grok 平台生效）
+		field.String("grok_chat_upstream_mode").
+			MaxLen(16).
+			Default("raw").
+			Comment("Grok Chat 上游协议：raw、responses、gray"),
+		field.Int("grok_chat_responses_gray_percent").
+			Default(0).
+			Comment("Grok Chat Responses 稳定灰度百分比，范围 0-100"),
+
 		// 分组级每分钟请求数上限（0 = 不限制）。设置后优先于用户级兜底生效。
 		field.Int("rpm_limit").
 			Default(0).
