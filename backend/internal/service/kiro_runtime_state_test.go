@@ -141,7 +141,7 @@ func TestGatewayServiceCheckAndWaitKiroCooldownRequiresStore(t *testing.T) {
 	require.ErrorIs(t, err, errKiroCooldownStoreUnavailable)
 }
 
-func TestGatewayServiceCheckAndWaitKiroCooldownClears429WithoutWaiting(t *testing.T) {
+func TestGatewayServiceCheckAndWaitKiroCooldownIgnores429WithoutClearingSharedState(t *testing.T) {
 	store := &stubKiroCooldownStore{
 		reserveWait: 200 * time.Millisecond,
 		state: &kirocooldown.State{
@@ -162,8 +162,26 @@ func TestGatewayServiceCheckAndWaitKiroCooldownClears429WithoutWaiting(t *testin
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), 50*time.Millisecond)
 	require.Equal(t, 0, store.reserveCalls, "Kiro 429 must not use ReserveRequest spacing")
-	require.True(t, store.clearCalled)
-	require.Equal(t, []string{"token1"}, store.clearKeys)
+	require.False(t, store.clearCalled)
+	require.Empty(t, store.clearKeys)
+}
+
+func TestGatewayServiceCheckAndWaitKiroUnresponsiveCooldownOnlyBlocksEnforceMode(t *testing.T) {
+	store := &stubKiroCooldownStore{
+		state: &kirocooldown.State{
+			Active:        true,
+			Reason:        kirocooldown.CooldownReasonUnresponsive,
+			CooldownUntil: time.Now().Add(time.Minute),
+			Remaining:     time.Minute,
+		},
+	}
+	svc := &GatewayService{kiroCooldownStore: store}
+
+	require.NoError(t, svc.checkAndWaitKiroCooldownWithMode(context.Background(), "token1", false))
+	err := svc.checkAndWaitKiroCooldownWithMode(context.Background(), "token1", true)
+	var cooldownErr *kirocooldown.Error
+	require.ErrorAs(t, err, &cooldownErr)
+	require.Equal(t, kirocooldown.CooldownReasonUnresponsive, cooldownErr.Reason())
 }
 
 func TestGatewayServiceCheckAndWaitKiroCooldownBlocksSuspendedState(t *testing.T) {

@@ -421,6 +421,18 @@ gateway:
   # Allow failover on selected 400 errors (default: off)
   # 允许在特定 400 错误时进行故障转移（默认：关闭）
   failover_on_400: false
+  # Kiro-only resilience rollout. Use observe first, then enforce selected groups.
+  # Kiro 专属限流/超时/切号保护；先 observe，再按分组切换到 enforce。
+  kiro_resilience:
+    mode: "observe" # off / observe / enforce
+    group_ids: [] # Empty applies to every group that can schedule Kiro
+    response_header_timeout_seconds: 30
+    first_semantic_timeout_seconds: 60
+    failover_budget_seconds: 105
+    pre_semantic_buffer_bytes: 262144
+    cleanup_grace_seconds: 3
+    unresponsive_cooldown_seconds: 30
+    unresponsive_cooldown_max_seconds: 120
   # Scheduling configuration
   # 调度配置
   scheduling:

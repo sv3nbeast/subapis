@@ -393,6 +393,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	kiroBridgeService     *GatewayService
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -413,6 +414,15 @@ type OpenAIGatewayService struct {
 	codexSnapshotThrottle               *accountWriteThrottle
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+}
+
+// SetKiroBridgeService wires Kiro-only scheduling guards without changing the
+// OpenAI service constructor used by tests and non-Kiro deployments.
+func (s *OpenAIGatewayService) SetKiroBridgeService(bridge *GatewayService) {
+	if s == nil {
+		return
+	}
+	s.kiroBridgeService = bridge
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

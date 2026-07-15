@@ -77,7 +77,7 @@ func kiroRuntimeStateDefaultJSONResponse(status int, body string) *http.Response
 	}
 }
 
-func TestExecuteKiroUpstreamClears429CooldownAndContinuesDefault(t *testing.T) {
+func TestExecuteKiroUpstreamIgnores429CooldownWithoutClearingDefault(t *testing.T) {
 	account := &Account{
 		ID:          42,
 		Platform:    PlatformKiro,
@@ -118,7 +118,7 @@ func TestExecuteKiroUpstreamClears429CooldownAndContinuesDefault(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, upstream.requests, 1)
-	require.True(t, store.clearCalled)
+	require.False(t, store.clearCalled)
 	require.Equal(t, 0, store.reserveCalls, "Kiro 429 must not use ReserveRequest spacing")
 }
 

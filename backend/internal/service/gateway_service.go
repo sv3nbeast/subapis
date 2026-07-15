@@ -625,10 +625,12 @@ type AccountWaitPlan struct {
 }
 
 type AccountSelectionResult struct {
-	Account     *Account
-	Acquired    bool
-	ReleaseFunc func()
-	WaitPlan    *AccountWaitPlan // nil means no wait allowed
+	Account               *Account
+	Acquired              bool
+	ReleaseFunc           func()
+	WaitPlan              *AccountWaitPlan // nil means no wait allowed
+	PreserveStickyBinding bool             // temporary load escape; keep the original binding after success
+	DeferStickyMigration  bool             // failure-driven switch; migrate only after a complete success
 }
 
 // ClaudeUsage 表示Claude API返回的usage信息
@@ -669,6 +671,16 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 }
 
+type UpstreamFailureKind string
+
+const (
+	UpstreamFailureRateLimited           UpstreamFailureKind = "rate_limited"
+	UpstreamFailureResponseHeaderTimeout UpstreamFailureKind = "response_header_timeout"
+	UpstreamFailureFirstSemanticTimeout  UpstreamFailureKind = "first_semantic_timeout"
+	UpstreamFailureTransportError        UpstreamFailureKind = "transport_error"
+	UpstreamFailureIncompleteStream      UpstreamFailureKind = "incomplete_stream"
+)
+
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
 	StatusCode             int
@@ -678,7 +690,12 @@ type UpstreamFailoverError struct {
 	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
 	SuppressTempUnschedule bool        // 可同账号重试但不应写入账号临时禁调（如 Kiro 流协议尾帧缺失/空解析）
 	KiroRateLimited        bool        // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
-	Cause                  error       // 内部原因，用于 errors.As 分类；不直接暴露给客户端
+	FailureKind            UpstreamFailureKind
+	RetryAfter             time.Duration
+	FailoverProhibited     bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
+	KiroCooldownCommitted  bool            // the credential cooldown was already persisted for this failure
+	UpstreamDone           <-chan struct{} // nil means no detached physical upstream remains
+	Cause                  error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -2284,7 +2301,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			derefGroupID(groupID), groupPlatform, requestedModel, shortSessionHash(sessionHash), stickyAccountID, cfg.LoadBatchEnabled, s.concurrencyService != nil)
 	}
 
-	if platform != PlatformKiro && (s.concurrencyService == nil || !cfg.LoadBatchEnabled) {
+	useLegacyScheduling := platform != PlatformKiro && (s.concurrencyService == nil || !cfg.LoadBatchEnabled)
+	if useLegacyScheduling && !(platform == PlatformAnthropic && s.kiroResilienceEnforced(groupID)) {
 		// 复制排除列表，用于会话限制拒绝时的重试
 		localExcluded := make(map[int64]struct{})
 		for k, v := range excludedIDs {
@@ -2373,6 +2391,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			useMixed = freshUseMixed
 		}
 	}
+	ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
@@ -2390,7 +2409,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						"group_id", derefGroupID(groupID),
 						"platform", platform,
 						"model", requestedModel)
-					return s.newSelectionResult(ctx, forcedAccount, true, result.ReleaseFunc, nil)
+					selection, selectionErr := s.newSelectionResult(ctx, forcedAccount, true, result.ReleaseFunc, nil)
+					s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, false, false)
+					return selection, selectionErr
 				}
 			}
 			slog.Info("account_scheduling_forced_account_wait_plan",
@@ -2398,12 +2419,14 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				"group_id", derefGroupID(groupID),
 				"platform", platform,
 				"model", requestedModel)
-			return s.newSelectionResult(ctx, forcedAccount, false, nil, &AccountWaitPlan{
+			selection, selectionErr := s.newSelectionResult(ctx, forcedAccount, false, nil, &AccountWaitPlan{
 				AccountID:      forcedAccount.ID,
 				MaxConcurrency: forcedAccount.Concurrency,
 				Timeout:        cfg.FallbackWaitTimeout,
 				MaxWaiting:     cfg.FallbackMaxWaiting,
 			})
+			s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, false, false)
+			return selection, selectionErr
 		}
 		return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 	}
@@ -2424,6 +2447,21 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	accountByID := make(map[int64]*Account, len(accounts))
 	for i := range accounts {
 		accountByID[accounts[i].ID] = &accounts[i]
+	}
+	kiroResilienceEnforced := s.kiroResilienceEnforced(groupID)
+	preserveKiroStickyBinding := false
+	deferKiroStickyMigration := false
+	if kiroResilienceEnforced && stickyAccountID > 0 {
+		stickyAccount := accountByID[stickyAccountID]
+		if stickyAccount == nil && s.accountRepo != nil {
+			if persisted, getErr := s.accountRepo.GetByID(ctx, stickyAccountID); getErr == nil && persisted != nil && s.isAccountInGroup(persisted, groupID) {
+				stickyAccount = persisted
+			}
+		}
+		if stickyAccount != nil && stickyAccount.Platform == PlatformKiro {
+			_, failedThisRequest := excludedIDs[stickyAccountID]
+			deferKiroStickyMigration = failedThisRequest || stickyAccount.IsRateLimited() || kiroCooldownStateFromContext(ctx, stickyAccount) != nil
+		}
 	}
 
 	// 获取模型路由配置（仅 anthropic 平台）
@@ -2470,6 +2508,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
 				filteredPlatform++
+				continue
+			}
+			if kiroCooldownStateFromContext(ctx, account) != nil {
+				filteredUnsched++
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
@@ -2524,6 +2566,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
 							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+							kiroCooldownStateFromContext(ctx, stickyAccount) == nil &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
@@ -2552,6 +2595,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 								}
 							}
 
+							if stickyCacheMissReason == "" && stickyAccount.Platform == PlatformKiro && kiroResilienceEnforced {
+								preserveKiroStickyBinding = true
+								stickyCacheMissReason = "kiro_busy_fallback_scan"
+							}
 							if stickyCacheMissReason == "" {
 								waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
 								if waitingCount < cfg.StickySessionMaxWaiting {
@@ -2592,7 +2639,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 								stickyCacheMissReason, stickyAccountID, shortSessionHash(sessionHash), currentRPM, baseRPM)
 						}
 					} else {
-						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+						if !preserveKiroStickyBinding && !deferKiroStickyMigration {
+							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+						}
 						logger.LegacyPrintf("service.gateway", "[StickyCacheMiss] reason=account_cleared account_id=%d session=%s current_rpm=0 base_rpm=0",
 							stickyAccountID, shortSessionHash(sessionHash))
 					}
@@ -2657,13 +2706,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 							result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
 							continue
 						}
-						if sessionHash != "" && s.cache != nil {
+						if s.shouldBindSelectionBeforeSuccess(item.account, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration) && s.cache != nil {
 							_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, item.account.ID, s.stickySessionTTLForGroupID(ctx, groupID))
 						}
 						if s.debugModelRoutingEnabled() {
 							logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed select: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), item.account.ID)
 						}
-						return s.newSelectionResult(ctx, item.account, true, result.ReleaseFunc, nil)
+						selection, selectionErr := s.newSelectionResult(ctx, item.account, true, result.ReleaseFunc, nil)
+						s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration)
+						return selection, selectionErr
 					}
 				}
 
@@ -2676,12 +2727,14 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					if s.debugModelRoutingEnabled() {
 						logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed wait: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), item.account.ID)
 					}
-					return s.newSelectionResult(ctx, item.account, false, nil, &AccountWaitPlan{
+					selection, selectionErr := s.newSelectionResult(ctx, item.account, false, nil, &AccountWaitPlan{
 						AccountID:      item.account.ID,
 						MaxConcurrency: item.account.Concurrency,
 						Timeout:        cfg.StickySessionWaitTimeout,
 						MaxWaiting:     cfg.StickySessionMaxWaiting,
 					})
+					s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration)
+					return selection, selectionErr
 				}
 				// 所有路由账号会话限制都已满，继续到 Layer 2 回退
 			}
@@ -2698,14 +2751,17 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if ok {
 				// 检查账户是否需要清理粘性会话绑定
 				// Check if the account needs sticky session cleanup
-				clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
+				kiroCooldown := kiroCooldownStateFromContext(ctx, account)
+				clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel) || kiroCooldown != nil
 				if clearSticky {
 					slog.Debug("sticky.layer1_5_no_routing_clear",
 						"account_id", accountID,
 						"reason", "should_clear_sticky_session",
 						"session", shortSessionHash(sessionHash),
 					)
-					_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+					if !(account.Platform == PlatformKiro && kiroResilienceEnforced && kiroCooldown != nil) {
+						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+					}
 				}
 
 				// 注意：不再检查 isAccountInGroup，因为 accountByID 已经从按分组过滤的
@@ -2762,25 +2818,29 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						)
 					}
 
-					waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
-					if waitingCount < cfg.StickySessionMaxWaiting {
-						// 会话数量限制检查（等待计划也需要占用会话配额）
-						// Session count limit check (wait plan also requires session quota)
-						if !s.checkAndRegisterSession(ctx, account, sessionHash) {
-							// 会话限制已满，继续到 Layer 2
-							// Session limit full, continue to Layer 2
-						} else {
-							slog.Debug("sticky.layer1_5_no_routing_hit",
-								"account_id", accountID,
-								"session", shortSessionHash(sessionHash),
-								"result", "wait_plan",
-							)
-							return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
-								AccountID:      accountID,
-								MaxConcurrency: account.Concurrency,
-								Timeout:        cfg.StickySessionWaitTimeout,
-								MaxWaiting:     cfg.StickySessionMaxWaiting,
-							})
+					if account.Platform == PlatformKiro && kiroResilienceEnforced {
+						preserveKiroStickyBinding = true
+					} else {
+						waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
+						if waitingCount < cfg.StickySessionMaxWaiting {
+							// 会话数量限制检查（等待计划也需要占用会话配额）
+							// Session count limit check (wait plan also requires session quota)
+							if !s.checkAndRegisterSession(ctx, account, sessionHash) {
+								// 会话限制已满，继续到 Layer 2
+								// Session limit full, continue to Layer 2
+							} else {
+								slog.Debug("sticky.layer1_5_no_routing_hit",
+									"account_id", accountID,
+									"session", shortSessionHash(sessionHash),
+									"result", "wait_plan",
+								)
+								return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+									AccountID:      accountID,
+									MaxConcurrency: account.Concurrency,
+									Timeout:        cfg.StickySessionWaitTimeout,
+									MaxWaiting:     cfg.StickySessionMaxWaiting,
+								})
+							}
 						}
 					}
 				} else if !clearSticky {
@@ -2825,6 +2885,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if freshAccounts, freshUseMixed, ok := s.fallbackToDirectSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, requestedModel, len(accounts)); ok {
 			accounts = freshAccounts
 			useMixed = freshUseMixed
+			ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 			ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 			ctx = s.withWindowCostPrefetch(ctx, accounts)
 			ctx = s.withRPMPrefetch(ctx, accounts)
@@ -2846,6 +2907,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 						accounts = freshAccounts
 						useMixed = freshUseMixed
 					}
+					ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 					ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 					ctx = s.withWindowCostPrefetch(ctx, accounts)
 					ctx = s.withRPMPrefetch(ctx, accounts)
@@ -2866,9 +2928,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		})
 	}
 
-	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
-	if err != nil {
-		if result, ok, legacyErr := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth); legacyErr != nil {
+	var loadMap map[int64]*AccountLoadInfo
+	var loadErr error
+	if s.concurrencyService == nil {
+		loadErr = errors.New("concurrency service unavailable")
+	} else {
+		loadMap, loadErr = s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
+	}
+	if loadErr != nil {
+		if result, ok, legacyErr := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth, preserveKiroStickyBinding, deferKiroStickyMigration); legacyErr != nil {
 			return nil, legacyErr
 		} else if ok {
 			return result, nil
@@ -2907,10 +2975,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				if !s.checkAndRegisterSession(ctx, selected.account, sessionHash) {
 					result.ReleaseFunc() // 释放槽位，继续尝试下一个账号
 				} else {
-					if sessionHash != "" && s.cache != nil {
+					if s.shouldBindSelectionBeforeSuccess(selected.account, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration) && s.cache != nil {
 						_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, selected.account.ID, s.stickySessionTTLForGroupID(ctx, groupID))
 					}
-					return s.newSelectionResult(ctx, selected.account, true, result.ReleaseFunc, nil)
+					selection, selectionErr := s.newSelectionResult(ctx, selected.account, true, result.ReleaseFunc, nil)
+					s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration)
+					return selection, selectionErr
 				}
 			}
 
@@ -2938,12 +3008,14 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			fallbackCandidates = removeAccountByID(fallbackCandidates, acc.ID)
 			continue // 会话限制已满，尝试下一个账号
 		}
-		return s.newSelectionResult(ctx, acc, false, nil, &AccountWaitPlan{
+		selection, selectionErr := s.newSelectionResult(ctx, acc, false, nil, &AccountWaitPlan{
 			AccountID:      acc.ID,
 			MaxConcurrency: acc.Concurrency,
 			Timeout:        cfg.FallbackWaitTimeout,
 			MaxWaiting:     cfg.FallbackMaxWaiting,
 		})
+		s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, preserveKiroStickyBinding, deferKiroStickyMigration)
+		return selection, selectionErr
 	}
 	return nil, s.noAvailableSelectionErrorForModel(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, useMixed)
 }
@@ -3046,7 +3118,7 @@ func (s *GatewayService) isAccountSchedulableForModelSelectionIgnoringAccountRat
 	return true
 }
 
-func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
+func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool, preserveStickyBinding, deferStickyMigration bool) (*AccountSelectionResult, bool, error) {
 	remaining := append([]*Account(nil), candidates...)
 	for len(remaining) > 0 {
 		acc := selectBalancedAccount(ctx, remaining, preferOAuth, "last_used")
@@ -3061,13 +3133,14 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 				remaining = removeAccountByID(remaining, acc.ID)
 				continue
 			}
-			if sessionHash != "" && s.cache != nil {
+			if s.shouldBindSelectionBeforeSuccess(acc, groupID, sessionHash, preserveStickyBinding, deferStickyMigration) && s.cache != nil {
 				_ = s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, acc.ID, s.stickySessionTTLForGroupID(ctx, groupID))
 			}
 			selection, err := s.newSelectionResult(ctx, acc, true, result.ReleaseFunc, nil)
 			if err != nil {
 				return nil, false, err
 			}
+			s.applyKiroSelectionBindingPolicy(selection, groupID, sessionHash, preserveStickyBinding, deferStickyMigration)
 			return selection, true, nil
 		}
 		remaining = removeAccountByID(remaining, acc.ID)
@@ -3095,6 +3168,9 @@ func (s *GatewayService) filterSelectableAccounts(
 		// re-check schedulability here so recently rate-limited/overloaded accounts
 		// are not selected again before the bucket is rebuilt.
 		if !s.isAccountSchedulableForSelection(acc) {
+			continue
+		}
+		if kiroCooldownStateFromContext(ctx, acc) != nil {
 			continue
 		}
 		if !s.isAccountAllowedForPlatform(acc, platform, allowMixedScheduling) {
@@ -4519,6 +4595,9 @@ func (s *GatewayService) selectLegacyEligibleAccount(
 		if !s.isAccountSchedulableForSelection(acc) {
 			continue
 		}
+		if kiroCooldownStateFromContext(ctx, acc) != nil {
+			continue
+		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
 			_ = s.accountRepo.SetError(ctx, acc.ID,
@@ -4628,6 +4707,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		accountsLoaded = true
 
 		// 提前预取窗口费用+RPM 计数，确保 routing 段内的调度检查调用能命中缓存
+		ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 		ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
@@ -4658,7 +4738,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				account, err := s.getSchedulableAccount(ctx, accountID)
 				// 检查账号分组归属和平台匹配（确保粘性会话不会跨分组或跨平台）
 				if err == nil {
-					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
+					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel) || kiroCooldownStateFromContext(ctx, account) != nil
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
@@ -4704,6 +4784,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	useMixed := false
 
 	// 批量预取窗口费用+RPM 计数，避免逐个账号查询（N+1）
+	ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
@@ -4727,7 +4808,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			account, err := s.getSchedulableAccount(ctx, accountID)
 			// 检查账号分组归属和平台匹配（确保粘性会话不会跨分组或跨平台）
 			if err == nil {
-				clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
+				clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel) || kiroCooldownStateFromContext(ctx, account) != nil
 				if clearSticky {
 					_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 				}
@@ -4806,7 +4887,10 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					account, err := s.getSchedulableAccount(ctx, accountID)
 					// 检查账号分组归属和有效性：原生平台直接匹配，跨平台账号需要启用 mixed_scheduling。
 					if err == nil {
-						clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
+						if account.Platform == PlatformKiro {
+							ctx = s.withKiroCooldownPrefetch(ctx, []Account{*account}, groupID)
+						}
+						clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel) || kiroCooldownStateFromContext(ctx, account) != nil
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
@@ -4832,6 +4916,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		accountsLoaded = true
 
 		// 提前预取窗口费用+RPM 计数，确保 routing 段内的调度检查调用能命中缓存
+		ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 		ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
@@ -4867,7 +4952,10 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				account, err := s.getSchedulableAccount(ctx, accountID)
 				// 检查账号分组归属和有效性：原生平台直接匹配，跨平台账号需要启用 mixed_scheduling。
 				if err == nil {
-					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel)
+					if account.Platform == PlatformKiro {
+						ctx = s.withKiroCooldownPrefetch(ctx, []Account{*account}, groupID)
+					}
+					clearSticky := shouldClearStickySessionWithContext(ctx, account, requestedModel) || kiroCooldownStateFromContext(ctx, account) != nil
 					if clearSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
@@ -4891,6 +4979,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	}
 
 	// 批量预取窗口费用+RPM 计数，避免逐个账号查询（N+1）
+	ctx = s.withKiroCooldownPrefetch(ctx, accounts, groupID)
 	ctx = s.withModelCapacityCooldownPrefetch(ctx, accounts, requestedModel)
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
@@ -4910,6 +4999,11 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		}
 	}
 	if selected == nil {
+		if cooldownErr := s.kiroCooldownExhaustedFromRepository(ctx, groupID, requestedModel, excludedIDs, func(account *Account) bool {
+			return isAccountAllowedInMixedScheduling(account, nativePlatform)
+		}); cooldownErr != nil {
+			return nil, cooldownErr
+		}
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs, true)
 		if requestedModel != "" {
 			return nil, fmt.Errorf("%w supporting model: %s (%s)", ErrNoAvailableAccounts, requestedModel, summarizeSelectionFailureStats(stats))
@@ -4991,6 +5085,34 @@ func (s *GatewayService) noAvailableSelectionErrorForModel(
 	excludedIDs map[int64]struct{},
 	allowMixedScheduling bool,
 ) error {
+	if s != nil && s.kiroResilienceEnforced(groupID) {
+		cooldownAccountIDs := make(map[int64]struct{})
+		for i := range accounts {
+			account := &accounts[i]
+			if account.Platform != PlatformKiro || kiroCooldownStateFromContext(ctx, account) == nil {
+				continue
+			}
+			if _, excluded := excludedIDs[account.ID]; excluded {
+				continue
+			}
+			if !s.isAccountAllowedForPlatform(account, platform, allowMixedScheduling) {
+				continue
+			}
+			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+				continue
+			}
+			cooldownAccountIDs[account.ID] = struct{}{}
+		}
+		if err := kiroCooldownExhaustedErrorFromContext(ctx, cooldownAccountIDs); err != nil && len(cooldownAccountIDs) > 0 {
+			return err
+		}
+		if err := s.kiroCooldownExhaustedFromRepository(ctx, groupID, requestedModel, excludedIDs, func(account *Account) bool {
+			return s.isAccountAllowedForPlatform(account, platform, allowMixedScheduling) &&
+				(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel))
+		}); err != nil {
+			return err
+		}
+	}
 	if requestedModel == "" {
 		return ErrNoAvailableAccounts
 	}
@@ -9913,7 +10035,8 @@ type clientVisibleStreamError interface {
 	ClientErrorMessage() string
 }
 
-func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool) (*streamingResult, error) {
+func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool, cancelOnClientDisconnectOpt ...bool) (*streamingResult, error) {
+	cancelOnClientDisconnect := len(cancelOnClientDisconnectOpt) > 0 && cancelOnClientDisconnectOpt[0]
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
 
@@ -10115,7 +10238,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		}
 		return outputBlocks
 	}
-	writeOutputBlocks := func(blocks []string) {
+	writeOutputBlocks := func(blocks []string) bool {
 		for _, block := range blocks {
 			if !clientDisconnected {
 				restored := reverseToolNamesIfPresent(c, []byte(block))
@@ -10124,14 +10247,19 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 				}
 				if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
 					clientDisconnected = true
+					if cancelOnClientDisconnect {
+						logger.LegacyPrintf("service.gateway", "Client disconnected during Kiro streaming, canceling upstream")
+						return true
+					}
 					logger.LegacyPrintf("service.gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
-					break
+					return false
 				}
 				flusher.Flush()
 				lastDataAt = time.Now()
 				resetKeepaliveTimer()
 			}
 		}
+		return false
 	}
 
 	processSSEEvent := func(lines []string) ([]string, string, *sseUsagePatch, error) {
@@ -10365,7 +10493,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						}
 						return nil, err
 					}
-					writeOutputBlocks(outputBlocks)
+					if writeOutputBlocks(outputBlocks) && cancelOnClientDisconnect {
+						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
+					}
 					if data != "" {
 						if firstTokenMs == nil && data != "[DONE]" {
 							ms := int(time.Since(startTime).Milliseconds())
@@ -10376,7 +10506,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						}
 					}
 				}
-				writeOutputBlocks(xmlInvokePendingBlocks())
+				if writeOutputBlocks(xmlInvokePendingBlocks()) && cancelOnClientDisconnect {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
+				}
 				if !sawTerminalEvent {
 					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: clientDisconnected}, fmt.Errorf("stream usage incomplete: missing terminal event")
 				}
@@ -10450,7 +10582,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					return nil, err
 				}
 
-				writeOutputBlocks(outputBlocks)
+				if writeOutputBlocks(outputBlocks) && cancelOnClientDisconnect {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
+				}
 				if data != "" {
 					if firstTokenMs == nil && data != "[DONE]" {
 						ms := int(time.Since(startTime).Milliseconds())
@@ -10497,6 +10631,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			}
 			if _, werr := fmt.Fprint(w, keepaliveBlock); werr != nil {
 				clientDisconnected = true
+				if cancelOnClientDisconnect {
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, newOpenAIClientCanceledError(context.Canceled)
+				}
 				logger.LegacyPrintf("service.gateway", "Client disconnected during keepalive ping, continuing to drain upstream for billing")
 				continue
 			}

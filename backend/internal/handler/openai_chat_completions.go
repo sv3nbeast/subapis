@@ -150,6 +150,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
 	kiroFailoverState.FailedAccountIDs = failedAccountIDs
+	if h.kiroBridgeService != nil {
+		kiroFailoverState.KiroResilienceEnforced = h.kiroBridgeService.KiroResilienceEnforced(apiKey.GroupID)
+	}
 
 	for {
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
@@ -182,6 +185,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if cls := classifySelectionError(err); cls.Handled {
+					applySelectionErrorMonitoringClassification(c, cls)
+					h.handleStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
+					return
+				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -189,13 +197,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			} else {
-				if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil && kiroFailoverState.LastFailoverErr.KiroRateLimited {
-					switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context()) {
+				if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil {
+					switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context(), err) {
 					case FailoverContinue:
 						continue
 					case FailoverCanceled:
 						return
 					}
+					lastFailoverErr = kiroFailoverState.LastFailoverErr
 				}
 				if lastFailoverErr != nil {
 					h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -219,7 +228,28 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, slotErr := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotErr != nil {
+			if service.IsKiroFailoverBudgetExceeded(slotErr) {
+				applyKiroBudgetExhaustedRetryAfter(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				return
+			}
+			if account.Platform == service.PlatformKiro && kiroFailoverState.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(slotErr) {
+				if _, remainingErr := h.kiroBridgeService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
+					applyKiroBudgetExhaustedRetryAfter(c)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					return
+				}
+				if !kiroFailoverState.KiroWaitReselectUsed {
+					kiroFailoverState.KiroWaitReselectUsed = true
+					reqLog.Info("openai_chat_completions.kiro_account_wait_timeout_reselect", zap.Int64("account_id", account.ID))
+					continue
+				}
+			}
+			h.handleConcurrencyError(c, slotErr, "account", streamStarted)
+			return
+		}
 		if !acquired {
 			return
 		}
@@ -228,14 +258,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		forwardStart := time.Now()
 
 		writerSizeBeforeForward := c.Writer.Size()
-		result, err := func() (*service.OpenAIForwardResult, error) {
-			defer func() {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-			}()
-			return h.forwardOpenAIChatCompletions(c.Request.Context(), c, account, forwardBody, kiroBridgeParsed, promptCacheKey)
-		}()
+		forwardCtx := c.Request.Context()
+		if switchCount > 0 {
+			forwardCtx = service.WithAccountSwitchCount(forwardCtx, switchCount, false)
+		}
+		result, err := h.forwardOpenAIChatCompletions(forwardCtx, c, account, forwardBody, kiroBridgeParsed, promptCacheKey)
+		releaseAccountSlotAfterForward(accountReleaseFunc, err)
 		cyberBlockKeyChat := ""
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyChat = service.CyberSessionBlockKey(apiKey.ID, c, body)
@@ -263,6 +291,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					if c.Writer.Size() != writerSizeBeforeForward {
+						if service.HasGatewaySSEErrorWritten(c) {
+							return
+						}
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
@@ -270,9 +301,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					if account.Platform == service.PlatformKiro {
 						kiroFailoverState.SwitchCount = switchCount
 						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
-						if action == FailoverContinue && failoverErr.RetryableOnSameAccount && !failoverErr.KiroRateLimited {
-							kiroFailoverState.ForceAccountID = account.ID
-						}
 						switchCount = kiroFailoverState.SwitchCount
 						lastFailoverErr = failoverErr
 						switch action {
@@ -285,6 +313,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 							return
 						}
 					}
+					kiroFailoverState.RecordAlternatePlatformFailure(failoverErr)
 					// Pool mode: retry on the same account
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
@@ -343,6 +372,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+		}
+		if kiroBridgeRequested && kiroFailoverState.KiroResilienceEnforced && sessionHash != "" &&
+			(len(failedAccountIDs) > 0 || selection.DeferStickyMigration ||
+				(account.Platform == service.PlatformKiro && !selection.PreserveStickyBinding)) {
+			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+			if bindErr := h.gatewayService.BindStickySession(stateCtx, apiKey.GroupID, sessionHash, account.ID); bindErr != nil {
+				reqLog.Warn("openai_chat_completions.kiro_bind_sticky_after_success_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
+			}
+			stateCancel()
 		}
 
 		userAgent := c.GetHeader("User-Agent")

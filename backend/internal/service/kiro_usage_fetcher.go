@@ -591,7 +591,7 @@ func (s *AccountUsageService) attachKiroRuntimeState(ctx context.Context, accoun
 	usage.KiroRuntimeState = ""
 	usage.KiroRuntimeReason = ""
 	usage.KiroRuntimeResetAt = nil
-	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroAccountKey(account))
+	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroCooldownKey(account))
 	if err != nil || state == nil {
 		return
 	}
@@ -616,7 +616,7 @@ func (s *AccountUsageService) EnrichAccountWithKiroRuntimeState(ctx context.Cont
 	if s.kiroCooldownStore == nil {
 		return
 	}
-	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroAccountKey(account))
+	state, err := s.kiroCooldownStore.GetState(ctx, buildKiroCooldownKey(account))
 	if err != nil || state == nil {
 		return
 	}

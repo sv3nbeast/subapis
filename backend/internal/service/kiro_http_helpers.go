@@ -34,6 +34,20 @@ func buildKiroAccountKey(account *Account) string {
 	)
 }
 
+func buildKiroCooldownKey(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if account.Type == AccountTypeAPIKey {
+		if apiKey := firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key"); apiKey != "" {
+			// Hash API-key credentials independently from the request fingerprint so
+			// duplicate account rows share cooldown without changing their User-Agent.
+			return kiropkg.BuildAccountKey("", "", apiKey, "", account.ID)
+		}
+	}
+	return buildKiroAccountKey(account)
+}
+
 func buildKiroMachineID(account *Account) string {
 	if account == nil {
 		return kiropkg.BuildMachineID("", "", "account:nil")

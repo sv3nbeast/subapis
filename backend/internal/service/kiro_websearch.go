@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 const kiroMaxWebSearchIterations = 5
@@ -106,7 +111,7 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 }
 
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
-	ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, w io.Writer,
+	ctx context.Context, account *Account, parsed *ParsedRequest, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, w io.Writer, completion *kiroStreamCompletion,
 ) error {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
@@ -121,15 +126,22 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	nextContentBlockIndex := 0
 	messageStartSent := false
 	var cacheUsage *kiroCacheEmulationUsage
+	groupID := parsedGroupID(parsed)
+	resilienceEnforced := s.kiroResilienceEnforced(groupID)
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
-		s.prefetchKiroWebSearchDescription(ctx, account, token)
+		if prefetchErr := s.prefetchKiroWebSearchDescription(ctx, account, token, groupID); prefetchErr != nil && resilienceEnforced {
+			return prefetchErr
+		}
 
-		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
+		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query, groupID)
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
 		if mcpErr != nil {
+			if resilienceEnforced {
+				return mcpErr
+			}
 			results = nil
 		}
 
@@ -138,7 +150,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			return errKiroWebSearchFallback
 		}
 
-		resp, requestCtx, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		resp, requestCtx, err := s.executeKiroUpstreamWithParsed(ctx, account, parsed, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
 			return err
 		}
@@ -161,6 +173,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}
 		nextContentBlockIndex += 2
 		requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+		if resilienceEnforced {
+			requestCtx.RequireTerminalEvent = true
+		}
 
 		chunks, _, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
@@ -197,14 +212,146 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				return err
 			}
 		}
-		s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
+		if completion != nil {
+			completion.markTerminal(cacheUsage)
+		} else {
+			s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
+		}
 		return nil
 	}
 
 	return fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*kiroWebSearchExecution, error) {
+func (s *GatewayService) openKiroWebSearchStreamResponse(
+	requestCtx context.Context,
+	streamCtx context.Context,
+	releaseStreamCtx context.CancelFunc,
+	stopPreSemanticTimer func(),
+	accountAttemptStarted time.Time,
+	account *Account,
+	parsed *ParsedRequest,
+	group *Group,
+	anthropicBody []byte,
+	mappedModel string,
+	requestModel string,
+	token string,
+	headers http.Header,
+	inputTokens int,
+) (*http.Response, int, error) {
+	groupID := parsedGroupID(parsed)
+	completion := &kiroStreamCompletion{service: s, account: account}
+	rawReader, rawWriter := io.Pipe()
+	clientReader, clientWriter := io.Pipe()
+	ready := make(chan error, 1)
+	go runKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
+
+	requestID := kiropkg.NewClaudeRequestID()
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	upstreamDone := make(chan struct{})
+	go func() {
+		defer close(upstreamDone)
+		defer releaseStreamCtx()
+		streamErr := s.streamKiroWebSearchAsAnthropic(streamCtx, account, parsed, group, anthropicBody, mappedModel, requestModel, token, headers, rawWriter, completion)
+		if streamErr != nil {
+			_ = rawWriter.CloseWithError(streamErr)
+			return
+		}
+		_ = rawWriter.Close()
+	}()
+
+	var gateErr error
+	select {
+	case gateErr = <-ready:
+	case <-streamCtx.Done():
+		gateErr = context.Cause(streamCtx)
+	}
+	if gateErr == nil {
+		stopPreSemanticTimer()
+		accountRound, _ := AccountSwitchCountFromContext(requestCtx)
+		responseHeaders := make(http.Header)
+		responseHeaders.Set("Content-Type", "text/event-stream")
+		responseHeaders.Set("x-request-id", requestID)
+		responseHeaders.Set("request-id", requestID)
+		logger.L().Info("kiro web search first semantic output ready",
+			zap.Int64("account_id", accountID),
+			zap.String("request_id", requestID),
+			zap.Int64("group_id", derefGroupID(groupID)),
+			zap.Int("account_round", accountRound+1),
+			zap.Int64("first_semantic_ms", time.Since(accountAttemptStarted).Milliseconds()),
+			zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(requestCtx).Milliseconds()),
+		)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     responseHeaders,
+			Body: &kiroTrackedStreamBody{
+				ReadCloser: clientReader,
+				cancel:     releaseStreamCtx,
+				done:       upstreamDone,
+				completion: completion,
+			},
+		}, inputTokens, nil
+	}
+
+	releaseStreamCtx()
+	_ = rawReader.CloseWithError(gateErr)
+	_ = clientReader.CloseWithError(gateErr)
+	cleanupStarted := time.Now()
+	cleaned := waitKiroUpstreamCleanup(upstreamDone, s.kiroCleanupGrace(groupID))
+	if !cleaned {
+		logger.L().Error("kiro web search upstream cleanup exceeded grace",
+			zap.String("request_id", requestID),
+			zap.Int64("account_id", accountID),
+			zap.Int64("cleanup_ms", time.Since(cleanupStarted).Milliseconds()),
+		)
+	}
+	if requestCtx.Err() != nil {
+		if !cleaned {
+			return nil, inputTokens, &kiroUpstreamCleanupPendingError{cause: context.Cause(requestCtx), done: upstreamDone}
+		}
+		return nil, inputTokens, context.Cause(requestCtx)
+	}
+
+	failoverErr := s.kiroStreamErrorToFailover(requestCtx, account, gateErr)
+	if failoverErr == nil {
+		body, _ := json.Marshal(map[string]any{
+			"type":  "error",
+			"error": map[string]string{"type": "upstream_error", "message": "Kiro web search stream did not produce output"},
+		})
+		failoverErr = &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: body, Cause: gateErr}
+	}
+	failoverErr.RetryableOnSameAccount = false
+	if failoverErr.KiroRateLimited {
+		failoverErr.FailureKind = UpstreamFailureRateLimited
+		s.ensureKiro429Cooldown(requestCtx, account, groupID, failoverErr)
+	} else if errors.Is(gateErr, errKiroFirstSemanticTimeout) || errors.Is(gateErr, errKiroFailoverBudgetExceeded) {
+		failoverErr.StatusCode = http.StatusServiceUnavailable
+		failoverErr.FailureKind = UpstreamFailureFirstSemanticTimeout
+		if errors.Is(gateErr, errKiroFailoverBudgetExceeded) {
+			kiroResilienceMetrics.failoverBudgetTimeout.Add(1)
+		} else {
+			kiroResilienceMetrics.firstSemanticTimeout.Add(1)
+		}
+		failoverErr.RetryAfter = s.markKiroAccountUnresponsive(requestCtx, account, groupID, failoverErr.FailureKind)
+	} else if failoverErr.FailureKind == "" {
+		failoverErr.FailureKind = UpstreamFailureIncompleteStream
+	}
+	if failoverErr.FailureKind == UpstreamFailureIncompleteStream {
+		failoverErr.StatusCode = http.StatusServiceUnavailable
+		if failoverErr.RetryAfter <= 0 {
+			failoverErr.RetryAfter = defaultKiroTransportRetryAfter
+		}
+	}
+	if !cleaned {
+		failoverErr.UpstreamDone = upstreamDone
+	}
+	return nil, inputTokens, failoverErr
+}
+
+func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, onFirstSemantic func()) (*kiroWebSearchExecution, error) {
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
 		return nil, errKiroWebSearchFallback
@@ -224,9 +371,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 	effectiveInputTokens := inputTokens
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
-		s.prefetchKiroWebSearchDescription(ctx, account, token)
+		_ = s.prefetchKiroWebSearchDescription(ctx, account, token, nil)
 
-		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query)
+		results, nextToken, mcpErr := s.callKiroWebSearchMCP(ctx, account, token, query, nil)
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
@@ -261,6 +408,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 				cacheUsageResolved = true
 			}
 			requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+			requestCtx.OnFirstSemantic = onFirstSemantic
 			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, mappedModel, requestCtx)
 		}()
 		if parseErr != nil {
@@ -294,13 +442,13 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 	return nil, fmt.Errorf("kiro web search exceeded max iterations")
 }
 
-func (s *GatewayService) prefetchKiroWebSearchDescription(ctx context.Context, account *Account, token string) {
+func (s *GatewayService) prefetchKiroWebSearchDescription(ctx context.Context, account *Account, token string, groupID *int64) error {
 	endpoint := kiropkg.BuildMcpEndpoint(kiroAPIRegion(account))
 	if cached, ok := kiroWebSearchDescCache.Load(endpoint); ok {
 		if desc, ok := cached.(string); ok && strings.TrimSpace(desc) != "" {
 			kiropkg.SetCachedWebSearchDescription(desc)
 		}
-		return
+		return nil
 	}
 
 	reqBody, _ := json.Marshal(kiropkg.MCPRequest{
@@ -308,40 +456,41 @@ func (s *GatewayService) prefetchKiroWebSearchDescription(ctx context.Context, a
 		JSONRPC: "2.0",
 		Method:  "tools/list",
 	})
-	resp, _, err := s.doKiroMCPJSONRequest(ctx, account, endpoint, reqBody, token)
+	resp, _, err := s.doKiroMCPJSONRequest(ctx, account, endpoint, reqBody, token, groupID)
 	if err != nil || resp == nil {
-		return
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return
+		return nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return
+		return err
 	}
 	var result kiropkg.MCPResponse
 	if err := json.Unmarshal(body, &result); err != nil || result.Result == nil {
-		return
+		return nil
 	}
 	for _, tool := range result.Result.Tools {
 		if strings.EqualFold(tool.Name, "web_search") && strings.TrimSpace(tool.Description) != "" {
 			kiroWebSearchDescCache.Store(endpoint, tool.Description)
 			kiropkg.SetCachedWebSearchDescription(tool.Description)
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
-func (s *GatewayService) callKiroWebSearchMCP(ctx context.Context, account *Account, token, query string) (*kiropkg.WebSearchResults, string, error) {
+func (s *GatewayService) callKiroWebSearchMCP(ctx context.Context, account *Account, token, query string, groupID *int64) (*kiropkg.WebSearchResults, string, error) {
 	reqBody, err := json.Marshal(buildKiroWebSearchMCPRequest(query))
 	if err != nil {
 		return nil, token, err
 	}
 
 	endpoint := kiropkg.BuildMcpEndpoint(kiroAPIRegion(account))
-	resp, nextToken, err := s.doKiroMCPJSONRequest(ctx, account, endpoint, reqBody, token)
+	resp, nextToken, err := s.doKiroMCPJSONRequest(ctx, account, endpoint, reqBody, token, groupID)
 	if err != nil {
 		return nil, nextToken, err
 	}
@@ -396,14 +545,20 @@ func buildKiroWebSearchMCPRequest(query string) kiropkg.MCPRequest {
 	}
 }
 
-func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Account, endpoint string, payload []byte, token string) (*http.Response, string, error) {
+func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Account, endpoint string, payload []byte, token string, groupID *int64) (*http.Response, string, error) {
 	currentToken := token
 	accountKey := buildKiroAccountKey(account)
+	cooldownKey := buildKiroCooldownKey(account)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	resilienceEnforced := s.kiroResilienceEnforced(groupID)
+	maxAttempts := 3
+	if resilienceEnforced {
+		maxAttempts = 2
+	}
 
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := s.checkAndWaitKiroCooldown(ctx, accountKey); err != nil {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := s.checkAndWaitKiroCooldownWithMode(ctx, cooldownKey, resilienceEnforced); err != nil {
 			if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
 				return nil, currentToken, failoverErr
 			}
@@ -415,9 +570,67 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			return nil, currentToken, err
 		}
 
-		resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		var wroteRequest atomic.Bool
+		if resilienceEnforced {
+			trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest.Store(true) }}
+			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+		}
+		accountRound, _ := AccountSwitchCountFromContext(ctx)
+		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint, accountRound+1, attempt+1)
+		resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, s.kiroResponseHeaderTimeout(groupID), func(timedReq *http.Request) (*http.Response, error) {
+			return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		})
+		stopHeaderObservation()
+		logger.L().Debug("kiro mcp response header completed",
+			zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+			zap.Int64("group_id", derefGroupID(groupID)),
+			zap.Int64("account_id", account.ID),
+			zap.String("endpoint", endpoint),
+			zap.Int("account_round", accountRound+1),
+			zap.Int("endpoint_attempt", attempt+1),
+			zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
+			zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
+			zap.Error(err),
+		)
 		if err != nil {
-			return nil, currentToken, err
+			if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID); failoverErr != nil {
+				if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+					failoverErr.UpstreamDone = physicalDone
+				}
+				return nil, currentToken, failoverErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+					return nil, currentToken, &kiroUpstreamCleanupPendingError{cause: err, done: physicalDone}
+				}
+				return nil, currentToken, err
+			}
+			if !resilienceEnforced {
+				return nil, currentToken, err
+			}
+			physicalCleaned := waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID))
+			if attempt == 0 && !wroteRequest.Load() && physicalCleaned {
+				continue
+			}
+			transportErr := &kiroEndpointTransportError{
+				EndpointName: "KiroMCP",
+				EndpointURL:  endpoint,
+				NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
+				Cause:        err,
+				UpstreamDone: physicalDone,
+			}
+			failoverErr := newKiroEndpointTransportFailover(transportErr)
+			failoverErr.StatusCode = http.StatusServiceUnavailable
+			failoverErr.RetryAfter = defaultKiroTransportRetryAfter
+			var headerTimeout *kiroResponseHeaderTimeoutError
+			if errors.As(err, &headerTimeout) {
+				kiroResilienceMetrics.responseHeaderTimeout.Add(1)
+				failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, UpstreamFailureResponseHeaderTimeout)
+			}
+			if physicalCleaned {
+				failoverErr.UpstreamDone = nil
+			}
+			return nil, currentToken, failoverErr
 		}
 
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -427,13 +640,17 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				return nil, currentToken, readErr
 			}
 			if resp.StatusCode == http.StatusForbidden && isKiroSuspendedBody(respBody) {
-				if _, err := s.markKiroSuspended(ctx, accountKey); err != nil {
+				if _, err := s.markKiroSuspended(ctx, cooldownKey); err != nil {
 					return nil, currentToken, err
 				}
 				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
 				return resp, currentToken, nil
 			}
 			if resp.StatusCode == http.StatusForbidden && !isKiroTokenErrorBody(respBody) {
+				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+				return resp, currentToken, nil
+			}
+			if resilienceEnforced {
 				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
 				return resp, currentToken, nil
 			}
@@ -448,6 +665,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			}
 			currentToken = refreshedToken
 			accountKey = buildKiroAccountKey(account)
+			cooldownKey = buildKiroCooldownKey(account)
 			if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 				return nil, currentToken, sleepErr
 			}
@@ -455,10 +673,45 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			if resilienceEnforced {
+				respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				if readErr != nil {
+					return nil, currentToken, readErr
+				}
+				failoverErr := &UpstreamFailoverError{
+					StatusCode:      http.StatusTooManyRequests,
+					ResponseBody:    respBody,
+					ResponseHeaders: resp.Header.Clone(),
+					KiroRateLimited: true,
+					FailureKind:     UpstreamFailureRateLimited,
+				}
+				failoverErr.RetryAfter = s.markKiroAccount429(ctx, account, groupID, resp.Header)
+				failoverErr.KiroCooldownCommitted = true
+				return nil, currentToken, failoverErr
+			}
 			return resp, currentToken, nil
 		}
 		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 {
-			if attempt < 2 {
+			if resilienceEnforced {
+				respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				if readErr != nil {
+					return nil, currentToken, readErr
+				}
+				retryAfter := kiroRetryAfterDuration(resp.Header, time.Now())
+				if retryAfter <= 0 {
+					retryAfter = defaultKiroTransportRetryAfter
+				}
+				return nil, currentToken, &UpstreamFailoverError{
+					StatusCode:      http.StatusServiceUnavailable,
+					ResponseBody:    respBody,
+					ResponseHeaders: resp.Header.Clone(),
+					FailureKind:     UpstreamFailureTransportError,
+					RetryAfter:      retryAfter,
+				}
+			}
+			if attempt < maxAttempts-1 {
 				_ = resp.Body.Close()
 				if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 					return nil, currentToken, sleepErr
@@ -466,8 +719,8 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				continue
 			}
 		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			if err := s.markKiroSuccess(ctx, accountKey); err != nil {
+		if !resilienceEnforced && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if err := s.markKiroSuccessPreservingCooldown(ctx, cooldownKey); err != nil {
 				_ = resp.Body.Close()
 				return nil, currentToken, err
 			}

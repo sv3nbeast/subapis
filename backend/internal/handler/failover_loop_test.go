@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -562,6 +563,157 @@ func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 		require.Contains(t, fs.FailedAccountIDs, int64(1459))
 		require.Zero(t, fs.SwitchCount)
 	})
+}
+
+func TestHandleFailoverError_Kiro429EnforcedStateMachine(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(1, true)
+	fs.KiroResilienceEnforced = true
+
+	firstErr := newTestKiro429FailoverErr()
+	firstErr.RetryAfter = 2 * time.Minute
+	action := fs.HandleFailoverError(context.Background(), mock, 1459, service.PlatformKiro, firstErr)
+	require.Equal(t, FailoverContinue, action)
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Equal(t, 1, fs.Kiro429RetryCount[1459])
+	require.Contains(t, fs.FailedAccountIDs, int64(1459))
+	require.Zero(t, fs.ForceAccountID)
+	require.Empty(t, fs.Kiro429SoftExcludedIDs)
+	require.False(t, fs.ForceCacheBilling, "Kiro cache emulation must be committed only by the final successful account")
+	require.Empty(t, mock.calls)
+
+	secondErr := newTestKiro429FailoverErr()
+	secondErr.RetryAfter = time.Minute
+	action = fs.HandleFailoverError(context.Background(), mock, 1469, service.PlatformKiro, secondErr)
+	require.Equal(t, FailoverExhausted, action)
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Equal(t, 1, fs.Kiro429RetryCount[1469])
+	require.Contains(t, fs.FailedAccountIDs, int64(1469))
+	require.Greater(t, secondErr.RetryAfter, 55*time.Second)
+	require.LessOrEqual(t, secondErr.RetryAfter, time.Minute)
+
+	action = fs.HandleSelectionExhausted(context.Background())
+	require.Equal(t, FailoverExhausted, action)
+	require.Zero(t, fs.ForceAccountID, "enforce mode must never restore an excluded Kiro account")
+}
+
+func TestHandleSelectionExhausted_KiroUsesEarliestPreexistingCooldown(t *testing.T) {
+	fs := NewFailoverState(3, false)
+	fs.KiroResilienceEnforced = true
+	rateErr := newTestKiro429FailoverErr()
+	rateErr.RetryAfter = 5 * time.Minute
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 71, service.PlatformKiro, rateErr))
+
+	selectionErr := &service.KiroCooldownExhaustedError{
+		StatusCode: http.StatusTooManyRequests,
+		RetryAfter: time.Minute,
+		Reason:     "rate_limit_exceeded",
+	}
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background(), selectionErr))
+	require.Same(t, rateErr, fs.LastFailoverErr)
+	require.Greater(t, fs.LastFailoverErr.RetryAfter, 55*time.Second)
+	require.LessOrEqual(t, fs.LastFailoverErr.RetryAfter, time.Minute)
+}
+
+func TestHandleSelectionExhausted_KiroUnresponsiveCooldownReturns503(t *testing.T) {
+	fs := NewFailoverState(3, false)
+	fs.KiroResilienceEnforced = true
+	rateErr := newTestKiro429FailoverErr()
+	rateErr.RetryAfter = 5 * time.Minute
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 72, service.PlatformKiro, rateErr))
+
+	selectionErr := &service.KiroCooldownExhaustedError{
+		StatusCode: http.StatusServiceUnavailable,
+		RetryAfter: 30 * time.Second,
+		Reason:     "upstream_unresponsive",
+	}
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background(), selectionErr))
+	require.Equal(t, http.StatusServiceUnavailable, fs.LastFailoverErr.StatusCode)
+	require.Equal(t, service.UpstreamFailureTransportError, fs.LastFailoverErr.FailureKind)
+	require.Greater(t, fs.LastFailoverErr.RetryAfter, 25*time.Second)
+	require.LessOrEqual(t, fs.LastFailoverErr.RetryAfter, 30*time.Second)
+}
+
+func TestHandleFailoverError_KiroEnforcedTransportDoesNotRetrySameAccount(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(2, false)
+	fs.KiroResilienceEnforced = true
+	err := newTestFailoverErr(503, true, false)
+	err.FailureKind = service.UpstreamFailureTransportError
+
+	action := fs.HandleFailoverError(context.Background(), mock, 42, service.PlatformKiro, err)
+
+	require.Equal(t, FailoverContinue, action)
+	require.Zero(t, fs.SameAccountRetryCount[42])
+	require.Contains(t, fs.FailedAccountIDs, int64(42))
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Empty(t, mock.calls)
+}
+
+func TestHandleFailoverError_KiroPostSemanticFailureNeverSwitches(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(3, false)
+	fs.KiroResilienceEnforced = true
+	err := newTestFailoverErr(http.StatusServiceUnavailable, false, false)
+	err.FailureKind = service.UpstreamFailureIncompleteStream
+	err.FailoverProhibited = true
+
+	action := fs.HandleFailoverError(context.Background(), mock, 43, service.PlatformKiro, err)
+
+	require.Equal(t, FailoverExhausted, action)
+	require.True(t, fs.KiroAttempted)
+	require.Zero(t, fs.SwitchCount)
+	require.NotContains(t, fs.FailedAccountIDs, int64(43))
+}
+
+func TestHandleSelectionExhausted_EnforcedGroupWithoutKiroKeepsLegacy503Backoff(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(3, false)
+	fs.KiroResilienceEnforced = true
+	serviceErr := newTestFailoverErr(http.StatusServiceUnavailable, false, false)
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 44, service.PlatformAnthropic, serviceErr))
+	require.False(t, fs.KiroAttempted)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Equal(t, FailoverCanceled, fs.HandleSelectionExhausted(ctx), "non-Kiro-only traffic must retain the legacy 503 backoff path")
+}
+
+func TestHandleSelectionExhausted_KiroMixedFailuresPreferServiceUnavailable(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(2, false)
+	fs.KiroResilienceEnforced = true
+
+	rateErr := newTestKiro429FailoverErr()
+	rateErr.RetryAfter = time.Minute
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 51, service.PlatformKiro, rateErr))
+
+	transportErr := newTestFailoverErr(http.StatusServiceUnavailable, false, false)
+	transportErr.FailureKind = service.UpstreamFailureTransportError
+	transportErr.RetryAfter = time.Second
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 52, service.PlatformKiro, transportErr))
+
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background()))
+	require.Same(t, transportErr, fs.LastFailoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, fs.LastFailoverErr.StatusCode)
+	require.Equal(t, service.UpstreamFailureTransportError, fs.LastFailoverErr.FailureKind)
+}
+
+func TestHandleSelectionExhausted_MixedPlatformFailureBeatsKiro429(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(3, false)
+	fs.KiroResilienceEnforced = true
+
+	serviceErr := newTestFailoverErr(http.StatusServiceUnavailable, false, false)
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 61, service.PlatformAnthropic, serviceErr))
+	rateErr := newTestKiro429FailoverErr()
+	rateErr.RetryAfter = time.Minute
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 62, service.PlatformKiro, rateErr))
+
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background()))
+	require.Same(t, serviceErr, fs.LastFailoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, fs.LastFailoverErr.StatusCode)
+	require.Zero(t, fs.LastFailoverErr.RetryAfter, "a non-Kiro failure must not inherit Kiro cooldown duration")
 }
 
 // ---------------------------------------------------------------------------

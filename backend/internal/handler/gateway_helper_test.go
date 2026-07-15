@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 // TestWrapReleaseOnDone_NoGoroutineLeak 验证 wrapReleaseOnDone 修复后不会泄露 goroutine
@@ -137,5 +139,29 @@ func BenchmarkWrapReleaseOnDone(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		release := wrapReleaseOnDone(ctx, func() {})
 		release()
+	}
+}
+
+func TestReleaseAccountSlotAfterForwardWaitsForPhysicalKiroUpstream(t *testing.T) {
+	done := make(chan struct{})
+	released := make(chan struct{})
+	err := &service.UpstreamFailoverError{
+		StatusCode:   503,
+		FailureKind:  service.UpstreamFailureResponseHeaderTimeout,
+		UpstreamDone: done,
+	}
+
+	releaseAccountSlotAfterForward(func() { close(released) }, err)
+	select {
+	case <-released:
+		t.Fatal("account slot released before the physical Kiro upstream exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(done)
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("account slot was not released after the physical Kiro upstream exited")
 	}
 }

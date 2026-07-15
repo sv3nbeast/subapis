@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -41,14 +42,15 @@ const (
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
 	singleAccountBackoffDelay = 2 * time.Second
 
-	// Kiro 429 只在同账号上补试一次；再次 429 就在本请求内软切换账号，
-	// 避免长时间卡在同一个上游限流账号，同时不触发账号临时禁用。
+	// Legacy Kiro behavior is retained behind off/observe so rollout can be
+	// reverted without a binary rollback. Enforce mode never enters this path.
 	kiro429SoftSwitchThreshold   = 2
 	kiro429HardRetryLimit        = 12
 	kiro429DecisionRetrySame     = "retry_same"
 	kiro429DecisionSoftSwitch    = "soft_switch"
 	kiro429DecisionResumeCurrent = "resume_current_no_next"
 	kiro429DecisionHardExclude   = "hard_exclude"
+	kiro429DecisionExclude       = "exclude_account"
 	kiro429DecisionExhausted     = "exhausted"
 )
 
@@ -64,9 +66,15 @@ type FailoverState struct {
 	AvoidEmailDomainSuffixes map[string]struct{}
 	ModelCapacityRetryState  *service.ModelCapacityRetryState
 	LastFailoverErr          *service.UpstreamFailoverError
+	LastNonRateLimitErr      *service.UpstreamFailoverError
 	ForceAccountID           int64
 	ForceCacheBilling        bool
+	KiroResilienceEnforced   bool
+	KiroAttempted            bool
+	KiroWaitReselectUsed     bool
 	hasBoundSession          bool
+	earliestKiroRetryAt      time.Time
+	lastNonRateLimitWasKiro  bool
 }
 
 // NewFailoverState 创建 failover 状态
@@ -120,14 +128,35 @@ func (s *FailoverState) HandleFailoverError(
 ) FailoverAction {
 	s.LastFailoverErr = failoverErr
 	s.ForceAccountID = 0
+	if s.KiroResilienceEnforced {
+		if platform == service.PlatformKiro {
+			s.KiroAttempted = true
+			s.recordEarliestKiroRetryAfter(failoverErr)
+		}
+		if !isKiro429Failover(platform, failoverErr) {
+			s.LastNonRateLimitErr = failoverErr
+			s.lastNonRateLimitWasKiro = platform == service.PlatformKiro
+		}
+	}
 
 	// 缓存计费判断
-	if needForceCacheBilling(s.hasBoundSession, failoverErr) {
+	if !(platform == service.PlatformKiro && s.KiroResilienceEnforced) && needForceCacheBilling(s.hasBoundSession, failoverErr) {
 		s.ForceCacheBilling = true
 	}
 
 	if isKiro429Failover(platform, failoverErr) {
-		return s.handleKiro429Failover(ctx, accountID, failoverErr)
+		if !s.KiroResilienceEnforced {
+			return s.handleLegacyKiro429Failover(ctx, accountID, failoverErr)
+		}
+		s.recordKiro429Failover(ctx, accountID, failoverErr)
+	}
+	// Kiro service layer already exhausts the account's endpoint list. Replaying
+	// the same account here can duplicate generation and multiply long waits.
+	if platform == service.PlatformKiro && s.KiroResilienceEnforced {
+		failoverErr.RetryableOnSameAccount = false
+	}
+	if failoverErr.FailoverProhibited {
+		return FailoverExhausted
 	}
 
 	// 同账号重试：对 RetryableOnSameAccount 的临时性错误，先在同一账号上重试
@@ -155,6 +184,9 @@ func (s *FailoverState) HandleFailoverError(
 
 	// 检查是否耗尽
 	if s.SwitchCount >= s.MaxSwitches {
+		if platform == service.PlatformKiro {
+			s.applyEarliestKiroRetryAfter(failoverErr)
+		}
 		return FailoverExhausted
 	}
 
@@ -165,12 +197,36 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int("upstream_status", failoverErr.StatusCode),
 		zap.Int("switch_count", s.SwitchCount),
 		zap.Int("max_switches", s.MaxSwitches),
+		zap.String("switch_reason", string(failoverErr.FailureKind)),
+		zap.Int64("retry_after_ms", failoverErr.RetryAfter.Milliseconds()),
 	)
 
 	return FailoverContinue
 }
 
-func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) FailoverAction {
+func (s *FailoverState) recordEarliestKiroRetryAfter(failoverErr *service.UpstreamFailoverError) {
+	if s == nil || failoverErr == nil || failoverErr.RetryAfter <= 0 {
+		return
+	}
+	retryAt := time.Now().Add(failoverErr.RetryAfter)
+	if s.earliestKiroRetryAt.IsZero() || retryAt.Before(s.earliestKiroRetryAt) {
+		s.earliestKiroRetryAt = retryAt
+	}
+	s.applyEarliestKiroRetryAfter(failoverErr)
+}
+
+func (s *FailoverState) applyEarliestKiroRetryAfter(failoverErr *service.UpstreamFailoverError) {
+	if s == nil || failoverErr == nil || s.earliestKiroRetryAt.IsZero() {
+		return
+	}
+	remaining := time.Until(s.earliestKiroRetryAt)
+	if remaining < time.Second {
+		remaining = time.Second
+	}
+	failoverErr.RetryAfter = remaining
+}
+
+func (s *FailoverState) handleLegacyKiro429Failover(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) FailoverAction {
 	if s.Kiro429RetryCount == nil {
 		s.Kiro429RetryCount = make(map[int64]int)
 	}
@@ -211,8 +267,24 @@ func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int
 		zap.Int("switch_count", s.SwitchCount),
 		zap.Int("failed_account_count", len(s.FailedAccountIDs)),
 	)
-
 	return FailoverContinue
+}
+
+func (s *FailoverState) recordKiro429Failover(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) {
+	if s.Kiro429RetryCount == nil {
+		s.Kiro429RetryCount = make(map[int64]int)
+	}
+	s.Kiro429RetryCount[accountID]++
+
+	logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
+		zap.String("request_id", requestIDFromContext(ctx)),
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", failoverErr.StatusCode),
+		zap.Int("retry_count", s.Kiro429RetryCount[accountID]),
+		zap.String("decision", kiro429DecisionExclude),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("failed_account_count", len(s.FailedAccountIDs)),
+	)
 }
 
 // HandleSelectionExhausted 处理选号失败（所有候选账号都在排除列表中）时的退避重试决策。
@@ -222,30 +294,44 @@ func (s *FailoverState) handleKiro429Failover(ctx context.Context, accountID int
 // 返回 FailoverContinue 时，调用方应设置 SingleAccountRetry context 并 continue。
 // 返回 FailoverExhausted 时，调用方应返回错误响应。
 // 返回 FailoverCanceled 时，调用方应直接 return。
-func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAction {
+func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionErrs ...error) FailoverAction {
+	s.recordKiroSelectionCooldown(selectionErrs...)
+	if s.KiroResilienceEnforced && s.KiroAttempted && s.LastNonRateLimitErr != nil {
+		s.LastFailoverErr = s.LastNonRateLimitErr
+		if s.lastNonRateLimitWasKiro {
+			s.applyEarliestKiroRetryAfter(s.LastFailoverErr)
+		}
+		return FailoverExhausted
+	}
 	if s.LastFailoverErr != nil && s.LastFailoverErr.KiroRateLimited {
-		if s.resumeKiro429SoftExcludedAccount(ctx, s.Kiro429LastSoftExcluded) {
-			return FailoverContinue
-		}
-		softExcludedIDs := make([]int64, 0, len(s.Kiro429SoftExcludedIDs))
-		for accountID := range s.Kiro429SoftExcludedIDs {
-			softExcludedIDs = append(softExcludedIDs, accountID)
-		}
-		sort.Slice(softExcludedIDs, func(i, j int) bool { return softExcludedIDs[i] < softExcludedIDs[j] })
-		for _, accountID := range softExcludedIDs {
-			if s.resumeKiro429SoftExcludedAccount(ctx, accountID) {
+		if !s.KiroResilienceEnforced {
+			if s.resumeLegacyKiro429SoftExcludedAccount(ctx, s.Kiro429LastSoftExcluded) {
 				return FailoverContinue
+			}
+			softExcludedIDs := make([]int64, 0, len(s.Kiro429SoftExcludedIDs))
+			for accountID := range s.Kiro429SoftExcludedIDs {
+				softExcludedIDs = append(softExcludedIDs, accountID)
+			}
+			sort.Slice(softExcludedIDs, func(i, j int) bool { return softExcludedIDs[i] < softExcludedIDs[j] })
+			for _, accountID := range softExcludedIDs {
+				if s.resumeLegacyKiro429SoftExcludedAccount(ctx, accountID) {
+					return FailoverContinue
+				}
 			}
 		}
 		logger.FromContext(ctx).Warn("gateway.kiro_429_retry_decision",
 			zap.String("request_id", requestIDFromContext(ctx)),
-			zap.Int("soft_switch_threshold", kiro429SoftSwitchThreshold),
-			zap.Int("hard_retry_limit", kiro429HardRetryLimit),
 			zap.String("decision", kiro429DecisionExhausted),
 			zap.Int("switch_count", s.SwitchCount),
 			zap.Int("failed_account_count", len(s.FailedAccountIDs)),
 		)
-		s.LastFailoverErr.ResponseBody = []byte(`{"error":{"type":"rate_limit_error","message":"Kiro upstream busy/rate limited after retry budget exhausted"}}`)
+		if len(s.LastFailoverErr.ResponseBody) == 0 {
+			s.LastFailoverErr.ResponseBody = []byte(`{"error":{"type":"rate_limit_error","message":"Kiro upstream busy/rate limited after retry budget exhausted"}}`)
+		}
+		s.applyEarliestKiroRetryAfter(s.LastFailoverErr)
+		return FailoverExhausted
+	}
+	if s.KiroAttempted && s.LastFailoverErr != nil && s.LastFailoverErr.FailureKind != "" {
 		return FailoverExhausted
 	}
 
@@ -271,7 +357,40 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAc
 	return FailoverExhausted
 }
 
-func (s *FailoverState) resumeKiro429SoftExcludedAccount(ctx context.Context, accountID int64) bool {
+func (s *FailoverState) recordKiroSelectionCooldown(selectionErrs ...error) {
+	if s == nil || !s.KiroResilienceEnforced || len(selectionErrs) == 0 || selectionErrs[0] == nil {
+		return
+	}
+	var cooldownErr *service.KiroCooldownExhaustedError
+	if !errors.As(selectionErrs[0], &cooldownErr) || cooldownErr == nil || cooldownErr.RetryAfter <= 0 {
+		return
+	}
+	failureKind := service.UpstreamFailureRateLimited
+	if cooldownErr.StatusCode != http.StatusTooManyRequests {
+		failureKind = service.UpstreamFailureTransportError
+	}
+	selectionFailover := &service.UpstreamFailoverError{
+		StatusCode:  cooldownErr.StatusCode,
+		FailureKind: failureKind,
+		RetryAfter:  cooldownErr.RetryAfter,
+		Cause:       cooldownErr,
+	}
+	s.recordEarliestKiroRetryAfter(selectionFailover)
+	if failureKind != service.UpstreamFailureRateLimited {
+		s.LastNonRateLimitErr = selectionFailover
+		s.lastNonRateLimitWasKiro = true
+	}
+}
+
+func (s *FailoverState) RecordAlternatePlatformFailure(failoverErr *service.UpstreamFailoverError) {
+	if s == nil || !s.KiroResilienceEnforced || failoverErr == nil || failoverErr.StatusCode == http.StatusTooManyRequests {
+		return
+	}
+	s.LastNonRateLimitErr = failoverErr
+	s.lastNonRateLimitWasKiro = false
+}
+
+func (s *FailoverState) resumeLegacyKiro429SoftExcludedAccount(ctx context.Context, accountID int64) bool {
 	if accountID <= 0 {
 		return false
 	}

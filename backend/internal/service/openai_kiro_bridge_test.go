@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,6 +190,238 @@ func TestSchedulerSnapshotOpenAIMixedBucketIncludesOnlyOptedInKiro(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, accounts, 2)
 	require.ElementsMatch(t, []int64{openAIAccount.ID, kiroEnabled.ID}, []int64{accounts[0].ID, accounts[1].ID})
+}
+
+func TestOpenAIKiroBridgeSchedulerSkipsSharedCooldown(t *testing.T) {
+	groupID := int64(11)
+	openAIAccount := bridgeTestAccount(31, PlatformOpenAI, 20, groupID)
+	kiroAccount := bridgeTestAccount(32, PlatformKiro, 1, groupID)
+	kiroAccount.Credentials["refresh_token"] = "openai-bridge-cooldown"
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{openAIAccount, kiroAccount}}}
+	store := &mappedKiroCooldownStore{states: map[string]*kirocooldown.State{
+		buildKiroCooldownKey(&kiroAccount): {
+			Active: true, Reason: kirocooldown.CooldownReason429,
+			CooldownUntil: time.Now().Add(time.Minute), Remaining: time.Minute,
+		},
+	}}
+	bridge := &GatewayService{
+		accountRepo:       repo,
+		kiroCooldownStore: store,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+		}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, openAIAccount.ID, selection.Account.ID)
+}
+
+func TestOpenAIKiroBridgeSchedulerAllCoolingReturnsRetryAfter(t *testing.T) {
+	groupID := int64(12)
+	kiroAccount := bridgeTestAccount(33, PlatformKiro, 1, groupID)
+	kiroAccount.Credentials["refresh_token"] = "openai-bridge-all-cooling"
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{kiroAccount}}}
+	store := &mappedKiroCooldownStore{states: map[string]*kirocooldown.State{
+		buildKiroCooldownKey(&kiroAccount): {
+			Active: true, Reason: kirocooldown.CooldownReason429,
+			CooldownUntil: time.Now().Add(45 * time.Second), Remaining: 45 * time.Second,
+		},
+	}}
+	bridge := &GatewayService{
+		accountRepo:       repo,
+		kiroCooldownStore: store,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+		}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cfg:         &config.Config{Gateway: config.GatewayConfig{OpenAIKiroBridgeEnabled: true}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.Nil(t, selection)
+	var cooldownErr *KiroCooldownExhaustedError
+	require.ErrorAs(t, err, &cooldownErr)
+	require.Equal(t, http.StatusTooManyRequests, cooldownErr.StatusCode)
+	require.Greater(t, cooldownErr.RetryAfter, 40*time.Second)
+}
+
+func TestOpenAIKiroBridgeInitialBindingWaitsForCompleteSuccess(t *testing.T) {
+	groupID := int64(16)
+	kiroAccount := bridgeTestAccount(63, PlatformKiro, 1, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{kiroAccount}}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}
+	bridge := &GatewayService{accountRepo: repo, cfg: &config.Config{Gateway: config.GatewayConfig{
+		KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+	}}}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{kiroAccount.ID: true}}),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "kiro_bridge_initial", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, kiroAccount.ID, selection.Account.ID)
+	require.True(t, selection.DeferStickyMigration)
+	require.Zero(t, cache.sessionBindings["openai:kiro_bridge_initial"])
+	selection.ReleaseFunc()
+}
+
+func TestOpenAIKiroBridgeBusyStickyScansIdleAccountAndPreservesBinding(t *testing.T) {
+	groupID := int64(13)
+	sticky := bridgeTestAccount(34, PlatformKiro, 1, groupID)
+	idle := bridgeTestAccount(35, PlatformKiro, 2, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{sticky, idle}}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:kiro_bridge_busy": sticky.ID}}
+	concurrencyCache := schedulerTestConcurrencyCache{
+		acquireResults: map[int64]bool{sticky.ID: false, idle.ID: true},
+		loadMap: map[int64]*AccountLoadInfo{
+			sticky.ID: {AccountID: sticky.ID, LoadRate: 100},
+			idle.ID:   {AccountID: idle.ID, LoadRate: 0},
+		},
+	}
+	bridge := &GatewayService{
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+		}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			Scheduling: config.GatewaySchedulingConfig{
+				StickySessionWaitTimeout: 30 * time.Second,
+				StickySessionMaxWaiting:  10,
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "kiro_bridge_busy", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, idle.ID, selection.Account.ID)
+	require.True(t, selection.PreserveStickyBinding)
+	require.Equal(t, sticky.ID, cache.sessionBindings["openai:kiro_bridge_busy"])
+	selection.ReleaseFunc()
+}
+
+func TestOpenAIKiroBridgeCoolingStickyScansIdleAccountAndPreservesBinding(t *testing.T) {
+	groupID := int64(14)
+	sticky := bridgeTestAccount(44, PlatformKiro, 1, groupID)
+	sticky.Credentials["refresh_token"] = "openai-bridge-sticky-cooling"
+	idle := bridgeTestAccount(45, PlatformKiro, 2, groupID)
+	idle.Credentials["refresh_token"] = "openai-bridge-sticky-idle"
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{sticky, idle}}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:kiro_bridge_cooling": sticky.ID}}
+	store := &mappedKiroCooldownStore{states: map[string]*kirocooldown.State{
+		buildKiroCooldownKey(&sticky): {
+			Active: true, Reason: kirocooldown.CooldownReason429,
+			CooldownUntil: time.Now().Add(time.Minute), Remaining: time.Minute,
+		},
+	}}
+	bridge := &GatewayService{
+		accountRepo:       repo,
+		kiroCooldownStore: store,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+		}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{idle.ID: true}}),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "kiro_bridge_cooling", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, idle.ID, selection.Account.ID)
+	require.False(t, selection.PreserveStickyBinding)
+	require.True(t, selection.DeferStickyMigration)
+	require.Equal(t, sticky.ID, cache.sessionBindings["openai:kiro_bridge_cooling"])
+	selection.ReleaseFunc()
+}
+
+func TestOpenAIKiroBridgeFailedStickyDefersCrossPlatformMigration(t *testing.T) {
+	groupID := int64(15)
+	sticky := bridgeTestAccount(54, PlatformKiro, 1, groupID)
+	idle := bridgeTestAccount(55, PlatformOpenAI, 2, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{sticky, idle}}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:kiro_bridge_failed": sticky.ID}}
+	bridge := &GatewayService{accountRepo: repo, cfg: &config.Config{Gateway: config.GatewayConfig{
+		KiroResilience: config.GatewayKiroResilienceConfig{Mode: config.KiroResilienceModeEnforce},
+	}}}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{idle.ID: true}}),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "kiro_bridge_failed", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, map[int64]struct{}{sticky.ID: {}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, idle.ID, selection.Account.ID)
+	require.False(t, selection.PreserveStickyBinding)
+	require.True(t, selection.DeferStickyMigration)
+	require.Equal(t, sticky.ID, cache.sessionBindings["openai:kiro_bridge_failed"])
+	selection.ReleaseFunc()
 }
 
 func TestOpenAIRecordUsageForKiroBridgeUsesOpenAIPriceAndKeepsCredits(t *testing.T) {

@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -15,6 +17,7 @@ type selectionErrorClassification struct {
 	ErrorType      string
 	Message        string
 	SkipMonitoring bool
+	RetryAfter     time.Duration
 }
 
 var selectionFailureSummaryPattern = regexp.MustCompile(
@@ -24,6 +27,22 @@ var selectionFailureSummaryPattern = regexp.MustCompile(
 func classifySelectionError(err error) selectionErrorClassification {
 	if err == nil {
 		return selectionErrorClassification{}
+	}
+	var cooldownErr *service.KiroCooldownExhaustedError
+	if errors.As(err, &cooldownErr) {
+		errorType := "upstream_error"
+		message := "Kiro upstream is temporarily unavailable, please retry later"
+		if cooldownErr.StatusCode == 429 {
+			errorType = "rate_limit_error"
+			message = "Kiro upstream is temporarily rate limited, please retry later"
+		}
+		return selectionErrorClassification{
+			Handled:    true,
+			StatusCode: cooldownErr.StatusCode,
+			ErrorType:  errorType,
+			Message:    message,
+			RetryAfter: cooldownErr.RetryAfter,
+		}
 	}
 
 	msg := strings.TrimSpace(err.Error())
@@ -84,10 +103,16 @@ func classifySelectionError(err error) selectionErrorClassification {
 }
 
 func applySelectionErrorMonitoringClassification(c *gin.Context, cls selectionErrorClassification) {
-	if c == nil || !cls.SkipMonitoring {
+	if c == nil {
 		return
 	}
-	c.Set(service.OpsSkipPassthroughKey, true)
+	if cls.RetryAfter > 0 {
+		seconds := int((cls.RetryAfter + time.Second - 1) / time.Second)
+		c.Header("Retry-After", strconv.Itoa(max(seconds, 1)))
+	}
+	if cls.SkipMonitoring {
+		c.Set(service.OpsSkipPassthroughKey, true)
+	}
 }
 
 func isPureUnsupportedSelectionSummary(msg string) bool {

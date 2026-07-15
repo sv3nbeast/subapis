@@ -944,6 +944,61 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	require.True(t, strings.Contains(firstText, "hello from kiro"))
 }
 
+func TestKiroParsersNotifyFirstSemanticOnce(t *testing.T) {
+	buildStream := func() *bytes.Buffer {
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+			"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 4}},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "first"},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": " second"},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+			"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+		}))
+		return stream
+	}
+
+	t.Run("non streaming", func(t *testing.T) {
+		calls := 0
+		_, err := ParseNonStreamingEventStreamWithContext(buildStream(), "claude-sonnet-4-6", KiroRequestContext{
+			OnFirstSemantic: func() { calls++ },
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		calls := 0
+		var output bytes.Buffer
+		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), buildStream(), &output, "claude-sonnet-4-6", 4, KiroRequestContext{
+			OnFirstSemantic: func() { calls++ },
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, calls)
+		require.Contains(t, output.String(), `"text":"first"`)
+		require.Contains(t, output.String(), `"text":" second"`)
+	})
+}
+
+func TestKiroParserTreatsValidEmptyTerminalAsFirstSemantic(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	calls := 0
+
+	_, err := ParseNonStreamingEventStreamWithContext(stream, "claude-sonnet-4-6", KiroRequestContext{
+		OnFirstSemantic: func() { calls++ },
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+}
+
 func TestParseNonStreamingEventStreamAppliesStopSequences(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{

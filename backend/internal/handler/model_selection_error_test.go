@@ -1,6 +1,13 @@
 package handler
 
-import "testing"
+import (
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
+)
 
 func TestClassifySelectionError_ChannelPricingRestriction(t *testing.T) {
 	err := errorString("no available accounts supporting model: gpt-4o (channel pricing restriction)")
@@ -49,6 +56,21 @@ func TestClassifySelectionError_PureModelCapacityCoolingSummary(t *testing.T) {
 	}
 	if got.StatusCode != 503 || got.ErrorType != "upstream_error" {
 		t.Fatalf("unexpected classification: %#v", got)
+	}
+}
+
+func TestClassifySelectionError_KiroCooldownCarriesRetryAfter(t *testing.T) {
+	err := &service.KiroCooldownExhaustedError{StatusCode: 429, RetryAfter: 1250 * time.Millisecond}
+	got := classifySelectionError(err)
+	if !got.Handled || got.StatusCode != 429 || got.ErrorType != "rate_limit_error" {
+		t.Fatalf("unexpected classification: %#v", got)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	applySelectionErrorMonitoringClassification(c, got)
+	if retryAfter := recorder.Header().Get("Retry-After"); retryAfter != "2" {
+		t.Fatalf("Retry-After = %q, want 2", retryAfter)
 	}
 }
 

@@ -227,9 +227,24 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {
-		return s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+		result, streamErr := s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage, s.kiroResilienceEnforced(kiroParsed.GroupID))
+		if streamErr == nil && result != nil && result.ClientDisconnect && s.kiroResilienceEnforced(kiroParsed.GroupID) {
+			streamErr = newOpenAIClientCanceledError(context.Canceled)
+		}
+		streamErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, streamErr)
+		return result, streamErr
 	}
-	return s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	result, bufferErr := s.handleCCBufferedFromAnthropic(
+		resp,
+		c,
+		originalModel,
+		mappedModel,
+		reasoningEffort,
+		startTime,
+		s.kiroResilienceEnforced(kiroParsed.GroupID),
+	)
+	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
+	return result, bufferErr
 }
 
 // extractCCReasoningEffortFromBody reads reasoning effort from a Chat Completions
@@ -259,7 +274,9 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
+	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -332,6 +349,13 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 				zap.String("request_id", requestID),
 			)
 		}
+		if strictTerminal {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusServiceUnavailable,
+				FailureKind: UpstreamFailureIncompleteStream,
+				Cause:       err,
+			}
+		}
 	}
 
 	if finalResp == nil {
@@ -393,7 +417,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 	includeUsage bool,
+	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
+	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -416,6 +442,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	clientDisconnected := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -426,14 +453,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:       requestID,
-			Usage:           usage,
-			Model:           originalModel,
-			UpstreamModel:   mappedModel,
-			ReasoningEffort: reasoningEffort,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
+			RequestID:        requestID,
+			Usage:            usage,
+			Model:            originalModel,
+			UpstreamModel:    mappedModel,
+			ReasoningEffort:  reasoningEffort,
+			Stream:           true,
+			Duration:         time.Since(startTime),
+			FirstTokenMs:     firstTokenMs,
+			ClientDisconnect: clientDisconnected,
 		}
 	}
 
@@ -446,6 +474,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		// c 可能持有请求侧注入的 ToolNameRewrite；无则仅做静态前缀还原。
 		out := string(reverseToolNamesIfPresent(c, []byte(sse)))
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
+			clientDisconnected = true
 			return true // client disconnected
 		}
 		return false
@@ -526,6 +555,26 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				zap.Error(err),
 				zap.String("request_id", requestID),
 			)
+		}
+		if strictTerminal {
+			result := resultWithUsage()
+			if result.ClientDisconnect {
+				return result, newOpenAIClientCanceledError(context.Canceled)
+			}
+			payload, _ := json.Marshal(map[string]any{
+				"error": map[string]string{
+					"type":    "upstream_error",
+					"message": "Upstream stream ended before a complete response",
+				},
+			})
+			MarkGatewaySSEErrorWritten(c)
+			_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
+			c.Writer.Flush()
+			return result, &UpstreamFailoverError{
+				StatusCode:  http.StatusServiceUnavailable,
+				FailureKind: UpstreamFailureIncompleteStream,
+				Cause:       err,
+			}
 		}
 	}
 

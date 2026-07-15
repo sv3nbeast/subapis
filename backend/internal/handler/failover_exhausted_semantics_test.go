@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -145,6 +146,63 @@ func TestHandleAnthropicFailoverExhausted_UsesUpstreamMappingAndOpsContext(t *te
 	detail, exists := c.Get(service.OpsUpstreamErrorDetailKey)
 	require.True(t, exists)
 	require.JSONEq(t, `{"error":{"message":"Resource has been exhausted (e.g. check quota)."}}`, detail.(string))
+}
+
+func TestHandleKiroFailoverExhaustedReturnsStandard429WithRetryAfter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h := &GatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusTooManyRequests,
+		FailureKind:  service.UpstreamFailureRateLimited,
+		RetryAfter:   1500 * time.Millisecond,
+		ResponseBody: []byte(`{"error":{"message":"rate limited"}}`),
+	}, service.PlatformKiro, false)
+
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Equal(t, "2", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"type":"rate_limit_error"`)
+}
+
+func TestHandleAnthropicKiroTransportExhaustedReturns503WithRetryAfter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/messages", nil)
+
+	h := &OpenAIGatewayHandler{}
+	h.handleAnthropicFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		FailureKind:  service.UpstreamFailureResponseHeaderTimeout,
+		RetryAfter:   30 * time.Second,
+		ResponseBody: []byte(`{"error":{"message":"header timeout"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "30", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"type":"upstream_error"`)
+}
+
+func TestHandleKiroIncompleteStreamExhaustedReturns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h := &GatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		FailureKind:  service.UpstreamFailureIncompleteStream,
+		RetryAfter:   time.Second,
+		ResponseBody: []byte(`{"error":{"message":"missing terminal event"}}`),
+	}, service.PlatformKiro, false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "1", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"type":"upstream_error"`)
 }
 
 func withPlatform(ctx context.Context, platform string) context.Context {

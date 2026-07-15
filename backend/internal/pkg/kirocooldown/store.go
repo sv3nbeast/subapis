@@ -19,8 +19,9 @@ const (
 	MinRequestInterval = time.Second
 	MaxRequestInterval = 2 * time.Second
 
-	CooldownReason429       = "rate_limit_exceeded"
-	CooldownReasonSuspended = "account_suspended"
+	CooldownReason429          = "rate_limit_exceeded"
+	CooldownReasonSuspended    = "account_suspended"
+	CooldownReasonUnresponsive = "upstream_unresponsive"
 
 	ShortCooldown = time.Minute
 	MaxCooldown   = 5 * time.Minute
@@ -74,18 +75,43 @@ return {0, next_slot_ms - now_ms, ''}
 	mark429Script = redis.NewScript(`
 local t = redis.call('TIME')
 local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local fail_count = tonumber(redis.call('HGET', KEYS[1], 'fail_count') or '0') + 1
 local short_cooldown_ms = tonumber(ARGV[1])
 local max_cooldown_ms = tonumber(ARGV[2])
 local state_ttl_ms = tonumber(ARGV[3])
-local cooldown_ms = short_cooldown_ms * (2 ^ (fail_count - 1))
+local reason = ARGV[4]
+local override_cooldown_ms = tonumber(ARGV[5]) or 0
+local fail_count_field = 'fail_count_unresponsive'
+if reason == 'rate_limit_exceeded' then
+  fail_count_field = 'fail_count_429'
+end
+local stored_fail_count = redis.call('HGET', KEYS[1], fail_count_field)
+if not stored_fail_count and reason == 'rate_limit_exceeded' then
+  -- Existing deployments only had fail_count, and it represented 429s.
+  stored_fail_count = redis.call('HGET', KEYS[1], 'fail_count')
+end
+local fail_count = tonumber(stored_fail_count or '0') + 1
+local cooldown_ms
+if override_cooldown_ms > 0 then
+  cooldown_ms = override_cooldown_ms
+else
+  cooldown_ms = short_cooldown_ms * (2 ^ (fail_count - 1))
+end
 if cooldown_ms > max_cooldown_ms then
   cooldown_ms = max_cooldown_ms
 end
+local cooldown_until_ms = now_ms + cooldown_ms
+local existing_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
+local existing_reason = redis.call('HGET', KEYS[1], 'cooldown_reason') or ''
+if existing_until_ms > cooldown_until_ms then
+  cooldown_until_ms = existing_until_ms
+  cooldown_ms = existing_until_ms - now_ms
+  reason = existing_reason
+end
 redis.call('HSET', KEYS[1],
   'fail_count', fail_count,
-  'cooldown_until_ms', now_ms + cooldown_ms,
-  'cooldown_reason', ARGV[4]
+  fail_count_field, fail_count,
+  'cooldown_until_ms', cooldown_until_ms,
+  'cooldown_reason', reason
 )
 redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
 return cooldown_ms
@@ -94,6 +120,29 @@ return cooldown_ms
 	markSuccessScript = redis.NewScript(`
 redis.call('HSET', KEYS[1],
   'fail_count', 0,
+  'fail_count_429', 0,
+  'fail_count_unresponsive', 0,
+  'cooldown_until_ms', 0,
+  'cooldown_reason', ''
+)
+redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[1]))
+return 1
+`)
+
+	markSuccessPreservingCooldownScript = redis.NewScript(`
+local t = redis.call('TIME')
+local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local cooldown_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
+if cooldown_until_ms > now_ms then
+  -- A concurrent success must not erase the failure streak that established
+  -- the active cooldown. Otherwise the next 429 restarts at one minute instead
+  -- of continuing the documented 1/2/4/5 minute backoff.
+  return 0
+end
+redis.call('HSET', KEYS[1],
+  'fail_count', 0,
+  'fail_count_429', 0,
+  'fail_count_unresponsive', 0,
   'cooldown_until_ms', 0,
   'cooldown_reason', ''
 )
@@ -108,6 +157,8 @@ local cooldown_ms = tonumber(ARGV[1])
 local state_ttl_ms = tonumber(ARGV[2])
 redis.call('HSET', KEYS[1],
   'fail_count', 0,
+  'fail_count_429', 0,
+  'fail_count_unresponsive', 0,
   'cooldown_until_ms', now_ms + cooldown_ms,
   'cooldown_reason', ARGV[3]
 )
@@ -141,6 +192,20 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("kiro token is in cooldown for %v", e.remaining.Round(time.Second))
 	}
 	return fmt.Sprintf("kiro token is in cooldown for %v (reason: %s)", e.remaining.Round(time.Second), e.reason)
+}
+
+func (e *Error) Remaining() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.remaining
+}
+
+func (e *Error) Reason() string {
+	if e == nil {
+		return ""
+	}
+	return e.reason
 }
 
 func Calculate429Cooldown(retryCount int) time.Duration {
@@ -227,7 +292,55 @@ func (s *Store) MarkSuccess(ctx context.Context, tokenKey string) error {
 	return nil
 }
 
+// MarkSuccessPreservingCooldown resets an expired failure streak, but never
+// clears a cooldown that another in-flight request has just established.
+func (s *Store) MarkSuccessPreservingCooldown(ctx context.Context, tokenKey string) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	if err := markSuccessPreservingCooldownScript.Run(
+		cacheCtx,
+		s.client,
+		[]string{RedisKey(tokenKey)},
+		activeTTL.Milliseconds(),
+	).Err(); err != nil {
+		return fmt.Errorf("kiro cooldown mark success preserving cooldown: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) Mark429(ctx context.Context, tokenKey string) (time.Duration, error) {
+	return s.markTransient(ctx, tokenKey, ShortCooldown, MaxCooldown, 0, CooldownReason429)
+}
+
+// Mark429WithRetryAfter prefers an explicit upstream Retry-After. When it is
+// absent, markTransient keeps the regular 1/2/4/5 minute exponential backoff.
+func (s *Store) Mark429WithRetryAfter(ctx context.Context, tokenKey string, retryAfter time.Duration) (time.Duration, error) {
+	if retryAfter < 0 {
+		retryAfter = 0
+	}
+	if retryAfter > 0 && retryAfter < 5*time.Second {
+		retryAfter = 5 * time.Second
+	}
+	if retryAfter > MaxCooldown {
+		retryAfter = MaxCooldown
+	}
+	return s.markTransient(ctx, tokenKey, ShortCooldown, MaxCooldown, retryAfter, CooldownReason429)
+}
+
+func (s *Store) MarkUnresponsive(ctx context.Context, tokenKey string, base, maximum time.Duration) (time.Duration, error) {
+	if base <= 0 {
+		base = 30 * time.Second
+	}
+	if maximum < base {
+		maximum = base
+	}
+	return s.markTransient(ctx, tokenKey, base, maximum, 0, CooldownReasonUnresponsive)
+}
+
+func (s *Store) markTransient(ctx context.Context, tokenKey string, base, maximum, override time.Duration, reason string) (time.Duration, error) {
 	if err := s.validate(); err != nil {
 		return 0, err
 	}
@@ -237,17 +350,18 @@ func (s *Store) Mark429(ctx context.Context, tokenKey string) (time.Duration, er
 		cacheCtx,
 		s.client,
 		[]string{RedisKey(tokenKey)},
-		ShortCooldown.Milliseconds(),
-		MaxCooldown.Milliseconds(),
+		base.Milliseconds(),
+		maximum.Milliseconds(),
 		stateTTL.Milliseconds(),
-		CooldownReason429,
+		reason,
+		override.Milliseconds(),
 	).Result()
 	if err != nil {
-		return 0, fmt.Errorf("kiro cooldown mark 429: %w", err)
+		return 0, fmt.Errorf("kiro cooldown mark %s: %w", reason, err)
 	}
 	cooldownMS, err := luaInt64(result)
 	if err != nil {
-		return 0, fmt.Errorf("kiro cooldown mark 429: %w", err)
+		return 0, fmt.Errorf("kiro cooldown mark %s: %w", reason, err)
 	}
 	return time.Duration(cooldownMS) * time.Millisecond, nil
 }
@@ -297,6 +411,64 @@ func (s *Store) GetState(ctx context.Context, tokenKey string) (*State, error) {
 		return nil, fmt.Errorf("kiro cooldown get state: unexpected response length %d", len(values))
 	}
 
+	return parseStateValues(values, time.Now())
+}
+
+// GetStates returns active cooldowns in one Redis round trip. Missing and
+// expired entries are omitted from the result.
+func (s *Store) GetStates(ctx context.Context, tokenKeys []string) (map[string]*State, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	result := make(map[string]*State, len(tokenKeys))
+	unique := make([]string, 0, len(tokenKeys))
+	seen := make(map[string]struct{}, len(tokenKeys))
+	for _, tokenKey := range tokenKeys {
+		tokenKey = strings.TrimSpace(tokenKey)
+		if tokenKey == "" {
+			continue
+		}
+		if _, ok := seen[tokenKey]; ok {
+			continue
+		}
+		seen[tokenKey] = struct{}{}
+		unique = append(unique, tokenKey)
+	}
+	if len(unique) == 0 {
+		return result, nil
+	}
+
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	pipe := s.client.Pipeline()
+	cmds := make([]*redis.SliceCmd, 0, len(unique))
+	for _, tokenKey := range unique {
+		cmds = append(cmds, pipe.HMGet(cacheCtx, RedisKey(tokenKey), "cooldown_until_ms", "cooldown_reason", "fail_count"))
+	}
+	if _, err := pipe.Exec(cacheCtx); err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("kiro cooldown batch get state: %w", err)
+	}
+	now := time.Now()
+	for i, cmd := range cmds {
+		values, err := cmd.Result()
+		if err != nil && err != redis.Nil {
+			return nil, fmt.Errorf("kiro cooldown batch get state: %w", err)
+		}
+		state, err := parseStateValues(values, now)
+		if err != nil {
+			return nil, err
+		}
+		if state != nil && state.Active {
+			result[unique[i]] = state
+		}
+	}
+	return result, nil
+}
+
+func parseStateValues(values []any, now time.Time) (*State, error) {
+	if len(values) != 3 {
+		return nil, fmt.Errorf("kiro cooldown get state: unexpected response length %d", len(values))
+	}
 	cooldownUntilMS, err := luaInt64(values[0])
 	if err != nil && values[0] != nil {
 		return nil, fmt.Errorf("kiro cooldown get state cooldown_until_ms: %w", err)
@@ -312,13 +484,11 @@ func (s *Store) GetState(ctx context.Context, tokenKey string) (*State, error) {
 	if cooldownUntilMS <= 0 {
 		return nil, nil
 	}
-
 	cooldownUntil := time.UnixMilli(cooldownUntilMS)
-	remaining := time.Until(cooldownUntil)
+	remaining := cooldownUntil.Sub(now)
 	if remaining <= 0 {
 		return nil, nil
 	}
-
 	return &State{
 		Active:        true,
 		Reason:        reason,

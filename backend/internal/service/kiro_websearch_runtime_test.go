@@ -85,7 +85,7 @@ func TestDoKiroMCPJSONRequestDoesNotMarkCooldownFor429(t *testing.T) {
 		Concurrency: 1,
 	}
 
-	resp, _, err := svc.doKiroMCPJSONRequest(context.Background(), account, "https://example.test/mcp", []byte(`{"jsonrpc":"2.0"}`), "token")
+	resp, _, err := svc.doKiroMCPJSONRequest(context.Background(), account, "https://example.test/mcp", []byte(`{"jsonrpc":"2.0"}`), "token", nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)

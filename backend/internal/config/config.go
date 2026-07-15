@@ -864,6 +864,8 @@ type GatewayConfig struct {
 
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
+	// KiroResilience: Kiro 上游限流、超时和切号保护配置。
+	KiroResilience GatewayKiroResilienceConfig `mapstructure:"kiro_resilience"`
 
 	// TLSFingerprint: TLS指纹伪装配置
 	TLSFingerprint TLSFingerprintConfig `mapstructure:"tls_fingerprint"`
@@ -1212,6 +1214,27 @@ type GatewaySchedulingConfig struct {
 	// 全量重建周期配置
 	// 全量重建周期（秒），0 表示禁用
 	FullRebuildIntervalSeconds int `mapstructure:"full_rebuild_interval_seconds"`
+}
+
+const (
+	KiroResilienceModeOff     = "off"
+	KiroResilienceModeObserve = "observe"
+	KiroResilienceModeEnforce = "enforce"
+)
+
+// GatewayKiroResilienceConfig controls Kiro-only failover protection. GroupIDs
+// is an allowlist for observe/enforce rollout; an empty list applies to all
+// groups that can schedule a Kiro account.
+type GatewayKiroResilienceConfig struct {
+	Mode                         string  `mapstructure:"mode"`
+	GroupIDs                     []int64 `mapstructure:"group_ids"`
+	ResponseHeaderTimeoutSeconds int     `mapstructure:"response_header_timeout_seconds"`
+	FirstSemanticTimeoutSeconds  int     `mapstructure:"first_semantic_timeout_seconds"`
+	FailoverBudgetSeconds        int     `mapstructure:"failover_budget_seconds"`
+	PreSemanticBufferBytes       int     `mapstructure:"pre_semantic_buffer_bytes"`
+	CleanupGraceSeconds          int     `mapstructure:"cleanup_grace_seconds"`
+	UnresponsiveCooldownSeconds  int     `mapstructure:"unresponsive_cooldown_seconds"`
+	UnresponsiveCooldownMaxSecs  int     `mapstructure:"unresponsive_cooldown_max_seconds"`
 }
 
 func (s *ServerConfig) Address() string {
@@ -1992,6 +2015,15 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
+	viper.SetDefault("gateway.kiro_resilience.mode", KiroResilienceModeObserve)
+	viper.SetDefault("gateway.kiro_resilience.group_ids", []int64{})
+	viper.SetDefault("gateway.kiro_resilience.response_header_timeout_seconds", 30)
+	viper.SetDefault("gateway.kiro_resilience.first_semantic_timeout_seconds", 60)
+	viper.SetDefault("gateway.kiro_resilience.failover_budget_seconds", 105)
+	viper.SetDefault("gateway.kiro_resilience.pre_semantic_buffer_bytes", 256*1024)
+	viper.SetDefault("gateway.kiro_resilience.cleanup_grace_seconds", 3)
+	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_seconds", 30)
+	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_max_seconds", 120)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_kiro_bridge_enabled", false)
@@ -2762,6 +2794,32 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.StreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be non-negative")
+	}
+	kiroResilience := c.Gateway.KiroResilience
+	if kiroMode := strings.ToLower(strings.TrimSpace(kiroResilience.Mode)); kiroMode != "" {
+		switch kiroMode {
+		case KiroResilienceModeOff, KiroResilienceModeObserve, KiroResilienceModeEnforce:
+		default:
+			return fmt.Errorf("gateway.kiro_resilience.mode must be one of: off/observe/enforce")
+		}
+		if kiroResilience.ResponseHeaderTimeoutSeconds <= 0 {
+			return fmt.Errorf("gateway.kiro_resilience.response_header_timeout_seconds must be positive")
+		}
+		if kiroResilience.FirstSemanticTimeoutSeconds <= 0 {
+			return fmt.Errorf("gateway.kiro_resilience.first_semantic_timeout_seconds must be positive")
+		}
+		if kiroResilience.FailoverBudgetSeconds < kiroResilience.ResponseHeaderTimeoutSeconds {
+			return fmt.Errorf("gateway.kiro_resilience.failover_budget_seconds must be >= response_header_timeout_seconds")
+		}
+		if kiroResilience.PreSemanticBufferBytes < 64*1024 || kiroResilience.PreSemanticBufferBytes > 4*1024*1024 {
+			return fmt.Errorf("gateway.kiro_resilience.pre_semantic_buffer_bytes must be between 65536 and 4194304")
+		}
+		if kiroResilience.CleanupGraceSeconds <= 0 || kiroResilience.CleanupGraceSeconds > 30 {
+			return fmt.Errorf("gateway.kiro_resilience.cleanup_grace_seconds must be between 1 and 30")
+		}
+		if kiroResilience.UnresponsiveCooldownSeconds <= 0 || kiroResilience.UnresponsiveCooldownMaxSecs < kiroResilience.UnresponsiveCooldownSeconds {
+			return fmt.Errorf("gateway.kiro_resilience.unresponsive cooldown bounds are invalid")
+		}
 	}
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&
 		(c.Gateway.StreamDataIntervalTimeout < 30 || c.Gateway.StreamDataIntervalTimeout > 1800) {

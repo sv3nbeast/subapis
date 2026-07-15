@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -194,6 +195,71 @@ func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 	stop = context.AfterFunc(ctx, release)
 
 	return release
+}
+
+func wrapReleaseOnce(releaseFunc func()) func() {
+	if releaseFunc == nil {
+		return nil
+	}
+	var once sync.Once
+	return func() { once.Do(releaseFunc) }
+}
+
+// releaseAccountSlotAfterForward keeps a Kiro lease until a canceled physical
+// upstream has actually exited. Ordinary attempts release synchronously.
+func releaseAccountSlotAfterForward(releaseFunc func(), forwardErr error) {
+	if releaseFunc == nil {
+		return
+	}
+	if upstreamDone := service.UpstreamDoneFromError(forwardErr); upstreamDone != nil {
+		go func(done <-chan struct{}) {
+			<-done
+			releaseFunc()
+		}(upstreamDone)
+		return
+	}
+	releaseFunc()
+}
+
+func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+	if c == nil || failoverErr == nil || failoverErr.RetryAfter <= 0 {
+		return
+	}
+	seconds := int((failoverErr.RetryAfter + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+}
+
+func applyKiroBudgetExhaustedRetryAfter(c *gin.Context) {
+	if c != nil {
+		c.Header("Retry-After", "1")
+	}
+}
+
+func prepareKiroAccountAttempt(c *gin.Context, gatewayService *service.GatewayService, groupID *int64, account *service.Account) error {
+	if c == nil || c.Request == nil || gatewayService == nil || account == nil || account.Platform != service.PlatformKiro {
+		return nil
+	}
+	ctx, err := gatewayService.StartKiroResilienceTracking(c.Request.Context(), groupID, account)
+	c.Request = c.Request.WithContext(ctx)
+	if err != nil {
+		applyKiroBudgetExhaustedRetryAfter(c)
+	}
+	return err
+}
+
+func kiroAccountWaitTimeout(gatewayService *service.GatewayService, ctx context.Context, groupID *int64, account *service.Account, configured time.Duration) (time.Duration, error) {
+	if gatewayService == nil || account == nil || account.Platform != service.PlatformKiro || !gatewayService.KiroResilienceEnforced(groupID) {
+		return configured, nil
+	}
+	return gatewayService.KiroWaitTimeoutWithinBudget(ctx, configured)
+}
+
+func isAccountConcurrencyWaitTimeout(err error) bool {
+	var concurrencyErr *ConcurrencyError
+	return errors.As(err, &concurrencyErr) && concurrencyErr.SlotType == "account" && concurrencyErr.IsTimeout
 }
 
 // IncrementWaitCount increments the wait count for a user

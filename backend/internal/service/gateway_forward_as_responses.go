@@ -262,9 +262,24 @@ func (s *GatewayService) forwardKiroAsResponses(
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {
-		return s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, streamErr := s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, s.kiroResilienceEnforced(kiroParsed.GroupID))
+		if streamErr == nil && result != nil && result.ClientDisconnect && s.kiroResilienceEnforced(kiroParsed.GroupID) {
+			streamErr = newOpenAIClientCanceledError(context.Canceled)
+		}
+		streamErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, streamErr)
+		return result, streamErr
 	}
-	return s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	result, bufferErr := s.handleResponsesBufferedStreamingResponse(
+		resp,
+		c,
+		originalModel,
+		mappedModel,
+		reasoningEffort,
+		startTime,
+		s.kiroResilienceEnforced(kiroParsed.GroupID),
+	)
+	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
+	return result, bufferErr
 }
 
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
@@ -330,7 +345,9 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
+	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -413,6 +430,13 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		}
+		if strictTerminal {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusServiceUnavailable,
+				FailureKind: UpstreamFailureIncompleteStream,
+				Cause:       err,
+			}
+		}
 	}
 
 	if finalResp == nil {
@@ -482,8 +506,9 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 	startTime time.Time,
 	originalModel string,
 	mappedModel string,
+	strictTerminalOpt ...bool,
 ) (*ClaudeUsage, error) {
-	_ = ctx
+	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
 	_ = account
 	_ = mappedModel
 	requestID := resp.Header.Get("x-request-id")
@@ -570,7 +595,16 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		}
-		// 流读取中断且未拿到完整响应：触发同账号重试（与流式路径完整性保护一致）。
+		// Kiro enforce treats a missing terminal event as incomplete. The outer
+		// semantic gate decides whether failover is still safe; after semantic
+		// output, finishKiroStreamResponse marks the error as non-replayable.
+		if strictTerminal {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusServiceUnavailable,
+				FailureKind: UpstreamFailureIncompleteStream,
+				Cause:       err,
+			}
+		}
 		if finalResp == nil {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             http.StatusBadGateway,
@@ -628,7 +662,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
+	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
+	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -647,6 +683,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	clientDisconnected := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -657,16 +694,17 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:       requestID,
-			ResponseID:      state.ResponseID,
-			Usage:           usage,
-			Model:           originalModel,
-			ResponsesOutput: outputAccumulator.BuildOutput(),
-			UpstreamModel:   mappedModel,
-			ReasoningEffort: reasoningEffort,
-			Stream:          true,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
+			RequestID:        requestID,
+			ResponseID:       state.ResponseID,
+			Usage:            usage,
+			Model:            originalModel,
+			ResponsesOutput:  outputAccumulator.BuildOutput(),
+			UpstreamModel:    mappedModel,
+			ReasoningEffort:  reasoningEffort,
+			Stream:           true,
+			Duration:         time.Since(startTime),
+			FirstTokenMs:     firstTokenMs,
+			ClientDisconnect: clientDisconnected,
 		}
 	}
 
@@ -683,6 +721,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			}
 			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
 			if _, err := fmt.Fprint(c.Writer, out); err != nil {
+				clientDisconnected = true
 				logger.L().Info("forward_as_responses stream: client disconnected",
 					zap.String("request_id", requestID),
 				)
@@ -779,6 +818,31 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				zap.Error(err),
 				zap.String("request_id", requestID),
 			)
+		}
+		if strictTerminal {
+			result := resultWithUsage()
+			if result.ClientDisconnect {
+				return result, newOpenAIClientCanceledError(context.Canceled)
+			}
+			failed := apicompat.ResponsesStreamEvent{
+				Type: "response.failed",
+				Response: &apicompat.ResponsesResponse{
+					ID:     state.ResponseID,
+					Model:  originalModel,
+					Status: "failed",
+					Error:  &apicompat.ResponsesError{Code: "upstream_error", Message: "Upstream stream ended before a complete response"},
+				},
+			}
+			if payload, marshalErr := apicompat.ResponsesEventToSSE(failed); marshalErr == nil {
+				MarkGatewaySSEErrorWritten(c)
+				_, _ = fmt.Fprint(c.Writer, payload)
+				c.Writer.Flush()
+			}
+			return result, &UpstreamFailoverError{
+				StatusCode:  http.StatusServiceUnavailable,
+				FailureKind: UpstreamFailureIncompleteStream,
+				Cause:       err,
+			}
 		}
 	}
 

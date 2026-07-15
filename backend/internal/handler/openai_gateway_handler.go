@@ -165,6 +165,9 @@ func NewOpenAIGatewayHandler(
 	opsService *service.OpsService,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
+	if gatewayService != nil {
+		gatewayService.SetKiroBridgeService(kiroBridgeService)
+	}
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 3
 	if cfg != nil {
@@ -385,6 +388,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
 	kiroFailoverState.FailedAccountIDs = failedAccountIDs
+	if h.kiroBridgeService != nil {
+		kiroFailoverState.KiroResilienceEnforced = h.kiroBridgeService.KiroResilienceEnforced(apiKey.GroupID)
+	}
 
 	for {
 		// Select account supporting the requested model
@@ -435,13 +441,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
-			if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil && kiroFailoverState.LastFailoverErr.KiroRateLimited {
-				switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context()) {
+			if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil {
+				switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context(), err) {
 				case FailoverContinue:
 					continue
 				case FailoverCanceled:
 					return
 				}
+				lastFailoverErr = kiroFailoverState.LastFailoverErr
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -475,7 +482,28 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, slotErr := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotErr != nil {
+			if service.IsKiroFailoverBudgetExceeded(slotErr) {
+				applyKiroBudgetExhaustedRetryAfter(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				return
+			}
+			if account.Platform == service.PlatformKiro && kiroFailoverState.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(slotErr) {
+				if _, remainingErr := h.kiroBridgeService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
+					applyKiroBudgetExhaustedRetryAfter(c)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					return
+				}
+				if !kiroFailoverState.KiroWaitReselectUsed {
+					kiroFailoverState.KiroWaitReselectUsed = true
+					reqLog.Info("openai.kiro_account_wait_timeout_reselect", zap.Int64("account_id", account.ID))
+					continue
+				}
+			}
+			h.handleConcurrencyError(c, slotErr, "account", streamStarted)
+			return
+		}
 		if !acquired {
 			return
 		}
@@ -486,14 +514,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 用扣除 compact 心跳字节的口径快照：心跳注释不构成语义响应，
 		// 不能因心跳字节变化而放弃 failover 换号（#3887）。
 		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
-		result, err := func() (*service.OpenAIForwardResult, error) {
-			defer func() {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-			}()
-			return h.forwardOpenAIResponses(c.Request.Context(), c, account, forwardBody, kiroBridgeParsed)
-		}()
+		forwardCtx := c.Request.Context()
+		if switchCount > 0 {
+			forwardCtx = service.WithAccountSwitchCount(forwardCtx, switchCount, false)
+		}
+		result, err := h.forwardOpenAIResponses(forwardCtx, c, account, forwardBody, kiroBridgeParsed)
+		releaseAccountSlotAfterForward(accountReleaseFunc, err)
 		cyberBlockKeyHTTP := ""
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyHTTP = service.CyberSessionBlockKey(apiKey.ID, c, sessionHashBody)
@@ -528,6 +554,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
+						if service.HasGatewaySSEErrorWritten(c) {
+							return
+						}
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
@@ -535,9 +564,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if account.Platform == service.PlatformKiro {
 						kiroFailoverState.SwitchCount = switchCount
 						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
-						if action == FailoverContinue && failoverErr.RetryableOnSameAccount && !failoverErr.KiroRateLimited {
-							kiroFailoverState.ForceAccountID = account.ID
-						}
 						switchCount = kiroFailoverState.SwitchCount
 						lastFailoverErr = failoverErr
 						switch action {
@@ -550,6 +576,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							return
 						}
 					}
+					kiroFailoverState.RecordAlternatePlatformFailure(failoverErr)
 					// 池模式：同账号重试
 					if failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
@@ -626,6 +653,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+		}
+		if kiroBridgeRequested && kiroFailoverState.KiroResilienceEnforced && sessionHash != "" &&
+			(len(failedAccountIDs) > 0 || selection.DeferStickyMigration ||
+				(account.Platform == service.PlatformKiro && !selection.PreserveStickyBinding)) {
+			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+			if bindErr := h.gatewayService.BindStickySession(stateCtx, apiKey.GroupID, sessionHash, account.ID); bindErr != nil {
+				reqLog.Warn("openai.kiro_bind_sticky_after_success_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
+			}
+			stateCancel()
 		}
 
 		// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
@@ -1009,7 +1045,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired, slotErr := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotErr != nil {
+			h.handleConcurrencyError(c, slotErr, "account", streamStarted)
+			return
+		}
 		if !acquired {
 			return
 		}
@@ -1021,14 +1061,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
 		writerSizeBeforeForward := c.Writer.Size()
-		result, err := func() (*service.OpenAIForwardResult, error) {
-			defer func() {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-			}()
-			return h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
-		}()
+		result, err := h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		releaseAccountSlotAfterForward(accountReleaseFunc, err)
 		cyberBlockKeyMsg := ""
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyMsg = service.CyberSessionBlockKey(apiKey.ID, c, body)
@@ -1221,6 +1255,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
+	applyFailoverRetryAfter(c, failoverErr)
 	status, errType, errMsg := h.resolveAnthropicFailoverExhaustedError(c, failoverErr)
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
@@ -1237,6 +1272,15 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 		if v, ok := c.Request.Context().Value(ctxkey.Platform).(string); ok && strings.TrimSpace(v) != "" {
 			platform = strings.TrimSpace(v)
 		}
+	}
+	if failoverErr.FailureKind == service.UpstreamFailureRateLimited {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "Kiro upstream rate limited", string(responseBody))
+		return http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later"
+	}
+	switch failoverErr.FailureKind {
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
+		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
 	}
 
 	if h.errorPassthroughService != nil && len(responseBody) > 0 {
@@ -1330,22 +1374,32 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	reqStream bool,
 	streamStarted *bool,
 	reqLog *zap.Logger,
-) (func(), bool) {
+) (func(), bool, error) {
 	if selection == nil || selection.Account == nil {
 		markOpsRoutingCapacityLimited(c)
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
-		return nil, false
+		return nil, false, nil
 	}
 
-	ctx := c.Request.Context()
 	account := selection.Account
+	if err := prepareKiroAccountAttempt(c, h.kiroBridgeService, groupID, account); err != nil {
+		if selection.Acquired && selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		return nil, false, err
+	}
+	ctx := c.Request.Context()
+	kiroEnforced := account.Platform == service.PlatformKiro && h.kiroBridgeService != nil && h.kiroBridgeService.KiroResilienceEnforced(groupID)
 	if selection.Acquired {
-		return wrapReleaseOnDone(ctx, selection.ReleaseFunc), true
+		if kiroEnforced {
+			return wrapReleaseOnce(selection.ReleaseFunc), true, nil
+		}
+		return wrapReleaseOnDone(ctx, selection.ReleaseFunc), true, nil
 	}
 	if selection.WaitPlan == nil {
 		markOpsRoutingCapacityLimited(c)
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", *streamStarted)
-		return nil, false
+		return nil, false, nil
 	}
 
 	fastReleaseFunc, fastAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(
@@ -1356,13 +1410,18 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	if err != nil {
 		reqLog.Warn("openai.account_slot_quick_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		h.handleConcurrencyError(c, err, "account", *streamStarted)
-		return nil, false
+		return nil, false, nil
 	}
 	if fastAcquired {
-		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
-			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		if !kiroEnforced {
+			if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
+				reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			}
 		}
-		return wrapReleaseOnDone(ctx, fastReleaseFunc), true
+		if kiroEnforced {
+			return wrapReleaseOnce(fastReleaseFunc), true, nil
+		}
+		return wrapReleaseOnDone(ctx, fastReleaseFunc), true, nil
 	}
 
 	canWait, waitErr := h.concurrencyHelper.IncrementAccountWaitCount(ctx, account.ID, selection.WaitPlan.MaxWaiting)
@@ -1374,7 +1433,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
 		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
-		return nil, false
+		return nil, false, nil
 	}
 
 	accountWaitCounted := waitErr == nil && canWait
@@ -1386,26 +1445,38 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	}
 	defer releaseWait()
 
+	waitTimeout, budgetErr := kiroAccountWaitTimeout(h.kiroBridgeService, ctx, groupID, account, selection.WaitPlan.Timeout)
+	if budgetErr != nil {
+		return nil, false, budgetErr
+	}
 	accountReleaseFunc, err := h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 		c,
 		account.ID,
 		selection.WaitPlan.MaxConcurrency,
-		selection.WaitPlan.Timeout,
+		waitTimeout,
 		reqStream,
 		streamStarted,
 	)
 	if err != nil {
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		if kiroEnforced && isAccountConcurrencyWaitTimeout(err) {
+			return nil, false, err
+		}
 		h.handleConcurrencyError(c, err, "account", *streamStarted)
-		return nil, false
+		return nil, false, nil
 	}
 
 	// Slot acquired: no longer waiting in queue.
 	releaseWait()
-	if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
-		reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	if !kiroEnforced {
+		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
+			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		}
 	}
-	return wrapReleaseOnDone(ctx, accountReleaseFunc), true
+	if kiroEnforced {
+		return wrapReleaseOnce(accountReleaseFunc), true, nil
+	}
+	return wrapReleaseOnDone(ctx, accountReleaseFunc), true, nil
 }
 
 // ResponsesWebSocket handles OpenAI Responses API WebSocket ingress endpoint
@@ -2080,8 +2151,20 @@ func (h *OpenAIGatewayHandler) handleConcurrencyError(c *gin.Context, err error,
 }
 
 func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
+	applyFailoverRetryAfter(c, failoverErr)
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	if failoverErr.FailureKind == service.UpstreamFailureRateLimited {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "Kiro upstream rate limited", string(responseBody))
+		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later", streamStarted)
+		return
+	}
+	switch failoverErr.FailureKind {
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
+		return
+	}
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {
 		service.SetOpsUpstreamError(c, statusCode, service.OpenAISilentRefusalClientMessage(), "")
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage(), streamStarted)

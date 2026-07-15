@@ -375,6 +375,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	if platform == service.PlatformGemini {
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
+		fs.KiroResilienceEnforced = h.gatewayService.KiroResilienceEnforced(apiKey.GroupID)
 		c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 
 		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
@@ -413,7 +414,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
 				}
-				action := fs.HandleSelectionExhausted(c.Request.Context())
+				action := fs.HandleSelectionExhausted(c.Request.Context(), err)
 				switch action {
 				case FailoverContinue:
 					ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
@@ -467,6 +468,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 
 			// 3. 获取账号并发槽位
+			if budgetErr := prepareKiroAccountAttempt(c, h.gatewayService, apiKey.GroupID, account); budgetErr != nil {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				return
+			}
 			accountReleaseFunc := selection.ReleaseFunc
 			if !selection.Acquired {
 				if selection.WaitPlan == nil {
@@ -500,28 +508,55 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				}
 
+				waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), apiKey.GroupID, account, selection.WaitPlan.Timeout)
+				if budgetErr != nil {
+					releaseWait()
+					applyKiroBudgetExhaustedRetryAfter(c)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					return
+				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 					c,
 					account.ID,
 					selection.WaitPlan.MaxConcurrency,
-					selection.WaitPlan.Timeout,
+					waitTimeout,
 					reqStream,
 					&streamStarted,
 				)
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
+					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
+						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
+							applyKiroBudgetExhaustedRetryAfter(c)
+							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+							return
+						}
+						if !fs.KiroWaitReselectUsed {
+							fs.KiroWaitReselectUsed = true
+							reqLog.Info("gateway.kiro_account_wait_timeout_reselect", zap.Int64("account_id", account.ID))
+							continue
+						}
+					}
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}
 				// Slot acquired: no longer waiting in queue.
 				releaseWait()
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionKey, account.ID); err != nil {
-					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				deferKiroMigration := account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced &&
+					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
+				if !deferKiroMigration {
+					if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionKey, account.ID); err != nil {
+						reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+					}
 				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
-			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			if account.Platform == service.PlatformKiro && h.gatewayService.KiroResilienceEnforced(apiKey.GroupID) {
+				accountReleaseFunc = wrapReleaseOnce(accountReleaseFunc)
+			} else {
+				accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			}
 
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
@@ -546,9 +581,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			} else {
 				result, err = h.geminiCompatService.Forward(requestCtx, c, account, body)
 			}
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+			releaseAccountSlotAfterForward(accountReleaseFunc, err)
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
@@ -688,6 +721,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	for {
 		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
+		fs.KiroResilienceEnforced = h.gatewayService.KiroResilienceEnforced(currentAPIKey.GroupID)
 		c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 		retryWithFallback := false
 
@@ -734,7 +768,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
 				}
-				action := fs.HandleSelectionExhausted(c.Request.Context())
+				action := fs.HandleSelectionExhausted(c.Request.Context(), err)
 				switch action {
 				case FailoverContinue:
 					ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
@@ -800,6 +834,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 
 			// 3. 获取账号并发槽位
+			if budgetErr := prepareKiroAccountAttempt(c, h.gatewayService, currentAPIKey.GroupID, account); budgetErr != nil {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				return
+			}
 			accountReleaseFunc := selection.ReleaseFunc
 			if !selection.Acquired {
 				if selection.WaitPlan == nil {
@@ -833,17 +874,36 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					}
 				}
 
+				waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), currentAPIKey.GroupID, account, selection.WaitPlan.Timeout)
+				if budgetErr != nil {
+					releaseWait()
+					applyKiroBudgetExhaustedRetryAfter(c)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					return
+				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 					c,
 					account.ID,
 					selection.WaitPlan.MaxConcurrency,
-					selection.WaitPlan.Timeout,
+					waitTimeout,
 					reqStream,
 					&streamStarted,
 				)
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
+					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
+						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
+							applyKiroBudgetExhaustedRetryAfter(c)
+							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+							return
+						}
+						if !fs.KiroWaitReselectUsed {
+							fs.KiroWaitReselectUsed = true
+							reqLog.Info("gateway.kiro_account_wait_timeout_reselect", zap.Int64("account_id", account.ID))
+							continue
+						}
+					}
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}
@@ -853,16 +913,37 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.String("session_key", sessionKey),
 					zap.Int64("account_id", account.ID),
 				)
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
-					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				deferKiroMigration := account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced &&
+					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
+				if !deferKiroMigration {
+					if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
+						reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+					}
 				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
-			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			if account.Platform == service.PlatformKiro && h.gatewayService.KiroResilienceEnforced(currentAPIKey.GroupID) {
+				accountReleaseFunc = wrapReleaseOnce(accountReleaseFunc)
+			} else {
+				accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+			}
 
 			// ===== 用户消息串行队列 START =====
 			var queueRelease func()
 			umqMode := h.getUserMsgQueueMode(account, attemptParsedReq)
+			umqWaitTimeout := h.cfg.Gateway.UserMessageQueue.WaitTimeout()
+			if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced {
+				var budgetErr error
+				umqWaitTimeout, budgetErr = h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), umqWaitTimeout)
+				if budgetErr != nil {
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
+					applyKiroBudgetExhaustedRetryAfter(c)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					return
+				}
+			}
 
 			switch umqMode {
 			case config.UMQModeSerialize:
@@ -870,7 +951,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				baseRPM := account.GetBaseRPM()
 				release, qErr := h.userMsgQueueHelper.AcquireWithWait(
 					c, account.ID, baseRPM, false, &streamStarted,
-					h.cfg.Gateway.UserMessageQueue.WaitTimeout(),
+					umqWaitTimeout,
 					reqLog,
 				)
 				if qErr != nil {
@@ -906,7 +987,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				baseRPM := account.GetBaseRPM()
 				if tErr := h.userMsgQueueHelper.ThrottleWithPing(
 					c, account.ID, baseRPM, reqStream, &streamStarted,
-					h.cfg.Gateway.UserMessageQueue.WaitTimeout(),
+					umqWaitTimeout,
 					reqLog,
 				); tErr != nil {
 					reqLog.Warn("gateway.umq_throttle_failed",
@@ -934,12 +1015,26 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if channelMapping.Mapped {
 				attemptParsedReq.Model = channelMapping.MappedModel
 				if err := attemptParsedReq.ReplaceBody(h.gatewayService.ReplaceModelInBody(attemptParsedReq.Body.Bytes(), channelMapping.MappedModel)); err != nil {
+					if queueRelease != nil {
+						queueRelease()
+					}
+					attemptParsedReq.OnUpstreamAccepted = nil
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
 					h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 					return
 				}
 			}
 			// Bedrock CC 兼容：清理 body 专有字段 + 过滤 anthropic-beta header，适用于所有转发路径
 			if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
+				if queueRelease != nil {
+					queueRelease()
+				}
+				attemptParsedReq.OnUpstreamAccepted = nil
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
 				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 				return
 			}
@@ -967,9 +1062,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 清理回调引用，防止 failover 重试时旧回调被错误调用
 			attemptParsedReq.OnUpstreamAccepted = nil
 
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+			releaseAccountSlotAfterForward(accountReleaseFunc, err)
 			if err != nil {
 				if isOpenAIForwardClientCanceled(c, err) {
 					markOpenAIClientClosedRequest(c)
@@ -1100,7 +1193,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - Kiro 429 请求内切换账号后最终成功：覆盖到成功账号
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
-			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries()) {
+			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries() ||
+				selection.DeferStickyMigration ||
+				(account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && !selection.PreserveStickyBinding)) {
 				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
 				if err := h.gatewayService.BindStickySession(stateCtx, currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -1748,6 +1843,7 @@ func (h *GatewayHandler) handleUserMsgQueueError(c *gin.Context, err error, stre
 }
 
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
+	applyFailoverRetryAfter(c, failoverErr)
 	status, errType, errMsg := h.resolveFailoverExhaustedError(c, failoverErr, platform)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
@@ -1788,6 +1884,15 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 		if v, ok := c.Request.Context().Value(ctxkey.Platform).(string); ok && strings.TrimSpace(v) != "" {
 			platform = strings.TrimSpace(v)
 		}
+	}
+	if failoverErr.FailureKind == service.UpstreamFailureRateLimited {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "Kiro upstream rate limited", string(responseBody))
+		return http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later"
+	}
+	switch failoverErr.FailureKind {
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
+		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
 	}
 
 	// 先检查透传规则

@@ -64,6 +64,7 @@ type OpenAIAccountScheduleRequest struct {
 	StickyWeighted          bool
 	SubscriptionPriority    bool
 	PreserveStickyBinding   bool
+	DeferStickyMigration    bool
 	PreviousResponseID      string
 	PreviousResponseCanMove bool
 	RequestedModel          string
@@ -76,6 +77,14 @@ type OpenAIAccountScheduleRequest struct {
 	KiroBridgeModel         string
 	ForcedAccountID         int64
 }
+
+type openAIStickyFallbackMode uint8
+
+const (
+	openAIStickyFallbackNone openAIStickyFallbackMode = iota
+	openAIStickyFallbackPreserve
+	openAIStickyFallbackDeferMigration
+)
 
 type OpenAIAccountScheduleDecision struct {
 	Layer               string
@@ -305,6 +314,14 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		decision.LatencyMs = time.Since(start).Milliseconds()
 		s.metrics.recordSelect(decision)
 	}()
+	if req.AllowKiroBridge && s != nil && s.service != nil && s.service.kiroBridgeService != nil {
+		if accounts, err := s.service.listSchedulableAccountsForSchedule(ctx, req.GroupID, req.Platform, true); err == nil {
+			ctx = s.service.kiroBridgeService.withKiroCooldownPrefetch(ctx, accounts, req.GroupID)
+		}
+		if len(req.ExcludedIDs) > 0 {
+			req.DeferStickyMigration = true
+		}
+	}
 
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if req.ForcedAccountID <= 0 && previousResponseID != "" && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
@@ -342,7 +359,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	}
 
 	if req.ForcedAccountID <= 0 && !req.StickyWeighted {
-		selection, escapedSticky, err := s.selectBySessionHash(ctx, req)
+		selection, stickyFallback, err := s.selectBySessionHash(ctx, req)
 		if err != nil {
 			return nil, decision, err
 		}
@@ -353,8 +370,11 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			decision.SelectedAccountType = selection.Account.Type
 			return selection, decision, nil
 		}
-		if escapedSticky {
+		switch stickyFallback {
+		case openAIStickyFallbackPreserve:
 			req.PreserveStickyBinding = true
+		case openAIStickyFallbackDeferMigration:
+			req.DeferStickyMigration = true
 		}
 	}
 
@@ -367,6 +387,14 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		return nil, decision, err
 	}
 	if selection != nil && selection.Account != nil {
+		preserveBinding := selection.PreserveStickyBinding || req.PreserveStickyBinding
+		deferMigration := selection.DeferStickyMigration || req.DeferStickyMigration
+		if req.AllowKiroBridge && s.service != nil && s.service.kiroBridgeService != nil {
+			s.service.kiroBridgeService.applyKiroSelectionBindingPolicy(selection, req.GroupID, req.SessionHash, preserveBinding, deferMigration)
+		} else {
+			selection.PreserveStickyBinding = preserveBinding
+			selection.DeferStickyMigration = !preserveBinding && deferMigration
+		}
 		decision.SelectedAccountID = selection.Account.ID
 		decision.SelectedAccountType = selection.Account.Type
 		if req.StickyWeighted {
@@ -384,10 +412,10 @@ func (s *defaultOpenAIAccountScheduler) Select(
 func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
-) (*AccountSelectionResult, bool, error) {
+) (*AccountSelectionResult, openAIStickyFallbackMode, error) {
 	sessionHash := strings.TrimSpace(req.SessionHash)
 	if sessionHash == "" || s == nil || s.service == nil || s.service.cache == nil {
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 
 	accountID := req.StickyAccountID
@@ -395,38 +423,49 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		var err error
 		accountID, err = s.service.getStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		if err != nil || accountID <= 0 {
-			return nil, false, nil
+			return nil, openAIStickyFallbackNone, nil
 		}
 	}
 	if accountID <= 0 {
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 	if req.ExcludedIDs != nil {
 		if _, excluded := req.ExcludedIDs[accountID]; excluded {
-			return nil, false, nil
+			return nil, openAIStickyFallbackNone, nil
 		}
 	}
 
 	account, err := s.service.getSchedulableAccount(ctx, accountID)
 	if err != nil || account == nil {
+		if s.shouldPreserveBlockedKiroSticky(ctx, req, accountID) {
+			return nil, openAIStickyFallbackDeferMigration, nil
+		}
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || !s.service.isAccountEligibleForOpenAISchedule(ctx, account, req) {
+	kiroCooldown := account.Platform == PlatformKiro && kiroCooldownStateFromContext(ctx, account) != nil
+	if shouldClearStickySession(account, req.RequestedModel) || !s.service.isAccountEligibleForOpenAISchedule(ctx, account, req) || kiroCooldown {
+		if account.Platform == PlatformKiro && s.shouldPreserveBlockedKiroSticky(ctx, req, accountID) {
+			return nil, openAIStickyFallbackDeferMigration, nil
+		}
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 	if !s.isAccountRequestCompatible(ctx, account, req) {
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 	if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 	account = s.service.recheckSelectedOpenAIAccountForSchedule(ctx, account, req)
-	if account == nil || !openAIStickyAccountMatchesGroup(account, req.GroupID) || !s.isAccountTransportCompatible(account, req.RequiredTransport) {
+	if account == nil || !openAIStickyAccountMatchesGroup(account, req.GroupID) || !s.isAccountTransportCompatible(account, req.RequiredTransport) ||
+		(account.Platform == PlatformKiro && kiroCooldownStateFromContext(ctx, account) != nil) {
+		if s.shouldPreserveBlockedKiroSticky(ctx, req, accountID) {
+			return nil, openAIStickyFallbackDeferMigration, nil
+		}
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
-		return nil, false, nil
+		return nil, openAIStickyFallbackNone, nil
 	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
 	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape {
@@ -436,7 +475,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			"error_rate", errorRate,
 			"ttft", ttft,
 		)
-		return nil, true, nil
+		return nil, openAIStickyFallbackPreserve, nil
 	}
 	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 	if acquireErr == nil && result != nil && result.Acquired {
@@ -445,13 +484,14 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			Account:     account,
 			Acquired:    true,
 			ReleaseFunc: result.ReleaseFunc,
-		}, false, nil
+		}, openAIStickyFallbackNone, nil
 	}
 
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
-		if escapeCfg.enabled && acquireErr == nil && result != nil && !result.Acquired {
+		kiroBusyEscape := req.AllowKiroBridge && account.Platform == PlatformKiro && s.service.kiroBridgeService != nil && s.service.kiroBridgeService.KiroResilienceEnforced(req.GroupID)
+		if (escapeCfg.enabled || kiroBusyEscape) && acquireErr == nil && result != nil && !result.Acquired {
 			errorRate, ttft, _ := s.stats.snapshot(accountID)
 			slog.Info("sticky_escape_triggered",
 				"account_id", accountID,
@@ -459,7 +499,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 				"error_rate", errorRate,
 				"ttft", ttft,
 			)
-			return nil, true, nil
+			return nil, openAIStickyFallbackPreserve, nil
 		}
 		return &AccountSelectionResult{
 			Account: account,
@@ -469,9 +509,21 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 				Timeout:        cfg.StickySessionWaitTimeout,
 				MaxWaiting:     cfg.StickySessionMaxWaiting,
 			},
-		}, false, nil
+		}, openAIStickyFallbackNone, nil
 	}
-	return nil, false, nil
+	return nil, openAIStickyFallbackNone, nil
+}
+
+func (s *defaultOpenAIAccountScheduler) shouldPreserveBlockedKiroSticky(ctx context.Context, req OpenAIAccountScheduleRequest, accountID int64) bool {
+	if !req.AllowKiroBridge || accountID <= 0 || s == nil || s.service == nil || s.service.accountRepo == nil ||
+		s.service.kiroBridgeService == nil || !s.service.kiroBridgeService.KiroResilienceEnforced(req.GroupID) {
+		return false
+	}
+	account, err := s.service.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil || account.Platform != PlatformKiro || !openAIStickyAccountMatchesGroup(account, req.GroupID) {
+		return false
+	}
+	return account.IsRateLimited() || kiroCooldownStateFromContext(ctx, account) != nil
 }
 
 func openAIStickyAccountMatchesGroup(account *Account, groupID *int64) bool {
@@ -1000,7 +1052,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			return nil, compactBlocked, acquireErr
 		}
 		if result != nil && result.Acquired {
-			if req.SessionHash != "" && !req.PreserveStickyBinding {
+			if s.shouldBindOpenAISelectionBeforeSuccess(req, fresh) {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
 			}
 			return &AccountSelectionResult{
@@ -1056,7 +1108,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			return nil, acquireErr
 		}
 		if result != nil && result.Acquired {
-			if req.SessionHash != "" && !req.PreserveStickyBinding {
+			if s.shouldBindOpenAISelectionBeforeSuccess(req, account) {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
 			return &AccountSelectionResult{
@@ -1081,6 +1133,16 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 	return nil, nil
 }
 
+func (s *defaultOpenAIAccountScheduler) shouldBindOpenAISelectionBeforeSuccess(req OpenAIAccountScheduleRequest, account *Account) bool {
+	if strings.TrimSpace(req.SessionHash) == "" || req.PreserveStickyBinding || req.DeferStickyMigration {
+		return false
+	}
+	if req.AllowKiroBridge && s != nil && s.service != nil && s.service.kiroBridgeService != nil {
+		return s.service.kiroBridgeService.shouldBindSelectionBeforeSuccess(account, req.GroupID, req.SessionHash, false, false)
+	}
+	return true
+}
+
 func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
@@ -1090,6 +1152,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return nil, 0, 0, 0, err
 	}
 	if len(accounts) == 0 {
+		if cooldownErr := s.kiroBridgeCooldownExhausted(ctx, req); cooldownErr != nil {
+			return nil, 0, 0, 0, cooldownErr
+		}
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
 	}
 
@@ -1101,6 +1166,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	cooldownAccountIDs := make(map[int64]struct{})
 	for i := range accounts {
 		account := &accounts[i]
 		if req.ForcedAccountID > 0 && account.ID != req.ForcedAccountID {
@@ -1115,6 +1181,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			continue
 		}
 		if s.service.isOpenAIAccountRuntimeBlocked(account) {
+			continue
+		}
+		if account.Platform == PlatformKiro && s.service.kiroBridgeService != nil && kiroCooldownStateFromContext(ctx, account) != nil {
+			cooldownAccountIDs[account.ID] = struct{}{}
 			continue
 		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
@@ -1137,6 +1207,12 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		})
 	}
 	if len(filtered) == 0 {
+		if err := kiroCooldownExhaustedErrorFromContext(ctx, cooldownAccountIDs); err != nil {
+			return nil, 0, 0, 0, err
+		}
+		if cooldownErr := s.kiroBridgeCooldownExhausted(ctx, req); cooldownErr != nil {
+			return nil, 0, 0, 0, cooldownErr
+		}
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
 	}
 
@@ -1195,6 +1271,21 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return attempt.result, attempt.candidateCount, attempt.topK, attempt.loadSkew, nil
 	}
 	return s.finishLoadBalanceSelectionFallback(ctx, req, attempt)
+}
+
+func (s *defaultOpenAIAccountScheduler) kiroBridgeCooldownExhausted(ctx context.Context, req OpenAIAccountScheduleRequest) error {
+	if !req.AllowKiroBridge || s == nil || s.service == nil || s.service.kiroBridgeService == nil || !s.service.openAIKiroBridgeEnabled() {
+		return nil
+	}
+	return s.service.kiroBridgeService.kiroCooldownExhaustedFromRepository(
+		ctx,
+		req.GroupID,
+		req.KiroBridgeModel,
+		req.ExcludedIDs,
+		func(account *Account) bool {
+			return account.IsEligibleForOpenAIKiroBridge(req.KiroBridgeModel)
+		},
+	)
 }
 
 func partitionOpenAIChatGPTSubscriptionAccounts(accounts []*Account) ([]*Account, []*Account) {
@@ -1370,6 +1461,9 @@ func (s *defaultOpenAIAccountScheduler) lookupShadowParentAccount(ctx context.Co
 
 func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) bool {
 	if account == nil {
+		return false
+	}
+	if account.Platform == PlatformKiro && s != nil && s.service != nil && s.service.kiroBridgeService != nil && kiroCooldownStateFromContext(ctx, account) != nil {
 		return false
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlocked(account) {

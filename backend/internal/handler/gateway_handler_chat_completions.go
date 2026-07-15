@@ -145,9 +145,11 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 	parsedReq.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
+	sessionBoundAccountID, _ := h.gatewayService.GetCachedSessionAccountID(c.Request.Context(), apiKey.GroupID, sessionHash)
 
 	// 3. Account selection + failover loop
 	fs := NewFailoverState(h.maxAccountSwitches, false)
+	fs.KiroResilienceEnforced = h.gatewayService.KiroResilienceEnforced(apiKey.GroupID)
 	c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 
 	for {
@@ -172,7 +174,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				h.chatCompletionsErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
 			}
-			action := fs.HandleSelectionExhausted(c.Request.Context())
+			action := fs.HandleSelectionExhausted(c.Request.Context(), err)
 			switch action {
 			case FailoverContinue:
 				continue
@@ -189,6 +191,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		account := selection.Account
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		if budgetErr := prepareKiroAccountAttempt(c, h.gatewayService, apiKey.GroupID, account); budgetErr != nil {
+			if selection.Acquired && selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+			return
+		}
 
 		// 4. Acquire account concurrency slot
 		accountReleaseFunc := selection.ReleaseFunc
@@ -197,21 +206,43 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
 				return
 			}
+			waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), apiKey.GroupID, account, selection.WaitPlan.Timeout)
+			if budgetErr != nil {
+				applyKiroBudgetExhaustedRetryAfter(c)
+				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+				return
+			}
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 				c,
 				account.ID,
 				selection.WaitPlan.MaxConcurrency,
-				selection.WaitPlan.Timeout,
+				waitTimeout,
 				reqStream,
 				&streamStarted,
 			)
 			if err != nil {
 				reqLog.Warn("gateway.cc.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
+					if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
+						applyKiroBudgetExhaustedRetryAfter(c)
+						h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+						return
+					}
+					if !fs.KiroWaitReselectUsed {
+						fs.KiroWaitReselectUsed = true
+						reqLog.Info("gateway.cc.kiro_account_wait_timeout_reselect", zap.Int64("account_id", account.ID))
+						continue
+					}
+				}
 				h.handleConcurrencyError(c, err, "account", streamStarted)
 				return
 			}
 		}
-		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+		if account.Platform == service.PlatformKiro && h.gatewayService.KiroResilienceEnforced(apiKey.GroupID) {
+			accountReleaseFunc = wrapReleaseOnce(accountReleaseFunc)
+		} else {
+			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+		}
 
 		// 5. Forward request
 		writerSizeBeforeForward := c.Writer.Size()
@@ -219,11 +250,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
-		result, err := h.gatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, parsedReq)
-
-		if accountReleaseFunc != nil {
-			accountReleaseFunc()
+		forwardCtx := c.Request.Context()
+		if fs.SwitchCount > 0 {
+			forwardCtx = service.WithAccountSwitchCount(forwardCtx, fs.SwitchCount, h.metadataBridgeEnabled())
 		}
+		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, parsedReq)
+
+		releaseAccountSlotAfterForward(accountReleaseFunc, err)
 
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
@@ -258,6 +291,15 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Error(err),
 			)
 			return
+		}
+		if fs.KiroResilienceEnforced && sessionHash != "" &&
+			(selection.DeferStickyMigration || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries() ||
+				(account.Platform == service.PlatformKiro && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || !selection.PreserveStickyBinding))) {
+			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+			if bindErr := h.gatewayService.BindStickySession(stateCtx, apiKey.GroupID, sessionHash, account.ID); bindErr != nil {
+				reqLog.Warn("gateway.cc.kiro_bind_sticky_after_success_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
+			}
+			stateCancel()
 		}
 
 		// 6. Record usage
@@ -304,6 +346,7 @@ func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int
 
 // handleCCFailoverExhausted writes a failover-exhausted error in CC format.
 func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *service.UpstreamFailoverError, streamStarted bool) {
+	applyFailoverRetryAfter(c, lastErr)
 	if streamStarted {
 		return
 	}

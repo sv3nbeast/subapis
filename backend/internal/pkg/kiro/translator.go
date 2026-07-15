@@ -176,8 +176,12 @@ type KiroRequestContext struct {
 	// BodyAttempt is zero for the first response body and increments only when an
 	// empty/invalid stream is reopened. It is diagnostic metadata and never
 	// participates in usage arithmetic.
-	BodyAttempt              int
-	RequireTerminalEvent     bool
+	BodyAttempt          int
+	RequireTerminalEvent bool
+	// OnFirstSemantic is an optional passive diagnostic hook. Parsers invoke it
+	// once for the first non-empty content/reasoning/tool event or a valid empty
+	// terminal event. It must never affect parsing or upstream cancellation.
+	OnFirstSemantic          func()
 	StructuredOutputToolName string
 	StructuredOutputUserHint string
 	StopSequences            []string
@@ -741,7 +745,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body)
+	content, toolUses, usage, stopReason, err := parseEventStream(body, requestCtx.OnFirstSemantic)
 	if err != nil {
 		return nil, err
 	}
@@ -791,6 +795,20 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	sawExplicitCompletionReason := false
 	streamOutputReleased := false
 	var bufferedStreamOutput bytes.Buffer
+	firstSemanticObserved := false
+	notifyFirstSemantic := func(events []kiroSemanticEvent) {
+		if firstSemanticObserved || requestCtx.OnFirstSemantic == nil {
+			return
+		}
+		for i := range events {
+			event := &events[i]
+			if kiroSemanticEventHasNewOutput(event) || kiroSemanticEventIsTerminal(event.SourceEventType) || kiroStopReasonIsCompletionEvidence(event.SourceStopReason) {
+				firstSemanticObserved = true
+				requestCtx.OnFirstSemantic()
+				return
+			}
+		}
+	}
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -1485,6 +1503,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		sawKiroEvent = true
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
+		notifyFirstSemantic(semanticEvents)
 		for i := range semanticEvents {
 			semanticEvent := &semanticEvents[i]
 			if kiroSemanticEventIsTerminal(semanticEvent.SourceEventType) {
@@ -3326,7 +3345,7 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, error) {
+func parseEventStream(body io.Reader, onFirstSemantic func()) (string, []KiroToolUse, Usage, string, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3335,6 +3354,21 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
+	firstSemanticObserved := false
+	lastObservedContentFragment := ""
+	notifyFirstSemantic := func(events []kiroSemanticEvent) {
+		if firstSemanticObserved || onFirstSemantic == nil {
+			return
+		}
+		for i := range events {
+			event := &events[i]
+			if kiroSemanticEventHasNewOutput(event) || kiroSemanticEventIsTerminal(event.SourceEventType) || kiroStopReasonIsCompletionEvidence(event.SourceStopReason) {
+				firstSemanticObserved = true
+				onFirstSemantic()
+				return
+			}
+		}
+	}
 	closeReasoning := func() {
 		if reasoningOpen {
 			_, _ = content.WriteString(thinkingEndTag)
@@ -3365,6 +3399,7 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
 			return "", nil, usage, stopReason, err
 		}
+		notifyFirstSemantic(extractSemanticEvents(msg.EventType, event, &lastObservedContentFragment))
 		if sr := readStopReason(event); sr != "" {
 			stopReason = sr
 		}
