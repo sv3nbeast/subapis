@@ -869,6 +869,7 @@ func TestOpenAIGatewayServiceRecordUsage_WSModePrefersUpstreamRequestIDOverClien
 		Result: &OpenAIForwardResult{
 			RequestID:    "resp_openai_ws_turn_456",
 			OpenAIWSMode: true,
+			Stream:       true,
 			Usage: OpenAIUsage{
 				InputTokens:  8,
 				OutputTokens: 4,
@@ -876,9 +877,10 @@ func TestOpenAIGatewayServiceRecordUsage_WSModePrefersUpstreamRequestIDOverClien
 			Model:    "gpt-5.1",
 			Duration: time.Second,
 		},
-		APIKey:  &APIKey{ID: 10050},
-		User:    &User{ID: 20050},
-		Account: &Account{ID: 30050},
+		APIKey:      &APIKey{ID: 10050},
+		User:        &User{ID: 20050},
+		Account:     &Account{ID: 30050},
+		RequestType: RequestTypeStream,
 	})
 
 	require.NoError(t, err)
@@ -886,6 +888,9 @@ func TestOpenAIGatewayServiceRecordUsage_WSModePrefersUpstreamRequestIDOverClien
 	require.Equal(t, "resp_openai_ws_turn_456", billingRepo.lastCmd.RequestID)
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, "resp_openai_ws_turn_456", usageRepo.lastLog.RequestID)
+	require.Equal(t, RequestTypeStream, usageRepo.lastLog.RequestType)
+	require.True(t, usageRepo.lastLog.Stream)
+	require.True(t, usageRepo.lastLog.OpenAIWSMode)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *testing.T) {

@@ -1003,6 +1003,40 @@
         </div>
       </div>
 
+      <!-- OpenAI HTTP ingress upstream transport override -->
+      <div v-if="allOpenAIPassthroughCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <label
+            id="bulk-edit-openai-http-ingress-ws-label"
+            class="input-label mb-0"
+            for="bulk-edit-openai-http-ingress-ws-enabled"
+          >
+            {{ t('admin.accounts.openai.httpIngressWsOverride') }}
+          </label>
+          <input
+            v-model="enableOpenAIHTTPIngressWSOverride"
+            id="bulk-edit-openai-http-ingress-ws-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-http-ingress-ws"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-http-ingress-ws"
+          :class="!enableOpenAIHTTPIngressWSOverride && 'pointer-events-none opacity-50'"
+        >
+          <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.httpIngressWsOverrideDesc') }}
+          </p>
+          <Select
+            v-model="openAIHTTPIngressWSOverride"
+            data-testid="bulk-edit-openai-http-ingress-ws-override"
+            :options="openAIHTTPIngressWSOverrideOptions"
+            aria-labelledby="bulk-edit-openai-http-ingress-ws-label"
+          />
+        </div>
+      </div>
+
       <!-- OpenAI Compact mode -->
       <div v-if="allOpenAIPassthroughCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1465,6 +1499,7 @@ const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
+const enableOpenAIHTTPIngressWSOverride = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
@@ -1528,6 +1563,8 @@ const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
+type OpenAIHTTPIngressWSOverride = 'inherit' | 'on' | 'off'
+const openAIHTTPIngressWSOverride = ref<OpenAIHTTPIngressWSOverride>('inherit')
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -1571,6 +1608,11 @@ const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
   { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
   { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
+])
+const openAIHTTPIngressWSOverrideOptions = computed(() => [
+  { value: 'inherit', label: t('admin.accounts.openai.httpIngressWsOverrideInherit') },
+  { value: 'on', label: t('admin.accounts.openai.httpIngressWsOverrideOn') },
+  { value: 'off', label: t('admin.accounts.openai.httpIngressWsOverrideOff') }
 ])
 const openAICompactModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.compactModeAuto') },
@@ -1795,6 +1837,19 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     )
   }
 
+  if (enableOpenAIHTTPIngressWSOverride.value) {
+    const extra = ensureExtra()
+    if (openAIHTTPIngressWSOverride.value === 'inherit') {
+      extra.openai_http_ingress_ws_override = null
+      extra.openai_ws_force_http = null
+    } else {
+      extra.openai_http_ingress_ws_override = openAIHTTPIngressWSOverride.value
+      if (openAIHTTPIngressWSOverride.value !== 'off') {
+        extra.openai_ws_force_http = null
+      }
+    }
+  }
+
   if (enableCodexCLIOnly.value) {
     const extra = ensureExtra()
     extra.codex_cli_only = codexCLIOnlyEnabled.value
@@ -1917,6 +1972,7 @@ const handleSubmit = async () => {
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
+    enableOpenAIHTTPIngressWSOverride.value ||
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
     enableOpenAICompactMode.value ||
@@ -2036,6 +2092,7 @@ watch(
       enableOpenAIPassthrough.value = false
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
+      enableOpenAIHTTPIngressWSOverride.value = false
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
       enableOpenAICompactMode.value = false
@@ -2064,6 +2121,7 @@ watch(
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+      openAIHTTPIngressWSOverride.value = 'inherit'
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false
       openAICompactMode.value = 'auto'

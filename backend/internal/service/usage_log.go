@@ -86,11 +86,11 @@ func RequestTypeFromLegacy(stream bool, openAIWSMode bool) RequestType {
 func ApplyLegacyRequestFields(requestType RequestType, fallbackStream bool, fallbackOpenAIWSMode bool) (stream bool, openAIWSMode bool) {
 	switch requestType.Normalize() {
 	case RequestTypeSync:
-		return false, false
+		return false, fallbackOpenAIWSMode
 	case RequestTypeStream:
-		return true, false
+		return true, fallbackOpenAIWSMode
 	case RequestTypeWSV2:
-		return true, true
+		return true, fallbackOpenAIWSMode
 	default:
 		return fallbackStream, fallbackOpenAIWSMode
 	}

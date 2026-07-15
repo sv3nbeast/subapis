@@ -255,6 +255,26 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('OpenAI 账号批量编辑应提交 HTTP 入站 WSS 覆盖', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-openai-http-ingress-ws-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-http-ingress-ws-override"]').setValue('on')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        openai_http_ingress_ws_override: 'on',
+        openai_ws_force_http: null
+      }
+    })
+  })
+
   it('筛选 OpenAI 账号批量编辑应提交 Compact 模式和专属模型映射', async () => {
     const wrapper = mountModal({
       accountIds: [],

@@ -270,6 +270,9 @@ type OpenAIWSRetryMetricsSnapshot struct {
 	RetryBackoffMsTotal           int64 `json:"retry_backoff_ms_total"`
 	RetryExhaustedTotal           int64 `json:"retry_exhausted_total"`
 	NonRetryableFastFallbackTotal int64 `json:"non_retryable_fast_fallback_total"`
+	HTTPIngressSelectedTotal      int64 `json:"http_ingress_selected_total"`
+	HTTPIngressSuccessTotal       int64 `json:"http_ingress_success_total"`
+	HTTPIngressPrewriteFallback   int64 `json:"http_ingress_prewrite_fallback_total"`
 }
 
 // OpenAIStreamAlreadyFinalizedError means the upstream stream has already sent
@@ -311,6 +314,9 @@ type openAIWSRetryMetrics struct {
 	retryBackoffMs           atomic.Int64
 	retryExhausted           atomic.Int64
 	nonRetryableFastFallback atomic.Int64
+	httpIngressSelected      atomic.Int64
+	httpIngressSuccess       atomic.Int64
+	httpIngressPrewrite      atomic.Int64
 }
 
 type accountWriteThrottle struct {
@@ -592,11 +598,13 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 	}
 	wsCfg := s.cfg.Gateway.OpenAIWS
 	logOpenAIWSModeInfo(
-		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
+		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v http_ingress_mode=%s http_ingress_rollout_percent=%d responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
 		wsCfg.Enabled,
 		wsCfg.OAuthEnabled,
 		wsCfg.APIKeyEnabled,
 		wsCfg.ForceHTTP,
+		strings.ToLower(strings.TrimSpace(wsCfg.HTTPIngressMode)),
+		wsCfg.HTTPIngressRolloutPercent,
 		wsCfg.ResponsesWebsocketsV2,
 		wsCfg.ResponsesWebsockets,
 		wsCfg.PayloadLogSampleRate,
@@ -904,6 +912,24 @@ func (s *OpenAIGatewayService) recordOpenAIWSNonRetryableFastFallback() {
 	s.openaiWSRetryMetrics.nonRetryableFastFallback.Add(1)
 }
 
+func (s *OpenAIGatewayService) recordOpenAIHTTPIngressWSSelected() {
+	if s != nil {
+		s.openaiWSRetryMetrics.httpIngressSelected.Add(1)
+	}
+}
+
+func (s *OpenAIGatewayService) recordOpenAIHTTPIngressWSSuccess() {
+	if s != nil {
+		s.openaiWSRetryMetrics.httpIngressSuccess.Add(1)
+	}
+}
+
+func (s *OpenAIGatewayService) recordOpenAIHTTPIngressWSPrewriteFallback() {
+	if s != nil {
+		s.openaiWSRetryMetrics.httpIngressPrewrite.Add(1)
+	}
+}
+
 func (s *OpenAIGatewayService) SnapshotOpenAIWSRetryMetrics() OpenAIWSRetryMetricsSnapshot {
 	if s == nil {
 		return OpenAIWSRetryMetricsSnapshot{}
@@ -913,6 +939,9 @@ func (s *OpenAIGatewayService) SnapshotOpenAIWSRetryMetrics() OpenAIWSRetryMetri
 		RetryBackoffMsTotal:           s.openaiWSRetryMetrics.retryBackoffMs.Load(),
 		RetryExhaustedTotal:           s.openaiWSRetryMetrics.retryExhausted.Load(),
 		NonRetryableFastFallbackTotal: s.openaiWSRetryMetrics.nonRetryableFastFallback.Load(),
+		HTTPIngressSelectedTotal:      s.openaiWSRetryMetrics.httpIngressSelected.Load(),
+		HTTPIngressSuccessTotal:       s.openaiWSRetryMetrics.httpIngressSuccess.Load(),
+		HTTPIngressPrewriteFallback:   s.openaiWSRetryMetrics.httpIngressPrewrite.Load(),
 	}
 }
 
@@ -2778,10 +2807,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
-	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport)
+	wsDecision := s.resolveOpenAIUpstreamTransport(c, account, openAIHTTPIngressWSRequest{
+		Endpoint:    openAIHTTPIngressEndpointResponses,
+		Body:        body,
+		ImageIntent: IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body),
+		Compact:     isOpenAIResponsesCompactPath(c),
+		InputTokens: isOpenAIResponsesInputTokensPath(c),
+	})
 	if c != nil {
 		c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
 		c.Set("openai_ws_transport_reason", wsDecision.Reason)
@@ -2948,6 +2981,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	imageIntent = imageIntent || IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, nil) || isOpenAIImageGenerationModel(upstreamModel)
+	if imageIntent && clientTransport == OpenAIClientTransportHTTP && wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+		wsDecision = openAIWSHTTPDecision("http_ingress_mapped_image")
+		if c != nil {
+			c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+			c.Set("openai_ws_transport_reason", wsDecision.Reason)
+		}
+	}
 	if imageIntent && !imageGenerationAllowed {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "permission_error", "message": ImageGenerationPermissionMessage()}})
@@ -3192,6 +3232,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// 命中 WS 时仅走 WebSocket Mode；不再自动回退 HTTP。
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+		if clientTransport == OpenAIClientTransportHTTP {
+			s.recordOpenAIHTTPIngressWSSelected()
+		}
 		// WS 分支需要结构化 payload 与重连恢复，命中后再触发 full-map decode。
 		wsReqBody, err := ensureReqBody()
 		if err != nil {
@@ -3303,6 +3346,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if c != nil && c.Writer != nil && c.Writer.Written() {
 				break
 			}
+			if clientTransport == OpenAIClientTransportHTTP {
+				if _, prewrite := isOpenAIWSPrewriteFallbackError(wsErr); prewrite {
+					break
+				}
+			}
 
 			reason, retryable := classifyOpenAIWSReconnectReason(wsErr)
 			if reason != "" {
@@ -3375,6 +3423,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			break
 		}
 		if wsErr == nil {
+			s.clearOpenAIWSFallbackCooling(account.ID)
+			if clientTransport == OpenAIClientTransportHTTP {
+				s.recordOpenAIHTTPIngressWSSuccess()
+			}
 			firstTokenMs := int64(0)
 			hasFirstTokenMs := wsResult != nil && wsResult.FirstTokenMs != nil
 			if hasFirstTokenMs {
@@ -3404,8 +3456,28 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
-		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
-		return nil, wsErr
+		if clientTransport == OpenAIClientTransportHTTP && (c == nil || c.Writer == nil || !c.Writer.Written()) {
+			if reason, prewrite := isOpenAIWSPrewriteFallbackError(wsErr); prewrite {
+				s.markOpenAIWSFallbackCooling(account.ID, reason)
+				s.recordOpenAIHTTPIngressWSPrewriteFallback()
+				wsDecision = openAIWSHTTPDecision("http_ingress_prewrite_fallback_" + reason)
+				if c != nil {
+					c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+					c.Set("openai_ws_transport_reason", wsDecision.Reason)
+				}
+				logOpenAIWSModeInfo(
+					"http_ingress_prewrite_fallback account_id=%d reason=%s",
+					account.ID,
+					normalizeOpenAIWSLogValue(reason),
+				)
+			} else {
+				s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
+				return nil, wsErr
+			}
+		} else {
+			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
+			return nil, wsErr
+		}
 	}
 
 	httpInvalidEncryptedContentRetryTried := false
@@ -6771,6 +6843,11 @@ func isOpenAIResponsesCompactPath(c *gin.Context) bool {
 	return suffix == "/compact" || strings.HasPrefix(suffix, "/compact/")
 }
 
+func isOpenAIResponsesInputTokensPath(c *gin.Context) bool {
+	suffix := strings.TrimSpace(openAIResponsesRequestPathSuffix(c))
+	return suffix == "/input_tokens" || strings.HasPrefix(suffix, "/input_tokens/")
+}
+
 func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
@@ -6880,6 +6957,8 @@ type OpenAIRecordUsageInput struct {
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
+	// RequestType 仅描述客户端入站协议；OpenAIWSMode 由 ForwardResult 独立描述上游传输。
+	RequestType RequestType
 	// CyberBlocked 为 true 时把该用量行标记为 cyber（request_type=cyber），计费逻辑不变。
 	CyberBlocked bool
 	ChannelUsageFields
@@ -7115,6 +7194,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	usageLog.AccountRateMultiplier = &accountRateMultiplier
 	usageLog.BillingType = billingType
+	usageLog.RequestType = input.RequestType.Normalize()
 	usageLog.Stream = result.Stream
 	if input.CyberBlocked {
 		usageLog.RequestType = RequestTypeCyberBlocked

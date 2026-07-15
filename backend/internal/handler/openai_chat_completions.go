@@ -21,6 +21,7 @@ import (
 // POST /v1/chat/completions
 func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	streamStarted := false
+	service.SetOpenAIClientTransport(c, service.OpenAIClientTransportHTTP)
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
@@ -363,6 +364,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				IPAddress:          clientIP,
 				APIKeyService:      h.apiKeyService,
 				QuotaPlatform:      quotaPlatform,
+				RequestType:        service.RequestTypeFromLegacy(reqStream, false),
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				CyberBlocked:       cyberBlocked,
 			}); err != nil {

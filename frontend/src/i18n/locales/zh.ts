@@ -4576,6 +4576,12 @@ export default {
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',
         wsModeHttpBridge: 'HTTP 桥接（http_bridge）',
+        httpIngressWsOverride: 'HTTP 入站上游传输',
+        httpIngressWsOverrideDesc:
+          '控制普通 HTTP 对话是否优先使用 WSS 上游；全局关闭、接口不兼容和账号 WS mode 关闭时仍使用 HTTP。第三方 API Key 必须显式使用 ctx_pool 并先通过连接测试。',
+        httpIngressWsOverrideInherit: '继承全局灰度',
+        httpIngressWsOverrideOn: '强制优先 WSS',
+        httpIngressWsOverrideOff: '强制使用 HTTP',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
         wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',

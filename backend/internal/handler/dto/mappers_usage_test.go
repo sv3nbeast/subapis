@@ -44,10 +44,10 @@ func TestUsageLogFromService_PrefersRequestTypeForLegacyFields(t *testing.T) {
 
 	require.Equal(t, "ws_v2", userDTO.RequestType)
 	require.True(t, userDTO.Stream)
-	require.True(t, userDTO.OpenAIWSMode)
+	require.False(t, userDTO.OpenAIWSMode)
 	require.Equal(t, "ws_v2", adminDTO.RequestType)
 	require.True(t, adminDTO.Stream)
-	require.True(t, adminDTO.OpenAIWSMode)
+	require.False(t, adminDTO.OpenAIWSMode)
 }
 
 func TestUsageCleanupTaskFromService_RequestTypeMapping(t *testing.T) {

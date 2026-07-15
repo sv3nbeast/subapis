@@ -64,15 +64,15 @@ func TestApplyLegacyRequestFields(t *testing.T) {
 
 	stream, ws := ApplyLegacyRequestFields(RequestTypeSync, true, true)
 	require.False(t, stream)
-	require.False(t, ws)
+	require.True(t, ws)
 
 	stream, ws = ApplyLegacyRequestFields(RequestTypeStream, false, true)
 	require.True(t, stream)
-	require.False(t, ws)
+	require.True(t, ws)
 
 	stream, ws = ApplyLegacyRequestFields(RequestTypeWSV2, false, false)
 	require.True(t, stream)
-	require.True(t, ws)
+	require.False(t, ws)
 
 	stream, ws = ApplyLegacyRequestFields(RequestTypeUnknown, true, false)
 	require.True(t, stream)
@@ -86,6 +86,17 @@ func TestUsageLogSyncRequestTypeAndLegacyFields(t *testing.T) {
 	log.SyncRequestTypeAndLegacyFields()
 
 	require.Equal(t, RequestTypeWSV2, log.RequestType)
+	require.True(t, log.Stream)
+	require.False(t, log.OpenAIWSMode)
+}
+
+func TestUsageLogSyncPreservesHTTPIngressWSUpstream(t *testing.T) {
+	t.Parallel()
+
+	log := &UsageLog{RequestType: RequestTypeStream, Stream: true, OpenAIWSMode: true}
+	log.SyncRequestTypeAndLegacyFields()
+
+	require.Equal(t, RequestTypeStream, log.RequestType)
 	require.True(t, log.Stream)
 	require.True(t, log.OpenAIWSMode)
 }

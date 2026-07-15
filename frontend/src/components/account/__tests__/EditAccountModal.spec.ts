@@ -715,6 +715,28 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_enabled).toBe(true)
   })
 
+  it('submits HTTP ingress WSS override and clears legacy force HTTP', async () => {
+    const account = buildOpenAISetupTokenAccount()
+    account.extra = {
+      ...account.extra,
+      openai_ws_force_http: true
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="edit-openai-http-ingress-ws-override"]').attributes('value')).toBe('off')
+    await wrapper.get('[data-testid="edit-openai-http-ingress-ws-override"]').setValue('on')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_http_ingress_ws_override).toBe('on')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_ws_force_http')
+  })
+
   it('shows and submits Anthropic OAuth model mapping', async () => {
     const account = buildAccount()
     account.name = 'Anthropic OAuth'

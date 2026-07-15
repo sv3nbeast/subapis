@@ -261,6 +261,11 @@ gateway:
     apikey_enabled: true
     # 全局强制 HTTP（紧急回滚开关）
     force_http: false
+    # HTTP 入站请求使用 WSv2 上游：off|responses|responses_chat。
+    # 建议先保持 off 部署，再通过账号覆盖和灰度比例逐步开启。
+    http_ingress_mode: off
+    # 按 account_id 确定性灰度，范围 0-100。
+    http_ingress_rollout_percent: 0
     # 允许在 WSv2 下按策略恢复 store=true（默认 false）
     allow_store_recovery: false
     # ingress 模式收到 previous_response_not_found 时，自动去掉 previous_response_id 重试一次（默认 true）

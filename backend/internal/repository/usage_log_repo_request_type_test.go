@@ -69,7 +69,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			log.BillingType,
 			int16(service.RequestTypeWSV2),
 			true,
-			true,
+			false,
 			sqlmock.AnyArg(), // duration_ms
 			sqlmock.AnyArg(), // first_token_ms
 			sqlmock.AnyArg(), // user_agent
@@ -105,7 +105,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 	require.Nil(t, log.ServiceTier)
 	require.Equal(t, service.RequestTypeWSV2, log.RequestType)
 	require.True(t, log.Stream)
-	require.True(t, log.OpenAIWSMode)
+	require.False(t, log.OpenAIWSMode)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -900,7 +900,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		require.Equal(t, "priority", *log.ServiceTier)
 		require.Equal(t, service.RequestTypeWSV2, log.RequestType)
 		require.True(t, log.Stream)
-		require.True(t, log.OpenAIWSMode)
+		require.False(t, log.OpenAIWSMode)
 	})
 
 	t.Run("request_type_unknown_falls_back_to_legacy", func(t *testing.T) {

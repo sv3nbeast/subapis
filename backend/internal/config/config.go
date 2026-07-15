@@ -978,6 +978,10 @@ type GatewayOpenAIWSConfig struct {
 	APIKeyEnabled bool `mapstructure:"apikey_enabled"`
 	// ForceHTTP: 全局强制 HTTP（用于紧急回滚）
 	ForceHTTP bool `mapstructure:"force_http"`
+	// HTTPIngressMode: HTTP 入站优先使用 WSv2 上游的范围（off/responses/responses_chat）。
+	HTTPIngressMode string `mapstructure:"http_ingress_mode"`
+	// HTTPIngressRolloutPercent: HTTP 入站 WSv2 上游按账号确定性灰度比例（0-100）。
+	HTTPIngressRolloutPercent int `mapstructure:"http_ingress_rollout_percent"`
 	// AllowStoreRecovery: 允许在 WSv2 下按策略恢复 store=true（默认 false）
 	AllowStoreRecovery bool `mapstructure:"allow_store_recovery"`
 	// IngressPreviousResponseRecoveryEnabled: ingress 模式收到 previous_response_not_found 时，是否允许自动去掉 previous_response_id 重试一次（默认 true）
@@ -2033,6 +2037,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.event_flush_interval_ms", 10)
 	viper.SetDefault("gateway.openai_ws.prewarm_cooldown_ms", 300)
 	viper.SetDefault("gateway.openai_ws.fallback_cooldown_seconds", 30)
+	viper.SetDefault("gateway.openai_ws.http_ingress_mode", "off")
+	viper.SetDefault("gateway.openai_ws.http_ingress_rollout_percent", 0)
 	viper.SetDefault("gateway.openai_ws.retry_backoff_initial_ms", 120)
 	viper.SetDefault("gateway.openai_ws.retry_backoff_max_ms", 2000)
 	viper.SetDefault("gateway.openai_ws.retry_jitter_ratio", 0.2)
@@ -2842,6 +2848,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.FallbackCooldownSeconds < 0 {
 		return fmt.Errorf("gateway.openai_ws.fallback_cooldown_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.HTTPIngressRolloutPercent < 0 || c.Gateway.OpenAIWS.HTTPIngressRolloutPercent > 100 {
+		return fmt.Errorf("gateway.openai_ws.http_ingress_rollout_percent must be within [0,100]")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.OpenAIWS.HTTPIngressMode)) {
+	case "", "off", "responses", "responses_chat":
+	default:
+		return fmt.Errorf("gateway.openai_ws.http_ingress_mode must be one of off|responses|responses_chat")
 	}
 	if c.Gateway.OpenAIWS.RetryBackoffInitialMS < 0 {
 		return fmt.Errorf("gateway.openai_ws.retry_backoff_initial_ms must be non-negative")

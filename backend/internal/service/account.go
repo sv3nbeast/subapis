@@ -1829,6 +1829,35 @@ func (a *Account) IsOpenAIWSForceHTTPEnabled() bool {
 	return ok && enabled
 }
 
+const (
+	OpenAIHTTPIngressWSOverrideInherit = "inherit"
+	OpenAIHTTPIngressWSOverrideOn      = "on"
+	OpenAIHTTPIngressWSOverrideOff     = "off"
+)
+
+// OpenAIHTTPIngressWSOverride 返回 HTTP 入站使用 WSv2 上游的账号覆盖值。
+// 缺失或非法值按 inherit 处理；历史 openai_ws_force_http=true 等价于 off。
+func (a *Account) OpenAIHTTPIngressWSOverride() string {
+	if a == nil || !a.IsOpenAI() {
+		return OpenAIHTTPIngressWSOverrideOff
+	}
+	if a.IsOpenAIWSForceHTTPEnabled() {
+		return OpenAIHTTPIngressWSOverrideOff
+	}
+	if a.Extra == nil {
+		return OpenAIHTTPIngressWSOverrideInherit
+	}
+	raw, _ := a.Extra["openai_http_ingress_ws_override"].(string)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case OpenAIHTTPIngressWSOverrideOn:
+		return OpenAIHTTPIngressWSOverrideOn
+	case OpenAIHTTPIngressWSOverrideOff:
+		return OpenAIHTTPIngressWSOverrideOff
+	default:
+		return OpenAIHTTPIngressWSOverrideInherit
+	}
+}
+
 // IsOpenAIWSAllowStoreRecoveryEnabled 返回账号级 store 恢复开关。
 // 字段：accounts.extra.openai_ws_allow_store_recovery。
 func (a *Account) IsOpenAIWSAllowStoreRecoveryEnabled() bool {

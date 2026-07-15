@@ -95,6 +95,12 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIWS.ResponsesWebsockets {
 		t.Fatalf("Gateway.OpenAIWS.ResponsesWebsockets = true, want false")
 	}
+	if cfg.Gateway.OpenAIWS.HTTPIngressMode != "off" {
+		t.Fatalf("Gateway.OpenAIWS.HTTPIngressMode = %q, want off", cfg.Gateway.OpenAIWS.HTTPIngressMode)
+	}
+	if cfg.Gateway.OpenAIWS.HTTPIngressRolloutPercent != 0 {
+		t.Fatalf("Gateway.OpenAIWS.HTTPIngressRolloutPercent = %d, want 0", cfg.Gateway.OpenAIWS.HTTPIngressRolloutPercent)
+	}
 	if !cfg.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled {
 		t.Fatalf("Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = false, want true")
 	}
@@ -1721,6 +1727,16 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			name:    "fallback_cooldown_seconds 不能为负数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.FallbackCooldownSeconds = -1 },
 			wantErr: "gateway.openai_ws.fallback_cooldown_seconds",
+		},
+		{
+			name:    "http_ingress_mode 必须为合法模式",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.HTTPIngressMode = "invalid" },
+			wantErr: "gateway.openai_ws.http_ingress_mode",
+		},
+		{
+			name:    "http_ingress_rollout_percent 必须在 [0,100]",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.HTTPIngressRolloutPercent = 101 },
+			wantErr: "gateway.openai_ws.http_ingress_rollout_percent",
 		},
 		{
 			name:    "store_disabled_conn_mode 必须为 strict|adaptive|off",

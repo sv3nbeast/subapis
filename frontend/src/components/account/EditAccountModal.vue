@@ -1617,6 +1617,28 @@
         </div>
       </div>
 
+      <!-- HTTP ingress upstream transport override -->
+      <div
+        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.httpIngressWsOverride') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.httpIngressWsOverrideDesc') }}
+            </p>
+          </div>
+          <div class="w-52">
+            <Select
+              v-model="openAIHTTPIngressWSOverride"
+              data-testid="edit-openai-http-ingress-ws-override"
+              :options="openAIHTTPIngressWSOverrideOptions"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI APIKey Responses API support mode -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
@@ -2777,6 +2799,8 @@ const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
+type OpenAIHTTPIngressWSOverride = 'inherit' | 'on' | 'off'
+const openAIHTTPIngressWSOverride = ref<OpenAIHTTPIngressWSOverride>('inherit')
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled' | 'block'
@@ -2824,6 +2848,11 @@ const openAIWSModeOptions = computed(() => [
     label: t('admin.accounts.openai.wsModeHttpBridge')
   }
 
+])
+const openAIHTTPIngressWSOverrideOptions = computed(() => [
+  { value: 'inherit', label: t('admin.accounts.openai.httpIngressWsOverrideInherit') },
+  { value: 'on', label: t('admin.accounts.openai.httpIngressWsOverrideOn') },
+  { value: 'off', label: t('admin.accounts.openai.httpIngressWsOverrideOff') }
 ])
 const openaiResponsesWebSocketV2Mode = computed({
   get: () => {
@@ -3215,6 +3244,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openAICompactModelMappings.value = []
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+  openAIHTTPIngressWSOverride.value = 'inherit'
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
   codexImageGenerationBridgeMode.value = 'inherit'
@@ -3258,6 +3288,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       fallbackEnabledKeys: ['responses_websockets_v2_enabled', 'openai_ws_enabled'],
       defaultMode: OPENAI_WS_MODE_OFF
     })
+    const rawHTTPIngressOverride = extra?.openai_http_ingress_ws_override
+    if (rawHTTPIngressOverride === 'on' || rawHTTPIngressOverride === 'off') {
+      openAIHTTPIngressWSOverride.value = rawHTTPIngressOverride
+    } else if (extra?.openai_ws_force_http === true) {
+      openAIHTTPIngressWSOverride.value = 'off'
+    }
     if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value = extra?.codex_cli_only_allow_app_server === true
@@ -4614,6 +4650,14 @@ const handleSubmit = async () => {
       }
       delete newExtra.responses_websockets_v2_enabled
       delete newExtra.openai_ws_enabled
+      if (openAIHTTPIngressWSOverride.value === 'inherit') {
+        delete newExtra.openai_http_ingress_ws_override
+      } else {
+        newExtra.openai_http_ingress_ws_override = openAIHTTPIngressWSOverride.value
+      }
+      if (openAIHTTPIngressWSOverride.value !== 'off') {
+        delete newExtra.openai_ws_force_http
+      }
       if (openaiPassthroughEnabled.value) {
         newExtra.openai_passthrough = true
       } else {

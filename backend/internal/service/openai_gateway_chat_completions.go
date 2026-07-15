@@ -235,6 +235,60 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
+	wsDecision := s.resolveOpenAIUpstreamTransport(c, account, openAIHTTPIngressWSRequest{
+		Endpoint: openAIHTTPIngressEndpointChat,
+		Body:     responsesBody,
+		ImageIntent: IsImageGenerationIntent(openAIResponsesEndpoint, originalModel, responsesBody) ||
+			isOpenAIImageGenerationModel(upstreamModel),
+	})
+	if c != nil {
+		c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+		c.Set("openai_ws_transport_reason", wsDecision.Reason)
+	}
+	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+		if GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP {
+			s.recordOpenAIHTTPIngressWSSelected()
+		}
+		result, wsErr := s.forwardChatCompletionsViaResponsesWS(
+			ctx,
+			c,
+			account,
+			responsesBody,
+			token,
+			wsDecision,
+			clientStream,
+			originalModel,
+			billingModel,
+			upstreamModel,
+			len(body),
+			startTime,
+		)
+		if wsErr == nil {
+			s.clearOpenAIWSFallbackCooling(account.ID)
+			if GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP {
+				s.recordOpenAIHTTPIngressWSSuccess()
+			}
+			return result, nil
+		}
+		if c == nil || c.Writer == nil || !c.Writer.Written() {
+			if reason, prewrite := isOpenAIWSPrewriteFallbackError(wsErr); prewrite {
+				s.markOpenAIWSFallbackCooling(account.ID, reason)
+				if GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP {
+					s.recordOpenAIHTTPIngressWSPrewriteFallback()
+				}
+				wsDecision = openAIWSHTTPDecision("http_ingress_prewrite_fallback_" + reason)
+				if c != nil {
+					c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
+					c.Set("openai_ws_transport_reason", wsDecision.Reason)
+				}
+			} else {
+				return nil, wsErr
+			}
+		} else {
+			return result, wsErr
+		}
+	}
+
 	// 6. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)

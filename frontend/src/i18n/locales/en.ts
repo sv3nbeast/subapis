@@ -4507,6 +4507,12 @@ export default {
         wsModeCtxPool: 'Context Pool (ctx_pool)',
         wsModePassthrough: 'Passthrough (passthrough)',
         wsModeHttpBridge: 'HTTP Bridge (http_bridge)',
+        httpIngressWsOverride: 'HTTP ingress upstream transport',
+        httpIngressWsOverrideDesc:
+          'Controls whether regular HTTP conversations prefer a WSS upstream. Global disablement, incompatible endpoints, and an off WS mode still use HTTP. Third-party API keys require an explicit ctx_pool mode and a successful connection test.',
+        httpIngressWsOverrideInherit: 'Inherit global rollout',
+        httpIngressWsOverrideOn: 'Force WSS preference',
+        httpIngressWsOverrideOff: 'Force HTTP',
         wsModeShared: 'Shared (shared)',
         wsModeDedicated: 'Dedicated (dedicated)',
         wsModeConcurrencyHint:
