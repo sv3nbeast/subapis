@@ -79,7 +79,11 @@ func TestInjectGrokPromptCacheIdentityIsStableAndTenantIsolated(t *testing.T) {
 	require.Equal(t, firstBody, repeatBody)
 	require.NotEqual(t, firstKey, secondKey)
 	require.Equal(t, firstKey, gjson.GetBytes(firstBody, "prompt_cache_key").String())
-	require.True(t, strings.HasPrefix(firstKey, grokPromptCacheIdentityPrefix))
+	require.Len(t, firstKey, 36)
+	require.Equal(t, byte('-'), firstKey[8])
+	require.Equal(t, byte('-'), firstKey[13])
+	require.Equal(t, byte('-'), firstKey[18])
+	require.Equal(t, byte('-'), firstKey[23])
 }
 
 func TestGrokPromptCacheSeedUsesStableClaudeSessionAcrossTurns(t *testing.T) {
@@ -108,6 +112,7 @@ func TestGrokPromptCacheSeedUsesStableClaudeSessionAcrossTurns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, firstKey, request.Header.Get("x-grok-conv-id"))
 	require.Equal(t, firstKey, request.Header.Get("x-grok-conversation-id"))
+	require.Equal(t, firstKey, gjson.GetBytes(firstUpstreamBody, "prompt_cache_key").String())
 }
 
 func TestGrokPromptCacheSeedUsesStableContentFallbackForOpenCode(t *testing.T) {

@@ -189,6 +189,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if upstreamModel == "" {
 			upstreamModel = "grok-4.3"
 		}
+		body, _, err = injectGrokPromptCacheIdentity(c, body, upstreamModel, "responses", grokPromptCacheKeyFromBody(body))
+		if err != nil {
+			releaseUpstreamCtx()
+			return nil, fmt.Errorf("inject Grok HTTP bridge prompt cache identity: %w", err)
+		}
 		body, err = patchGrokResponsesBody(body, upstreamModel)
 		if err != nil {
 			releaseUpstreamCtx()

@@ -12,8 +12,6 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const grokPromptCacheIdentityPrefix = "s2-grok-v1-"
-
 const grokPromptCacheSeedMaxBytes = 1024
 
 // grokCLIRequestMetadata maps Sub2API's tenant-isolated session identity to the
@@ -27,6 +25,13 @@ func grokCLIRequestMetadata(c *gin.Context, account *Account, body []byte, model
 			account.GetCredential("principal_id"),
 		))
 	}
+	// All gateway paths isolate prompt_cache_key before building the upstream
+	// request. Reuse that exact UUID for the Grok CLI conversation headers;
+	// hashing it again would make the body and header identities diverge.
+	if identity := normalizeGrokPromptCacheSeed(grokPromptCacheKeyFromBody(body)); identity != "" {
+		metadata.ConversationID = identity
+		return metadata
+	}
 	if seed := grokExplicitSessionSeed(c, body); seed != "" {
 		metadata.ConversationID = grokPromptCacheIdentity(c, model, "headers", seed)
 	}
@@ -38,16 +43,14 @@ func grokPromptCacheIdentity(c *gin.Context, model, operation, seed string) stri
 	if seed == "" {
 		return ""
 	}
-	if strings.HasPrefix(seed, grokPromptCacheIdentityPrefix) {
-		return seed
-	}
 	apiKeyID := getAPIKeyIDFromContext(c)
 	if apiKeyID <= 0 {
 		return ""
 	}
 	source := fmt.Sprintf("sub2api:grok:prompt-cache:v1:%d:%s:%s:%s", apiKeyID, strings.ToLower(strings.TrimSpace(model)), strings.TrimSpace(operation), seed)
-	digest := sha256.Sum256([]byte(source))
-	return grokPromptCacheIdentityPrefix + hex.EncodeToString(digest[:16])
+	// cli-chat-proxy uses a UUID-shaped conversation identity. Keep the body
+	// prompt_cache_key and x-grok-conv-id byte-identical to Grok Build clients.
+	return generateSessionUUID(source)
 }
 
 func injectGrokPromptCacheIdentity(c *gin.Context, body []byte, model, operation, explicit string) ([]byte, string, error) {
