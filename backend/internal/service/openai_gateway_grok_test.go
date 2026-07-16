@@ -179,6 +179,39 @@ func TestBuildGrokResponsesRequestUsesAccountBaseURLAndBearerToken(t *testing.T)
 	require.Equal(t, `{"model":"grok-4.3"}`, strings.TrimSpace(string(data)))
 }
 
+func TestBuildGrokResponsesRequestDoesNotForceIdentityEncodingForStreams(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{name: "api", baseURL: xai.DefaultBaseURL},
+		{name: "free cli", baseURL: xai.DefaultCLIBaseURL},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				ID:       7,
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"base_url": tt.baseURL,
+				},
+			}
+
+			req, err := buildGrokResponsesRequest(
+				context.Background(),
+				nil,
+				account,
+				[]byte(`{"model":"grok-4.5","input":"hello","stream":true}`),
+				"access-token",
+			)
+			require.NoError(t, err)
+			require.Empty(t, req.Header.Get("Accept-Encoding"))
+		})
+	}
+}
+
 func TestBuildGrokResponsesRequestRejectsUnsafeAccountBaseURL(t *testing.T) {
 	t.Parallel()
 

@@ -970,9 +970,6 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	if account != nil {
 		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, gjson.GetBytes(body, "model").String()))
 	}
-	if gjson.GetBytes(body, "stream").Bool() {
-		req.Header.Set("Accept-Encoding", "identity")
-	}
 	if c != nil {
 		if v := c.GetHeader("OpenAI-Beta"); strings.TrimSpace(v) != "" {
 			req.Header.Set("OpenAI-Beta", v)
