@@ -723,6 +723,7 @@ const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
 const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
 
 const accountColumnFallbacks = {
+  id: { zh: '账号 ID', en: 'Account ID' },
   name: { zh: '名称', en: 'Name' },
   platformType: { zh: '平台/类型', en: 'Platform / Type' },
   capacity: { zh: '容量', en: 'Capacity' },
@@ -1474,6 +1475,7 @@ function getAntigravityTierClass(row: any): string {
 const allColumns = computed(() => {
   const c = [
     { key: 'select', label: '', sortable: false },
+    { key: 'id', label: accountColumnLabel('id'), sortable: true },
     { key: 'name', label: accountColumnLabel('name'), sortable: true },
     {
       key: 'platform_type',

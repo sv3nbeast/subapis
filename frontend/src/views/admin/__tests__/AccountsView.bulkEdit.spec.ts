@@ -70,6 +70,7 @@ const DataTableStub = {
     <div data-test="data-table">
       <span v-for="column in columns" :key="column.key" data-test="column-key">{{ column.key }}</span>
       <div v-for="row in data" :key="row.id">
+        <div data-test="id-cell"><slot name="cell-id" :value="row.id" :row="row" /></div>
         <slot name="cell-created_at" :value="row.created_at" :row="row" />
       </div>
     </div>
@@ -160,7 +161,7 @@ describe('admin AccountsView bulk edit scope', () => {
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-target-mode')).toBe('filtered')
   })
 
-  it('renders the created_at column by default', async () => {
+  it('renders the account ID and created_at columns by default', async () => {
     listAccounts.mockResolvedValue({
       items: [
         {
@@ -220,11 +221,17 @@ describe('admin AccountsView bulk edit scope', () => {
     await flushPromises()
 
     const columnKeys = wrapper.findAll('[data-test="column-key"]').map(node => node.text())
+    expect(columnKeys.slice(0, 3)).toEqual(['select', 'id', 'name'])
     expect(columnKeys).toContain('created_at')
     const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string; label: string; sortable: boolean }>
+    expect(columns.find(column => column.key === 'id')).toMatchObject({
+      label: '账号 ID',
+      sortable: true
+    })
     expect(columns.find(column => column.key === 'created_at')).toMatchObject({
       label: '创建时间',
       sortable: true
     })
+    expect(wrapper.get('[data-test="id-cell"]').text()).toBe('#1')
   })
 })
