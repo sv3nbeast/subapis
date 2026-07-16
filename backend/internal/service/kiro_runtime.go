@@ -1030,10 +1030,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	translatorWriter := pw
 	var translatedReader *io.PipeReader
 	var ready chan error
+	var gateDone <-chan struct{}
 	if resilienceEnforced {
 		translatedReader, translatorWriter = io.Pipe()
 		ready = make(chan error, 1)
-		go runKiroFirstSemanticGate(streamCtx, translatedReader, pw, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
+		gateDone = startKiroFirstSemanticGate(streamCtx, translatedReader, pw, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
 	}
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
@@ -1045,10 +1046,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		accountID = account.ID
 	}
 
-	upstreamDone := make(chan struct{})
+	producerDone := make(chan struct{})
 	go func() {
-		defer close(upstreamDone)
-		defer releaseStreamCtx()
+		defer close(producerDone)
+		if !resilienceEnforced {
+			defer releaseStreamCtx()
+		}
 		defer semanticObserver.stop()
 		currentResp := resp
 		currentRequestCtx := requestCtx
@@ -1173,6 +1176,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			currentRequestCtx = nextRequestCtx
 		}
 	}()
+	upstreamDone := (<-chan struct{})(producerDone)
+	if resilienceEnforced {
+		upstreamDone = joinKiroGatedStreamCleanup(producerDone, gateDone, releaseStreamCtx)
+	}
 
 	if resilienceEnforced {
 		var gateErr error

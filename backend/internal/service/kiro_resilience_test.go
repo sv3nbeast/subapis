@@ -682,6 +682,32 @@ func TestFinishKiroStreamResponseWaitsForPhysicalCleanupAfterCancel(t *testing.T
 	require.Zero(t, store.markSuccessCalls)
 }
 
+func TestJoinKiroGatedStreamCleanupWaitsForGateDrain(t *testing.T) {
+	producerDone := make(chan struct{})
+	gateDone := make(chan struct{})
+	released := make(chan struct{})
+	close(producerDone)
+
+	pipelineDone := joinKiroGatedStreamCleanup(producerDone, gateDone, func() { close(released) })
+	select {
+	case <-released:
+		t.Fatal("stream context released before semantic gate drained producer EOF")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(gateDone)
+	select {
+	case <-pipelineDone:
+	case <-time.After(time.Second):
+		t.Fatal("gated stream cleanup did not complete")
+	}
+	select {
+	case <-released:
+	default:
+		t.Fatal("stream context was not released after the gate drained")
+	}
+}
+
 func TestExecuteKiroUpstreamEnforceTriesEachEndpointOnceOn429(t *testing.T) {
 	store := &recordingKiroResilienceCooldownStore{}
 	responses := make([]kiroScriptedUpstreamOutcome, 0, 3)
@@ -975,4 +1001,41 @@ func TestOpenKiroAnthropicStreamResponseEnforceCancelsUpstreamWithClient(t *test
 	}
 	_ = resp.Body.Close()
 	_ = streamWriter.Close()
+}
+
+func TestOpenKiroAnthropicStreamResponseEnforceDrainsTerminalBeforeInternalCancel(t *testing.T) {
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"complete"}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes())},
+	}
+	svc := enforcedKiroResilienceTestService()
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = &recordingKiroResilienceCooldownStore{}
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+	account := &Account{
+		ID: 98, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "api_region": "us-east-1"},
+	}
+	groupID := int64(29)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	body := []byte(`{"model":"claude-opus-4-8","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.GroupID = &groupID
+	parsed.Group = group
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(context.Background(), account, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.NoError(t, err)
+
+	streamBytes, readErr := io.ReadAll(resp.Body)
+	require.NoError(t, readErr)
+	require.Contains(t, string(streamBytes), "complete")
+	require.Contains(t, string(streamBytes), "event: message_stop")
+	require.NoError(t, svc.finishKiroStreamResponse(context.Background(), resp, &groupID, nil))
 }

@@ -244,17 +244,16 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 	rawReader, rawWriter := io.Pipe()
 	clientReader, clientWriter := io.Pipe()
 	ready := make(chan error, 1)
-	go runKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
+	gateDone := startKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
 
 	requestID := kiropkg.NewClaudeRequestID()
 	accountID := int64(0)
 	if account != nil {
 		accountID = account.ID
 	}
-	upstreamDone := make(chan struct{})
+	producerDone := make(chan struct{})
 	go func() {
-		defer close(upstreamDone)
-		defer releaseStreamCtx()
+		defer close(producerDone)
 		streamErr := s.streamKiroWebSearchAsAnthropic(streamCtx, account, parsed, group, anthropicBody, mappedModel, requestModel, token, headers, rawWriter, completion)
 		if streamErr != nil {
 			_ = rawWriter.CloseWithError(streamErr)
@@ -262,6 +261,7 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 		}
 		_ = rawWriter.Close()
 	}()
+	upstreamDone := joinKiroGatedStreamCleanup(producerDone, gateDone, releaseStreamCtx)
 
 	var gateErr error
 	select {

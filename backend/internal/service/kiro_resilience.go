@@ -428,6 +428,36 @@ type kiroTrackedStreamBody struct {
 	once       sync.Once
 }
 
+func startKiroFirstSemanticGate(ctx context.Context, src io.ReadCloser, dst *io.PipeWriter, maxBuffer, maxLineSize int, ready chan<- error) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runKiroFirstSemanticGate(ctx, src, dst, maxBuffer, maxLineSize, ready)
+	}()
+	return done
+}
+
+// joinKiroGatedStreamCleanup releases the stream context only after both the
+// upstream translator and the semantic gate have exited. The producer closes
+// its pipe before producerDone, allowing the gate to drain a clean terminal
+// event before release can turn that EOF into context.Canceled.
+func joinKiroGatedStreamCleanup(producerDone, gateDone <-chan struct{}, release context.CancelFunc) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if producerDone != nil {
+			<-producerDone
+		}
+		if gateDone != nil {
+			<-gateDone
+		}
+		if release != nil {
+			release()
+		}
+	}()
+	return done
+}
+
 func (b *kiroTrackedStreamBody) Close() error {
 	if b == nil {
 		return nil
