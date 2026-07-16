@@ -37,6 +37,7 @@ export interface GrokTokenInfo {
   email?: string
   subscription_tier?: string
   entitlement_status?: string
+  base_url?: string
   [key: string]: unknown
 }
 

@@ -103,6 +103,7 @@ type GrokTokenInfo struct {
 	Email             string `json:"email,omitempty"`
 	SubscriptionTier  string `json:"subscription_tier,omitempty"`
 	EntitlementStatus string `json:"entitlement_status,omitempty"`
+	BaseURL           string `json:"base_url,omitempty"`
 }
 
 func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchangeCodeInput) (*GrokTokenInfo, error) {
@@ -235,7 +236,11 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	if tokenInfo.EntitlementStatus != "" {
 		creds["entitlement_status"] = tokenInfo.EntitlementStatus
 	}
-	creds["base_url"] = xai.DefaultBaseURL
+	baseURL := strings.TrimSpace(tokenInfo.BaseURL)
+	if baseURL == "" {
+		baseURL = inferGrokBaseURL(tokenInfo.AccessToken)
+	}
+	creds["base_url"] = baseURL
 	return creds
 }
 
@@ -258,6 +263,7 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 		ExpiresAt:    now.Add(time.Duration(expiresIn) * time.Second).Unix(),
 		ClientID:     strings.TrimSpace(clientID),
 		Scope:        tokenResp.Scope,
+		BaseURL:      inferGrokBaseURL(tokenResp.AccessToken),
 	}
 	if info.ClientID == "" {
 		info.ClientID = xai.EffectiveClientID()
@@ -309,4 +315,62 @@ func parseJWTEmailClaim(token string) string {
 		return ""
 	}
 	return strings.TrimSpace(claims.Email)
+}
+
+// inferGrokBaseURL distinguishes xAI API OAuth tokens from Grok CLI tokens.
+// API tokens currently include a tier claim, while free CLI tokens do not.
+// Opaque or malformed tokens keep the historical API default.
+func inferGrokBaseURL(accessToken string) string {
+	parts := strings.Split(strings.TrimSpace(accessToken), ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return xai.DefaultBaseURL
+	}
+
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return xai.DefaultBaseURL
+	}
+	var header map[string]json.RawMessage
+	if err := json.Unmarshal(headerBytes, &header); err != nil || len(header) == 0 {
+		return xai.DefaultBaseURL
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return xai.DefaultBaseURL
+	}
+	var claims map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil || claims == nil {
+		return xai.DefaultBaseURL
+	}
+	if _, hasTier := claims["tier"]; hasTier {
+		return xai.DefaultBaseURL
+	}
+	return xai.DefaultCLIBaseURL
+}
+
+// PreserveGrokOAuthRoutingCredentials prevents reauthorization from deleting
+// routing configuration that is not part of an OAuth token response.
+func PreserveGrokOAuthRoutingCredentials(account *Account, incoming map[string]any) map[string]any {
+	if account == nil || account.Platform != PlatformGrok {
+		return incoming
+	}
+
+	merged := make(map[string]any, len(incoming)+2)
+	for key, value := range incoming {
+		merged[key] = value
+	}
+	for _, key := range []string{"base_url", "model_mapping"} {
+		if _, exists := merged[key]; exists {
+			continue
+		}
+		if value, exists := account.Credentials[key]; exists {
+			merged[key] = value
+		}
+	}
+	if _, exists := merged["base_url"]; !exists {
+		accessToken, _ := merged["access_token"].(string)
+		merged["base_url"] = inferGrokBaseURL(accessToken)
+	}
+	return merged
 }

@@ -121,4 +121,27 @@ describe('buildReauthAccountUpdatePayload', () => {
       }
     })
   })
+
+  it('keeps model mapping while allowing a newly inferred Grok route to replace the old route', () => {
+    const payload = buildReauthAccountUpdatePayload(
+      {
+        credentials: {
+          base_url: 'https://api.x.ai/v1',
+          model_mapping: { 'grok-latest': 'grok-4.5' }
+        }
+      } as any,
+      {
+        credentials: {
+          access_token: 'new-access',
+          base_url: 'https://cli-chat-proxy.grok.com/v1'
+        }
+      }
+    )
+
+    expect(payload.credentials).toEqual({
+      access_token: 'new-access',
+      base_url: 'https://cli-chat-proxy.grok.com/v1',
+      model_mapping: { 'grok-latest': 'grok-4.5' }
+    })
+  })
 })

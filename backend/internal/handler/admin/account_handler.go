@@ -1342,9 +1342,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		return
 	}
 
+	credentials := service.PreserveGrokOAuthRoutingCredentials(existing, req.Credentials)
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
 		Type:        req.Type,
-		Credentials: req.Credentials,
+		Credentials: credentials,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

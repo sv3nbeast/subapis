@@ -208,6 +208,7 @@ import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import { useKiroOAuth } from '@/composables/useKiroOAuth'
 import { useDroidOAuth } from '@/composables/useDroidOAuth'
 import type { Account, AccountPlatform } from '@/types'
+import { buildReauthAccountUpdatePayload } from '@/components/account/reauthPayload'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
@@ -539,7 +540,10 @@ const handleExchangeCode = async () => {
     })
     if (!tokenInfo) return
 
-    const credentials = grokOAuth.buildCredentials(tokenInfo)
+    const credentialsPatch = grokOAuth.buildCredentials(tokenInfo)
+    const credentials =
+      buildReauthAccountUpdatePayload(props.account, { credentials: credentialsPatch }).credentials ??
+      credentialsPatch
     const extra = grokOAuth.buildExtraInfo(tokenInfo)
 
     try {

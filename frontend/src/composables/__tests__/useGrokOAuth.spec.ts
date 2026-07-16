@@ -53,3 +53,21 @@ describe('useGrokOAuth.exchangeAuthCode', () => {
     )
   })
 })
+
+describe('useGrokOAuth.buildCredentials', () => {
+  it('persists the backend-selected Grok upstream route', () => {
+    const oauth = useGrokOAuth()
+
+    expect(
+      oauth.buildCredentials({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        base_url: 'https://cli-chat-proxy.grok.com/v1'
+      })
+    ).toEqual({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      base_url: 'https://cli-chat-proxy.grok.com/v1'
+    })
+  })
+})
