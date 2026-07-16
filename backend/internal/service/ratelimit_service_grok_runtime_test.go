@@ -67,3 +67,52 @@ func TestGrok403RuntimePolicyDoesNotPenalizeRequestScopedForbidden(t *testing.T)
 	require.Zero(t, repo.tempCalls)
 	require.Zero(t, repo.errorCalls)
 }
+
+func TestOpenAIGatewayGrokAccessDeniedUsesConsecutive403Policy(t *testing.T) {
+	tests := []struct {
+		name           string
+		count          int64
+		wantTempCalls  int
+		wantErrorCalls int
+	}{
+		{
+			name:          "first denial starts temporary cooldown",
+			count:         1,
+			wantTempCalls: 1,
+		},
+		{
+			name:           "third denial disables account",
+			count:          3,
+			wantErrorCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &grok403RuntimeRepo{}
+			rateLimitSvc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			rateLimitSvc.SetOpenAI403CounterCache(&grok403RuntimeCounter{count: tt.count})
+			gatewaySvc := &OpenAIGatewayService{
+				accountRepo:      repo,
+				rateLimitService: rateLimitSvc,
+			}
+			rateLimitSvc.SetAccountRuntimeBlocker(gatewaySvc)
+			account := &Account{ID: 93, Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+			gatewaySvc.handleGrokAccountUpstreamError(
+				context.Background(),
+				account,
+				http.StatusForbidden,
+				http.Header{},
+				[]byte(`{"code":"permission-denied","error":"Access denied"}`),
+			)
+
+			require.Equal(t, tt.wantTempCalls, repo.tempCalls)
+			require.Equal(t, tt.wantErrorCalls, repo.errorCalls)
+			require.True(t, gatewaySvc.isOpenAIAccountRuntimeBlocked(account))
+			if tt.wantErrorCalls > 0 {
+				require.Contains(t, repo.errorMsg, "consecutive_403=3/3")
+			}
+		})
+	}
+}

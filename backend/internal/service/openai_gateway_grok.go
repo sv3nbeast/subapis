@@ -1013,6 +1013,13 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
 			return
 		}
+		if s.rateLimitService != nil {
+			stateCtx, cancel := openAIAccountStateContext(ctx)
+			defer cancel()
+			upstreamMsg := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody))
+			s.rateLimitService.handleGrok403(stateCtx, account, upstreamMsg, responseBody)
+			return
+		}
 		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
 	case http.StatusTooManyRequests:
 		// Free Build reports its rolling 24-hour token allowance exhaustion as
