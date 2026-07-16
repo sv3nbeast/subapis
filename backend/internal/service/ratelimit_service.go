@@ -1161,16 +1161,21 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			}
 		}
 
-		// Anthropic 平台：没有限流重置时间的 429 可能是非真实限流（如 Extra usage required），
-		// 不适合按 5h/7d 窗口长时间封禁；但完全不标记会导致账号永不冷却，
-		// 调度器让每个请求反复撞同一批持续 429 的账号（failover 预算被白白烧掉，
-		// 客户端稳定收到 429）。因此同样走可配置的秒级兜底回避，管理端可调大或关闭。
+		// Anthropic 平台：只有响应体明确声明 rate_limit_error 时才进入短时递增冷却。
+		// 其他无 reset 头的 429 可能是 Extra usage 等业务限制，保持不标记，避免误伤。
 		if account.Platform == PlatformAnthropic {
-			slog.Warn("rate_limit_429_no_reset_time",
+			if isAnthropicRateLimitErrorBody(responseBody) {
+				slog.Warn("anthropic_rate_limit_429_no_reset_time",
+					"account_id", account.ID,
+					"platform", account.Platform,
+					"reason", "explicit rate_limit_error without reset time")
+				s.applyAnthropic429NoResetRateLimit(ctx, account)
+				return
+			}
+			slog.Warn("rate_limit_429_no_reset_time_skipped",
 				"account_id", account.ID,
 				"platform", account.Platform,
-				"reason", "no rate limit reset time in headers, likely not a real rate limit")
-			s.apply429FallbackRateLimit(ctx, account, "anthropic_no_reset_time")
+				"reason", "ambiguous anthropic 429 without reset time")
 			return
 		}
 
