@@ -1205,6 +1205,51 @@ func TestOpenKiroAnthropicStreamResponseDetachesClientCancellation(t *testing.T)
 	require.Contains(t, string(streamBytes), "hello from kiro")
 }
 
+func TestOpenKiroAnthropicStreamResponseObservePersistsTerminalCache(t *testing.T) {
+	resetKiroCacheTracker()
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"cached response"}}`)))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{newKiroEventStreamResponse(http.StatusOK, upstreamBody.Bytes())},
+	}
+	cache := newFakeKiroGatewayCache()
+	svc := observedKiroResilienceTestService()
+	svc.cache = cache
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = &kiroStreamFailoverCooldownStore{}
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+
+	account := kiroCacheAccount(1735, "observe-integration-refresh", "observe-integration-access")
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+	group := kiroCacheGroup(0.94)
+	body := kiroCacheManyMessageBodyWithoutControl("observe-stream-integration", 12, 0)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.Stream = true
+	parsed.Group = group
+	parsed.GroupID = &group.ID
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(ctx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.NoError(t, err)
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Contains(t, string(streamBytes), "cached response")
+
+	resetKiroCacheTracker()
+	second := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, parsed.Model, 20000)
+	require.NotNil(t, second)
+	require.Positive(t, second.CacheReadInputTokens, "observe terminal stream must persist a reusable cache fingerprint")
+}
+
 func TestOpenKiroAnthropicStreamResponseAllowsDirectAPIKey(t *testing.T) {
 	upstreamBody := bytes.NewBuffer(nil)
 	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{

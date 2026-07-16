@@ -509,6 +509,29 @@ func TestBuildKiroCacheEmulationUsageForRequestCommitsOnlyAfterSuccess(t *testin
 	}
 }
 
+func TestFinalizeKiroStreamCacheUsageCommitsObserveTerminal(t *testing.T) {
+	resetKiroCacheTracker()
+	cache := newFakeKiroGatewayCache()
+	svc := &GatewayService{cache: cache}
+	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")
+	account := kiroCacheAccount(1734, "observe-stream-refresh", "observe-stream-access")
+	group := kiroCacheGroup(0.94)
+	body := kiroCacheManyMessageBodyWithoutControl("observe-stream-terminal", 12, 0)
+
+	first := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-opus-4-8", 20000)
+	if first == nil || first.CacheCreationInputTokens <= 0 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("first observe stream should create cache, got %+v", first)
+	}
+
+	svc.finalizeKiroStreamCacheUsage(ctx, nil, first)
+	resetKiroCacheTracker()
+
+	second := svc.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-opus-4-8", 20000)
+	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheCreationInputTokens != 0 {
+		t.Fatalf("terminal observe stream should persist cache for the next request, got %+v", second)
+	}
+}
+
 func TestPrepareKiroCacheEmulationProfileBodySkipsNonKiroAccounts(t *testing.T) {
 	svc := &GatewayService{}
 	ctx := SetClaudeCodeUserAgent(context.Background(), "claude-cli/2.1.195 (external, cli)")

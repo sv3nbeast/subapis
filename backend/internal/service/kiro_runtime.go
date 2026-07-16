@@ -1071,9 +1071,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				if streamResult != nil {
 					s.logKiroUsageBudget(account, group, requestID, mappedModel, originalInputTokens, currentRequestCtx, streamResult.Usage)
 				}
-				if completion != nil {
-					completion.markTerminal(cacheUsage)
-				}
+				s.finalizeKiroStreamCacheUsage(streamCtx, completion, cacheUsage)
 				_ = translatorWriter.Close()
 				return
 			}

@@ -378,6 +378,17 @@ func (c *kiroStreamCompletion) markTerminal(cacheUsage *kiroCacheEmulationUsage)
 	c.mu.Unlock()
 }
 
+// finalizeKiroStreamCacheUsage commits terminal cache state immediately for
+// legacy off/observe streams. Enforced streams carry a tracked completion and
+// defer the commit until downstream streaming and physical cleanup succeed.
+func (s *GatewayService) finalizeKiroStreamCacheUsage(ctx context.Context, completion *kiroStreamCompletion, cacheUsage *kiroCacheEmulationUsage) {
+	if completion != nil {
+		completion.markTerminal(cacheUsage)
+		return
+	}
+	s.commitKiroCacheEmulationUsage(ctx, cacheUsage)
+}
+
 func (c *kiroStreamCompletion) complete(ctx context.Context) error {
 	if c == nil {
 		return nil
