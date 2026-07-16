@@ -108,6 +108,22 @@ func (s *kiroResponsesHistoryStore) expandRequired(prevID string) (json.RawMessa
 	return system, messages, true
 }
 
+func (s *kiroResponsesHistoryStore) customToolNames(prevID string) map[string]struct{} {
+	prev, ok := s.load(prevID)
+	if !ok {
+		return nil
+	}
+	names := make(map[string]struct{})
+	for _, entry := range s.collectChain(prev) {
+		for _, item := range entry.Output {
+			if item.Type == "custom_tool_call" && strings.TrimSpace(item.Name) != "" {
+				names[item.Name] = struct{}{}
+			}
+		}
+	}
+	return names
+}
+
 func (s *kiroResponsesHistoryStore) expandEntry(prev kiroResponsesHistoryEntry) (json.RawMessage, []apicompat.AnthropicMessage) {
 	chain := s.collectChain(prev)
 	messages := make([]apicompat.AnthropicMessage, 0, len(chain)*2)
@@ -176,9 +192,14 @@ func kiroResponsesOutputToAnthropicMessages(items []apicompat.ResponsesOutput) [
 			}
 			out = append(out, apicompat.AnthropicMessage{Role: role, Content: content})
 
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			input := json.RawMessage("{}")
-			if strings.TrimSpace(item.Arguments) != "" {
+			if item.Type == "custom_tool_call" {
+				if strings.TrimSpace(item.Input) != "" {
+					encoded, _ := json.Marshal(map[string]any{kiroCodexCustomToolInputField: item.Input})
+					input = encoded
+				}
+			} else if strings.TrimSpace(item.Arguments) != "" {
 				input = json.RawMessage(item.Arguments)
 			}
 			id := strings.TrimSpace(item.CallID)

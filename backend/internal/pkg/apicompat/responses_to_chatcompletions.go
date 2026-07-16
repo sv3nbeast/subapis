@@ -433,6 +433,7 @@ func generateChatCmplID() string {
 type bufferedFuncCall struct {
 	CallID string
 	Name   string
+	Type   string
 	Args   strings.Builder
 }
 
@@ -469,6 +470,7 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
 				CallID: event.Item.CallID,
 				Name:   event.Item.Name,
+				Type:   event.Item.Type,
 			})
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -517,12 +519,18 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	}
 
 	for i := range a.funcCalls {
-		out = append(out, ResponsesOutput{
-			Type:      "function_call",
-			CallID:    a.funcCalls[i].CallID,
-			Name:      a.funcCalls[i].Name,
-			Arguments: a.funcCalls[i].Args.String(),
-		})
+		call := ResponsesOutput{
+			Type:   a.funcCalls[i].Type,
+			CallID: a.funcCalls[i].CallID,
+			Name:   a.funcCalls[i].Name,
+		}
+		if call.Type == "custom_tool_call" {
+			call.Input = a.funcCalls[i].Args.String()
+		} else {
+			call.Type = "function_call"
+			call.Arguments = a.funcCalls[i].Args.String()
+		}
+		out = append(out, call)
 	}
 
 	return out

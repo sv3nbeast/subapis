@@ -17,6 +17,13 @@ import (
 // Responses API response. This is the reverse of ResponsesToAnthropic and
 // enables Anthropic upstream responses to be returned in OpenAI Responses format.
 func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
+	return AnthropicToResponsesResponseWithOptions(resp, AnthropicEventToResponsesOptions{})
+}
+
+// AnthropicToResponsesResponseWithOptions applies the same opt-in bridge
+// metadata as the streaming converter while preserving the default response
+// conversion when options are empty.
+func AnthropicToResponsesResponseWithOptions(resp *AnthropicResponse, options AnthropicEventToResponsesOptions) *ResponsesResponse {
 	id := resp.ID
 	if id == "" {
 		id = generateResponsesID()
@@ -56,14 +63,25 @@ func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
 			if len(block.Input) > 0 {
 				args = string(block.Input)
 			}
-			outputs = append(outputs, ResponsesOutput{
-				Type:      "function_call",
-				ID:        generateItemID(),
-				CallID:    toResponsesCallID(block.ID),
-				Name:      block.Name,
-				Arguments: args,
-				Status:    "completed",
-			})
+			if _, custom := options.CustomToolNames[block.Name]; custom {
+				outputs = append(outputs, ResponsesOutput{
+					Type:   "custom_tool_call",
+					ID:     generateItemID(),
+					CallID: toResponsesCallID(block.ID),
+					Name:   block.Name,
+					Input:  customToolInputFromArguments(args),
+					Status: "completed",
+				})
+			} else {
+				outputs = append(outputs, ResponsesOutput{
+					Type:      "function_call",
+					ID:        generateItemID(),
+					CallID:    toResponsesCallID(block.ID),
+					Name:      block.Name,
+					Arguments: args,
+					Status:    "completed",
+				})
+			}
 		}
 	}
 
@@ -163,8 +181,16 @@ type AnthropicEventToResponsesState struct {
 	StopReason          string
 
 	// For function_call: track per-output info
-	CurrentCallID string
-	CurrentName   string
+	CurrentCallID   string
+	CurrentName     string
+	CurrentToolKind string
+
+	// Kiro GPT Responses compatibility is opt-in. It must not change the
+	// Anthropic /v1/messages path or the default Anthropic->Responses adapter.
+	CoalesceInterleavedText bool
+	VisibleTextSeen         bool
+	SuppressReasoningBlock  bool
+	CustomToolNames         map[string]struct{}
 
 	// Usage from message_start / message_delta. InputTokens here follows
 	// Anthropic semantics (excludes cached tokens); they are added back when
@@ -177,9 +203,29 @@ type AnthropicEventToResponsesState struct {
 
 // NewAnthropicEventToResponsesState returns an initialised stream state.
 func NewAnthropicEventToResponsesState() *AnthropicEventToResponsesState {
+	return NewAnthropicEventToResponsesStateWithOptions(AnthropicEventToResponsesOptions{})
+}
+
+// AnthropicEventToResponsesOptions contains compatibility switches used by
+// protocol bridges. The zero value preserves the existing event lifecycle.
+type AnthropicEventToResponsesOptions struct {
+	CoalesceInterleavedText bool
+	CustomToolNames         map[string]struct{}
+}
+
+// NewAnthropicEventToResponsesStateWithOptions builds an event conversion
+// state with bridge-specific behavior. Maps are copied so a request cannot
+// mutate another request's tool metadata.
+func NewAnthropicEventToResponsesStateWithOptions(opts AnthropicEventToResponsesOptions) *AnthropicEventToResponsesState {
+	customTools := make(map[string]struct{}, len(opts.CustomToolNames))
+	for name := range opts.CustomToolNames {
+		customTools[name] = struct{}{}
+	}
 	return &AnthropicEventToResponsesState{
-		ResponseID: generateResponsesID(),
-		Created:    time.Now().Unix(),
+		ResponseID:              generateResponsesID(),
+		Created:                 time.Now().Unix(),
+		CoalesceInterleavedText: opts.CoalesceInterleavedText,
+		CustomToolNames:         customTools,
 	}
 }
 
@@ -270,6 +316,16 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 
 	switch evt.ContentBlock.Type {
 	case "thinking":
+		// Kiro GPT can emit text -> reasoning -> text. Codex Desktop treats the
+		// second text item as a separate assistant message and may render only
+		// the first one. Once visible text has started, suppress only that late
+		// reasoning block and keep the message item open for subsequent text.
+		// This option is enabled exclusively by the Kiro Responses bridge.
+		if state.CoalesceInterleavedText && state.CurrentItemType == "message" && state.VisibleTextSeen {
+			events = append(events, closeCurrentResponsesTextPart(state)...)
+			state.SuppressReasoningBlock = true
+			return events
+		}
 		events = append(events, closeCurrentResponsesItem(state)...)
 		state.CurrentItemID = generateItemID()
 		state.CurrentItemType = "reasoning"
@@ -298,6 +354,7 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 			events = append(events, closeCurrentResponsesItem(state)...)
 			state.CurrentItemID = generateItemID()
 			state.CurrentItemType = "message"
+			state.VisibleTextSeen = false
 			state.ContentIndex = 0
 			state.CurrentMessageParts = nil
 
@@ -330,6 +387,10 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 		state.CurrentItemType = "function_call"
 		state.CurrentCallID = toResponsesCallID(evt.ContentBlock.ID)
 		state.CurrentName = evt.ContentBlock.Name
+		state.CurrentToolKind = "function"
+		if _, ok := state.CustomToolNames[state.CurrentName]; ok {
+			state.CurrentToolKind = "custom"
+		}
 		state.CurrentArguments.Reset()
 		initialArguments := strings.TrimSpace(string(evt.ContentBlock.Input))
 		if initialArguments != "" && initialArguments != "null" && initialArguments != "{}" {
@@ -339,7 +400,7 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 		events = append(events, makeResponsesEvent(state, "response.output_item.added", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Item: &ResponsesOutput{
-				Type:   "function_call",
+				Type:   responsesToolOutputType(state.CurrentToolKind),
 				ID:     state.CurrentItemID,
 				CallID: state.CurrentCallID,
 				Name:   state.CurrentName,
@@ -362,6 +423,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 			return nil
 		}
 		_, _ = state.CurrentText.WriteString(evt.Delta.Text)
+		state.VisibleTextSeen = true
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			ContentIndex: state.ContentIndex,
@@ -370,6 +432,9 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		})}
 
 	case "thinking_delta":
+		if state.SuppressReasoningBlock {
+			return nil
+		}
 		if evt.Delta.Thinking == "" {
 			return nil
 		}
@@ -386,6 +451,12 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 			return nil
 		}
 		_, _ = state.CurrentArguments.WriteString(evt.Delta.PartialJSON)
+		if state.CurrentToolKind == "custom" {
+			// Kiro transports tools as JSON objects. A Responses custom tool is
+			// freeform, so buffer until the object is complete and unwrap its
+			// input field in closeCurrentResponsesItem.
+			return nil
+		}
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Delta:       evt.Delta.PartialJSON,
@@ -403,6 +474,10 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 }
 
 func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *AnthropicEventToResponsesState) []ResponsesStreamEvent {
+	if state.SuppressReasoningBlock {
+		state.SuppressReasoningBlock = false
+		return nil
+	}
 	switch state.CurrentItemType {
 	case "reasoning", "function_call":
 		return closeCurrentResponsesItem(state)
@@ -507,20 +582,48 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 		if arguments == "" {
 			arguments = "{}"
 		}
-		events = append(events, makeResponsesEvent(state, "response.function_call_arguments.done", &ResponsesStreamEvent{
-			OutputIndex: state.OutputIndex,
-			ItemID:      state.CurrentItemID,
-			CallID:      state.CurrentCallID,
-			Name:        state.CurrentName,
-			Arguments:   arguments,
-		}))
-		item = ResponsesOutput{
-			Type:      "function_call",
-			ID:        state.CurrentItemID,
-			CallID:    state.CurrentCallID,
-			Name:      state.CurrentName,
-			Arguments: arguments,
-			Status:    "completed",
+		if state.CurrentToolKind == "custom" {
+			input := customToolInputFromArguments(arguments)
+			if input != "" {
+				events = append(events, makeResponsesEvent(state, "response.custom_tool_call_input.delta", &ResponsesStreamEvent{
+					OutputIndex: state.OutputIndex,
+					ItemID:      state.CurrentItemID,
+					CallID:      state.CurrentCallID,
+					Name:        state.CurrentName,
+					Delta:       input,
+				}))
+			}
+			events = append(events, makeResponsesEvent(state, "response.custom_tool_call_input.done", &ResponsesStreamEvent{
+				OutputIndex: state.OutputIndex,
+				ItemID:      state.CurrentItemID,
+				CallID:      state.CurrentCallID,
+				Name:        state.CurrentName,
+				Input:       input,
+			}))
+			item = ResponsesOutput{
+				Type:   "custom_tool_call",
+				ID:     state.CurrentItemID,
+				CallID: state.CurrentCallID,
+				Name:   state.CurrentName,
+				Input:  input,
+				Status: "completed",
+			}
+		} else {
+			events = append(events, makeResponsesEvent(state, "response.function_call_arguments.done", &ResponsesStreamEvent{
+				OutputIndex: state.OutputIndex,
+				ItemID:      state.CurrentItemID,
+				CallID:      state.CurrentCallID,
+				Name:        state.CurrentName,
+				Arguments:   arguments,
+			}))
+			item = ResponsesOutput{
+				Type:      "function_call",
+				ID:        state.CurrentItemID,
+				CallID:    state.CurrentCallID,
+				Name:      state.CurrentName,
+				Arguments: arguments,
+				Status:    "completed",
+			}
 		}
 	}
 
@@ -533,15 +636,50 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 	state.CurrentItemID = ""
 	state.CurrentCallID = ""
 	state.CurrentName = ""
+	state.CurrentToolKind = ""
 	state.CurrentText.Reset()
 	state.CurrentReasoning.Reset()
 	state.CurrentArguments.Reset()
 	state.CurrentMessageParts = nil
 	state.TextPartOpen = false
 	state.SummaryPartOpen = false
+	state.VisibleTextSeen = false
+	state.SuppressReasoningBlock = false
 	state.OutputIndex++
 	state.ContentIndex = 0
 	return events
+}
+
+func responsesToolOutputType(kind string) string {
+	if kind == "custom" {
+		return "custom_tool_call"
+	}
+	return "function_call"
+}
+
+func customToolInputFromArguments(arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" || arguments == "{}" {
+		return ""
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(arguments), &object); err == nil {
+		for _, key := range []string{"input", "code", "text"} {
+			raw, ok := object[key]
+			if !ok {
+				continue
+			}
+			var value string
+			if err := json.Unmarshal(raw, &value); err == nil {
+				return value
+			}
+		}
+	}
+	var value string
+	if err := json.Unmarshal([]byte(arguments), &value); err == nil {
+		return value
+	}
+	return arguments
 }
 
 func closeCurrentResponsesTextPart(state *AnthropicEventToResponsesState) []ResponsesStreamEvent {

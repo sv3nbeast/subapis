@@ -1923,3 +1923,95 @@ func TestAnthropicEventToResponses_InterleavedTextReasoningHasCompleteCodexLifec
 	require.Equal(t, 10, completed.Response.Usage.InputTokens)
 	require.Equal(t, 3, completed.Response.Usage.OutputTokens)
 }
+
+func TestAnthropicEventToResponses_KiroCodexCoalescesTextAroundLateReasoning(t *testing.T) {
+	state := NewAnthropicEventToResponsesStateWithOptions(AnthropicEventToResponsesOptions{
+		CoalesceInterleavedText: true,
+	})
+	stream := []AnthropicStreamEvent{
+		{Type: "message_start", Message: &AnthropicResponse{ID: "msg_kiro", Model: "gpt-5.6-sol"}},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "text"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "text_delta", Text: "安全风"}},
+		{Type: "content_block_stop"},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "thinking"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "thinking_delta", Thinking: "late summary"}},
+		{Type: "content_block_stop"},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "text"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "text_delta", Text: "险清单。"}},
+		{Type: "content_block_stop"},
+		{Type: "message_delta", Delta: &AnthropicDelta{StopReason: "end_turn"}},
+		{Type: "message_stop"},
+	}
+
+	var events []ResponsesStreamEvent
+	for i := range stream {
+		events = append(events, AnthropicEventToResponsesEvents(&stream[i], state)...)
+	}
+
+	var addedItems, doneItems int
+	var completed *ResponsesStreamEvent
+	for i := range events {
+		switch events[i].Type {
+		case "response.output_item.added":
+			addedItems++
+			require.Equal(t, "message", events[i].Item.Type)
+		case "response.output_item.done":
+			doneItems++
+		case "response.reasoning_summary_text.delta":
+			t.Fatal("late reasoning must not split a visible Kiro GPT message")
+		case "response.completed":
+			completed = &events[i]
+		}
+	}
+	require.Equal(t, 1, addedItems)
+	require.Equal(t, 1, doneItems)
+	require.NotNil(t, completed)
+	require.Len(t, completed.Response.Output, 1)
+	require.Equal(t, "message", completed.Response.Output[0].Type)
+	require.Len(t, completed.Response.Output[0].Content, 2)
+	require.Equal(t, "安全风", completed.Response.Output[0].Content[0].Text)
+	require.Equal(t, "险清单。", completed.Response.Output[0].Content[1].Text)
+}
+
+func TestAnthropicEventToResponses_KiroCodexRestoresCustomToolCall(t *testing.T) {
+	state := NewAnthropicEventToResponsesStateWithOptions(AnthropicEventToResponsesOptions{
+		CustomToolNames: map[string]struct{}{"exec": {}},
+	})
+	stream := []AnthropicStreamEvent{
+		{Type: "message_start", Message: &AnthropicResponse{ID: "msg_kiro", Model: "gpt-5.6-sol"}},
+		{Type: "content_block_start", ContentBlock: &AnthropicContentBlock{Type: "tool_use", ID: "toolu_1", Name: "exec"}},
+		{Type: "content_block_delta", Delta: &AnthropicDelta{Type: "input_json_delta", PartialJSON: `{"input":"const result = await tools.exec_command({cmd: \"pwd\"}); text(result.output);"}`}},
+		{Type: "content_block_stop"},
+		{Type: "message_delta", Delta: &AnthropicDelta{StopReason: "tool_use"}},
+		{Type: "message_stop"},
+	}
+
+	var events []ResponsesStreamEvent
+	for i := range stream {
+		events = append(events, AnthropicEventToResponsesEvents(&stream[i], state)...)
+	}
+
+	var added, inputDelta, inputDone, itemDone *ResponsesStreamEvent
+	for i := range events {
+		switch events[i].Type {
+		case "response.output_item.added":
+			added = &events[i]
+		case "response.custom_tool_call_input.delta":
+			inputDelta = &events[i]
+		case "response.custom_tool_call_input.done":
+			inputDone = &events[i]
+		case "response.output_item.done":
+			itemDone = &events[i]
+		}
+	}
+	require.NotNil(t, added)
+	require.Equal(t, "custom_tool_call", added.Item.Type)
+	require.Equal(t, "exec", added.Item.Name)
+	require.NotNil(t, inputDelta)
+	require.Contains(t, inputDelta.Delta, "tools.exec_command")
+	require.NotNil(t, inputDone)
+	require.Equal(t, inputDelta.Delta, inputDone.Input)
+	require.NotNil(t, itemDone)
+	require.Equal(t, "custom_tool_call", itemDone.Item.Type)
+	require.Equal(t, inputDelta.Delta, itemDone.Item.Input)
+}

@@ -75,4 +75,13 @@ func TestBufferedResponseAccumulator_CodexEvents(t *testing.T) {
 		Delta: "raw-reasoning",
 	})
 	require.True(t, acc.HasContent())
+
+	output := acc.BuildOutput()
+	require.Len(t, output, 2)
+	require.Equal(t, "reasoning", output[0].Type)
+	require.Equal(t, "custom_tool_call", output[1].Type)
+	require.Equal(t, "c1", output[1].CallID)
+	require.Equal(t, "apply_patch", output[1].Name)
+	require.Equal(t, "patch-body", output[1].Input)
+	require.Empty(t, output[1].Arguments)
 }

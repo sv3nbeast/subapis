@@ -44,6 +44,26 @@ func (s *GatewayService) ForwardAsResponses(
 	if err := json.Unmarshal(body, &responsesReq); err != nil {
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
+	kiroCodexTools := kiroCodexResponsesToolMetadata{CustomToolNames: make(map[string]struct{})}
+	if account != nil && account.Platform == PlatformKiro && IsOpenAIKiroBridgeModel(responsesReq.Model) {
+		normalizedBody, toolMetadata, normalizeErr := normalizeKiroCodexResponsesTools(body)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		kiroCodexTools = toolMetadata
+		body = normalizedBody
+		if err := json.Unmarshal(body, &responsesReq); err != nil {
+			return nil, fmt.Errorf("parse normalized Kiro Responses request: %w", err)
+		}
+		if kiroCodexTools.DeclaredToolCount > 0 {
+			logger.L().Info("kiro.codex_responses_tools_normalized",
+				zap.Int64("account_id", account.ID),
+				zap.Int("declared_tool_count", kiroCodexTools.DeclaredToolCount),
+				zap.Int("forwarded_tool_count", kiroCodexTools.ForwardedToolCount),
+				zap.Int("custom_tool_count", len(kiroCodexTools.CustomToolNames)),
+			)
+		}
+	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
 	storeKiroResponse := true
@@ -70,6 +90,11 @@ func (s *GatewayService) ForwardAsResponses(
 			msg := fmt.Sprintf("previous_response_id not found: %s", strings.TrimSpace(responsesReq.PreviousResponseID))
 			writeResponsesError(c, http.StatusNotFound, "invalid_request_error", msg)
 			return nil, fmt.Errorf("kiro responses previous_response_id not found: %s", strings.TrimSpace(responsesReq.PreviousResponseID))
+		}
+		if IsOpenAIKiroBridgeModel(originalModel) {
+			for name := range globalKiroResponsesHistoryStore.customToolNames(responsesReq.PreviousResponseID) {
+				kiroCodexTools.CustomToolNames[name] = struct{}{}
+			}
 		}
 		anthropicReq.System = mergeKiroResponsesSystem(historySystem, anthropicReq.System)
 		if len(history) > 0 {
@@ -103,7 +128,7 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 
 	if account != nil && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
-		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime)
+		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools)
 		if handleErr == nil && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 				ID:                 result.ResponseID,
@@ -247,6 +272,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 	reasoningEffort *string,
 	parsed *ParsedRequest,
 	startTime time.Time,
+	toolMetadata kiroCodexResponsesToolMetadata,
 ) (*ForwardResult, error) {
 	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
 	if err != nil {
@@ -262,21 +288,30 @@ func (s *GatewayService) forwardKiroAsResponses(
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {
-		result, streamErr := s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, s.kiroResilienceEnforced(kiroParsed.GroupID))
+		result, streamErr := s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
+			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
+			CustomToolNames:         toolMetadata.CustomToolNames,
+		})
 		if streamErr == nil && result != nil && result.ClientDisconnect && s.kiroResilienceEnforced(kiroParsed.GroupID) {
 			streamErr = newOpenAIClientCanceledError(context.Canceled)
 		}
 		streamErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, streamErr)
 		return result, streamErr
 	}
-	result, bufferErr := s.handleResponsesBufferedStreamingResponse(
+	result, bufferErr := s.handleResponsesBufferedStreamingResponseWithOptions(
 		resp,
 		c,
 		originalModel,
 		mappedModel,
 		reasoningEffort,
 		startTime,
-		s.kiroResilienceEnforced(kiroParsed.GroupID),
+		responsesStreamingBridgeOptions{
+			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
+			CustomToolNames:         toolMetadata.CustomToolNames,
+			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),
+		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
 	return result, bufferErr
@@ -347,7 +382,21 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	startTime time.Time,
 	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
-	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
+	return s.handleResponsesBufferedStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
+		StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
+	})
+}
+
+func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	mappedModel string,
+	reasoningEffort *string,
+	startTime time.Time,
+	options responsesStreamingBridgeOptions,
+) (*ForwardResult, error) {
+	strictTerminal := options.StrictTerminal
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -417,6 +466,13 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 				case "thinking_delta":
 					finalResp.Content[idx].Thinking += event.Delta.Thinking
 				case "input_json_delta":
+					// Kiro starts tool_use blocks with input={} and sends the
+					// actual object via deltas. The generic buffered path keeps
+					// its historical behavior; only the Kiro GPT Responses bridge
+					// discards that placeholder before appending deltas.
+					if options.NormalizeBufferedInput && strings.TrimSpace(string(finalResp.Content[idx].Input)) == "{}" {
+						finalResp.Content[idx].Input = nil
+					}
 					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
 				}
 			}
@@ -456,7 +512,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 
 	// Convert to Responses format
 	finalResp, _ = normalizeOpenAICompatAnthropicResponse(finalResp)
-	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
+	responsesResp := apicompat.AnthropicToResponsesResponseWithOptions(finalResp, apicompat.AnthropicEventToResponsesOptions{
+		CoalesceInterleavedText: options.CoalesceInterleavedText,
+		CustomToolNames:         options.CustomToolNames,
+	})
 	responsesResp.Model = originalModel // Use original model name
 
 	if s.responseHeaderFilter != nil {
@@ -664,7 +723,28 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	startTime time.Time,
 	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
-	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
+	return s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
+		StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
+	})
+}
+
+type responsesStreamingBridgeOptions struct {
+	StrictTerminal          bool
+	CoalesceInterleavedText bool
+	CustomToolNames         map[string]struct{}
+	NormalizeBufferedInput  bool
+}
+
+func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	mappedModel string,
+	reasoningEffort *string,
+	startTime time.Time,
+	options responsesStreamingBridgeOptions,
+) (*ForwardResult, error) {
+	strictTerminal := options.StrictTerminal
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -676,7 +756,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)
 
-	state := apicompat.NewAnthropicEventToResponsesState()
+	state := apicompat.NewAnthropicEventToResponsesStateWithOptions(apicompat.AnthropicEventToResponsesOptions{
+		CoalesceInterleavedText: options.CoalesceInterleavedText,
+		CustomToolNames:         options.CustomToolNames,
+	})
 	state.Model = originalModel
 	xmlInvokeBridge := newOpenAICompatAnthropicXMLInvokeBridge()
 	outputAccumulator := apicompat.NewBufferedResponseAccumulator()
