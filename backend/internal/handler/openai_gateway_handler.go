@@ -1278,7 +1278,10 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 		return http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later"
 	}
 	switch failoverErr.FailureKind {
-	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout:
+		recordKiroGatewayTimeoutOps(c, failoverErr)
+		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
+	case service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
 		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
 		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
 	}
@@ -2160,7 +2163,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		return
 	}
 	switch failoverErr.FailureKind {
-	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout:
+		recordKiroGatewayTimeoutOps(c, failoverErr)
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
+		return
+	case service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
 		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
 		return

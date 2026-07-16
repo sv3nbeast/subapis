@@ -538,6 +538,27 @@ func TestClassifyOpsMarkedTransportFailureAsNetwork(t *testing.T) {
 	require.Equal(t, "proxy_connect", entry.NetworkErrorType)
 }
 
+func TestClassifyOpsGatewayTimeoutAsPlatformNetworkError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, 0, "Kiro gateway response header timeout", "network_error_type=response_header_timeout")
+	service.MarkOpsNetworkError(c, "response_header_timeout")
+
+	phase, limited, owner, source := classifyOpsErrorLog(
+		c,
+		"upstream_error",
+		"Upstream service temporarily unavailable",
+		"",
+		http.StatusServiceUnavailable,
+	)
+
+	require.Equal(t, "network", phase)
+	require.False(t, limited)
+	require.Equal(t, "platform", owner)
+	require.Equal(t, "gateway", source)
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

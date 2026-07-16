@@ -757,7 +757,20 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				effectiveUpstreamStatus = *upstreamStatusCode
 			}
 
+			networkErrorType := service.GetOpsNetworkErrorType(c)
+			errorPhase := "upstream"
+			errorSource := "upstream_http"
+			errorOwner := "provider"
 			recoveredMsg := "Recovered upstream error"
+			if networkErrorType != "" {
+				errorPhase = "network"
+				errorSource = "gateway"
+				errorOwner = classifyOpsNetworkErrorOwner(networkErrorType)
+				recoveredMsg = "Recovered network error"
+				if errorOwner == "platform" {
+					recoveredMsg = "Recovered gateway timeout"
+				}
+			}
 			if effectiveUpstreamStatus > 0 {
 				recoveredMsg += " " + strconvItoa(effectiveUpstreamStatus)
 			}
@@ -805,7 +818,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				}(),
 				UserAgent: c.GetHeader("User-Agent"),
 
-				ErrorPhase: "upstream",
+				ErrorPhase: errorPhase,
 				ErrorType:  "upstream_error",
 				// Severity/retryability should reflect the upstream failure, not the final client status (200).
 				Severity:          classifyOpsSeverity("upstream_error", effectiveUpstreamStatus),
@@ -816,8 +829,8 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				ErrorMessage: recoveredMsg,
 				ErrorBody:    "",
 
-				ErrorSource: "upstream_http",
-				ErrorOwner:  "provider",
+				ErrorSource: errorSource,
+				ErrorOwner:  errorOwner,
 
 				UpstreamStatusCode:   upstreamStatusCode,
 				UpstreamErrorMessage: upstreamErrorMessage,
@@ -1452,7 +1465,8 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	if upstreamError && !routingCapacityLimited && !clientContextLimited {
 		phase = "upstream"
 	}
-	if service.GetOpsNetworkErrorType(c) != "" && !routingCapacityLimited && !clientContextLimited {
+	networkErrorType := service.GetOpsNetworkErrorType(c)
+	if networkErrorType != "" && !routingCapacityLimited && !clientContextLimited {
 		phase = "network"
 	}
 	if clientContextLimited && !routingCapacityLimited {
@@ -1469,6 +1483,9 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	isBusinessLimited = routingCapacityLimited || clientContextLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
 	errorOwner = classifyOpsErrorOwner(phase, message)
 	errorSource = classifyOpsErrorSource(phase, message)
+	if phase == "network" {
+		errorOwner = classifyOpsNetworkErrorOwner(networkErrorType)
+	}
 	return phase, isBusinessLimited, errorOwner, errorSource
 }
 
@@ -1639,6 +1656,15 @@ func classifyOpsErrorOwner(phase string, message string) string {
 			return "provider"
 		}
 		return "platform"
+	}
+}
+
+func classifyOpsNetworkErrorOwner(networkErrorType string) string {
+	switch strings.ToLower(strings.TrimSpace(networkErrorType)) {
+	case "response_header_timeout", "first_semantic_timeout", "failover_budget_timeout":
+		return "platform"
+	default:
+		return "provider"
 	}
 }
 

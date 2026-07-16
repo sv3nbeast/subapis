@@ -184,6 +184,32 @@ func TestHandleAnthropicKiroTransportExhaustedReturns503WithRetryAfter(t *testin
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	require.Equal(t, "30", w.Header().Get("Retry-After"))
 	require.Contains(t, w.Body.String(), `"type":"upstream_error"`)
+	require.Equal(t, "response_header_timeout", service.GetOpsNetworkErrorType(c))
+	_, hasUpstreamStatus := c.Get(service.OpsUpstreamStatusCodeKey)
+	require.False(t, hasUpstreamStatus, "a gateway timer must not be persisted as an upstream HTTP 503")
+}
+
+func TestHandleKiroGatewayTimeoutDoesNotInventUpstream503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	h := &GatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		FailureKind:  service.UpstreamFailureFirstSemanticTimeout,
+		RetryAfter:   15 * time.Second,
+		ResponseBody: []byte(`{"error":{"message":"semantic timeout"}}`),
+	}, service.PlatformKiro, false)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "first_semantic_timeout", service.GetOpsNetworkErrorType(c))
+	_, hasUpstreamStatus := c.Get(service.OpsUpstreamStatusCodeKey)
+	require.False(t, hasUpstreamStatus)
+	message, ok := c.Get(service.OpsUpstreamErrorMessageKey)
+	require.True(t, ok)
+	require.Equal(t, "Kiro gateway first semantic timeout", message)
 }
 
 func TestHandleKiroIncompleteStreamExhaustedReturns503(t *testing.T) {

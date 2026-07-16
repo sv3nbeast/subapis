@@ -1872,6 +1872,26 @@ func (h *GatewayHandler) mapUpstreamError(statusCode int) (int, string, string) 
 	}
 }
 
+func recordKiroGatewayTimeoutOps(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+	if c == nil || failoverErr == nil {
+		return
+	}
+	networkType := ""
+	message := ""
+	switch failoverErr.FailureKind {
+	case service.UpstreamFailureResponseHeaderTimeout:
+		networkType = "response_header_timeout"
+		message = "Kiro gateway response header timeout"
+	case service.UpstreamFailureFirstSemanticTimeout:
+		networkType = "first_semantic_timeout"
+		message = "Kiro gateway first semantic timeout"
+	default:
+		return
+	}
+	service.MarkOpsNetworkError(c, networkType)
+	service.SetOpsUpstreamError(c, 0, message, "network_error_type="+networkType)
+}
+
 func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverErr *service.UpstreamFailoverError, fallbackPlatform string) (int, string, string) {
 	if failoverErr == nil {
 		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
@@ -1890,7 +1910,10 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 		return http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later"
 	}
 	switch failoverErr.FailureKind {
-	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout, service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
+	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout:
+		recordKiroGatewayTimeoutOps(c, failoverErr)
+		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
+	case service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
 		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))
 		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
 	}

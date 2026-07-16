@@ -161,17 +161,33 @@ func recordKiroFailoverOps(c *gin.Context, account *Account, failoverErr *Upstre
 		Message:            message,
 	}
 
+	networkType := ""
+	switch failoverErr.FailureKind {
+	case UpstreamFailureResponseHeaderTimeout:
+		networkType = "response_header_timeout"
+	case UpstreamFailureFirstSemanticTimeout:
+		networkType = "first_semantic_timeout"
+	}
 	var transportErr *kiroEndpointTransportError
 	if errors.As(failoverErr.Cause, &transportErr) && transportErr != nil {
 		event.UpstreamURL = transportErr.EndpointURL
-		event.Detail = "network_error_type=" + transportErr.NetworkType
+		if networkType == "" {
+			networkType = transportErr.NetworkType
+		}
+	}
+	if networkType != "" {
+		event.Detail = "network_error_type=" + networkType
 		if failoverErr.KiroRateLimited {
-			event.Detail += "; fallback_transport_error=" + sanitizeUpstreamErrorMessage(transportErr.Error())
+			if transportErr != nil {
+				event.Detail += "; fallback_transport_error=" + sanitizeUpstreamErrorMessage(transportErr.Error())
+			}
 		} else {
 			event.UpstreamStatusCode = 0
 			event.Kind = "network_failover"
-			event.Message = sanitizeUpstreamErrorMessage(transportErr.Error())
-			MarkOpsNetworkError(c, transportErr.NetworkType)
+			if transportErr != nil {
+				event.Message = sanitizeUpstreamErrorMessage(transportErr.Error())
+			}
+			MarkOpsNetworkError(c, networkType)
 			setOpsUpstreamError(c, 0, event.Message, event.Detail)
 		}
 	}
@@ -414,7 +430,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}, nil
 	}
 	accountAttemptStarted := time.Now()
-	semanticObserver := s.startKiroFirstSemanticObservation(ctx, parsed.GroupID, account, accountAttemptStarted)
+	semanticObserver := s.startKiroFirstSemanticObservation(ctx, parsed.GroupID, account, accountAttemptStarted, estimateKiroInputTokens(body))
 	defer semanticObserver.stop()
 
 	token, tokenType, err := s.GetAccessToken(ctx, account)
@@ -920,15 +936,16 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	groupID := parsedGroupID(parsed)
 	resilienceEnforced := s.kiroResilienceEnforced(groupID)
+	inputTokens := estimateKiroInputTokens(anthropicBody)
 	accountAttemptStarted := time.Now()
-	semanticObserver := s.startKiroFirstSemanticObservation(ctx, groupID, account, accountAttemptStarted)
+	semanticObserver := s.startKiroFirstSemanticObservation(ctx, groupID, account, accountAttemptStarted, inputTokens)
 	streamCtx := ctx
 	releaseStreamCtx := context.CancelFunc(func() {})
 	stopPreSemanticTimer := func() {}
 	if resilienceEnforced {
 		var cancelStreamCtx context.CancelCauseFunc
 		var budgetErr error
-		streamCtx, cancelStreamCtx, stopPreSemanticTimer, budgetErr = s.kiroPreSemanticContext(ctx, groupID)
+		streamCtx, cancelStreamCtx, stopPreSemanticTimer, budgetErr = s.kiroPreSemanticContext(ctx, groupID, inputTokens)
 		if budgetErr != nil {
 			return nil, 0, s.newKiroTimeoutFailover(ctx, account, groupID, budgetErr)
 		}
@@ -954,7 +971,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		return nil, 0, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
 
-	inputTokens := estimateKiroInputTokens(anthropicBody)
 	originalInputTokens := inputTokens
 	if isOnlyWebSearchToolInBody(anthropicBody) && !resilienceEnforced {
 		pr, pw := io.Pipe()
@@ -1311,10 +1327,11 @@ func (s *GatewayService) newKiroTimeoutFailover(ctx context.Context, account *Ac
 		},
 	})
 	failoverErr := &UpstreamFailoverError{
-		StatusCode:   http.StatusServiceUnavailable,
-		ResponseBody: body,
-		FailureKind:  failureKind,
-		Cause:        cause,
+		StatusCode:         http.StatusServiceUnavailable,
+		ResponseBody:       body,
+		FailureKind:        failureKind,
+		FailoverProhibited: true,
+		Cause:              cause,
 	}
 	failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, failureKind)
 	return failoverErr
@@ -1403,8 +1420,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			}}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 			accountRound, _ := AccountSwitchCountFromContext(ctx)
-			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1)
 			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForInput(groupID, requestCtx.PayloadInputTokenEstimate)
+			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1, responseHeaderTimeout)
 			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 				return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			})
@@ -1447,6 +1464,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 							UpstreamDone: physicalDone,
 						}
 						failoverErr := newKiroEndpointTransportFailover(transportErr)
+						failoverErr.FailoverProhibited = true
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)
 						failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, failoverErr.FailureKind)
 						return nil, requestCtx, failoverErr
@@ -1462,6 +1480,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					}
 					failoverErr := newKiroEndpointTransportFailover(transportErr)
 					failoverErr.StatusCode = http.StatusServiceUnavailable
+					failoverErr.FailoverProhibited = true
 					failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 					if errors.As(err, &headerTimeout) {
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)

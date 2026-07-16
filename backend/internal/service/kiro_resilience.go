@@ -918,11 +918,11 @@ func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupI
 	return context.WithValue(ctx, kiroResilienceObservationContextKey{}, observation), nil
 }
 
-func (s *GatewayService) startKiroFirstSemanticObservation(ctx context.Context, groupID *int64, account *Account, started time.Time) *kiroFirstSemanticObserver {
+func (s *GatewayService) startKiroFirstSemanticObservation(ctx context.Context, groupID *int64, account *Account, started time.Time, inputTokens int) *kiroFirstSemanticObserver {
 	if !s.kiroResilienceObserved(groupID) {
 		return nil
 	}
-	timeout := time.Duration(s.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds) * time.Second
+	timeout := s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -989,13 +989,16 @@ func (s *GatewayService) startKiroResponseHeaderObservation(
 	endpoint string,
 	accountRound int,
 	endpointAttempt int,
+	timeout time.Duration,
 ) func() {
 	if !s.kiroResilienceObserved(groupID) {
 		return func() {}
 	}
-	timeout := time.Duration(s.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds) * time.Second
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(s.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
 	}
 	accountID := int64(0)
 	if account != nil {
@@ -1125,7 +1128,7 @@ func (s *GatewayService) kiroContextWithinBudget(ctx context.Context, groupID *i
 // kiroPreSemanticContext applies the account and request budgets only until
 // the first semantic event. stopTimer must be called as soon as that event is
 // accepted so a long, healthy generation is not canceled by a failover timer.
-func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *int64) (context.Context, context.CancelCauseFunc, func(), error) {
+func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *int64, inputTokens int) (context.Context, context.CancelCauseFunc, func(), error) {
 	ctx, err := s.StartKiroResilienceBudget(ctx, groupID)
 	if err != nil {
 		return ctx, func(error) {}, func() {}, err
@@ -1139,7 +1142,7 @@ func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *in
 	if remaining <= 0 {
 		return ctx, func(error) {}, func() {}, errKiroFailoverBudgetExceeded
 	}
-	timeout := s.kiroFirstSemanticTimeout(groupID)
+	timeout := s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
 	cause := error(errKiroFirstSemanticTimeout)
 	if timeout <= 0 || remaining < timeout {
 		timeout = remaining
@@ -1183,21 +1186,21 @@ func (s *GatewayService) kiroResponseHeaderTimeout(groupID *int64) time.Duration
 }
 
 // kiroResponseHeaderTimeoutForInput gives large prompt uploads enough time to
-// reach Kiro without weakening the request-wide failover budget. The first
-// semantic deadline remains authoritative and keeps a small parsing headroom.
+// reach Kiro without weakening the request-wide failover budget. The scaled
+// first-semantic deadline remains authoritative and keeps parsing headroom.
 func (s *GatewayService) kiroResponseHeaderTimeoutForInput(groupID *int64, payloadInputTokens int) time.Duration {
 	base := s.kiroResponseHeaderTimeout(groupID)
 	if base <= 0 || payloadInputTokens <= 200_000 {
 		return base
 	}
 	const (
-		tokenStep        = 200_000
-		timeoutStep      = 10 * time.Second
+		tokenStep        = 100_000
+		timeoutStep      = 15 * time.Second
 		semanticHeadroom = 5 * time.Second
 	)
 	steps := (payloadInputTokens - 200_000 + tokenStep - 1) / tokenStep
 	timeout := base + time.Duration(steps)*timeoutStep
-	if semanticTimeout := s.kiroFirstSemanticTimeout(groupID); semanticTimeout > semanticHeadroom {
+	if semanticTimeout := s.kiroFirstSemanticTimeoutForInput(groupID, payloadInputTokens); semanticTimeout > semanticHeadroom {
 		maxTimeout := semanticTimeout - semanticHeadroom
 		if maxTimeout > base && timeout > maxTimeout {
 			timeout = maxTimeout
@@ -1211,6 +1214,25 @@ func (s *GatewayService) kiroFirstSemanticTimeout(groupID *int64) time.Duration 
 		return 0
 	}
 	return time.Duration(s.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds) * time.Second
+}
+
+func (s *GatewayService) kiroFirstSemanticTimeoutForInput(groupID *int64, inputTokens int) time.Duration {
+	base := s.kiroFirstSemanticTimeout(groupID)
+	if base <= 0 || inputTokens <= 200_000 {
+		return base
+	}
+	const (
+		tokenStep   = 100_000
+		timeoutStep = 15 * time.Second
+		budgetGuard = 5 * time.Second
+	)
+	steps := (inputTokens - 200_000 + tokenStep - 1) / tokenStep
+	timeout := base + time.Duration(steps)*timeoutStep
+	budget := time.Duration(s.cfg.Gateway.KiroResilience.FailoverBudgetSeconds) * time.Second
+	if maximum := budget - budgetGuard; maximum > base && timeout > maximum {
+		timeout = maximum
+	}
+	return timeout
 }
 
 func (s *GatewayService) kiroPreSemanticBufferBytes(groupID *int64) int {

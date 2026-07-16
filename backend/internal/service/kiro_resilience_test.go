@@ -216,7 +216,7 @@ func TestKiroSemanticObserverWriterPassesSplitSSEThroughUnchanged(t *testing.T) 
 	defer cancel()
 	tracked, err := svc.StartKiroResilienceTracking(ctx, &groupID, &Account{ID: 181, Platform: PlatformKiro})
 	require.NoError(t, err)
-	observer := svc.startKiroFirstSemanticObservation(tracked, &groupID, &Account{ID: 181, Platform: PlatformKiro}, time.Now())
+	observer := svc.startKiroFirstSemanticObservation(tracked, &groupID, &Account{ID: 181, Platform: PlatformKiro}, time.Now(), 0)
 	require.NotNil(t, observer)
 	t.Cleanup(observer.stop)
 
@@ -247,7 +247,7 @@ func TestKiroSemanticObserverIgnoresPingAndMessageStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	tracked, err := svc.StartKiroResilienceTracking(ctx, &groupID, &Account{ID: 191, Platform: PlatformKiro})
 	require.NoError(t, err)
-	observer := svc.startKiroFirstSemanticObservation(tracked, &groupID, &Account{ID: 191, Platform: PlatformKiro}, time.Now())
+	observer := svc.startKiroFirstSemanticObservation(tracked, &groupID, &Account{ID: 191, Platform: PlatformKiro}, time.Now(), 0)
 	require.NotNil(t, observer)
 
 	var output bytes.Buffer
@@ -275,7 +275,7 @@ func TestKiroResponseHeaderObservationDoesNotCancelRequest(t *testing.T) {
 	defer cancel()
 	before := SnapshotKiroResilienceMetrics().ResponseHeaderTimeoutObservedTotal
 
-	stop := svc.startKiroResponseHeaderObservation(ctx, &groupID, &Account{ID: 201, Platform: PlatformKiro}, "q", 1, 1)
+	stop := svc.startKiroResponseHeaderObservation(ctx, &groupID, &Account{ID: 201, Platform: PlatformKiro}, "q", 1, 1, time.Second)
 	defer stop()
 	require.Eventually(t, func() bool {
 		return SnapshotKiroResilienceMetrics().ResponseHeaderTimeoutObservedTotal == before+1
@@ -434,10 +434,22 @@ func TestKiroResponseHeaderTimeoutScalesForLargePayloads(t *testing.T) {
 	groupID := int64(29)
 
 	require.Equal(t, 30*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 200_000))
-	require.Equal(t, 40*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 400_000))
-	require.Equal(t, 50*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 600_000))
-	require.Equal(t, 55*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 800_000))
-	require.Equal(t, 55*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 1_200_000))
+	require.Equal(t, 45*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 300_000))
+	require.Equal(t, 60*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 400_000))
+	require.Equal(t, 90*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 600_000))
+	require.Equal(t, 95*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 800_000))
+	require.Equal(t, 95*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 1_200_000))
+}
+
+func TestKiroFirstSemanticTimeoutScalesForLargeInputs(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	groupID := int64(13)
+
+	require.Equal(t, 60*time.Second, svc.kiroFirstSemanticTimeoutForInput(&groupID, 200_000))
+	require.Equal(t, 75*time.Second, svc.kiroFirstSemanticTimeoutForInput(&groupID, 300_000))
+	require.Equal(t, 90*time.Second, svc.kiroFirstSemanticTimeoutForInput(&groupID, 400_000))
+	require.Equal(t, 100*time.Second, svc.kiroFirstSemanticTimeoutForInput(&groupID, 600_000))
+	require.Equal(t, 100*time.Second, svc.kiroFirstSemanticTimeoutForInput(&groupID, 1_000_000))
 }
 
 func TestKiroResponseHeaderTimeoutScalingDisabledOutsideEnforce(t *testing.T) {
@@ -593,7 +605,7 @@ func TestKiroPreSemanticContextUsesSharedBudgetAndStopsAfterReady(t *testing.T) 
 	t.Run("budget expires", func(t *testing.T) {
 		budget := &kiroResilienceBudget{duration: 20 * time.Millisecond}
 		ctx := context.WithValue(context.Background(), kiroResilienceBudgetContextKey{}, budget)
-		attemptCtx, cancel, stop, err := svc.kiroPreSemanticContext(ctx, nil)
+		attemptCtx, cancel, stop, err := svc.kiroPreSemanticContext(ctx, nil, 0)
 		require.NoError(t, err)
 		defer cancel(context.Canceled)
 		defer stop()
@@ -609,7 +621,7 @@ func TestKiroPreSemanticContextUsesSharedBudgetAndStopsAfterReady(t *testing.T) 
 	t.Run("semantic ready stops failover timer", func(t *testing.T) {
 		budget := &kiroResilienceBudget{duration: 40 * time.Millisecond}
 		ctx := context.WithValue(context.Background(), kiroResilienceBudgetContextKey{}, budget)
-		attemptCtx, cancel, stop, err := svc.kiroPreSemanticContext(ctx, nil)
+		attemptCtx, cancel, stop, err := svc.kiroPreSemanticContext(ctx, nil, 0)
 		require.NoError(t, err)
 		stop()
 		defer cancel(context.Canceled)
@@ -789,6 +801,7 @@ func TestExecuteKiroUpstreamEnforceDoesNotReplayAfterRequestWrite(t *testing.T) 
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Equal(t, UpstreamFailureTransportError, failoverErr.FailureKind)
+	require.True(t, failoverErr.FailoverProhibited, "a possibly delivered request must not be replayed on another account")
 	require.Equal(t, 1, upstream.requests, "a possibly delivered request must never be replayed on another endpoint")
 }
 
@@ -942,6 +955,7 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
+	require.True(t, failoverErr.FailoverProhibited, "a still-running request must not be replayed on another account")
 	require.NotNil(t, failoverErr.UpstreamDone)
 	require.Equal(t, int32(1), upstream.calls.Load(), "a still-running transport must block the one allowed connection retry")
 
@@ -951,6 +965,50 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	case <-time.After(time.Second):
 		t.Fatal("blocked MCP transport did not exit after release")
 	}
+}
+
+func TestNewKiroTimeoutFailoverProhibitsReplay(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	svc.kiroCooldownStore = &recordingKiroResilienceCooldownStore{}
+	groupID := int64(92)
+	account := &Account{
+		ID: 952, Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "first-semantic-timeout"},
+	}
+
+	failoverErr := svc.newKiroTimeoutFailover(context.Background(), account, &groupID, errKiroFirstSemanticTimeout)
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, UpstreamFailureFirstSemanticTimeout, failoverErr.FailureKind)
+	require.True(t, failoverErr.FailoverProhibited, "a request awaiting semantic output has already reached upstream")
+}
+
+func TestRecordKiroHeaderTimeoutOpsUsesGatewayNetworkSemantics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	headerTimeout := &kiroResponseHeaderTimeoutError{Timeout: 30 * time.Second, Endpoint: "q.us-east-1.amazonaws.com"}
+	transportErr := &kiroEndpointTransportError{
+		EndpointName: "KiroIDE",
+		EndpointURL:  "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+		NetworkType:  "transport",
+		Cause:        headerTimeout,
+	}
+	failoverErr := newKiroEndpointTransportFailover(transportErr)
+
+	recordKiroFailoverOps(c, &Account{ID: 953, Name: "header-timeout", Platform: PlatformKiro}, failoverErr)
+
+	require.Equal(t, "response_header_timeout", GetOpsNetworkErrorType(c))
+	_, hasUpstreamStatus := c.Get(OpsUpstreamStatusCodeKey)
+	require.False(t, hasUpstreamStatus)
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, 1)
+	require.Zero(t, events[0].UpstreamStatusCode)
+	require.Equal(t, "network_failover", events[0].Kind)
+	require.Equal(t, "network_error_type=response_header_timeout", events[0].Detail)
 }
 
 func TestHandleKiroHTTPErrorEnforceNormalizesFinal5xxTo503(t *testing.T) {

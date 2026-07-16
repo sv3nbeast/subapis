@@ -576,8 +576,9 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 		}
 		accountRound, _ := AccountSwitchCountFromContext(ctx)
-		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint, accountRound+1, attempt+1)
-		resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, s.kiroResponseHeaderTimeout(groupID), func(timedReq *http.Request) (*http.Response, error) {
+		responseHeaderTimeout := s.kiroResponseHeaderTimeout(groupID)
+		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint, accountRound+1, attempt+1, responseHeaderTimeout)
+		resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 			return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		})
 		stopHeaderObservation()
@@ -621,6 +622,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			}
 			failoverErr := newKiroEndpointTransportFailover(transportErr)
 			failoverErr.StatusCode = http.StatusServiceUnavailable
+			failoverErr.FailoverProhibited = wroteRequest.Load() || !physicalCleaned
 			failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 			var headerTimeout *kiroResponseHeaderTimeoutError
 			if errors.As(err, &headerTimeout) {
