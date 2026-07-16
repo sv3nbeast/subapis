@@ -429,6 +429,23 @@ func TestDoKiroWithResponseHeaderTimeoutClosesResponseReturnedWithError(t *testi
 	}
 }
 
+func TestKiroResponseHeaderTimeoutScalesForLargePayloads(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	groupID := int64(29)
+
+	require.Equal(t, 30*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 200_000))
+	require.Equal(t, 40*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 400_000))
+	require.Equal(t, 50*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 600_000))
+	require.Equal(t, 55*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 800_000))
+	require.Equal(t, 55*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 1_200_000))
+}
+
+func TestKiroResponseHeaderTimeoutScalingDisabledOutsideEnforce(t *testing.T) {
+	svc := observedKiroResilienceTestService()
+	groupID := int64(29)
+	require.Zero(t, svc.kiroResponseHeaderTimeoutForInput(&groupID, 800_000))
+}
+
 func TestEnsureKiro429CooldownIsIdempotentAcrossStreamGate(t *testing.T) {
 	store := &recordingKiroResilienceCooldownStore{}
 	svc := enforcedKiroResilienceTestService()

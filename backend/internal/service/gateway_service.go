@@ -6583,6 +6583,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, fmt.Errorf("normalize claude code date watermark: %w", err)
 		}
 	}
+	if account != nil && account.Platform == PlatformKiro {
+		ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
+	}
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {

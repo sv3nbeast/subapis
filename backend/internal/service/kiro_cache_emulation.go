@@ -41,11 +41,17 @@ type kiroCacheEmulationUsage struct {
 	pendingCommit              *kiroCachePendingCommit
 }
 
-type kiroCachePendingCommit struct {
-	once      sync.Once
+type kiroCacheBillingScopeContextKey struct{}
+
+type kiroCacheIdentity struct {
 	cacheKey  uint64
 	stableKey string
-	profile   *kiroCacheProfile
+}
+
+type kiroCachePendingCommit struct {
+	once       sync.Once
+	identities []kiroCacheIdentity
+	profile    *kiroCacheProfile
 }
 
 type kiroCacheEntry struct {
@@ -88,17 +94,31 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 	if !ok {
 		return nil
 	}
-	cacheKey := kiroCacheCredentialKey(account)
-	if cacheKey == 0 {
+	physicalIdentity := kiroCacheIdentity{
+		cacheKey:  kiroCacheCredentialKey(account),
+		stableKey: strings.TrimSpace(kiroCacheCredentialIdentity(account)),
+	}
+	if physicalIdentity.cacheKey == 0 {
 		return nil
 	}
-	stableKey := strings.TrimSpace(kiroCacheCredentialIdentity(account))
+	billingIdentity := physicalIdentity
+	if scopedIdentity, ok := kiroCacheBillingIdentityFromContext(ctx); ok {
+		billingIdentity = scopedIdentity
+	}
 	persistence := s.kiroCachePersistenceStore()
-	match := globalKiroCacheTracker.match(ctx, stableKey, cacheKey, profile, persistence)
+	match := globalKiroCacheTracker.match(ctx, billingIdentity.stableKey, billingIdentity.cacheKey, profile, persistence)
+	if match == nil && billingIdentity.stableKey != physicalIdentity.stableKey {
+		// Preserve existing account-level cache benefits while adding logical
+		// continuity across gateway-driven account failover.
+		match = globalKiroCacheTracker.match(ctx, physicalIdentity.stableKey, physicalIdentity.cacheKey, profile, persistence)
+	}
+	identities := []kiroCacheIdentity{billingIdentity}
+	if billingIdentity.stableKey != physicalIdentity.stableKey {
+		identities = append(identities, physicalIdentity)
+	}
 	result := &kiroCacheEmulationUsage{pendingCommit: &kiroCachePendingCommit{
-		cacheKey:  cacheKey,
-		stableKey: stableKey,
-		profile:   profile,
+		identities: identities,
+		profile:    profile,
 	}}
 	if match != nil {
 		result.CacheReadInputTokens = min(match.cumulativeTokens, profile.totalInputTokens)
@@ -134,13 +154,66 @@ func (s *GatewayService) commitKiroCacheEmulationUsage(ctx context.Context, usag
 	}
 	pending := usage.pendingCommit
 	pending.once.Do(func() {
-		persistEntries := globalKiroCacheTracker.update(pending.cacheKey, pending.profile)
 		persistence := s.kiroCachePersistenceStore()
-		if persistence == nil || pending.stableKey == "" || len(persistEntries) == 0 {
-			return
+		for _, identity := range pending.identities {
+			if identity.cacheKey == 0 {
+				continue
+			}
+			persistEntries := globalKiroCacheTracker.update(identity.cacheKey, pending.profile)
+			if persistence == nil || identity.stableKey == "" || len(persistEntries) == 0 {
+				continue
+			}
+			_ = persistence.UpsertKiroCacheFingerprints(ctx, identity.stableKey, persistEntries)
 		}
-		_ = persistence.UpsertKiroCacheFingerprints(ctx, pending.stableKey, persistEntries)
 	})
+}
+
+func withKiroCacheBillingIdentity(ctx context.Context, groupID, apiKeyID int64, sessionHash string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionHash = strings.TrimSpace(sessionHash)
+	if groupID <= 0 || apiKeyID <= 0 || sessionHash == "" {
+		return ctx
+	}
+	seed := fmt.Sprintf("v1|group:%d|api_key:%d|session:%s", groupID, apiKeyID, sessionHash)
+	digest := sha256.Sum256([]byte(seed))
+	stableKey := "logical_session:" + hex.EncodeToString(digest[:])
+	identity := kiroCacheIdentity{cacheKey: hashKiroCacheIdentity(stableKey), stableKey: stableKey}
+	return context.WithValue(ctx, kiroCacheBillingScopeContextKey{}, identity)
+}
+
+func (s *GatewayService) withKiroCacheBillingScopeForParsed(ctx context.Context, parsed *ParsedRequest) context.Context {
+	if parsed == nil || parsed.SessionContext == nil || !s.kiroResilienceEnforced(parsed.GroupID) {
+		return ctx
+	}
+	if _, ok := kiroCacheBillingIdentityFromContext(ctx); ok {
+		return ctx
+	}
+	return withKiroCacheBillingIdentity(
+		ctx,
+		derefGroupID(parsed.GroupID),
+		parsed.SessionContext.APIKeyID,
+		s.GenerateSessionHash(parsed),
+	)
+}
+
+func kiroCacheBillingIdentityFromContext(ctx context.Context) (kiroCacheIdentity, bool) {
+	if ctx == nil {
+		return kiroCacheIdentity{}, false
+	}
+	identity, ok := ctx.Value(kiroCacheBillingScopeContextKey{}).(kiroCacheIdentity)
+	return identity, ok && identity.cacheKey != 0 && strings.TrimSpace(identity.stableKey) != ""
+}
+
+func hashKiroCacheIdentity(stableKey string) uint64 {
+	stableKey = strings.TrimSpace(stableKey)
+	if stableKey == "" {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(stableKey))
+	return h.Sum64()
 }
 
 func (s *GatewayService) kiroCachePersistenceStore() KiroCachePersistenceStore {
@@ -726,13 +799,7 @@ func (t *kiroCacheTracker) pruneLocked(now time.Time) {
 }
 
 func kiroCacheCredentialKey(account *Account) uint64 {
-	stableKey := strings.TrimSpace(kiroCacheCredentialIdentity(account))
-	if stableKey == "" {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(stableKey))
-	return h.Sum64()
+	return hashKiroCacheIdentity(kiroCacheCredentialIdentity(account))
 }
 
 func kiroCacheCredentialIdentity(account *Account) string {

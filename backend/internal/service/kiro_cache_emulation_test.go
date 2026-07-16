@@ -177,6 +177,96 @@ func TestKiroCacheEmulationAccountIsolation(t *testing.T) {
 	}
 }
 
+func TestKiroCacheEmulationBillingScopeSurvivesAccountFailover(t *testing.T) {
+	resetKiroCacheTracker()
+	cache := &fakeKiroGatewayCache{entries: make(map[string]time.Time)}
+	svc := &GatewayService{cache: cache}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("logical failover", false)
+	ctx := withKiroCacheBillingIdentity(context.Background(), group.ID, 795, "same-user-session")
+	accountA := kiroCacheAccount(101, "refresh-logical-a", "access-a")
+	accountB := kiroCacheAccount(102, "refresh-logical-b", "access-b")
+
+	first := svc.buildKiroCacheEmulationUsageForRequest(ctx, accountA, group, body, "claude-sonnet-4-6", 2000)
+	if first == nil || first.CacheCreationInputTokens != 2000 || first.CacheReadInputTokens != 0 {
+		t.Fatalf("unexpected first usage: %+v", first)
+	}
+	svc.commitKiroCacheEmulationUsage(ctx, first)
+
+	failover := svc.buildKiroCacheEmulationUsageForRequest(ctx, accountB, group, body, "claude-sonnet-4-6", 2000)
+	if failover == nil || failover.CacheReadInputTokens != 2000 || failover.CacheCreationInputTokens != 0 {
+		t.Fatalf("gateway account failover must preserve user billing cache continuity: %+v", failover)
+	}
+	svc.commitKiroCacheEmulationUsage(ctx, failover)
+
+	physical := svc.buildKiroCacheEmulationUsageForRequest(context.Background(), accountB, group, body, "claude-sonnet-4-6", 2000)
+	if physical == nil || physical.CacheReadInputTokens != 2000 || physical.CacheCreationInputTokens != 0 {
+		t.Fatalf("logical billing commit must also preserve account-level cache state: %+v", physical)
+	}
+}
+
+func TestKiroCacheEmulationBillingScopeDoesNotWarmOnFailedAttempt(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("logical failed attempt", false)
+	ctx := withKiroCacheBillingIdentity(context.Background(), group.ID, 795, "same-user-session")
+
+	failed := svc.buildKiroCacheEmulationUsageForRequest(ctx, kiroCacheAccount(103, "refresh-failed-a", "access-a"), group, body, "claude-sonnet-4-6", 2000)
+	if failed == nil || failed.CacheCreationInputTokens != 2000 {
+		t.Fatalf("unexpected failed-attempt preview: %+v", failed)
+	}
+
+	retry := svc.buildKiroCacheEmulationUsageForRequest(ctx, kiroCacheAccount(104, "refresh-failed-b", "access-b"), group, body, "claude-sonnet-4-6", 2000)
+	if retry == nil || retry.CacheCreationInputTokens != 2000 || retry.CacheReadInputTokens != 0 {
+		t.Fatalf("failed attempt must not warm logical billing cache: %+v", retry)
+	}
+}
+
+func TestKiroCacheEmulationBillingScopeIsolatedByAPIKeyAndSession(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("logical isolation", false)
+	seedCtx := withKiroCacheBillingIdentity(context.Background(), group.ID, 795, "session-a")
+	seed := svc.buildKiroCacheEmulationUsageForRequest(seedCtx, kiroCacheAccount(105, "refresh-scope-a", "access-a"), group, body, "claude-sonnet-4-6", 2000)
+	svc.commitKiroCacheEmulationUsage(seedCtx, seed)
+
+	otherAPIKeyCtx := withKiroCacheBillingIdentity(context.Background(), group.ID, 796, "session-a")
+	otherAPIKey := svc.buildKiroCacheEmulationUsageForRequest(otherAPIKeyCtx, kiroCacheAccount(106, "refresh-scope-b", "access-b"), group, body, "claude-sonnet-4-6", 2000)
+	if otherAPIKey == nil || otherAPIKey.CacheCreationInputTokens != 2000 || otherAPIKey.CacheReadInputTokens != 0 {
+		t.Fatalf("different API key must not share logical billing cache: %+v", otherAPIKey)
+	}
+
+	otherSessionCtx := withKiroCacheBillingIdentity(context.Background(), group.ID, 795, "session-b")
+	otherSession := svc.buildKiroCacheEmulationUsageForRequest(otherSessionCtx, kiroCacheAccount(107, "refresh-scope-c", "access-c"), group, body, "claude-sonnet-4-6", 2000)
+	if otherSession == nil || otherSession.CacheCreationInputTokens != 2000 || otherSession.CacheReadInputTokens != 0 {
+		t.Fatalf("different session must not share logical billing cache: %+v", otherSession)
+	}
+}
+
+func TestKiroCacheBillingScopeForParsedOnlyAppliesInEnforceMode(t *testing.T) {
+	groupID := int64(29)
+	body := kiroCacheRequestBody("parsed scope", false)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	if err != nil {
+		t.Fatalf("parse request: %v", err)
+	}
+	parsed.GroupID = &groupID
+	parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroAutoStickyEnabled: true}
+	parsed.SessionContext = &SessionContext{APIKeyID: 795}
+
+	enforcedCtx := enforcedKiroResilienceTestService().withKiroCacheBillingScopeForParsed(context.Background(), parsed)
+	if _, ok := kiroCacheBillingIdentityFromContext(enforcedCtx); !ok {
+		t.Fatal("enforce mode should attach logical cache billing scope")
+	}
+
+	observedCtx := observedKiroResilienceTestService().withKiroCacheBillingScopeForParsed(context.Background(), parsed)
+	if _, ok := kiroCacheBillingIdentityFromContext(observedCtx); ok {
+		t.Fatal("observe mode must preserve legacy account-scoped billing")
+	}
+}
+
 func TestKiroCacheEmulationStableCredentialIsolation(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}

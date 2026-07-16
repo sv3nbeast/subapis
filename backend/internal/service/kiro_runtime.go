@@ -253,6 +253,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
 	}
+	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	if msg := validateKiroRequestShape(parsed); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":  "error",
@@ -916,6 +917,7 @@ func resolveKiroUpstreamModel(mappedModel string) string {
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
+	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	groupID := parsedGroupID(parsed)
 	resilienceEnforced := s.kiroResilienceEnforced(groupID)
 	accountAttemptStarted := time.Now()
@@ -1402,7 +1404,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 			accountRound, _ := AccountSwitchCountFromContext(ctx)
 			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1)
-			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, s.kiroResponseHeaderTimeout(groupID), func(timedReq *http.Request) (*http.Response, error) {
+			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForInput(groupID, requestCtx.PayloadInputTokenEstimate)
+			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 				return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			})
 			stopHeaderObservation()
@@ -1413,6 +1416,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 				zap.String("endpoint", endpoint.Name),
 				zap.Int("account_round", accountRound+1),
 				zap.Int("endpoint_attempt", attempt+1),
+				zap.Int64("response_header_timeout_ms", responseHeaderTimeout.Milliseconds()),
+				zap.Int("payload_input_estimate", requestCtx.PayloadInputTokenEstimate),
 				zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
 				zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
 				zap.Error(err),

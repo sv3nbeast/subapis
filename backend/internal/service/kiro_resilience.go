@@ -1182,6 +1182,30 @@ func (s *GatewayService) kiroResponseHeaderTimeout(groupID *int64) time.Duration
 	return time.Duration(s.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds) * time.Second
 }
 
+// kiroResponseHeaderTimeoutForInput gives large prompt uploads enough time to
+// reach Kiro without weakening the request-wide failover budget. The first
+// semantic deadline remains authoritative and keeps a small parsing headroom.
+func (s *GatewayService) kiroResponseHeaderTimeoutForInput(groupID *int64, payloadInputTokens int) time.Duration {
+	base := s.kiroResponseHeaderTimeout(groupID)
+	if base <= 0 || payloadInputTokens <= 200_000 {
+		return base
+	}
+	const (
+		tokenStep        = 200_000
+		timeoutStep      = 10 * time.Second
+		semanticHeadroom = 5 * time.Second
+	)
+	steps := (payloadInputTokens - 200_000 + tokenStep - 1) / tokenStep
+	timeout := base + time.Duration(steps)*timeoutStep
+	if semanticTimeout := s.kiroFirstSemanticTimeout(groupID); semanticTimeout > semanticHeadroom {
+		maxTimeout := semanticTimeout - semanticHeadroom
+		if maxTimeout > base && timeout > maxTimeout {
+			timeout = maxTimeout
+		}
+	}
+	return timeout
+}
+
 func (s *GatewayService) kiroFirstSemanticTimeout(groupID *int64) time.Duration {
 	if !s.kiroResilienceEnforced(groupID) || s.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds <= 0 {
 		return 0
