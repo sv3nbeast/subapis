@@ -1969,6 +1969,199 @@ func TestForwardAsAnthropic_CompleteStreamDoesNotRecordMissingTerminalOps(t *tes
 	require.False(t, ok)
 }
 
+func TestForwardAsAnthropic_DoneSentinelFinalizesCompleteContentWithoutTerminal(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{name: "synchronous scanner"},
+		{
+			name: "keepalive scanner",
+			cfg: &config.Config{Gateway: config.GatewayConfig{
+				StreamKeepaliveInterval: 1,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamBody := strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_done","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","output_index":0,"delta":"complete content"}`,
+				"",
+				"data: [DONE]",
+				"",
+			}, "\n")
+
+			result, err, rec, c := forwardOpenAICompatAnthropicTestStream(t, upstreamBody, tt.cfg)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Contains(t, rec.Body.String(), "complete content")
+			require.Contains(t, rec.Body.String(), "event: message_stop")
+			_, ok := c.Get(OpsUpstreamErrorsKey)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestForwardAsAnthropic_DoneSentinelRejectsIncompleteToolCall(t *testing.T) {
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_tool","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read"}}`,
+		"",
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"file_path\":"}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	result, err, rec, c := forwardOpenAICompatAnthropicTestStream(t, upstreamBody, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing terminal event")
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), `"type":"tool_use"`)
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
+	events := openAICompatOpsEvents(t, c)
+	require.Len(t, events, 1)
+	require.Equal(t, "stream_missing_terminal", events[0].Kind)
+}
+
+func TestForwardAsAnthropic_CleanEOFFinalizesClosedContentWithoutTerminal(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{name: "synchronous scanner"},
+		{
+			name: "keepalive scanner",
+			cfg: &config.Config{Gateway: config.GatewayConfig{
+				StreamKeepaliveInterval: 1,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamBody := strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_clean_eof","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","output_index":0,"delta":"closed content"}`,
+				"",
+				`data: {"type":"response.output_text.done","output_index":0,"text":"closed content"}`,
+				"",
+			}, "\n")
+
+			result, err, rec, c := forwardOpenAICompatAnthropicTestStream(t, upstreamBody, tt.cfg)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Contains(t, rec.Body.String(), "closed content")
+			require.Contains(t, rec.Body.String(), "event: message_stop")
+			_, ok := c.Get(OpsUpstreamErrorsKey)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestForwardAsAnthropic_DoneSentinelRejectsMalformedNonTerminalFrame(t *testing.T) {
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_bad_delta","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","output_index":0,"delta":"valid prefix"}`,
+		"",
+		`data: {"type":"response.output_text.delta","output_index":0,"delta":"truncated`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	result, err, rec, _ := forwardOpenAICompatAnthropicTestStream(t, upstreamBody, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing terminal event")
+	require.NotNil(t, result)
+	require.Contains(t, rec.Body.String(), "valid prefix")
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
+}
+
+func TestForwardAsAnthropic_TruncatedSuccessfulTerminalFinalizesCompleteContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		terminalLines []string
+	}{
+		{
+			name: "event header hint",
+			terminalLines: []string{
+				"event: response.completed",
+				`data: {"type":"response.completed","response":`,
+			},
+		},
+		{
+			name: "data payload hint",
+			terminalLines: []string{
+				`data: {"type":"response.completed","response":`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := []string{
+				`data: {"type":"response.created","response":{"id":"resp_truncated_terminal","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","output_index":0,"delta":"complete before terminal"}`,
+				"",
+			}
+			lines = append(lines, tt.terminalLines...)
+			lines = append(lines, "")
+
+			result, err, rec, c := forwardOpenAICompatAnthropicTestStream(t, strings.Join(lines, "\n"), nil)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Contains(t, rec.Body.String(), "complete before terminal")
+			require.Contains(t, rec.Body.String(), "event: message_stop")
+			_, ok := c.Get(OpsUpstreamErrorsKey)
+			require.False(t, ok)
+		})
+	}
+}
+
+func forwardOpenAICompatAnthropicTestStream(
+	t *testing.T,
+	upstreamBody string,
+	cfg *config.Config,
+) (*OpenAIForwardResult, error, *httptest.ResponseRecorder, *gin.Context) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":64,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_explicit_end"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	return result, err, rec, c
+}
+
 func openAICompatOpsEvents(t *testing.T, c *gin.Context) []*OpsUpstreamErrorEvent {
 	t.Helper()
 	v, ok := c.Get(OpsUpstreamErrorsKey)

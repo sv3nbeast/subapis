@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -572,6 +573,37 @@ func isOpenAICompatDoneSentinelLine(line string) bool {
 	return ok && strings.TrimSpace(payload) == "[DONE]"
 }
 
+func openAICompatEventTypeHint(frame openAICompatSSEFrame) string {
+	eventType := strings.TrimSpace(frame.EventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(gjson.Get(frame.Data, "type").String())
+	}
+	return eventType
+}
+
+func isOpenAICompatSuccessfulTerminalHint(eventType string) bool {
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "response.completed" || eventType == "response.done" {
+		return true
+	}
+	return false
+}
+
+func canFinalizeOpenAICompatExplicitEnd(state *apicompat.ResponsesEventToAnthropicState) bool {
+	if state == nil || !state.MessageStartSent || state.MessageStopSent {
+		return false
+	}
+	if state.ContentBlockIndex == 0 && !state.ContentBlockOpen {
+		return false
+	}
+	return !state.ContentBlockOpen || state.CurrentBlockType != "tool_use"
+}
+
+func canFinalizeOpenAICompatCleanEOF(state *apicompat.ResponsesEventToAnthropicState) bool {
+	return state != nil && state.MessageStartSent && !state.MessageStopSent &&
+		!state.ContentBlockOpen && state.ContentBlockIndex > 0
+}
+
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
@@ -757,6 +789,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	clientOutputStarted := false
 	var streamFailoverErr error
 	var streamNonFailoverErr error
+	malformedNonTerminalSeen := false
 
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
@@ -790,8 +823,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 
-	// processDataLine handles a single "data: ..." SSE line from upstream.
-	processDataLine := func(payload string) bool {
+	// processDataLine handles a single Responses SSE payload from upstream.
+	processDataLine := func(payload, eventTypeHint string) bool {
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
@@ -800,8 +833,20 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			if isOpenAICompatSuccessfulTerminalHint(eventTypeHint) && canFinalizeOpenAICompatExplicitEnd(state) {
+				logger.L().Warn("openai messages stream: finalizing after truncated successful terminal event",
+					zap.Error(err),
+					zap.String("event_type", eventTypeHint),
+					zap.Int("payload_bytes", len(payload)),
+					zap.String("request_id", requestID),
+				)
+				return true
+			}
+			malformedNonTerminalSeen = true
 			logger.L().Warn("openai messages stream: failed to parse event",
 				zap.Error(err),
+				zap.String("event_type", strings.TrimSpace(eventTypeHint)),
+				zap.Int("payload_bytes", len(payload)),
 				zap.String("request_id", requestID),
 			)
 			return false
@@ -965,7 +1010,36 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
-		return processDataLine(payload)
+		return processDataLine(payload, openAICompatEventTypeHint(frame))
+	}
+	finalizeDoneSentinel := func() (*OpenAIForwardResult, error) {
+		if malformedNonTerminalSeen || !canFinalizeOpenAICompatExplicitEnd(state) {
+			return missingTerminalErr()
+		}
+		logger.L().Warn("openai messages stream: accepting done sentinel without terminal event",
+			zap.String("request_id", requestID),
+			zap.Int64("account_id", account.ID),
+			zap.String("platform", account.Platform),
+		)
+		return finalizeStream()
+	}
+	finalizeCleanEOF := func() (*OpenAIForwardResult, error) {
+		if malformedNonTerminalSeen || !canFinalizeOpenAICompatCleanEOF(state) {
+			return missingTerminalErr()
+		}
+		logger.L().Warn("openai messages stream: finalizing cleanly closed content without terminal event",
+			zap.String("request_id", requestID),
+			zap.Int64("account_id", account.ID),
+			zap.String("platform", account.Platform),
+		)
+		return finalizeStream()
+	}
+	finishPendingFrame := func(parser *openAICompatSSEFrameParser) bool {
+		frame, ok := parser.Finish()
+		if !ok || strings.TrimSpace(frame.Data) == "[DONE]" {
+			return false
+		}
+		return processFrame(frame)
 	}
 
 	// ── Determine keepalive interval ──
@@ -980,7 +1054,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		for scanner.Scan() {
 			line := scanner.Text()
 			if isOpenAICompatDoneSentinelLine(line) {
-				return missingTerminalErr()
+				if finishPendingFrame(&parser) {
+					return finalizeStream()
+				}
+				return finalizeDoneSentinel()
 			}
 			frame, ok := parser.AddLine(line)
 			if !ok {
@@ -996,13 +1073,13 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
-				return missingTerminalErr()
+				return finalizeDoneSentinel()
 			}
 			if processFrame(frame) {
 				return finalizeStream()
 			}
 		}
-		return missingTerminalErr()
+		return finalizeCleanEOF()
 	}
 
 	// ── With keepalive: goroutine + channel + select ──
@@ -1055,13 +1132,13 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				// Upstream closed
 				if frame, ok := parser.Finish(); ok {
 					if strings.TrimSpace(frame.Data) == "[DONE]" {
-						return missingTerminalErr()
+						return finalizeDoneSentinel()
 					}
 					if processFrame(frame) {
 						return finalizeStream()
 					}
 				}
-				return missingTerminalErr()
+				return finalizeCleanEOF()
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
@@ -1070,7 +1147,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			lastDataAt = time.Now()
 			line := ev.line
 			if isOpenAICompatDoneSentinelLine(line) {
-				return missingTerminalErr()
+				if finishPendingFrame(&parser) {
+					return finalizeStream()
+				}
+				return finalizeDoneSentinel()
 			}
 			frame, ok := parser.AddLine(line)
 			if !ok {
