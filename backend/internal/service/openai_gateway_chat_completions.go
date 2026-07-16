@@ -100,6 +100,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	compatPromptCacheInjected := false
+	if promptCacheKey == "" && account.Platform == PlatformGrok {
+		promptCacheKey = grokPromptCacheSeedFromRequest(c, body)
+		compatPromptCacheInjected = promptCacheKey != ""
+	}
 	if promptCacheKey == "" && account.Type == AccountTypeOAuth && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = deriveCompatPromptCacheKey(&chatReq, upstreamModel)
 		compatPromptCacheInjected = promptCacheKey != ""

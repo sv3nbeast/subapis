@@ -62,6 +62,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	anthropicDigestChain := ""
 	anthropicMatchedDigestChain := ""
 	compatPromptCacheInjected := false
+	if promptCacheKey == "" && account.Platform == PlatformGrok {
+		promptCacheKey = grokPromptCacheSeedFromRequest(c, body)
+		compatPromptCacheInjected = promptCacheKey != ""
+	}
 	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {

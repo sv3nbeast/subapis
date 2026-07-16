@@ -82,6 +82,65 @@ func TestInjectGrokPromptCacheIdentityIsStableAndTenantIsolated(t *testing.T) {
 	require.True(t, strings.HasPrefix(firstKey, grokPromptCacheIdentityPrefix))
 }
 
+func TestGrokPromptCacheSeedUsesStableClaudeSessionAcrossTurns(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Set("api_key", &APIKey{ID: 7})
+	firstBody := []byte(`{"model":"grok-latest","metadata":{"user_id":"{\"device_id\":\"device-1\",\"account_uuid\":\"\",\"session_id\":\"session-1\"}"},"messages":[{"role":"user","content":"hello"}]}`)
+	secondBody := []byte(`{"model":"grok-latest","metadata":{"user_id":"{\"device_id\":\"device-1\",\"account_uuid\":\"\",\"session_id\":\"session-1\"}"},"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"continue"}]}`)
+
+	firstSeed := grokPromptCacheSeedFromRequest(c, firstBody)
+	secondSeed := grokPromptCacheSeedFromRequest(c, secondBody)
+	require.Equal(t, "session-1", firstSeed)
+	require.Equal(t, firstSeed, secondSeed)
+
+	responsesBody := []byte(`{"model":"grok-4.5","input":"hello","stream":true}`)
+	firstUpstreamBody, firstKey, err := injectGrokPromptCacheIdentity(c, responsesBody, "grok-4.5", "messages", firstSeed)
+	require.NoError(t, err)
+	secondUpstreamBody, secondKey, err := injectGrokPromptCacheIdentity(c, responsesBody, "grok-4.5", "messages", secondSeed)
+	require.NoError(t, err)
+	require.Equal(t, firstKey, secondKey)
+	require.Equal(t, firstUpstreamBody, secondUpstreamBody)
+
+	account := &Account{ID: 54, Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: map[string]any{"base_url": xai.DefaultCLIBaseURL}}
+	request, err := buildGrokResponsesRequest(context.Background(), c, account, firstUpstreamBody, "token")
+	require.NoError(t, err)
+	require.Equal(t, firstKey, request.Header.Get("x-grok-conv-id"))
+	require.Equal(t, firstKey, request.Header.Get("x-grok-conversation-id"))
+}
+
+func TestGrokPromptCacheSeedUsesStableContentFallbackForOpenCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("api_key", &APIKey{ID: 8})
+	firstBody := []byte(`{"model":"grok-4.5","messages":[{"role":"system","content":"rules"},{"role":"user","content":"hello"}]}`)
+	secondBody := []byte(`{"model":"grok-4.5","messages":[{"role":"system","content":"rules"},{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"continue"}]}`)
+
+	firstSeed := grokPromptCacheSeedFromRequest(c, firstBody)
+	secondSeed := grokPromptCacheSeedFromRequest(c, secondBody)
+	require.NotEmpty(t, firstSeed)
+	require.Equal(t, firstSeed, secondSeed)
+	require.True(t, strings.HasPrefix(firstSeed, "grok-content-"))
+
+	account := &Account{ID: 55, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	firstMetadata := grokCLIRequestMetadata(c, account, firstBody, "grok-4.5")
+	secondMetadata := grokCLIRequestMetadata(c, account, secondBody, "grok-4.5")
+	require.NotEmpty(t, firstMetadata.ConversationID)
+	require.Equal(t, firstMetadata.ConversationID, secondMetadata.ConversationID)
+}
+
+func TestGrokPromptCacheSeedPrefersClaudeSessionHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("X-Claude-Code-Session-Id", "header-session")
+	body := []byte(`{"prompt_cache_key":"body-session","metadata":{"session_id":"metadata-session"}}`)
+
+	require.Equal(t, "header-session", grokPromptCacheSeedFromRequest(c, body))
+}
+
 func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
