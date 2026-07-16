@@ -20,6 +20,8 @@ type grokRateLimitAccountRepo struct {
 	rateLimitedCalls     int
 	lastRateLimitedID    int64
 	lastRateLimitResetAt time.Time
+	tempCalls            int
+	lastTempReason       string
 }
 
 func (r *grokRateLimitAccountRepo) SetError(_ context.Context, _ int64, errorMessage string) error {
@@ -32,6 +34,12 @@ func (r *grokRateLimitAccountRepo) SetRateLimited(_ context.Context, id int64, r
 	r.rateLimitedCalls++
 	r.lastRateLimitedID = id
 	r.lastRateLimitResetAt = resetAt
+	return nil
+}
+
+func (r *grokRateLimitAccountRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, reason string) error {
+	r.tempCalls++
+	r.lastTempReason = reason
 	return nil
 }
 
@@ -100,7 +108,7 @@ func TestRateLimitServiceGrokPermissionDeniedCreditsMessageUsesBillingPeriodRate
 	require.WithinDuration(t, resetAt, repo.lastRateLimitResetAt, time.Second)
 }
 
-func TestRateLimitServiceGrokGeneric403StillMarksRealEntitlementError(t *testing.T) {
+func TestRateLimitServiceGrokGeneric403StartsWithTemporaryCooldown(t *testing.T) {
 	repo := &grokRateLimitAccountRepo{}
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 	account := &Account{ID: 503, Platform: PlatformGrok, Type: AccountTypeOAuth}
@@ -114,8 +122,27 @@ func TestRateLimitServiceGrokGeneric403StillMarksRealEntitlementError(t *testing
 	)
 
 	require.True(t, shouldFailover)
-	require.Equal(t, 1, repo.setErrorCalls)
+	require.Zero(t, repo.setErrorCalls)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Contains(t, repo.lastTempReason, "(1/3)")
 	require.Zero(t, repo.rateLimitedCalls)
+}
+
+func TestRateLimitServiceGrokGeneric403ThresholdMarksError(t *testing.T) {
+	repo := &grokRateLimitAccountRepo{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc.SetOpenAI403CounterCache(&openAI403CounterCacheStub{counts: []int64{3}})
+	account := &Account{ID: 504, Platform: PlatformGrok, Type: AccountTypeOAuth}
+
+	shouldFailover := svc.HandleUpstreamError(
+		context.Background(), account, http.StatusForbidden, http.Header{},
+		[]byte(`{"code":"permission-denied","error":"Access to the chat endpoint is denied."}`),
+	)
+
+	require.True(t, shouldFailover)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Zero(t, repo.tempCalls)
+	require.Contains(t, repo.lastErrorMessage, "consecutive_403=3/3")
 }
 
 func TestOpenAIGatewayGrokSpendingLimit402RateLimitsFreeAccount(t *testing.T) {

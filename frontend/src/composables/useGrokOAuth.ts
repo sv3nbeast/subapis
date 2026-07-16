@@ -121,6 +121,9 @@ export function useGrokOAuth() {
       client_id: tokenInfo.client_id,
       scope: tokenInfo.scope,
       email: tokenInfo.email,
+      user_id: tokenInfo.user_id,
+      team_id: tokenInfo.team_id,
+      identity_key: tokenInfo.identity_key,
       subscription_tier: tokenInfo.subscription_tier,
       entitlement_status: tokenInfo.entitlement_status,
       base_url: tokenInfo.base_url

@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/droid"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 const upstreamModelsBodyLimit int64 = 8 << 20
@@ -80,6 +81,8 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.Platform == PlatformKiro:
 		return s.buildKiroUpstreamModelsRequest(ctx, account)
+	case account.IsGrok():
+		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI():
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
@@ -93,6 +96,44 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 			fmt.Sprintf("Unsupported platform for upstream model sync: %s", account.Platform), nil,
 		)
 	}
+}
+
+func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	if account == nil {
+		return nil, newUpstreamModelSyncConfigError("Grok account is required", nil)
+	}
+	var token string
+	switch account.Type {
+	case AccountTypeOAuth:
+		if s.grokTokenProvider == nil {
+			return nil, newUpstreamModelSyncConfigError("Grok token provider is not configured", nil)
+		}
+		var err error
+		token, err = s.grokTokenProvider.GetAccessToken(ctx, account)
+		if err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Failed to get Grok access token", err)
+		}
+	case AccountTypeAPIKey:
+		token = strings.TrimSpace(account.GetCredential("api_key"))
+	default:
+		return nil, newUpstreamModelSyncUnsupportedError(fmt.Sprintf("Unsupported Grok account type for upstream model sync: %s", account.Type), nil)
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, newUpstreamModelSyncConfigError("No Grok credential is available", nil)
+	}
+	endpoint, err := xai.BuildModelsURL(account.GetGrokBaseURL())
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Grok model list URL", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Grok model list request", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	req.Header.Set("User-Agent", "sub2api-grok/1.0")
+	xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL(), grokCLIRequestMetadata(nil, account, nil, ""))
+	return req, nil
 }
 
 func (s *AccountTestService) buildKiroUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {

@@ -437,6 +437,14 @@ func BuildChatCompletionsURL(baseURL string) (string, error) {
 	return validatedBaseURL + "/chat/completions", nil
 }
 
+func BuildModelsURL(baseURL string) (string, error) {
+	validatedBaseURL, err := ValidatedBaseURL(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base url: %w", err)
+	}
+	return validatedBaseURL + "/models", nil
+}
+
 func BuildImagesGenerationsURL(baseURL string) (string, error) {
 	validatedBaseURL, err := ValidatedBaseURL(baseURL)
 	if err != nil {

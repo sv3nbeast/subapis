@@ -41,6 +41,10 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if strings.TrimSpace(upstreamModel) == "" {
 		upstreamModel = "grok-4.3"
 	}
+	body, _, err := injectGrokPromptCacheIdentity(c, body, upstreamModel, "responses", grokPromptCacheKeyFromBody(body))
+	if err != nil {
+		return nil, fmt.Errorf("inject Grok prompt cache identity: %w", err)
+	}
 	patchedBody, err := patchGrokResponsesBody(body, upstreamModel)
 	if err != nil {
 		return nil, err
@@ -65,6 +69,18 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if err != nil {
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	}
+	resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+		token = refreshedToken
+		retryReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, refreshedToken)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+	})
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -140,6 +156,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
 	}
 
+	s.markGrokUpstreamSuccess(ctx, account)
 	s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 
 	var usage *OpenAIUsage
@@ -211,11 +228,73 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	out, err = normalizeGrokResponsesResponseFormat(out)
+	if err != nil {
+		return nil, err
+	}
 	out, err = sanitizeGrokResponsesTools(out)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func normalizeGrokResponsesResponseFormat(body []byte) ([]byte, error) {
+	if !gjson.GetBytes(body, "response_format").Exists() {
+		return body, nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	var text map[string]json.RawMessage
+	if raw := payload["text"]; len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return nil, fmt.Errorf("invalid Grok text response format: %w", err)
+		}
+	}
+	if text == nil {
+		text = make(map[string]json.RawMessage)
+	}
+	if raw := bytes.TrimSpace(text["format"]); len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		format, err := normalizeGrokLegacyResponseFormat(payload["response_format"])
+		if err != nil {
+			return nil, err
+		}
+		text["format"] = format
+	}
+	encodedText, err := json.Marshal(text)
+	if err != nil {
+		return nil, err
+	}
+	payload["text"] = encodedText
+	delete(payload, "response_format")
+	return json.Marshal(payload)
+}
+
+func normalizeGrokLegacyResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
+	var format map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &format); err != nil {
+		return nil, fmt.Errorf("invalid Grok response_format: %w", err)
+	}
+	var formatType string
+	_ = json.Unmarshal(format["type"], &formatType)
+	if formatType != "json_schema" || len(bytes.TrimSpace(format["json_schema"])) == 0 {
+		return raw, nil
+	}
+	var schema map[string]json.RawMessage
+	if err := json.Unmarshal(format["json_schema"], &schema); err != nil {
+		return nil, fmt.Errorf("invalid Grok response_format.json_schema: %w", err)
+	}
+	result := make(map[string]json.RawMessage, len(schema)+1)
+	typeJSON, _ := json.Marshal("json_schema")
+	result["type"] = typeJSON
+	for key, value := range schema {
+		if key != "type" {
+			result[key] = value
+		}
+	}
+	return json.Marshal(result)
 }
 
 func isGrokModelInputSchemaError(body []byte) bool {
@@ -889,7 +968,10 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	req.Header.Set("User-Agent", "sub2api-grok/1.0")
 	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
 	if account != nil {
-		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL())
+		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, gjson.GetBytes(body, "model").String()))
+	}
+	if gjson.GetBytes(body, "stream").Bool() {
+		req.Header.Set("Accept-Encoding", "identity")
 	}
 	if c != nil {
 		if v := c.GetHeader("OpenAI-Beta"); strings.TrimSpace(v) != "" {

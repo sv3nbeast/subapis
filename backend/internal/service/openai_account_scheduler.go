@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -2287,6 +2288,9 @@ func buildOpenAIAccountSchedulerScoreSnapshot(
 }
 
 func openAIQuotaHeadroomFactor(account *Account, now time.Time) float64 {
+	if account != nil && account.Platform == PlatformGrok {
+		return grokQuotaHeadroomFactor(account, now)
+	}
 	if account == nil || len(account.Extra) == 0 || openAIQuotaHeadroomSnapshotStale(account.Extra, now) {
 		return openAIQuotaHeadroomNeutralFactor
 	}
@@ -2302,6 +2306,40 @@ func openAIQuotaHeadroomFactor(account *Account, now time.Time) float64 {
 		if secondaryRemaining < openAIQuotaHeadroomSecondaryLowRemain {
 			factor *= openAIQuotaHeadroomNeutralFactor
 		}
+	}
+	return factor
+}
+
+func grokQuotaHeadroomFactor(account *Account, now time.Time) float64 {
+	if account == nil || len(account.Extra) == 0 {
+		return openAIQuotaHeadroomNeutralFactor
+	}
+	factor := openAIQuotaHeadroomNeutralFactor
+	observed := false
+	if billing, err := grokBillingSnapshotFromExtra(account.Extra); err == nil && billing != nil {
+		if updatedAt, err := time.Parse(time.RFC3339, billing.UpdatedAt); err == nil && now.Sub(updatedAt) < openAIQuotaHeadroomSnapshotStaleAfter {
+			if billing.CreditRemainingPercent > 0 || billing.CreditUsagePercent > 0 {
+				factor = clamp01(billing.CreditRemainingPercent / 100)
+				observed = true
+			}
+		}
+	}
+	if snapshot, err := grokQuotaSnapshotFromExtra(account.Extra); err == nil && snapshot != nil {
+		if updatedAt, err := time.Parse(time.RFC3339, snapshot.UpdatedAt); err == nil && now.Sub(updatedAt) < openAIQuotaHeadroomSnapshotStaleAfter {
+			for _, window := range []*xai.QuotaWindow{snapshot.Requests, snapshot.Tokens} {
+				if window == nil || window.Limit == nil || window.Remaining == nil || *window.Limit <= 0 {
+					continue
+				}
+				windowFactor := clamp01(float64(*window.Remaining) / float64(*window.Limit))
+				if !observed || windowFactor < factor {
+					factor = windowFactor
+				}
+				observed = true
+			}
+		}
+	}
+	if !observed {
+		return openAIQuotaHeadroomNeutralFactor
 	}
 	return factor
 }

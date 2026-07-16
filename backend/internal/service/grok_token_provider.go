@@ -123,6 +123,61 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	return accessToken, nil
 }
 
+// ForceRefreshAccessToken refreshes a Grok OAuth credential even when its
+// stored expiry is still in the future. It is used for one-shot recovery when
+// xAI explicitly rejects an otherwise unexpired access token.
+func (p *GrokTokenProvider) ForceRefreshAccessToken(ctx context.Context, account *Account) (string, error) {
+	if p == nil {
+		return "", errors.New("grok token provider not configured")
+	}
+	if account == nil {
+		return "", errors.New("account is nil")
+	}
+	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
+		return "", errors.New("not a grok oauth account")
+	}
+	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		return "", errors.New("grok refresh_token is missing")
+	}
+	if p.refreshAPI == nil || p.executor == nil {
+		return "", errors.New("grok token refresh API not configured")
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
+	defer cancel()
+	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, forceOAuthRefreshExecutor{OAuthRefreshExecutor: p.executor}, 0)
+	if err != nil {
+		p.markTempUnschedulable(account, err)
+		return "", err
+	}
+	if result == nil {
+		return "", errors.New("grok token refresh returned empty result")
+	}
+	if result.LockHeld {
+		return "", errors.New("grok token refresh already in progress")
+	}
+	if result.NewCredentials != nil {
+		account.Credentials = cloneCredentials(result.NewCredentials)
+	} else if result.Account != nil {
+		account.Credentials = cloneCredentials(result.Account.Credentials)
+	}
+
+	accessToken := strings.TrimSpace(account.GetGrokAccessToken())
+	if accessToken == "" {
+		return "", errors.New("access_token not found after forced Grok refresh")
+	}
+	if p.tokenCache != nil {
+		ttl := 30 * time.Minute
+		if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
+			if until := time.Until(*expiresAt); until > 0 {
+				ttl = until
+			}
+		}
+		_ = p.tokenCache.SetAccessToken(ctx, GrokTokenCacheKey(account), accessToken, ttl)
+	}
+	return accessToken, nil
+}
+
 func (p *GrokTokenProvider) markTempUnschedulable(account *Account, refreshErr error) {
 	if p == nil || p.accountRepo == nil || account == nil {
 		return

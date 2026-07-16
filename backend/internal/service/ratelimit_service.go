@@ -876,9 +876,12 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	if account.Platform == PlatformOpenAI {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
-	if account.Platform == PlatformGrok && isGrokQuotaExhausted(account, responseBody) {
-		s.markGrokQuotaExhausted(ctx, account)
-		return true
+	if account.Platform == PlatformGrok {
+		if isGrokQuotaExhausted(account, responseBody) {
+			s.markGrokQuotaExhausted(ctx, account)
+			return true
+		}
+		return s.handleGrok403(ctx, account, upstreamMsg, responseBody)
 	}
 	// 非 Antigravity 平台：保持原有行为
 	msg := buildForbiddenErrorMessage(
@@ -889,6 +892,71 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	)
 	s.handleAuthError(ctx, account, msg)
 	return true
+}
+
+// handleGrok403 avoids turning a single transient edge/entitlement response
+// into a permanent account error. Explicit request paths first force-refresh
+// and retry the OAuth token; this counter is the final cross-request guard.
+func (s *RateLimitService) handleGrok403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) bool {
+	msg := buildForbiddenErrorMessage(
+		"Access forbidden (403):",
+		upstreamMsg,
+		responseBody,
+		"account may be suspended or lack permissions",
+	)
+	if !isGrokAccountScopedForbidden(upstreamMsg, responseBody) {
+		// A request/policy-level 403 can reproduce on every credential. Fail over
+		// without poisoning otherwise healthy accounts; a later success will still
+		// clear any earlier account-scoped 403 counter.
+		slog.Warn("grok_403_request_scoped_no_account_penalty", "account_id", account.ID, "message", msg)
+		return true
+	}
+
+	count := int64(1)
+	if s.openAI403CounterCache != nil {
+		value, err := s.openAI403CounterCache.IncrementOpenAI403Count(ctx, account.ID, openAI403CounterWindowMinutes)
+		if err != nil {
+			slog.Warn("grok_403_increment_failed", "account_id", account.ID, "error", err)
+		} else {
+			count = value
+		}
+	}
+	if count >= openAI403DisableThreshold {
+		msg = fmt.Sprintf("%s | consecutive_403=%d/%d", msg, count, openAI403DisableThreshold)
+		s.handleAuthError(ctx, account, msg)
+		return true
+	}
+
+	until := time.Now().Add(30 * time.Minute)
+	reason := fmt.Sprintf("Grok 403 temporary cooldown (%d/%d): %s", count, openAI403DisableThreshold, msg)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("grok_403_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
+		return true
+	}
+	s.notifyAccountSchedulingBlocked(account, until, "grok_403_temp")
+	slog.Warn("grok_403_temp_unschedulable", "account_id", account.ID, "until", until, "count", count, "threshold", openAI403DisableThreshold)
+	return true
+}
+
+func isGrokAccountScopedForbidden(upstreamMsg string, responseBody []byte) bool {
+	if isGrokCredentialRecoveryCandidate(http.StatusForbidden, responseBody) {
+		return true
+	}
+	text := strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(upstreamMsg),
+		strings.TrimSpace(extractUpstreamErrorMessage(responseBody)),
+		strings.TrimSpace(string(responseBody)),
+	}, " "))
+	for _, signal := range []string{
+		"quota", "billing", "subscription", "entitlement", "permission",
+		"unauthorized", "authentication", "invalid token", "token expired",
+		"usage-exhausted", "insufficient", "spending-limit", "account suspended",
+	} {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 // markGrokQuotaExhausted rate-limits (rather than permanently disables) a Grok

@@ -64,7 +64,7 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build upstream request: %v", err)
 	}
-	setGrokBillingHeaders(req, token)
+	setGrokBillingHeaders(req, token, account)
 
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
 	if err != nil {
@@ -136,7 +136,7 @@ func (s *GrokQuotaService) fetchSubscriptionTier(ctx context.Context, account *A
 	if err != nil {
 		return ""
 	}
-	setGrokBillingHeaders(req, token)
+	setGrokBillingHeaders(req, token, account)
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
 	if err != nil {
 		return ""
@@ -152,7 +152,7 @@ func (s *GrokQuotaService) fetchSubscriptionTier(ctx context.Context, account *A
 	return xai.ParseSettingsSubscriptionTier(body)
 }
 
-func setGrokBillingHeaders(req *http.Request, token string) {
+func setGrokBillingHeaders(req *http.Request, token string, account *Account) {
 	if req == nil {
 		return
 	}
@@ -162,7 +162,12 @@ func setGrokBillingHeaders(req *http.Request, token string) {
 	req.Header.Set("User-Agent", "sub2api-grok-billing/1.0")
 	// Billing endpoints live on cli-chat-proxy; include full CLI identity so
 	// version checks (if any) do not see "none".
-	xai.ApplyCLIChatProxyHeaders(req, xai.DefaultCLIBaseURL)
+	metadata := xai.CLIRequestMetadata{}
+	if account != nil {
+		metadata.AccountID = account.ID
+		metadata.UserID = firstNonEmpty(account.GetCredential("user_id"), account.GetCredential("principal_id"))
+	}
+	xai.ApplyCLIChatProxyHeaders(req, xai.DefaultCLIBaseURL, metadata)
 }
 
 func (s *GrokQuotaService) ResetQuota(ctx context.Context, accountID int64) (*GrokQuotaResetResult, error) {

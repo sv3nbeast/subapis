@@ -159,6 +159,14 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	if account.Platform == PlatformGrok {
+		resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+			return s.sendCCUpstreamRequest(ctx, c, account, targetURL, upstreamBody, clientStream, refreshedToken, customUA)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// 7. Handle error response with failover
@@ -192,6 +200,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
+		s.markGrokUpstreamSuccess(ctx, account)
 		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 	}
 

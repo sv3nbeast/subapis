@@ -129,3 +129,28 @@ func TestGrokTokenProviderRefreshFailureUnschedulesWithRedactedReason(t *testing
 	require.NotContains(t, tempCache.lastState.ErrorMessage, "leaked-access")
 	require.NotContains(t, tempCache.lastState.ErrorMessage, "leaked-refresh")
 }
+
+func TestGrokTokenProviderForceRefreshesUnexpiredToken(t *testing.T) {
+	account := &Account{
+		ID: 56, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "old-access", "refresh_token": "refresh-token",
+			"expires_at": time.Now().Add(4 * time.Hour).UTC().Format(time.RFC3339),
+			"base_url":   xai.DefaultCLIBaseURL,
+		},
+	}
+	repo := &tokenRefreshAccountRepo{accountsByID: map[int64]*Account{56: account}}
+	cache := &grokTokenCacheForProviderTest{lockResult: true}
+	oauthSvc := NewGrokOAuthService(nil, &grokOAuthClientStub{refreshResponse: &xai.TokenResponse{
+		AccessToken: "forced-access", ExpiresIn: 3600,
+	}})
+	defer oauthSvc.Stop()
+	provider := NewGrokTokenProvider(repo, cache)
+	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache), NewGrokTokenRefresher(oauthSvc))
+
+	token, err := provider.ForceRefreshAccessToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "forced-access", token)
+	require.Equal(t, "forced-access", account.GetGrokAccessToken())
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+}

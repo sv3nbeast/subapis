@@ -231,6 +231,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	responsesBody = updatedBody
 	if useGrokResponses {
+		responsesBody, promptCacheKey, err = injectGrokPromptCacheIdentity(c, responsesBody, upstreamModel, "chat", promptCacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("inject Grok chat prompt cache identity: %w", err)
+		}
 		patchedBody, patchErr := patchGrokResponsesBody(responsesBody, upstreamModel)
 		if patchErr != nil {
 			return nil, patchErr
@@ -328,6 +332,20 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		}
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	if useGrokResponses {
+		resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+			retryCtx, releaseRetryCtx := detachUpstreamContext(ctx)
+			defer releaseRetryCtx()
+			retryReq, buildErr := buildGrokResponsesRequest(retryCtx, c, account, responsesBody, refreshedToken)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+		})
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// 8. Handle error response with failover
@@ -362,6 +380,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	// 9. Handle normal response
+	if useGrokResponses {
+		s.markGrokUpstreamSuccess(ctx, account)
+	}
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {

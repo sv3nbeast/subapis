@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -172,6 +173,9 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
 	if stream {
 		upstreamReq.Header.Set("Accept", "text/event-stream")
+		if account != nil && account.Platform == PlatformGrok {
+			upstreamReq.Header.Set("Accept-Encoding", "identity")
+		}
 	} else {
 		upstreamReq.Header.Set("Accept", "application/json")
 	}
@@ -191,7 +195,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// Free Grok Build (cli-chat-proxy) requires CLI identity headers.
 	// Official api.x.ai accounts are unaffected (helper is a no-op).
 	if account != nil && account.Platform == PlatformGrok {
-		xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL())
+		xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, gjson.GetBytes(body, "model").String()))
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效）

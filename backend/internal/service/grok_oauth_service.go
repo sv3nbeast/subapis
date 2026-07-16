@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -101,6 +103,9 @@ type GrokTokenInfo struct {
 	ClientID          string `json:"client_id,omitempty"`
 	Scope             string `json:"scope,omitempty"`
 	Email             string `json:"email,omitempty"`
+	UserID            string `json:"user_id,omitempty"`
+	TeamID            string `json:"team_id,omitempty"`
+	IdentityKey       string `json:"identity_key,omitempty"`
 	SubscriptionTier  string `json:"subscription_tier,omitempty"`
 	EntitlementStatus string `json:"entitlement_status,omitempty"`
 	BaseURL           string `json:"base_url,omitempty"`
@@ -230,6 +235,15 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	if tokenInfo.Email != "" {
 		creds["email"] = tokenInfo.Email
 	}
+	if tokenInfo.UserID != "" {
+		creds["user_id"] = tokenInfo.UserID
+	}
+	if tokenInfo.TeamID != "" {
+		creds["team_id"] = tokenInfo.TeamID
+	}
+	if tokenInfo.IdentityKey != "" {
+		creds["identity_key"] = tokenInfo.IdentityKey
+	}
 	if tokenInfo.SubscriptionTier != "" {
 		creds["subscription_tier"] = tokenInfo.SubscriptionTier
 	}
@@ -241,7 +255,7 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 		baseURL = inferGrokBaseURL(tokenInfo.AccessToken)
 	}
 	creds["base_url"] = baseURL
-	return creds
+	return EnrichGrokOAuthCredentials(creds)
 }
 
 func (s *GrokOAuthService) Stop() {
@@ -271,14 +285,22 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 	if info.TokenType == "" {
 		info.TokenType = "Bearer"
 	}
-	if email := parseJWTEmailClaim(tokenResp.IDToken); email != "" {
-		info.Email = email
-	}
+	claims := parseGrokJWTIdentity(tokenResp.IDToken, tokenResp.AccessToken)
+	info.Email = claims.Email
+	info.UserID = claims.UserID
+	info.TeamID = claims.TeamID
 	if info.Email == "" && existing != nil {
 		if email, _ := existing["email"].(string); email != "" {
 			info.Email = email
 		}
 	}
+	identityCredentials := map[string]any{
+		"client_id": info.ClientID,
+		"email":     info.Email,
+		"user_id":   info.UserID,
+		"team_id":   info.TeamID,
+	}
+	info.IdentityKey = GrokOAuthIdentityKey(identityCredentials)
 	return info
 }
 
@@ -299,22 +321,128 @@ func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string
 	return proxy.URL(), nil
 }
 
-func parseJWTEmailClaim(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
+type grokJWTIdentity struct {
+	Email  string
+	UserID string
+	TeamID string
+}
+
+func parseGrokJWTIdentity(tokens ...string) grokJWTIdentity {
+	var identity grokJWTIdentity
+	for _, token := range tokens {
+		parts := strings.Split(strings.TrimSpace(token), ".")
+		if len(parts) < 2 {
+			continue
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			continue
+		}
+		var claims map[string]any
+		if json.Unmarshal(payload, &claims) != nil {
+			continue
+		}
+		if identity.Email == "" {
+			identity.Email = strings.TrimSpace(grokStringClaim(claims, "email"))
+		}
+		if identity.UserID == "" {
+			identity.UserID = strings.TrimSpace(firstNonEmpty(
+				grokStringClaim(claims, "sub"),
+				grokStringClaim(claims, "user_id"),
+				grokStringClaim(claims, "principal_id"),
+			))
+		}
+		if identity.TeamID == "" {
+			identity.TeamID = strings.TrimSpace(firstNonEmpty(
+				grokStringClaim(claims, "team_id"),
+				grokStringClaim(claims, "organization_id"),
+			))
+		}
+	}
+	return identity
+}
+
+func grokStringClaim(claims map[string]any, key string) string {
+	value, _ := claims[key].(string)
+	return value
+}
+
+// EnrichGrokOAuthCredentials derives stable non-secret identity fields from
+// imported JWTs. It makes both authorization-code and manual refresh-token
+// imports idempotent without relying on rotating token values.
+func EnrichGrokOAuthCredentials(credentials map[string]any) map[string]any {
+	enriched := make(map[string]any, len(credentials)+4)
+	for key, value := range credentials {
+		enriched[key] = value
+	}
+	claims := parseGrokJWTIdentity(
+		grokCredentialString(enriched, "id_token"),
+		grokCredentialString(enriched, "access_token"),
+	)
+	for key, value := range map[string]string{
+		"email": claims.Email, "user_id": claims.UserID, "team_id": claims.TeamID,
+	} {
+		if strings.TrimSpace(grokCredentialString(enriched, key)) == "" && strings.TrimSpace(value) != "" {
+			enriched[key] = strings.TrimSpace(value)
+		}
+	}
+	if identityKey := GrokOAuthIdentityKey(enriched); identityKey != "" {
+		enriched["identity_key"] = identityKey
+	}
+	return enriched
+}
+
+// GrokOAuthIdentityKey returns a stable hash of the OAuth principal, team and
+// client. Token values are deliberately excluded because xAI rotates them.
+func GrokOAuthIdentityKey(credentials map[string]any) string {
+	if credentials == nil {
 		return ""
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
+	principal := strings.TrimSpace(grokCredentialString(credentials, "user_id"))
+	if principal == "" {
+		principal = strings.ToLower(strings.TrimSpace(grokCredentialString(credentials, "email")))
+	}
+	if principal == "" {
 		return ""
 	}
-	var claims struct {
-		Email string `json:"email"`
+	clientID := strings.TrimSpace(grokCredentialString(credentials, "client_id"))
+	if clientID == "" {
+		clientID = xai.DefaultClientID
 	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
+	teamID := strings.TrimSpace(grokCredentialString(credentials, "team_id"))
+	digest := sha256.Sum256([]byte("grok-oauth-v1\x00" + clientID + "\x00" + principal + "\x00" + teamID))
+	return hex.EncodeToString(digest[:])
+}
+
+func SameGrokOAuthIdentity(left, right map[string]any) bool {
+	if left == nil || right == nil {
+		return false
 	}
-	return strings.TrimSpace(claims.Email)
+	left = EnrichGrokOAuthCredentials(left)
+	right = EnrichGrokOAuthCredentials(right)
+	if leftKey, rightKey := grokCredentialString(left, "identity_key"), grokCredentialString(right, "identity_key"); leftKey != "" && leftKey == rightKey {
+		return true
+	}
+	if !grokIdentityFieldCompatible(left, right, "client_id") || !grokIdentityFieldCompatible(left, right, "team_id") {
+		return false
+	}
+	leftUser, rightUser := grokCredentialString(left, "user_id"), grokCredentialString(right, "user_id")
+	if leftUser != "" && rightUser != "" {
+		return leftUser == rightUser
+	}
+	leftEmail := strings.ToLower(grokCredentialString(left, "email"))
+	rightEmail := strings.ToLower(grokCredentialString(right, "email"))
+	return leftEmail != "" && leftEmail == rightEmail
+}
+
+func grokIdentityFieldCompatible(left, right map[string]any, key string) bool {
+	leftValue, rightValue := grokCredentialString(left, key), grokCredentialString(right, key)
+	return leftValue == "" || rightValue == "" || leftValue == rightValue
+}
+
+func grokCredentialString(credentials map[string]any, key string) string {
+	value, _ := credentials[key].(string)
+	return strings.TrimSpace(value)
 }
 
 // inferGrokBaseURL distinguishes xAI API OAuth tokens from Grok CLI tokens.

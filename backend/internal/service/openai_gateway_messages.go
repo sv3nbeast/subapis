@@ -246,6 +246,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	responsesBody = updatedBody
 	if account.Platform == PlatformGrok {
+		responsesBody, promptCacheKey, err = injectGrokPromptCacheIdentity(c, responsesBody, upstreamModel, "messages", promptCacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("inject Grok messages prompt cache identity: %w", err)
+		}
 		patchedBody, patchErr := patchGrokResponsesBody(responsesBody, upstreamModel)
 		if patchErr != nil {
 			return nil, patchErr
@@ -308,6 +312,20 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	if account.Platform == PlatformGrok {
+		resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+			retryCtx, releaseRetryCtx := detachUpstreamContext(ctx)
+			defer releaseRetryCtx()
+			retryReq, buildErr := buildGrokResponsesRequest(retryCtx, c, account, responsesBody, refreshedToken)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+		})
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// 8. Handle error response with failover
@@ -338,6 +356,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 
+	if account.Platform == PlatformGrok {
+		s.markGrokUpstreamSuccess(ctx, account)
+	}
 	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
 		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
 			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)

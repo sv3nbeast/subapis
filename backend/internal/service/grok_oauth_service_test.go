@@ -113,6 +113,33 @@ func TestGrokOAuthServiceBuildAccountCredentialsUsesInferredCLIBaseURL(t *testin
 	require.Equal(t, xai.DefaultCLIBaseURL, svc.BuildAccountCredentials(info)["base_url"])
 }
 
+func TestEnrichGrokOAuthCredentialsBuildsStablePrincipalIdentity(t *testing.T) {
+	first := EnrichGrokOAuthCredentials(map[string]any{
+		"access_token":  grokTestJWT(t, map[string]any{"sub": "user-1", "email": "User@Example.com", "team_id": "team-1"}),
+		"refresh_token": "refresh-a",
+		"client_id":     xai.DefaultClientID,
+	})
+	second := EnrichGrokOAuthCredentials(map[string]any{
+		"access_token":  grokTestJWT(t, map[string]any{"sub": "user-1", "email": "User@Example.com", "team_id": "team-1"}),
+		"refresh_token": "refresh-b",
+		"client_id":     xai.DefaultClientID,
+	})
+
+	require.Equal(t, "user-1", first["user_id"])
+	require.Equal(t, "team-1", first["team_id"])
+	require.Equal(t, first["identity_key"], second["identity_key"])
+	require.True(t, SameGrokOAuthIdentity(first, second))
+}
+
+func TestSameGrokOAuthIdentitySupportsLegacyEmailAndSeparatesTeams(t *testing.T) {
+	legacy := map[string]any{"email": "User@Example.com", "client_id": xai.DefaultClientID}
+	sameUser := map[string]any{"email": "user@example.com", "client_id": xai.DefaultClientID, "team_id": "team-1"}
+	otherTeam := map[string]any{"email": "user@example.com", "client_id": xai.DefaultClientID, "team_id": "team-2"}
+
+	require.True(t, SameGrokOAuthIdentity(legacy, sameUser))
+	require.False(t, SameGrokOAuthIdentity(sameUser, otherTeam))
+}
+
 func TestPreserveGrokOAuthRoutingCredentials(t *testing.T) {
 	account := &Account{
 		Platform: PlatformGrok,

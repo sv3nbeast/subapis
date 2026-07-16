@@ -998,16 +998,24 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	buildRequest := func(accessToken string) (*http.Request, error) {
+		req, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Accept-Encoding", "identity")
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("User-Agent", "sub2api-grok/1.0")
+		// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
+		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, payloadBytes, testModelID))
+		return req, nil
+	}
+	req, err := buildRequest(authToken)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok request")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("User-Agent", "sub2api-grok/1.0")
-	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
-	xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL())
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -1017,6 +1025,17 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API request failed: %s", err.Error()))
+	}
+	recovery := &OpenAIGatewayService{accountRepo: s.accountRepo, grokTokenProvider: s.grokTokenProvider}
+	resp, _, err = recovery.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+		retryReq, buildErr := buildRequest(refreshedToken)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+	})
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API retry failed: %s", err.Error()))
 	}
 	defer func() { _ = resp.Body.Close() }()
 

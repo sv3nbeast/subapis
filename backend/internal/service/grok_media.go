@@ -321,27 +321,34 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return nil, err
 	}
 
-	var bodyReader io.Reader
-	if endpoint.RequiresRequestBody() {
-		bodyReader = bytes.NewReader(body)
-	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
-	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
+	buildRequest := func(accessToken string) (*http.Request, error) {
+		var bodyReader io.Reader
+		if endpoint.RequiresRequestBody() {
+			bodyReader = bytes.NewReader(body)
+		}
+		upstreamReq, buildErr := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		upstreamReq.Header.Set("Authorization", "Bearer "+accessToken)
+		upstreamReq.Header.Set("Accept", "application/json")
+		upstreamReq.Header.Set("User-Agent", "sub2api-grok/1.0")
+		// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
+		xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, requestInfo.Model))
+		if endpoint.RequiresRequestBody() {
+			requestContentType := strings.TrimSpace(contentType)
+			if requestContentType == "" {
+				requestContentType = "application/json"
+			}
+			upstreamReq.Header.Set("Content-Type", requestContentType)
+		}
+		return upstreamReq, nil
+	}
+	upstreamReq, err := buildRequest(token)
 	if err != nil {
 		return nil, err
-	}
-	upstreamReq.Header.Set("Authorization", "Bearer "+token)
-	upstreamReq.Header.Set("Accept", "application/json")
-	upstreamReq.Header.Set("User-Agent", "sub2api-grok/1.0")
-	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
-	xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL())
-	if endpoint.RequiresRequestBody() {
-		contentType = strings.TrimSpace(contentType)
-		if contentType == "" {
-			contentType = "application/json"
-		}
-		upstreamReq.Header.Set("Content-Type", contentType)
 	}
 
 	proxyURL := ""
@@ -350,6 +357,17 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	}
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if err != nil {
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	}
+	resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+		retryReq, buildErr := buildRequest(refreshedToken)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+	})
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -363,6 +381,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, requestModel)
 	}
 
+	s.markGrokUpstreamSuccess(ctx, account)
 	s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {

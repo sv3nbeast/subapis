@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -409,6 +411,35 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIResponse(t *testing.T) {
 	require.Equal(t, []string{"gpt-5", "o3"}, models)
 	require.Equal(t, "https://openai.example.com/v1/models", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer openai-key", upstream.lastReq.Header.Get("Authorization"))
+}
+
+func TestFetchUpstreamSupportedModelsParsesGrokBuildModels(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"grok-4.5"},{"id":"grok-build-0.1"},{"id":"grok-4.5"}]}`)),
+	}}
+	account := &Account{
+		ID: 17, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "grok-access", "base_url": xai.DefaultCLIBaseURL,
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	svc := &AccountTestService{
+		httpUpstream:      upstream,
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-build-0.1"}, models)
+	require.Equal(t, xai.DefaultCLIBaseURL+"/models", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer grok-access", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, xai.CLIClientVersion, upstream.lastReq.Header.Get(xai.CLIClientVersionHdr))
 }
 
 func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {

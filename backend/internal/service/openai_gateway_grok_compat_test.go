@@ -48,6 +48,40 @@ func TestNormalizeGrokResponsesModelInputWorkingInputDefault(t *testing.T) {
 	require.Equal(t, body, normalized)
 }
 
+func TestPatchGrokResponsesBodyNormalizesLegacyResponseFormat(t *testing.T) {
+	body := []byte(`{"model":"grok","input":"json please","response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,"schema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}}}`)
+
+	patched, err := patchGrokResponsesBody(body, "grok-4.5")
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(patched, "response_format").Exists())
+	require.Equal(t, "json_schema", gjson.GetBytes(patched, "text.format.type").String())
+	require.Equal(t, "answer", gjson.GetBytes(patched, "text.format.name").String())
+	require.True(t, gjson.GetBytes(patched, "text.format.strict").Bool())
+	require.Equal(t, "object", gjson.GetBytes(patched, "text.format.schema.type").String())
+}
+
+func TestInjectGrokPromptCacheIdentityIsStableAndTenantIsolated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	first, _ := gin.CreateTestContext(httptest.NewRecorder())
+	first.Set("api_key", &APIKey{ID: 7})
+	second, _ := gin.CreateTestContext(httptest.NewRecorder())
+	second.Set("api_key", &APIKey{ID: 8})
+	body := []byte(`{"model":"grok-4.5","prompt_cache_key":"client-session","input":"hi"}`)
+
+	firstBody, firstKey, err := injectGrokPromptCacheIdentity(first, body, "grok-4.5", "responses", "")
+	require.NoError(t, err)
+	repeatBody, repeatKey, err := injectGrokPromptCacheIdentity(first, body, "grok-4.5", "responses", "")
+	require.NoError(t, err)
+	_, secondKey, err := injectGrokPromptCacheIdentity(second, body, "grok-4.5", "responses", "")
+	require.NoError(t, err)
+
+	require.Equal(t, firstKey, repeatKey)
+	require.Equal(t, firstBody, repeatBody)
+	require.NotEqual(t, firstKey, secondKey)
+	require.Equal(t, firstKey, gjson.GetBytes(firstBody, "prompt_cache_key").String())
+	require.True(t, strings.HasPrefix(firstKey, grokPromptCacheIdentityPrefix))
+}
+
 func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

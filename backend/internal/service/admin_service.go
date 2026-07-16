@@ -2977,6 +2977,18 @@ func normalizeAccountConcurrency(platform, accountType string, concurrency int) 
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
+	if input.Platform == PlatformGrok && input.Type == AccountTypeOAuth {
+		input.Credentials = EnrichGrokOAuthCredentials(input.Credentials)
+		if existing, err := s.upsertExistingGrokOAuthAccount(ctx, input); err != nil {
+			return nil, err
+		} else if existing != nil {
+			return existing, nil
+		}
+	}
+
 	// 绑定分组
 	groupIDs := input.GroupIDs
 	// 如果没有指定分组,自动绑定对应平台的默认分组
@@ -3084,6 +3096,76 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	return account, nil
+}
+
+// upsertExistingGrokOAuthAccount makes authorization-code and manual RT imports
+// idempotent. xAI rotates both access and refresh tokens, so equality must be
+// based on the OAuth principal/team identity rather than token bytes.
+func (s *adminServiceImpl) upsertExistingGrokOAuthAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if s == nil || s.accountRepo == nil || input == nil || input.Platform != PlatformGrok || input.Type != AccountTypeOAuth {
+		return nil, nil
+	}
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformGrok)
+	if err != nil {
+		return nil, fmt.Errorf("list Grok accounts before OAuth upsert: %w", err)
+	}
+	var matched *Account
+	for i := range accounts {
+		candidate := &accounts[i]
+		if candidate.Type != AccountTypeOAuth || !SameGrokOAuthIdentity(candidate.Credentials, input.Credentials) {
+			continue
+		}
+		if matched == nil || candidate.ID < matched.ID {
+			matched = candidate
+		}
+	}
+	if matched == nil {
+		return nil, nil
+	}
+
+	credentials := PreserveGrokOAuthRoutingCredentials(matched, input.Credentials)
+	update := &UpdateAccountInput{
+		Credentials:           credentials,
+		Status:                StatusActive,
+		RateMultiplier:        input.RateMultiplier,
+		LoadFactor:            input.LoadFactor,
+		ExpiresAt:             input.ExpiresAt,
+		AutoPauseOnExpired:    input.AutoPauseOnExpired,
+		SkipMixedChannelCheck: input.SkipMixedChannelCheck,
+	}
+	if strings.TrimSpace(input.Name) != "" {
+		update.Name = input.Name
+	}
+	if input.ProxyID != nil {
+		update.ProxyID = input.ProxyID
+	}
+	if input.Concurrency > 0 {
+		concurrency := input.Concurrency
+		update.Concurrency = &concurrency
+	}
+	if input.Priority != 0 {
+		priority := input.Priority
+		update.Priority = &priority
+	}
+	if len(input.GroupIDs) > 0 {
+		groupIDs := append([]int64(nil), input.GroupIDs...)
+		update.GroupIDs = &groupIDs
+	}
+
+	_, err = s.UpdateAccount(ctx, matched.ID, update)
+	if err != nil {
+		return nil, fmt.Errorf("update existing Grok OAuth account %d: %w", matched.ID, err)
+	}
+	if len(input.Extra) > 0 {
+		if err := s.accountRepo.UpdateExtra(ctx, matched.ID, input.Extra); err != nil {
+			return nil, fmt.Errorf("merge existing Grok OAuth account extra %d: %w", matched.ID, err)
+		}
+	}
+	if _, err := s.ClearAccountError(ctx, matched.ID); err != nil {
+		return nil, fmt.Errorf("recover existing Grok OAuth account %d: %w", matched.ID, err)
+	}
+	slog.Info("grok_oauth_account_upserted", "account_id", matched.ID, "identity_key", grokCredentialString(credentials, "identity_key"))
+	return s.accountRepo.GetByID(ctx, matched.ID)
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
