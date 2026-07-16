@@ -18,6 +18,11 @@ Environment variables:
   GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
                                    true/false. When unset, preserve the current
                                    sub2api container value; default false.
+  GATEWAY_KIRO_RESILIENCE_MODE     Optional off/observe/enforce override. When
+                                   unset, preserve the running container value.
+  GATEWAY_KIRO_RESILIENCE_GROUP_IDS
+                                   Optional comma-separated rollout group IDs.
+                                   When unset, preserve the running container value.
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -43,6 +48,8 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
+KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
+KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -69,6 +76,48 @@ OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED:-false}"
 if [[ "${OPENAI_KIRO_BRIDGE_ENABLED}" != "true" && "${OPENAI_KIRO_BRIDGE_ENABLED}" != "false" ]]; then
   echo "GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED must be true or false" >&2
   exit 1
+fi
+
+if docker inspect "${SERVICE_NAME}" >/dev/null 2>&1; then
+  if [[ -z "${KIRO_RESILIENCE_MODE}" ]]; then
+    KIRO_RESILIENCE_MODE="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^GATEWAY_KIRO_RESILIENCE_MODE=//p' \
+        | head -n 1
+    )"
+  fi
+  if [[ -z "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
+    KIRO_RESILIENCE_GROUP_IDS="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^GATEWAY_KIRO_RESILIENCE_GROUP_IDS=//p' \
+        | head -n 1
+    )"
+  fi
+fi
+
+if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
+  KIRO_RESILIENCE_MODE="$(printf '%s' "${KIRO_RESILIENCE_MODE}" | tr '[:upper:]' '[:lower:]')"
+  case "${KIRO_RESILIENCE_MODE}" in
+    off|observe|enforce) ;;
+    *)
+      echo "GATEWAY_KIRO_RESILIENCE_MODE must be off, observe, or enforce" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]] &&
+  [[ ! "${KIRO_RESILIENCE_GROUP_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "GATEWAY_KIRO_RESILIENCE_GROUP_IDS must be comma-separated numeric IDs" >&2
+  exit 1
+fi
+
+KIRO_RESILIENCE_ENV=""
+if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
+  KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_MODE=${KIRO_RESILIENCE_MODE}"$'\n'
+fi
+if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
+  KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_GROUP_IDS=${KIRO_RESILIENCE_GROUP_IDS}"$'\n'
 fi
 
 if [[ ! -d "${REPO_ROOT}" ]]; then
@@ -103,6 +152,7 @@ services:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
       - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
+${KIRO_RESILIENCE_ENV%$'\n'}
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
@@ -144,6 +194,15 @@ docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_USER_AGENT_VERSION
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
 echo "--- OpenAI Kiro bridge env ---"
 docker exec "${CONTAINER_ID}" printenv GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
+if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
+  echo "--- Kiro resilience env ---"
+  docker exec "${CONTAINER_ID}" printenv GATEWAY_KIRO_RESILIENCE_MODE
+  if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
+    docker exec "${CONTAINER_ID}" printenv GATEWAY_KIRO_RESILIENCE_GROUP_IDS
+  else
+    echo "all groups"
+  fi
+fi
 echo "--- antigravity worker files ---"
 docker exec "${CONTAINER_ID}" sh -lc 'ls -l /app/antigravityworker*'
 if ! docker exec "${CONTAINER_ID}" test -x /app/antigravityworker-boringcrypto; then

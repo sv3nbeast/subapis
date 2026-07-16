@@ -18,6 +18,11 @@ Options:
   --tag TAG                      Docker image tag suffix. Default: prod-YYYYmmdd-HHMMSS-<gitsha>
   --image-repo NAME              Docker image repo name. Default: sub2api
   --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.23.2
+  --kiro-resilience-mode MODE    Kiro resilience mode: off, observe, or enforce.
+                                  When omitted, preserve the running container value
+  --kiro-resilience-group-ids IDS
+                                  Comma-separated rollout group IDs. When omitted,
+                                  preserve the running container value
   --skip-sync                    Skip rsync and only trigger remote rebuild/redeploy
   --no-delete                    Disable rsync --delete
   -n, --dry-run                  Show rsync changes only; skip remote rebuild
@@ -46,6 +51,8 @@ REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
+KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
+KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
 IMAGE_TAG=""
 SKIP_SYNC=0
 DRY_RUN=0
@@ -77,6 +84,14 @@ while (($# > 0)); do
       ANTIGRAVITY_VERSION="$2"
       shift 2
       ;;
+    --kiro-resilience-mode)
+      KIRO_RESILIENCE_MODE="$2"
+      shift 2
+      ;;
+    --kiro-resilience-group-ids)
+      KIRO_RESILIENCE_GROUP_IDS="$2"
+      shift 2
+      ;;
     --skip-sync)
       SKIP_SYNC=1
       shift
@@ -100,6 +115,23 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
+  KIRO_RESILIENCE_MODE="$(printf '%s' "${KIRO_RESILIENCE_MODE}" | tr '[:upper:]' '[:lower:]')"
+  case "${KIRO_RESILIENCE_MODE}" in
+    off|observe|enforce) ;;
+    *)
+      echo "Invalid Kiro resilience mode: ${KIRO_RESILIENCE_MODE}" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]] &&
+  [[ ! "${KIRO_RESILIENCE_GROUP_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "Invalid Kiro resilience group IDs: ${KIRO_RESILIENCE_GROUP_IDS}" >&2
+  exit 1
+fi
 
 require_cmd ssh
 
@@ -187,6 +219,8 @@ echo "Remote deploy dir:  ${REMOTE_DEPLOY_DIR}"
 echo "Image ref:          ${IMAGE_REF}"
 echo "Antigravity ver:    ${ANTIGRAVITY_VERSION}"
 echo "OpenAI Kiro bridge: ${OPENAI_KIRO_BRIDGE_ENABLED:-preserve-current}"
+echo "Kiro resilience:    ${KIRO_RESILIENCE_MODE:-preserve-current}"
+echo "Kiro rollout groups: ${KIRO_RESILIENCE_GROUP_IDS:-preserve-current}"
 
 if [[ "${SKIP_SYNC}" -eq 0 ]]; then
   ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_SRC_DIR}'"
@@ -222,4 +256,6 @@ ssh "${REMOTE_HOST}" \
     DEPLOY_DIR="${REMOTE_DEPLOY_DIR}" \
     ANTIGRAVITY_USER_AGENT_VERSION="${ANTIGRAVITY_VERSION}" \
     GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED}" \
+    GATEWAY_KIRO_RESILIENCE_MODE="${KIRO_RESILIENCE_MODE}" \
+    GATEWAY_KIRO_RESILIENCE_GROUP_IDS="${KIRO_RESILIENCE_GROUP_IDS}" \
     bash "${REMOTE_SRC_DIR}/scripts/rebuild-prod-sub2api.sh"
