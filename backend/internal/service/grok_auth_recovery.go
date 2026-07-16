@@ -42,7 +42,10 @@ func (s *OpenAIGatewayService) retryGrokAfterCredentialRefresh(
 	response *http.Response,
 	retry func(accessToken string) (*http.Response, error),
 ) (*http.Response, bool, error) {
-	if s == nil || account == nil || response == nil || response.Body == nil || retry == nil ||
+	if response == nil || (response.StatusCode != http.StatusUnauthorized && response.StatusCode != http.StatusForbidden) {
+		return response, false, nil
+	}
+	if s == nil || account == nil || response.Body == nil || retry == nil ||
 		s.grokTokenProvider == nil || strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
 		return response, false, nil
 	}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -10,6 +11,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+type grokAuthRecoveryTrackingBody struct {
+	reader     io.Reader
+	readCalls  int
+	closeCalls int
+}
+
+func (b *grokAuthRecoveryTrackingBody) Read(p []byte) (int, error) {
+	b.readCalls++
+	return b.reader.Read(p)
+}
+
+func (b *grokAuthRecoveryTrackingBody) Close() error {
+	b.closeCalls++
+	return nil
+}
 
 type grokAuthRecoveryRepo struct {
 	AccountRepository
@@ -58,6 +75,44 @@ func TestGrokCredentialRecoveryCandidateIsNarrow(t *testing.T) {
 	require.True(t, isGrokCredentialRecoveryCandidate(http.StatusForbidden, []byte(`{"error":"Access to the chat endpoint is denied. Please update permissions."}`)))
 	require.False(t, isGrokCredentialRecoveryCandidate(http.StatusForbidden, []byte(`{"error":"regional policy denied"}`)))
 	require.False(t, isGrokCredentialRecoveryCandidate(http.StatusPaymentRequired, []byte(`{"error":"spending limit"}`)))
+}
+
+func TestRetryGrokAfterCredentialRefreshLeavesSuccessfulStreamUntouched(t *testing.T) {
+	payload := bytes.Repeat([]byte("stream-data-"), int(openAIUpstreamErrorBodyReadLimit/12)+4096)
+	body := &grokAuthRecoveryTrackingBody{reader: bytes.NewReader(payload)}
+	account := &Account{
+		ID: 78, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "valid-access", "refresh_token": "refresh-token",
+			"expires_at": time.Now().Add(4 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	service := &OpenAIGatewayService{
+		grokTokenProvider: NewGrokTokenProvider(&grokAuthRecoveryRepo{account: account}, nil),
+	}
+	success := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+	retryCalls := 0
+
+	response, retried, err := service.retryGrokAfterCredentialRefresh(context.Background(), account, success, func(string) (*http.Response, error) {
+		retryCalls++
+		return nil, nil
+	})
+
+	require.NoError(t, err)
+	require.False(t, retried)
+	require.Same(t, success, response)
+	require.Same(t, body, response.Body)
+	require.Zero(t, retryCalls)
+	require.Zero(t, body.readCalls)
+	require.Zero(t, body.closeCalls)
+
+	got, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
 }
 
 func TestRetryGrokAfterCredentialRefreshRetriesSameAccountOnce(t *testing.T) {
