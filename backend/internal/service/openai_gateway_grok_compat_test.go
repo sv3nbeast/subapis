@@ -146,6 +146,37 @@ func TestGrokPromptCacheSeedPrefersClaudeSessionHeader(t *testing.T) {
 	require.Equal(t, "header-session", grokPromptCacheSeedFromRequest(c, body))
 }
 
+func TestGrokCompactPromptCacheIdentityPreservesPreNormalizedSeed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	compactContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	compactContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	compactContext.Set("api_key", &APIKey{ID: 7})
+	compactContext.Set(openAICompactSessionSeedKey, "client-session")
+	compactInput := []byte(`{"model":"grok-4.5","input":[{"type":"compaction_trigger"}]}`)
+
+	continuationContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	continuationContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	continuationContext.Set("api_key", &APIKey{ID: 7})
+	continuationInput := []byte(`{"model":"grok-4.5","prompt_cache_key":"client-session","input":[{"type":"compaction","encrypted_content":"opaque"}]}`)
+
+	compactBody, compactIdentity, err := injectGrokPromptCacheIdentity(compactContext, compactInput, "grok-4.5", "responses", "")
+	require.NoError(t, err)
+	continuationBody, continuationIdentity, err := injectGrokPromptCacheIdentity(continuationContext, continuationInput, "grok-4.5", "responses", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, compactIdentity)
+	require.Equal(t, compactIdentity, continuationIdentity)
+	require.Equal(t, compactIdentity, gjson.GetBytes(compactBody, "prompt_cache_key").String())
+	require.Equal(t, continuationIdentity, gjson.GetBytes(continuationBody, "prompt_cache_key").String())
+
+	account := &Account{ID: 54, Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: map[string]any{"base_url": xai.DefaultCLIBaseURL}}
+	compactRequest, err := buildGrokResponsesRequest(context.Background(), compactContext, account, compactBody, "token")
+	require.NoError(t, err)
+	continuationRequest, err := buildGrokResponsesRequest(context.Background(), continuationContext, account, continuationBody, "token")
+	require.NoError(t, err)
+	require.Equal(t, compactIdentity, compactRequest.Header.Get("x-grok-conv-id"))
+	require.Equal(t, compactRequest.Header.Get("x-grok-conv-id"), continuationRequest.Header.Get("x-grok-conv-id"))
+}
+
 func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

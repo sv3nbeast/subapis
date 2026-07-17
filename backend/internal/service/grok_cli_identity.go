@@ -70,6 +70,19 @@ func injectGrokPromptCacheIdentity(c *gin.Context, body []byte, model, operation
 }
 
 func grokExplicitSessionSeed(c *gin.Context, body []byte) string {
+	// Compact request normalization intentionally removes prompt_cache_key from
+	// the upstream body. The handler preserves the original client seed in the
+	// Gin context so compact and continuation requests keep the same Grok
+	// conversation identity; otherwise xAI cannot decode the returned blob.
+	if c != nil {
+		if rawSeed, ok := c.Get(openAICompactSessionSeedKey); ok {
+			if seed, ok := rawSeed.(string); ok {
+				if normalized := normalizeGrokPromptCacheSeed(seed); normalized != "" {
+					return normalized
+				}
+			}
+		}
+	}
 	return grokPromptCacheSeedFromRequest(c, body)
 }
 
