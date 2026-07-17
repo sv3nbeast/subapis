@@ -80,7 +80,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
-	if account != nil && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+	if account != nil && account.IsKiroDirect() {
 		return s.forwardKiroAsChatCompletions(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, includeUsage, reasoningEffort, parsed, startTime)
 	}
 

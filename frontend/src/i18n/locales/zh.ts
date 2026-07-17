@@ -5184,6 +5184,8 @@ export default {
           oauthSubtitle: 'Google/GitHub 登录，可能继续跳转 AWS IDC',
           idcTitle: 'AWS IDC',
           idcSubtitle: '使用 IAM Identity Center Start URL',
+          externalIDPTitle: '企业 SSO',
+          externalIDPSubtitle: 'Microsoft Entra ID',
           importTitle: '导入 Token',
           importSubtitle: '粘贴已有 Kiro Token JSON',
           importDialogTitle: '导入 Kiro Token',
@@ -5204,7 +5206,8 @@ export default {
           missingState: '回调缺少 state，请粘贴完整回调链接，或重新生成授权链接后重试。',
           stateMismatch: '回调 state 与当前授权会话不一致，请使用刚生成的授权链接完成登录，并粘贴最新回调链接。',
           missingIDCContinuation: '这个 Kiro 回调缺少 issuer_url，请重新生成授权链接后重试。',
-          idcContinuationReady: '已切换到 AWS IDC 设备授权。请打开新生成的授权链接，完成登录后直接点击完成授权。'
+          idcContinuationReady: '已切换到 AWS IDC 设备授权。请打开新生成的授权链接，完成登录后直接点击完成授权。',
+          externalIDPContinuationReady: '请打开 Microsoft 登录链接完成授权，然后粘贴最终回调链接。'
         }
       },
       // Gemini specific (platform-wide)

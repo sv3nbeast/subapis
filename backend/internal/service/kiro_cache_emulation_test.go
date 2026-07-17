@@ -465,6 +465,85 @@ func TestKiroCacheEmulationRecoversFromPersistentStoreAfterTrackerReset(t *testi
 	}
 }
 
+func TestKiroCacheEmulationConcurrentTerminalCommitsDeduplicateAcrossInstances(t *testing.T) {
+	resetKiroCacheTracker()
+	cache := newFakeKiroGatewayCache()
+	serviceA := &GatewayService{cache: cache}
+	serviceB := &GatewayService{cache: cache}
+	ctx := withKiroCacheBillingIdentity(context.Background(), 23, 991, "parallel-session")
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("parallel-terminal", false)
+	account := kiroCacheAccount(951, "parallel-refresh", "parallel-access")
+
+	usageA := serviceA.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 2000)
+	usageB := serviceB.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 2000)
+	for _, usage := range []*kiroCacheEmulationUsage{usageA, usageB} {
+		if usage == nil || usage.CacheCreationInputTokens != 2000 || usage.CacheReadInputTokens != 0 {
+			t.Fatalf("both in-flight requests should initially be unresolved creators, got %+v", usage)
+		}
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, commit := range []func(){
+		func() { serviceA.commitKiroCacheEmulationUsage(ctx, usageA) },
+		func() { serviceB.commitKiroCacheEmulationUsage(ctx, usageB) },
+	} {
+		wg.Add(1)
+		go func(commit func()) {
+			defer wg.Done()
+			<-start
+			commit()
+		}(commit)
+	}
+	close(start)
+	wg.Wait()
+
+	creators := 0
+	readers := 0
+	for _, usage := range []*kiroCacheEmulationUsage{usageA, usageB} {
+		switch {
+		case usage.CacheCreationInputTokens == 2000 && usage.CacheReadInputTokens == 0:
+			creators++
+		case usage.CacheCreationInputTokens == 0 && usage.CacheReadInputTokens == 2000:
+			readers++
+		default:
+			t.Fatalf("unexpected terminal cache classification: %+v", usage)
+		}
+	}
+	if creators != 1 || readers != 1 {
+		t.Fatalf("terminal commits must elect exactly one creator, creators=%d readers=%d", creators, readers)
+	}
+}
+
+func TestKiroCacheEmulationFailedConcurrentAttemptDoesNotReserveCreation(t *testing.T) {
+	resetKiroCacheTracker()
+	cache := newFakeKiroGatewayCache()
+	serviceA := &GatewayService{cache: cache}
+	serviceB := &GatewayService{cache: cache}
+	ctx := withKiroCacheBillingIdentity(context.Background(), 29, 992, "failed-parallel-session")
+	group := kiroCacheGroup(1)
+	body := kiroCacheRequestBody("failed-parallel-terminal", false)
+	account := kiroCacheAccount(952, "failed-parallel-refresh", "failed-parallel-access")
+
+	failed := serviceA.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 2000)
+	success := serviceB.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 2000)
+	if failed == nil || success == nil || failed.CacheCreationInputTokens != 2000 || success.CacheCreationInputTokens != 2000 {
+		t.Fatalf("parallel attempts should begin unresolved, failed=%+v success=%+v", failed, success)
+	}
+
+	// The failed request deliberately never reaches terminal commit.
+	serviceB.commitKiroCacheEmulationUsage(ctx, success)
+	if success.CacheCreationInputTokens != 2000 || success.CacheReadInputTokens != 0 {
+		t.Fatalf("first successful terminal request must remain the creator: %+v", success)
+	}
+	resetKiroCacheTracker()
+	afterSuccess := serviceA.buildKiroCacheEmulationUsageForRequest(ctx, account, group, body, "claude-sonnet-4-6", 2000)
+	if afterSuccess == nil || afterSuccess.CacheCreationInputTokens != 0 || afterSuccess.CacheReadInputTokens != 2000 {
+		t.Fatalf("only the successful request should warm persistent cache: %+v", afterSuccess)
+	}
+}
+
 func TestKiroCacheEmulationIgnoresVolatileToolIdentifiers(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}
@@ -702,7 +781,7 @@ func resetKiroCacheTracker() {
 type fakeKiroGatewayCache struct {
 	mu          sync.Mutex
 	entries     map[string]time.Time
-	upsertCalls int
+	commitCalls int
 }
 
 func newFakeKiroGatewayCache() *fakeKiroGatewayCache {
@@ -741,29 +820,32 @@ func (c *fakeKiroGatewayCache) GetKiroCacheFingerprints(_ context.Context, stabl
 	return out, nil
 }
 
-func (c *fakeKiroGatewayCache) UpsertKiroCacheFingerprints(_ context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error {
+func (c *fakeKiroGatewayCache) CommitKiroCacheFingerprints(_ context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) (map[string]bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.upsertCalls++
+	c.commitCalls++
 	now := time.Now()
+	existing := make(map[string]bool, len(fingerprintTTLs))
 	for fingerprint, ttl := range fingerprintTTLs {
 		if ttl <= 0 {
 			continue
 		}
 		key := stableKey + "|" + fingerprint
-		expiresAt := now.Add(ttl)
-		if existing, ok := c.entries[key]; ok && existing.After(expiresAt) {
-			continue
+		if expiresAt, ok := c.entries[key]; ok && expiresAt.After(now) {
+			existing[fingerprint] = true
 		}
-		c.entries[key] = expiresAt
+		expiresAt := now.Add(ttl)
+		if current, ok := c.entries[key]; !ok || expiresAt.After(current) {
+			c.entries[key] = expiresAt
+		}
 	}
-	return nil
+	return existing, nil
 }
 
-func (c *fakeKiroGatewayCache) UpsertCalls() int {
+func (c *fakeKiroGatewayCache) CommitCalls() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.upsertCalls
+	return c.commitCalls
 }
 
 func kiroCacheGroup(ratio float64) *Group {

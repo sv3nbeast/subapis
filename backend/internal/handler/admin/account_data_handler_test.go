@@ -403,7 +403,7 @@ func TestImportDataAcceptsCLIProxyAPIKiroExternalIDPJSON(t *testing.T) {
 	require.Equal(t, "access-token", created.Credentials["access_token"])
 	require.Equal(t, "refresh-token", created.Credentials["refresh_token"])
 	require.Equal(t, "external_idp", created.Credentials["auth_method"])
-	require.Equal(t, "Enterprise", created.Credentials["provider"])
+	require.Equal(t, "ExternalIdp", created.Credentials["provider"])
 	require.Equal(t, "client-id", created.Credentials["client_id"])
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID", created.Credentials["profile_arn"])
 	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", created.Credentials["issuer_url"])

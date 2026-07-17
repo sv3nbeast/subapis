@@ -24,11 +24,27 @@ func TestParseImportedTokenInfersIDCAuthMetadataFromClientCredentials(t *testing
 	require.Equal(t, defaultIDCRegion, token.Region)
 }
 
+func TestParseImportedTokenPrefersExternalIDPMetadataOverClientSecret(t *testing.T) {
+	token, err := ParseImportedToken(`{
+		"accessToken": "access-token",
+		"refreshToken": "refresh-token",
+		"authMethod": "unknown",
+		"provider": "Enterprise",
+		"clientId": "client-id",
+		"clientSecret": "client-secret",
+		"tokenEndpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token"
+	}`, "")
+	require.NoError(t, err)
+	require.Equal(t, AuthMethodExternalIDP, token.AuthMethod)
+	require.Equal(t, ProviderExternalIdp, token.Provider)
+}
+
 func TestParseImportedTokenAcceptsCLIProxyAPIExternalIDPFormat(t *testing.T) {
 	token, err := ParseImportedToken(`{
 		"access_token": "access-token",
 		"refresh_token": "refresh-token",
-		"auth_method": "external_idp",
+			"auth_method": "external_idp",
+			"provider": "Enterprise",
 		"client_id": "client-id",
 		"expired": "2026-07-08T06:13:47Z",
 		"issuer_url": "https://login.microsoftonline.com/example/v2.0",
@@ -42,7 +58,7 @@ func TestParseImportedTokenAcceptsCLIProxyAPIExternalIDPFormat(t *testing.T) {
 	require.Equal(t, "access-token", token.AccessToken)
 	require.Equal(t, "refresh-token", token.RefreshToken)
 	require.Equal(t, "external_idp", token.AuthMethod)
-	require.Equal(t, ProviderEnterprise, token.Provider)
+	require.Equal(t, ProviderExternalIdp, token.Provider)
 	require.Equal(t, "client-id", token.ClientID)
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILEID", token.ProfileArn)
 	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", token.IssuerURL)
@@ -65,6 +81,18 @@ func TestParseImportedTokenDerivesExternalIDPTokenEndpointFromIssuerURL(t *testi
 	require.NoError(t, err)
 	require.Equal(t, "https://login.microsoftonline.com/example/v2.0", token.StartURL)
 	require.Equal(t, "https://login.microsoftonline.com/example/oauth2/v2.0/token", token.TokenEndpoint)
+}
+
+func TestParseImportedTokenRejectsIncompleteExternalIDPCredentials(t *testing.T) {
+	tests := []string{
+		`{"access_token":"access","auth_method":"external_idp","provider":"ExternalIdp","client_id":"client","token_endpoint":"https://login.microsoftonline.com/tenant/oauth2/v2.0/token"}`,
+		`{"access_token":"access","refresh_token":"refresh","auth_method":"external_idp","provider":"ExternalIdp","token_endpoint":"https://login.microsoftonline.com/tenant/oauth2/v2.0/token"}`,
+		`{"access_token":"access","refresh_token":"refresh","auth_method":"external_idp","provider":"ExternalIdp","client_id":"client"}`,
+	}
+	for _, tokenJSON := range tests {
+		_, err := ParseImportedToken(tokenJSON, "")
+		require.ErrorContains(t, err, "requires refreshToken, clientId, and tokenEndpoint")
+	}
 }
 
 func TestRefreshExternalIDPTokenUsesFormRefreshGrant(t *testing.T) {
@@ -112,7 +140,7 @@ func TestRefreshExternalIDPTokenUsesFormRefreshGrant(t *testing.T) {
 	require.Equal(t, "old-refresh-token", token.RefreshToken)
 	require.Equal(t, "profile-arn", token.ProfileArn)
 	require.Equal(t, "external_idp", token.AuthMethod)
-	require.Equal(t, ProviderEnterprise, token.Provider)
+	require.Equal(t, ProviderExternalIdp, token.Provider)
 	require.Equal(t, server.URL, token.TokenEndpoint)
 }
 

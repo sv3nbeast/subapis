@@ -84,34 +84,71 @@ func TestBuildKiroMachineIDDerivesFromAPIKeyAccount(t *testing.T) {
 	require.Equal(t, kiropkg.BuildMachineID("", "kiro-api-key", "account:103"), buildKiroMachineID(account))
 }
 
-func TestIsKiroDirectModeAccount(t *testing.T) {
-	require.True(t, isKiroDirectModeAccount(&Account{
+func TestAccountIsKiroDirect(t *testing.T) {
+	require.True(t, (&Account{
 		Platform: PlatformKiro,
 		Type:     AccountTypeOAuth,
-	}))
-	require.True(t, isKiroDirectModeAccount(&Account{
+	}).IsKiroDirect())
+	require.True(t, (&Account{
 		Platform: PlatformKiro,
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
 			"api_key": "kiro-api-key",
 		},
-	}))
-	require.False(t, isKiroDirectModeAccount(&Account{
+	}).IsKiroDirect())
+	require.False(t, (&Account{
 		Platform: PlatformKiro,
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
 			"api_key":  "kiro-api-key",
 			"base_url": "https://kiro-upstream.example.com",
 		},
-	}))
-	require.False(t, isKiroDirectModeAccount(&Account{
+	}).IsKiroDirect())
+	require.False(t, (&Account{
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
-	}))
+	}).IsKiroDirect())
+}
+
+func TestAccountKiroCredentialsNormalizeLegacyShapes(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"kiroApiKey": " legacy-key ",
+		},
+	}
+	require.Equal(t, "legacy-key", account.KiroAPIKey())
+
+	account.Type = AccountTypeOAuth
+	account.Credentials = map[string]any{
+		"client_id":      "external-client",
+		"token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+	}
+	require.Equal(t, kiropkg.AuthMethodExternalIDP, account.KiroAuthMethod())
+
+	account.Credentials = map[string]any{
+		"client_id":      "external-client",
+		"client_secret":  "optional-external-secret",
+		"token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+	}
+	require.Equal(t, kiropkg.AuthMethodExternalIDP, account.KiroAuthMethod())
+
+	account.Credentials = map[string]any{"auth_method": "External-IdP"}
+	require.Equal(t, kiropkg.AuthMethodExternalIDP, account.KiroAuthMethod())
+
+	account.Credentials = map[string]any{
+		"auth_method":   "unknown",
+		"client_id":     "legacy-idc-client",
+		"client_secret": "legacy-idc-secret",
+	}
+	require.Equal(t, kiropkg.AuthMethodIDC, account.KiroAuthMethod())
 }
 
 func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
 			"auth_method": "external_idp",
 			"provider":    "Internal",

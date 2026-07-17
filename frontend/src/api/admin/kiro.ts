@@ -18,6 +18,9 @@ export interface KiroIDCAuthUrlResponse extends KiroAuthUrlResponse {
 }
 
 export interface KiroTokenInfo {
+  auth_url?: string
+  session_id?: string
+  state?: string
   access_token?: string
   refresh_token?: string
   profile_arn?: string
@@ -74,6 +77,9 @@ export async function refreshToken(payload: {
   start_url?: string
   region?: string
   profile_arn?: string
+  issuer_url?: string
+  token_endpoint?: string
+  scopes?: string
   proxy_id?: number
 }): Promise<KiroTokenInfo> {
   const { data } = await apiClient.post<KiroTokenInfo>('/admin/kiro/oauth/refresh-token', payload)

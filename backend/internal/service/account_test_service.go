@@ -211,7 +211,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testDroidAccountConnection(c, account, modelID)
 	}
 
-	if isKiroDirectModeAccount(account) {
+	if account.IsKiroDirect() {
 		return s.testKiroAccountConnection(c, account, modelID)
 	}
 
@@ -421,13 +421,13 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 		testModelID = mappedModel
 	}
 
-	if !isKiroDirectModeAccount(account) {
+	if !account.IsKiroDirect() {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported Kiro account type: %s", account.Type))
 	}
 
 	var accessToken string
 	if account.Type == AccountTypeAPIKey {
-		accessToken = firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key")
+		accessToken = account.KiroAPIKey()
 		if accessToken == "" {
 			return s.sendErrorAndEnd(c, "No API key available")
 		}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -237,7 +238,52 @@ func (a *Account) IsGemini() bool {
 }
 
 func (a *Account) IsKiro() bool {
-	return a.Platform == PlatformKiro
+	return a != nil && a.Platform == PlatformKiro
+}
+
+// KiroAuthMethod returns one canonical auth mode, including imported legacy
+// credentials that predate the auth_method field.
+func (a *Account) KiroAuthMethod() string {
+	if !a.IsKiro() || a.Type != AccountTypeOAuth {
+		return ""
+	}
+	return kiropkg.ResolveAuthMethod(
+		a.GetCredential("auth_method"),
+		a.GetCredential("provider"),
+		a.GetCredential("client_id"),
+		a.GetCredential("client_secret"),
+		a.GetCredential("token_endpoint"),
+		a.GetCredential("issuer_url"),
+	)
+}
+
+// KiroAPIKey accepts the persisted canonical key plus historical import aliases.
+func (a *Account) KiroAPIKey() string {
+	if !a.IsKiro() || a.Type != AccountTypeAPIKey {
+		return ""
+	}
+	for _, key := range []string{"kiro_api_key", "kiroApiKey", "api_key"} {
+		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// IsKiroDirect reports whether requests should use the native AWS/Kiro runtime.
+// API-key accounts with a base URL are relays and remain on the Anthropic path.
+func (a *Account) IsKiroDirect() bool {
+	if !a.IsKiro() {
+		return false
+	}
+	switch a.Type {
+	case AccountTypeOAuth:
+		return true
+	case AccountTypeAPIKey:
+		return strings.TrimSpace(a.GetCredential("base_url")) == ""
+	default:
+		return false
+	}
 }
 
 func (a *Account) IsKiroCacheEmulationEnabled() bool {

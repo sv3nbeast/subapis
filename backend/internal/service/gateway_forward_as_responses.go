@@ -127,7 +127,7 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
-	if account != nil && account.Platform == PlatformKiro && account.Type == AccountTypeOAuth {
+	if account != nil && account.IsKiroDirect() {
 		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools)
 		if handleErr == nil && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{

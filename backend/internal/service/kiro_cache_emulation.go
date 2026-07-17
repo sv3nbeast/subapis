@@ -30,6 +30,7 @@ const (
 	kiroCacheMinTokensHaiku3     = 2048
 	kiroCachePrefixLookbackLimit = 128
 	kiroCachePrefixLookbackMax   = 512
+	kiroCacheCommitTimeout       = 500 * time.Millisecond
 )
 
 type kiroCacheEmulationUsage struct {
@@ -49,9 +50,12 @@ type kiroCacheIdentity struct {
 }
 
 type kiroCachePendingCommit struct {
-	once       sync.Once
-	identities []kiroCacheIdentity
-	profile    *kiroCacheProfile
+	once                 sync.Once
+	identities           []kiroCacheIdentity
+	profile              *kiroCacheProfile
+	inputTokens          int
+	ratio                float64
+	initialMatchedTokens int
 }
 
 type kiroCacheEntry struct {
@@ -117,8 +121,11 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 		identities = append(identities, physicalIdentity)
 	}
 	result := &kiroCacheEmulationUsage{pendingCommit: &kiroCachePendingCommit{
-		identities: identities,
-		profile:    profile,
+		identities:           identities,
+		profile:              profile,
+		inputTokens:          inputTokens,
+		ratio:                ratio,
+		initialMatchedTokens: resultMatchedTokens(match),
 	}}
 	if match != nil {
 		result.CacheReadInputTokens = min(match.cumulativeTokens, profile.totalInputTokens)
@@ -154,18 +161,97 @@ func (s *GatewayService) commitKiroCacheEmulationUsage(ctx context.Context, usag
 	}
 	pending := usage.pendingCommit
 	pending.once.Do(func() {
+		commitBase := context.Background()
+		if ctx != nil {
+			commitBase = context.WithoutCancel(ctx)
+		}
+		commitCtx, cancel := context.WithTimeout(commitBase, kiroCacheCommitTimeout)
+		defer cancel()
+
 		persistence := s.kiroCachePersistenceStore()
-		for _, identity := range pending.identities {
+		for index, identity := range pending.identities {
 			if identity.cacheKey == 0 {
 				continue
 			}
-			persistEntries := globalKiroCacheTracker.update(identity.cacheKey, pending.profile)
-			if persistence == nil || identity.stableKey == "" || len(persistEntries) == 0 {
-				continue
+			persistEntries := kiroCacheProfilePersistenceEntries(pending.profile)
+			matchedTokens := 0
+			committedInMemory := false
+			if persistence != nil && identity.stableKey != "" && len(persistEntries) > 0 {
+				existing, err := persistence.CommitKiroCacheFingerprints(commitCtx, identity.stableKey, persistEntries)
+				if err == nil {
+					matchedTokens = matchedKiroCacheTokens(pending.profile, existing)
+				}
+			} else {
+				matchedTokens = globalKiroCacheTracker.commit(identity.cacheKey, pending.profile)
+				committedInMemory = true
 			}
-			_ = persistence.UpsertKiroCacheFingerprints(ctx, identity.stableKey, persistEntries)
+			if !committedInMemory {
+				globalKiroCacheTracker.update(identity.cacheKey, pending.profile)
+			}
+			if index == 0 && matchedTokens > pending.initialMatchedTokens {
+				pending.initialMatchedTokens = matchedTokens
+			}
 		}
+		usage.applyCommittedMatch(pending.initialMatchedTokens)
 	})
+}
+
+func (s *GatewayService) kiroCacheEmulationTerminalFinalizer(ctx context.Context, usage *kiroCacheEmulationUsage) func() *kiropkg.Usage {
+	if usage == nil {
+		return nil
+	}
+	return func() *kiropkg.Usage {
+		s.commitKiroCacheEmulationUsage(ctx, usage)
+		return usage.toKiroUsage()
+	}
+}
+
+func resultMatchedTokens(match *kiroCacheLookupCandidate) int {
+	if match == nil {
+		return 0
+	}
+	return match.cumulativeTokens
+}
+
+func (u *kiroCacheEmulationUsage) applyCommittedMatch(matchedTokens int) {
+	if u == nil || u.pendingCommit == nil || u.pendingCommit.profile == nil {
+		return
+	}
+	pending := u.pendingCommit
+	profile := pending.profile
+	lastBreakpoint := profile.lastCacheableBreakpoint()
+	if lastBreakpoint == nil {
+		return
+	}
+	matchedTokens = min(max(matchedTokens, 0), min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens))
+	creationTokens := max(min(lastBreakpoint.cumulativeTokens, profile.totalInputTokens)-matchedTokens, 0)
+	creation5mTokens, creation1hTokens := profile.ttlBreakdown(matchedTokens)
+	u.CacheReadInputTokens = scaleKiroCacheTokens(matchedTokens, pending.ratio)
+	u.CacheCreationInputTokens = scaleKiroCacheTokens(creationTokens, pending.ratio)
+	u.CacheCreation5mInputTokens = scaleKiroCacheTokens(creation5mTokens, pending.ratio)
+	u.CacheCreation1hInputTokens = scaleKiroCacheTokens(creation1hTokens, pending.ratio)
+	u.InputTokens = max(pending.inputTokens-u.CacheReadInputTokens-u.CacheCreationInputTokens, 0)
+}
+
+func kiroCacheProfilePersistenceEntries(profile *kiroCacheProfile) map[string]time.Duration {
+	if profile == nil {
+		return nil
+	}
+	entries := make(map[string]time.Duration)
+	for _, breakpoint := range profile.cacheableBreakpoints() {
+		block := profile.blocks[breakpoint.blockIndex]
+		entries[hex.EncodeToString(block.prefixFingerprint[:])] = breakpoint.ttl
+	}
+	return entries
+}
+
+func matchedKiroCacheTokens(profile *kiroCacheProfile, existing map[string]bool) int {
+	for _, candidate := range buildKiroCacheLookupCandidates(profile) {
+		if existing[candidate.fingerprintHex] {
+			return candidate.cumulativeTokens
+		}
+	}
+	return 0
 }
 
 func withKiroCacheBillingIdentity(ctx context.Context, groupID, apiKeyID int64, sessionHash string) context.Context {
@@ -785,6 +871,47 @@ func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) ma
 	return persistEntries
 }
 
+func (t *kiroCacheTracker) commit(cacheKey uint64, profile *kiroCacheProfile) int {
+	if t == nil || profile == nil || cacheKey == 0 {
+		return 0
+	}
+	candidates := buildKiroCacheLookupCandidates(profile)
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pruneLocked(now)
+
+	matchedTokens := 0
+	accountEntries := t.entries[cacheKey]
+	for _, candidate := range candidates {
+		entry, ok := accountEntries[candidate.fingerprint]
+		if ok && entry.expiresAt.After(now) {
+			matchedTokens = candidate.cumulativeTokens
+			break
+		}
+	}
+	if accountEntries == nil {
+		accountEntries = make(map[[32]byte]kiroCacheEntry)
+		t.entries[cacheKey] = accountEntries
+	}
+	for _, breakpoint := range profile.cacheableBreakpoints() {
+		block := profile.blocks[breakpoint.blockIndex]
+		expiresAt := now.Add(breakpoint.ttl)
+		entry, ok := accountEntries[block.prefixFingerprint]
+		if ok {
+			entry.tokens = max(entry.tokens, block.cumulativeTokens)
+			entry.ttl = maxDuration(entry.ttl, breakpoint.ttl)
+			if expiresAt.After(entry.expiresAt) {
+				entry.expiresAt = expiresAt
+			}
+			accountEntries[block.prefixFingerprint] = entry
+			continue
+		}
+		accountEntries[block.prefixFingerprint] = kiroCacheEntry{tokens: block.cumulativeTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
+	}
+	return matchedTokens
+}
+
 func (t *kiroCacheTracker) pruneLocked(now time.Time) {
 	for cacheKey, accountEntries := range t.entries {
 		for fp, entry := range accountEntries {
@@ -894,6 +1021,15 @@ func countKiroMessageContentTokens(value any) int {
 		}
 		return total
 	case map[string]any:
+		if mediaType, source, ok := kiroImageTokenSource(typed); ok {
+			if tokens, estimated := kiropkg.EstimateImageTokens(mediaType, source); estimated {
+				return tokens
+			}
+			if isKiroRemoteImageURL(source) {
+				return anthropictokenizer.CountTokens("[Image: " + source + "]")
+			}
+			return kiropkg.DefaultImageTokenEstimate
+		}
 		if text, ok := typed["text"].(string); ok {
 			return anthropictokenizer.CountTokens(text)
 		}
@@ -910,6 +1046,55 @@ func countKiroMessageContentTokens(value any) int {
 	default:
 		return 0
 	}
+}
+
+func kiroImageTokenSource(value map[string]any) (mediaType, source string, ok bool) {
+	kind, _ := value["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image":
+		mediaType, source = kiroImageSourceFields(value)
+		return mediaType, source, true
+	case "image_url", "input_image":
+		mediaType, source = kiroImageSourceFields(value)
+		if raw, exists := value["image_url"]; exists {
+			switch typed := raw.(type) {
+			case string:
+				source = typed
+			case map[string]any:
+				if rawURL, found := typed["url"].(string); found {
+					source = rawURL
+				}
+			}
+		}
+		return mediaType, source, true
+	default:
+		return "", "", false
+	}
+}
+
+func kiroImageSourceFields(value map[string]any) (mediaType, source string) {
+	container := value
+	if nested, ok := value["source"].(map[string]any); ok {
+		container = nested
+	}
+	for _, key := range []string{"media_type", "mediaType", "mime_type"} {
+		if candidate, ok := container[key].(string); ok && strings.TrimSpace(candidate) != "" {
+			mediaType = candidate
+			break
+		}
+	}
+	for _, key := range []string{"data", "url"} {
+		if candidate, ok := container[key].(string); ok && strings.TrimSpace(candidate) != "" {
+			source = candidate
+			break
+		}
+	}
+	return mediaType, source
+}
+
+func isKiroRemoteImageURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func countKiroSerializedValueTokens(value any) int {

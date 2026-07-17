@@ -35,6 +35,12 @@ var (
 	oidcEndpointOverride  = ""
 )
 
+var allowedExternalIDPHostSuffixes = []string{
+	".microsoftonline.com",
+	".microsoftonline.us",
+	".microsoftonline.cn",
+}
+
 type SocialProvider string
 
 const (
@@ -43,15 +49,20 @@ const (
 )
 
 const (
-	ProviderGoogle     = "Google"
-	ProviderGithub     = "Github"
-	ProviderBuilderId  = "BuilderId"
-	ProviderEnterprise = "Enterprise"
+	ProviderGoogle      = "Google"
+	ProviderGithub      = "Github"
+	ProviderBuilderId   = "BuilderId"
+	ProviderEnterprise  = "Enterprise"
+	ProviderExternalIdp = "ExternalIdp"
+
+	AuthMethodSocial      = "social"
+	AuthMethodIDC         = "idc"
+	AuthMethodExternalIDP = "external_idp"
 )
 
 func IsValidKiroProvider(p string) bool {
 	switch strings.TrimSpace(p) {
-	case ProviderGoogle, ProviderGithub, ProviderBuilderId, ProviderEnterprise:
+	case ProviderGoogle, ProviderGithub, ProviderBuilderId, ProviderEnterprise, ProviderExternalIdp:
 		return true
 	default:
 		return false
@@ -105,18 +116,22 @@ func normalizeKiroExpiresAt(raw string) (string, error) {
 }
 
 type AuthSession struct {
-	State        string
-	CodeVerifier string
-	DeviceCode   string
-	ProxyURL     string
-	CreatedAt    time.Time
-	AuthType     string
-	Provider     string
-	RedirectURI  string
-	ClientID     string
-	ClientSecret string
-	Region       string
-	StartURL     string
+	State         string
+	CodeVerifier  string
+	DeviceCode    string
+	ProxyURL      string
+	CreatedAt     time.Time
+	AuthType      string
+	Provider      string
+	RedirectURI   string
+	ClientID      string
+	ClientSecret  string
+	Region        string
+	StartURL      string
+	TokenEndpoint string
+	IssuerURL     string
+	Scopes        string
+	LoginHint     string
 }
 
 type SessionStore struct {
@@ -138,7 +153,11 @@ func (s *SessionStore) Get(id string) (*AuthSession, bool) {
 		delete(s.data, id)
 		return nil, false
 	}
-	return session, ok
+	if !ok || session == nil {
+		return nil, ok
+	}
+	snapshot := *session
+	return &snapshot, true
 }
 
 func (s *SessionStore) Set(id string, session *AuthSession) {
@@ -148,7 +167,12 @@ func (s *SessionStore) Set(id string, session *AuthSession) {
 	if len(s.data) >= sessionCleanupMin && s.setCount%sessionCleanupEvery == 0 {
 		s.pruneExpiredLocked(time.Now())
 	}
-	s.data[id] = session
+	if session == nil {
+		s.data[id] = nil
+		return
+	}
+	snapshot := *session
+	s.data[id] = &snapshot
 }
 
 func (s *SessionStore) Delete(id string) {
@@ -319,6 +343,18 @@ func (r *createTokenResponse) UnmarshalJSON(data []byte) error {
 
 type userInfoResponse struct {
 	Email string `json:"email"`
+}
+
+type externalIDPDiscoveryResponse struct {
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+}
+
+type externalIDPTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
 }
 
 type deviceRegistration struct {
@@ -495,6 +531,104 @@ func BuildSocialTokenRedirectURI(baseRedirectURI, callbackPath, loginOption stri
 		return fullRedirectURI + "?login_option=" + url.QueryEscape(option)
 	}
 	return fullRedirectURI
+}
+
+func BuildExternalIDPAuthURL(authEndpoint, clientID, redirectURI, scopes, codeChallenge, state, loginHint string) string {
+	params := url.Values{}
+	params.Set("client_id", strings.TrimSpace(clientID))
+	params.Set("response_type", "code")
+	params.Set("response_mode", "query")
+	params.Set("redirect_uri", strings.TrimSpace(redirectURI))
+	params.Set("scope", strings.TrimSpace(scopes))
+	params.Set("code_challenge", strings.TrimSpace(codeChallenge))
+	params.Set("code_challenge_method", "S256")
+	params.Set("state", strings.TrimSpace(state))
+	if loginHint = strings.TrimSpace(loginHint); loginHint != "" {
+		params.Set("login_hint", loginHint)
+	}
+	return strings.TrimRight(strings.TrimSpace(authEndpoint), "?") + "?" + params.Encode()
+}
+
+func DiscoverExternalIDP(ctx context.Context, proxyURL, issuerURL string) (*externalIDPDiscoveryResponse, error) {
+	issuer := strings.TrimRight(strings.TrimSpace(issuerURL), "/")
+	if err := validateExternalIDPEndpoint(issuer); err != nil {
+		return nil, fmt.Errorf("invalid external idp issuer: %w", err)
+	}
+	var discovery externalIDPDiscoveryResponse
+	if err := doJSON(ctx, proxyURL, http.MethodGet, issuer+"/.well-known/openid-configuration", nil, &discovery, nil); err != nil {
+		return nil, err
+	}
+	discovery.AuthorizationEndpoint = strings.TrimSpace(discovery.AuthorizationEndpoint)
+	discovery.TokenEndpoint = strings.TrimSpace(discovery.TokenEndpoint)
+	if discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" {
+		return nil, fmt.Errorf("external idp discovery is missing authorization or token endpoint")
+	}
+	if err := validateExternalIDPEndpoint(discovery.AuthorizationEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid external idp authorization endpoint: %w", err)
+	}
+	if err := validateExternalIDPEndpoint(discovery.TokenEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid external idp token endpoint: %w", err)
+	}
+	return &discovery, nil
+}
+
+func validateExternalIDPEndpoint(rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("endpoint must be an HTTPS URL without user info")
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	for _, suffix := range allowedExternalIDPHostSuffixes {
+		root := strings.TrimPrefix(suffix, ".")
+		if host == root || strings.HasSuffix(host, suffix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("host %q is not an allowed Microsoft identity endpoint", host)
+}
+
+func ExchangeExternalIDPAuthCode(ctx context.Context, proxyURL, tokenEndpoint, clientID, code, codeVerifier, redirectURI, scopes, issuerURL string) (*TokenData, error) {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", strings.TrimSpace(clientID))
+	form.Set("code", strings.TrimSpace(code))
+	form.Set("code_verifier", strings.TrimSpace(codeVerifier))
+	form.Set("redirect_uri", strings.TrimSpace(redirectURI))
+	if scopes = strings.TrimSpace(scopes); scopes != "" {
+		form.Set("scope", scopes)
+	}
+	var response externalIDPTokenResponse
+	if err := doForm(ctx, proxyURL, http.MethodPost, strings.TrimSpace(tokenEndpoint), form, &response, map[string]string{"Accept": "application/json"}); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(response.AccessToken) == "" {
+		return nil, fmt.Errorf("kiro external_idp token response missing access token")
+	}
+	if strings.TrimSpace(response.RefreshToken) == "" {
+		return nil, fmt.Errorf("kiro external_idp token response missing refresh token; request offline_access and reauthorize")
+	}
+	expiresIn := response.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	if strings.TrimSpace(response.Scope) != "" {
+		scopes = strings.TrimSpace(response.Scope)
+	}
+	return &TokenData{
+		AccessToken:   strings.TrimSpace(response.AccessToken),
+		RefreshToken:  strings.TrimSpace(response.RefreshToken),
+		ExpiresAt:     time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
+		AuthMethod:    AuthMethodExternalIDP,
+		Provider:      ProviderExternalIdp,
+		ClientID:      strings.TrimSpace(clientID),
+		IssuerURL:     strings.TrimSpace(issuerURL),
+		TokenEndpoint: strings.TrimSpace(tokenEndpoint),
+		Scopes:        scopes,
+		Region:        defaultIDCRegion,
+	}, nil
 }
 
 func CreateSocialToken(ctx context.Context, proxyURL, code, codeVerifier, redirectURI string) (*TokenData, error) {
@@ -770,7 +904,7 @@ func RefreshExternalIDPToken(ctx context.Context, proxyURL, refreshToken, client
 		ProfileArn:    nextProfileArn,
 		ExpiresAt:     time.Now().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339),
 		AuthMethod:    "external_idp",
-		Provider:      ProviderEnterprise,
+		Provider:      ProviderExternalIdp,
 		ClientID:      clientID,
 		ClientSecret:  strings.TrimSpace(clientSecret),
 		Region:        region,
@@ -821,7 +955,6 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
 		return nil, fmt.Errorf("failed to parse kiro token: %w", err)
 	}
-	token.AuthMethod = normalizeImportedAuthMethod(token.AuthMethod)
 	if strings.TrimSpace(token.AccessToken) == "" {
 		return nil, fmt.Errorf("access token is empty")
 	}
@@ -837,27 +970,30 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 			token.ClientSecret = reg.ClientSecret
 		}
 	}
-	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.ClientSecret) != "" {
-		token.AuthMethod = "idc"
-	}
-	if token.AuthMethod == "" && strings.TrimSpace(token.ClientID) != "" && strings.TrimSpace(token.TokenEndpoint) != "" {
-		token.AuthMethod = "external_idp"
-	}
 	token.Provider = strings.TrimSpace(token.Provider)
-	if token.AuthMethod == "external_idp" && token.Provider == "" {
-		token.Provider = ProviderEnterprise
-	}
+	token.AuthMethod = ResolveAuthMethod(
+		token.AuthMethod,
+		token.Provider,
+		token.ClientID,
+		token.ClientSecret,
+		token.TokenEndpoint,
+		token.IssuerURL,
+	)
 	if token.AuthMethod == "external_idp" {
+		token.Provider = ProviderExternalIdp
 		if strings.TrimSpace(token.StartURL) == "" && strings.TrimSpace(token.IssuerURL) != "" {
 			token.StartURL = strings.TrimSpace(token.IssuerURL)
 		}
 		token.TokenEndpoint = ResolveExternalIDPTokenEndpoint(token.TokenEndpoint, firstNonEmpty(token.IssuerURL, token.StartURL))
+		if strings.TrimSpace(token.RefreshToken) == "" || strings.TrimSpace(token.ClientID) == "" || strings.TrimSpace(token.TokenEndpoint) == "" {
+			return nil, fmt.Errorf("kiro external_idp import requires refreshToken, clientId, and tokenEndpoint")
+		}
 	}
 	if strings.EqualFold(token.Provider, "AWS") && token.AuthMethod == "idc" {
 		token.Provider = resolveIDCProvider(token.StartURL)
 	}
 	if !IsValidKiroProvider(token.Provider) {
-		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise)", token.Provider)
+		return nil, fmt.Errorf("unsupported or missing kiro provider: %q (must be one of Google/Github/BuilderId/Enterprise/ExternalIdp)", token.Provider)
 	}
 	if (token.AuthMethod == "idc" || token.AuthMethod == "external_idp") && strings.TrimSpace(token.Region) == "" {
 		token.Region = defaultIDCRegion
@@ -872,16 +1008,44 @@ func ParseImportedToken(tokenJSON string, deviceRegistrationJSON string) (*Token
 	return &token, nil
 }
 
-func normalizeImportedAuthMethod(authMethod string) string {
+// NormalizeAuthMethod canonicalizes the auth mode used by imported credentials,
+// account routing, refresh, and request headers.
+func NormalizeAuthMethod(authMethod string) string {
 	switch strings.ToLower(strings.TrimSpace(authMethod)) {
-	case "idc", "iam_identity_center":
-		return "idc"
+	case "idc", "iam_identity_center", "builder-id", "builder_id", "builderid", "awsidc":
+		return AuthMethodIDC
 	case "external_idp", "external-idp", "externalidp":
-		return "external_idp"
+		return AuthMethodExternalIDP
 	case "social":
-		return "social"
+		return AuthMethodSocial
 	default:
-		return strings.ToLower(strings.TrimSpace(authMethod))
+		return ""
+	}
+}
+
+// ResolveAuthMethod applies credential inference only when auth_method is
+// absent or unknown. External IdP metadata takes precedence because those
+// clients may also use a client secret.
+func ResolveAuthMethod(authMethod, provider, clientID, clientSecret, tokenEndpoint, issuerURL string) string {
+	if method := NormalizeAuthMethod(authMethod); method != "" {
+		return method
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID != "" && (strings.TrimSpace(tokenEndpoint) != "" || strings.TrimSpace(issuerURL) != "") {
+		return AuthMethodExternalIDP
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case strings.ToLower(ProviderExternalIdp):
+		return AuthMethodExternalIDP
+	}
+	if clientID != "" && strings.TrimSpace(clientSecret) != "" {
+		return AuthMethodIDC
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case strings.ToLower(ProviderBuilderId), strings.ToLower(ProviderEnterprise), "aws":
+		return AuthMethodIDC
+	default:
+		return AuthMethodSocial
 	}
 }
 

@@ -860,6 +860,11 @@ watch(inputMethod, (newVal) => {
   emit('update:inputMethod', newVal)
 })
 
+const isKiroExternalIDPDescriptor = (path: string, loginOption: string, issuerURL: string) =>
+  props.platform === 'kiro' &&
+  path.toLowerCase() !== '/oauth/callback' &&
+  (loginOption.toLowerCase() === 'external_idp' || issuerURL.trim() !== '')
+
 // Auto-extract code from callback URL (OpenAI/Gemini/Antigravity/Kiro)
 // e.g., http://localhost:8085/callback?code=xxx...&state=...
 watch(authCodeInput, (newVal) => {
@@ -876,13 +881,19 @@ watch(authCodeInput, (newVal) => {
       if (stateParam) {
         oauthState.value = stateParam
       }
+      let preserveKiroDescriptor = false
       if (props.platform === 'kiro') {
         oauthCallbackPath.value = url.pathname || ''
         oauthLoginOption.value = url.searchParams.get('login_option') || ''
         oauthIssuerURL.value = url.searchParams.get('issuer_url') || ''
         oauthIDCRegion.value = url.searchParams.get('idc_region') || ''
+        preserveKiroDescriptor = isKiroExternalIDPDescriptor(
+          oauthCallbackPath.value,
+          oauthLoginOption.value,
+          oauthIssuerURL.value
+        )
       }
-      if (code && code !== trimmed) {
+      if (code && code !== trimmed && !preserveKiroDescriptor) {
         // Replace the input with just the code
         authCodeInput.value = code
       }
@@ -903,7 +914,12 @@ watch(authCodeInput, (newVal) => {
         oauthIssuerURL.value = issuerURLMatch?.[1] ? decodeURIComponent(issuerURLMatch[1]) : ''
         oauthIDCRegion.value = idcRegionMatch?.[1] ? decodeURIComponent(idcRegionMatch[1]) : ''
       }
-      if (match && match[1] && match[1] !== trimmed) {
+      const preserveKiroDescriptor = isKiroExternalIDPDescriptor(
+        oauthCallbackPath.value,
+        oauthLoginOption.value,
+        oauthIssuerURL.value
+      )
+      if (match && match[1] && match[1] !== trimmed && !preserveKiroDescriptor) {
         authCodeInput.value = decodeURIComponent(match[1])
       }
     }

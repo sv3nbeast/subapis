@@ -535,6 +535,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	for bodyAttempt := 0; ; bodyAttempt++ {
 		currentRequestCtx.BodyAttempt = bodyAttempt
 		currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+		currentRequestCtx.FinalizeCacheEmulationUsage = s.kiroCacheEmulationTerminalFinalizer(ctx, cacheUsage)
 		parseResult, err = kiropkg.ParseNonStreamingEventStreamWithContext(currentResp.Body, mappedModel, currentRequestCtx)
 		_ = currentResp.Body.Close()
 		if err == nil {
@@ -878,7 +879,7 @@ func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Ac
 
 func (s *GatewayService) shouldPrepareKiroCacheEmulationProfile(ctx context.Context, account *Account, body []byte) bool {
 	_ = s
-	if account == nil || !account.IsKiro() || !isKiroDirectModeAccount(account) || len(body) == 0 {
+	if account == nil || !account.IsKiroDirect() || len(body) == 0 {
 		return false
 	}
 	ua := strings.ToLower(strings.TrimSpace(ClaudeCodeUserAgent(ctx)))
@@ -1086,6 +1087,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		for bodyAttempt := 0; ; bodyAttempt++ {
 			currentRequestCtx.BodyAttempt = bodyAttempt
 			currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+			currentRequestCtx.FinalizeCacheEmulationUsage = s.kiroCacheEmulationTerminalFinalizer(streamCtx, cacheUsage)
 			currentRequestCtx.PriorAttemptKiroCredits = discardedKiroCredits
 			currentRequestCtx.RequireTerminalEvent = true
 			streamWriter := io.Writer(translatorWriter)
@@ -2240,10 +2242,9 @@ func kiroInputTokenBudgetForBody(requestCtx *kiropkg.KiroRequestContext, body []
 	if requestCtx == nil {
 		return max(semanticEstimate, 0)
 	}
-	if hasKiroNonTextPrompt(body) {
-		// The semantic text counter intentionally ignores binary image/document
-		// bytes. Do not turn that partial count into a hard billing cap; retain the
-		// serialized bound until Kiro supplies exact/context usage.
+	if hasKiroUnestimatedNonTextPrompt(body) {
+		// Keep the serialized upper bound for documents or malformed image data.
+		// Valid inline images are included in the semantic estimate by dimensions.
 		requestCtx.SemanticInputTokenBudget = 0
 		if requestCtx.InputTokenBudget > 0 {
 			return requestCtx.InputTokenBudget
@@ -2253,7 +2254,7 @@ func kiroInputTokenBudgetForBody(requestCtx *kiropkg.KiroRequestContext, body []
 	return kiroInputTokenBudget(requestCtx, semanticEstimate)
 }
 
-func hasKiroNonTextPrompt(body []byte) bool {
+func hasKiroUnestimatedNonTextPrompt(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
@@ -2269,9 +2270,32 @@ func hasKiroNonTextPrompt(body []byte) bool {
 		}
 		content.ForEach(func(_, part gjson.Result) bool {
 			switch strings.ToLower(strings.TrimSpace(part.Get("type").String())) {
-			case "image", "image_url", "input_image", "file", "input_file", "document":
+			case "file", "input_file", "document":
 				found = true
 				return false
+			case "image", "image_url", "input_image":
+				mediaType := firstNonEmpty(
+					part.Get("source.media_type").String(),
+					part.Get("source.mediaType").String(),
+					part.Get("source.mime_type").String(),
+					part.Get("media_type").String(),
+				)
+				source := firstNonEmpty(
+					part.Get("source.data").String(),
+					part.Get("source.url").String(),
+					part.Get("image_url.url").String(),
+					part.Get("image_url").String(),
+					part.Get("data").String(),
+					part.Get("url").String(),
+				)
+				if isKiroRemoteImageURL(source) {
+					return true
+				}
+				if _, ok := kiropkg.EstimateImageTokens(mediaType, source); !ok {
+					found = true
+					return false
+				}
+				return true
 			default:
 				return true
 			}

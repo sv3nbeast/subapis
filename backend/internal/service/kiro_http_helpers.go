@@ -39,7 +39,7 @@ func buildKiroCooldownKey(account *Account) string {
 		return ""
 	}
 	if account.Type == AccountTypeAPIKey {
-		if apiKey := firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key"); apiKey != "" {
+		if apiKey := account.KiroAPIKey(); apiKey != "" {
 			// Hash API-key credentials independently from the request fingerprint so
 			// duplicate account rows share cooldown without changing their User-Agent.
 			return kiropkg.BuildAccountKey("", "", apiKey, "", account.ID)
@@ -59,21 +59,9 @@ func buildKiroMachineID(account *Account) string {
 	}
 	fallbackKey := buildKiroMachineIDFallbackKey(account)
 	if account.Type == AccountTypeAPIKey {
-		return kiropkg.BuildMachineID("", firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key"), fallbackKey)
+		return kiropkg.BuildMachineID("", account.KiroAPIKey(), fallbackKey)
 	}
 	return kiropkg.BuildMachineID(account.GetCredential("refresh_token"), "", fallbackKey)
-}
-
-func firstKiroCredential(account *Account, keys ...string) string {
-	if account == nil {
-		return ""
-	}
-	for _, key := range keys {
-		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func buildKiroMachineIDFallbackKey(account *Account) string {
@@ -99,7 +87,7 @@ func kiroIsPlaceholderProfileARN(arn string) bool {
 }
 
 func kiroDefaultProfileARN(account *Account) string {
-	if account != nil && strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "social") {
+	if account != nil && account.KiroAuthMethod() == kiropkg.AuthMethodSocial {
 		return kiroSocialProfileARN
 	}
 	return kiroBuilderIDProfileARN
@@ -273,7 +261,7 @@ func applyKiroConditionalHeaders(req *http.Request, account *Account) {
 	if account.Type == AccountTypeAPIKey {
 		req.Header["TokenType"] = []string{"API_KEY"}
 	}
-	if strings.EqualFold(strings.TrimSpace(account.GetCredential("auth_method")), "external_idp") {
+	if account.KiroAuthMethod() == kiropkg.AuthMethodExternalIDP {
 		req.Header.Set("TokenType", "EXTERNAL_IDP")
 	}
 	if strings.EqualFold(strings.TrimSpace(account.GetCredential("provider")), "Internal") {

@@ -161,7 +161,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		effectiveInputTokens := kiroInputTokenBudgetForBody(&requestCtx, currentBody, semanticInputTokens)
 		if !messageStartSent {
 			cacheUsage = s.buildKiroCacheEmulationUsageForRequest(ctx, account, group, anthropicBody, mappedModel, effectiveInputTokens)
-			if err := writeAnthropicMessageStart(w, "", mappedModel, effectiveInputTokens, cacheUsage); err != nil {
+			if err := writeAnthropicMessageStart(w, "", mappedModel, effectiveInputTokens, nil); err != nil {
 				_ = resp.Body.Close()
 				return err
 			}
@@ -173,6 +173,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}
 		nextContentBlockIndex += 2
 		requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+		requestCtx.FinalizeCacheEmulationUsage = s.kiroCacheEmulationTerminalFinalizer(ctx, cacheUsage)
 		if resilienceEnforced {
 			requestCtx.RequireTerminalEvent = true
 		}
@@ -408,6 +409,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 				cacheUsageResolved = true
 			}
 			requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+			requestCtx.FinalizeCacheEmulationUsage = s.kiroCacheEmulationTerminalFinalizer(ctx, cacheUsage)
 			requestCtx.OnFirstSemantic = onFirstSemantic
 			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, mappedModel, requestCtx)
 		}()

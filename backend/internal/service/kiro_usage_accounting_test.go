@@ -43,6 +43,18 @@ func TestKiroInputTokenBudgetDoesNotCapBinaryPromptToTextOnlyEstimate(t *testing
 	require.Zero(t, requestCtx.SemanticInputTokenBudget)
 }
 
+func TestKiroInputTokenBudgetUsesVisualEstimateForValidInlineImage(t *testing.T) {
+	requestCtx := kiropkg.KiroRequestContext{InputTokenBudget: 18_000}
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"` + kiroPNGDataURLForTest(t, 512, 512) + `"}}]}]}`)
+	estimate := estimateKiroInputTokens(body)
+
+	effective := kiroInputTokenBudgetForBody(&requestCtx, body, estimate)
+
+	require.GreaterOrEqual(t, estimate, 350)
+	require.Equal(t, estimate, effective)
+	require.Equal(t, estimate, requestCtx.SemanticInputTokenBudget)
+}
+
 func TestKiroUsageToClaudeDoesNotDoubleCountCacheOnlyInput(t *testing.T) {
 	usage := kiroUsageToClaude(kiropkg.Usage{
 		InputTokens:              0,

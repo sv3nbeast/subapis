@@ -10,6 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestKiroTokenCacheKeyIsAccountScoped(t *testing.T) {
+	first := &Account{ID: 101, Credentials: map[string]any{"client_id_hash": "shared-device", "client_id": "shared-client"}}
+	second := &Account{ID: 202, Credentials: map[string]any{"client_id_hash": "shared-device", "client_id": "shared-client"}}
+
+	require.Equal(t, "kiro:account:101", KiroTokenCacheKey(first))
+	require.Equal(t, "kiro:account:202", KiroTokenCacheKey(second))
+	require.NotEqual(t, KiroTokenCacheKey(first), KiroTokenCacheKey(second))
+}
+
 type kiroTokenProviderRuntimeRepo struct {
 	AccountRepository
 	account                *Account

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,24 @@ const kiroCacheShadowStreamKey = "kiro_cache_shadow_samples:v1"
 const kiroCacheShadowMetricsPrefix = "kiro_cache_shadow_metrics:v1:"
 const kiroCacheShadowRetention = 7 * 24 * time.Hour
 const kiroCacheShadowMaxSamples = 200000
+
+const commitKiroCacheFingerprintsScript = `
+local existing = {}
+for i, key in ipairs(KEYS) do
+  local ttl = tonumber(ARGV[i])
+  local present = redis.call("EXISTS", key)
+  existing[i] = present
+  if present == 0 then
+    redis.call("SET", key, "1", "PX", ttl)
+  else
+    local current_ttl = redis.call("PTTL", key)
+    if current_ttl < 0 or ttl > current_ttl then
+      redis.call("PEXPIRE", key, ttl)
+    end
+  end
+end
+return existing
+`
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -99,44 +118,49 @@ func (c *gatewayCache) GetKiroCacheFingerprints(ctx context.Context, stableKey s
 	return out, nil
 }
 
-func (c *gatewayCache) UpsertKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error {
+func (c *gatewayCache) CommitKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) (map[string]bool, error) {
+	existing := make(map[string]bool, len(fingerprintTTLs))
 	if c == nil || c.rdb == nil || stableKey == "" || len(fingerprintTTLs) == 0 {
-		return nil
+		return existing, nil
 	}
-	pipe := c.rdb.Pipeline()
-	cmds := make([]redis.Cmder, 0, len(fingerprintTTLs)*3)
+
+	fingerprints := make([]string, 0, len(fingerprintTTLs))
 	for fingerprint, ttl := range fingerprintTTLs {
-		if fingerprint == "" || ttl <= 0 {
+		if fingerprint == "" || ttl.Milliseconds() <= 0 {
 			continue
 		}
-		ttlMillis := ttl.Milliseconds()
-		if ttlMillis <= 0 {
-			continue
+		fingerprints = append(fingerprints, fingerprint)
+	}
+	if len(fingerprints) == 0 {
+		return existing, nil
+	}
+	sort.Strings(fingerprints)
+
+	keys := make([]string, 0, len(fingerprints))
+	args := make([]any, 0, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		keys = append(keys, buildKiroCacheFingerprintKey(stableKey, fingerprint))
+		args = append(args, fingerprintTTLs[fingerprint].Milliseconds())
+	}
+
+	values, err := c.rdb.Eval(ctx, commitKiroCacheFingerprintsScript, keys, args...).Slice()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != len(fingerprints) {
+		return nil, fmt.Errorf("unexpected Kiro cache commit result count: got %d want %d", len(values), len(fingerprints))
+	}
+	for i, value := range values {
+		switch typed := value.(type) {
+		case int64:
+			existing[fingerprints[i]] = typed > 0
+		case string:
+			existing[fingerprints[i]] = typed != "" && typed != "0"
+		default:
+			return nil, fmt.Errorf("unexpected Kiro cache commit result type %T", value)
 		}
-		key := buildKiroCacheFingerprintKey(stableKey, fingerprint)
-		// 不再使用 Lua script：go-redis pipeline 中 EVALSHA 遇到 NOSCRIPT 不会像
-		// 普通 client 调用一样可靠回退，生产曾出现大量 NOSCRIPT，导致 Kiro
-		// cache fingerprint 持久化未真正落 Redis。这里用 Redis 原生命令实现同等语义：
-		// 1) 新 key：SET ... NX PX ttl；
-		// 2) 已存在且新 TTL 更长：PEXPIRE ... GT；
-		// 3) 已存在但意外无 TTL：PEXPIRE ... NX。
-		cmds = append(cmds, pipe.SetNX(ctx, key, "1", ttl))
-		cmds = append(cmds, pipe.Do(ctx, "PEXPIRE", key, ttlMillis, "GT"))
-		cmds = append(cmds, pipe.Do(ctx, "PEXPIRE", key, ttlMillis, "NX"))
 	}
-	if len(cmds) == 0 {
-		return nil
-	}
-	_, err := pipe.Exec(ctx)
-	if err != nil && err != redis.Nil {
-		return err
-	}
-	for _, cmd := range cmds {
-		if cmdErr := cmd.Err(); cmdErr != nil && cmdErr != redis.Nil {
-			return cmdErr
-		}
-	}
-	return nil
+	return existing, nil
 }
 
 func (c *gatewayCache) RecordKiroCacheShadowSample(ctx context.Context, sample *service.KiroCacheShadowSample) error {

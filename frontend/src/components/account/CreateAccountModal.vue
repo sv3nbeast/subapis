@@ -474,7 +474,7 @@
       <!-- Kiro OAuth auth mode selection -->
       <div v-if="form.platform === 'kiro' && accountCategory === 'oauth-based'">
         <label class="input-label">{{ t('admin.accounts.oauth.kiro.authModeTitle') }}</label>
-        <div class="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <button
             type="button"
             @click="kiroAccountType = 'oauth'"
@@ -559,6 +559,35 @@
               </span>
               <span class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.oauth.kiro.importSubtitle') }}
+              </span>
+            </div>
+          </button>
+          <button
+            type="button"
+            @click="kiroAccountType = 'external_idp'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              kiroAccountType === 'external_idp'
+                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
+                : 'border-gray-200 hover:border-emerald-300 dark:border-dark-600 dark:hover:border-emerald-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                kiroAccountType === 'external_idp'
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="shield" size="sm" />
+            </div>
+            <div class="min-w-0">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('admin.accounts.oauth.kiro.externalIDPTitle') }}
+              </span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.oauth.kiro.externalIDPSubtitle') }}
               </span>
             </div>
           </button>
@@ -4116,7 +4145,7 @@ const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist'
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
-const kiroAccountType = ref<'oauth' | 'idc' | 'import'>('oauth')
+const kiroAccountType = ref<'oauth' | 'idc' | 'external_idp' | 'import'>('oauth')
 const kiroOAuthProvider = ref<'google' | 'github'>('google')
 const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
@@ -5813,7 +5842,13 @@ const handleGenerateUrl = async () => {
         region: kiroIDCRegion.value.trim() || undefined
       })
     } else {
-      await kiroOAuth.generateAuthUrl(form.proxy_id, kiroOAuthProvider.value === 'github' ? 'Github' : 'Google')
+      const provider =
+        kiroAccountType.value === 'external_idp'
+          ? 'ExternalIdp'
+          : kiroOAuthProvider.value === 'github'
+            ? 'Github'
+            : 'Google'
+      await kiroOAuth.generateAuthUrl(form.proxy_id, provider)
     }
   } else if (form.platform === 'droid') {
     await droidOAuth.generateAuthUrl(form.proxy_id)
@@ -6673,7 +6708,13 @@ const handleKiroExchange = async (authCode: string) => {
       loginOption: oauthFlowRef.value?.oauthLoginOption || '',
       proxyId: form.proxy_id
     })
-    if (!tokenInfo) return
+    if (!tokenInfo) {
+      if (kiroAccountType.value === 'external_idp' && kiroOAuth.externalIDPStage.value === 'idp') {
+        oauthFlowRef.value?.reset()
+        appStore.showInfo(t('admin.accounts.oauth.kiro.externalIDPContinuationReady'), 6000)
+      }
+      return
+    }
 
     const credentials = buildKiroCredentials(tokenInfo)
     await createAccountAndFinish('kiro', 'oauth', credentials, buildKiroExtra(buildMixedSchedulingExtra()))

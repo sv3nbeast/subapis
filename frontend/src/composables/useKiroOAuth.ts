@@ -4,6 +4,38 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { KiroTokenInfo } from '@/api/admin/kiro'
 
+export type KiroAuthMethod = 'social' | 'idc' | 'external_idp'
+
+export function resolveKiroAuthMethod(credentials: Record<string, unknown>): KiroAuthMethod {
+  const raw = String(credentials.auth_method || '')
+    .trim()
+    .toLowerCase()
+  if (
+    ['idc', 'iam_identity_center', 'builder-id', 'builder_id', 'builderid', 'awsidc'].includes(raw)
+  ) {
+    return 'idc'
+  }
+  if (['external_idp', 'external-idp', 'externalidp'].includes(raw)) {
+    return 'external_idp'
+  }
+  if (raw === 'social') return 'social'
+
+  const clientId = String(credentials.client_id || '').trim()
+  const provider = String(credentials.provider || '')
+    .trim()
+    .toLowerCase()
+  if (
+    clientId &&
+    (String(credentials.token_endpoint || '').trim() || String(credentials.issuer_url || '').trim())
+  ) {
+    return 'external_idp'
+  }
+  if (provider === 'externalidp') return 'external_idp'
+  if (clientId && String(credentials.client_secret || '').trim()) return 'idc'
+  if (['builderid', 'enterprise', 'aws'].includes(provider)) return 'idc'
+  return 'social'
+}
+
 export function useKiroOAuth() {
   const appStore = useAppStore()
   const { t } = useI18n()
@@ -13,6 +45,7 @@ export function useKiroOAuth() {
   const state = ref('')
   const loading = ref(false)
   const error = ref('')
+  const externalIDPStage = ref<'portal' | 'idp'>('portal')
 
   const resetState = () => {
     authUrl.value = ''
@@ -20,6 +53,7 @@ export function useKiroOAuth() {
     state.value = ''
     loading.value = false
     error.value = ''
+    externalIDPStage.value = 'portal'
   }
 
   const errorMessage = (err: any) =>
@@ -31,13 +65,14 @@ export function useKiroOAuth() {
 
   const generateAuthUrl = async (
     proxyId: number | null | undefined,
-    provider: 'Google' | 'Github' = 'Google'
+    provider: 'Google' | 'Github' | 'ExternalIdp' = 'Google'
   ): Promise<boolean> => {
     loading.value = true
     error.value = ''
     authUrl.value = ''
     sessionId.value = ''
     state.value = ''
+    externalIDPStage.value = 'portal'
 
     try {
       const response = await adminAPI.kiro.generateAuthUrl({
@@ -57,14 +92,17 @@ export function useKiroOAuth() {
     }
   }
 
-  const generateIDCAuthUrl = async (
-    params: { proxyId?: number | null; startUrl?: string; region?: string }
-  ): Promise<boolean> => {
+  const generateIDCAuthUrl = async (params: {
+    proxyId?: number | null
+    startUrl?: string
+    region?: string
+  }): Promise<boolean> => {
     loading.value = true
     error.value = ''
     authUrl.value = ''
     sessionId.value = ''
     state.value = ''
+    externalIDPStage.value = 'portal'
 
     try {
       const response = await adminAPI.kiro.generateIDCAuthUrl({
@@ -96,7 +134,7 @@ export function useKiroOAuth() {
     loading.value = true
     error.value = ''
     try {
-      return await adminAPI.kiro.exchangeCode({
+      const response = await adminAPI.kiro.exchangeCode({
         session_id: params.sessionId,
         state: params.state,
         code: params.code.trim(),
@@ -104,6 +142,14 @@ export function useKiroOAuth() {
         login_option: params.loginOption,
         proxy_id: params.proxyId || undefined
       })
+      if (response.auth_url && response.session_id && response.state && !response.access_token) {
+        authUrl.value = response.auth_url
+        sessionId.value = response.session_id
+        state.value = response.state
+        externalIDPStage.value = 'idp'
+        return null
+      }
+      return response
     } catch (err: any) {
       error.value = errorMessage(err)
       appStore.showError(error.value)
@@ -122,6 +168,9 @@ export function useKiroOAuth() {
     startUrl?: string
     region?: string
     profileArn?: string
+    issuerUrl?: string
+    tokenEndpoint?: string
+    scopes?: string
     proxyId?: number | null
   }): Promise<KiroTokenInfo | null> => {
     loading.value = true
@@ -136,6 +185,9 @@ export function useKiroOAuth() {
         start_url: payload.startUrl,
         region: payload.region,
         profile_arn: payload.profileArn,
+        issuer_url: payload.issuerUrl,
+        token_endpoint: payload.tokenEndpoint,
+        scopes: payload.scopes,
         proxy_id: payload.proxyId || undefined
       })
     } catch (err: any) {
@@ -190,6 +242,7 @@ export function useKiroOAuth() {
     state,
     loading,
     error,
+    externalIDPStage,
     resetState,
     generateAuthUrl,
     generateIDCAuthUrl,

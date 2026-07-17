@@ -5151,6 +5151,8 @@ export default {
           oauthSubtitle: 'Google/GitHub sign-in; may continue to AWS IDC',
           idcTitle: 'AWS IDC',
           idcSubtitle: 'Use IAM Identity Center start URL',
+          externalIDPTitle: 'Enterprise SSO',
+          externalIDPSubtitle: 'Microsoft Entra ID',
           importTitle: 'Import Token',
           importSubtitle: 'Paste existing Kiro token JSON',
           importDialogTitle: 'Import Kiro Token',
@@ -5176,7 +5178,9 @@ export default {
           missingIDCContinuation:
             'This Kiro callback is missing issuer_url; regenerate the authorization URL and retry.',
           idcContinuationReady:
-            'Switched to AWS IDC device authorization. Open the newly generated authorization URL, finish sign-in, then click Complete Authorization.'
+            'Switched to AWS IDC device authorization. Open the newly generated authorization URL, finish sign-in, then click Complete Authorization.',
+          externalIDPContinuationReady:
+            'Open the Microsoft sign-in URL, finish authorization, then paste the final callback URL.'
         }
       }, // Gemini specific (platform-wide)
       gemini: {

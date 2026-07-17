@@ -94,7 +94,7 @@ func (s *AccountUsageService) getKiroUsage(ctx context.Context, account *Account
 			ErrorCode: errorCodeNetworkError,
 		}, nil
 	}
-	if !isKiroDirectModeAccount(account) {
+	if !account.IsKiroDirect() {
 		return &UsageInfo{
 			Source:    source,
 			UpdatedAt: &now,
@@ -192,22 +192,9 @@ func (s *AccountUsageService) fetchAndCacheKiroUsage(ctx context.Context, accoun
 	return usage, nil
 }
 
-func isKiroDirectModeAccount(account *Account) bool {
-	if account == nil || account.Platform != PlatformKiro {
-		return false
-	}
-	if account.Type == AccountTypeOAuth {
-		return true
-	}
-	if account.Type == AccountTypeAPIKey {
-		return strings.TrimSpace(account.GetCredential("base_url")) == ""
-	}
-	return false
-}
-
 func (s *AccountUsageService) getKiroUsageAccessToken(ctx context.Context, account *Account) (string, error) {
 	if account != nil && account.Type == AccountTypeAPIKey {
-		return firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key"), nil
+		return account.KiroAPIKey(), nil
 	}
 	if s != nil && s.kiroTokenProvider != nil {
 		return s.kiroTokenProvider.GetAccessToken(ctx, account)

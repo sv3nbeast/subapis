@@ -707,7 +707,7 @@ func TestForwardAsResponses_KiroExpandsPreviousResponseHistory(t *testing.T) {
 		Platform:    PlatformKiro,
 		Type:        AccountTypeAPIKey,
 		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "kiro-key"},
+		Credentials: map[string]any{"api_key": "kiro-key", "base_url": "https://api.anthropic.com"},
 	}
 
 	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
@@ -762,7 +762,7 @@ func TestForwardAsResponses_KiroStoresStreamingOutputForPreviousResponseHistory(
 		Platform:    PlatformKiro,
 		Type:        AccountTypeAPIKey,
 		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "kiro-key"},
+		Credentials: map[string]any{"api_key": "kiro-key", "base_url": "https://api.anthropic.com"},
 	}
 
 	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
@@ -818,7 +818,7 @@ func TestForwardAsResponses_KiroStoreFalseDoesNotPersistHistory(t *testing.T) {
 		Platform:    PlatformKiro,
 		Type:        AccountTypeAPIKey,
 		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "kiro-key"},
+		Credentials: map[string]any{"api_key": "kiro-key", "base_url": "https://api.anthropic.com"},
 	}
 
 	firstResult, err := svc.ForwardAsResponses(context.Background(), firstCtx, account, firstBody, &ParsedRequest{
@@ -865,7 +865,7 @@ func TestForwardAsResponses_KiroMissingPreviousResponseIDReturns404(t *testing.T
 		Platform:    PlatformKiro,
 		Type:        AccountTypeAPIKey,
 		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "kiro-key"},
+		Credentials: map[string]any{"api_key": "kiro-key", "base_url": "https://api.anthropic.com"},
 	}
 
 	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{

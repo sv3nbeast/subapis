@@ -141,12 +141,8 @@ func KiroTokenCacheKey(account *Account) string {
 	if account == nil {
 		return "kiro:account:0"
 	}
-	if clientIDHash := strings.TrimSpace(account.GetCredential("client_id_hash")); clientIDHash != "" {
-		return "kiro:" + clientIDHash
-	}
-	if clientID := strings.TrimSpace(account.GetCredential("client_id")); clientID != "" {
-		return "kiro:client:" + clientID
-	}
+	// OAuth client registrations identify the Kiro application/device, not the
+	// signed-in user. Multiple accounts may legitimately share them.
 	return "kiro:account:" + strconv.FormatInt(account.ID, 10)
 }
 

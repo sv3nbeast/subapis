@@ -1,10 +1,17 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -131,7 +138,7 @@ func TestGatewayService_CountTokensKiroOAuth401RefreshesWithoutTempUnschedule(t 
 	require.Equal(t, 0, repo.setTempCalls, "Kiro count_tokens 401 must not remove the account from the main request scheduler")
 	require.Equal(t, 1, repo.updateCredentialsCalls, "Kiro count_tokens 401 should still force-refresh the token")
 	require.Equal(t, "fresh-token", repo.lastCredentials["access_token"])
-	require.Equal(t, []string{"kiro:client-hash", "kiro:account:1459"}, cache.deletedKeys)
+	require.Equal(t, []string{"kiro:account:1459"}, cache.deletedKeys)
 }
 
 func TestGatewayService_CountTokensKiroOAuth401NonRetryableRefreshCanSetErrorButNotTempUnschedule(t *testing.T) {
@@ -186,5 +193,75 @@ func TestGatewayService_ForwardCountTokens_KiroReturnsEstimatedTokens(t *testing
 	err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"input_tokens":3}`, rec.Body.String())
+	require.JSONEq(t, `{"input_tokens":`+strconv.Itoa(estimateKiroInputTokens(parsed.Body.Bytes()))+`}`, rec.Body.String())
+}
+
+func TestGatewayServiceForwardCountTokensKiroImageUsesVisualEstimate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dataURL := kiroPNGDataURLForTest(t, 512, 512)
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"` + dataURL + `"}}]}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	want := estimateKiroInputTokens(body)
+	require.GreaterOrEqual(t, want, 350)
+	require.Less(t, want, len(dataURL)/2, "base64 payload must not be counted as text")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+	err = (&GatewayService{}).ForwardCountTokens(context.Background(), c, &Account{
+		ID: 1569, Platform: PlatformKiro, Type: AccountTypeOAuth,
+	}, parsed)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"input_tokens":`+strconv.Itoa(want)+`}`, recorder.Body.String())
+}
+
+func TestGatewayServiceForwardCountTokensKiroRelayUsesUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewBufferString(`{"input_tokens":77}`)),
+	}}
+	svc := &GatewayService{
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 1570, Platform: PlatformKiro, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "relay-key", "base_url": "http://kiro-relay.example"},
+	}
+
+	err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"input_tokens":77}`, recorder.Body.String())
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "http://kiro-relay.example/v1/messages/count_tokens?beta=true", upstream.lastReq.URL.String())
+	require.Equal(t, "relay-key", upstream.lastReq.Header.Get("x-api-key"))
+}
+
+func kiroPNGDataURLForTest(t *testing.T, width, height int) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8(x ^ y), A: 255})
+		}
+	}
+	var out bytes.Buffer
+	require.NoError(t, png.Encode(&out, img))
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(out.Bytes())
 }

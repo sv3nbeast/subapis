@@ -205,7 +205,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
-import { useKiroOAuth } from '@/composables/useKiroOAuth'
+import { resolveKiroAuthMethod, useKiroOAuth } from '@/composables/useKiroOAuth'
 import { useDroidOAuth } from '@/composables/useDroidOAuth'
 import type { Account, AccountPlatform } from '@/types'
 import { buildReauthAccountUpdatePayload } from '@/components/account/reauthPayload'
@@ -276,12 +276,13 @@ const currentOAuthPlatform = computed<AccountPlatform>(() => {
   if (isDroid.value) return 'droid'
   return 'anthropic'
 })
-const isKiroIDCAccount = computed(() => {
-  if (!isKiro.value) return false
-  const creds = (props.account?.credentials || {}) as Record<string, unknown>
-  const authMethod = String(creds.auth_method || '').trim().toLowerCase()
-  return authMethod === 'idc' || authMethod === 'builder-id'
-})
+const kiroAuthMethod = computed(() =>
+  resolveKiroAuthMethod((props.account?.credentials || {}) as Record<string, unknown>)
+)
+const isKiroIDCAccount = computed(() => isKiro.value && kiroAuthMethod.value === 'idc')
+const isKiroExternalIDPAccount = computed(
+  () => isKiro.value && kiroAuthMethod.value === 'external_idp'
+)
 
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
@@ -404,6 +405,8 @@ const handleGenerateUrl = async () => {
         startUrl: typeof creds.start_url === 'string' ? creds.start_url : undefined,
         region: typeof creds.region === 'string' ? creds.region : undefined
       })
+    } else if (isKiroExternalIDPAccount.value) {
+      await kiroOAuth.generateAuthUrl(props.account.proxy_id, 'ExternalIdp')
     } else {
       const provider = String(creds.provider || '').toLowerCase() === 'github' ? 'Github' : 'Google'
       await kiroOAuth.generateAuthUrl(props.account.proxy_id, provider)
@@ -610,7 +613,13 @@ const handleExchangeCode = async () => {
       loginOption: oauthFlowRef.value?.oauthLoginOption || '',
       proxyId: props.account.proxy_id
     })
-    if (!tokenInfo) return
+    if (!tokenInfo) {
+      if (isKiroExternalIDPAccount.value && kiroOAuth.externalIDPStage.value === 'idp') {
+        oauthFlowRef.value?.reset()
+        appStore.showInfo(t('admin.accounts.oauth.kiro.externalIDPContinuationReady'), 6000)
+      }
+      return
+    }
 
     const credentials = kiroOAuth.buildCredentials(tokenInfo)
 

@@ -74,6 +74,30 @@ func TestForwardAsChatCompletionsKiroUsesNativeGPTModel(t *testing.T) {
 	require.Equal(t, kiroNativeGPTTestModel, result.UpstreamModel)
 }
 
+func TestForwardAsChatCompletionsKiroDirectAPIKeyUsesNativeRuntime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello chat"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "native api key chat ok")
+	account.Type = AccountTypeAPIKey
+	delete(account.Credentials, "access_token")
+	account.Credentials["kiro_api_key"] = "kiro-api-key"
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assertKiroNativeGPTUpstreamRequest(t, upstream)
+	require.Equal(t, []string{"API_KEY"}, upstream.lastReq.Header["TokenType"])
+	require.Equal(t, "native api key chat ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
+}
+
 func TestForwardAsChatCompletionsKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
@@ -244,6 +268,31 @@ func TestForwardAsResponsesKiroUsesNativeGPTModel(t *testing.T) {
 	require.Equal(t, "native gpt responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 	require.Equal(t, kiroNativeGPTTestModel, result.Model)
 	require.Equal(t, kiroNativeGPTTestModel, result.UpstreamModel)
+}
+
+func TestForwardAsResponsesKiroDirectAPIKeyUsesNativeRuntime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"input_text","text":"hello responses"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "native api key responses ok")
+	account.Type = AccountTypeAPIKey
+	delete(account.Credentials, "access_token")
+	account.Credentials["api_key"] = "kiro-api-key"
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assertKiroNativeGPTUpstreamRequest(t, upstream)
+	require.Equal(t, []string{"API_KEY"}, upstream.lastReq.Header["TokenType"])
+	require.Equal(t, "native api key responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 }
 
 func TestForwardAsResponsesKiroCarriesCodexCustomToolAndRestoresCall(t *testing.T) {
@@ -529,7 +578,7 @@ func TestForwardAsResponsesKiroNativeGPTCodexLiteToolChoiceNoneStillRetriesPrelu
 	upstream.resp = nil
 	upstream.responses = []*http.Response{
 		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位所有仓库、HTTP 路由和相关实现。"),
-		kiroCustomToolEventStreamResponseWithCredits(t, "toolu_exec_retry", "exec", `{"input":"const r = await tools.exec_command({cmd: "pwd"}); text(r.output);"}`, 0.23),
+		kiroCustomToolEventStreamResponseWithCredits(t, "toolu_exec_retry", "exec", `{"input":"const r = await tools.exec_command({cmd: \"pwd\"}); text(r.output);"}`, 0.23),
 	}
 
 	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
@@ -811,7 +860,7 @@ func TestKiroNativeGPTPreludeRetryCommitsCacheOnlyAfterSuccessfulTerminal(t *tes
 	require.Contains(t, string(streamBytes), `"name":"read"`)
 	require.NoError(t, svc.finishKiroStreamResponse(context.Background(), resp, parsed.GroupID, nil))
 	require.Len(t, upstream.requests, 2)
-	require.Equal(t, 1, cache.UpsertCalls(), "discarded prelude attempt must not commit cache state")
+	require.Equal(t, 1, cache.CommitCalls(), "discarded prelude attempt must not commit cache state")
 
 	resetKiroCacheTracker()
 	nextUsage := svc.buildKiroCacheEmulationUsageForRequest(context.Background(), account, group, body, kiroNativeGPTTestModel, inputTokens)

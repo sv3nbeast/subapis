@@ -537,7 +537,11 @@ type GatewayCache interface {
 // 凭证稳定身份，具体实现应在写外部缓存前自行摘要化，避免原始标识泄露到键名。
 type KiroCachePersistenceStore interface {
 	GetKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprints []string) (map[string]bool, error)
-	UpsertKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error
+	// CommitKiroCacheFingerprints atomically publishes a successful request's
+	// fingerprints and reports which keys existed before this commit. The
+	// result lets concurrent successful requests agree on one cache creator
+	// across gateway instances without reserving cache state before success.
+	CommitKiroCacheFingerprints(ctx context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) (map[string]bool, error)
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -5362,7 +5366,7 @@ func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (
 	case AccountTypeAPIKey:
 		apiKey := account.GetCredential("api_key")
 		if account.Platform == PlatformKiro {
-			apiKey = firstKiroCredential(account, "kiro_api_key", "kiroApiKey", "api_key")
+			apiKey = account.KiroAPIKey()
 		}
 		if apiKey == "" {
 			return "", "", errors.New("api_key not found in credentials")
@@ -6592,7 +6596,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
 	}
 
-	if account != nil && account.Platform == PlatformKiro && isKiroDirectModeAccount(account) {
+	if account != nil && account.IsKiroDirect() {
 		return s.forwardKiroMessages(ctx, c, account, parsed, startTime)
 	}
 	if account != nil && account.Platform == PlatformDroid {
@@ -12159,6 +12163,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			return fmt.Errorf("normalize claude code date watermark: %w", err)
 		}
 	}
+	if account != nil && account.IsKiroDirect() {
+		c.JSON(http.StatusOK, gin.H{"input_tokens": max(estimateKiroInputTokens(parsed.Body.Bytes()), 1)})
+		return nil
+	}
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
@@ -12234,16 +12242,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
 	// 这里直接返回本地估算结果，避免 Claude/Claude Code 探测链持续收到 404。
 	if account.Platform == PlatformAntigravity {
-		c.JSON(http.StatusOK, gin.H{
-			"input_tokens": estimateAnthropicCountTokens(parsed),
-		})
-		return nil
-	}
-
-	// Kiro 上游的 count_tokens 端点当前不支持 JWT/OAuth 鉴权，会返回
-	// "jwt auth is not yet supported on count_tokens"。该探测接口不应污染账号
-	// 状态或让客户端在正式 /v1/messages 前失败，直接返回本地估算值。
-	if account.Platform == PlatformKiro {
 		c.JSON(http.StatusOK, gin.H{
 			"input_tokens": estimateAnthropicCountTokens(parsed),
 		})

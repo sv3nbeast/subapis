@@ -8,12 +8,14 @@ const {
   applyOAuthCredentialsMock,
   clearErrorMock,
   exchangeKiroAuthCodeMock,
+  generateKiroAuthUrlMock,
   buildKiroCredentialsMock,
   resetKiroStateMock
 } = vi.hoisted(() => ({
   applyOAuthCredentialsMock: vi.fn(),
   clearErrorMock: vi.fn(),
   exchangeKiroAuthCodeMock: vi.fn(),
+  generateKiroAuthUrlMock: vi.fn(),
   buildKiroCredentialsMock: vi.fn(),
   resetKiroStateMock: vi.fn()
 }))
@@ -115,17 +117,20 @@ vi.mock('@/composables/useAntigravityOAuth', async () => {
   }
 })
 
-vi.mock('@/composables/useKiroOAuth', async () => {
+vi.mock('@/composables/useKiroOAuth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/composables/useKiroOAuth')>()
   const { ref } = await vi.importActual<typeof import('vue')>('vue')
   return {
+    ...actual,
     useKiroOAuth: () => ({
       authUrl: ref('https://oidc.us-east-1.amazonaws.com/authorize'),
       sessionId: ref('kiro-session'),
       state: ref('kiro-state'),
       loading: ref(false),
       error: ref(''),
+      externalIDPStage: ref('portal'),
       resetState: resetKiroStateMock,
-      generateAuthUrl: vi.fn(),
+      generateAuthUrl: generateKiroAuthUrlMock,
       generateIDCAuthUrl: vi.fn(),
       exchangeAuthCode: exchangeKiroAuthCodeMock,
       buildCredentials: buildKiroCredentialsMock
@@ -194,11 +199,29 @@ function makeKiroIDCAccount() {
   } as any
 }
 
-function mountModal(component: typeof UserReAuthAccountModal | typeof AdminReAuthAccountModal) {
+function makeKiroExternalIDPAccount() {
+  return {
+    ...makeKiroIDCAccount(),
+    name: 'Kiro Enterprise SSO',
+    credentials: {
+      auth_method: 'external_idp',
+      provider: 'ExternalIdp',
+      client_id: 'client-id',
+      issuer_url: 'https://login.microsoftonline.com/tenant/v2.0',
+      token_endpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+      refresh_token: 'old-refresh'
+    }
+  } as any
+}
+
+function mountModal(
+  component: typeof UserReAuthAccountModal | typeof AdminReAuthAccountModal,
+  account = makeKiroIDCAccount()
+) {
   return mount(component, {
     props: {
       show: true,
-      account: makeKiroIDCAccount()
+      account
     },
     global: {
       stubs: {
@@ -260,5 +283,13 @@ describe.each([
         region: 'us-east-1'
       }
     })
+  })
+
+  it('preserves the External IdP provider during reauthorization', async () => {
+    const wrapper = mountModal(component, makeKiroExternalIDPAccount())
+    wrapper.getComponent(OAuthAuthorizationFlowStub).vm.$emit('generate-url')
+    await flushPromises()
+
+    expect(generateKiroAuthUrlMock).toHaveBeenCalledWith(null, 'ExternalIdp')
   })
 })
