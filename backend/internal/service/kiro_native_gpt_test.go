@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -212,6 +214,7 @@ func TestForwardAsResponsesKiroContinuesCodexCustomToolWithPreviousResponseID(t 
 	require.Equal(t, "exec", gjson.Get(secondRec.Body.String(), "output.0.name").String())
 	require.Equal(t, `text("again")`, gjson.Get(secondRec.Body.String(), "output.0.input").String())
 	require.Len(t, upstream.bodies, 2)
+	require.Contains(t, string(upstream.bodies[1]), "never end the turn after only announcing")
 	assertKiroCodexToolCycle(t, upstream.bodies[1], "toolu_exec", "exec", `text("hello")`, "hello")
 }
 
@@ -293,6 +296,367 @@ func TestForwardAsResponsesKiroCoalescesTextAroundLateReasoning(t *testing.T) {
 	require.Contains(t, wire, `"status":"completed"`)
 }
 
+func kiroNativeGPTPreludeResponse(t *testing.T, text string) *http.Response {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": text},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 11, "outputTokens": 12},
+		},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "meteringEvent", map[string]any{
+		"meteringEvent": map[string]any{"usage": 0.17},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_prelude"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+}
+
+func kiroNativeGPTPreludeFailureResponse(t *testing.T, text string) *http.Response {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": text},
+	}))
+	_, _ = stream.Write(buildKiroExceptionFrame(t, "InternalServerException", map[string]any{
+		"message": "upstream disconnected",
+	}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_prelude_failure"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+}
+
+func kiroNativeGPTToolRequestBody() []byte {
+	return []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]},
+			{"type":"additional_tools","tools":[{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}]}
+		],
+		"stream":true
+	}`)
+}
+
+func enableKiroNativeGPTEnforceMode(svc *GatewayService) {
+	svc.cfg.Gateway.KiroResilience = config.GatewayKiroResilienceConfig{
+		Mode:                         config.KiroResilienceModeEnforce,
+		ResponseHeaderTimeoutSeconds: 30,
+		FirstSemanticTimeoutSeconds:  60,
+		FailoverBudgetSeconds:        105,
+		PreSemanticBufferBytes:       256 * 1024,
+		CleanupGraceSeconds:          3,
+	}
+}
+
+func TestForwardAsResponsesKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := kiroNativeGPTToolRequestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroCustomToolEventStreamResponseWithCredits(t, "toolu_exec_retry", "exec", `{"input":"const r = await tools.exec_command({cmd: \"pwd\"}); text(r.output);"}`, 0.23),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.bodies, 2)
+	require.NotContains(t, rec.Body.String(), "我现在直接读取工作区")
+	require.Contains(t, rec.Body.String(), `"type":"custom_tool_call"`)
+	require.Contains(t, rec.Body.String(), "tools.exec_command")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.completed"))
+
+	firstContent := gjson.GetBytes(upstream.bodies[0], "conversationState.currentMessage.userInputMessage.content").String()
+	secondContent := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, firstContent, kiroNativeToolProgressRetryInstruction)
+	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
+	require.NotEqual(t,
+		gjson.GetBytes(upstream.bodies[0], "conversationState.conversationId").String(),
+		gjson.GetBytes(upstream.bodies[1], "conversationState.conversationId").String(),
+	)
+	require.Equal(t, 5, result.Usage.OutputTokens, "discarded prelude tokens must not enter client billing")
+	require.InDelta(t, 0.40, result.Usage.KiroCredits, 0.000001)
+}
+
+func TestForwardAsResponsesKiroNativeGPTBufferedPreludeRetriesForNonStreamingClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := bytes.Replace(kiroNativeGPTToolRequestBody(), []byte(`"stream":true`), []byte(`"stream":false`), 1)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_exec_sync_retry", "exec", `{"input":"text(\"done\")"}`),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我现在直接读取工作区")
+	require.Equal(t, "custom_tool_call", gjson.Get(rec.Body.String(), "output.0.type").String())
+	require.Equal(t, "exec", gjson.Get(rec.Body.String(), "output.0.name").String())
+	require.Equal(t, `text("done")`, gjson.Get(rec.Body.String(), "output.0.input").String())
+}
+
+func TestForwardAsResponsesKiroNativeGPTPreludeRetriesWithoutResilienceGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := kiroNativeGPTToolRequestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我继续直接读取工作区，先定位仓库和路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_exec_off_mode", "exec", `{"input":"text(\"done\")"}`),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我继续直接读取工作区")
+	require.NotContains(t, rec.Body.String(), "sub2api_internal_kiro_ping")
+	require.Contains(t, rec.Body.String(), `"type":"custom_tool_call"`)
+}
+
+func TestForwardAsResponsesKiroNativeGPTPreludeReasoningTextToolKeepsOneMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := kiroNativeGPTToolRequestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "我先读取"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "select the read tool"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "工作区。"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_exec_interleaved",
+			"name":      "exec",
+			"input":     `{"input":"text(\"workspace\")"}`,
+			"stop":      true,
+		},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 11, "outputTokens": 10}},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_interleaved_tool"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	wire := rec.Body.String()
+	require.Equal(t, 1, strings.Count(wire, `"role":"assistant","status":"in_progress","type":"message"`))
+	customToolItems := 0
+	for _, item := range result.ResponsesOutput {
+		if item.Type == "custom_tool_call" {
+			customToolItems++
+		}
+	}
+	require.Equal(t, 1, customToolItems)
+	require.Contains(t, wire, `"text":"我先读取工作区。"`)
+	require.Equal(t, 1, strings.Count(wire, "event: response.completed"))
+}
+
+func TestForwardAsResponsesKiroNativeGPTPreludeRetryExhaustionIsNotFalseSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := kiroNativeGPTToolRequestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroNativeGPTPreludeResponse(t, "我会先检查代码，再追踪请求链路。"),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.True(t, failoverErr.FailoverProhibited)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.Len(t, upstream.requests, 2)
+	require.Empty(t, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "response.completed")
+}
+
+func TestForwardAsResponsesKiroNativeGPTBufferedPreludeFailureDoesNotReplay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := kiroNativeGPTToolRequestBody()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = kiroNativeGPTPreludeFailureResponse(t, "我现在直接读取工作区，先定位仓库和路由。")
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.True(t, failoverErr.FailoverProhibited)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.Len(t, upstream.requests, 1)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestKiroNativeGPTPreludeRetryCommitsCacheOnlyAfterSuccessfulTerminal(t *testing.T) {
+	resetKiroCacheTracker()
+	longPrefix := strings.Repeat("stable workspace context ", 1600)
+	body := []byte(fmt.Sprintf(`{
+		"model":"gpt-5.6-sol",
+		"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral","ttl":"1h"}}],
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`, longPrefix))
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	group := kiroCacheGroup(1)
+	parsed.Group = group
+	parsed.GroupID = &group.ID
+	parsed.KiroNativeToolProgressRequired = true
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	cache := newFakeKiroGatewayCache()
+	svc.cache = cache
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_retry", "read", `{"path":"README.md"}`),
+	}
+
+	resp, inputTokens, err := svc.openKiroAnthropicStreamResponse(context.Background(), account, parsed, body, kiroNativeGPTTestModel, kiroNativeGPTTestModel, http.Header{}, group)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(streamBytes), `"name":"read"`)
+	require.NoError(t, svc.finishKiroStreamResponse(context.Background(), resp, parsed.GroupID, nil))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, 1, cache.UpsertCalls(), "discarded prelude attempt must not commit cache state")
+
+	resetKiroCacheTracker()
+	nextUsage := svc.buildKiroCacheEmulationUsageForRequest(context.Background(), account, group, body, kiroNativeGPTTestModel, inputTokens)
+	require.NotNil(t, nextUsage)
+	require.Positive(t, nextUsage.CacheReadInputTokens, "successful retry must leave the stable prefix reusable")
+}
+
+func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":false
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	upstream.resp = kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。")
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Contains(t, rec.Body.String(), "我先读取工作区")
+}
+
 func TestForwardMessagesKiroUsesNativeGPTModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.6-sol","max_tokens":256,"messages":[{"role":"user","content":"hello messages"}],"stream":false}`)
@@ -315,6 +679,10 @@ func TestForwardMessagesKiroUsesNativeGPTModel(t *testing.T) {
 }
 
 func kiroCustomToolEventStreamResponse(t *testing.T, toolUseID, name, input string) *http.Response {
+	return kiroCustomToolEventStreamResponseWithCredits(t, toolUseID, name, input, 0)
+}
+
+func kiroCustomToolEventStreamResponseWithCredits(t *testing.T, toolUseID, name, input string, credits float64) *http.Response {
 	t.Helper()
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
@@ -328,6 +696,11 @@ func kiroCustomToolEventStreamResponse(t *testing.T, toolUseID, name, input stri
 	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 11, "outputTokens": 5}},
 	}))
+	if credits > 0 {
+		_, _ = stream.Write(kiroEventStreamFrame(t, "meteringEvent", map[string]any{
+			"meteringEvent": map[string]any{"usage": credits},
+		}))
+	}
 	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
 		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
 	}))

@@ -34,9 +34,12 @@ type kiroEndpointConfig struct {
 	Name      string
 }
 
+const kiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"
+
 type kiroUpstreamRequestOptions struct {
-	ConversationRetryNonce string
-	EndpointStartOffset    int
+	ConversationRetryNonce  string
+	EndpointStartOffset     int
+	NativeToolProgressRetry bool
 }
 
 // kiroEndpointTransportError preserves which endpoint failed before an HTTP
@@ -1078,9 +1081,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			maxBodyRetries = 0
 		}
 		var contextRetryCause error
+		nativeToolProgressRetryUsed := false
+		discardedKiroCredits := 0.0
 		for bodyAttempt := 0; ; bodyAttempt++ {
 			currentRequestCtx.BodyAttempt = bodyAttempt
 			currentRequestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+			currentRequestCtx.PriorAttemptKiroCredits = discardedKiroCredits
 			currentRequestCtx.RequireTerminalEvent = true
 			streamWriter := io.Writer(translatorWriter)
 			if semanticObserver != nil {
@@ -1096,6 +1102,21 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				_ = translatorWriter.Close()
 				return
 			}
+			var stalledProgress *kiropkg.NativeToolProgressStalledError
+			if errors.As(streamErr, &stalledProgress) && stalledProgress.KiroCredits > 0 {
+				discardedKiroCredits += stalledProgress.KiroCredits
+			}
+			if nativeToolProgressRetryUsed {
+				cause := streamErr
+				if !kiropkg.IsNativeToolProgressStalled(cause) {
+					cause = errors.Join(&kiropkg.NativeToolProgressStalledError{}, cause)
+				}
+				_ = translatorWriter.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
+					Attempts: bodyAttempt + 1,
+					Cause:    cause,
+				})
+				return
+			}
 			if contextRetryCause != nil {
 				_ = translatorWriter.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
 					Attempts: bodyAttempt + 1,
@@ -1108,7 +1129,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				_ = translatorWriter.CloseWithError(streamErr)
 				return
 			}
-			if maxBodyRetries <= 0 {
+			nativeToolProgressStalled := kiropkg.IsNativeToolProgressStalled(streamErr)
+			retryLimit := maxBodyRetries
+			if nativeToolProgressStalled && retryLimit < 1 {
+				retryLimit = 1
+			}
+			if retryLimit <= 0 {
 				_ = translatorWriter.CloseWithError(streamErr)
 				return
 			}
@@ -1126,7 +1152,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				})
 				return
 			}
-			if bodyAttempt >= maxBodyRetries {
+			if bodyAttempt >= retryLimit {
 				_ = translatorWriter.CloseWithError(&kiroStreamBodyRetriesExhaustedError{
 					Attempts: bodyAttempt + 1,
 					Cause:    streamErr,
@@ -1138,26 +1164,37 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			}
 			retryAttempt := bodyAttempt + 1
 			retryNonce := buildKiroStreamBodyRetryNonce(account, requestID, retryAttempt)
+			if nativeToolProgressStalled {
+				nativeToolProgressRetryUsed = true
+			}
 			logger.L().Warn("kiro.stream_body_retry",
 				zap.Int64("account_id", accountID),
 				zap.String("request_id", requestID),
 				zap.Int("retry_attempt", retryAttempt),
-				zap.Int("retry_max", maxBodyRetries),
+				zap.Int("retry_max", retryLimit),
+				zap.Bool("native_tool_progress_retry", nativeToolProgressStalled),
 				zap.String("reason", sanitizeUpstreamErrorMessage(emptyStreamMsg)),
 			)
-			if sleepErr := sleepKiroRetry(streamCtx, bodyAttempt); sleepErr != nil {
-				logger.L().Warn("kiro.stream_body_retry_sleep_failed",
-					zap.Int64("account_id", accountID),
-					zap.String("request_id", requestID),
-					zap.Int("retry_attempt", retryAttempt),
-					zap.Error(sleepErr),
-				)
-				_ = translatorWriter.CloseWithError(streamErr)
-				return
+			if !nativeToolProgressStalled {
+				if sleepErr := sleepKiroRetry(streamCtx, bodyAttempt); sleepErr != nil {
+					logger.L().Warn("kiro.stream_body_retry_sleep_failed",
+						zap.Int64("account_id", accountID),
+						zap.String("request_id", requestID),
+						zap.Int("retry_attempt", retryAttempt),
+						zap.Error(sleepErr),
+					)
+					_ = translatorWriter.CloseWithError(streamErr)
+					return
+				}
+			}
+			endpointStartOffset := retryAttempt
+			if nativeToolProgressStalled {
+				endpointStartOffset = 0
 			}
 			nextResp, nextRequestCtx, err := s.executeKiroUpstreamWithParsedOptions(streamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, kiroUpstreamRequestOptions{
-				ConversationRetryNonce: retryNonce,
-				EndpointStartOffset:    retryAttempt,
+				ConversationRetryNonce:  retryNonce,
+				EndpointStartOffset:     endpointStartOffset,
+				NativeToolProgressRetry: nativeToolProgressStalled,
 			})
 			if err != nil {
 				logger.L().Warn("kiro.stream_body_retry_open_failed",
@@ -1244,6 +1281,21 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				failoverErr = &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: body, Cause: gateErr}
 			}
 			failoverErr.RetryableOnSameAccount = false
+			nativeToolProgressStalled := kiropkg.IsNativeToolProgressStalled(gateErr)
+			nativeToolProgressBufferedFailure := kiropkg.IsNativeToolProgressBufferedFailure(gateErr)
+			if nativeToolProgressStalled || nativeToolProgressBufferedFailure {
+				failoverErr.StatusCode = http.StatusServiceUnavailable
+				failoverErr.FailureKind = UpstreamFailureIncompleteStream
+				failoverErr.SuppressTempUnschedule = true
+				failoverErr.FailoverProhibited = true
+				logger.L().Warn("kiro.native_tool_progress_failed",
+					zap.Int64("account_id", accountID),
+					zap.String("request_id", requestID),
+					zap.Int64("group_id", derefGroupID(groupID)),
+					zap.Bool("retry_exhausted", nativeToolProgressStalled),
+					zap.Bool("buffered_upstream_failure", nativeToolProgressBufferedFailure),
+				)
+			}
 			if failoverErr.KiroRateLimited {
 				failoverErr.FailureKind = UpstreamFailureRateLimited
 				s.ensureKiro429Cooldown(ctx, account, groupID, failoverErr)
@@ -1878,6 +1930,7 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 	if isKiroCLIWireMode(account) && profileArn == "" {
 		profileArn = kiroResolveProfileArnForKRS(account)
 	}
+	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	if isKiroCLIWireMode(account) {
 		buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
@@ -1885,6 +1938,7 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 			UseNativeEffort:            true,
 			AttachEnvState:             true,
 			InjectThinkingSystemPrompt: false,
+			RequireNativeToolProgress:  requireNativeToolProgress,
 		})
 		if err != nil {
 			return nil, err
@@ -1895,7 +1949,13 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 	if origin == "" {
 		origin = "AI_EDITOR"
 	}
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, origin, headers)
+	buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
+		Origin:                     origin,
+		UseNativeEffort:            false,
+		AttachEnvState:             false,
+		InjectThinkingSystemPrompt: true,
+		RequireNativeToolProgress:  requireNativeToolProgress,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1921,6 +1981,29 @@ func applyKiroUpstreamRequestOptions(buildResult *kiropkg.KiroBuildResult, optio
 	if strings.TrimSpace(options.ConversationRetryNonce) != "" {
 		buildResult.Payload = applyKiroConversationRetryNonce(buildResult.Payload, options.ConversationRetryNonce)
 	}
+	if options.NativeToolProgressRetry {
+		buildResult.Payload = applyKiroNativeToolProgressRetryInstruction(buildResult.Payload)
+	}
+}
+
+func applyKiroNativeToolProgressRetryInstruction(payload []byte) []byte {
+	if len(payload) == 0 || len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()) == 0 {
+		return payload
+	}
+	const contentPath = "conversationState.currentMessage.userInputMessage.content"
+	content := strings.TrimSpace(gjson.GetBytes(payload, contentPath).String())
+	if strings.Contains(content, kiroNativeToolProgressRetryInstruction) {
+		return payload
+	}
+	if content != "" {
+		content += "\n\n"
+	}
+	content += kiroNativeToolProgressRetryInstruction
+	next, err := sjson.SetBytes(payload, contentPath, content)
+	if err != nil {
+		return payload
+	}
+	return next
 }
 
 func applyKiroConversationRetryNonce(payload []byte, nonce string) []byte {

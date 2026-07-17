@@ -294,6 +294,9 @@ type ParsedRequest struct {
 	OutputEffort    string          // output_config.effort（Claude API 的推理强度控制）
 	MaxTokens       int             // max_tokens 值（用于探测请求拦截）
 	SessionContext  *SessionContext // 可选：请求上下文区分因子（nil 时行为不变）
+	// KiroNativeToolProgressRequired is set only by the Kiro native-GPT
+	// Responses bridge when the Codex request declares callable tools.
+	KiroNativeToolProgressRequired bool
 
 	// ExplicitSessionID 是客户端通过 HTTP 请求头显式传递的会话标识。
 	// 由 Handler 层设置，不从请求体解析，因此 ReplaceBody 后保留。

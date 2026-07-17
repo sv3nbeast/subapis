@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3913,4 +3914,227 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Greater(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int(), int64(0))
 	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+}
+
+type synchronizedKiroTestWriter struct {
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	updated chan struct{}
+}
+
+func newSynchronizedKiroTestWriter() *synchronizedKiroTestWriter {
+	return &synchronizedKiroTestWriter{updated: make(chan struct{}, 32)}
+}
+
+func (w *synchronizedKiroTestWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.buffer.Write(p)
+	w.mu.Unlock()
+	select {
+	case w.updated <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (w *synchronizedKiroTestWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
+
+func buildNativeToolProgressStream(t *testing.T, text string, includeTool bool) *bytes.Buffer {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": text},
+	}))
+	if includeTool {
+		_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+			"toolUseEvent": map[string]any{
+				"toolUseId": "toolu_read_workspace",
+				"name":      "read",
+				"input":     `{"path":"README.md"}`,
+				"stop":      true,
+			},
+		}))
+	}
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 8},
+		},
+	}))
+	stopReason := "end_turn"
+	if includeTool {
+		stopReason = "tool_use"
+	}
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": stopReason},
+	}))
+	return stream
+}
+
+func TestKiroNativeToolProgressPreludeDetection(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "production chinese prelude", text: "我现在直接读取工作区，先确定仓库边界、技术栈、HTTP 路由，再沿调用链追踪。", want: true},
+		{name: "previous production continuation prelude", text: "我继续直接读取工作区代码，先定位所有仓库和 HTTP 路由，再逐接口追踪。", want: true},
+		{name: "english prelude", text: "I'll inspect the repository first, then trace the request path.", want: true},
+		{name: "later negation does not hide prelude", text: "我会先检查代码，确保不会影响现有 Claude 路径。", want: true},
+		{name: "normal answer", text: "这个问题由请求终止事件顺序错误导致，修复点如下。", want: false},
+		{name: "capability limitation", text: "我现在无法读取工作区，因为当前没有文件访问权限。", want: false},
+		{name: "english capability limitation", text: "I will not inspect the repository because no file tools are available.", want: false},
+		{name: "long completed answer", text: "我会检查代码。" + strings.Repeat("这是已经完成的详细分析。", 40), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, looksLikeKiroNativeToolPrelude(tt.text))
+		})
+	}
+}
+
+func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]
+	}`)
+
+	gptResult, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
+		Origin:                    "AI_EDITOR",
+		RequireNativeToolProgress: true,
+	})
+	require.NoError(t, err)
+	require.True(t, gptResult.Context.NativeToolProgressRequired)
+	require.Contains(t, gjson.GetBytes(gptResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
+
+	claudeResult, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-4-6", "", nil, KiroPayloadOptions{
+		Origin:                    "AI_EDITOR",
+		RequireNativeToolProgress: true,
+	})
+	require.NoError(t, err)
+	require.False(t, claudeResult.Context.NativeToolProgressRequired)
+	require.NotContains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
+
+	noToolsBody := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"answer directly"}]}`)
+	noToolsResult, err := BuildKiroPayloadWithOptions(noToolsBody, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
+		Origin:                    "AI_EDITOR",
+		RequireNativeToolProgress: true,
+	})
+	require.NoError(t, err)
+	require.False(t, noToolsResult.Context.NativeToolProgressRequired)
+
+	historyToolBody := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[
+			{"role":"user","content":"inspect"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"read","input":{"path":"README.md"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":"done"}]}
+		]
+	}`)
+	historyToolResult, err := BuildKiroPayloadWithOptions(historyToolBody, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
+		Origin:                    "AI_EDITOR",
+		RequireNativeToolProgress: true,
+	})
+	require.NoError(t, err)
+	require.True(t, historyToolResult.Context.NativeToolProgressRequired)
+	require.Contains(t, string(historyToolResult.Payload), systemNativeToolProgressPolicy)
+}
+
+func TestStreamKiroNativeToolProgressPreludeWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "我现在直接读取工作区，先定位路由和依赖。", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "我现在直接读取工作区")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroNativeToolProgressPreludeThenUpstreamFailureIsNonReplayable(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "我现在直接读取工作区，先定位仓库和路由。"},
+	}))
+	_, _ = stream.Write(buildEventStreamExceptionFrame(t, "InternalServerException", map[string]any{
+		"message": "upstream disconnected",
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressBufferedFailure(err))
+	require.False(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "我现在直接读取工作区")
+	require.NotContains(t, out.String(), "event: message_start")
+}
+
+func TestStreamKiroNativeToolProgressPreludeThenToolReleasesCompleteStream(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "我先读取工作区，再定位路由。", true)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), "我先读取工作区")
+	require.Contains(t, out.String(), `"type":"tool_use"`)
+	require.Contains(t, out.String(), `"name":"read"`)
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestStreamKiroNativeToolProgressNormalTextReleasesBeforeTerminal(t *testing.T) {
+	inputReader, inputWriter := io.Pipe()
+	out := newSynchronizedKiroTestWriter()
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), inputReader, out, "gpt-5.6-sol", 20, KiroRequestContext{
+			NativeToolProgressRequired: true,
+			RequireTerminalEvent:       true,
+		})
+		resultCh <- err
+	}()
+
+	_, err := inputWriter.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "这里是完整答案，不需要调用工具。"},
+	}))
+	require.NoError(t, err)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for !strings.Contains(out.String(), "这里是完整答案") {
+		select {
+		case <-out.updated:
+		case <-deadline.C:
+			t.Fatal("normal text remained buffered until terminal event")
+		}
+	}
+
+	_, err = inputWriter.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	require.NoError(t, err)
+	require.NoError(t, inputWriter.Close())
+	select {
+	case streamErr := <-resultCh:
+		require.NoError(t, streamErr)
+	case <-time.After(time.Second):
+		t.Fatal("translator did not finish after terminal event")
+	}
 }

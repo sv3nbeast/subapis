@@ -278,6 +278,8 @@ func (s *GatewayService) forwardKiroAsResponses(
 	if err != nil {
 		return nil, err
 	}
+	kiroParsed.KiroNativeToolProgressRequired = IsOpenAIKiroBridgeModel(originalModel) &&
+		(toolMetadata.ForwardedToolCount > 0 || len(toolMetadata.CustomToolNames) > 0)
 	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	if err != nil {
 		return nil, err

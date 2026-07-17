@@ -700,8 +700,9 @@ func resetKiroCacheTracker() {
 }
 
 type fakeKiroGatewayCache struct {
-	mu      sync.Mutex
-	entries map[string]time.Time
+	mu          sync.Mutex
+	entries     map[string]time.Time
+	upsertCalls int
 }
 
 func newFakeKiroGatewayCache() *fakeKiroGatewayCache {
@@ -743,6 +744,7 @@ func (c *fakeKiroGatewayCache) GetKiroCacheFingerprints(_ context.Context, stabl
 func (c *fakeKiroGatewayCache) UpsertKiroCacheFingerprints(_ context.Context, stableKey string, fingerprintTTLs map[string]time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.upsertCalls++
 	now := time.Now()
 	for fingerprint, ttl := range fingerprintTTLs {
 		if ttl <= 0 {
@@ -756,6 +758,12 @@ func (c *fakeKiroGatewayCache) UpsertKiroCacheFingerprints(_ context.Context, st
 		c.entries[key] = expiresAt
 	}
 	return nil
+}
+
+func (c *fakeKiroGatewayCache) UpsertCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.upsertCalls
 }
 
 func kiroCacheGroup(ratio float64) *Group {
