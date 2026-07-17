@@ -507,6 +507,45 @@ func enableKiroNativeGPTEnforceMode(svc *GatewayService) {
 	}
 }
 
+func TestForwardAsResponsesKiroNativeGPTCodexLiteToolChoiceNoneStillRetriesPrelude(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"tool_choice":"none",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]},
+			{"type":"additional_tools","tools":[{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}]}
+		],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位所有仓库、HTTP 路由和相关实现。"),
+		kiroCustomToolEventStreamResponseWithCredits(t, "toolu_exec_retry", "exec", `{"input":"const r = await tools.exec_command({cmd: "pwd"}); text(r.output);"}`, 0.23),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我现在直接读取工作区")
+	require.Contains(t, rec.Body.String(), `"type":"custom_tool_call"`)
+	require.Equal(t, int64(1), gjson.GetBytes(upstream.bodies[0], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int())
+	require.NotContains(t, gjson.GetBytes(upstream.bodies[0], "conversationState.history.0.userInputMessage.content").String(), "Do not use any tools")
+}
+
 func TestForwardAsResponsesKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetKiroResponsesHistoryStoreForTest()

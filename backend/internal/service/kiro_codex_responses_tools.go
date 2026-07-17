@@ -22,6 +22,7 @@ type kiroCodexResponsesToolMetadata struct {
 func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesToolMetadata, error) {
 	metadata := kiroCodexResponsesToolMetadata{CustomToolNames: make(map[string]struct{})}
 	changed := false
+	codexLiteAdditionalToolsDetected := false
 	var request map[string]any
 	if err := json.Unmarshal(body, &request); err != nil {
 		return nil, metadata, fmt.Errorf("parse Kiro Codex Responses tools: %w", err)
@@ -51,6 +52,7 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 				continue
 			}
 			changed = true
+			codexLiteAdditionalToolsDetected = true
 			if tools, ok := item["tools"].([]any); ok {
 				declared = append(declared, tools...)
 			}
@@ -71,6 +73,9 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 	}
 	if metadata.DeclaredToolCount > 0 {
 		request["tools"] = flattened
+	}
+	if codexLiteAdditionalToolsDetected {
+		changed = normalizeKiroCodexResponsesToolChoice(request) || changed
 	}
 	normalized, err := json.Marshal(request)
 	if err != nil {
@@ -172,6 +177,21 @@ func flattenKiroCodexResponsesTool(rawTool any, namespace string, metadata *kiro
 		copyTool["parameters"] = schema
 	}
 	return []any{copyTool}
+}
+
+func normalizeKiroCodexResponsesToolChoice(request map[string]any) bool {
+	rawChoice, exists := request["tool_choice"]
+	if !exists || rawChoice == nil {
+		return false
+	}
+	if choice, ok := rawChoice.(string); ok {
+		if strings.EqualFold(strings.TrimSpace(choice), "none") {
+			request["tool_choice"] = "auto"
+			return true
+		}
+		return false
+	}
+	return normalizeCodexToolChoice(request)
 }
 
 func appendKiroCodexCustomToolHint(description string) string {

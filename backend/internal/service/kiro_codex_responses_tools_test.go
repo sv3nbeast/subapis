@@ -70,3 +70,34 @@ func TestNormalizeKiroCodexResponsesToolsConvertsHistoryWithoutDeclarations(t *t
 	require.False(t, gjson.GetBytes(normalized, "input.0.input").Exists())
 	require.Equal(t, "function_call_output", gjson.GetBytes(normalized, "input.1.type").String())
 }
+
+func TestNormalizeKiroCodexResponsesToolsPromotesCodexLiteToolChoiceNoneToAuto(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"tool_choice":"none",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"continue"}]},
+			{"type":"additional_tools","tools":[{"type":"custom","name":"exec","description":"Run JavaScript"}]}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, metadata.DeclaredToolCount)
+	require.Equal(t, "auto", gjson.GetBytes(normalized, "tool_choice").String())
+	require.Equal(t, int64(1), gjson.GetBytes(normalized, "tools.#").Int())
+}
+
+func TestNormalizeKiroCodexResponsesToolsPreservesExplicitNoneOutsideCodexLite(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"tool_choice":"none",
+		"tools":[{"type":"function","name":"read","parameters":{"type":"object","properties":{}}}],
+		"input":[{"role":"user","content":[{"type":"input_text","text":"answer directly"}]}]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, metadata.DeclaredToolCount)
+	require.Equal(t, "none", gjson.GetBytes(normalized, "tool_choice").String())
+}
