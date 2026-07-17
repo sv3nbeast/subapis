@@ -34,7 +34,7 @@ type kiroEndpointConfig struct {
 	Name      string
 }
 
-const kiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"
+const kiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt incorrectly claimed that native tools were unavailable or ended after announcing tool-backed work without making a tool call. The tools listed in this request are available. Do not describe tool limitations or repeat the announcement; call one of the available native tools now.]"
 
 type kiroUpstreamRequestOptions struct {
 	ConversationRetryNonce  string

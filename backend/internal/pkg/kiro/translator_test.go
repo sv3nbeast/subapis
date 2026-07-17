@@ -3996,6 +3996,44 @@ func TestKiroNativeToolProgressPreludeDetection(t *testing.T) {
 	}
 }
 
+func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "production chinese capability refusal",
+			text: "当前任务仍被工具环境阻塞：本会话没有提供终端、文件搜索或文件读取工具，因此无法实际扫描",
+			want: true,
+		},
+		{
+			name: "english capability refusal",
+			text: "This session has no terminal, file search, or file read tools available, so I cannot inspect the repository.",
+			want: true,
+		},
+		{
+			name: "ordinary tool result is not a refusal",
+			text: "工具已经执行完成，下面是扫描结果。",
+			want: false,
+		},
+		{
+			name: "ordinary limitation without tool context",
+			text: "当前任务无法继续，因为输入信息不完整。",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, looksLikeKiroNativeToolRefusal(tt.text))
+			require.Equal(t, tt.want, looksLikeKiroNativeToolProgressFailure(tt.text))
+		})
+	}
+
+	require.True(t, mayBecomeKiroNativeToolRefusal("本会话没有"))
+	require.True(t, mayBecomeKiroNativeToolRefusal("This session has no"))
+}
+
 func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.6-sol",

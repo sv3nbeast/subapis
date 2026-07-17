@@ -111,6 +111,9 @@ var (
 	nativeToolProgressEnglishPrefixes = []string{"i will", "i'll", "i am going to", "i'm going to", "let me", "first i", "first, i", "next i", "next, i"}
 	nativeToolProgressChineseActions  = []string{"读取", "检查", "查看", "搜索", "定位", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
 	nativeToolProgressNegations       = []string{"无法", "不能", "无需", "不需要", "没有权限", "未提供", "can't", "cannot", "unable to", "do not have access", "don't have access", "not "}
+	nativeToolProgressToolTerms       = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
+	nativeToolProgressRefusalTerms    = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
+	nativeToolProgressRefusalPrefixes = []string{"当前任务仍被", "当前任务被", "本会话没有", "本会话未", "the current task", "this session", "i cannot", "i can't", "unable to", "no terminal", "no file"}
 )
 
 var kiroModelAliases = []struct {
@@ -931,7 +934,8 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		text := visibleTextBuf.String()
-		if looksLikeKiroNativeToolPrelude(text) || mayBecomeKiroNativeToolPrelude(text) {
+		if looksLikeKiroNativeToolProgressFailure(text) ||
+			mayBecomeKiroNativeToolPrelude(text) || mayBecomeKiroNativeToolRefusal(text) {
 			return nil
 		}
 		nativeToolProgressGuard = false
@@ -1666,7 +1670,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
 	}
-	if nativeToolProgressGuard && !nativeToolEmitted && looksLikeKiroNativeToolPrelude(visibleTextBuf.String()) {
+	if nativeToolProgressGuard && !nativeToolEmitted && looksLikeKiroNativeToolProgressFailure(visibleTextBuf.String()) {
 		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 	}
 	// 移除"thinking-only 强制 max_tokens"误判分支
@@ -2110,10 +2114,55 @@ func hasKiroNativeToolProgressBlockingNegation(text string) bool {
 }
 
 func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted bool, text string) error {
-	if err == nil || !guard || toolEmitted || !looksLikeKiroNativeToolPrelude(text) {
+	if err == nil || !guard || toolEmitted || !looksLikeKiroNativeToolProgressFailure(text) {
 		return err
 	}
 	return &NativeToolProgressBufferedError{Cause: err}
+}
+
+// looksLikeKiroNativeToolProgressFailure recognizes a GPT bridge response that
+// cannot complete a tool-backed turn. Besides the usual "I will inspect ..."
+// prelude, Kiro sometimes emits a capability refusal such as "this session has
+// no terminal/file tools" even though the request contains native tools. Keep
+// both forms private so the corrective retry can turn them into a real call.
+func looksLikeKiroNativeToolProgressFailure(text string) bool {
+	return looksLikeKiroNativeToolPrelude(text) || looksLikeKiroNativeToolRefusal(text)
+}
+
+func looksLikeKiroNativeToolRefusal(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	hasToolTerm := false
+	for _, term := range nativeToolProgressToolTerms {
+		if strings.Contains(normalized, term) {
+			hasToolTerm = true
+			break
+		}
+	}
+	if !hasToolTerm {
+		return false
+	}
+	for _, term := range nativeToolProgressRefusalTerms {
+		if strings.Contains(normalized, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func mayBecomeKiroNativeToolRefusal(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	for _, prefix := range nativeToolProgressRefusalPrefixes {
+		if strings.HasPrefix(prefix, normalized) || strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractClaudeStopSequences(claudeBody []byte) []string {

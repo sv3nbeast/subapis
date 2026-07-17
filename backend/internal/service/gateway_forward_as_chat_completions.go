@@ -234,21 +234,36 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {
-		result, streamErr := s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage, s.kiroResilienceEnforced(kiroParsed.GroupID))
+		result, streamErr := s.handleCCStreamingFromAnthropicWithOptions(
+			resp,
+			c,
+			originalModel,
+			mappedModel,
+			reasoningEffort,
+			startTime,
+			includeUsage,
+			responsesStreamingBridgeOptions{
+				StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+				CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
+			},
+		)
 		if streamErr == nil && result != nil && result.ClientDisconnect && s.kiroResilienceEnforced(kiroParsed.GroupID) {
 			streamErr = newOpenAIClientCanceledError(context.Canceled)
 		}
 		streamErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, streamErr)
 		return result, streamErr
 	}
-	result, bufferErr := s.handleCCBufferedFromAnthropic(
+	result, bufferErr := s.handleCCBufferedFromAnthropicWithOptions(
 		resp,
 		c,
 		originalModel,
 		mappedModel,
 		reasoningEffort,
 		startTime,
-		s.kiroResilienceEnforced(kiroParsed.GroupID),
+		responsesStreamingBridgeOptions{
+			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
+		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
 	return result, bufferErr
@@ -302,7 +317,29 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	startTime time.Time,
 	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
-	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
+	return s.handleCCBufferedFromAnthropicWithOptions(
+		resp,
+		c,
+		originalModel,
+		mappedModel,
+		reasoningEffort,
+		startTime,
+		responsesStreamingBridgeOptions{
+			StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
+		},
+	)
+}
+
+func (s *GatewayService) handleCCBufferedFromAnthropicWithOptions(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	mappedModel string,
+	reasoningEffort *string,
+	startTime time.Time,
+	options responsesStreamingBridgeOptions,
+) (*ForwardResult, error) {
+	strictTerminal := options.StrictTerminal
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -401,7 +438,9 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 	// Chain: Anthropic → Responses → Chat Completions
 	finalResp, _ = normalizeOpenAICompatAnthropicResponse(finalResp)
-	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
+	responsesResp := apicompat.AnthropicToResponsesResponseWithOptions(finalResp, apicompat.AnthropicEventToResponsesOptions{
+		CoalesceInterleavedText: options.CoalesceInterleavedText,
+	})
 	ccResp := apicompat.ResponsesToChatCompletions(responsesResp, originalModel)
 
 	if s.responseHeaderFilter != nil {
@@ -445,7 +484,31 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	includeUsage bool,
 	strictTerminalOpt ...bool,
 ) (*ForwardResult, error) {
-	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
+	return s.handleCCStreamingFromAnthropicWithOptions(
+		resp,
+		c,
+		originalModel,
+		mappedModel,
+		reasoningEffort,
+		startTime,
+		includeUsage,
+		responsesStreamingBridgeOptions{
+			StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
+		},
+	)
+}
+
+func (s *GatewayService) handleCCStreamingFromAnthropicWithOptions(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	mappedModel string,
+	reasoningEffort *string,
+	startTime time.Time,
+	includeUsage bool,
+	options responsesStreamingBridgeOptions,
+) (*ForwardResult, error) {
+	strictTerminal := options.StrictTerminal
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -457,8 +520,12 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)
 
-	// Use Anthropic→Responses state machine, then convert Responses→CC
-	anthState := apicompat.NewAnthropicEventToResponsesState()
+	// Use Anthropic→Responses state machine, then convert Responses→CC.
+	// Kiro GPT opts into the late-reasoning coalescer; all other callers retain
+	// the historical item lifecycle through the zero-value options.
+	anthState := apicompat.NewAnthropicEventToResponsesStateWithOptions(apicompat.AnthropicEventToResponsesOptions{
+		CoalesceInterleavedText: options.CoalesceInterleavedText,
+	})
 	anthState.Model = originalModel
 	xmlInvokeBridge := newOpenAICompatAnthropicXMLInvokeBridge()
 	ccState := apicompat.NewResponsesEventToChatState()
