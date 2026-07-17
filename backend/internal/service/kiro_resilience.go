@@ -1195,7 +1195,7 @@ func (s *GatewayService) kiroResponseHeaderTimeoutForInput(groupID *int64, paylo
 	}
 	const (
 		tokenStep        = 100_000
-		timeoutStep      = 15 * time.Second
+		timeoutStep      = 30 * time.Second
 		semanticHeadroom = 5 * time.Second
 	)
 	steps := (payloadInputTokens - 200_000 + tokenStep - 1) / tokenStep

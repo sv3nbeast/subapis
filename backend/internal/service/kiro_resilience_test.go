@@ -434,11 +434,28 @@ func TestKiroResponseHeaderTimeoutScalesForLargePayloads(t *testing.T) {
 	groupID := int64(29)
 
 	require.Equal(t, 30*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 200_000))
-	require.Equal(t, 45*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 300_000))
-	require.Equal(t, 60*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 400_000))
-	require.Equal(t, 90*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 600_000))
+	require.Equal(t, 60*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 300_000))
+	require.Equal(t, 85*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 356_583))
+	require.Equal(t, 85*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 400_000))
+	require.Equal(t, 95*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 600_000))
 	require.Equal(t, 95*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 800_000))
 	require.Equal(t, 95*time.Second, svc.kiroResponseHeaderTimeoutForInput(&groupID, 1_200_000))
+}
+
+func TestKiroLargePayloadTimeoutsPreserveBudgetHeadroom(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	groupID := int64(29)
+	payloadInputTokens := 356_583
+
+	headerTimeout := svc.kiroResponseHeaderTimeoutForInput(&groupID, payloadInputTokens)
+	semanticTimeout := svc.kiroFirstSemanticTimeoutForInput(&groupID, payloadInputTokens)
+	failoverBudget := time.Duration(svc.cfg.Gateway.KiroResilience.FailoverBudgetSeconds) * time.Second
+
+	require.Equal(t, 85*time.Second, headerTimeout)
+	require.Equal(t, 90*time.Second, semanticTimeout)
+	require.Equal(t, 105*time.Second, failoverBudget)
+	require.Less(t, headerTimeout, semanticTimeout)
+	require.Less(t, semanticTimeout, failoverBudget)
 }
 
 func TestKiroFirstSemanticTimeoutScalesForLargeInputs(t *testing.T) {
