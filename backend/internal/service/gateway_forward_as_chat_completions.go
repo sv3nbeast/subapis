@@ -217,6 +217,13 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	// Chat Completions is another OpenAI-facing Kiro GPT bridge entry point.
+	// Keep the native-tool progress guard in parity with Responses so a Kiro
+	// turn that only announces tool-backed work is held back and corrected once
+	// before any partial text reaches the client. The model gate deliberately
+	// excludes Kiro Claude and ordinary Messages traffic.
+	kiroParsed.KiroNativeToolProgressRequired = IsOpenAIKiroBridgeModel(originalModel) &&
+		hasKiroNativeToolProgressInput(anthropicBody)
 	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	if err != nil {
 		return nil, err
@@ -245,6 +252,25 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
 	return result, bufferErr
+}
+
+func hasKiroNativeToolProgressInput(anthropicBody []byte) bool {
+	if len(gjson.GetBytes(anthropicBody, "tools").Array()) > 0 {
+		return true
+	}
+
+	// Some compatible clients omit the tool declaration after a tool call and
+	// send only the assistant tool_use history. Keep the guard active for that
+	// continuation as well; BuildKiroPayloadWithOptions will restore the
+	// placeholder tool definition when needed.
+	for _, message := range gjson.GetBytes(anthropicBody, "messages").Array() {
+		for _, block := range message.Get("content").Array() {
+			if block.Get("type").String() == "tool_use" && strings.TrimSpace(block.Get("name").String()) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // extractCCReasoningEffortFromBody reads reasoning effort from a Chat Completions

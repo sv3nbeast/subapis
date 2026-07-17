@@ -74,6 +74,77 @@ func TestForwardAsChatCompletionsKiroUsesNativeGPTModel(t *testing.T) {
 	require.Equal(t, kiroNativeGPTTestModel, result.UpstreamModel)
 }
 
+func TestForwardAsChatCompletionsKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"function","function":{"name":"exec","description":"Run JavaScript orchestration","parameters":{"type":"object","properties":{"input":{"type":"string"}}}}}],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_exec_chat_retry", "exec", `{"input":"text(\"done\")"}`),
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我现在直接读取工作区")
+	require.Contains(t, rec.Body.String(), `"tool_calls"`)
+	require.Contains(t, rec.Body.String(), `"name":"exec"`)
+	require.Contains(t, rec.Body.String(), "data: [DONE]")
+
+	firstContent := gjson.GetBytes(upstream.bodies[0], "conversationState.currentMessage.userInputMessage.content").String()
+	secondContent := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, firstContent, kiroNativeToolProgressRetryInstruction)
+	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
+	require.NotEqual(t,
+		gjson.GetBytes(upstream.bodies[0], "conversationState.conversationId").String(),
+		gjson.GetBytes(upstream.bodies[1], "conversationState.conversationId").String(),
+	)
+}
+
+func TestForwardAsChatCompletionsKiroClaudeToolPreludeIsUnchanged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"function","function":{"name":"exec","description":"Run JavaScript orchestration","parameters":{"type":"object","properties":{"input":{"type":"string"}}}}}],
+		"stream":false
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	upstream.resp = kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。")
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: "claude-sonnet-4-6",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Contains(t, rec.Body.String(), "我先读取工作区，再定位路由。")
+}
+
 func TestForwardAsResponsesKiroUsesNativeGPTModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetKiroResponsesHistoryStoreForTest()
