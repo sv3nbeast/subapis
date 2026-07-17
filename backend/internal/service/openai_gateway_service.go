@@ -406,7 +406,7 @@ type OpenAIGatewayService struct {
 	openaiAccountStats            *openAIAccountRuntimeStats
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
-	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time
+	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: openAIAccountRuntimeBlock
 	openaiOAuth429WindowStartUnixNano   atomic.Int64
 	openaiOAuth429WindowCount           atomic.Int64
 	openaiWSRetryMetrics                openAIWSRetryMetrics

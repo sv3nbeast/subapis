@@ -58,17 +58,6 @@ func classifySelectionError(err error) selectionErrorClassification {
 		}
 	}
 
-	if strings.Contains(lower, "no available openai accounts supporting model:") ||
-		strings.Contains(lower, "no available gemini accounts supporting model:") {
-		return selectionErrorClassification{
-			Handled:        true,
-			StatusCode:     400,
-			ErrorType:      "invalid_request_error",
-			Message:        "Requested model is not supported by this API key/group",
-			SkipMonitoring: true,
-		}
-	}
-
 	if strings.Contains(lower, "supporting model:") && isPureUnsupportedSelectionSummary(lower) {
 		return selectionErrorClassification{
 			Handled:        true,

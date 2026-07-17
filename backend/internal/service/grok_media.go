@@ -381,13 +381,12 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, requestModel)
 	}
 
-	s.markGrokUpstreamSuccess(ctx, account)
-	s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
 	}
 	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
 	return &OpenAIForwardResult{
 		RequestID:            requestIDHeader,

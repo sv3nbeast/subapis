@@ -199,21 +199,19 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
 
-	if account.Platform == PlatformGrok {
-		s.markGrokUpstreamSuccess(ctx, account)
-		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
-	}
-
 	// 8. Forward response
 	var result *OpenAIForwardResult
 	var forwardErr error
 	if clientStream {
 		result, forwardErr = s.streamRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, len(body))
 	} else {
-		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	if result != nil {
 		addOpenAIUsage(&result.Usage, bridgeUsage)
+	}
+	if forwardErr == nil && account.Platform == PlatformGrok {
+		s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 	}
 	return result, forwardErr
 }
@@ -256,6 +254,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	var firstTokenMs *int
 	clientDisconnected := false
 	clientOutputStarted := false
+	sawDone := false
 	pendingLines := make([]string, 0, 8)
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 
@@ -296,7 +295,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		refusalDetector.ObserveSSELine(line)
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
-			if trimmedPayload != "[DONE]" {
+			if trimmedPayload == "[DONE]" {
+				sawDone = true
+			} else {
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
 					usage = *u
@@ -327,6 +328,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				zap.String("request_id", requestID),
 			)
 		}
+		if account != nil && account.Platform == PlatformGrok && !sawDone {
+			return nil, fmt.Errorf("grok chat_completions stream read error: %w", err)
+		}
 	} else if !clientDisconnected && !clientOutputStarted {
 		if refusalDetector.IsSilentRefusal() {
 			return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
@@ -348,6 +352,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				clientOutputStarted = true
 			}
 		}
+	}
+	if account != nil && account.Platform == PlatformGrok && !sawDone {
+		return nil, errors.New("grok chat_completions stream ended before [DONE]")
 	}
 
 	return &OpenAIForwardResult{
@@ -405,6 +412,7 @@ func extractCCStreamUsage(payload string) *OpenAIUsage {
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -424,7 +432,12 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 
 	var ccResp apicompat.ChatCompletionsResponse
 	var usage OpenAIUsage
-	if err := json.Unmarshal(respBody, &ccResp); err == nil && ccResp.Usage != nil {
+	parseErr := json.Unmarshal(respBody, &ccResp)
+	if parseErr != nil && account != nil && account.Platform == PlatformGrok {
+		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Invalid upstream response")
+		return nil, fmt.Errorf("parse grok chat_completions response: %w", parseErr)
+	}
+	if parseErr == nil && ccResp.Usage != nil {
 		usage = OpenAIUsage{
 			InputTokens:  ccResp.Usage.PromptTokens,
 			OutputTokens: ccResp.Usage.CompletionTokens,

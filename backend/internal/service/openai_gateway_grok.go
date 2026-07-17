@@ -156,9 +156,6 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
 	}
 
-	s.markGrokUpstreamSuccess(ctx, account)
-	s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
-
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
@@ -178,6 +175,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = nonStreamResult.usage
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
 	}
+	s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 
 	if usage == nil {
 		usage = &OpenAIUsage{}
@@ -831,7 +829,6 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream error: %s", upstreamMsg)
 	}
 
-	s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("read grok composer image bridge response: %w", err)

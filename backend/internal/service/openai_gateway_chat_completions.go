@@ -384,9 +384,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	// 9. Handle normal response
-	if useGrokResponses {
-		s.markGrokUpstreamSuccess(ctx, account)
-	}
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
@@ -422,7 +419,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 	if handleErr == nil && useGrokResponses {
-		s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+		s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 	} else if handleErr == nil && account.Type == AccountTypeOAuth && !account.IsShadow() {
 		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)

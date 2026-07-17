@@ -34,6 +34,14 @@ func TestClassifySelectionError_PureUnsupportedModelSummary(t *testing.T) {
 	}
 }
 
+func TestClassifySelectionError_AmbiguousOpenAIEmptyPoolIsNotModelUnsupported(t *testing.T) {
+	err := errorString("no available OpenAI accounts supporting model: grok-4.5")
+	got := classifySelectionError(err)
+	if got.Handled {
+		t.Fatalf("ambiguous empty-pool error must use model availability diagnosis: %#v", got)
+	}
+}
+
 func TestClassifySelectionError_PureRateLimitedSummary(t *testing.T) {
 	err := errorString("no available accounts supporting model: claude-sonnet-4-6 (total=197 eligible=0 excluded=0 unschedulable=0 platform_filtered=0 model_unsupported=0 model_rate_limited=197 model_capacity_cooling=0)")
 	got := classifySelectionError(err)

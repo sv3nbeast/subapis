@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"go.uber.org/zap"
 )
@@ -86,4 +87,18 @@ func (s *OpenAIGatewayService) markGrokUpstreamSuccess(ctx context.Context, acco
 		return
 	}
 	s.rateLimitService.ResetOpenAI403Counter(ctx, account.ID)
+}
+
+// commitGrokUpstreamSuccess persists health and quota signals only after the
+// caller has completely consumed a successful upstream response. Keeping this
+// off the pre-output path avoids adding Redis/DB latency to Grok TTFT.
+func (s *OpenAIGatewayService) commitGrokUpstreamSuccess(ctx context.Context, account *Account, headers http.Header, statusCode int) {
+	if s == nil || account == nil || account.Platform != PlatformGrok {
+		return
+	}
+	stateCtx, cancel := openAIAccountStateContext(ctx)
+	defer cancel()
+
+	s.markGrokUpstreamSuccess(stateCtx, account)
+	s.updateGrokUsageSnapshot(stateCtx, account.ID, xai.ParseQuotaHeaders(headers, statusCode))
 }

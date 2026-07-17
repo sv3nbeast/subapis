@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -14,6 +15,12 @@ const (
 	openAIOAuth429StormThreshold          = 20
 	openAIOAuth429StormMaxAccountSwitches = 1
 )
+
+type openAIAccountRuntimeBlock struct {
+	Until     time.Time
+	StartedAt time.Time
+	Reason    string
+}
 
 func openAIAccountStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.Background()
@@ -101,28 +108,27 @@ func (s *OpenAIGatewayService) BlockAccountScheduling(account *Account, until ti
 	if blockUntil.IsZero() || !blockUntil.After(now) {
 		blockUntil = now.Add(openAIStopSchedulingBridgeCooldown)
 	}
+	next := openAIAccountRuntimeBlock{
+		Until:     blockUntil,
+		StartedAt: now,
+		Reason:    reason,
+	}
 
 	for {
 		current, loaded := s.openaiAccountRuntimeBlockUntil.Load(account.ID)
 		if !loaded {
-			actual, stored := s.openaiAccountRuntimeBlockUntil.LoadOrStore(account.ID, blockUntil)
-			if !stored {
-				return
-			}
-			current = actual
-		}
-
-		currentUntil, ok := current.(time.Time)
-		if !ok || currentUntil.IsZero() {
-			if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+			_, alreadyLoaded := s.openaiAccountRuntimeBlockUntil.LoadOrStore(account.ID, next)
+			if !alreadyLoaded {
 				return
 			}
 			continue
 		}
-		if currentUntil.After(blockUntil) {
+
+		currentBlock, ok := openAIAccountRuntimeBlockFromValue(current)
+		if ok && currentBlock.Until.After(blockUntil) {
 			return
 		}
-		if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+		if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, next) {
 			return
 		}
 	}
@@ -143,15 +149,64 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlocked(account *Account) b
 	if !ok {
 		return false
 	}
-	cooldownUntil, ok := value.(time.Time)
-	if !ok || cooldownUntil.IsZero() {
+	block, ok := openAIAccountRuntimeBlockFromValue(value)
+	if !ok || block.Until.IsZero() {
 		s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
 		return false
 	}
-	if time.Now().Before(cooldownUntil) {
+	now := time.Now()
+	if now.Before(block.Until) {
+		if account.Platform == PlatformGrok && shouldReconcileStaleGrokRuntimeBlock(account, block, now) {
+			if s.openaiAccountRuntimeBlockUntil.CompareAndDelete(account.ID, value) {
+				slog.Warn("grok_runtime_block_reconciled",
+					"account_id", account.ID,
+					"runtime_block_until", block.Until,
+					"reason", block.Reason,
+				)
+				return false
+			}
+		}
 		return true
 	}
-	s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
+	s.openaiAccountRuntimeBlockUntil.CompareAndDelete(account.ID, value)
+	return false
+}
+
+func openAIAccountRuntimeBlockFromValue(value any) (openAIAccountRuntimeBlock, bool) {
+	switch block := value.(type) {
+	case openAIAccountRuntimeBlock:
+		return block, true
+	case time.Time:
+		// Compatibility for tests or rolling upgrades that still hold the old value shape.
+		return openAIAccountRuntimeBlock{Until: block}, true
+	default:
+		return openAIAccountRuntimeBlock{}, false
+	}
+}
+
+func shouldReconcileStaleGrokRuntimeBlock(account *Account, block openAIAccountRuntimeBlock, now time.Time) bool {
+	if block.StartedAt.IsZero() || now.Sub(block.StartedAt) < openAIStopSchedulingBridgeCooldown {
+		return false
+	}
+	return !hasPersistedAccountSchedulingBlock(account, now)
+}
+
+func hasPersistedAccountSchedulingBlock(account *Account, now time.Time) bool {
+	if account == nil || !account.IsActive() || !account.Schedulable {
+		return true
+	}
+	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt) {
+		return true
+	}
+	for _, until := range []*time.Time{
+		account.RateLimitResetAt,
+		account.OverloadUntil,
+		account.TempUnschedulableUntil,
+	} {
+		if until != nil && now.Before(*until) {
+			return true
+		}
+	}
 	return false
 }
 

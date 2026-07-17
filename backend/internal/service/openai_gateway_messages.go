@@ -361,9 +361,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 
-	if account.Platform == PlatformGrok {
-		s.markGrokUpstreamSuccess(ctx, account)
-	}
 	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
 		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
 			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
@@ -415,7 +412,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 	if handleErr == nil && account.Type == AccountTypeOAuth && !account.IsShadow() {
 		if account.Platform == PlatformGrok {
-			s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+			s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 		} else if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 		}
