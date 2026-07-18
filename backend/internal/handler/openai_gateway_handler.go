@@ -291,11 +291,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		reqLog.Warn("openai.request_validation_failed",
-			zap.String("reason", "previous_response_id_requires_wsv2"),
-		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
-		return
 	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
@@ -328,6 +323,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
 	kiroBridgeRequested := isOpenAIKiroBridgeResponsesRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	// The native OpenAI HTTP Responses path deliberately rejects
+	// previous_response_id because its server-side response store is only
+	// available through Responses WebSocket v2. The Kiro OpenAI bridge is
+	// different: it persists its own response history and expands the chain
+	// before translating the request upstream. Keep the native restriction for
+	// every other platform/account while allowing this explicit bridge path to
+	// reach ForwardAsResponses.
+	if previousResponseID != "" && !kiroBridgeRequested {
+		reqLog.Warn("openai.request_validation_failed",
+			zap.String("reason", "previous_response_id_requires_wsv2"),
+		)
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
+		return
+	}
 	var kiroBridgeParsed *service.ParsedRequest
 	if kiroBridgeRequested {
 		kiroBridgeParsed, err = parseOpenAIKiroBridgeRequest(c, apiKey, forwardBody, "responses")
