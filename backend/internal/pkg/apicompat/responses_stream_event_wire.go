@@ -167,6 +167,14 @@ func responsesItemWire(item *ResponsesOutput) map[string]any {
 		m["call_id"] = item.CallID
 		m["name"] = item.Name
 		m["arguments"] = item.Arguments
+	case "custom_tool_call":
+		// Codex treats custom/freeform tool items as executable calls too.
+		// Keep the identity and freeform input on both output_item.added and
+		// output_item.done; omitting them makes strict clients drop the tool
+		// turn even though response.custom_tool_call_input.done is complete.
+		m["call_id"] = item.CallID
+		m["name"] = item.Name
+		m["input"] = item.Input
 	}
 	return m
 }

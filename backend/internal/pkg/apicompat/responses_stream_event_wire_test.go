@@ -51,6 +51,25 @@ func TestWire_FunctionCallItemAlwaysComplete(t *testing.T) {
 	require.Equal(t, "", item["arguments"])
 }
 
+// TestWire_CustomToolCallItemAlwaysComplete guards the Codex custom/freeform
+// tool shape. The input-done event alone is insufficient for clients that bind
+// the call from output_item.added/done.
+func TestWire_CustomToolCallItemAlwaysComplete(t *testing.T) {
+	for _, eventType := range []string{"response.output_item.added", "response.output_item.done"} {
+		m := marshalEvent(t, ResponsesStreamEvent{
+			Type:        eventType,
+			OutputIndex: 0,
+			Item:        &ResponsesOutput{Type: "custom_tool_call", ID: "item_1", CallID: "call_a", Name: "exec", Input: `text("hello")`, Status: "completed"},
+		})
+		item, ok := m["item"].(map[string]any)
+		require.True(t, ok, "item must be an object")
+		require.Equal(t, "custom_tool_call", item["type"])
+		require.Equal(t, "call_a", item["call_id"])
+		require.Equal(t, "exec", item["name"])
+		require.Equal(t, `text("hello")`, item["input"])
+	}
+}
+
 // TestWire_MessageItemContentAlwaysArray guards content:[] presence.
 func TestWire_MessageItemContentAlwaysArray(t *testing.T) {
 	m := marshalEvent(t, ResponsesStreamEvent{

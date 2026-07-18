@@ -213,19 +213,36 @@ func TestForwardAsResponsesWebSocketTurnCoalescesInterleavedTextReasoningAndTool
 	require.Equal(t, 1, countWSResponseTerminals(events))
 	messageItems := 0
 	toolItems := 0
+	toolItemLifecycleFields := 0
+	toolItemInputDone := 0
 	for _, event := range events {
-		if gjson.GetBytes(event, "type").String() != "response.output_item.added" {
+		eventType := gjson.GetBytes(event, "type").String()
+		if eventType != "response.output_item.added" && eventType != "response.output_item.done" {
 			continue
 		}
-		switch gjson.GetBytes(event, "item.type").String() {
+		itemType := gjson.GetBytes(event, "item.type").String()
+		switch itemType {
 		case "message":
-			messageItems++
+			if eventType == "response.output_item.added" {
+				messageItems++
+			}
 		case "custom_tool_call":
-			toolItems++
+			if eventType == "response.output_item.added" {
+				toolItems++
+			}
+			if gjson.GetBytes(event, "item.call_id").String() == "toolu_ws_interleaved" &&
+				gjson.GetBytes(event, "item.name").String() == "exec" {
+				toolItemLifecycleFields++
+			}
+			if eventType == "response.output_item.done" && strings.TrimSpace(gjson.GetBytes(event, "item.input").String()) != "" {
+				toolItemInputDone++
+			}
 		}
 	}
 	require.Equal(t, 1, messageItems, "text -> reasoning -> text must remain one assistant message item")
 	require.Equal(t, 1, toolItems)
+	require.Equal(t, 2, toolItemLifecycleFields, "custom tool call_id/name must be present on added and done items")
+	require.Equal(t, 1, toolItemInputDone, "custom tool input must be present on the completed item")
 	require.True(t, wsEventsContainText(events, "read the workspace"))
 }
 
