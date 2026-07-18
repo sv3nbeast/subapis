@@ -1617,6 +1617,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
+	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMappingWS)
+	kiroBridgeRequested := openAICompatibleRequestPlatform(apiKey) == service.PlatformOpenAI && service.IsOpenAIKiroBridgeModel(kiroBridgeModel) && isBareOpenAIResponsesPath(c)
+	baseRequestContext := c.Request.Context()
 
 	var currentUserRelease func()
 	var currentAccountRelease func()
@@ -1628,6 +1631,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	releaseTurnSlots := func() {
 		releaseAccountSlot()
+		if currentUserRelease != nil {
+			currentUserRelease()
+			currentUserRelease = nil
+		}
+	}
+	releaseTurnSlotsAfterForward := func(forwardErr error) {
+		accountRelease := currentAccountRelease
+		currentAccountRelease = nil
+		releaseAccountSlotAfterForward(accountRelease, forwardErr)
 		if currentUserRelease != nil {
 			currentUserRelease()
 			currentUserRelease = nil
@@ -1686,27 +1698,51 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	var lastFailoverErr *service.UpstreamFailoverError
+	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
+	kiroFailoverState.FailedAccountIDs = failedAccountIDs
+	if h.kiroBridgeService != nil {
+		kiroFailoverState.KiroResilienceEnforced = h.kiroBridgeService.KiroResilienceEnforced(apiKey.GroupID)
+	}
 
 	for {
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			ctx,
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-			reqModel,
-			failedAccountIDs,
-			requiredTransport,
-			service.OpenAIEndpointCapabilityChatCompletions,
-			false,
-			previousResponseCanMove,
-			requestPlatform,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		if kiroBridgeRequested {
+			kiroFailoverState.SwitchCount = switchCount
+			selectionCtx := kiroFailoverState.SelectionContext(c.Request.Context(), apiKey.GroupID, false)
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForKiroBridgeWebSocket(
+				selectionCtx, apiKey.GroupID, previousResponseID, sessionHash, reqModel, kiroBridgeModel, failedAccountIDs, previousResponseCanMove,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				ctx,
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				reqModel,
+				failedAccountIDs,
+				requiredTransport,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+				previousResponseCanMove,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			reqLog.Warn("openai.websocket_account_select_failed",
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil {
+				switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context(), err) {
+				case FailoverContinue:
+					continue
+				case FailoverCanceled:
+					return
+				}
+				lastFailoverErr = kiroFailoverState.LastFailoverErr
+			}
 			if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
 			} else {
@@ -1724,6 +1760,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
+		if err := prepareKiroAccountAttempt(c, h.kiroBridgeService, apiKey.GroupID, account); err != nil {
+			if selection.Acquired && selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "Kiro upstream failover budget exhausted")
+			return
+		}
 		accountMaxConcurrency := account.Concurrency
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency
@@ -1750,16 +1793,25 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			}
 			accountReleaseFunc = fastReleaseFunc
 		}
-		currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
-		if err := h.gatewayService.BindStickySession(ctx, apiKey.GroupID, sessionHash, account.ID); err != nil {
-			reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		if account.Platform == service.PlatformKiro {
+			currentAccountRelease = wrapReleaseOnce(accountReleaseFunc)
+		} else {
+			currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+		}
+		if account.Platform != service.PlatformKiro || (!selection.DeferStickyMigration && !selection.PreserveStickyBinding) {
+			if err := h.gatewayService.BindStickySession(ctx, apiKey.GroupID, sessionHash, account.ID); err != nil {
+				reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			}
 		}
 
-		token, _, err := h.gatewayService.GetAccessToken(ctx, account)
-		if err != nil {
-			reqLog.Warn("openai.websocket_get_access_token_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-			closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "failed to get access token")
-			return
+		token := ""
+		if account.Platform != service.PlatformKiro {
+			token, _, err = h.gatewayService.GetAccessToken(ctx, account)
+			if err != nil {
+				reqLog.Warn("openai.websocket_get_access_token_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "failed to get access token")
+				return
+			}
 		}
 
 		reqLog.Debug("openai.websocket_account_selected",
@@ -1824,7 +1876,20 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is busy, please retry later", nil)
 				}
 				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
-				currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+				if account.Platform == service.PlatformKiro {
+					currentAccountRelease = wrapReleaseOnce(accountReleaseFunc)
+				} else {
+					currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+				}
+				if account.Platform == service.PlatformKiro {
+					// A long-lived client WS can be idle longer than one Kiro request
+					// budget. Start a fresh budget for each later logical turn.
+					c.Request = c.Request.WithContext(baseRequestContext)
+					if err := prepareKiroAccountAttempt(c, h.kiroBridgeService, apiKey.GroupID, account); err != nil {
+						releaseTurnSlots()
+						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "Kiro upstream failover budget exhausted", err)
+					}
+				}
 				return nil
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
@@ -1832,7 +1897,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// CyberBlocked 必须在 submit 前同步预捕获（task 闭包由 worker 池异步执行，
 				// 届时 defer 已清除标记）。
 				defer clearCyberPolicyTurnState(c)
-				releaseTurnSlots()
+				releaseTurnSlotsAfterForward(turnErr)
 				h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, turnErr != nil, cyberBlockKey, channelMappingWS.ToUsageFields(reqModel, ""), requestPayloadHash)
 				if service.GetOpsCyberPolicy(c) != nil {
 					cyberBlockedThisConn = true
@@ -1855,8 +1920,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if result == nil {
 					return
 				}
+				if account.Platform == service.PlatformKiro && sessionHash != "" &&
+					(selection.DeferStickyMigration || !selection.PreserveStickyBinding) {
+					stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+					if bindErr := h.gatewayService.BindStickySession(stateCtx, apiKey.GroupID, sessionHash, account.ID); bindErr != nil {
+						reqLog.Warn("openai.websocket_kiro_bind_sticky_after_success_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
+					}
+					stateCancel()
+				}
 				// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
-				if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
+				if account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
@@ -1891,6 +1964,40 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				})
 			},
 		}
+		if account.Platform == service.PlatformKiro {
+			if h.kiroBridgeService == nil {
+				closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "Kiro bridge service is unavailable")
+				return
+			}
+			hooks.BridgeTurn = func(
+				_ context.Context,
+				bridgeContext *gin.Context,
+				bridgeAccount *service.Account,
+				payload []byte,
+				turn int,
+				writeClientMessage func([]byte) error,
+			) (*service.OpenAIForwardResult, error) {
+				parsed, parseErr := parseOpenAIKiroBridgeRequest(bridgeContext, apiKey, payload, "responses")
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				requestPayloadHash = service.HashUsageRequestPayload(payload)
+				forwardCtx := bridgeContext.Request.Context()
+				if switchCount > 0 {
+					forwardCtx = service.WithAccountSwitchCount(forwardCtx, switchCount, false)
+				}
+				gatewayResult, forwardErr := h.kiroBridgeService.ForwardAsResponsesWebSocketTurn(
+					forwardCtx,
+					bridgeContext,
+					bridgeAccount,
+					payload,
+					parsed,
+					turn == 1,
+					writeClientMessage,
+				)
+				return openAIForwardResultFromGateway(gatewayResult), forwardErr
+			}
+		}
 
 		// 应用渠道模型映射到 WebSocket 首条消息
 		wsFirstMessage := firstMessage
@@ -1901,7 +2008,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// 说明该会话链不属于本次调度到的账号，原样转发会触发上游会话链鉴权失败（“鉴权失败，请检查 API Key”）。
 		// 故剥离首包里的 previous_response_id，改用首包内 input 重建上下文；带 function_call_output 的
 		// 工具续链无法重建，保持原样。仅作用于首轮首包，后续 turn 的续链由 WS 转发层既有逻辑处理。
-		if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+		if previousResponseID != "" && account.Platform != service.PlatformKiro && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
 			wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
 			reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
 				zap.Int64("account_id", account.ID),
@@ -1917,6 +2024,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if errors.As(err, &failoverErr) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 				releaseAccountSlot()
+				if account.Platform == service.PlatformKiro {
+					kiroFailoverState.SwitchCount = switchCount
+					action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
+					switchCount = kiroFailoverState.SwitchCount
+					lastFailoverErr = failoverErr
+					switch action {
+					case FailoverContinue:
+						if !ensureUserSlotHeld() {
+							return
+						}
+						continue
+					case FailoverCanceled:
+						return
+					default:
+						closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
+						return
+					}
+				}
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
 				if switchCount >= maxAccountSwitches {

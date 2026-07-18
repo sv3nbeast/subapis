@@ -1438,6 +1438,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Ac
 	if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
 		return true
 	}
+	if account != nil && account.Platform == PlatformKiro && requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
+		return true
+	}
 	if s == nil || s.service == nil {
 		return false
 	}
@@ -1790,8 +1793,8 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, false, "")
 }
 
-// SelectAccountWithSchedulerForKiroBridge is restricted to HTTP text endpoints.
-// The caller supplies the channel-mapped model separately so native OpenAI
+// SelectAccountWithSchedulerForKiroBridge serves HTTP text endpoints. The
+// caller supplies the channel-mapped model separately so native OpenAI
 // candidates keep their existing requested-model behavior.
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForKiroBridge(
 	ctx context.Context,
@@ -1802,6 +1805,22 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForKiroBridge(
 	excludedIDs map[int64]struct{},
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	return s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, "", false, PlatformOpenAI, false, true, kiroBridgeModel)
+}
+
+// SelectAccountWithSchedulerForKiroBridgeWebSocket keeps native OpenAI
+// candidates gated by WS ingress compatibility while allowing eligible Kiro
+// candidates to use the per-turn HTTP Responses bridge.
+func (s *OpenAIGatewayService) SelectAccountWithSchedulerForKiroBridgeWebSocket(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	sessionHash string,
+	requestedModel string,
+	kiroBridgeModel string,
+	excludedIDs map[int64]struct{},
+	previousResponseCanMove bool,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportResponsesWebsocketV2Ingress, OpenAIEndpointCapabilityChatCompletions, "", false, PlatformOpenAI, previousResponseCanMove, true, kiroBridgeModel)
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
@@ -1964,6 +1983,9 @@ func cloneExcludedAccountIDs(excludedIDs map[int64]struct{}) map[int64]struct{} 
 
 func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Account, requiredTransport OpenAIUpstreamTransport) bool {
 	if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
+		return true
+	}
+	if account != nil && account.Platform == PlatformKiro && requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
 		return true
 	}
 	if s == nil || account == nil {

@@ -55,6 +55,10 @@ func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloa
 }
 
 func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
+	return prepareOpenAIWSHTTPBridgeBodyWithPreviousResponseID(payload, false)
+}
+
+func prepareOpenAIWSHTTPBridgeBodyWithPreviousResponseID(payload []byte, preservePreviousResponseID bool) ([]byte, error) {
 	var body map[string]any
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return nil, err
@@ -64,14 +68,17 @@ func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
 	}
 	delete(body, "type")
 	delete(body, "generate")
-	delete(body, "previous_response_id")
+	if !preservePreviousResponseID {
+		delete(body, "previous_response_id")
+	}
 	body["stream"] = true
 	return json.Marshal(body)
 }
 
 type openAIWSToolCallReplayCollector struct {
-	items []json.RawMessage
-	seen  map[string]struct{}
+	items      []json.RawMessage
+	itemScores []int
+	indexByKey map[string]int
 }
 
 func (c *openAIWSToolCallReplayCollector) AddEvent(eventType string, message []byte) {
@@ -111,14 +118,44 @@ func (c *openAIWSToolCallReplayCollector) addItem(item gjson.Result) {
 	if key == "" {
 		key = raw
 	}
-	if c.seen == nil {
-		c.seen = make(map[string]struct{})
+	score := openAIWSToolCallReplayItemScore(item)
+	if c.indexByKey == nil {
+		c.indexByKey = make(map[string]int)
 	}
-	if _, ok := c.seen[key]; ok {
+	if index, ok := c.indexByKey[key]; ok {
+		// output_item.done can precede response.completed with only
+		// id/type/status. Replace that shell with the richer terminal output
+		// carrying call_id/name/input so the next WS turn can replay a valid
+		// tool_use before its tool result.
+		if index >= 0 && index < len(c.items) && index < len(c.itemScores) && score > c.itemScores[index] {
+			c.items[index] = json.RawMessage(raw)
+			c.itemScores[index] = score
+		}
 		return
 	}
-	c.seen[key] = struct{}{}
+	c.indexByKey[key] = len(c.items)
 	c.items = append(c.items, json.RawMessage(raw))
+	c.itemScores = append(c.itemScores, score)
+}
+
+func openAIWSToolCallReplayItemScore(item gjson.Result) int {
+	if !item.Exists() || item.Type != gjson.JSON {
+		return 0
+	}
+	score := 1
+	if strings.TrimSpace(item.Get("call_id").String()) != "" {
+		score += 8
+	}
+	if strings.TrimSpace(item.Get("name").String()) != "" {
+		score += 4
+	}
+	if item.Get("input").Exists() || item.Get("arguments").Exists() {
+		score += 4
+	}
+	if strings.EqualFold(strings.TrimSpace(item.Get("status").String()), "completed") {
+		score++
+	}
+	return score
 }
 
 func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {

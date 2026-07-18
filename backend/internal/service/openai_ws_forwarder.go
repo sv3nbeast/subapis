@@ -240,6 +240,18 @@ type OpenAIWSIngressHooks struct {
 	BeforeTurn          func(turn int) error
 	BeforeRequest       func(turn int, payload []byte, originalModel string) error
 	AfterTurn           func(turn int, result *OpenAIForwardResult, turnErr error)
+	// BridgeTurn handles one response.create over a provider-specific HTTP
+	// Responses bridge while preserving the client WebSocket session. It is
+	// intentionally injected per selected account; native OpenAI and Grok keep
+	// their existing executors.
+	BridgeTurn func(
+		ctx context.Context,
+		c *gin.Context,
+		account *Account,
+		payload []byte,
+		turn int,
+		writeClientMessage func([]byte) error,
+	) (*OpenAIForwardResult, error)
 }
 
 func normalizeOpenAIWSLogValue(value string) string {
@@ -2537,7 +2549,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
-	if strings.TrimSpace(token) == "" {
+	if strings.TrimSpace(token) == "" && (hooks == nil || hooks.BridgeTurn == nil) {
 		return errors.New("token is empty")
 	}
 
@@ -2551,7 +2563,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	forceHTTPBridge := account.Platform == PlatformGrok
+	forceHTTPBridge := account.Platform == PlatformGrok || (hooks != nil && hooks.BridgeTurn != nil)
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
 	if modeRouterV2Enabled && !forceHTTPBridge {
@@ -2599,7 +2611,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	wsHost := "-"
 	wsPath := "-"
 	if forceHTTPBridge {
-		wsHost = "xai-http-bridge"
+		wsHost = "http-responses-bridge"
 		wsPath = "/v1/responses"
 	} else {
 		var err error
@@ -2968,21 +2980,51 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw),
 				)
 			}
-			result, bridgeErr := s.proxyOpenAIWSHTTPBridgeTurn(
-				ctx,
-				c,
-				account,
-				token,
-				bridgePayloadRaw,
-				bridgePayloadBytes,
-				currentBridgePayload.originalModel,
-				currentBridgePayload.imageBillingModel,
-				currentBridgePayload.imageSizeTier,
-				currentBridgePayload.imageInputSize,
-				currentBridgePayload.correctToolCalls,
-				turn,
-				writeClientMessage,
-			)
+			var result *OpenAIForwardResult
+			var bridgeErr error
+			if hooks != nil && hooks.BridgeTurn != nil {
+				replayCollector := &openAIWSToolCallReplayCollector{}
+				wroteDownstream := false
+				bridgeWriter := func(message []byte) error {
+					eventType, _, _ := parseOpenAIWSEventEnvelope(message)
+					replayCollector.AddEvent(eventType, message)
+					if err := writeClientMessage(message); err != nil {
+						return err
+					}
+					wroteDownstream = true
+					return nil
+				}
+				result, bridgeErr = hooks.BridgeTurn(ctx, c, account, bridgePayloadRaw, turn, bridgeWriter)
+				if result != nil {
+					if replayInput := replayCollector.Items(); len(replayInput) > 0 {
+						result.wsReplayInput = replayInput
+						result.wsReplayInputExists = true
+					}
+				}
+				var failoverErr *UpstreamFailoverError
+				if errors.As(bridgeErr, &failoverErr) && failoverErr != nil && (turn > 1 || wroteDownstream) {
+					// The handler can only replay the first response.create frame on a
+					// newly selected account. A later turn, or any client-visible
+					// output, must never be replayed as that would duplicate work.
+					failoverErr.FailoverProhibited = true
+				}
+			} else {
+				result, bridgeErr = s.proxyOpenAIWSHTTPBridgeTurn(
+					ctx,
+					c,
+					account,
+					token,
+					bridgePayloadRaw,
+					bridgePayloadBytes,
+					currentBridgePayload.originalModel,
+					currentBridgePayload.imageBillingModel,
+					currentBridgePayload.imageSizeTier,
+					currentBridgePayload.imageInputSize,
+					currentBridgePayload.correctToolCalls,
+					turn,
+					writeClientMessage,
+				)
+			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, result, bridgeErr)
 			}
@@ -3004,7 +3046,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					stateStore.BindSessionTurnState(groupID, sessionHash, bridgeTurnState, s.openAIWSSessionStickyTTL())
 				}
 			}
-			responseID := strings.TrimSpace(result.RequestID)
+			responseID := strings.TrimSpace(result.ResponseID)
+			if responseID == "" {
+				responseID = strings.TrimSpace(result.RequestID)
+			}
 			if responseID != "" && stateStore != nil {
 				ttl := s.openAIWSResponseStickyTTL()
 				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))

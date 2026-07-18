@@ -145,6 +145,64 @@ func TestSelectAccountWithSchedulerForKiroBridgeUsesSharedPriority(t *testing.T)
 	require.Equal(t, openAIAccount.ID, selection.Account.ID)
 }
 
+func TestSelectAccountWithSchedulerForKiroBridgeWebSocketAllowsKiroButRejectsHTTPOnlyOpenAI(t *testing.T) {
+	groupID := int64(71)
+	httpOnlyOpenAI := bridgeTestAccount(7101, PlatformOpenAI, 1, groupID)
+	kiroAccount := bridgeTestAccount(7102, PlatformKiro, 2, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{httpOnlyOpenAI, kiroAccount}}}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                2,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridgeWebSocket(
+		context.Background(), &groupID, "", "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil, false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, kiroAccount.ID, selection.Account.ID)
+}
+
+func TestSelectAccountWithSchedulerForKiroBridgeWebSocketKeepsNativePreviousResponseSticky(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(72)
+	openAIAccount := bridgeTestAccount(7201, PlatformOpenAI, 50, groupID)
+	openAIAccount.Extra = map[string]any{"openai_apikey_responses_websockets_v2_enabled": true}
+	kiroAccount := bridgeTestAccount(7202, PlatformKiro, 1, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{openAIAccount, kiroAccount}}}
+	store := NewOpenAIWSStateStore(nil)
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Gateway.OpenAIKiroBridgeEnabled = true
+	cfg.Gateway.OpenAIWS.LBTopK = 1
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights = config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cfg:                cfg,
+		openaiWSStateStore: store,
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+	}
+	require.NoError(t, store.BindResponseAccount(ctx, groupID, "resp_native_sticky", openAIAccount.ID, time.Hour))
+
+	selection, decision, err := svc.SelectAccountWithSchedulerForKiroBridgeWebSocket(
+		ctx, &groupID, "resp_native_sticky", "", OpenAIKiroBridgeModel, OpenAIKiroBridgeModel, nil, false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, openAIAccount.ID, selection.Account.ID)
+	require.True(t, decision.StickyPreviousHit)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func TestSelectAccountWithSchedulerForKiroBridgeGlobalSwitchFailsClosed(t *testing.T) {
 	groupID := int64(8)
 	openAIAccount := bridgeTestAccount(11, PlatformOpenAI, 20, groupID)

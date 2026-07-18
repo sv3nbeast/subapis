@@ -2475,7 +2475,9 @@ func (s *OpenAIGatewayService) isAccountEligibleForOpenAISchedule(ctx context.Co
 	if !req.AllowKiroBridge || !s.openAIKiroBridgeEnabled() || normalizeOpenAICompatiblePlatform(req.Platform) != PlatformOpenAI || req.RequireCompact {
 		return false
 	}
-	if req.RequiredTransport != OpenAIUpstreamTransportAny && req.RequiredTransport != OpenAIUpstreamTransportHTTPSSE {
+	if req.RequiredTransport != OpenAIUpstreamTransportAny &&
+		req.RequiredTransport != OpenAIUpstreamTransportHTTPSSE &&
+		req.RequiredTransport != OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
 		return false
 	}
 	if req.RequiredCapability != "" && req.RequiredCapability != OpenAIEndpointCapabilityChatCompletions {
