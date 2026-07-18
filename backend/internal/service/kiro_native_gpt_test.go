@@ -363,6 +363,7 @@ func TestForwardAsResponsesKiroContinuesCodexCustomToolWithPreviousResponseID(t 
 
 	firstBody := []byte(`{
 		"model":"gpt-5.6-sol",
+		"store":false,
 		"input":[
 			{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]},
 			{"type":"additional_tools","tools":[{"type":"custom","name":"exec","description":"Run JavaScript"}]}

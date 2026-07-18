@@ -129,7 +129,7 @@ func (s *GatewayService) ForwardAsResponses(
 
 	if account != nil && account.IsKiroDirect() {
 		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools)
-		if handleErr == nil && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
+		if handleErr == nil && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 				ID:                 result.ResponseID,
 				PreviousResponseID: responsesReq.PreviousResponseID,
@@ -247,7 +247,7 @@ func (s *GatewayService) ForwardAsResponses(
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
-	if handleErr == nil && account != nil && account.Platform == PlatformKiro && storeKiroResponse && result != nil && strings.TrimSpace(result.ResponseID) != "" {
+	if handleErr == nil && account != nil && account.Platform == PlatformKiro && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 		globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 			ID:                 result.ResponseID,
 			PreviousResponseID: responsesReq.PreviousResponseID,
@@ -259,6 +259,32 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 
 	return result, handleErr
+}
+
+// shouldPersistKiroResponsesHistory keeps the minimum state required for a
+// Codex tool turn to continue through previous_response_id. Codex commonly
+// sends store=false because it owns the conversation state, but the bridge
+// still needs the assistant tool call locally so the next tool result can be
+// converted back into Kiro's conversation history. Ordinary store=false text
+// responses retain the normal non-persistent behavior, and Claude/Kiro paths
+// are not changed.
+func shouldPersistKiroResponsesHistory(storeRequested bool, model string, result *ForwardResult) bool {
+	if result == nil || strings.TrimSpace(result.ResponseID) == "" {
+		return false
+	}
+	if storeRequested {
+		return true
+	}
+	if !IsOpenAIKiroBridgeModel(model) {
+		return false
+	}
+	for _, item := range result.ResponsesOutput {
+		switch item.Type {
+		case "function_call", "custom_tool_call":
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GatewayService) forwardKiroAsResponses(
