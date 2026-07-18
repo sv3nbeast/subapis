@@ -115,7 +115,7 @@ func TestForwardAsChatCompletionsKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t 
 	enableKiroNativeGPTEnforceMode(svc)
 	upstream.resp = nil
 	upstream.responses = []*http.Response{
-		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位所有仓库、HTTP 路由和“质押/借贷/清算/还款”等相关实现。"),
 		kiroCustomToolEventStreamResponse(t, "toolu_exec_chat_retry", "exec", `{"input":"text(\"done\")"}`),
 	}
 
@@ -608,7 +608,7 @@ func TestForwardAsResponsesKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testi
 	enableKiroNativeGPTEnforceMode(svc)
 	upstream.resp = nil
 	upstream.responses = []*http.Response{
-		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位仓库和路由。"),
+		kiroNativeGPTPreludeResponse(t, "我现在直接读取工作区，先定位所有仓库、HTTP 路由和“质押/借贷/清算/还款”等相关实现。"),
 		kiroCustomToolEventStreamResponseWithCredits(t, "toolu_exec_retry", "exec", `{"input":"const r = await tools.exec_command({cmd: \"pwd\"}); text(r.output);"}`, 0.23),
 	}
 

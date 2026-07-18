@@ -4565,6 +4565,12 @@ func TestKiroNativeToolProgressPreludeDetection(t *testing.T) {
 	}
 }
 
+func TestKiroNativeToolProgressIntentDetection(t *testing.T) {
+	require.True(t, looksLikeKiroNativeToolProgressFailure("计划：读取工作区，再定位所有 HTTP 路由。"))
+	require.False(t, looksLikeKiroNativeToolProgressFailure("工具已经执行完成，下面是扫描结果。"))
+	require.False(t, looksLikeKiroNativeToolProgressFailure("这里是完整答案，不需要调用工具。"))
+}
+
 func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
 	tests := []struct {
 		name string

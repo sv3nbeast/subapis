@@ -114,6 +114,7 @@ var (
 	nativeToolProgressToolTerms       = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
 	nativeToolProgressRefusalTerms    = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
 	nativeToolProgressRefusalPrefixes = []string{"当前任务仍被", "当前任务被", "本会话没有", "本会话未", "the current task", "this session", "i cannot", "i can't", "unable to", "no terminal", "no file"}
+	nativeToolProgressCompletionTerms = []string{"已完成", "已经完成", "执行完成", "扫描结果", "结果如下", "completed", "results:"}
 )
 
 var kiroModelAliases = []struct {
@@ -2200,7 +2201,41 @@ func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted boo
 // no terminal/file tools" even though the request contains native tools. Keep
 // both forms private so the corrective retry can turn them into a real call.
 func looksLikeKiroNativeToolProgressFailure(text string) bool {
-	return looksLikeKiroNativeToolPrelude(text) || looksLikeKiroNativeToolRefusal(text)
+	return looksLikeKiroNativeToolPrelude(text) ||
+		looksLikeKiroNativeToolRefusal(text) ||
+		looksLikeKiroNativeToolIntent(text)
+}
+
+// looksLikeKiroNativeToolIntent covers provider wording that starts with a
+// conversational prefix or formatting marker before the known prelude. It is
+// intentionally limited to text containing both a tool-related term and an
+// action. The guard is enabled only for Kiro native GPT requests that already
+// declared callable tools, so a bounded corrective retry is safer than
+// exposing a narration-only turn as a successful Codex completion.
+func looksLikeKiroNativeToolIntent(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	hasToolTerm := false
+	for _, term := range nativeToolProgressToolTerms {
+		if strings.Contains(normalized, term) {
+			hasToolTerm = true
+			break
+		}
+	}
+	if !hasToolTerm {
+		return false
+	}
+	for _, term := range nativeToolProgressCompletionTerms {
+		if strings.Contains(normalized, term) {
+			return false
+		}
+	}
+	if hasKiroNativeToolProgressBlockingNegation(normalized) {
+		return false
+	}
+	return hasKiroNativeToolProgressAction(normalized)
 }
 
 func looksLikeKiroNativeToolRefusal(text string) bool {
