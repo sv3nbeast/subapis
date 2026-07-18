@@ -7214,7 +7214,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	durationMs := int(result.Duration.Milliseconds())
 	accountRateMultiplier := account.BillingRateMultiplier()
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
-	if result.OpenAIWSMode {
+	// A single Responses WebSocket ingress can contain multiple independently
+	// billable response.create turns. The connection-level client request ID is
+	// therefore not an idempotency key for a turn. Prefer the per-turn upstream
+	// request ID for native WSS and for WS-ingress HTTP bridges such as Kiro.
+	if result.OpenAIWSMode || input.RequestType.Normalize() == RequestTypeWSV2 {
 		if upstreamRequestID := strings.TrimSpace(result.RequestID); upstreamRequestID != "" {
 			requestID = upstreamRequestID
 		}

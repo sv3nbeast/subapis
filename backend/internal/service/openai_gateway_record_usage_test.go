@@ -893,6 +893,50 @@ func TestOpenAIGatewayServiceRecordUsage_WSModePrefersUpstreamRequestIDOverClien
 	require.True(t, usageRepo.lastLog.OpenAIWSMode)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_WSIngressHTTPBridgeUsesPerTurnRequestID(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo, nil)
+
+	ctx := context.WithValue(context.Background(), ctxkey.ClientRequestID, "kiro-ws-connection-123")
+	input := &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:    "kiro-upstream-turn-1",
+			OpenAIWSMode: false,
+			Stream:       true,
+			Usage: OpenAIUsage{
+				InputTokens:  8,
+				OutputTokens: 4,
+			},
+			Model:    "gpt-5.6-sol",
+			Duration: time.Second,
+		},
+		APIKey:      &APIKey{ID: 10051},
+		User:        &User{ID: 20051},
+		Account:     &Account{ID: 30051, Platform: PlatformKiro},
+		RequestType: RequestTypeWSV2,
+	}
+	err := svc.RecordUsage(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, billingRepo.lastCmd)
+	firstTurnRequestID := billingRepo.lastCmd.RequestID
+	require.Equal(t, "kiro-upstream-turn-1", firstTurnRequestID)
+
+	input.Result.RequestID = "kiro-upstream-turn-2"
+	err = svc.RecordUsage(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Equal(t, "kiro-upstream-turn-2", billingRepo.lastCmd.RequestID)
+	require.NotEqual(t, firstTurnRequestID, billingRepo.lastCmd.RequestID)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "kiro-upstream-turn-2", usageRepo.lastLog.RequestID)
+	require.Equal(t, RequestTypeWSV2, usageRepo.lastLog.RequestType)
+	require.False(t, usageRepo.lastLog.OpenAIWSMode)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
