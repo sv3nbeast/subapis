@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,65 @@ type openAIAccountRuntimeBlock struct {
 	Until     time.Time
 	StartedAt time.Time
 	Reason    string
+}
+
+const maxOpenAIOAuthModelUnsupportedEntries = 128
+
+type openAIOAuthModelUnsupportedCache struct {
+	mu           sync.Mutex
+	untilByModel map[string]time.Time
+}
+
+func (c *openAIOAuthModelUnsupportedCache) Mark(modelKey string, until time.Time) {
+	if c == nil || modelKey == "" || !until.After(time.Now()) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.untilByModel == nil {
+		c.untilByModel = make(map[string]time.Time)
+	}
+	now := time.Now()
+	for key, currentUntil := range c.untilByModel {
+		if !now.Before(currentUntil) {
+			delete(c.untilByModel, key)
+		}
+	}
+	if currentUntil, exists := c.untilByModel[modelKey]; exists {
+		if until.After(currentUntil) {
+			c.untilByModel[modelKey] = until
+		}
+		return
+	}
+	if len(c.untilByModel) >= maxOpenAIOAuthModelUnsupportedEntries {
+		var oldestKey string
+		var oldestUntil time.Time
+		for key, currentUntil := range c.untilByModel {
+			if oldestKey == "" || currentUntil.Before(oldestUntil) {
+				oldestKey = key
+				oldestUntil = currentUntil
+			}
+		}
+		delete(c.untilByModel, oldestKey)
+	}
+	c.untilByModel[modelKey] = until
+}
+
+func (c *openAIOAuthModelUnsupportedCache) IsActive(modelKey string) bool {
+	if c == nil || modelKey == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	until, exists := c.untilByModel[modelKey]
+	if !exists {
+		return false
+	}
+	if !time.Now().Before(until) {
+		delete(c.untilByModel, modelKey)
+		return false
+	}
+	return true
 }
 
 func openAIAccountStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -42,9 +103,71 @@ func isOpenAIAccount(account *Account) bool {
 	return account != nil && (account.Platform == PlatformOpenAI || account.Platform == PlatformGrok)
 }
 
+func (s *OpenAIGatewayService) markOpenAIOAuthModelUnsupported(account *Account, upstreamModel string, responseBody []byte) {
+	if s == nil || !isOpenAIOAuthAccount(account) || !isUpstreamChatGPTCodexModelUnsupportedError(http.StatusBadRequest, responseBody) {
+		return
+	}
+	modelKey := openAIOAuthModelUnsupportedKey(upstreamModel)
+	if modelKey == "" {
+		return
+	}
+	s.openaiOAuthModelUnsupported.Mark(modelKey, time.Now().Add(upstreamModelNotFoundCooldown))
+}
+
+func (s *OpenAIGatewayService) isOpenAIOAuthModelUnsupportedForRequest(account *Account, requestedModel string, requireCompact bool) bool {
+	return s.isOpenAIOAuthModelUnsupportedForRequestWithPassthrough(account, requestedModel, requireCompact, account != nil && account.IsOpenAIPassthroughEnabled())
+}
+
+func (s *OpenAIGatewayService) isOpenAIOAuthModelUnsupportedForSchedule(account *Account, req OpenAIAccountScheduleRequest) bool {
+	usePassthroughModel := account != nil && account.IsOpenAIPassthroughEnabled()
+	// Native WS passthrough relays the raw frame model rather than applying the
+	// account model mapping used by normal Responses forwarding.
+	if !usePassthroughModel && req.RequiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress &&
+		s.isOpenAIWSIngressPassthroughAccount(account) {
+		usePassthroughModel = true
+	}
+	return s.isOpenAIOAuthModelUnsupportedForRequestWithPassthrough(account, req.RequestedModel, req.RequireCompact, usePassthroughModel)
+}
+
+func (s *OpenAIGatewayService) isOpenAIOAuthModelUnsupportedForRequestWithPassthrough(account *Account, requestedModel string, requireCompact bool, usePassthroughModel bool) bool {
+	if s == nil || !isOpenAIOAuthAccount(account) {
+		return false
+	}
+	modelKey := openAIOAuthModelUnsupportedKey(openAIOAuthUpstreamModelForRequest(account, requestedModel, requireCompact, usePassthroughModel))
+	if modelKey == "" {
+		return false
+	}
+	return s.openaiOAuthModelUnsupported.IsActive(modelKey)
+}
+
+func openAIOAuthUpstreamModelForRequest(account *Account, requestedModel string, requireCompact bool, usePassthroughModel bool) string {
+	if usePassthroughModel {
+		upstreamModel := strings.TrimSpace(requestedModel)
+		if requireCompact {
+			return resolveOpenAICompactForwardModel(account, upstreamModel)
+		}
+		return upstreamModel
+	}
+	return resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
+}
+
+func (s *OpenAIGatewayService) isOpenAIWSIngressPassthroughAccount(account *Account) bool {
+	if s == nil || s.cfg == nil || account == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
+		return false
+	}
+	return account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault) == OpenAIWSIngressModePassthrough
+}
+
+func openAIOAuthModelUnsupportedKey(model string) string {
+	return strings.ToLower(strings.TrimSpace(model))
+}
+
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) bool {
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
+	if len(requestedModel) > 0 {
+		s.markOpenAIOAuthModelUnsupported(account, requestedModel[0], responseBody)
+	}
 
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIContextWindowError("", responseBody) {
 		return false

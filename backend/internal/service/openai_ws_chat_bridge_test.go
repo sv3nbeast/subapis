@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -272,6 +273,104 @@ func TestOpenAIGatewayService_Forward_HTTPIngressWSPostwriteFailureDoesNotFallba
 	metrics := svc.SnapshotOpenAIWSRetryMetrics()
 	require.Equal(t, int64(1), metrics.HTTPIngressSelectedTotal)
 	require.Zero(t, metrics.HTTPIngressPrewriteFallback)
+}
+
+func TestOpenAIGatewayService_Forward_HTTPIngressWSAccountModelUnsupportedTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		require.NoError(t, err)
+		require.NoError(t, conn.WriteJSON(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "invalid_request_error",
+				"message": "Requested model is not supported by this API key/group",
+			},
+		}))
+	}))
+	defer wsServer.Close()
+
+	cfg := openAIHTTPIngressWSTestConfig(OpenAIHTTPIngressModeResponses)
+	upstream := &httpUpstreamRecorder{}
+	repo := &modelCapabilityAccountRepoStub{}
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{accountRepo: repo},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := openAIHTTPIngressWSTestAccount(306, wsServer.URL)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","stream":false,"input":"hello"}`))
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.False(t, c.Writer.Written())
+	require.Nil(t, upstream.lastReq, "account capability error must not fall back to HTTP on the same account")
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, "gpt-5.6-sol", repo.modelRateLimitCalls[0].model)
+}
+
+func TestOpenAIGatewayService_Forward_HTTPIngressWSAccountModelUnsupportedAfterOutputDoesNotFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		require.NoError(t, err)
+		require.NoError(t, conn.WriteJSON(map[string]any{
+			"type":          "response.output_text.delta",
+			"output_index":  0,
+			"content_index": 0,
+			"delta":         "already visible",
+		}))
+		require.NoError(t, conn.WriteJSON(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "invalid_request_error",
+				"message": "Requested model is not supported by this API key/group",
+			},
+		}))
+	}))
+	defer wsServer.Close()
+
+	cfg := openAIHTTPIngressWSTestConfig(OpenAIHTTPIngressModeResponses)
+	repo := &modelCapabilityAccountRepoStub{}
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		rateLimitService: &RateLimitService{accountRepo: repo},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := openAIHTTPIngressWSTestAccount(307, wsServer.URL)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","stream":true,"input":"hello"}`))
+
+	var failoverErr *UpstreamFailoverError
+	require.Error(t, err)
+	require.False(t, errors.As(err, &failoverErr))
+	require.Nil(t, result)
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), "already visible")
+	require.Empty(t, repo.modelRateLimitCalls)
 }
 
 func openAIHTTPIngressWSTestConfig(mode string) *config.Config {

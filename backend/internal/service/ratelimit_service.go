@@ -185,16 +185,19 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
+	accountModelUnsupported := isUpstreamAccountModelUnsupportedError(statusCode, responseBody)
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
-	if account.IsPoolMode() && !customErrorCodesEnabled {
+	if account.IsPoolMode() && !customErrorCodesEnabled && !accountModelUnsupported {
 		slog.Info("pool_mode_error_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}
 
 	// apikey 类型账号：检查自定义错误码配置
 	// 如果启用且错误码不在列表中，则不处理（不停止调度、不标记限流/过载）
-	if !account.ShouldHandleErrorCode(statusCode) {
+	// 明确的账号-模型能力拒绝例外：即使自定义错误码未包含 400，也必须记录模型级
+	// 冷却，否则下一次请求会再次选中同一无能力账号。
+	if !account.ShouldHandleErrorCode(statusCode) && !accountModelUnsupported {
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}
@@ -2311,6 +2314,7 @@ func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
 
 const upstreamModelNotFoundCooldown = 30 * time.Minute
 const upstreamModelNotFoundReason = "upstream_404_model_not_found"
+const upstreamAccountModelUnsupportedReason = "upstream_400_model_unsupported"
 const tempUnschedBodyMaxBytes = 64 << 10
 const tempUnschedMessageMaxBytes = 2048
 
@@ -2318,10 +2322,11 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if s == nil || account == nil || s.accountRepo == nil {
 		return false
 	}
-	if !account.ShouldHandleErrorCode(statusCode) {
+	accountModelUnsupported := isUpstreamAccountModelUnsupportedError(statusCode, responseBody)
+	if !account.ShouldHandleErrorCode(statusCode) && !accountModelUnsupported {
 		return false
 	}
-	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
+	if !isUpstreamModelUnavailableError(statusCode, responseBody) {
 		return false
 	}
 	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
@@ -2329,7 +2334,11 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 		return false
 	}
 	resetAt := time.Now().Add(upstreamModelNotFoundCooldown)
-	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, upstreamModelNotFoundReason); err != nil {
+	reason := upstreamModelNotFoundReason
+	if accountModelUnsupported {
+		reason = upstreamAccountModelUnsupportedReason
+	}
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
 		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)
 		return true
 	}

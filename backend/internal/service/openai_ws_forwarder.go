@@ -2270,6 +2270,24 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				})
 			}
 		}
+		if !wroteDownstream && (eventType == "error" || eventType == "response.failed") &&
+			isUpstreamAccountModelUnsupportedError(http.StatusBadRequest, message) {
+			lease.MarkBroken()
+			logOpenAIWSModeInfo(
+				"account_model_unsupported_failover account_id=%d conn_id=%s event=%s",
+				account.ID,
+				connID,
+				truncateOpenAIWSLogValue(eventType, openAIWSLogValueMaxLen),
+			)
+			return nil, s.newOpenAIAccountModelUnsupportedFailover(
+				ctx,
+				c,
+				account,
+				lease.HandshakeHeaders(),
+				message,
+				mappedModel,
+			)
+		}
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
@@ -3334,6 +3352,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
+			}
+			if !wroteDownstream && (eventType == "error" || eventType == "response.failed") &&
+				isUpstreamAccountModelUnsupportedError(http.StatusBadRequest, upstreamMessage) {
+				lease.MarkBroken()
+				logOpenAIWSModeInfo(
+					"ingress_ws_account_model_unsupported_failover account_id=%d turn=%d conn_id=%s event=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
+					truncateOpenAIWSLogValue(eventType, openAIWSLogValueMaxLen),
+				)
+				return nil, s.newOpenAIAccountModelUnsupportedFailover(
+					ctx,
+					c,
+					account,
+					lease.HandshakeHeaders(),
+					upstreamMessage,
+					mappedModel,
+				)
 			}
 
 			if !clientDisconnected {

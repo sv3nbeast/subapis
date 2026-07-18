@@ -289,6 +289,44 @@ func (s *openAISnapshotCacheStub) GetAccount(ctx context.Context, accountID int6
 	return &cloned, nil
 }
 
+func TestOpenAIHydrateSelectedAccount_PreservesDatabaseRecheckOverStaleSnapshot(t *testing.T) {
+	stale := &Account{
+		ID:       6101,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "stale-token",
+			"model_mapping": map[string]any{
+				"gpt-5.6-sol": "gpt-5.6-sol",
+			},
+		},
+	}
+	fresh := Account{
+		ID:       stale.ID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "fresh-token",
+			"model_mapping": map[string]any{
+				"gpt-5.5": "gpt-5.5",
+			},
+		},
+	}
+	cache := &openAISnapshotCacheStub{accountsByID: map[int64]*Account{stale.ID: stale}}
+	repo := schedulerTestOpenAIAccountRepo{accounts: []Account{fresh}}
+	svc := &OpenAIGatewayService{
+		accountRepo:       repo,
+		schedulerSnapshot: NewSchedulerSnapshotService(cache, nil, repo, nil, nil),
+	}
+
+	got, err := svc.hydrateSelectedAccount(context.Background(), &fresh)
+
+	require.NoError(t, err)
+	require.Same(t, &fresh, got)
+	require.Equal(t, "fresh-token", got.GetOpenAIAccessToken())
+	require.False(t, got.IsModelSupported("gpt-5.6-sol"))
+}
+
 func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_DBOverridesConfig(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()

@@ -407,6 +407,7 @@ type OpenAIGatewayService struct {
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: openAIAccountRuntimeBlock
+	openaiOAuthModelUnsupported         openAIOAuthModelUnsupportedCache
 	openaiOAuth429WindowStartUnixNano   atomic.Int64
 	openaiOAuth429WindowCount           atomic.Int64
 	openaiWSRetryMetrics                openAIWSRetryMetrics
@@ -1526,6 +1527,20 @@ func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *A
 	return true
 }
 
+func (s *OpenAIGatewayService) isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+	if !isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
+		return false
+	}
+	return !s.isOpenAIOAuthModelUnsupportedForRequest(account, requestedModel, requireCompact)
+}
+
+func (s *OpenAIGatewayService) isOpenAICompatibleAccountEligibleForSchedule(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) bool {
+	if !isOpenAICompatibleAccountEligibleForRequest(ctx, account, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability) {
+		return false
+	}
+	return !s.isOpenAIOAuthModelUnsupportedForSchedule(account, req)
+}
+
 type openAIQuotaAutoPauseDecision struct {
 	window      string
 	threshold   float64
@@ -1935,7 +1950,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 
 	// 验证账号是否可用于当前请求
 	// Verify account is usable for current request
-	if !isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, false, requiredCapability) {
+	if !s.isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, false, requiredCapability) {
 		return nil
 	}
 	if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
@@ -2141,7 +2156,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 				if clearSticky {
 					_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 				}
-				if !clearSticky && isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, false, requiredCapability) {
+				if !clearSticky && s.isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, false, requiredCapability) {
 					account = s.recheckSelectedOpenAIAccountFromDB(ctx, account, platform, requestedModel, requireCompact, requiredCapability)
 					if account == nil {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -2204,7 +2219,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
 		// re-check schedulability here so recently rate-limited/overloaded accounts
 		// are not selected again before the bucket is rebuilt.
-		if !isOpenAICompatibleAccountEligibleForRequest(ctx, acc, platform, requestedModel, false, requiredCapability) {
+		if !s.isOpenAICompatibleAccountEligibleForRequest(ctx, acc, platform, requestedModel, false, requiredCapability) {
 			continue
 		}
 		if !parentHealthyForShadow(acc, parentLookupL2) {
@@ -2455,7 +2470,7 @@ func (s *OpenAIGatewayService) isAccountEligibleForOpenAISchedule(ctx context.Co
 		return false
 	}
 	if account.Platform != PlatformKiro {
-		return isOpenAICompatibleAccountEligibleForRequest(ctx, account, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
+		return s.isOpenAICompatibleAccountEligibleForSchedule(ctx, account, req)
 	}
 	if !req.AllowKiroBridge || !s.openAIKiroBridgeEnabled() || normalizeOpenAICompatiblePlatform(req.Platform) != PlatformOpenAI || req.RequireCompact {
 		return false
@@ -2536,7 +2551,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccount(ctx context.
 		fresh = current
 	}
 
-	if !isOpenAICompatibleAccountEligibleForRequest(ctx, fresh, platform, requestedModel, requireCompact, requiredCapability) {
+	if !s.isOpenAICompatibleAccountEligibleForRequest(ctx, fresh, platform, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
@@ -2568,7 +2583,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	}
 	platform = normalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
+		if !s.isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
 		if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
@@ -2581,7 +2596,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
-	if !isOpenAICompatibleAccountEligibleForRequest(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
+	if !s.isOpenAICompatibleAccountEligibleForRequest(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
@@ -2611,6 +2626,13 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
 
 func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
 	if account == nil || s.schedulerSnapshot == nil {
+		return account, nil
+	}
+	// Every production scheduling path rechecks the selected account from the
+	// repository immediately before this point. Do not replace that current
+	// model mapping and runtime state with the independently refreshed account
+	// snapshot, which can lag an account edit.
+	if s.accountRepo != nil {
 		return account, nil
 	}
 	hydrated, err := s.schedulerSnapshot.GetAccount(ctx, account.ID)
@@ -2728,6 +2750,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
+	if isUpstreamAccountModelUnsupportedError(statusCode, upstreamBody) {
+		return true
+	}
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
@@ -2774,6 +2799,39 @@ func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, re
 		return
 	}
 	s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody)
+}
+
+func (s *OpenAIGatewayService) newOpenAIAccountModelUnsupportedFailover(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	headers http.Header,
+	responseBody []byte,
+	upstreamModel string,
+) *UpstreamFailoverError {
+	const statusCode = http.StatusBadRequest
+
+	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
+	if upstreamMsg == "" {
+		upstreamMsg = "selected account does not support the requested model"
+	}
+	s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, headers, responseBody, upstreamModel)
+	if account != nil {
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: statusCode,
+			UpstreamRequestID:  headers.Get("x-request-id"),
+			Kind:               "failover",
+			Message:            upstreamMsg,
+		})
+	}
+	return &UpstreamFailoverError{
+		StatusCode:      statusCode,
+		ResponseBody:    append([]byte(nil), responseBody...),
+		ResponseHeaders: cloneHeader(headers),
+	}
 }
 
 // Forward forwards request to OpenAI API
@@ -3819,8 +3877,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	if resp.StatusCode >= 400 {
 		// 透传模式默认保持原样代理；但 429/529 属于网关必须兜底的
-		// 上游容量类错误，应先触发多账号 failover 以维持基础 SLA。
-		if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode) {
+		// 上游容量类错误，以及明确的账号-模型能力拒绝，应先触发多账号
+		// failover 以维持基础 SLA。其余 400 保持原样返回，避免将客户端
+		// 请求校验错误误判为账号故障。
+		responseBody := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(responseBody))
+		if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode, responseBody) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body)
 		}
 		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
@@ -4039,7 +4102,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	return req, nil
 }
 
-func shouldFailoverOpenAIPassthroughResponse(statusCode int) bool {
+func shouldFailoverOpenAIPassthroughResponse(statusCode int, responseBody []byte) bool {
+	if isUpstreamAccountModelUnsupportedError(statusCode, responseBody) {
+		return true
+	}
 	switch statusCode {
 	case http.StatusTooManyRequests, 529:
 		return true
