@@ -1,5 +1,3 @@
-//go:build unit
-
 package service
 
 import (
@@ -11,13 +9,23 @@ import (
 )
 
 type accountRepoStubForClearAccountError struct {
-	mockAccountRepoForGemini
+	AccountRepository
 	account                  *Account
 	clearErrorCalls          int
 	clearRateLimitCalls      int
 	clearAntigravityCalls    int
 	clearModelRateLimitCalls int
 	clearTempUnschedCalls    int
+}
+
+type adminRuntimeBlockRecorder struct {
+	clearedAccountID int64
+}
+
+func (r *adminRuntimeBlockRecorder) BlockAccountScheduling(*Account, time.Time, string) {}
+
+func (r *adminRuntimeBlockRecorder) ClearAccountSchedulingBlock(accountID int64) {
+	r.clearedAccountID = accountID
 }
 
 func (r *accountRepoStubForClearAccountError) GetByID(ctx context.Context, id int64) (*Account, error) {
@@ -72,7 +80,8 @@ func TestAdminService_ClearAccountError_AlsoClearsRecoverableRuntimeState(t *tes
 			TempUnschedulableReason: "missing refresh token",
 		},
 	}
-	svc := &adminServiceImpl{accountRepo: repo}
+	runtimeBlocker := &adminRuntimeBlockRecorder{}
+	svc := &adminServiceImpl{accountRepo: repo, runtimeBlocker: runtimeBlocker}
 
 	updated, err := svc.ClearAccountError(context.Background(), 31)
 	require.NoError(t, err)
@@ -86,4 +95,5 @@ func TestAdminService_ClearAccountError_AlsoClearsRecoverableRuntimeState(t *tes
 	require.Nil(t, updated.TempUnschedulableUntil)
 	require.Empty(t, updated.TempUnschedulableReason)
 	require.True(t, updated.Schedulable)
+	require.Equal(t, int64(31), runtimeBlocker.clearedAccountID)
 }

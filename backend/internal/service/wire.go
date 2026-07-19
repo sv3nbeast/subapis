@@ -653,6 +653,7 @@ func ProvideAdminService(
 	privacyClientFactory PrivacyClientFactory,
 	httpUpstream HTTPUpstream,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	runtimeBlocker AccountRuntimeBlocker,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,
@@ -675,6 +676,7 @@ func ProvideAdminService(
 	)
 	if impl, ok := svc.(*adminServiceImpl); ok {
 		impl.SetKiroProfileResolverDeps(httpUpstream, tlsFPProfileService)
+		impl.SetAccountRuntimeBlocker(runtimeBlocker)
 	}
 	return svc
 }
