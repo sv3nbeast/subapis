@@ -195,7 +195,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			if selection.Acquired && selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
-			h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+			h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 			return
 		}
 
@@ -209,7 +209,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), apiKey.GroupID, account, selection.WaitPlan.Timeout)
 			if budgetErr != nil {
 				applyKiroBudgetExhaustedRetryAfter(c)
-				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+				h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 				return
 			}
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
@@ -225,7 +225,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
 					if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 						applyKiroBudgetExhaustedRetryAfter(c)
-						h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+						h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 						return
 					}
 					if !fs.KiroWaitReselectUsed {
@@ -336,6 +336,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 // chatCompletionsErrorResponse writes an error in OpenAI Chat Completions format.
 func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int, errType, message string) {
+	message = sanitizeClientErrorMessage(status, message)
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,

@@ -77,6 +77,16 @@ func TestOpenAIHandleStreamingAwareError_ResponsesStreamingEmitsResponseFailed(t
 	assert.Equal(t, "Concurrency limit exceeded for user, please retry later", errObj["message"])
 }
 
+func TestOpenAIHandleStreamingAwareError_ResponsesStreamingHidesInternalProviderName(t *testing.T) {
+	c, w := newGinContextForEndpoint(t, EndpointResponses)
+	h := &OpenAIGatewayHandler{}
+	h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", true)
+
+	_, errObj := parseResponsesFailedSSE(t, w.Body.String())
+	assert.Equal(t, clientUpstreamTemporarilyUnavailableMessage, errObj["message"])
+	assert.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
+}
+
 // 当 setOpsRequestContext 写过 model，合成事件应回填该字段（与 codebase 已有 makeResponsesCompletedEvent 对齐）。
 func TestOpenAIHandleStreamingAwareError_ResponsesStreamingIncludesModel(t *testing.T) {
 	c, w := newGinContextForEndpoint(t, EndpointResponses)
@@ -173,6 +183,15 @@ func TestGatewayHandleStreamingAwareError_MessagesStreamingKeepsLegacy(t *testin
 
 	body := w.Body.String()
 	assert.True(t, strings.HasPrefix(body, `data: {"type":"error"`), "got: %q", body)
+}
+
+func TestGatewayHandleStreamingAwareError_MessagesStreamingHidesInternalProviderName(t *testing.T) {
+	c, w := newGinContextForEndpoint(t, EndpointMessages)
+	h := &GatewayHandler{}
+	h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Kiro upstream busy", true)
+
+	assert.Contains(t, w.Body.String(), clientUpstreamTemporarilyRateLimitedMessage)
+	assert.NotContains(t, strings.ToLower(w.Body.String()), "kiro")
 }
 
 // 项目里 /responses 注册在多组路由：/v1/responses（gateway）、裸 /responses（top-level）、

@@ -495,13 +495,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if slotErr != nil {
 			if service.IsKiroFailoverBudgetExceeded(slotErr) {
 				applyKiroBudgetExhaustedRetryAfter(c)
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 				return
 			}
 			if account.Platform == service.PlatformKiro && kiroFailoverState.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(slotErr) {
 				if _, remainingErr := h.kiroBridgeService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 					applyKiroBudgetExhaustedRetryAfter(c)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 					return
 				}
 				if !kiroFailoverState.KiroWaitReselectUsed {
@@ -1232,6 +1232,7 @@ func resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel 
 
 // anthropicErrorResponse writes an error in Anthropic Messages API format.
 func (h *OpenAIGatewayHandler) anthropicErrorResponse(c *gin.Context, status int, errType, message string) {
+	message = sanitizeClientErrorMessage(status, message)
 	c.JSON(status, gin.H{
 		"type": "error",
 		"error": gin.H{
@@ -1244,6 +1245,7 @@ func (h *OpenAIGatewayHandler) anthropicErrorResponse(c *gin.Context, status int
 // anthropicStreamingAwareError handles errors that may occur during streaming,
 // using Anthropic SSE error format.
 func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
+	clientMessage := sanitizeClientErrorMessage(status, message)
 	if streamStarted {
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
@@ -1251,7 +1253,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 				"type": "error",
 				"error": gin.H{
 					"type":    errType,
-					"message": message,
+					"message": clientMessage,
 				},
 			})
 			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errPayload) //nolint:errcheck
@@ -1259,7 +1261,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 		}
 		return
 	}
-	h.anthropicErrorResponse(c, status, errType, message)
+	h.anthropicErrorResponse(c, status, errType, clientMessage)
 }
 
 // handleAnthropicFailoverExhausted maps upstream failover errors to Anthropic format.
@@ -1764,7 +1766,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if selection.Acquired && selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
-			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "Kiro upstream failover budget exhausted")
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, clientUpstreamTemporarilyUnavailableMessage)
 			return
 		}
 		accountMaxConcurrency := account.Concurrency
@@ -1887,7 +1889,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					c.Request = c.Request.WithContext(baseRequestContext)
 					if err := prepareKiroAccountAttempt(c, h.kiroBridgeService, apiKey.GroupID, account); err != nil {
 						releaseTurnSlots()
-						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "Kiro upstream failover budget exhausted", err)
+						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, clientUpstreamTemporarilyUnavailableMessage, err)
 					}
 				}
 				return nil
@@ -2371,6 +2373,7 @@ func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, st
 
 // handleStreamingAwareError handles errors that may occur after streaming has started
 func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
+	clientMessage := sanitizeClientErrorMessage(status, message)
 	// body-signal compact 心跳可能已把响应头提交为 200：先停心跳（建立
 	// happens-before，接管 ResponseWriter），并升级为流内错误处理。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
@@ -2382,7 +2385,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 		// 通用 `event: error` 帧不被识别为终止事件，会导致
 		// "stream closed before response.completed"。
 		if inboundIsResponses(c) {
-			if writeResponsesFailedSSE(c, errType, message) {
+			if writeResponsesFailedSSE(c, errType, clientMessage) {
 				return
 			}
 		}
@@ -2390,7 +2393,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
 			// SSE 错误事件固定 schema，使用 Quote 直拼可避免额外 Marshal 分配。
-			errorEvent := "event: error\ndata: " + `{"error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
+			errorEvent := "event: error\ndata: " + `{"error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(clientMessage) + `}}` + "\n\n"
 			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
 				_ = c.Error(err)
 			}
@@ -2400,7 +2403,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 	}
 
 	// Normal case: return JSON response with proper status code
-	h.errorResponse(c, status, errType, message)
+	h.errorResponse(c, status, errType, clientMessage)
 }
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。
@@ -2475,18 +2478,19 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 
 // errorResponse returns OpenAI API format error response
 func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
+	clientMessage := sanitizeClientErrorMessage(status, message)
 	// body-signal compact 心跳可能已把响应头提交为 200：JSON 错误体会与已
 	// 提交的 SSE 流交错，必须降级为 response.failed 终止事件（#3887）。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
 		service.MarkOpsStreamError(c, errType, message, status)
-		if writeResponsesFailedSSE(c, errType, message) {
+		if writeResponsesFailedSSE(c, errType, clientMessage) {
 			return
 		}
 	}
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,
-			"message": message,
+			"message": clientMessage,
 		},
 	})
 }
@@ -2538,7 +2542,7 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 	if conn == nil {
 		return
 	}
-	reason = strings.TrimSpace(reason)
+	reason = strings.TrimSpace(sanitizeClientErrorMessage(http.StatusServiceUnavailable, reason))
 	if len(reason) > 120 {
 		reason = reason[:120]
 	}

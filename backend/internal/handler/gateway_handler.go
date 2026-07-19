@@ -472,7 +472,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if selection.Acquired && selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 				return
 			}
 			accountReleaseFunc := selection.ReleaseFunc
@@ -512,7 +512,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if budgetErr != nil {
 					releaseWait()
 					applyKiroBudgetExhaustedRetryAfter(c)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 					return
 				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
@@ -529,7 +529,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
 						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 							applyKiroBudgetExhaustedRetryAfter(c)
-							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 							return
 						}
 						if !fs.KiroWaitReselectUsed {
@@ -838,7 +838,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if selection.Acquired && selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 				return
 			}
 			accountReleaseFunc := selection.ReleaseFunc
@@ -878,7 +878,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if budgetErr != nil {
 					releaseWait()
 					applyKiroBudgetExhaustedRetryAfter(c)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 					return
 				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
@@ -895,7 +895,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
 						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 							applyKiroBudgetExhaustedRetryAfter(c)
-							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 							return
 						}
 						if !fs.KiroWaitReselectUsed {
@@ -940,7 +940,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						accountReleaseFunc()
 					}
 					applyKiroBudgetExhaustedRetryAfter(c)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 					return
 				}
 			}
@@ -1947,6 +1947,7 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 
 // handleStreamingAwareError handles errors that may occur after streaming has started
 func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
+	clientMessage := sanitizeClientErrorMessage(status, message)
 	if streamStarted {
 		// 响应状态码已固化为 200（ping/部分数据已 flush），错误只能就地以 SSE 帧回传。
 		// 标记本次流内错误，供 ops_error_logger 补记——否则该中间件按 status>=400 采集，
@@ -1957,7 +1958,7 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 		// response.completed/failed/incomplete/cancelled 集合。
 		// Anthropic-backed Responses 路径同样会因为通用 error 帧被拒。
 		if inboundIsResponses(c) {
-			if writeResponsesFailedSSE(c, errType, message) {
+			if writeResponsesFailedSSE(c, errType, clientMessage) {
 				return
 			}
 		}
@@ -1965,7 +1966,7 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
 			// SSE 错误事件固定 schema，使用 Quote 直拼可避免额外 Marshal 分配。
-			errorEvent := `data: {"type":"error","error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
+			errorEvent := `data: {"type":"error","error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(clientMessage) + `}}` + "\n\n"
 			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
 				_ = c.Error(err)
 			}
@@ -1975,7 +1976,7 @@ func (h *GatewayHandler) handleStreamingAwareError(c *gin.Context, status int, e
 	}
 
 	// Normal case: return JSON response with proper status code
-	h.errorResponse(c, status, errType, message)
+	h.errorResponse(c, status, errType, clientMessage)
 }
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。
@@ -2071,6 +2072,7 @@ func (h *GatewayHandler) checkClaudeCodeVersion(c *gin.Context) bool {
 
 // errorResponse 返回Claude API格式的错误响应
 func (h *GatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
+	message = sanitizeClientErrorMessage(status, message)
 	c.JSON(status, gin.H{
 		"type": "error",
 		"error": gin.H{

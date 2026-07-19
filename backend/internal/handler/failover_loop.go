@@ -326,7 +326,7 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionE
 			zap.Int("failed_account_count", len(s.FailedAccountIDs)),
 		)
 		if len(s.LastFailoverErr.ResponseBody) == 0 {
-			s.LastFailoverErr.ResponseBody = []byte(`{"error":{"type":"rate_limit_error","message":"Kiro upstream busy/rate limited after retry budget exhausted"}}`)
+			s.LastFailoverErr.ResponseBody = []byte(`{"error":{"type":"rate_limit_error","message":"` + clientUpstreamTemporarilyRateLimitedMessage + `"}}`)
 		}
 		s.applyEarliestKiroRetryAfter(s.LastFailoverErr)
 		return FailoverExhausted

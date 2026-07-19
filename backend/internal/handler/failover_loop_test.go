@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -613,6 +614,15 @@ func TestHandleSelectionExhausted_KiroUsesEarliestPreexistingCooldown(t *testing
 	require.Same(t, rateErr, fs.LastFailoverErr)
 	require.Greater(t, fs.LastFailoverErr.RetryAfter, 55*time.Second)
 	require.LessOrEqual(t, fs.LastFailoverErr.RetryAfter, time.Minute)
+}
+
+func TestHandleSelectionExhausted_KiroRateLimitFallbackBodyHidesInternalProviderName(t *testing.T) {
+	fs := NewFailoverState(1, false)
+	fs.LastFailoverErr = newTestKiro429FailoverErr()
+
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background()))
+	require.Contains(t, string(fs.LastFailoverErr.ResponseBody), clientUpstreamTemporarilyRateLimitedMessage)
+	require.NotContains(t, strings.ToLower(string(fs.LastFailoverErr.ResponseBody)), "kiro")
 }
 
 func TestHandleSelectionExhausted_KiroUnresponsiveCooldownReturns503(t *testing.T) {

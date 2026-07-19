@@ -232,13 +232,13 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if slotErr != nil {
 			if service.IsKiroFailoverBudgetExceeded(slotErr) {
 				applyKiroBudgetExhaustedRetryAfter(c)
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 				return
 			}
 			if account.Platform == service.PlatformKiro && kiroFailoverState.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(slotErr) {
 				if _, remainingErr := h.kiroBridgeService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 					applyKiroBudgetExhaustedRetryAfter(c)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
 					return
 				}
 				if !kiroFailoverState.KiroWaitReselectUsed {

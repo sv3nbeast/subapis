@@ -73,12 +73,26 @@ func TestClassifySelectionError_KiroCooldownCarriesRetryAfter(t *testing.T) {
 	if !got.Handled || got.StatusCode != 429 || got.ErrorType != "rate_limit_error" {
 		t.Fatalf("unexpected classification: %#v", got)
 	}
+	if got.Message != clientUpstreamTemporarilyRateLimitedMessage {
+		t.Fatalf("client message = %q, want %q", got.Message, clientUpstreamTemporarilyRateLimitedMessage)
+	}
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	applySelectionErrorMonitoringClassification(c, got)
 	if retryAfter := recorder.Header().Get("Retry-After"); retryAfter != "2" {
 		t.Fatalf("Retry-After = %q, want 2", retryAfter)
+	}
+}
+
+func TestClassifySelectionError_KiroUnavailableUsesGenericClientMessage(t *testing.T) {
+	err := &service.KiroCooldownExhaustedError{StatusCode: 503, RetryAfter: time.Second}
+	got := classifySelectionError(err)
+	if !got.Handled || got.StatusCode != 503 || got.ErrorType != "upstream_error" {
+		t.Fatalf("unexpected classification: %#v", got)
+	}
+	if got.Message != clientUpstreamTemporarilyUnavailableMessage {
+		t.Fatalf("client message = %q, want %q", got.Message, clientUpstreamTemporarilyUnavailableMessage)
 	}
 }
 

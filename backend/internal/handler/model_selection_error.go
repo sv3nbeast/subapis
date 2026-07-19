@@ -31,10 +31,10 @@ func classifySelectionError(err error) selectionErrorClassification {
 	var cooldownErr *service.KiroCooldownExhaustedError
 	if errors.As(err, &cooldownErr) {
 		errorType := "upstream_error"
-		message := "Kiro upstream is temporarily unavailable, please retry later"
+		message := clientUpstreamTemporarilyUnavailableMessage
 		if cooldownErr.StatusCode == 429 {
 			errorType = "rate_limit_error"
-			message = "Kiro upstream is temporarily rate limited, please retry later"
+			message = clientUpstreamTemporarilyRateLimitedMessage
 		}
 		return selectionErrorClassification{
 			Handled:    true,

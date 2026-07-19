@@ -205,7 +205,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			if selection.Acquired && selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
-			h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+			h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 			return
 		}
 
@@ -219,7 +219,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), apiKey.GroupID, account, selection.WaitPlan.Timeout)
 			if budgetErr != nil {
 				applyKiroBudgetExhaustedRetryAfter(c)
-				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+				h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 				return
 			}
 			accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
@@ -235,7 +235,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
 					if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 						applyKiroBudgetExhaustedRetryAfter(c)
-						h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Kiro upstream failover budget exhausted")
+						h.responsesErrorResponse(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage)
 						return
 					}
 					if !fs.KiroWaitReselectUsed {
@@ -350,6 +350,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 // responsesErrorResponse writes an error in OpenAI Responses API format.
 func (h *GatewayHandler) responsesErrorResponse(c *gin.Context, status int, code, message string) {
+	message = sanitizeClientErrorMessage(status, message)
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"code":    code,
