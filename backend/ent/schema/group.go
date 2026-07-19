@@ -86,6 +86,10 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
+		field.JSON("model_quota_ratios", map[string]float64{}).
+			Default(map[string]float64{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("订阅模型额度占比：规范模型ID -> 0到1之间的额度比例"),
 		field.Int("default_validity_days").
 			Default(30),
 

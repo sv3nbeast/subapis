@@ -446,6 +446,46 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Accumulates() {
 	s.Require().InDelta(3.5, got.DailyUsageUSD, 1e-6)
 }
 
+func (s *UserSubscriptionRepoSuite) TestIncrementUsageForModelAccumulatesWithTotalUsage() {
+	user := s.mustCreateUser("model-usage@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-model-usage")
+	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
+
+	s.Require().NoError(s.repo.IncrementUsageForModel(s.ctx, sub.ID, 1.25, "claude-fable-5"))
+	s.Require().NoError(s.repo.IncrementUsageForModel(s.ctx, sub.ID, 0.75, "claude-fable-5"))
+
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().InDelta(2, got.DailyUsageUSD, 1e-6)
+	s.Require().InDelta(2, got.WeeklyUsageUSD, 1e-6)
+	s.Require().InDelta(2, got.MonthlyUsageUSD, 1e-6)
+	modelUsage := got.ModelUsage["claude-fable-5"]
+	s.Require().InDelta(2, modelUsage.DailyUsageUSD, 1e-6)
+	s.Require().InDelta(2, modelUsage.WeeklyUsageUSD, 1e-6)
+	s.Require().InDelta(2, modelUsage.MonthlyUsageUSD, 1e-6)
+}
+
+func (s *UserSubscriptionRepoSuite) TestResetUsageWindowsResetsMatchingModelDimensions() {
+	user := s.mustCreateUser("model-reset@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-model-reset")
+	sub := s.mustCreateSubscription(user.ID, group.ID, func(c *dbent.UserSubscriptionCreate) {
+		c.SetDailyUsageUsd(3)
+		c.SetWeeklyUsageUsd(4)
+		c.SetMonthlyUsageUsd(5)
+		c.SetModelUsage(map[string]service.SubscriptionModelUsage{
+			"claude-fable-5": {DailyUsageUSD: 3, WeeklyUsageUSD: 4, MonthlyUsageUSD: 5},
+		})
+	})
+
+	s.Require().NoError(s.repo.ResetUsageWindows(s.ctx, sub.ID, true, false, false, time.Now()))
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	modelUsage := got.ModelUsage["claude-fable-5"]
+	s.Require().Zero(modelUsage.DailyUsageUSD)
+	s.Require().InDelta(4, modelUsage.WeeklyUsageUSD, 1e-6)
+	s.Require().InDelta(5, modelUsage.MonthlyUsageUSD, 1e-6)
+}
+
 func (s *UserSubscriptionRepoSuite) TestIncrementUsageResetsExpiredWindowsToCurrentCost() {
 	user := s.mustCreateUser("usage-expired-window@test.com", service.RoleUser)
 	group := s.mustCreateGroup("g-usage-expired-window")
@@ -883,7 +923,7 @@ func (s *UserSubscriptionRepoSuite) TestUpdate_NilInput() {
 
 // --- 并发用量更新测试 ---
 
-func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
+func (s *UserSubscriptionRepoSuite) TestIncrementUsageForModel_Concurrent() {
 	user := s.mustCreateUser("concurrent@test.com", service.RoleUser)
 	group := s.mustCreateGroup("g-concurrent")
 	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
@@ -891,11 +931,11 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
 	const numGoroutines = 10
 	const incrementPerGoroutine = 1.5
 
-	// 启动多个 goroutine 并发调用 IncrementUsage
+	// 启动多个 goroutine 并发调用模型维度用量更新。
 	errCh := make(chan error, numGoroutines)
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
-			errCh <- s.repo.IncrementUsage(s.ctx, sub.ID, incrementPerGoroutine)
+			errCh <- s.repo.IncrementUsageForModel(s.ctx, sub.ID, incrementPerGoroutine, "claude-fable-5")
 		}()
 	}
 
@@ -912,6 +952,10 @@ func (s *UserSubscriptionRepoSuite) TestIncrementUsage_Concurrent() {
 	s.Require().InDelta(expectedUsage, got.DailyUsageUSD, 1e-6, "daily usage should be correctly accumulated")
 	s.Require().InDelta(expectedUsage, got.WeeklyUsageUSD, 1e-6, "weekly usage should be correctly accumulated")
 	s.Require().InDelta(expectedUsage, got.MonthlyUsageUSD, 1e-6, "monthly usage should be correctly accumulated")
+	modelUsage := got.ModelUsage["claude-fable-5"]
+	s.Require().InDelta(expectedUsage, modelUsage.DailyUsageUSD, 1e-6, "model daily usage should be correctly accumulated")
+	s.Require().InDelta(expectedUsage, modelUsage.WeeklyUsageUSD, 1e-6, "model weekly usage should be correctly accumulated")
+	s.Require().InDelta(expectedUsage, modelUsage.MonthlyUsageUSD, 1e-6, "model monthly usage should be correctly accumulated")
 }
 
 func (s *UserSubscriptionRepoSuite) TestTxContext_RollbackIsolation() {

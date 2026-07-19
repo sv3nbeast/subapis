@@ -64,6 +64,10 @@
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.monthlyLimit') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.monthly_limit_usd }}</span>
         </div>
+        <div v-for="entry in modelQuotaEntries" :key="entry.model" class="col-span-2 flex items-center justify-between gap-2">
+          <span class="truncate text-gray-400 dark:text-dark-500">{{ entry.model }}</span>
+          <span class="shrink-0 font-medium text-gray-700 dark:text-gray-300">{{ entry.percent }}%</span>
+        </div>
         <div v-if="plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.quota') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.planCard.unlimited') }}</span>
@@ -171,6 +175,12 @@ const modelScopeLabels = computed(() => {
   if (!scopes || scopes.length === 0) return []
   return scopes.map(s => MODEL_SCOPE_LABELS[s] || s)
 })
+
+const modelQuotaEntries = computed(() =>
+  Object.entries(props.plan.model_quota_ratios || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([model, ratio]) => ({ model, percent: Number((ratio * 100).toFixed(2)) })),
+)
 
 const validitySuffix = computed(() => {
   const u = (props.plan.validity_unit || 'day').trim().toLowerCase()

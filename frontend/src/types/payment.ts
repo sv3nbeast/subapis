@@ -219,6 +219,7 @@ export interface SubscriptionPlan {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  model_quota_ratios?: Record<string, number>
   supported_model_scopes?: string[]
   name: string
   description: string

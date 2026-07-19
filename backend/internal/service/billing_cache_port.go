@@ -11,5 +11,6 @@ type SubscriptionCacheData struct {
 	DailyUsage   float64
 	WeeklyUsage  float64
 	MonthlyUsage float64
+	ModelUsage   map[string]SubscriptionModelUsage
 	Version      int64
 }

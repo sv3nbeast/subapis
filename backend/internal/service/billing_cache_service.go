@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -39,6 +40,7 @@ var (
 	ErrUserPlatformDailyQuotaExhausted   = infraerrors.TooManyRequests("USER_PLATFORM_DAILY_QUOTA_EXHAUSTED", "Daily usage quota exhausted for this platform.")
 	ErrUserPlatformWeeklyQuotaExhausted  = infraerrors.TooManyRequests("USER_PLATFORM_WEEKLY_QUOTA_EXHAUSTED", "Weekly usage quota exhausted for this platform.")
 	ErrUserPlatformMonthlyQuotaExhausted = infraerrors.TooManyRequests("USER_PLATFORM_MONTHLY_QUOTA_EXHAUSTED", "Monthly usage quota exhausted for this platform.")
+	ErrSubscriptionModelQuotaExhausted   = infraerrors.TooManyRequests("SUBSCRIPTION_MODEL_QUOTA_EXHAUSTED", "Subscription quota exhausted for this model.")
 )
 
 // subscriptionCacheData 订阅缓存数据结构（内部使用）
@@ -48,6 +50,7 @@ type subscriptionCacheData struct {
 	DailyUsage   float64
 	WeeklyUsage  float64
 	MonthlyUsage float64
+	ModelUsage   map[string]SubscriptionModelUsage
 	Version      int64
 }
 
@@ -56,7 +59,6 @@ type cacheWriteKind int
 
 const (
 	cacheWriteSetBalance cacheWriteKind = iota
-	cacheWriteSetSubscription
 	cacheWriteUpdateSubscriptionUsage
 	cacheWriteDeductBalance
 	cacheWriteUpdateRateLimitUsage
@@ -76,22 +78,26 @@ const (
 // 3. 非阻塞写入，队列满时关键任务同步回退，非关键任务丢弃并告警
 // 4. 统一超时控制，避免慢操作阻塞工作池
 const (
-	cacheWriteWorkerCount     = 10              // 工作协程数量
-	cacheWriteBufferSize      = 1000            // 任务队列缓冲大小
-	cacheWriteTimeout         = 2 * time.Second // 单个写入操作超时
-	cacheWriteDropLogInterval = 5 * time.Second // 丢弃日志节流间隔
-	balanceLoadTimeout        = 3 * time.Second
+	cacheWriteWorkerCount       = 10              // 工作协程数量
+	cacheWriteBufferSize        = 1000            // 任务队列缓冲大小
+	cacheWriteTimeout           = 2 * time.Second // 单个写入操作超时
+	subscriptionPopulateTimeout = 50 * time.Millisecond
+	cacheWriteDropLogInterval   = 5 * time.Second // 丢弃日志节流间隔
+	balanceLoadTimeout          = 3 * time.Second
 )
 
 // cacheWriteTask 缓存写入任务
 type cacheWriteTask struct {
-	kind             cacheWriteKind
-	userID           int64
-	groupID          int64
-	apiKeyID         int64
-	balance          float64
-	amount           float64
-	subscriptionData *subscriptionCacheData
+	kind     cacheWriteKind
+	userID   int64
+	groupID  int64
+	apiKeyID int64
+	balance  float64
+	amount   float64
+}
+
+type subscriptionModelUsageCache interface {
+	UpdateSubscriptionUsageForModel(ctx context.Context, userID, groupID int64, cost float64, model string) error
 }
 
 // apiKeyRateLimitLoader defines the interface for loading rate limit data from DB.
@@ -227,8 +233,6 @@ func (s *BillingCacheService) cacheWriteWorker(ch <-chan cacheWriteTask) {
 		switch task.kind {
 		case cacheWriteSetBalance:
 			s.setBalanceCache(ctx, task.userID, task.balance)
-		case cacheWriteSetSubscription:
-			s.setSubscriptionCache(ctx, task.userID, task.groupID, task.subscriptionData)
 		case cacheWriteUpdateSubscriptionUsage:
 			if s.cache != nil {
 				if err := s.cache.UpdateSubscriptionUsage(ctx, task.userID, task.groupID, task.amount); err != nil {
@@ -257,8 +261,6 @@ func cacheWriteKindName(kind cacheWriteKind) string {
 	switch kind {
 	case cacheWriteSetBalance:
 		return "set_balance"
-	case cacheWriteSetSubscription:
-		return "set_subscription"
 	case cacheWriteUpdateSubscriptionUsage:
 		return "update_subscription_usage"
 	case cacheWriteDeductBalance:
@@ -436,13 +438,12 @@ func (s *BillingCacheService) GetSubscriptionStatus(ctx context.Context, userID,
 		return nil, err
 	}
 
-	// 异步建立缓存
-	_ = s.enqueueCacheWrite(cacheWriteTask{
-		kind:             cacheWriteSetSubscription,
-		userID:           userID,
-		groupID:          groupID,
-		subscriptionData: data,
-	})
+	// Cache misses already pay the DB round trip. Populate Redis before the
+	// request proceeds so a later usage increment cannot be reordered ahead of
+	// this snapshot by different cache workers.
+	populateCtx, cancel := context.WithTimeout(ctx, subscriptionPopulateTimeout)
+	s.setSubscriptionCache(populateCtx, userID, groupID, data)
+	cancel()
 
 	return data, nil
 }
@@ -454,6 +455,7 @@ func (s *BillingCacheService) convertFromPortsData(data *SubscriptionCacheData) 
 		DailyUsage:   data.DailyUsage,
 		WeeklyUsage:  data.WeeklyUsage,
 		MonthlyUsage: data.MonthlyUsage,
+		ModelUsage:   data.ModelUsage,
 		Version:      data.Version,
 	}
 }
@@ -465,6 +467,7 @@ func (s *BillingCacheService) convertToPortsData(data *subscriptionCacheData) *S
 		DailyUsage:   data.DailyUsage,
 		WeeklyUsage:  data.WeeklyUsage,
 		MonthlyUsage: data.MonthlyUsage,
+		ModelUsage:   data.ModelUsage,
 		Version:      data.Version,
 	}
 }
@@ -482,6 +485,7 @@ func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID,
 		DailyUsage:   sub.DailyUsageUSD,
 		WeeklyUsage:  sub.WeeklyUsageUSD,
 		MonthlyUsage: sub.MonthlyUsageUSD,
+		ModelUsage:   sub.ModelUsage,
 		Version:      sub.UpdatedAt.Unix(),
 	}, nil
 }
@@ -498,8 +502,19 @@ func (s *BillingCacheService) setSubscriptionCache(ctx context.Context, userID, 
 
 // UpdateSubscriptionUsage 更新订阅用量缓存（同步调用）
 func (s *BillingCacheService) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, costUSD float64) error {
+	return s.updateSubscriptionUsageForModel(ctx, userID, groupID, costUSD, "")
+}
+
+func (s *BillingCacheService) UpdateSubscriptionUsageForModel(ctx context.Context, userID, groupID int64, costUSD float64, model string) error {
+	return s.updateSubscriptionUsageForModel(ctx, userID, groupID, costUSD, model)
+}
+
+func (s *BillingCacheService) updateSubscriptionUsageForModel(ctx context.Context, userID, groupID int64, costUSD float64, model string) error {
 	if s.cache == nil {
 		return nil
+	}
+	if cache, ok := s.cache.(subscriptionModelUsageCache); ok {
+		return cache.UpdateSubscriptionUsageForModel(ctx, userID, groupID, costUSD, model)
 	}
 	return s.cache.UpdateSubscriptionUsage(ctx, userID, groupID, costUSD)
 }
@@ -520,7 +535,7 @@ func (s *BillingCacheService) QueueUpdateSubscriptionUsage(userID, groupID int64
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
 	defer cancel()
-	if err := s.UpdateSubscriptionUsage(ctx, userID, groupID, costUSD); err != nil {
+	if err := s.cache.UpdateSubscriptionUsage(ctx, userID, groupID, costUSD); err != nil {
 		logger.LegacyPrintf("service.billing_cache", "Warning: update subscription cache fallback failed for user %d group %d: %v", userID, groupID, err)
 	}
 }
@@ -1063,6 +1078,9 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 			}
 		}
 	}
+	if err := checkSubscriptionModelQuota(ctx, group, subscription, subData.ModelUsage); err != nil {
+		return err
+	}
 
 	// 检查限额（使用传入的Group限额配置）
 	if group.HasDailyLimit() && dailyUsage >= *group.DailyLimitUSD {
@@ -1078,6 +1096,54 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func checkSubscriptionModelQuota(ctx context.Context, group *Group, subscription *UserSubscription, cachedUsage map[string]SubscriptionModelUsage) error {
+	if group == nil || subscription == nil || len(group.ModelQuotaRatios) == 0 {
+		return nil
+	}
+	requestedModel, _ := ctx.Value(ctxkey.Model).(string)
+	model, ratio, ok := MatchSubscriptionModelQuota(group.ModelQuotaRatios, requestedModel)
+	if !ok {
+		return nil
+	}
+	usage := cachedUsage[model]
+	now := time.Now()
+	if subscription.NeedsQuotaCycleResetAt(now) {
+		usage = SubscriptionModelUsage{}
+	} else {
+		if subscription.NeedsDailyResetAt(now) {
+			usage.DailyUsageUSD = 0
+		}
+		if subscription.NeedsWeeklyReset() {
+			usage.WeeklyUsageUSD = 0
+		}
+		if subscription.NeedsMonthlyReset() {
+			usage.MonthlyUsageUSD = 0
+		}
+	}
+
+	if group.HasDailyLimit() && usage.DailyUsageUSD >= *group.DailyLimitUSD*ratio {
+		return subscriptionModelQuotaError(model, "daily", subscription.DailyResetTime(), now.Add(24*time.Hour))
+	}
+	if group.HasWeeklyLimit() && usage.WeeklyUsageUSD >= *group.WeeklyLimitUSD*ratio {
+		return subscriptionModelQuotaError(model, "weekly", subscription.WeeklyResetTime(), now.Add(7*24*time.Hour))
+	}
+	if group.HasMonthlyLimit() && usage.MonthlyUsageUSD >= *group.MonthlyLimitUSD*ratio {
+		return subscriptionModelQuotaError(model, "monthly", subscription.MonthlyResetTime(), now.Add(30*24*time.Hour))
+	}
+	return nil
+}
+
+func subscriptionModelQuotaError(model, window string, resetAt *time.Time, fallback time.Time) error {
+	if resetAt == nil || !resetAt.After(time.Now()) {
+		resetAt = &fallback
+	}
+	return ErrSubscriptionModelQuotaExhausted.WithMetadata(map[string]string{
+		"model":            model,
+		"window":           window,
+		"window_resets_at": resetAt.Format(time.RFC3339),
+	})
 }
 
 type billingCircuitBreakerState int

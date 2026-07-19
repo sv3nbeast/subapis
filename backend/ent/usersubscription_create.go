@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 // UserSubscriptionCreate is the builder for creating a UserSubscription entity.
@@ -231,6 +232,12 @@ func (_c *UserSubscriptionCreate) SetNillableMonthlyUsageUsd(v *float64) *UserSu
 	return _c
 }
 
+// SetModelUsage sets the "model_usage" field.
+func (_c *UserSubscriptionCreate) SetModelUsage(v map[string]domain.SubscriptionModelUsage) *UserSubscriptionCreate {
+	_c.mutation.SetModelUsage(v)
+	return _c
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_c *UserSubscriptionCreate) SetAssignedBy(v int64) *UserSubscriptionCreate {
 	_c.mutation.SetAssignedBy(v)
@@ -388,6 +395,10 @@ func (_c *UserSubscriptionCreate) defaults() error {
 		v := usersubscription.DefaultMonthlyUsageUsd
 		_c.mutation.SetMonthlyUsageUsd(v)
 	}
+	if _, ok := _c.mutation.ModelUsage(); !ok {
+		v := usersubscription.DefaultModelUsage
+		_c.mutation.SetModelUsage(v)
+	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		if usersubscription.DefaultAssignedAt == nil {
 			return fmt.Errorf("ent: uninitialized usersubscription.DefaultAssignedAt (forgotten import ent/runtime?)")
@@ -437,6 +448,9 @@ func (_c *UserSubscriptionCreate) check() error {
 	}
 	if _, ok := _c.mutation.MonthlyUsageUsd(); !ok {
 		return &ValidationError{Name: "monthly_usage_usd", err: errors.New(`ent: missing required field "UserSubscription.monthly_usage_usd"`)}
+	}
+	if _, ok := _c.mutation.ModelUsage(); !ok {
+		return &ValidationError{Name: "model_usage", err: errors.New(`ent: missing required field "UserSubscription.model_usage"`)}
 	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		return &ValidationError{Name: "assigned_at", err: errors.New(`ent: missing required field "UserSubscription.assigned_at"`)}
@@ -533,6 +547,10 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.MonthlyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
 		_node.MonthlyUsageUsd = value
+	}
+	if value, ok := _c.mutation.ModelUsage(); ok {
+		_spec.SetField(usersubscription.FieldModelUsage, field.TypeJSON, value)
+		_node.ModelUsage = value
 	}
 	if value, ok := _c.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -910,6 +928,18 @@ func (u *UserSubscriptionUpsert) UpdateMonthlyUsageUsd() *UserSubscriptionUpsert
 // AddMonthlyUsageUsd adds v to the "monthly_usage_usd" field.
 func (u *UserSubscriptionUpsert) AddMonthlyUsageUsd(v float64) *UserSubscriptionUpsert {
 	u.Add(usersubscription.FieldMonthlyUsageUsd, v)
+	return u
+}
+
+// SetModelUsage sets the "model_usage" field.
+func (u *UserSubscriptionUpsert) SetModelUsage(v map[string]domain.SubscriptionModelUsage) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldModelUsage, v)
+	return u
+}
+
+// UpdateModelUsage sets the "model_usage" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateModelUsage() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldModelUsage)
 	return u
 }
 
@@ -1297,6 +1327,20 @@ func (u *UserSubscriptionUpsertOne) AddMonthlyUsageUsd(v float64) *UserSubscript
 func (u *UserSubscriptionUpsertOne) UpdateMonthlyUsageUsd() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateMonthlyUsageUsd()
+	})
+}
+
+// SetModelUsage sets the "model_usage" field.
+func (u *UserSubscriptionUpsertOne) SetModelUsage(v map[string]domain.SubscriptionModelUsage) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetModelUsage(v)
+	})
+}
+
+// UpdateModelUsage sets the "model_usage" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateModelUsage() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateModelUsage()
 	})
 }
 
@@ -1858,6 +1902,20 @@ func (u *UserSubscriptionUpsertBulk) AddMonthlyUsageUsd(v float64) *UserSubscrip
 func (u *UserSubscriptionUpsertBulk) UpdateMonthlyUsageUsd() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateMonthlyUsageUsd()
+	})
+}
+
+// SetModelUsage sets the "model_usage" field.
+func (u *UserSubscriptionUpsertBulk) SetModelUsage(v map[string]domain.SubscriptionModelUsage) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetModelUsage(v)
+	})
+}
+
+// UpdateModelUsage sets the "model_usage" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateModelUsage() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateModelUsage()
 	})
 }
 

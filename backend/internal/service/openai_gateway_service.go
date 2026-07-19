@@ -7381,6 +7381,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			AccountRateMultiplier: accountRateMultiplier,
 			APIKeyService:         input.APIKeyService,
 			Platform:              quotaPlatform,
+			RequestedModel:        usageLog.RequestedModel,
 		}, s.billingDeps(), s.usageBillingRepo)
 		return err
 	}()

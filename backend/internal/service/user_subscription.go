@@ -21,6 +21,7 @@ type UserSubscription struct {
 	DailyUsageUSD   float64
 	WeeklyUsageUSD  float64
 	MonthlyUsageUSD float64
+	ModelUsage      map[string]SubscriptionModelUsage
 
 	AssignedBy *int64
 	AssignedAt time.Time
@@ -33,6 +34,24 @@ type UserSubscription struct {
 	User           *User
 	Group          *Group
 	AssignedByUser *User
+}
+
+func (s *UserSubscription) resetModelUsage(daily, weekly, monthly bool) {
+	if s == nil {
+		return
+	}
+	for model, usage := range s.ModelUsage {
+		if daily {
+			usage.DailyUsageUSD = 0
+		}
+		if weekly {
+			usage.WeeklyUsageUSD = 0
+		}
+		if monthly {
+			usage.MonthlyUsageUSD = 0
+		}
+		s.ModelUsage[model] = usage
+	}
 }
 
 func (s *UserSubscription) IsActive() bool {

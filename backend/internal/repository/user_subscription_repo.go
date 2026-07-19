@@ -41,6 +41,7 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetDailyUsageUsd(sub.DailyUsageUSD).
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
+		SetModelUsage(nonNilSubscriptionModelUsage(sub.ModelUsage)).
 		SetNillableAssignedBy(sub.AssignedBy)
 
 	if sub.StartsAt.IsZero() {
@@ -143,6 +144,7 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetDailyUsageUsd(sub.DailyUsageUSD).
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
+		SetModelUsage(nonNilSubscriptionModelUsage(sub.ModelUsage)).
 		SetNillableAssignedBy(sub.AssignedBy).
 		SetAssignedAt(sub.AssignedAt).
 		SetNotes(sub.Notes)
@@ -378,6 +380,7 @@ func (r *userSubscriptionRepository) ResetUsageForQuotaCycle(ctx context.Context
 		SetDailyUsageUsd(0).
 		SetWeeklyUsageUsd(0).
 		SetMonthlyUsageUsd(0).
+		SetModelUsage(map[string]service.SubscriptionModelUsage{}).
 		SetDailyWindowStart(windowStart).
 		SetWeeklyWindowStart(windowStart).
 		SetMonthlyWindowStart(windowStart).
@@ -400,63 +403,75 @@ func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int
 
 func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	update := client.UserSubscription.UpdateOneID(id)
-	if resetDaily {
-		update.SetDailyUsageUsd(0).SetDailyWindowStart(newWindowStart)
+	const query = `
+		UPDATE user_subscriptions
+		SET
+			daily_usage_usd = CASE WHEN $2 THEN 0 ELSE daily_usage_usd END,
+			weekly_usage_usd = CASE WHEN $3 THEN 0 ELSE weekly_usage_usd END,
+			monthly_usage_usd = CASE WHEN $4 THEN 0 ELSE monthly_usage_usd END,
+			daily_window_start = CASE WHEN $2 THEN $5 ELSE daily_window_start END,
+			weekly_window_start = CASE WHEN $3 THEN $5 ELSE weekly_window_start END,
+			monthly_window_start = CASE WHEN $4 THEN $5 ELSE monthly_window_start END,
+			model_usage = COALESCE((
+				SELECT jsonb_object_agg(entry.key, entry.value || jsonb_build_object(
+					'daily_usage_usd', CASE WHEN $2 THEN 0 ELSE COALESCE((entry.value->>'daily_usage_usd')::numeric, 0) END,
+					'weekly_usage_usd', CASE WHEN $3 THEN 0 ELSE COALESCE((entry.value->>'weekly_usage_usd')::numeric, 0) END,
+					'monthly_usage_usd', CASE WHEN $4 THEN 0 ELSE COALESCE((entry.value->>'monthly_usage_usd')::numeric, 0) END
+				)) FROM jsonb_each(COALESCE(user_subscriptions.model_usage, '{}'::jsonb)) AS entry
+			), '{}'::jsonb),
+			updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	result, err := client.ExecContext(ctx, query, id, resetDaily, resetWeekly, resetMonthly, newWindowStart)
+	if err != nil {
+		return err
 	}
-	if resetWeekly {
-		update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if resetMonthly {
-		update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
+	if affected == 0 {
+		return service.ErrSubscriptionNotFound
 	}
-	_, err := update.Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return nil
 }
 
 func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.DailyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.DailyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetDailyUsageUsd(0).
-		SetDailyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.resetUsageWindow(ctx, id, expectedWindowStart, newWindowStart, "daily")
 }
 
 func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.WeeklyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.WeeklyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetWeeklyUsageUsd(0).
-		SetWeeklyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.resetUsageWindow(ctx, id, expectedWindowStart, newWindowStart, "weekly")
 }
 
 func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.MonthlyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.MonthlyWindowStartEQ(*expectedWindowStart))
+	return r.resetUsageWindow(ctx, id, expectedWindowStart, newWindowStart, "monthly")
+}
+
+func (r *userSubscriptionRepository) resetUsageWindow(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time, dimension string) error {
+	usageColumn := dimension + "_usage_usd"
+	windowColumn := dimension + "_window_start"
+	modelField := dimension + "_usage_usd"
+	condition := windowColumn + " IS NULL"
+	args := []any{id, newWindowStart}
+	if expectedWindowStart != nil {
+		condition = windowColumn + " = $3"
+		args = append(args, *expectedWindowStart)
 	}
-	n, err := query.
-		SetMonthlyUsageUsd(0).
-		SetMonthlyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	query := `UPDATE user_subscriptions SET ` + usageColumn + ` = 0, ` + windowColumn + ` = $2,
+		model_usage = COALESCE((SELECT jsonb_object_agg(entry.key, entry.value || jsonb_build_object('` + modelField + `', 0))
+			FROM jsonb_each(COALESCE(user_subscriptions.model_usage, '{}'::jsonb)) AS entry), '{}'::jsonb),
+		updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL AND ` + condition
+	client := clientFromContext(ctx, r.client)
+	result, err := client.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	return r.translateConditionalWindowReset(ctx, client, id, int(affected), nil)
 }
 
 func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context.Context, client *dbent.Client, id int64, affected int, err error) error {
@@ -480,60 +495,46 @@ func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context
 }
 
 func (r *userSubscriptionRepository) ResetDailyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
-	threshold := time.Now().Add(-24 * time.Hour)
-	client := clientFromContext(ctx, r.client)
-	affected, err := client.UserSubscription.Update().
-		Where(
-			usersubscription.ID(id),
-			usersubscription.Or(
-				usersubscription.DailyWindowStartIsNil(),
-				usersubscription.DailyWindowStartLTE(threshold),
-			),
-		).
-		SetDailyUsageUsd(0).
-		SetDailyWindowStart(newWindowStart).
-		Save(ctx)
-	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.resetUsageWindowIfExpired(ctx, id, newWindowStart, "daily", 24*time.Hour)
 }
 
 func (r *userSubscriptionRepository) ResetWeeklyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
-	threshold := time.Now().Add(-7 * 24 * time.Hour)
-	client := clientFromContext(ctx, r.client)
-	affected, err := client.UserSubscription.Update().
-		Where(
-			usersubscription.ID(id),
-			usersubscription.Or(
-				usersubscription.WeeklyWindowStartIsNil(),
-				usersubscription.WeeklyWindowStartLTE(threshold),
-			),
-		).
-		SetWeeklyUsageUsd(0).
-		SetWeeklyWindowStart(newWindowStart).
-		Save(ctx)
-	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.resetUsageWindowIfExpired(ctx, id, newWindowStart, "weekly", 7*24*time.Hour)
 }
 
 func (r *userSubscriptionRepository) ResetMonthlyUsageIfExpired(ctx context.Context, id int64, newWindowStart time.Time) (bool, error) {
-	threshold := time.Now().Add(-30 * 24 * time.Hour)
+	return r.resetUsageWindowIfExpired(ctx, id, newWindowStart, "monthly", 30*24*time.Hour)
+}
+
+func (r *userSubscriptionRepository) resetUsageWindowIfExpired(ctx context.Context, id int64, newWindowStart time.Time, dimension string, window time.Duration) (bool, error) {
+	usageColumn := dimension + "_usage_usd"
+	windowColumn := dimension + "_window_start"
+	modelField := dimension + "_usage_usd"
+	query := `UPDATE user_subscriptions SET ` + usageColumn + ` = 0, ` + windowColumn + ` = $2,
+		model_usage = COALESCE((SELECT jsonb_object_agg(entry.key, entry.value || jsonb_build_object('` + modelField + `', 0))
+			FROM jsonb_each(COALESCE(user_subscriptions.model_usage, '{}'::jsonb)) AS entry), '{}'::jsonb),
+		updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL AND (` + windowColumn + ` IS NULL OR ` + windowColumn + ` <= $3)`
 	client := clientFromContext(ctx, r.client)
-	affected, err := client.UserSubscription.Update().
-		Where(
-			usersubscription.ID(id),
-			usersubscription.Or(
-				usersubscription.MonthlyWindowStartIsNil(),
-				usersubscription.MonthlyWindowStartLTE(threshold),
-			),
-		).
-		SetMonthlyUsageUsd(0).
-		SetMonthlyWindowStart(newWindowStart).
-		Save(ctx)
-	return affected > 0, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	result, err := client.ExecContext(ctx, query, id, newWindowStart, time.Now().Add(-window))
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
 }
 
 // IncrementUsage 原子性地累加订阅用量。
 // 限额检查已在请求前由 BillingCacheService.CheckBillingEligibility 完成，
 // 此处仅负责记录实际消费，确保消费数据的完整性。
 func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int64, costUSD float64) error {
+	return r.incrementUsage(ctx, id, costUSD, "")
+}
+
+func (r *userSubscriptionRepository) IncrementUsageForModel(ctx context.Context, id int64, costUSD float64, model string) error {
+	return r.incrementUsage(ctx, id, costUSD, normalizeSubscriptionModelForStorage(model))
+}
+
+func (r *userSubscriptionRepository) incrementUsage(ctx context.Context, id int64, costUSD float64, model string) error {
 	const updateSQL = `
 		WITH current_subscription AS (
 			SELECT
@@ -589,6 +590,19 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 				WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
 				ELSE us.monthly_usage_usd + $1
 			END,
+			model_usage = CASE WHEN $3 = '' THEN COALESCE(us.model_usage, '{}'::jsonb) ELSE
+				jsonb_set(COALESCE(us.model_usage, '{}'::jsonb), ARRAY[$3], jsonb_build_object(
+					'daily_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'daily_usage_usd')::numeric, 0) + $1 END,
+					'weekly_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'weekly_usage_usd')::numeric, 0) + $1 END,
+					'monthly_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'monthly_usage_usd')::numeric, 0) + $1 END
+				), true)
+			END,
 			daily_window_start = CASE
 				WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN DATE_TRUNC('day', NOW())
 				ELSE us.daily_window_start
@@ -619,7 +633,7 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 	`
 
 	client := clientFromContext(ctx, r.client)
-	result, err := client.ExecContext(ctx, updateSQL, costUSD, id)
+	result, err := client.ExecContext(ctx, updateSQL, costUSD, id, model)
 	if err != nil {
 		return err
 	}
@@ -635,6 +649,14 @@ func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int6
 
 	// affected == 0：订阅不存在或已删除
 	return service.ErrSubscriptionNotFound
+}
+
+func normalizeSubscriptionModelForStorage(model string) string {
+	model = service.NormalizeSubscriptionQuotaModel(model)
+	if model == "" || len(model) > 128 {
+		return ""
+	}
+	return model
 }
 
 func (r *userSubscriptionRepository) BatchUpdateExpiredStatus(ctx context.Context) (int64, error) {
@@ -791,6 +813,7 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		DailyUsageUSD:      m.DailyUsageUsd,
 		WeeklyUsageUSD:     m.WeeklyUsageUsd,
 		MonthlyUsageUSD:    m.MonthlyUsageUsd,
+		ModelUsage:         m.ModelUsage,
 		AssignedBy:         m.AssignedBy,
 		AssignedAt:         m.AssignedAt,
 		Notes:              derefString(m.Notes),
@@ -840,4 +863,11 @@ func normalizeQuotaCycleDays(days int) int {
 		return service.MaxValidityDays
 	}
 	return days
+}
+
+func nonNilSubscriptionModelUsage(usage map[string]service.SubscriptionModelUsage) map[string]service.SubscriptionModelUsage {
+	if usage == nil {
+		return map[string]service.SubscriptionModelUsage{}
+	}
+	return usage
 }

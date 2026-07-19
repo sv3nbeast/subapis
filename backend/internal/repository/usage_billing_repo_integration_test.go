@@ -114,12 +114,13 @@ func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.
 
 	requestID := uuid.NewString()
 	cmd := &service.UsageBillingCommand{
-		RequestID:        requestID,
-		APIKeyID:         apiKey.ID,
-		UserID:           user.ID,
-		AccountID:        0,
-		SubscriptionID:   &subscription.ID,
-		SubscriptionCost: 2.5,
+		RequestID:         requestID,
+		APIKeyID:          apiKey.ID,
+		UserID:            user.ID,
+		AccountID:         0,
+		SubscriptionID:    &subscription.ID,
+		SubscriptionCost:  2.5,
+		SubscriptionModel: "claude-fable-5",
 	}
 
 	result1, err := repo.Apply(ctx, cmd)
@@ -130,9 +131,15 @@ func TestUsageBillingRepositoryApply_DeduplicatesSubscriptionBilling(t *testing.
 	require.NoError(t, err)
 	require.False(t, result2.Applied)
 
-	var dailyUsage float64
-	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT daily_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&dailyUsage))
+	var dailyUsage, modelDailyUsage float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT daily_usage_usd,
+		       COALESCE((model_usage->'claude-fable-5'->>'daily_usage_usd')::double precision, 0)
+		FROM user_subscriptions
+		WHERE id = $1
+	`, subscription.ID).Scan(&dailyUsage, &modelDailyUsage))
 	require.InDelta(t, 2.5, dailyUsage, 0.000001)
+	require.InDelta(t, 2.5, modelDailyUsage, 0.000001)
 }
 
 func TestUsageBillingRepositoryApply_ResetsExpiredSubscriptionWindowsToCurrentCost(t *testing.T) {
@@ -167,6 +174,9 @@ func TestUsageBillingRepositoryApply_ResetsExpiredSubscriptionWindowsToCurrentCo
 		DailyUsageUSD:      10,
 		WeeklyUsageUSD:     20,
 		MonthlyUsageUSD:    30,
+		ModelUsage: map[string]service.SubscriptionModelUsage{
+			"claude-fable-5": {DailyUsageUSD: 5, WeeklyUsageUSD: 6, MonthlyUsageUSD: 7},
+		},
 	})
 	t.Cleanup(func() {
 		_, _ = integrationDB.ExecContext(context.Background(), "DELETE FROM usage_billing_dedup WHERE api_key_id = $1", apiKey.ID)
@@ -177,12 +187,13 @@ func TestUsageBillingRepositoryApply_ResetsExpiredSubscriptionWindowsToCurrentCo
 	})
 
 	cmd := &service.UsageBillingCommand{
-		RequestID:        uuid.NewString(),
-		APIKeyID:         apiKey.ID,
-		UserID:           user.ID,
-		AccountID:        0,
-		SubscriptionID:   &subscription.ID,
-		SubscriptionCost: 2.5,
+		RequestID:         uuid.NewString(),
+		APIKeyID:          apiKey.ID,
+		UserID:            user.ID,
+		AccountID:         0,
+		SubscriptionID:    &subscription.ID,
+		SubscriptionCost:  2.5,
+		SubscriptionModel: "claude-fable-5",
 	}
 
 	result, err := repo.Apply(ctx, cmd)
@@ -190,14 +201,24 @@ func TestUsageBillingRepositoryApply_ResetsExpiredSubscriptionWindowsToCurrentCo
 	require.True(t, result.Applied)
 
 	var dailyUsage, weeklyUsage, monthlyUsage float64
+	var modelDailyUsage, modelWeeklyUsage, modelMonthlyUsage float64
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT daily_usage_usd, weekly_usage_usd, monthly_usage_usd
+		SELECT daily_usage_usd, weekly_usage_usd, monthly_usage_usd,
+		       COALESCE((model_usage->'claude-fable-5'->>'daily_usage_usd')::double precision, 0),
+		       COALESCE((model_usage->'claude-fable-5'->>'weekly_usage_usd')::double precision, 0),
+		       COALESCE((model_usage->'claude-fable-5'->>'monthly_usage_usd')::double precision, 0)
 		FROM user_subscriptions
 		WHERE id = $1
-	`, subscription.ID).Scan(&dailyUsage, &weeklyUsage, &monthlyUsage))
+	`, subscription.ID).Scan(
+		&dailyUsage, &weeklyUsage, &monthlyUsage,
+		&modelDailyUsage, &modelWeeklyUsage, &modelMonthlyUsage,
+	))
 	require.InDelta(t, 2.5, dailyUsage, 0.000001)
 	require.InDelta(t, 2.5, weeklyUsage, 0.000001)
 	require.InDelta(t, 2.5, monthlyUsage, 0.000001)
+	require.InDelta(t, 2.5, modelDailyUsage, 0.000001)
+	require.InDelta(t, 2.5, modelWeeklyUsage, 0.000001)
+	require.InDelta(t, 2.5, modelMonthlyUsage, 0.000001)
 }
 
 func TestUsageBillingRepositoryApply_RequestFingerprintConflict(t *testing.T) {

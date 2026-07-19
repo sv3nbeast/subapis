@@ -11088,6 +11088,22 @@ type postUsageBillingParams struct {
 	AccountRateMultiplier float64
 	APIKeyService         APIKeyQuotaUpdater
 	Platform              string
+	RequestedModel        string
+}
+
+type subscriptionModelUsageRecorder interface {
+	IncrementUsageForModel(ctx context.Context, id int64, costUSD float64, model string) error
+}
+
+func (p *postUsageBillingParams) subscriptionQuotaModel() string {
+	if p == nil || p.APIKey == nil || p.APIKey.Group == nil {
+		return ""
+	}
+	model, _, ok := MatchSubscriptionModelQuota(p.APIKey.Group.ModelQuotaRatios, p.RequestedModel)
+	if !ok {
+		return ""
+	}
+	return model
 }
 
 // PlatformFromAPIKey derives the quota platform from the API key's group.
@@ -11133,10 +11149,16 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	// 1. 订阅 / 余额扣费
 	if p.IsSubscriptionBill {
 		if cost.ActualCost > 0 {
-			if err := deps.userSubRepo.IncrementUsage(billingCtx, p.Subscription.ID, cost.ActualCost); err != nil {
+			var err error
+			model := p.subscriptionQuotaModel()
+			if recorder, ok := deps.userSubRepo.(subscriptionModelUsageRecorder); ok && model != "" {
+				err = recorder.IncrementUsageForModel(billingCtx, p.Subscription.ID, cost.ActualCost, model)
+			} else {
+				err = deps.userSubRepo.IncrementUsage(billingCtx, p.Subscription.ID, cost.ActualCost)
+			}
+			if err != nil {
 				slog.Error("increment subscription usage failed", "subscription_id", p.Subscription.ID, "error", err)
 			}
-			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, cost.ActualCost)
 		}
 	} else {
 		if cost.ActualCost > 0 {
@@ -11241,6 +11263,9 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 	if usageLog != nil {
 		cmd.Model = usageLog.Model
+		if p.RequestedModel == "" {
+			p.RequestedModel = usageLog.RequestedModel
+		}
 		cmd.BillingType = usageLog.BillingType
 		cmd.InputTokens = usageLog.InputTokens
 		cmd.OutputTokens = usageLog.OutputTokens
@@ -11261,6 +11286,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.ActualCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionCost = p.Cost.ActualCost
+		cmd.SubscriptionModel = p.subscriptionQuotaModel()
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
 	}
@@ -11320,7 +11346,13 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 
 	if p.IsSubscriptionBill {
 		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
-			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
+			model := p.subscriptionQuotaModel()
+			if model == "" {
+				deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
+			} else if err := deps.billingCacheService.UpdateSubscriptionUsageForModel(ctx, p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost, model); err != nil {
+				slog.Error("update subscription model usage cache failed", "user_id", p.User.ID, "group_id", *p.APIKey.GroupID, "model", model, "error", err)
+				_ = deps.billingCacheService.InvalidateSubscription(ctx, p.User.ID, *p.APIKey.GroupID)
+			}
 		}
 	} else if p.Cost.ActualCost > 0 && p.User != nil {
 		syncBalanceCacheAfterDeduction(ctx, p, deps, result)
@@ -11765,6 +11797,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		AccountRateMultiplier: accountRateMultiplier,
 		APIKeyService:         input.APIKeyService,
 		Platform:              quotaPlatform,
+		RequestedModel:        requestedModel,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {

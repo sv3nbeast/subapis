@@ -95,10 +95,11 @@ type Group struct {
 	IsExclusive    bool    `json:"is_exclusive"`
 	Status         string  `json:"status"`
 
-	SubscriptionType string   `json:"subscription_type"`
-	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD   *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
+	SubscriptionType string             `json:"subscription_type"`
+	DailyLimitUSD    *float64           `json:"daily_limit_usd"`
+	WeeklyLimitUSD   *float64           `json:"weekly_limit_usd"`
+	MonthlyLimitUSD  *float64           `json:"monthly_limit_usd"`
+	ModelQuotaRatios map[string]float64 `json:"model_quota_ratios"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
 	AllowImageGeneration         bool    `json:"allow_image_generation"`
@@ -621,9 +622,10 @@ type UserSubscription struct {
 	QuotaCycleEndAt    *time.Time `json:"quota_cycle_end_at"`
 	QuotaCycleDays     int        `json:"quota_cycle_days"`
 
-	DailyUsageUSD   float64 `json:"daily_usage_usd"`
-	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
-	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
+	DailyUsageUSD   float64                                  `json:"daily_usage_usd"`
+	WeeklyUsageUSD  float64                                  `json:"weekly_usage_usd"`
+	MonthlyUsageUSD float64                                  `json:"monthly_usage_usd"`
+	ModelUsage      map[string]domain.SubscriptionModelUsage `json:"model_usage"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`

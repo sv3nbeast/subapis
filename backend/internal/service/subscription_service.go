@@ -879,22 +879,26 @@ func normalizeExpiredWindows(subs []UserSubscription) {
 			sub.DailyUsageUSD = 0
 			sub.WeeklyUsageUSD = 0
 			sub.MonthlyUsageUSD = 0
+			sub.resetModelUsage(true, true, true)
 			continue
 		}
 		// 日窗口过期：清零展示数据
 		if sub.NeedsDailyReset() {
 			sub.DailyWindowStart = nil
 			sub.DailyUsageUSD = 0
+			sub.resetModelUsage(true, false, false)
 		}
 		// 周窗口过期：清零展示数据
 		if sub.NeedsWeeklyReset() {
 			sub.WeeklyWindowStart = nil
 			sub.WeeklyUsageUSD = 0
+			sub.resetModelUsage(false, true, false)
 		}
 		// 月窗口过期：清零展示数据
 		if sub.NeedsMonthlyReset() {
 			sub.MonthlyWindowStart = nil
 			sub.MonthlyUsageUSD = 0
+			sub.resetModelUsage(false, false, true)
 		}
 	}
 }
@@ -979,6 +983,7 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		sub.DailyUsageUSD = 0
 		sub.WeeklyUsageUSD = 0
 		sub.MonthlyUsageUSD = 0
+		sub.resetModelUsage(true, true, true)
 		needsInvalidateCache = true
 	}
 
@@ -990,6 +995,7 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		}
 		sub.DailyWindowStart = &windowStart
 		sub.DailyUsageUSD = 0
+		sub.resetModelUsage(true, false, false)
 		needsInvalidateCache = true
 	}
 
@@ -1001,6 +1007,7 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		}
 		sub.WeeklyWindowStart = &windowStart
 		sub.WeeklyUsageUSD = 0
+		sub.resetModelUsage(false, true, false)
 		needsInvalidateCache = true
 	}
 
@@ -1012,6 +1019,7 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 		}
 		sub.MonthlyWindowStart = &windowStart
 		sub.MonthlyUsageUSD = 0
+		sub.resetModelUsage(false, false, true)
 		needsInvalidateCache = true
 	}
 
@@ -1062,18 +1070,22 @@ func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, grou
 		sub.DailyUsageUSD = 0
 		sub.WeeklyUsageUSD = 0
 		sub.MonthlyUsageUSD = 0
+		sub.resetModelUsage(true, true, true)
 		needsMaintenance = true
 	} else {
 		if sub.NeedsDailyReset() {
 			sub.DailyUsageUSD = 0
+			sub.resetModelUsage(true, false, false)
 			needsMaintenance = true
 		}
 		if sub.NeedsWeeklyReset() {
 			sub.WeeklyUsageUSD = 0
+			sub.resetModelUsage(false, true, false)
 			needsMaintenance = true
 		}
 		if sub.NeedsMonthlyReset() {
 			sub.MonthlyUsageUSD = 0
+			sub.resetModelUsage(false, false, true)
 			needsMaintenance = true
 		}
 	}

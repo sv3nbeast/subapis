@@ -219,6 +219,26 @@
               </p>
             </div>
 
+            <div
+              v-for="entry in getModelQuotaEntries(subscription)"
+              :key="entry.model"
+              class="space-y-2 border-t border-gray-100 pt-3 dark:border-dark-700"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <span class="truncate text-sm font-medium text-gray-700 dark:text-gray-300">{{ entry.model }}</span>
+                <span class="shrink-0 text-xs text-gray-500 dark:text-dark-400">{{ entry.percent }}%</span>
+              </div>
+              <div v-for="window in entry.windows" :key="window.label" class="space-y-1">
+                <div class="flex items-center justify-between gap-3 text-xs">
+                  <span class="text-gray-500 dark:text-dark-400">{{ window.label }}</span>
+                  <span class="shrink-0 text-gray-500 dark:text-dark-400">${{ window.used.toFixed(2) }} / ${{ window.limit.toFixed(2) }}</span>
+                </div>
+                <div class="relative h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600">
+                  <div class="absolute inset-y-0 left-0 rounded-full transition-all duration-300" :class="getProgressBarClass(window.used, window.limit)" :style="{ width: getProgressWidth(window.used, window.limit) }"></div>
+                </div>
+              </div>
+            </div>
+
             <!-- No limits configured - Unlimited badge -->
             <div
               v-if="
@@ -311,6 +331,24 @@ function getProgressBarClass(used: number | undefined, limit: number | null | un
   if (percentage >= 90) return 'bg-red-500'
   if (percentage >= 70) return 'bg-orange-500'
   return 'bg-green-500'
+}
+
+function getModelQuotaEntries(subscription: UserSubscription) {
+  const group = subscription.group
+  if (!group) return []
+  return Object.entries(group.model_quota_ratios || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([model, ratio]) => {
+      const usage = subscription.model_usage?.[model]
+      const windows = [
+        { label: t('userSubscriptions.daily'), limit: group.daily_limit_usd, used: usage?.daily_usage_usd || 0 },
+        { label: t('userSubscriptions.weekly'), limit: group.weekly_limit_usd, used: usage?.weekly_usage_usd || 0 },
+        { label: t('userSubscriptions.monthly'), limit: group.monthly_limit_usd, used: usage?.monthly_usage_usd || 0 },
+      ].filter((window): window is { label: string; limit: number; used: number } => window.limit != null && window.limit > 0)
+        .map(window => ({ ...window, limit: window.limit * ratio }))
+      return { model, percent: Number((ratio * 100).toFixed(2)), windows }
+    })
+    .filter(entry => entry.windows.length > 0)
 }
 
 function formatExpirationDate(expiresAt: string): string {

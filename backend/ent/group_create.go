@@ -259,6 +259,12 @@ func (_c *GroupCreate) SetNillableMonthlyLimitUsd(v *float64) *GroupCreate {
 	return _c
 }
 
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (_c *GroupCreate) SetModelQuotaRatios(v map[string]float64) *GroupCreate {
+	_c.mutation.SetModelQuotaRatios(v)
+	return _c
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_c *GroupCreate) SetDefaultValidityDays(v int) *GroupCreate {
 	_c.mutation.SetDefaultValidityDays(v)
@@ -952,6 +958,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultSubscriptionType
 		_c.mutation.SetSubscriptionType(v)
 	}
+	if _, ok := _c.mutation.ModelQuotaRatios(); !ok {
+		v := group.DefaultModelQuotaRatios
+		_c.mutation.SetModelQuotaRatios(v)
+	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		v := group.DefaultDefaultValidityDays
 		_c.mutation.SetDefaultValidityDays(v)
@@ -1138,6 +1148,9 @@ func (_c *GroupCreate) check() error {
 		if err := group.SubscriptionTypeValidator(v); err != nil {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.ModelQuotaRatios(); !ok {
+		return &ValidationError{Name: "model_quota_ratios", err: errors.New(`ent: missing required field "Group.model_quota_ratios"`)}
 	}
 	if _, ok := _c.mutation.DefaultValidityDays(); !ok {
 		return &ValidationError{Name: "default_validity_days", err: errors.New(`ent: missing required field "Group.default_validity_days"`)}
@@ -1335,6 +1348,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.MonthlyLimitUsd(); ok {
 		_spec.SetField(group.FieldMonthlyLimitUsd, field.TypeFloat64, value)
 		_node.MonthlyLimitUsd = &value
+	}
+	if value, ok := _c.mutation.ModelQuotaRatios(); ok {
+		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
+		_node.ModelQuotaRatios = value
 	}
 	if value, ok := _c.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
@@ -1893,6 +1910,18 @@ func (u *GroupUpsert) AddMonthlyLimitUsd(v float64) *GroupUpsert {
 // ClearMonthlyLimitUsd clears the value of the "monthly_limit_usd" field.
 func (u *GroupUpsert) ClearMonthlyLimitUsd() *GroupUpsert {
 	u.SetNull(group.FieldMonthlyLimitUsd)
+	return u
+}
+
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (u *GroupUpsert) SetModelQuotaRatios(v map[string]float64) *GroupUpsert {
+	u.Set(group.FieldModelQuotaRatios, v)
+	return u
+}
+
+// UpdateModelQuotaRatios sets the "model_quota_ratios" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateModelQuotaRatios() *GroupUpsert {
+	u.SetExcluded(group.FieldModelQuotaRatios)
 	return u
 }
 
@@ -2850,6 +2879,20 @@ func (u *GroupUpsertOne) UpdateMonthlyLimitUsd() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearMonthlyLimitUsd() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearMonthlyLimitUsd()
+	})
+}
+
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (u *GroupUpsertOne) SetModelQuotaRatios(v map[string]float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetModelQuotaRatios(v)
+	})
+}
+
+// UpdateModelQuotaRatios sets the "model_quota_ratios" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateModelQuotaRatios() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateModelQuotaRatios()
 	})
 }
 
@@ -4076,6 +4119,20 @@ func (u *GroupUpsertBulk) UpdateMonthlyLimitUsd() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearMonthlyLimitUsd() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearMonthlyLimitUsd()
+	})
+}
+
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (u *GroupUpsertBulk) SetModelQuotaRatios(v map[string]float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetModelQuotaRatios(v)
+	})
+}
+
+// UpdateModelQuotaRatios sets the "model_quota_ratios" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateModelQuotaRatios() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateModelQuotaRatios()
 	})
 }
 

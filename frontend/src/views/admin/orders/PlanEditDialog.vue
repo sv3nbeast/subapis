@@ -30,6 +30,10 @@
           <div><span class="text-gray-500">{{ t('payment.admin.dailyLimit') }}:</span> <span class="ml-1 font-medium text-gray-700 dark:text-gray-300">{{ selectedGroupInfo.daily_limit_usd != null ? '$' + selectedGroupInfo.daily_limit_usd : t('payment.admin.unlimited') }}</span></div>
           <div><span class="text-gray-500">{{ t('payment.admin.weeklyLimit') }}:</span> <span class="ml-1 font-medium text-gray-700 dark:text-gray-300">{{ selectedGroupInfo.weekly_limit_usd != null ? '$' + selectedGroupInfo.weekly_limit_usd : t('payment.admin.unlimited') }}</span></div>
           <div><span class="text-gray-500">{{ t('payment.admin.monthlyLimit') }}:</span> <span class="ml-1 font-medium text-gray-700 dark:text-gray-300">{{ selectedGroupInfo.monthly_limit_usd != null ? '$' + selectedGroupInfo.monthly_limit_usd : t('payment.admin.unlimited') }}</span></div>
+          <div v-for="entry in Object.entries(selectedGroupInfo.model_quota_ratios || {})" :key="entry[0]" class="col-span-2 flex items-center justify-between gap-2">
+            <span class="truncate text-gray-500">{{ entry[0] }}</span>
+            <span class="font-medium text-gray-700 dark:text-gray-300">{{ Number((entry[1] * 100).toFixed(2)) }}%</span>
+          </div>
         </div>
       </div>
 

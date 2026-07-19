@@ -78,6 +78,10 @@ func (UserSubscription) Fields() []ent.Field {
 		field.Float("monthly_usage_usd").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
 			Default(0),
+		field.JSON("model_usage", map[string]domain.SubscriptionModelUsage{}).
+			Default(map[string]domain.SubscriptionModelUsage{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("订阅模型额度用量：规范模型ID -> 日/周/月USD用量"),
 
 		field.Int64("assigned_by").
 			Optional().

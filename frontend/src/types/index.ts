@@ -590,6 +590,12 @@ export type GroupPlatform = KnownGroupPlatform | (string & {})
 
 export type SubscriptionType = 'standard' | 'subscription'
 
+export interface SubscriptionModelUsage {
+  daily_usage_usd: number
+  weekly_usage_usd: number
+  monthly_usage_usd: number
+}
+
 export interface OpenAIMessagesDispatchModelConfig {
   opus_mapped_model?: string
   sonnet_mapped_model?: string
@@ -610,6 +616,7 @@ export interface Group {
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
   monthly_limit_usd: number | null
+  model_quota_ratios: Record<string, number>
   // 图片生成计费配置
   allow_image_generation: boolean
   allow_batch_image_generation: boolean
@@ -752,6 +759,7 @@ export interface CreateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  model_quota_ratios?: Record<string, number>
   allow_image_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
@@ -807,6 +815,7 @@ export interface UpdateGroupRequest {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  model_quota_ratios?: Record<string, number>
   allow_image_generation?: boolean
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
@@ -1853,6 +1862,7 @@ export interface UserSubscription {
   daily_usage_usd: number
   weekly_usage_usd: number
   monthly_usage_usd: number
+  model_usage: Record<string, SubscriptionModelUsage>
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null

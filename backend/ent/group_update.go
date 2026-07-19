@@ -317,6 +317,12 @@ func (_u *GroupUpdate) ClearMonthlyLimitUsd() *GroupUpdate {
 	return _u
 }
 
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (_u *GroupUpdate) SetModelQuotaRatios(v map[string]float64) *GroupUpdate {
+	_u.mutation.SetModelQuotaRatios(v)
+	return _u
+}
+
 // SetDefaultValidityDays sets the "default_validity_days" field.
 func (_u *GroupUpdate) SetDefaultValidityDays(v int) *GroupUpdate {
 	_u.mutation.ResetDefaultValidityDays()
@@ -1422,6 +1428,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(group.FieldMonthlyLimitUsd, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.ModelQuotaRatios(); ok {
+		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
+	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)
 	}
@@ -2214,6 +2223,12 @@ func (_u *GroupUpdateOne) AddMonthlyLimitUsd(v float64) *GroupUpdateOne {
 // ClearMonthlyLimitUsd clears the value of the "monthly_limit_usd" field.
 func (_u *GroupUpdateOne) ClearMonthlyLimitUsd() *GroupUpdateOne {
 	_u.mutation.ClearMonthlyLimitUsd()
+	return _u
+}
+
+// SetModelQuotaRatios sets the "model_quota_ratios" field.
+func (_u *GroupUpdateOne) SetModelQuotaRatios(v map[string]float64) *GroupUpdateOne {
+	_u.mutation.SetModelQuotaRatios(v)
 	return _u
 }
 
@@ -3351,6 +3366,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(group.FieldMonthlyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.ModelQuotaRatios(); ok {
+		_spec.SetField(group.FieldModelQuotaRatios, field.TypeJSON, value)
 	}
 	if value, ok := _u.mutation.DefaultValidityDays(); ok {
 		_spec.SetField(group.FieldDefaultValidityDays, field.TypeInt, value)

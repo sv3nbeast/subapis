@@ -220,6 +220,7 @@ type CreateGroupInput struct {
 	DailyLimitUSD    *float64 // 日限额 (USD)
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	ModelQuotaRatios map[string]float64
 	// 图片生成计费配置（antigravity/gemini 平台使用）
 	AllowImageGeneration         bool
 	AllowBatchImageGeneration    bool
@@ -283,6 +284,7 @@ type UpdateGroupInput struct {
 	DailyLimitUSD    *float64 // 日限额 (USD)
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
+	ModelQuotaRatios map[string]float64
 	// 图片生成计费配置（antigravity/gemini 平台使用）
 	AllowImageGeneration         *bool
 	AllowBatchImageGeneration    *bool
@@ -828,7 +830,6 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if err != nil {
 		return nil, err
 	}
-
 	// Protect admin users: cannot disable admin accounts
 	if user.Role == "admin" && input.Status == "disabled" {
 		return nil, errors.New("cannot disable admin user")
@@ -2072,6 +2073,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	dailyLimit := normalizeLimit(input.DailyLimitUSD)
 	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
 	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
+	modelQuotaRatios, err := NormalizeSubscriptionModelQuotaRatios(subscriptionType, input.ModelQuotaRatios)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateSubscriptionModelQuotaBase(modelQuotaRatios, dailyLimit, weeklyLimit, monthlyLimit); err != nil {
+		return nil, err
+	}
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
@@ -2189,6 +2197,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
+		ModelQuotaRatios:                modelQuotaRatios,
 		AllowImageGeneration:            allowImageGeneration,
 		AllowBatchImageGeneration:       allowBatchImageGeneration,
 		ImageRateIndependent:            input.ImageRateIndependent,
@@ -2384,6 +2393,16 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
 	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
 	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	if input.ModelQuotaRatios != nil {
+		group.ModelQuotaRatios = input.ModelQuotaRatios
+	}
+	group.ModelQuotaRatios, err = NormalizeSubscriptionModelQuotaRatios(group.SubscriptionType, group.ModelQuotaRatios)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateSubscriptionModelQuotaBase(group.ModelQuotaRatios, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD); err != nil {
+		return nil, err
+	}
 	// 图片生成计费配置：负数表示清除（使用默认价格）
 	if input.AllowImageGeneration != nil {
 		group.AllowImageGeneration = *input.AllowImageGeneration

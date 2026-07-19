@@ -56,6 +56,8 @@ const (
 	subFieldWeeklyUsage  = "weekly_usage"
 	subFieldMonthlyUsage = "monthly_usage"
 	subFieldVersion      = "version"
+	subFieldModelPrefix  = "model_usage:"
+	subFieldSchema       = "schema_version"
 )
 
 // billingRateLimitKey generates the Redis key for API key rate limit cache.
@@ -93,7 +95,28 @@ var (
 		redis.call('HINCRBYFLOAT', KEYS[1], 'daily_usage', cost)
 		redis.call('HINCRBYFLOAT', KEYS[1], 'weekly_usage', cost)
 		redis.call('HINCRBYFLOAT', KEYS[1], 'monthly_usage', cost)
+		local model = ARGV[3]
+		if model ~= '' then
+			local prefix = 'model_usage:' .. model .. ':'
+			redis.call('HINCRBYFLOAT', KEYS[1], prefix .. 'daily_usage_usd', cost)
+			redis.call('HINCRBYFLOAT', KEYS[1], prefix .. 'weekly_usage_usd', cost)
+			redis.call('HINCRBYFLOAT', KEYS[1], prefix .. 'monthly_usage_usd', cost)
+		end
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
+		return 1
+	`)
+
+	setSubCacheScript = redis.NewScript(`
+		if redis.call('EXISTS', KEYS[1]) == 1 then
+			if redis.call('HGET', KEYS[1], 'schema_version') == '2' then
+				return 0
+			end
+			redis.call('DEL', KEYS[1])
+		end
+		for i = 2, #ARGV, 2 do
+			redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+		end
+		redis.call('EXPIRE', KEYS[1], ARGV[1])
 		return 1
 	`)
 
@@ -187,6 +210,9 @@ func (c *billingCache) GetSubscriptionCache(ctx context.Context, userID, groupID
 
 func (c *billingCache) parseSubscriptionCache(data map[string]string) (*service.SubscriptionCacheData, error) {
 	result := &service.SubscriptionCacheData{}
+	if data[subFieldSchema] != "2" {
+		return nil, errors.New("invalid cache: unsupported subscription schema")
+	}
 
 	result.Status = data[subFieldStatus]
 	if result.Status == "" {
@@ -216,6 +242,8 @@ func (c *billingCache) parseSubscriptionCache(data map[string]string) (*service.
 		result.Version, _ = strconv.ParseInt(versionStr, 10, 64)
 	}
 
+	result.ModelUsage = parseSubscriptionModelUsageCache(data)
+
 	return result, nil
 }
 
@@ -226,30 +254,76 @@ func (c *billingCache) SetSubscriptionCache(ctx context.Context, userID, groupID
 
 	key := billingSubKey(userID, groupID)
 
-	fields := map[string]any{
-		subFieldStatus:       data.Status,
-		subFieldExpiresAt:    data.ExpiresAt.Unix(),
-		subFieldDailyUsage:   data.DailyUsage,
-		subFieldWeeklyUsage:  data.WeeklyUsage,
-		subFieldMonthlyUsage: data.MonthlyUsage,
-		subFieldVersion:      data.Version,
+	args := []any{
+		int(jitteredTTL().Seconds()),
+		subFieldStatus, data.Status,
+		subFieldExpiresAt, data.ExpiresAt.Unix(),
+		subFieldDailyUsage, data.DailyUsage,
+		subFieldWeeklyUsage, data.WeeklyUsage,
+		subFieldMonthlyUsage, data.MonthlyUsage,
+		subFieldVersion, data.Version,
+		subFieldSchema, 2,
+	}
+	for model, usage := range data.ModelUsage {
+		prefix := subFieldModelPrefix + model + ":"
+		args = append(args,
+			prefix+"daily_usage_usd", usage.DailyUsageUSD,
+			prefix+"weekly_usage_usd", usage.WeeklyUsageUSD,
+			prefix+"monthly_usage_usd", usage.MonthlyUsageUSD,
+		)
 	}
 
-	pipe := c.rdb.Pipeline()
-	pipe.HSet(ctx, key, fields)
-	pipe.Expire(ctx, key, jitteredTTL())
-	_, err := pipe.Exec(ctx)
+	_, err := setSubCacheScript.Run(ctx, c.rdb, []string{key}, args...).Result()
 	return err
 }
 
 func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
+	return c.UpdateSubscriptionUsageForModel(ctx, userID, groupID, cost, "")
+}
+
+func (c *billingCache) UpdateSubscriptionUsageForModel(ctx context.Context, userID, groupID int64, cost float64, model string) error {
 	key := billingSubKey(userID, groupID)
-	_, err := updateSubUsageScript.Run(ctx, c.rdb, []string{key}, cost, int(jitteredTTL().Seconds())).Result()
+	_, err := updateSubUsageScript.Run(ctx, c.rdb, []string{key}, cost, int(jitteredTTL().Seconds()), service.NormalizeSubscriptionQuotaModel(model)).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		log.Printf("Warning: update subscription usage cache failed for user %d group %d: %v", userID, groupID, err)
 		return err
 	}
 	return nil
+}
+
+func parseSubscriptionModelUsageCache(data map[string]string) map[string]service.SubscriptionModelUsage {
+	result := make(map[string]service.SubscriptionModelUsage)
+	for field, raw := range data {
+		if !strings.HasPrefix(field, subFieldModelPrefix) {
+			continue
+		}
+		var dimension string
+		for _, candidate := range []string{"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd"} {
+			if strings.HasSuffix(field, ":"+candidate) {
+				dimension = candidate
+				break
+			}
+		}
+		if dimension == "" {
+			continue
+		}
+		model := strings.TrimSuffix(strings.TrimPrefix(field, subFieldModelPrefix), ":"+dimension)
+		if model == "" {
+			continue
+		}
+		value, _ := strconv.ParseFloat(raw, 64)
+		usage := result[model]
+		switch dimension {
+		case "daily_usage_usd":
+			usage.DailyUsageUSD = value
+		case "weekly_usage_usd":
+			usage.WeeklyUsageUSD = value
+		case "monthly_usage_usd":
+			usage.MonthlyUsageUSD = value
+		}
+		result[model] = usage
+	}
+	return result
 }
 
 func (c *billingCache) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {

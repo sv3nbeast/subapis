@@ -40,6 +40,7 @@ const mountPlanCard = (groupPlatform: string) =>
         validity_days: 30,
         validity_unit: "day",
         supported_model_scopes: ["claude", "gemini_text", "gemini_image"],
+        model_quota_ratios: { "claude-fable-5": 0.5 },
         is_active: true,
       },
     },
@@ -61,5 +62,12 @@ describe("SubscriptionPlanCard", () => {
     expect(text).toContain("Claude");
     expect(text).toContain("Gemini");
     expect(text).toContain("Imagen");
+  });
+
+  it("shows model quota shares", () => {
+    const text = mountPlanCard("anthropic").text();
+
+    expect(text).toContain("claude-fable-5");
+    expect(text).toContain("50%");
   });
 });

@@ -709,6 +709,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
+            <SubscriptionModelQuotaEditor v-model="createForm.model_quota_ratios" />
           </div>
         </div>
 
@@ -2244,6 +2245,7 @@
                 :placeholder="t('admin.groups.subscription.noLimit')"
               />
             </div>
+            <SubscriptionModelQuotaEditor v-model="editForm.model_quota_ratios" />
           </div>
         </div>
 
@@ -3624,6 +3626,7 @@ import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
+import SubscriptionModelQuotaEditor from "@/components/admin/group/SubscriptionModelQuotaEditor.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
@@ -4025,6 +4028,7 @@ const createForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
+  model_quota_ratios: {} as Record<string, number>,
   // 图片生成计费配置
   allow_image_generation: false,
   allow_batch_image_generation: false,
@@ -4333,6 +4337,7 @@ const editForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
+  model_quota_ratios: {} as Record<string, number>,
   // 图片生成计费配置
   allow_image_generation: false,
   allow_batch_image_generation: false,
@@ -4719,6 +4724,7 @@ const closeCreateModal = () => {
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
+  createForm.model_quota_ratios = {};
   createForm.allow_image_generation = false;
   createForm.allow_batch_image_generation = false;
   createForm.image_rate_independent = false;
@@ -4910,6 +4916,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.daily_limit_usd = group.daily_limit_usd;
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
+  editForm.model_quota_ratios = { ...(group.model_quota_ratios || {}) };
   editForm.allow_image_generation = group.allow_image_generation ?? false;
   editForm.allow_batch_image_generation = group.allow_batch_image_generation ?? false;
   editForm.image_rate_independent = group.image_rate_independent ?? false;

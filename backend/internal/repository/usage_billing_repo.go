@@ -173,7 +173,7 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
 	if cmd.SubscriptionCost > 0 && cmd.SubscriptionID != nil {
-		if err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost); err != nil {
+		if err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, cmd.SubscriptionModel); err != nil {
 			return err
 		}
 	}
@@ -212,7 +212,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	return nil
 }
 
-func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64) error {
+func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64, model string) error {
 	const updateSQL = `
 		WITH current_subscription AS (
 			SELECT
@@ -268,6 +268,19 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 				WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
 				ELSE us.monthly_usage_usd + $1
 			END,
+			model_usage = CASE WHEN $3 = '' THEN COALESCE(us.model_usage, '{}'::jsonb) ELSE
+				jsonb_set(COALESCE(us.model_usage, '{}'::jsonb), ARRAY[$3], jsonb_build_object(
+					'daily_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'daily_usage_usd')::numeric, 0) + $1 END,
+					'weekly_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.weekly_window_start IS NULL OR us.weekly_window_start <= NOW() - INTERVAL '7 days' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'weekly_usage_usd')::numeric, 0) + $1 END,
+					'monthly_usage_usd', CASE
+						WHEN ct.quota_cycle_expired OR us.monthly_window_start IS NULL OR us.monthly_window_start <= NOW() - INTERVAL '30 days' THEN $1
+						ELSE COALESCE((us.model_usage->$3->>'monthly_usage_usd')::numeric, 0) + $1 END
+				), true)
+			END,
 			daily_window_start = CASE
 				WHEN ct.quota_cycle_expired OR us.daily_window_start IS NULL OR us.daily_window_start <= NOW() - INTERVAL '24 hours' THEN DATE_TRUNC('day', NOW())
 				ELSE us.daily_window_start
@@ -296,7 +309,7 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 			AND us.group_id = g.id
 			AND g.deleted_at IS NULL
 	`
-	res, err := tx.ExecContext(ctx, updateSQL, costUSD, subscriptionID)
+	res, err := tx.ExecContext(ctx, updateSQL, costUSD, subscriptionID, service.NormalizeSubscriptionQuotaModel(model))
 	if err != nil {
 		return err
 	}
