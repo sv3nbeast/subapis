@@ -22,10 +22,14 @@ import (
 )
 
 type recordingKiroResilienceCooldownStore struct {
-	markSuccessCalls int
-	mark429Calls     int
-	lastRetryAfter   time.Duration
-	states           map[string]*kirocooldown.State
+	markSuccessCalls         int
+	mark429Calls             int
+	markUnresponsiveCalls    int
+	observeUnresponsiveCalls int
+	lastRetryAfter           time.Duration
+	lastObservationScope     string
+	observationResult        *kirocooldown.UnresponsiveObservationResult
+	states                   map[string]*kirocooldown.State
 }
 
 func (s *recordingKiroResilienceCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
@@ -49,6 +53,28 @@ func (s *recordingKiroResilienceCooldownStore) Mark429WithRetryAfter(_ context.C
 		return time.Minute, nil
 	}
 	return retryAfter, nil
+}
+
+func (s *recordingKiroResilienceCooldownStore) MarkUnresponsive(context.Context, string, time.Duration, time.Duration) (time.Duration, error) {
+	s.markUnresponsiveCalls++
+	return 30 * time.Second, nil
+}
+
+func (s *recordingKiroResilienceCooldownStore) ObserveUnresponsive(
+	_ context.Context,
+	_ string,
+	observationScope string,
+	_ time.Duration,
+	_ time.Duration,
+	_ int,
+	_ time.Duration,
+) (*kirocooldown.UnresponsiveObservationResult, error) {
+	s.observeUnresponsiveCalls++
+	s.lastObservationScope = observationScope
+	if s.observationResult != nil {
+		return s.observationResult, nil
+	}
+	return &kirocooldown.UnresponsiveObservationResult{FailureCount: 1}, nil
 }
 
 func (s *recordingKiroResilienceCooldownStore) MarkSuspended(context.Context, string) (time.Duration, error) {
@@ -81,6 +107,10 @@ type blockedKiroMCPHeaderUpstream struct {
 	calls   atomic.Int32
 	release chan struct{}
 	exited  chan struct{}
+}
+
+type canceledKiroHeaderUpstream struct {
+	calls atomic.Int32
 }
 
 type kiroTestErrorReadCloser struct {
@@ -135,6 +165,19 @@ func (u *blockedKiroMCPHeaderUpstream) DoWithTLS(*http.Request, string, int64, i
 	<-u.release
 	close(u.exited)
 	return nil, context.Canceled
+}
+
+func (u *canceledKiroHeaderUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	return nil, errors.New("unexpected Do call")
+}
+
+func (u *canceledKiroHeaderUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.calls.Add(1)
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteRequest != nil {
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
+	}
+	<-req.Context().Done()
+	return nil, context.Cause(req.Context())
 }
 
 func enforcedKiroResilienceTestService() *GatewayService {
@@ -854,6 +897,42 @@ func TestExecuteKiroUpstreamEnforceAllowsOneUnwrittenRetryAcrossEndpointRound(t 
 	require.Len(t, upstream.requests, 4, "three endpoints plus one account-wide unwritten connection retry")
 }
 
+func TestExecuteKiroUpstreamHeaderTimeoutAfterWriteOnlyRecordsSoftFailure(t *testing.T) {
+	upstream := &canceledKiroHeaderUpstream{}
+	store := &recordingKiroResilienceCooldownStore{}
+	svc := enforcedKiroResilienceTestService()
+	svc.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds = 1
+	svc.cfg.Gateway.KiroResilience.CleanupGraceSeconds = 1
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = store
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+	account := &Account{
+		ID: 944, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"api_region": "us-east-1", "refresh_token": "header-timeout-after-write"},
+	}
+	groupID := int64(84)
+	parsed := &ParsedRequest{GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}}
+	payload, err := createTestPayload("claude-sonnet-4-6")
+	require.NoError(t, err)
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	ctx, err := svc.StartKiroResilienceBudget(context.Background(), &groupID)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(ctx, account, parsed, body, "claude-sonnet-4-6", "claude-sonnet-4-6", "token", nil)
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
+	require.True(t, failoverErr.FailoverProhibited, "a written request must never be replayed")
+	require.Equal(t, int32(1), upstream.calls.Load())
+	require.Equal(t, 1, store.observeUnresponsiveCalls)
+	require.Zero(t, store.markUnresponsiveCalls, "the first ambiguous timeout must not open the credential circuit")
+	require.Contains(t, store.lastObservationScope, "response_header")
+	require.Contains(t, store.lastObservationScope, "KiroIDE")
+	require.Nil(t, account.RateLimitResetAt)
+}
+
 func TestExecuteKiroUpstreamEnforceMixed429AndTransportReturns503(t *testing.T) {
 	store := &recordingKiroResilienceCooldownStore{}
 	upstream := &kiroScriptedUpstream{outcomes: []kiroScriptedUpstreamOutcome{
@@ -957,7 +1036,8 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	svc.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds = 1
 	svc.cfg.Gateway.KiroResilience.CleanupGraceSeconds = 1
 	svc.httpUpstream = upstream
-	svc.kiroCooldownStore = &recordingKiroResilienceCooldownStore{}
+	store := &recordingKiroResilienceCooldownStore{}
+	svc.kiroCooldownStore = store
 	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
 	account := &Account{
 		ID: 951, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
@@ -975,6 +1055,9 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	require.True(t, failoverErr.FailoverProhibited, "a still-running request must not be replayed on another account")
 	require.NotNil(t, failoverErr.UpstreamDone)
 	require.Equal(t, int32(1), upstream.calls.Load(), "a still-running transport must block the one allowed connection retry")
+	require.Equal(t, 1, store.observeUnresponsiveCalls)
+	require.Zero(t, store.markUnresponsiveCalls, "an ambiguous response-header timeout must not immediately open the credential circuit")
+	require.Nil(t, account.RateLimitResetAt)
 
 	close(upstream.release)
 	select {
@@ -986,18 +1069,134 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 
 func TestNewKiroTimeoutFailoverProhibitsReplay(t *testing.T) {
 	svc := enforcedKiroResilienceTestService()
-	svc.kiroCooldownStore = &recordingKiroResilienceCooldownStore{}
+	store := &recordingKiroResilienceCooldownStore{}
+	svc.kiroCooldownStore = store
 	groupID := int64(92)
 	account := &Account{
 		ID: 952, Platform: PlatformKiro, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"refresh_token": "first-semantic-timeout"},
 	}
 
-	failoverErr := svc.newKiroTimeoutFailover(context.Background(), account, &groupID, errKiroFirstSemanticTimeout)
+	failoverErr := svc.newKiroTimeoutFailover(context.Background(), account, &groupID, errKiroFirstSemanticTimeout, "claude-sonnet-4-6", true)
 
 	require.NotNil(t, failoverErr)
 	require.Equal(t, UpstreamFailureFirstSemanticTimeout, failoverErr.FailureKind)
 	require.True(t, failoverErr.FailoverProhibited, "a request awaiting semantic output has already reached upstream")
+	require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
+	require.Equal(t, 1, store.observeUnresponsiveCalls)
+	require.Zero(t, store.markUnresponsiveCalls)
+	require.Contains(t, store.lastObservationScope, "claude-sonnet-4-6")
+	require.Nil(t, account.RateLimitResetAt, "the first model-scoped timeout must not block the whole credential")
+}
+
+func TestNewKiroTimeoutFailoverBeforeUpstreamDoesNotPenalizeCredential(t *testing.T) {
+	tests := []struct {
+		name               string
+		cause              error
+		failoverProhibited bool
+	}{
+		{name: "account attempt timeout can switch", cause: errKiroFirstSemanticTimeout},
+		{name: "exhausted total budget stops switching", cause: errKiroFailoverBudgetExceeded, failoverProhibited: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := enforcedKiroResilienceTestService()
+			store := &recordingKiroResilienceCooldownStore{}
+			svc.kiroCooldownStore = store
+			groupID := int64(92)
+			account := &Account{
+				ID: 956, Platform: PlatformKiro, Type: AccountTypeOAuth,
+				Credentials: map[string]any{"refresh_token": "timeout-before-upstream"},
+			}
+
+			failoverErr := svc.newKiroTimeoutFailover(context.Background(), account, &groupID, tt.cause, "claude-sonnet-4-6", false)
+
+			require.NotNil(t, failoverErr)
+			require.Equal(t, tt.failoverProhibited, failoverErr.FailoverProhibited)
+			require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
+			require.Zero(t, store.observeUnresponsiveCalls)
+			require.Zero(t, store.markUnresponsiveCalls)
+			require.Nil(t, account.RateLimitResetAt)
+		})
+	}
+}
+
+func TestOpenKiroAnthropicStreamResponseExpiredBudgetDoesNotPenalizeSelectedAccount(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	store := &recordingKiroResilienceCooldownStore{}
+	svc.kiroCooldownStore = store
+	account := &Account{
+		ID: 957, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "unused", "refresh_token": "expired-before-upstream"},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	groupID := int64(93)
+	parsed.GroupID = &groupID
+	parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	expiredBudget := &kiroResilienceBudget{duration: -time.Second}
+	ctx := context.WithValue(context.Background(), kiroResilienceBudgetContextKey{}, expiredBudget)
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(ctx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, parsed.Group)
+
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.ErrorIs(t, err, errKiroFailoverBudgetExceeded)
+	require.True(t, failoverErr.FailoverProhibited, "an exhausted request budget must stop further account switches")
+	require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
+	require.Zero(t, store.observeUnresponsiveCalls)
+	require.Zero(t, store.markUnresponsiveCalls)
+	require.Nil(t, account.RateLimitResetAt)
+}
+
+func TestObserveKiroAccountUnresponsiveEscalatesRepeatedScope(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	store := &recordingKiroResilienceCooldownStore{observationResult: &kirocooldown.UnresponsiveObservationResult{
+		Cooldown:     30 * time.Second,
+		FailureCount: 2,
+		Escalated:    true,
+	}}
+	svc.kiroCooldownStore = store
+	groupID := int64(92)
+	account := &Account{
+		ID: 954, Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "repeated-timeout"},
+	}
+
+	retryAfter := svc.observeKiroAccountUnresponsive(
+		context.Background(),
+		account,
+		&groupID,
+		UpstreamFailureResponseHeaderTimeout,
+		"response_header|endpoint:q|proxy:1",
+	)
+
+	require.Equal(t, 30*time.Second, retryAfter)
+	require.Equal(t, 1, store.observeUnresponsiveCalls)
+	require.Zero(t, store.markUnresponsiveCalls)
+	require.NotNil(t, account.RateLimitResetAt)
+	require.Greater(t, time.Until(*account.RateLimitResetAt), 25*time.Second)
+}
+
+func TestConfirmedKiroUnresponsiveFailureStillOpensCircuitImmediately(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	store := &recordingKiroResilienceCooldownStore{}
+	svc.kiroCooldownStore = store
+	groupID := int64(92)
+	account := &Account{
+		ID: 955, Platform: PlatformKiro, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "confirmed-timeout"},
+	}
+
+	retryAfter := svc.markKiroAccountUnresponsive(context.Background(), account, &groupID, UpstreamFailureResponseHeaderTimeout)
+
+	require.Equal(t, 30*time.Second, retryAfter)
+	require.Equal(t, 1, store.markUnresponsiveCalls)
+	require.Zero(t, store.observeUnresponsiveCalls)
+	require.NotNil(t, account.RateLimitResetAt)
 }
 
 func TestRecordKiroHeaderTimeoutOpsUsesGatewayNetworkSemantics(t *testing.T) {

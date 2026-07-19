@@ -1235,6 +1235,8 @@ type GatewayKiroResilienceConfig struct {
 	CleanupGraceSeconds          int     `mapstructure:"cleanup_grace_seconds"`
 	UnresponsiveCooldownSeconds  int     `mapstructure:"unresponsive_cooldown_seconds"`
 	UnresponsiveCooldownMaxSecs  int     `mapstructure:"unresponsive_cooldown_max_seconds"`
+	UnresponsiveFailureThreshold int     `mapstructure:"unresponsive_failure_threshold"`
+	UnresponsiveFailureWindowSec int     `mapstructure:"unresponsive_failure_window_seconds"`
 }
 
 func (s *ServerConfig) Address() string {
@@ -2024,6 +2026,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.kiro_resilience.cleanup_grace_seconds", 3)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_seconds", 30)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_max_seconds", 120)
+	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_threshold", 2)
+	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_window_seconds", 120)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_kiro_bridge_enabled", false)
@@ -2819,6 +2823,12 @@ func (c *Config) Validate() error {
 		}
 		if kiroResilience.UnresponsiveCooldownSeconds <= 0 || kiroResilience.UnresponsiveCooldownMaxSecs < kiroResilience.UnresponsiveCooldownSeconds {
 			return fmt.Errorf("gateway.kiro_resilience.unresponsive cooldown bounds are invalid")
+		}
+		if kiroResilience.UnresponsiveFailureThreshold < 2 || kiroResilience.UnresponsiveFailureThreshold > 10 {
+			return fmt.Errorf("gateway.kiro_resilience.unresponsive_failure_threshold must be between 2 and 10")
+		}
+		if kiroResilience.UnresponsiveFailureWindowSec <= 0 || kiroResilience.UnresponsiveFailureWindowSec > 3600 {
+			return fmt.Errorf("gateway.kiro_resilience.unresponsive_failure_window_seconds must be between 1 and 3600")
 		}
 	}
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&

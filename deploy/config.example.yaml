@@ -433,6 +433,9 @@ gateway:
     cleanup_grace_seconds: 3
     unresponsive_cooldown_seconds: 30
     unresponsive_cooldown_max_seconds: 120
+    # A single ambiguous timeout is soft evidence; repeated failures in this window open the credential circuit.
+    unresponsive_failure_threshold: 2
+    unresponsive_failure_window_seconds: 120
   # Scheduling configuration
   # 调度配置
   scheduling:

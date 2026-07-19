@@ -78,6 +78,15 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultKiroUnresponsiveFailurePolicy(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 2, cfg.Gateway.KiroResilience.UnresponsiveFailureThreshold)
+	require.Equal(t, 120, cfg.Gateway.KiroResilience.UnresponsiveFailureWindowSec)
+}
+
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

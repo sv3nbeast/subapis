@@ -67,6 +67,98 @@ func TestGetStatesReturnsOnlyActiveCooldowns(t *testing.T) {
 	require.Equal(t, CooldownReasonUnresponsive, states["credential-b"].Reason)
 }
 
+func TestObserveUnresponsiveRequiresRepeatedSameScopeBeforeCooldown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	first, err := store.ObserveUnresponsive(
+		context.Background(),
+		"credential-a",
+		"response_header|endpoint:q|proxy:1",
+		30*time.Second,
+		2*time.Minute,
+		2,
+		2*time.Minute,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.FailureCount)
+	require.Zero(t, first.Cooldown)
+	require.False(t, first.Escalated)
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Nil(t, state, "the first ambiguous timeout must not open the credential circuit")
+
+	second, err := store.ObserveUnresponsive(
+		context.Background(),
+		"credential-a",
+		"response_header|endpoint:q|proxy:1",
+		30*time.Second,
+		2*time.Minute,
+		2,
+		2*time.Minute,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, second.FailureCount)
+	require.Equal(t, 30*time.Second, second.Cooldown)
+	require.True(t, second.Escalated)
+
+	state, err = store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, CooldownReasonUnresponsive, state.Reason)
+	require.Equal(t, 1, state.FailCount, "hard cooldown backoff counts circuit openings, not soft observations")
+}
+
+func TestObserveUnresponsiveScopesAndWindowDoNotCrossContaminate(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	observe := func(scope string) *UnresponsiveObservationResult {
+		result, err := store.ObserveUnresponsive(
+			context.Background(),
+			"credential-a",
+			scope,
+			30*time.Second,
+			2*time.Minute,
+			2,
+			2*time.Minute,
+		)
+		require.NoError(t, err)
+		return result
+	}
+
+	require.Equal(t, 1, observe("endpoint-a").FailureCount)
+	require.Equal(t, 1, observe("endpoint-b").FailureCount)
+	require.Equal(t, 1, observe("endpoint-a").FailureCount, "switching scope resets the soft streak")
+	mr.FastForward(2*time.Minute + time.Second)
+	require.Equal(t, 1, observe("endpoint-a").FailureCount, "expired soft evidence must not open a later circuit")
+
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Nil(t, state)
+}
+
+func TestMarkSuccessPreservingCooldownClearsSoftUnresponsiveEvidence(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	first, err := store.ObserveUnresponsive(context.Background(), "credential-a", "endpoint-a", 30*time.Second, 2*time.Minute, 2, 2*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.FailureCount)
+	require.NoError(t, store.MarkSuccessPreservingCooldown(context.Background(), "credential-a"))
+
+	afterSuccess, err := store.ObserveUnresponsive(context.Background(), "credential-a", "endpoint-a", 30*time.Second, 2*time.Minute, 2, 2*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, afterSuccess.FailureCount)
+	require.False(t, afterSuccess.Escalated)
+}
+
 func TestMarkSuccessPreservingCooldownDoesNotClearConcurrent429(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})

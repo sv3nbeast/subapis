@@ -80,6 +80,11 @@ local max_cooldown_ms = tonumber(ARGV[2])
 local state_ttl_ms = tonumber(ARGV[3])
 local reason = ARGV[4]
 local override_cooldown_ms = tonumber(ARGV[5]) or 0
+redis.call('HDEL', KEYS[1],
+  'unresponsive_observation_scope',
+  'unresponsive_observation_count',
+  'unresponsive_observation_at_ms'
+)
 local fail_count_field = 'fail_count_unresponsive'
 if reason == 'rate_limit_exceeded' then
   fail_count_field = 'fail_count_429'
@@ -117,6 +122,67 @@ redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
 return cooldown_ms
 `)
 
+	observeUnresponsiveScript = redis.NewScript(`
+local t = redis.call('TIME')
+local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local base_cooldown_ms = tonumber(ARGV[1])
+local max_cooldown_ms = tonumber(ARGV[2])
+local state_ttl_ms = tonumber(ARGV[3])
+local threshold = tonumber(ARGV[4])
+local observation_window_ms = tonumber(ARGV[5])
+local observation_scope = ARGV[6]
+local existing_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
+
+if existing_until_ms > now_ms then
+  local existing_fail_count = tonumber(redis.call('HGET', KEYS[1], 'fail_count_unresponsive') or '0')
+  return {existing_until_ms - now_ms, existing_fail_count, 0}
+end
+if existing_until_ms > 0 then
+  redis.call('HDEL', KEYS[1], 'cooldown_until_ms', 'cooldown_reason')
+end
+
+local stored_scope = redis.call('HGET', KEYS[1], 'unresponsive_observation_scope') or ''
+local stored_count = tonumber(redis.call('HGET', KEYS[1], 'unresponsive_observation_count') or '0')
+local stored_at_ms = tonumber(redis.call('HGET', KEYS[1], 'unresponsive_observation_at_ms') or '0')
+local observation_count = 1
+if stored_scope == observation_scope and stored_at_ms > 0 and now_ms - stored_at_ms <= observation_window_ms then
+  observation_count = stored_count + 1
+end
+
+redis.call('HSET', KEYS[1],
+  'unresponsive_observation_scope', observation_scope,
+  'unresponsive_observation_count', observation_count,
+  'unresponsive_observation_at_ms', now_ms
+)
+
+if observation_count < threshold then
+  local current_ttl_ms = redis.call('PTTL', KEYS[1])
+  if current_ttl_ms < observation_window_ms then
+    redis.call('PEXPIRE', KEYS[1], observation_window_ms)
+  end
+  return {0, observation_count, 0}
+end
+
+local hard_fail_count = tonumber(redis.call('HGET', KEYS[1], 'fail_count_unresponsive') or '0') + 1
+local cooldown_ms = base_cooldown_ms * (2 ^ (hard_fail_count - 1))
+if cooldown_ms > max_cooldown_ms then
+  cooldown_ms = max_cooldown_ms
+end
+redis.call('HSET', KEYS[1],
+  'fail_count', hard_fail_count,
+  'fail_count_unresponsive', hard_fail_count,
+  'cooldown_until_ms', now_ms + cooldown_ms,
+  'cooldown_reason', 'upstream_unresponsive'
+)
+redis.call('HDEL', KEYS[1],
+  'unresponsive_observation_scope',
+  'unresponsive_observation_count',
+  'unresponsive_observation_at_ms'
+)
+redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
+return {cooldown_ms, observation_count, 1}
+`)
+
 	markSuccessScript = redis.NewScript(`
 redis.call('HSET', KEYS[1],
   'fail_count', 0,
@@ -124,6 +190,11 @@ redis.call('HSET', KEYS[1],
   'fail_count_unresponsive', 0,
   'cooldown_until_ms', 0,
   'cooldown_reason', ''
+)
+redis.call('HDEL', KEYS[1],
+  'unresponsive_observation_scope',
+  'unresponsive_observation_count',
+  'unresponsive_observation_at_ms'
 )
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[1]))
 return 1
@@ -146,6 +217,11 @@ redis.call('HSET', KEYS[1],
   'cooldown_until_ms', 0,
   'cooldown_reason', ''
 )
+redis.call('HDEL', KEYS[1],
+  'unresponsive_observation_scope',
+  'unresponsive_observation_count',
+  'unresponsive_observation_at_ms'
+)
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[1]))
 return 1
 `)
@@ -161,6 +237,11 @@ redis.call('HSET', KEYS[1],
   'fail_count_unresponsive', 0,
   'cooldown_until_ms', now_ms + cooldown_ms,
   'cooldown_reason', ARGV[3]
+)
+redis.call('HDEL', KEYS[1],
+  'unresponsive_observation_scope',
+  'unresponsive_observation_count',
+  'unresponsive_observation_at_ms'
 )
 redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
 return cooldown_ms
@@ -178,6 +259,12 @@ type State struct {
 	CooldownUntil time.Time
 	Remaining     time.Duration
 	FailCount     int
+}
+
+type UnresponsiveObservationResult struct {
+	Cooldown     time.Duration
+	FailureCount int
+	Escalated    bool
 }
 
 func NewError(remaining time.Duration, reason string) error {
@@ -338,6 +425,76 @@ func (s *Store) MarkUnresponsive(ctx context.Context, tokenKey string, base, max
 		maximum = base
 	}
 	return s.markTransient(ctx, tokenKey, base, maximum, 0, CooldownReasonUnresponsive)
+}
+
+// ObserveUnresponsive records ambiguous endpoint/model timeout evidence without
+// opening the credential-wide circuit on the first failure. Repeated failures
+// for the same scope within the observation window escalate to the existing
+// credential cooldown and keep its 30/60/120-style backoff history.
+func (s *Store) ObserveUnresponsive(
+	ctx context.Context,
+	tokenKey string,
+	observationScope string,
+	base time.Duration,
+	maximum time.Duration,
+	threshold int,
+	observationWindow time.Duration,
+) (*UnresponsiveObservationResult, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if base <= 0 {
+		base = 30 * time.Second
+	}
+	if maximum < base {
+		maximum = base
+	}
+	if threshold < 2 {
+		threshold = 2
+	}
+	if observationWindow <= 0 {
+		observationWindow = 2 * time.Minute
+	}
+
+	scopeSum := sha256.Sum256([]byte(strings.TrimSpace(observationScope)))
+	scopeDigest := hex.EncodeToString(scopeSum[:])
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	value, err := observeUnresponsiveScript.Run(
+		cacheCtx,
+		s.client,
+		[]string{RedisKey(tokenKey)},
+		base.Milliseconds(),
+		maximum.Milliseconds(),
+		stateTTL.Milliseconds(),
+		threshold,
+		observationWindow.Milliseconds(),
+		scopeDigest,
+	).Result()
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe unresponsive: %w", err)
+	}
+	parts, ok := value.([]any)
+	if !ok || len(parts) != 3 {
+		return nil, fmt.Errorf("kiro cooldown observe unresponsive: unexpected response %T", value)
+	}
+	cooldownMS, err := luaInt64(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe unresponsive cooldown: %w", err)
+	}
+	failureCount, err := luaInt64(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe unresponsive count: %w", err)
+	}
+	escalated, err := luaInt64(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe unresponsive escalation: %w", err)
+	}
+	return &UnresponsiveObservationResult{
+		Cooldown:     time.Duration(cooldownMS) * time.Millisecond,
+		FailureCount: int(failureCount),
+		Escalated:    escalated == 1,
+	}, nil
 }
 
 func (s *Store) markTransient(ctx context.Context, tokenKey string, base, maximum, override time.Duration, reason string) (time.Duration, error) {

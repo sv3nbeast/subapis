@@ -336,7 +336,13 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 		} else {
 			kiroResilienceMetrics.firstSemanticTimeout.Add(1)
 		}
-		failoverErr.RetryAfter = s.markKiroAccountUnresponsive(requestCtx, account, groupID, failoverErr.FailureKind)
+		failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+			requestCtx,
+			account,
+			groupID,
+			failoverErr.FailureKind,
+			kiroSemanticUnresponsiveScope(mappedModel),
+		)
 	} else if failoverErr.FailureKind == "" {
 		failoverErr.FailureKind = UpstreamFailureIncompleteStream
 	}
@@ -596,9 +602,10 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			zap.Error(err),
 		)
 		if err != nil {
-			if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID); failoverErr != nil {
+			if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, "", wroteRequest.Load()); failoverErr != nil {
 				if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
 					failoverErr.UpstreamDone = physicalDone
+					failoverErr.FailoverProhibited = true
 				}
 				return nil, currentToken, failoverErr
 			}
@@ -629,7 +636,24 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			var headerTimeout *kiroResponseHeaderTimeoutError
 			if errors.As(err, &headerTimeout) {
 				kiroResilienceMetrics.responseHeaderTimeout.Add(1)
-				failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, UpstreamFailureResponseHeaderTimeout)
+				observationScope := kiroHeaderUnresponsiveScope(account, kiroEndpointConfig{
+					Name: "KiroMCP",
+					URL:  endpoint,
+				}, proxyURL)
+				if wroteRequest.Load() || !physicalCleaned {
+					failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+						ctx,
+						account,
+						groupID,
+						UpstreamFailureResponseHeaderTimeout,
+						observationScope,
+					)
+				} else {
+					// The request was provably never written and the one safe retry was
+					// exhausted, so this is confirmed transport failure rather than an
+					// ambiguous slow response.
+					failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, UpstreamFailureResponseHeaderTimeout)
+				}
 			}
 			if physicalCleaned {
 				failoverErr.UpstreamDone = nil

@@ -951,7 +951,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		var budgetErr error
 		streamCtx, cancelStreamCtx, stopPreSemanticTimer, budgetErr = s.kiroPreSemanticContext(ctx, groupID, inputTokens)
 		if budgetErr != nil {
-			return nil, 0, s.newKiroTimeoutFailover(ctx, account, groupID, budgetErr)
+			semanticObserver.stop()
+			return nil, 0, s.newKiroTimeoutFailover(ctx, account, groupID, budgetErr, mappedModel, false)
 		}
 		releaseStreamCtx = func() {
 			stopPreSemanticTimer()
@@ -964,7 +965,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 		semanticObserver.stop()
 		cause := context.Cause(streamCtx)
 		releaseStreamCtx()
-		if failoverErr := s.newKiroTimeoutFailover(ctx, account, groupID, cause); failoverErr != nil {
+		if failoverErr := s.newKiroTimeoutFailover(ctx, account, groupID, cause, mappedModel, false); failoverErr != nil {
 			return nil, 0, failoverErr
 		}
 		return nil, 0, err
@@ -1309,7 +1310,13 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				} else {
 					kiroResilienceMetrics.firstSemanticTimeout.Add(1)
 				}
-				failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, failoverErr.FailureKind)
+				failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+					ctx,
+					account,
+					groupID,
+					failoverErr.FailureKind,
+					kiroSemanticUnresponsiveScope(mappedModel),
+				)
 			} else if failoverErr.FailureKind == "" {
 				failoverErr.FailureKind = UpstreamFailureIncompleteStream
 			}
@@ -1356,12 +1363,12 @@ func (s *GatewayService) executeKiroUpstream(ctx context.Context, account *Accou
 	return s.executeKiroUpstreamWithParsed(ctx, account, nil, anthropicBody, mappedModel, requestModel, token, headers)
 }
 
-func (s *GatewayService) kiroContextCauseFailover(ctx context.Context, account *Account, groupID *int64) *UpstreamFailoverError {
+func (s *GatewayService) kiroContextCauseFailover(ctx context.Context, account *Account, groupID *int64, mappedModel string, upstreamStarted bool) *UpstreamFailoverError {
 	cause := context.Cause(ctx)
-	return s.newKiroTimeoutFailover(ctx, account, groupID, cause)
+	return s.newKiroTimeoutFailover(ctx, account, groupID, cause, mappedModel, upstreamStarted)
 }
 
-func (s *GatewayService) newKiroTimeoutFailover(ctx context.Context, account *Account, groupID *int64, cause error) *UpstreamFailoverError {
+func (s *GatewayService) newKiroTimeoutFailover(ctx context.Context, account *Account, groupID *int64, cause error, mappedModel string, upstreamStarted bool) *UpstreamFailoverError {
 	failureKind := UpstreamFailureKind("")
 	switch {
 	case errors.Is(cause, errKiroFailoverBudgetExceeded):
@@ -1384,11 +1391,36 @@ func (s *GatewayService) newKiroTimeoutFailover(ctx context.Context, account *Ac
 		StatusCode:         http.StatusServiceUnavailable,
 		ResponseBody:       body,
 		FailureKind:        failureKind,
-		FailoverProhibited: true,
+		RetryAfter:         defaultKiroTransportRetryAfter,
+		FailoverProhibited: upstreamStarted || errors.Is(cause, errKiroFailoverBudgetExceeded),
 		Cause:              cause,
 	}
-	failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, failureKind)
+	if upstreamStarted {
+		failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+			ctx,
+			account,
+			groupID,
+			failureKind,
+			kiroSemanticUnresponsiveScope(mappedModel),
+		)
+	}
 	return failoverErr
+}
+
+func kiroSemanticUnresponsiveScope(mappedModel string) string {
+	return "first_semantic|model:" + strings.TrimSpace(mappedModel)
+}
+
+func kiroHeaderUnresponsiveScope(account *Account, endpoint kiroEndpointConfig, proxyURL string) string {
+	accountKey := buildKiroCooldownKey(account)
+	return fmt.Sprintf(
+		"response_header|credential:%s|endpoint:%s|url:%s|target:%s|proxy:%s",
+		accountKey,
+		endpoint.Name,
+		endpoint.URL,
+		endpoint.AmzTarget,
+		strings.TrimSpace(proxyURL),
+	)
 }
 
 func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, kiropkg.KiroRequestContext, error) {
@@ -1475,6 +1507,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 			accountRound, _ := AccountSwitchCountFromContext(ctx)
 			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForInput(groupID, requestCtx.PayloadInputTokenEstimate)
+			responseHeaderObservationScope := kiroHeaderUnresponsiveScope(account, endpoint, proxyURL)
 			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1, responseHeaderTimeout)
 			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 				return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
@@ -1494,9 +1527,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 				zap.Error(err),
 			)
 			if err != nil {
-				if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID); failoverErr != nil {
+				if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, mappedModel, wroteRequest.Load()); failoverErr != nil {
 					if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
 						failoverErr.UpstreamDone = physicalDone
+						failoverErr.FailoverProhibited = true
 					}
 					return nil, requestCtx, failoverErr
 				}
@@ -1520,7 +1554,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 						failoverErr := newKiroEndpointTransportFailover(transportErr)
 						failoverErr.FailoverProhibited = true
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)
-						failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, failoverErr.FailureKind)
+						failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+							ctx,
+							account,
+							groupID,
+							failoverErr.FailureKind,
+							responseHeaderObservationScope,
+						)
 						return nil, requestCtx, failoverErr
 					}
 				}
@@ -1538,7 +1578,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 					if errors.As(err, &headerTimeout) {
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)
-						failoverErr.RetryAfter = s.markKiroAccountUnresponsive(ctx, account, groupID, UpstreamFailureResponseHeaderTimeout)
+						failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
+							ctx,
+							account,
+							groupID,
+							UpstreamFailureResponseHeaderTimeout,
+							responseHeaderObservationScope,
+						)
 					}
 					return nil, requestCtx, failoverErr
 				}

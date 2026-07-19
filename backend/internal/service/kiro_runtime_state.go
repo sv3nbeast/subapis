@@ -12,6 +12,11 @@ import (
 
 var errKiroCooldownStoreUnavailable = errors.New("kiro cooldown store unavailable")
 
+const (
+	defaultKiroUnresponsiveFailureThreshold = 2
+	defaultKiroUnresponsiveFailureWindow    = 2 * time.Minute
+)
+
 type KiroCooldownStore interface {
 	ReserveRequest(ctx context.Context, tokenKey string) (time.Duration, error)
 	MarkSuccess(ctx context.Context, tokenKey string) error
@@ -27,6 +32,18 @@ type kiroCooldownRetryAfterStore interface {
 
 type kiroCooldownUnresponsiveStore interface {
 	MarkUnresponsive(ctx context.Context, tokenKey string, base, maximum time.Duration) (time.Duration, error)
+}
+
+type kiroCooldownUnresponsiveObservationStore interface {
+	ObserveUnresponsive(
+		ctx context.Context,
+		tokenKey string,
+		observationScope string,
+		base time.Duration,
+		maximum time.Duration,
+		threshold int,
+		observationWindow time.Duration,
+	) (*kirocooldown.UnresponsiveObservationResult, error)
 }
 
 type kiroCooldownSuccessPreservingStore interface {
@@ -163,6 +180,27 @@ func (s *GatewayService) markKiroUnresponsive(ctx context.Context, tokenKey stri
 	return s.kiroCooldownStore.Mark429(ctx, tokenKey)
 }
 
+func (s *GatewayService) observeKiroUnresponsive(
+	ctx context.Context,
+	tokenKey string,
+	observationScope string,
+	base time.Duration,
+	maximum time.Duration,
+	threshold int,
+	observationWindow time.Duration,
+) (*kirocooldown.UnresponsiveObservationResult, error) {
+	if s == nil || s.kiroCooldownStore == nil {
+		return nil, errKiroCooldownStoreUnavailable
+	}
+	extended, ok := s.kiroCooldownStore.(kiroCooldownUnresponsiveObservationStore)
+	if !ok {
+		// Older/custom stores fail open here. Falling back to MarkUnresponsive
+		// would recreate the false-positive credential circuit this path avoids.
+		return &kirocooldown.UnresponsiveObservationResult{FailureCount: 1}, nil
+	}
+	return extended.ObserveUnresponsive(ctx, tokenKey, observationScope, base, maximum, threshold, observationWindow)
+}
+
 func kiroRetryAfterDuration(headers http.Header, now time.Time) time.Duration {
 	resetAt := parseRetryAfterResetTime(headers, now)
 	if resetAt == nil || !resetAt.After(now) {
@@ -238,6 +276,95 @@ func (s *GatewayService) markKiroAccountUnresponsive(ctx context.Context, accoun
 		"cooldown_ms", cooldown.Milliseconds(),
 	)
 	return cooldown
+}
+
+func (s *GatewayService) observeKiroAccountUnresponsive(
+	ctx context.Context,
+	account *Account,
+	groupID *int64,
+	failureKind UpstreamFailureKind,
+	observationScope string,
+) time.Duration {
+	if s == nil || account == nil {
+		return defaultKiroTransportRetryAfter
+	}
+	base, maximum := s.kiroUnresponsiveCooldown(groupID)
+	if base <= 0 {
+		if s.kiroResilienceMode(groupID) != "off" {
+			slog.Info("kiro_unresponsive_soft_failure_observed", "group_id", derefGroupID(groupID), "account_id", account.ID, "failure_kind", failureKind, "enforced", false)
+		}
+		return defaultKiroTransportRetryAfter
+	}
+	threshold, observationWindow := s.kiroUnresponsiveFailurePolicy()
+	stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+	defer stateCancel()
+	result, err := s.observeKiroUnresponsive(
+		stateCtx,
+		buildKiroCooldownKey(account),
+		observationScope,
+		base,
+		maximum,
+		threshold,
+		observationWindow,
+	)
+	if err != nil {
+		slog.Warn("kiro_unresponsive_soft_failure_mark_failed",
+			"group_id", derefGroupID(groupID),
+			"account_id", account.ID,
+			"failure_kind", failureKind,
+			"error", err,
+		)
+		return defaultKiroTransportRetryAfter
+	}
+	if result == nil {
+		return defaultKiroTransportRetryAfter
+	}
+	if result.Escalated {
+		cooldown := result.Cooldown
+		if cooldown <= 0 {
+			cooldown = base
+		}
+		s.persistKiroRuntimeCooldown(stateCtx, account, cooldown, string(failureKind))
+		slog.Info("kiro_unresponsive_cooldown_escalated",
+			"request_id", resolveUsageBillingRequestID(ctx, ""),
+			"group_id", derefGroupID(groupID),
+			"account_id", account.ID,
+			"failure_kind", failureKind,
+			"failure_count", result.FailureCount,
+			"threshold", threshold,
+			"cooldown_ms", cooldown.Milliseconds(),
+		)
+		return cooldown
+	}
+	slog.Info("kiro_unresponsive_soft_failure_observed",
+		"request_id", resolveUsageBillingRequestID(ctx, ""),
+		"group_id", derefGroupID(groupID),
+		"account_id", account.ID,
+		"failure_kind", failureKind,
+		"failure_count", result.FailureCount,
+		"threshold", threshold,
+		"window_ms", observationWindow.Milliseconds(),
+		"existing_cooldown_ms", result.Cooldown.Milliseconds(),
+	)
+	if result.Cooldown > 0 {
+		return result.Cooldown
+	}
+	return defaultKiroTransportRetryAfter
+}
+
+func (s *GatewayService) kiroUnresponsiveFailurePolicy() (int, time.Duration) {
+	threshold := defaultKiroUnresponsiveFailureThreshold
+	window := defaultKiroUnresponsiveFailureWindow
+	if s == nil || s.cfg == nil {
+		return threshold, window
+	}
+	if configured := s.cfg.Gateway.KiroResilience.UnresponsiveFailureThreshold; configured >= 2 {
+		threshold = configured
+	}
+	if configured := s.cfg.Gateway.KiroResilience.UnresponsiveFailureWindowSec; configured > 0 {
+		window = time.Duration(configured) * time.Second
+	}
+	return threshold, window
 }
 
 func (s *GatewayService) persistKiroRuntimeCooldown(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
