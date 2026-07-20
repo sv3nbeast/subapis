@@ -1294,6 +1294,81 @@ func TestOpenKiroAnthropicStreamResponseAllowsDirectAPIKey(t *testing.T) {
 	require.Contains(t, string(streamBytes), "hello from kiro api key")
 }
 
+func TestOpenKiroAnthropicStreamResponseRetriesMetadataOnlyInResilienceMode(t *testing.T) {
+	t.Setenv(kiroStreamBodyRetryEnvVariable, "0")
+	metadataOnlyBody := bytes.NewBuffer(nil)
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":10,"outputTokens":0,"totalTokens":10}}}`)))
+	_, _ = metadataOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"recovered after metadata-only retry"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{
+		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody.Bytes()),
+			newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+		},
+	}
+	store := &recordingKiroResilienceCooldownStore{}
+	svc := enforcedKiroResilienceTestService()
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = store
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+
+	groupID := int64(29)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	account := &Account{
+		ID:          1945,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"api_region":   "us-east-1",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.Group = group
+	parsed.GroupID = &groupID
+
+	ctx, err := svc.StartKiroResilienceBudget(context.Background(), &groupID)
+	require.NoError(t, err)
+	resp, _, err := svc.openKiroAnthropicStreamResponse(ctx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.NoError(t, err)
+
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Contains(t, string(streamBytes), "recovered after metadata-")
+	require.Contains(t, string(streamBytes), "only retry")
+	require.Len(t, upstream.requests, 2)
+	require.NotEqual(t, upstream.requests[0].URL.String(), upstream.requests[1].URL.String(), "metadata-only retry should rotate endpoint")
+
+	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	secondPayload, err := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, err)
+	require.NotEqual(t,
+		gjson.GetBytes(firstPayload, "conversationState.conversationId").String(),
+		gjson.GetBytes(secondPayload, "conversationState.conversationId").String(),
+		"metadata-only retry must use a fresh conversation id")
+	require.Zero(t, store.markUnresponsiveCalls, "metadata-only output must not enter account unresponsive cooldown")
+}
+
 func TestForwardKiroMessagesStreamMissingTerminalAfterPartialOutputReturnsSSEError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

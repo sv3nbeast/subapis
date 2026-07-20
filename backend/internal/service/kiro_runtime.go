@@ -806,6 +806,11 @@ func kiroEmptyEventStreamMessage(err error) string {
 	return ""
 }
 
+func isKiroMetadataOnlyStreamError(err error) bool {
+	message := strings.ToLower(kiroEmptyEventStreamMessage(err))
+	return strings.Contains(message, "metadata-only assistant output")
+}
+
 func isKiroContextLimitError(err error) bool {
 	var contextErr *kiropkg.ContextLimitError
 	return errors.As(err, &contextErr)
@@ -1134,7 +1139,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			}
 			nativeToolProgressStalled := kiropkg.IsNativeToolProgressStalled(streamErr)
 			retryLimit := maxBodyRetries
-			if nativeToolProgressStalled && retryLimit < 1 {
+			metadataOnlyOutput := isKiroMetadataOnlyStreamError(streamErr)
+			// A metadata-only turn has reached Kiro and completed without any
+			// semantic output. It is safe to replay before the semantic gate is
+			// released, even when resilience mode disables generic body retries.
+			// Use a fresh conversation nonce so a cached empty turn is not replayed.
+			if (nativeToolProgressStalled || metadataOnlyOutput) && retryLimit < 1 {
 				retryLimit = 1
 			}
 			if retryLimit <= 0 {
@@ -1176,6 +1186,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				zap.Int("retry_attempt", retryAttempt),
 				zap.Int("retry_max", retryLimit),
 				zap.Bool("native_tool_progress_retry", nativeToolProgressStalled),
+				zap.Bool("metadata_only_retry", metadataOnlyOutput),
 				zap.String("reason", sanitizeUpstreamErrorMessage(emptyStreamMsg)),
 			)
 			if !nativeToolProgressStalled {
