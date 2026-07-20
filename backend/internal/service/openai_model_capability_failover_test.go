@@ -304,7 +304,8 @@ func TestOpenAIGatewayService_ForwardOrdinaryBadRequestDoesNotFailover(t *testin
 	require.Empty(t, repo.modelRateLimitCalls)
 }
 
-func TestOpenAIGatewayService_ChatGPTModelCapabilityFailureSkipsAllOAuthCandidates(t *testing.T) {
+func TestOpenAIGatewayService_ChatGPTModelCapabilityFailureSkipsOnlyAffectedOAuthCandidate(t *testing.T) {
+	groupID := int64(85)
 	oauthAccount := Account{
 		ID:          85,
 		Platform:    PlatformOpenAI,
@@ -313,6 +314,7 @@ func TestOpenAIGatewayService_ChatGPTModelCapabilityFailureSkipsAllOAuthCandidat
 		Schedulable: true,
 		Concurrency: 1,
 		Priority:    0,
+		GroupIDs:    []int64{groupID},
 		Credentials: map[string]any{
 			"access_token":       "oauth-token",
 			"chatgpt_account_id": "chatgpt-account",
@@ -321,32 +323,27 @@ func TestOpenAIGatewayService_ChatGPTModelCapabilityFailureSkipsAllOAuthCandidat
 			},
 		},
 	}
-	apiKeyAccount := Account{
-		ID:          1000,
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeAPIKey,
-		Status:      StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Priority:    10,
-		Credentials: map[string]any{
-			"api_key": "test-key",
-			"model_mapping": map[string]any{
-				"gpt-5.6-sol": "gpt-5.6-sol",
-			},
+	secondOAuthAccount := oauthAccount
+	secondOAuthAccount.ID++
+	secondOAuthAccount.Priority++
+	secondOAuthAccount.Credentials = map[string]any{
+		"access_token":       "second-oauth-token",
+		"chatgpt_account_id": "second-chatgpt-account",
+		"model_mapping": map[string]any{
+			"gpt-5.6-sol": "gpt-5.6-sol",
 		},
 	}
-	accounts := make([]Account, 0, 43)
-	for i := 0; i < 42; i++ {
-		candidate := oauthAccount
-		candidate.ID += int64(i)
-		candidate.Priority = i
-		accounts = append(accounts, candidate)
-	}
-	accounts = append(accounts, apiKeyAccount)
+	accounts := []Account{oauthAccount, secondOAuthAccount}
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: accounts}}
 	svc := &OpenAIGatewayService{
-		accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
-		cfg:         &config.Config{},
+		accountRepo: repo,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
 	}
 	body := []byte(`{"error":{"message":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.","type":"invalid_request_error"}}`)
 
@@ -357,12 +354,31 @@ func TestOpenAIGatewayService_ChatGPTModelCapabilityFailureSkipsAllOAuthCandidat
 
 	require.NoError(t, err)
 	require.NotNil(t, selected)
-	require.Equal(t, apiKeyAccount.ID, selected.ID)
+	require.Equal(t, secondOAuthAccount.ID, selected.ID)
 	require.True(t, svc.isOpenAIOAuthModelUnsupportedForRequest(&oauthAccount, "gpt-5.6-sol", false))
-	require.False(t, svc.isOpenAIOAuthModelUnsupportedForRequest(&apiKeyAccount, "gpt-5.6-sol", false))
+	require.False(t, svc.isOpenAIOAuthModelUnsupportedForRequest(&secondOAuthAccount, "gpt-5.6-sol", false))
+	require.False(t, svc.isOpenAICompatibleAccountEligibleForSchedule(context.Background(), &oauthAccount, OpenAIAccountScheduleRequest{
+		RequestedModel: "gpt-5.6-sol",
+		Platform:       PlatformOpenAI,
+	}))
+	require.True(t, svc.isOpenAICompatibleAccountEligibleForSchedule(context.Background(), &secondOAuthAccount, OpenAIAccountScheduleRequest{
+		RequestedModel: "gpt-5.6-sol",
+		Platform:       PlatformOpenAI,
+	}))
+
+	bridgeSelection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "", "gpt-5.6-sol", "gpt-5.6-sol", nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, bridgeSelection)
+	require.NotNil(t, bridgeSelection.Account)
+	require.Equal(t, secondOAuthAccount.ID, bridgeSelection.Account.ID)
+	if bridgeSelection.ReleaseFunc != nil {
+		bridgeSelection.ReleaseFunc()
+	}
 
 	oauthOnlySvc := &OpenAIGatewayService{
-		accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts[:42]},
+		accountRepo: openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: accounts[:1]}},
 		cfg:         &config.Config{},
 	}
 	_ = oauthOnlySvc.newOpenAIAccountModelUnsupportedFailover(
@@ -379,15 +395,15 @@ func TestOpenAIOAuthModelUnsupportedCacheBoundsAndExpires(t *testing.T) {
 	}
 
 	cache.mu.Lock()
-	count := len(cache.untilByModel)
-	cache.untilByModel["expired"] = time.Now().Add(-time.Minute)
+	count := len(cache.untilByAccountModel)
+	cache.untilByAccountModel["expired"] = time.Now().Add(-time.Minute)
 	cache.mu.Unlock()
 
 	require.Equal(t, maxOpenAIOAuthModelUnsupportedEntries, count)
 	require.False(t, cache.IsActive("expired"))
 
 	cache.mu.Lock()
-	_, expiredStillPresent := cache.untilByModel["expired"]
+	_, expiredStillPresent := cache.untilByAccountModel["expired"]
 	cache.mu.Unlock()
 	require.False(t, expiredStillPresent)
 }
@@ -410,7 +426,7 @@ func TestOpenAIOAuthModelUnsupportedCacheConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	cache.mu.Lock()
-	count := len(cache.untilByModel)
+	count := len(cache.untilByAccountModel)
 	cache.mu.Unlock()
 	require.LessOrEqual(t, count, maxOpenAIOAuthModelUnsupportedEntries)
 }
