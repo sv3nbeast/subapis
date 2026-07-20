@@ -16,9 +16,29 @@
         <span class="sidebar-brand-title text-lg font-bold text-gray-900 dark:text-white">
           {{ siteName }}
         </span>
+        <small class="ui-v2-sidebar-brand-subtitle">{{ t('nav.workspace') }}</small>
         <!-- Version Badge -->
-        <VersionBadge :version="siteVersion" />
+        <VersionBadge class="sidebar-version-badge" :version="siteVersion" />
       </div>
+      <button
+        type="button"
+        class="ui-v2-sidebar-collapse"
+        :title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :aria-label="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        @click="toggleSidebar"
+      >
+        <ChevronDoubleLeftIcon v-if="!sidebarCollapsed" class="h-4 w-4" />
+        <ChevronDoubleRightIcon v-else class="h-4 w-4" />
+      </button>
+    </div>
+
+    <div v-if="currentUser" class="ui-v2-workspace-switcher">
+      <span class="ui-v2-workspace-avatar">{{ userInitials }}</span>
+      <span class="ui-v2-workspace-copy">
+        <strong>{{ t('nav.personalWorkspace') }}</strong>
+        <small>{{ displayName }}</small>
+      </span>
+      <ChevronDownIcon class="h-4 w-4 flex-shrink-0" />
     </div>
 
     <!-- Navigation -->
@@ -164,8 +184,30 @@
       </template>
     </nav>
 
+    <div v-if="currentUser" class="ui-v2-sidebar-account">
+      <div v-if="!authStore.isSimpleMode" class="ui-v2-sidebar-balance">
+        <span>
+          <small>{{ t('common.availableBalance') }}</small>
+          <strong>{{ formatSidebarMoney(currentUser.balance) }}</strong>
+        </span>
+        <i aria-hidden="true"></i>
+      </div>
+      <router-link
+        to="/profile"
+        class="ui-v2-sidebar-profile"
+        @click="handleMenuItemClick('/profile')"
+      >
+        <span class="ui-v2-profile-avatar">{{ userInitials }}</span>
+        <span class="ui-v2-profile-copy">
+          <strong>{{ displayName }}</strong>
+          <small>{{ currentUser.email }}</small>
+        </span>
+        <span class="ui-v2-profile-more" aria-hidden="true">...</span>
+      </router-link>
+    </div>
+
     <!-- Bottom Section -->
-    <div class="mt-auto border-t border-gray-100 p-3 dark:border-dark-800">
+    <div class="sidebar-legacy-controls mt-auto border-t border-gray-100 p-3 dark:border-dark-800">
       <!-- Theme Toggle -->
       <button
         @click="toggleTheme"
@@ -286,6 +328,17 @@ const siteName = computed(() => appStore.siteName)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
+const currentUser = computed(() => authStore.user)
+const displayName = computed(() => {
+  const user = currentUser.value
+  return user?.username || user?.email?.split('@')[0] || t('nav.personalWorkspace')
+})
+const userInitials = computed(() => displayName.value.slice(0, 2).toUpperCase())
+
+function formatSidebarMoney(value: unknown): string {
+  const amount = Number(value)
+  return `$${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'}`
+}
 
 // SVG Icon Components
 const DashboardIcon = {

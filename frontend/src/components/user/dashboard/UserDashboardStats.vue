@@ -1,8 +1,9 @@
 <template>
-  <!-- Row 1: Core Stats -->
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+  <div class="dashboard-stats-shell space-y-6" :class="modeClass">
+    <!-- Row 1: Core Stats -->
+    <div class="dashboard-stat-grid grid grid-cols-2 gap-4 lg:grid-cols-4">
     <!-- Balance -->
-    <div v-if="!isSimple" class="card p-4">
+    <div v-if="showPrimary && !isSimple" class="dashboard-metric-card dashboard-metric-balance card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-emerald-100 p-2 dark:bg-emerald-900/30">
           <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -10,7 +11,9 @@
           </svg>
         </div>
         <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.balance') }}</p>
+          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+            {{ props.mode === 'primary' ? t('common.availableBalance') : t('dashboard.balance') }}
+          </p>
           <p class="text-xl font-bold text-emerald-600 dark:text-emerald-400">${{ formatBalance(balance) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.available') }}</p>
         </div>
@@ -18,7 +21,7 @@
     </div>
 
     <!-- API Keys -->
-    <div class="card p-4">
+    <div v-if="showSecondary || (showPrimary && isSimple)" class="dashboard-metric-card dashboard-metric-keys card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
           <Icon name="key" size="md" class="text-blue-600 dark:text-blue-400" :stroke-width="2" />
@@ -32,21 +35,21 @@
     </div>
 
     <!-- Today Requests -->
-    <div class="card p-4">
+    <div v-if="showPrimary" class="dashboard-metric-card dashboard-metric-requests card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
           <Icon name="chart" size="md" class="text-green-600 dark:text-green-400" :stroke-width="2" />
         </div>
         <div>
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayRequests') }}</p>
-          <p class="text-xl font-bold text-gray-900 dark:text-white">{{ stats?.today_requests || 0 }}</p>
+          <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatNumber(stats?.today_requests || 0) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('common.total') }}: {{ formatNumber(stats?.total_requests || 0) }}</p>
         </div>
       </div>
     </div>
 
     <!-- Today Cost -->
-    <div class="card p-4">
+    <div v-if="showSecondary" class="dashboard-metric-card dashboard-metric-cost card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
           <Icon name="dollar" size="md" class="text-purple-600 dark:text-purple-400" :stroke-width="2" />
@@ -65,12 +68,12 @@
         </div>
       </div>
     </div>
-  </div>
+    </div>
 
-  <!-- Row 2: Token Stats -->
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <!-- Row 2: Token Stats -->
+    <div class="dashboard-stat-grid grid grid-cols-2 gap-4 lg:grid-cols-4">
     <!-- Today Tokens -->
-    <div class="card p-4">
+    <div v-if="showPrimary || props.mode === 'secondary'" class="dashboard-metric-card dashboard-metric-today-tokens card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
           <Icon name="cube" size="md" class="text-amber-600 dark:text-amber-400" :stroke-width="2" />
@@ -79,7 +82,7 @@
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.todayTokens') }}</p>
           <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatTokens(stats?.today_tokens || 0) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.input') }}: {{ formatTokens(stats?.today_input_tokens || 0) }} / {{ t('dashboard.output') }}: {{ formatTokens(stats?.today_output_tokens || 0) }}</p>
-          <p v-if="todayCacheTokens > 0" class="text-xs text-cyan-600 dark:text-cyan-400">
+          <p v-if="todayCacheTokens > 0 && props.mode !== 'primary'" class="text-xs text-cyan-600 dark:text-cyan-400">
             {{ t('dashboard.cache') }}: {{ formatTokens(todayCacheTokens) }}
             <span class="text-violet-600 dark:text-violet-400">
               · {{ t('usage.inputCacheReadRatio') }}: {{ formatPercent(todayCacheHitRate) }}
@@ -94,7 +97,7 @@
     </div>
 
     <!-- Total Tokens -->
-    <div class="card p-4">
+    <div v-if="showSecondary" class="dashboard-metric-card dashboard-metric-total-tokens card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-indigo-100 p-2 dark:bg-indigo-900/30">
           <Icon name="database" size="md" class="text-indigo-600 dark:text-indigo-400" :stroke-width="2" />
@@ -118,7 +121,7 @@
     </div>
 
     <!-- Performance (RPM/TPM) -->
-    <div class="card p-4">
+    <div v-if="showSecondary" class="dashboard-metric-card dashboard-metric-performance card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-violet-100 p-2 dark:bg-violet-900/30">
           <Icon name="bolt" size="md" class="text-violet-600 dark:text-violet-400" :stroke-width="2" />
@@ -138,7 +141,7 @@
     </div>
 
     <!-- Avg Response Time -->
-    <div class="card p-4">
+    <div v-if="showPrimary" class="dashboard-metric-card dashboard-metric-response card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-rose-100 p-2 dark:bg-rose-900/30">
           <Icon name="clock" size="md" class="text-rose-600 dark:text-rose-400" :stroke-width="2" />
@@ -150,10 +153,10 @@
         </div>
       </div>
     </div>
-  </div>
+    </div>
 
-  <!-- Row 3: Per-platform breakdown -->
-  <div v-if="!isSimple && platformCards.length > 0" class="card p-4">
+    <!-- Row 3: Per-platform breakdown -->
+    <div v-if="showSecondary && !isSimple && platformCards.length > 0" class="dashboard-platform-breakdown card p-4">
     <div class="mb-3 flex items-center justify-between">
       <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('dashboard.platformBreakdown') }}</h3>
       <span class="text-xs text-gray-500 dark:text-gray-400">
@@ -239,6 +242,7 @@
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
@@ -259,13 +263,19 @@ interface FusedPlatformCard {
   quota?: PlatformQuotaItem
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   stats: UserStatsType
   balance: number
   isSimple: boolean
   platformQuotas?: PlatformQuotaItem[] | null
-}>()
+  mode?: 'all' | 'primary' | 'secondary'
+}>(), {
+  mode: 'all',
+})
 const { t } = useI18n()
+const showPrimary = computed(() => props.mode !== 'secondary')
+const showSecondary = computed(() => props.mode !== 'primary')
+const modeClass = computed(() => `dashboard-stats-${props.mode}`)
 
 const PLATFORM_LABELS: Record<string, string> = {
   anthropic: 'Claude',

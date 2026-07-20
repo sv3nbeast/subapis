@@ -16,6 +16,11 @@ ARG GOSUMDB=sum.golang.google.cn
 # Stage 1: Frontend Builder
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS frontend-builder
+ARG VITE_UI_V2_ROLLOUT_MODE=preview
+ARG VITE_UI_V2_ROLLOUT_PERCENT=0
+
+ENV VITE_UI_V2_ROLLOUT_MODE=${VITE_UI_V2_ROLLOUT_MODE}
+ENV VITE_UI_V2_ROLLOUT_PERCENT=${VITE_UI_V2_ROLLOUT_PERCENT}
 
 WORKDIR /app/frontend
 ENV NODE_OPTIONS=--max-old-space-size=1536

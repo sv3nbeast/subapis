@@ -1,6 +1,12 @@
 <template>
   <AppLayout>
-    <div class="space-y-6">
+    <div class="usage-page space-y-6">
+      <header class="ui-v2-standard-page-heading ui-v2-usage-page-heading">
+        <p>{{ t('nav.personalWorkspace') }}</p>
+        <h1>{{ t('usage.title') }}</h1>
+        <span>{{ t('usage.description') }}</span>
+      </header>
+
       <UsageStatsCards :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
 
       <div class="space-y-4">

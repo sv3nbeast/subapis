@@ -7,11 +7,11 @@ const { setReplayCallback } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/stores', () => ({
-  useAppStore: () => ({ sidebarCollapsed: false }),
+  useAppStore: () => ({ sidebarCollapsed: false, mobileOpen: false }),
 }))
 
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ user: { role: 'user' } }),
+  useAuthStore: () => ({ user: { id: 7, role: 'user' } }),
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -25,23 +25,66 @@ vi.mock('@/composables/useOnboardingTour', () => ({
 describe('AppLayout density', () => {
   beforeEach(() => {
     document.documentElement.classList.remove('app-density-compact')
+    document.documentElement.classList.remove('ui-v2-active')
+    localStorage.clear()
+    window.history.replaceState({}, '', '/')
     setReplayCallback.mockClear()
   })
 
-  it('scopes compact density to the app layout lifecycle', () => {
-    const wrapper = mount(AppLayout, {
-      global: {
-        stubs: {
-          AppHeader: true,
-          AppSidebar: true,
+  const mountLayout = () => mount(AppLayout, {
+    slots: {
+      default: '<div data-testid="business-content">business content</div>',
+    },
+    global: {
+      stubs: {
+        AppHeader: {
+          props: ['uiVersion'],
+          emits: ['useLegacyUi'],
+          template: '<button data-testid="legacy-switch" @click="$emit(\'useLegacyUi\')">{{ uiVersion }}</button>',
         },
+        AppSidebar: true,
+        AppMobileDock: true,
       },
-    })
+    },
+  })
+
+  it('keeps compact density scoped to the app layout lifecycle', () => {
+    const wrapper = mountLayout()
 
     expect(document.documentElement.classList.contains('app-density-compact')).toBe(true)
 
     wrapper.unmount()
 
     expect(document.documentElement.classList.contains('app-density-compact')).toBe(false)
+  })
+
+  it('keeps the legacy shell and original slot content by default', () => {
+    const wrapper = mountLayout()
+
+    expect(wrapper.attributes('data-ui-version')).toBe('legacy')
+    expect(wrapper.classes()).not.toContain('ui-v2')
+    expect(wrapper.get('[data-testid="business-content"]').text()).toBe('business content')
+
+    wrapper.unmount()
+  })
+
+  it('enables v2 only for an explicit preview and can return immediately', async () => {
+    window.history.replaceState({}, '', '/dashboard?ui=v2')
+    const wrapper = mountLayout()
+
+    expect(wrapper.attributes('data-ui-version')).toBe('v2')
+    expect(wrapper.classes()).toContain('ui-v2')
+    expect(document.documentElement.classList.contains('ui-v2-active')).toBe(true)
+    expect(localStorage.getItem('sub2api:ui-version:7')).toBe('v2')
+
+    await wrapper.get('[data-testid="legacy-switch"]').trigger('click')
+
+    expect(wrapper.attributes('data-ui-version')).toBe('legacy')
+    expect(wrapper.classes()).not.toContain('ui-v2')
+    expect(document.documentElement.classList.contains('ui-v2-active')).toBe(false)
+    expect(localStorage.getItem('sub2api:ui-version:7')).toBe('legacy')
+    expect(window.location.search).toBe('')
+
+    wrapper.unmount()
   })
 })

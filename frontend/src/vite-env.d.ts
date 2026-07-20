@@ -2,6 +2,8 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string
+  readonly VITE_UI_V2_ROLLOUT_MODE?: 'off' | 'preview' | 'percentage' | 'full'
+  readonly VITE_UI_V2_ROLLOUT_PERCENT?: string
   readonly BASE_URL: string
 }
 

@@ -40,20 +40,23 @@ const createStats = (): UserStatsType => ({
 })
 
 describe('UserDashboardStats', () => {
-  it('shows cache read and write token breakdown on token cards', () => {
-    const wrapper = mount(UserDashboardStats, {
-      props: {
-        stats: createStats(),
-        balance: 0,
-        isSimple: false,
-        platformQuotas: []
+  const mountStats = (mode: 'all' | 'primary' | 'secondary' = 'all') => mount(UserDashboardStats, {
+    props: {
+      stats: createStats(),
+      balance: 0,
+      isSimple: false,
+      platformQuotas: [],
+      mode,
+    },
+    global: {
+      stubs: {
+        Icon: true,
       },
-      global: {
-        stubs: {
-          Icon: true
-        }
-      }
-    })
+    },
+  })
+
+  it('shows cache read and write token breakdown on token cards', () => {
+    const wrapper = mountStats()
 
     const text = wrapper.text()
     expect(text).toContain('dashboard.cache: 70')
@@ -64,5 +67,30 @@ describe('UserDashboardStats', () => {
     expect(text).toContain('usage.inputCacheReadRatio: 50.0%')
     expect(text).toContain('usage.cacheRead: 400')
     expect(text).toContain('usage.cacheWrite: 300')
+  })
+
+  it('renders only the four approved first-screen metrics in primary mode', () => {
+    const wrapper = mountStats('primary')
+
+    expect(wrapper.findAll('.dashboard-metric-card')).toHaveLength(4)
+    expect(wrapper.find('.dashboard-metric-balance').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-requests').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-today-tokens').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-response').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-keys').exists()).toBe(false)
+    expect(wrapper.find('.dashboard-metric-cost').exists()).toBe(false)
+  })
+
+  it('keeps the remaining original metrics available in secondary mode', () => {
+    const wrapper = mountStats('secondary')
+
+    expect(wrapper.findAll('.dashboard-metric-card')).toHaveLength(5)
+    expect(wrapper.find('.dashboard-metric-keys').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-cost').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-total-tokens').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-performance').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-today-tokens').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-metric-balance').exists()).toBe(false)
+    expect(wrapper.find('.dashboard-metric-response').exists()).toBe(false)
   })
 })

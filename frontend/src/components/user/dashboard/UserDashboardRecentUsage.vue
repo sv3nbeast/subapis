@@ -1,5 +1,5 @@
 <template>
-  <div class="card">
+  <div class="dashboard-activity-card card">
     <div class="flex items-center justify-between border-b border-gray-100 px-6 py-4 dark:border-dark-700">
       <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('dashboard.recentUsage') }}</h2>
       <span class="badge badge-gray">{{ t('dashboard.last7Days') }}</span>

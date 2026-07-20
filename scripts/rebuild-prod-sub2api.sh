@@ -15,6 +15,9 @@ Environment variables:
                                    Default: 1.23.2
   ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
                                    Default: true
+  VITE_UI_V2_ROLLOUT_MODE         UI rollout: off, preview, percentage, or full.
+                                   Default: preview
+  VITE_UI_V2_ROLLOUT_PERCENT      Stable cohort percentage for percentage mode. Default: 0
   GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
                                    true/false. When unset, preserve the current
                                    sub2api container value; default false.
@@ -47,6 +50,8 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
+UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
+UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
@@ -64,6 +69,19 @@ fi
 
 require_cmd docker
 require_cmd sed
+
+case "${UI_V2_ROLLOUT_MODE}" in
+  off|preview|percentage|full) ;;
+  *)
+    echo "VITE_UI_V2_ROLLOUT_MODE must be one of: off, preview, percentage, full." >&2
+    exit 1
+    ;;
+esac
+
+if ! [[ "${UI_V2_ROLLOUT_PERCENT}" =~ ^[0-9]+$ ]] || (( UI_V2_ROLLOUT_PERCENT > 100 )); then
+  echo "VITE_UI_V2_ROLLOUT_PERCENT must be an integer from 0 to 100." >&2
+  exit 1
+fi
 
 if [[ -z "${OPENAI_KIRO_BRIDGE_ENABLED}" ]] && docker inspect "${SERVICE_NAME}" >/dev/null 2>&1; then
   OPENAI_KIRO_BRIDGE_ENABLED="$(
@@ -137,7 +155,11 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 if [[ "${SKIP_BUILD}" != "1" ]]; then
   echo "Building image: ${IMAGE_REF}"
-  docker build -t "${IMAGE_REF}" "${REPO_ROOT}"
+  docker build \
+    --build-arg "VITE_UI_V2_ROLLOUT_MODE=${UI_V2_ROLLOUT_MODE}" \
+    --build-arg "VITE_UI_V2_ROLLOUT_PERCENT=${UI_V2_ROLLOUT_PERCENT}" \
+    -t "${IMAGE_REF}" \
+    "${REPO_ROOT}"
 fi
 
 if [[ -f "${OVERRIDE_FILE}" ]]; then

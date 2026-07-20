@@ -100,8 +100,9 @@ function buildStatsMap(): Map<string, HourlyStat> {
   const intervalMs = props.intervalMinutes * 60_000
   for (const stat of props.modelStatus.hourly_stats) {
     // Truncate to interval window to match backend aggregation
-    const d = new Date(stat.hour)
-    d.setTime(Math.floor(d.getTime() / intervalMs) * intervalMs)
+    const timestamp = new Date(stat.hour).getTime()
+    if (!Number.isFinite(timestamp)) continue
+    const d = new Date(Math.floor(timestamp / intervalMs) * intervalMs)
     map.set(d.toISOString(), stat)
   }
   return map

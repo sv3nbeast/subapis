@@ -1,17 +1,43 @@
 <template>
-  <header class="glass sticky top-0 z-30 border-b border-gray-200/50 dark:border-dark-700/50">
-    <div class="flex h-14 items-center justify-between px-4 md:px-5">
+  <header
+    class="app-header glass sticky top-0 z-30 border-b border-gray-200/50 dark:border-dark-700/50"
+    :class="{ 'ui-v2-account-open': isV2 && dropdownOpen }"
+  >
+    <div class="app-header-inner flex h-14 items-center justify-between px-4 md:px-5">
       <!-- Left: Mobile Menu Toggle + Page Title -->
-      <div class="flex items-center gap-3">
+      <div class="app-header-leading flex min-w-0 items-center gap-3">
         <button
           @click="toggleMobileSidebar"
-          class="btn-ghost btn-icon lg:hidden"
+          class="app-header-menu btn-ghost btn-icon lg:hidden"
           aria-label="Toggle Menu"
         >
           <Icon name="menu" size="md" />
         </button>
 
-        <div class="hidden lg:block">
+        <button
+          v-if="isV2"
+          type="button"
+          class="ui-v2-mobile-brand lg:hidden"
+          :aria-label="t('nav.mainNavigation')"
+          :aria-expanded="appStore.mobileOpen"
+          @click="toggleMobileSidebar"
+        >
+          <span class="ui-v2-mobile-brand-mark">
+            <img v-if="appStore.publicSettingsLoaded" :src="siteLogo" :alt="t('common.logoAlt')">
+          </span>
+          <strong>{{ appStore.siteName }}</strong>
+        </button>
+
+        <div
+          v-if="isV2 && topbarServiceStatus"
+          class="ui-v2-topbar-context"
+          :class="`is-${topbarServiceStatus}`"
+        >
+          <span aria-hidden="true"></span>
+          <strong>{{ topbarServiceStatusLabel }}</strong>
+        </div>
+
+        <div class="app-header-page-copy hidden lg:block">
           <h1 class="text-lg font-semibold text-gray-900 dark:text-white">
             {{ pageTitle }}
           </h1>
@@ -22,9 +48,19 @@
       </div>
 
       <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + User Dropdown -->
-      <div class="flex items-center gap-2.5">
+      <div class="app-header-actions flex items-center gap-2.5">
+        <button
+          v-if="isV2"
+          type="button"
+          class="ui-v2-header-icon"
+          :title="isDark ? t('nav.lightMode') : t('nav.darkMode')"
+          :aria-label="isDark ? t('nav.lightMode') : t('nav.darkMode')"
+          @click="toggleTheme"
+        >
+          <Icon :name="isDark ? 'sun' : 'moon'" size="sm" :stroke-width="1.8" />
+        </button>
         <!-- Announcement Bell -->
-        <AnnouncementBell v-if="user" />
+        <AnnouncementBell v-if="user" class="header-announcement" />
 
         <!-- Docs Link -->
         <a
@@ -32,22 +68,22 @@
           :href="docUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+          class="header-doc-link flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
         >
           <Icon name="book" size="sm" />
           <span class="hidden sm:inline">{{ t('nav.docs') }}</span>
         </a>
 
         <!-- Language Switcher -->
-        <LocaleSwitcher />
+        <LocaleSwitcher class="header-locale" />
 
         <!-- Subscription Progress (for users with active subscriptions) -->
-        <SubscriptionProgressMini v-if="user" />
+        <SubscriptionProgressMini v-if="user" class="header-subscription" />
 
         <!-- Balance Display -->
         <div
           v-if="user"
-          class="group relative hidden items-center gap-2 rounded-xl bg-primary-50 px-3 py-1.5 dark:bg-primary-900/20 sm:flex"
+          class="header-balance group relative hidden items-center gap-2 rounded-xl bg-primary-50 px-3 py-1.5 dark:bg-primary-900/20 sm:flex"
         >
           <svg
             class="h-4 w-4 text-primary-600 dark:text-primary-400"
@@ -92,13 +128,15 @@
         </div>
 
         <!-- User Dropdown -->
-        <div v-if="user" class="relative" ref="dropdownRef">
+        <div v-if="user" class="header-user-menu relative" ref="dropdownRef">
           <button
             @click="toggleDropdown"
-            class="flex items-center gap-2 rounded-xl p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-dark-800"
+            class="header-user-button flex items-center gap-2 rounded-xl p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-dark-800"
             aria-label="User Menu"
+            aria-controls="app-user-menu"
+            :aria-expanded="dropdownOpen"
           >
-            <div class="flex h-8 w-8 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 text-sm font-medium text-white shadow-sm">
+            <div class="header-user-avatar flex h-8 w-8 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 text-sm font-medium text-white shadow-sm">
               <img
                 v-if="avatarUrl"
                 :src="avatarUrl"
@@ -118,9 +156,36 @@
             <Icon name="chevronDown" size="sm" class="hidden text-gray-400 md:block" />
           </button>
 
+          <button
+            v-if="dropdownOpen && isV2"
+            ref="accountScrimRef"
+            type="button"
+            class="ui-v2-account-scrim"
+            :aria-label="t('common.close')"
+            @click.stop="closeDropdown"
+          ></button>
+
           <!-- Dropdown Menu -->
           <transition name="dropdown">
-            <div v-if="dropdownOpen" class="dropdown right-0 mt-2 w-56">
+            <div
+              v-if="dropdownOpen"
+              id="app-user-menu"
+              ref="accountPanelRef"
+              class="dropdown ui-v2-account-panel right-0 mt-2 w-56"
+              :aria-label="t('nav.myAccount')"
+            >
+              <div
+                v-if="isV2"
+                class="ui-v2-sheet-handle-zone"
+                aria-hidden="true"
+                @pointerdown="beginSheetDrag"
+                @pointermove="moveSheetDrag"
+                @pointerup="endSheetDrag"
+                @pointercancel="endSheetDrag"
+              >
+                <span class="ui-v2-sheet-handle"></span>
+              </div>
+
               <!-- User Info -->
               <div class="border-b border-gray-100 px-4 py-3 dark:border-dark-700">
                 <div class="text-sm font-medium text-gray-900 dark:text-white">
@@ -154,6 +219,29 @@
                 </router-link>
 
                 <a
+                  v-if="isV2 && docUrl"
+                  :href="docUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="dropdown-item"
+                  @click="closeDropdown"
+                >
+                  <Icon name="book" size="sm" />
+                  {{ t('nav.docs') }}
+                </a>
+
+                <button
+                  v-if="isV2"
+                  type="button"
+                  class="dropdown-item w-full"
+                  data-testid="use-legacy-ui"
+                  @click="useLegacyUi"
+                >
+                  <Icon name="arrowLeft" size="sm" />
+                  {{ t('nav.returnToClassic') }}
+                </button>
+
+                <a
                   v-if="authStore.isAdmin"
                   href="https://github.com/Wei-Shaw/sub2api"
                   target="_blank"
@@ -171,6 +259,10 @@
                   {{ t('nav.github') }}
                 </a>
 
+              </div>
+
+              <div v-if="isV2" class="ui-v2-dropdown-locale border-t border-gray-100 px-3 py-2 dark:border-dark-700">
+                <LocaleSwitcher />
               </div>
 
               <!-- Contact Support (only show if configured) -->
@@ -249,7 +341,19 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { useBottomSheetGesture } from '@/composables/useBottomSheetGesture'
+import { statusAPI, type ServiceStatusResponse } from '@/api/status'
 import { sanitizeUrl } from '@/utils/url'
+
+const props = withDefaults(defineProps<{
+  uiVersion?: 'legacy' | 'v2'
+}>(), {
+  uiVersion: 'legacy',
+})
+
+const emit = defineEmits<{
+  useLegacyUi: []
+}>()
 
 const router = useRouter()
 const route = useRoute()
@@ -259,11 +363,25 @@ const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
 const onboardingStore = useOnboardingStore()
 
+const isV2 = computed(() => props.uiVersion === 'v2')
+const topbarServiceStatus = ref<ServiceStatusResponse['overall_status'] | null>(null)
 const user = computed(() => authStore.user)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const accountPanelRef = ref<HTMLElement | null>(null)
+const accountScrimRef = ref<HTMLElement | null>(null)
+const isDark = ref(document.documentElement.classList.contains('dark'))
+const { beginSheetDrag, moveSheetDrag, endSheetDrag, cancelSheetDrag } = useBottomSheetGesture({
+  enabled: () => isV2.value && window.matchMedia('(max-width: 1023px)').matches,
+  panelRef: accountPanelRef,
+  scrimRef: accountScrimRef,
+  onDismiss: () => {
+    dropdownOpen.value = false
+  },
+})
 const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => sanitizeUrl(appStore.docUrl))
+const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '/logo.png', { allowRelative: true, allowDataUrl: true }))
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')
 const availableBalance = computed(() => Number(user.value?.balance || 0))
 const frozenBalance = computed(() => Number(user.value?.frozen_balance || 0))
@@ -272,6 +390,18 @@ const balanceAvailableText = computed(() => t('common.availableBalance') === 'co
 const balanceFrozenText = computed(() => t('common.frozenBalance') === 'common.frozenBalance' ? '冻结金额' : t('common.frozenBalance'))
 const balanceTotalText = computed(() => t('common.totalBalance') === 'common.totalBalance' ? '总余额' : t('common.totalBalance'))
 const balanceFrozenLabel = computed(() => `${balanceFrozenText.value} ${formatHeaderMoney(frozenBalance.value)}`)
+const topbarServiceStatusLabel = computed(() => {
+  switch (topbarServiceStatus.value) {
+    case 'operational':
+      return t('status.allOperational')
+    case 'degraded':
+      return t('status.degraded')
+    case 'major_outage':
+      return t('status.majorOutage')
+    default:
+      return ''
+  }
+})
 
 // 只在标准模式的管理员下显示新手引导按钮
 const showOnboardingButton = computed(() => {
@@ -326,11 +456,41 @@ function toggleMobileSidebar() {
 }
 
 function toggleDropdown() {
-  dropdownOpen.value = !dropdownOpen.value
+  if (dropdownOpen.value) {
+    closeDropdown()
+    return
+  }
+  dropdownOpen.value = true
 }
 
 function closeDropdown() {
+  cancelSheetDrag()
   dropdownOpen.value = false
+}
+
+function useLegacyUi() {
+  closeDropdown()
+  emit('useLegacyUi')
+}
+
+function toggleTheme() {
+  const nextDark = !document.documentElement.classList.contains('dark')
+  document.documentElement.classList.toggle('dark', nextDark)
+  localStorage.setItem('theme', nextDark ? 'dark' : 'light')
+  isDark.value = nextDark
+}
+
+async function loadTopbarServiceStatus() {
+  try {
+    const status = await statusAPI.getStatus()
+    const visible =
+      status.overall_status !== 'unknown' &&
+      status.models.length > 0 &&
+      (status.public_visible || authStore.isAdmin)
+    topbarServiceStatus.value = visible ? status.overall_status : null
+  } catch {
+    topbarServiceStatus.value = null
+  }
 }
 
 async function handleLogout() {
@@ -360,12 +520,23 @@ function handleClickOutside(event: MouseEvent) {
   }
 }
 
+let themeObserver: MutationObserver | null = null
+
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  if (isV2.value) {
+    void loadTopbarServiceStatus()
+  }
+  themeObserver = new MutationObserver(() => {
+    isDark.value = document.documentElement.classList.contains('dark')
+  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside)
+  themeObserver?.disconnect()
+  themeObserver = null
 })
 </script>
 
