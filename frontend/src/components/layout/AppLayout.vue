@@ -22,7 +22,7 @@
       <AppHeader :ui-version="uiVersion" @use-legacy-ui="useLegacyUi" />
 
       <!-- Main Content -->
-      <main class="app-content-shell p-3 md:p-4 lg:p-5">
+      <main class="app-content-shell p-3 md:p-4 lg:p-5" :class="{ 'app-content-shell-v2': isV2 }">
         <slot :ui-version="uiVersion" />
       </main>
     </div>
@@ -84,7 +84,10 @@ defineExpose({ replayTour })
 <style scoped>
 .app-content-shell {
   animation: app-content-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  will-change: opacity, transform;
+}
+
+.app-content-shell-v2 {
+  animation: none;
 }
 
 @keyframes app-content-enter {
@@ -102,7 +105,6 @@ defineExpose({ replayTour })
 @media (prefers-reduced-motion: reduce) {
   .app-content-shell {
     animation: none;
-    will-change: auto;
   }
 }
 </style>

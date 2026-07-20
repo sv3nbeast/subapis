@@ -5,7 +5,7 @@
         <div>
           <p>{{ t('nav.personalWorkspace') }}</p>
           <h1>{{ t('dashboard.greetingTitle', { greeting, name: displayName }) }}</h1>
-          <span>{{ t('dashboard.overviewSubtitle') }}</span>
+          <span>{{ dashboardSubtitle }}</span>
         </div>
         <div class="ui-v2-dashboard-actions">
           <router-link to="/usage" class="ui-v2-dashboard-button ui-v2-dashboard-button-secondary">
@@ -19,7 +19,48 @@
         </div>
       </header>
 
-      <div v-if="loading" class="dashboard-loading-state"><LoadingSpinner /></div>
+      <div v-if="uiVersion === 'v2'" class="dashboard-command-bar">
+        <div class="dashboard-view-segmented" role="tablist" :aria-label="t('dashboard.workspaceView')">
+          <button
+            id="dashboard-overview-tab"
+            type="button"
+            role="tab"
+            data-dashboard-view="overview"
+            :class="{ 'is-active': activeDashboardView === 'overview' }"
+            :aria-selected="activeDashboardView === 'overview'"
+            aria-controls="dashboard-overview-panel"
+            @click="selectDashboardView('overview')"
+          >
+            <Icon name="grid" size="sm" :stroke-width="1.8" />
+            {{ t('dashboard.overviewView') }}
+          </button>
+          <button
+            id="dashboard-analysis-tab"
+            type="button"
+            role="tab"
+            data-dashboard-view="analysis"
+            :class="{ 'is-active': activeDashboardView === 'analysis' }"
+            :aria-selected="activeDashboardView === 'analysis'"
+            aria-controls="dashboard-analysis-panel"
+            @click="selectDashboardView('analysis')"
+          >
+            <Icon name="chart" size="sm" :stroke-width="1.8" />
+            {{ t('dashboard.analysisView') }}
+          </button>
+        </div>
+        <button
+          type="button"
+          class="dashboard-refresh-button"
+          :title="t('common.refresh')"
+          :aria-label="t('common.refresh')"
+          :disabled="refreshing"
+          @click="refreshAll"
+        >
+          <Icon name="refresh" size="sm" :stroke-width="1.8" />
+        </button>
+      </div>
+
+      <div v-if="loadingStats" class="dashboard-loading-state"><LoadingSpinner /></div>
 
       <div v-else-if="!stats" class="dashboard-load-error card">
         <Icon name="exclamationCircle" size="lg" :stroke-width="1.8" />
@@ -35,36 +76,53 @@
 
       <template v-else>
         <template v-if="uiVersion === 'v2'">
-          <UserDashboardStats
-            :stats="stats"
-            :balance="user?.balance || 0"
-            :is-simple="authStore.isSimpleMode"
-            :platform-quotas="platformQuotas"
-            mode="primary"
-          />
-
-          <div class="dashboard-v2-primary-grid">
-            <DashboardRequestTrend
-              :trend="trendData"
-              :loading="loadingCharts"
-              :period="trendPeriod"
-              @period-change="selectTrendPeriod"
+          <section
+            v-if="activeDashboardView === 'overview'"
+            id="dashboard-overview-panel"
+            class="dashboard-workspace-panel"
+            role="tabpanel"
+            aria-labelledby="dashboard-overview-tab"
+          >
+            <UserDashboardStats
+              :stats="stats"
+              :balance="user?.balance || 0"
+              :is-simple="authStore.isSimpleMode"
+              :platform-quotas="platformQuotas"
+              mode="primary"
             />
-            <section class="dashboard-service-card">
-              <ServiceStatusOverview compact />
-            </section>
-          </div>
 
-          <div class="dashboard-lower-grid grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2"><UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" /></div>
-            <div class="lg:col-span-1"><UserDashboardQuickActions /></div>
-          </div>
+            <div class="dashboard-v2-primary-grid">
+              <DashboardRequestTrend
+                :trend="overviewTrend"
+                :loading="loadingOverviewTrend"
+                :period="trendPeriod"
+                @period-change="selectTrendPeriod"
+              />
+              <section class="dashboard-service-card">
+                <ServiceStatusOverview compact />
+              </section>
+            </div>
 
-          <section class="dashboard-v2-secondary">
-            <header class="dashboard-v2-secondary-header">
-              <h2>{{ t('dashboard.moreMetrics') }}</h2>
-              <p>{{ t('dashboard.moreMetricsDescription') }}</p>
+            <div class="dashboard-lower-grid grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div class="lg:col-span-2"><UserDashboardRecentUsage :data="recentUsage" :loading="loadingUsage" /></div>
+              <div class="lg:col-span-1"><UserDashboardQuickActions /></div>
+            </div>
+          </section>
+
+          <section
+            v-else
+            id="dashboard-analysis-panel"
+            class="dashboard-workspace-panel dashboard-analysis-panel"
+            role="tabpanel"
+            aria-labelledby="dashboard-analysis-tab"
+          >
+            <header class="dashboard-analysis-heading">
+              <div>
+                <h2>{{ t('dashboard.moreMetrics') }}</h2>
+                <p>{{ t('dashboard.moreMetricsDescription') }}</p>
+              </div>
             </header>
+
             <UserDashboardStats
               :stats="stats"
               :balance="user?.balance || 0"
@@ -72,15 +130,16 @@
               :platform-quotas="platformQuotas"
               mode="secondary"
             />
+
             <UserDashboardCharts
-              v-model:startDate="startDate"
-              v-model:endDate="endDate"
-              v-model:granularity="granularity"
-              :loading="loadingCharts"
-              :trend="trendData"
+              v-model:startDate="analysisStartDate"
+              v-model:endDate="analysisEndDate"
+              v-model:granularity="analysisGranularity"
+              :loading="loadingAnalytics"
+              :trend="analyticsTrend"
               :models="modelStats"
-              @dateRangeChange="loadCharts"
-              @granularityChange="loadCharts"
+              @dateRangeChange="loadAnalytics"
+              @granularityChange="loadAnalytics"
               @refresh="refreshAll"
             />
           </section>
@@ -95,14 +154,14 @@
           />
           <ServiceStatusOverview compact />
           <UserDashboardCharts
-            v-model:startDate="startDate"
-            v-model:endDate="endDate"
-            v-model:granularity="granularity"
-            :loading="loadingCharts"
-            :trend="trendData"
+            v-model:startDate="analysisStartDate"
+            v-model:endDate="analysisEndDate"
+            v-model:granularity="analysisGranularity"
+            :loading="loadingAnalytics"
+            :trend="analyticsTrend"
             :models="modelStats"
-            @dateRangeChange="loadCharts"
-            @granularityChange="loadCharts"
+            @dateRangeChange="loadAnalytics"
+            @granularityChange="loadAnalytics"
             @refresh="refreshAll"
           />
           <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -116,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, defineComponent, h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { usageAPI, type UserDashboardStats as UserStatsType } from '@/api/usage'
@@ -126,17 +185,29 @@ import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import Icon from '@/components/icons/Icon.vue'
 import DashboardRequestTrend from '@/components/user/dashboard/DashboardRequestTrend.vue'
 import UserDashboardStats from '@/components/user/dashboard/UserDashboardStats.vue'
-import UserDashboardCharts from '@/components/user/dashboard/UserDashboardCharts.vue'
 import ServiceStatusOverview from '@/components/status/ServiceStatusOverview.vue'
 import UserDashboardRecentUsage from '@/components/user/dashboard/UserDashboardRecentUsage.vue'
 import UserDashboardQuickActions from '@/components/user/dashboard/UserDashboardQuickActions.vue'
 import { useUiVersion } from '@/composables/useUiVersion'
 import type { UsageLog, TrendDataPoint, ModelStat, PlatformQuotaItem } from '@/types'
 
+const DashboardChartsLoading = defineComponent({
+  name: 'DashboardChartsLoading',
+  setup: () => () => h('div', { class: 'dashboard-analysis-loading' }, [h(LoadingSpinner)]),
+})
+const UserDashboardCharts = defineAsyncComponent({
+  loader: () => import('@/components/user/dashboard/UserDashboardCharts.vue').then((module) => module.default),
+  loadingComponent: DashboardChartsLoading,
+  delay: 0,
+})
+
+type DashboardViewMode = 'overview' | 'analysis'
+
 const authStore = useAuthStore()
 const { t } = useI18n()
 const user = computed(() => authStore.user)
 const { uiVersion: initialUiVersion } = useUiVersion(computed(() => user.value?.id))
+const activeDashboardView = ref<DashboardViewMode>('overview')
 const displayName = computed(() => user.value?.username || user.value?.email?.split('@')[0] || t('nav.personalWorkspace'))
 const greeting = computed(() => {
   const hour = new Date().getHours()
@@ -144,31 +215,44 @@ const greeting = computed(() => {
   if (hour < 18) return t('dashboard.greetingAfternoon')
   return t('dashboard.greetingEvening')
 })
+const dashboardSubtitle = computed(() => activeDashboardView.value === 'overview'
+  ? t('dashboard.overviewSubtitle')
+  : t('dashboard.analysisSubtitle'))
 
 const stats = ref<UserStatsType | null>(null)
-const loading = ref(false)
+const loadingStats = ref(true)
 const loadingUsage = ref(false)
-const loadingCharts = ref(false)
-const trendData = ref<TrendDataPoint[]>([])
+const loadingOverviewTrend = ref(false)
+const loadingAnalytics = ref(false)
+const overviewTrend = ref<TrendDataPoint[]>([])
+const analyticsTrend = ref<TrendDataPoint[]>([])
 const modelStats = ref<ModelStat[]>([])
 const recentUsage = ref<UsageLog[]>([])
 const platformQuotas = ref<PlatformQuotaItem[]>([])
+const analyticsLoaded = ref(false)
 
 const formatLD = (d: Date) => d.toISOString().split('T')[0]
-const trendPeriod = ref<7 | 30 | 90>(initialUiVersion.value === 'v2' ? 30 : 7)
-const startDate = ref(formatLD(new Date(Date.now() - (trendPeriod.value - 1) * 86400000)))
-const endDate = ref(formatLD(new Date()))
-const granularity = ref('day')
+const today = () => new Date()
+const daysAgo = (days: number) => new Date(Date.now() - days * 86400000)
+const trendPeriod = ref<7 | 30 | 90>(30)
+const analysisDays = initialUiVersion.value === 'v2' ? 30 : 7
+const analysisStartDate = ref(formatLD(daysAgo(analysisDays - 1)))
+const analysisEndDate = ref(formatLD(today()))
+const analysisGranularity = ref('day')
 
-const loadStats = async () => {
-  loading.value = true
+const refreshing = computed(() => loadingStats.value || loadingUsage.value || loadingOverviewTrend.value || loadingAnalytics.value)
+
+const loadStats = async (refreshUser = false) => {
+  loadingStats.value = true
   try {
-    await authStore.refreshUser()
+    if (refreshUser) {
+      await authStore.refreshUser()
+    }
     stats.value = await usageAPI.getDashboardStats()
   } catch (error) {
     console.error('Failed to load dashboard stats:', error)
   } finally {
-    loading.value = false
+    loadingStats.value = false
   }
 }
 
@@ -186,31 +270,65 @@ const loadPlatformQuotas = async () => {
   }
 }
 
-const loadCharts = async () => {
-  loadingCharts.value = true
+const loadOverviewTrend = async () => {
+  if (loadingOverviewTrend.value) return
+  loadingOverviewTrend.value = true
+  const endDate = formatLD(today())
+  const startDate = formatLD(daysAgo(trendPeriod.value - 1))
   try {
-    const res = await Promise.all([
-      usageAPI.getDashboardTrend({
-        start_date: startDate.value,
-        end_date: endDate.value,
-        granularity: granularity.value as 'day' | 'hour',
-      }),
-      usageAPI.getDashboardModels({ start_date: startDate.value, end_date: endDate.value }),
-    ])
-    trendData.value = res[0].trend || []
-    modelStats.value = res[1].models || []
+    const res = await usageAPI.getDashboardTrend({
+      start_date: startDate,
+      end_date: endDate,
+      granularity: 'day',
+    })
+    overviewTrend.value = res.trend || []
   } catch (error) {
-    console.error('Failed to load charts:', error)
+    console.error('Failed to load overview trend:', error)
   } finally {
-    loadingCharts.value = false
+    loadingOverviewTrend.value = false
+  }
+}
+
+const loadAnalytics = async () => {
+  if (loadingAnalytics.value) return
+  loadingAnalytics.value = true
+  try {
+    const [trendResponse, modelsResponse] = await Promise.all([
+      usageAPI.getDashboardTrend({
+        start_date: analysisStartDate.value,
+        end_date: analysisEndDate.value,
+        granularity: analysisGranularity.value as 'day' | 'hour',
+      }),
+      usageAPI.getDashboardModels({
+        start_date: analysisStartDate.value,
+        end_date: analysisEndDate.value,
+      }),
+    ])
+    analyticsTrend.value = trendResponse.trend || []
+    modelStats.value = modelsResponse.models || []
+    analyticsLoaded.value = true
+  } catch (error) {
+    console.error('Failed to load analytics:', error)
+  } finally {
+    loadingAnalytics.value = false
   }
 }
 
 const loadRecent = async () => {
+  if (loadingUsage.value) return
   loadingUsage.value = true
+  const endDate = formatLD(today())
+  const startDate = formatLD(daysAgo(6))
   try {
-    const res = await usageAPI.getByDateRange(startDate.value, endDate.value)
-    recentUsage.value = res.items.slice(0, 5)
+    const res = await usageAPI.query({
+      start_date: startDate,
+      end_date: endDate,
+      page: 1,
+      page_size: 5,
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    })
+    recentUsage.value = res.items
   } catch (error) {
     console.error('Failed to load recent usage:', error)
   } finally {
@@ -219,19 +337,37 @@ const loadRecent = async () => {
 }
 
 const selectTrendPeriod = (days: 7 | 30 | 90) => {
+  if (trendPeriod.value === days) return
   trendPeriod.value = days
-  endDate.value = formatLD(new Date())
-  startDate.value = formatLD(new Date(Date.now() - (days - 1) * 86400000))
-  granularity.value = 'day'
-  void loadCharts()
+  void loadOverviewTrend()
+}
+
+const selectDashboardView = (view: DashboardViewMode) => {
+  activeDashboardView.value = view
+  if (view === 'analysis' && !analyticsLoaded.value) {
+    void loadAnalytics()
+  }
 }
 
 const refreshAll = () => {
-  void loadStats()
+  void loadStats(true)
   void loadPlatformQuotas()
-  void loadCharts()
   void loadRecent()
+  if (initialUiVersion.value === 'v2' && activeDashboardView.value === 'overview') {
+    void loadOverviewTrend()
+  } else {
+    void loadAnalytics()
+  }
 }
 
-onMounted(refreshAll)
+onMounted(() => {
+  void loadStats()
+  void loadPlatformQuotas()
+  void loadRecent()
+  if (initialUiVersion.value === 'v2') {
+    void loadOverviewTrend()
+  } else {
+    void loadAnalytics()
+  }
+})
 </script>

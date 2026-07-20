@@ -109,7 +109,7 @@ describe('useRoutePrefetch', () => {
       const route = createMockRoute('/dashboard')
       const config = _getPrefetchConfig(route)
 
-      expect(config).toHaveLength(3)
+      expect(config).toHaveLength(1)
     })
 
     it('未定义的路由应该返回空数组', () => {
@@ -205,7 +205,7 @@ describe('useRoutePrefetch', () => {
 
     it('用户预加载映射表应该包含正确的路由', () => {
       expect(_userPrefetchMap).toHaveProperty('/dashboard')
-      expect(_userPrefetchMap['/dashboard']).toEqual(['/keys', '/usage', '/available-channels'])
+      expect(_userPrefetchMap['/dashboard']).toEqual(['/keys'])
       expect(_userPrefetchMap['/available-channels']).toContain('/channel-status')
     })
   })

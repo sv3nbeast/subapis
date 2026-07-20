@@ -26,32 +26,60 @@
 
     <div class="dashboard-request-canvas">
       <LoadingSpinner v-if="loading" size="md" />
-      <Line v-else-if="chartData" :data="chartData" :options="chartOptions" />
+      <svg
+        v-else-if="chartPoints.length"
+        ref="chartRef"
+        class="dashboard-request-svg"
+        :viewBox="`0 0 ${chartWidth} ${chartHeight}`"
+        role="img"
+        :aria-label="t('dashboard.requestTrend')"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="dashboard-request-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="currentColor" stop-opacity="0.18" />
+            <stop offset="1" stop-color="currentColor" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+
+        <g class="dashboard-request-grid" aria-hidden="true">
+          <g v-for="tick in yTicks" :key="tick.y">
+            <line :x1="plotLeft" :x2="chartWidth - plotRight" :y1="tick.y" :y2="tick.y" />
+            <text :x="plotLeft - 9" :y="tick.y + 4">{{ formatCompact(tick.value) }}</text>
+          </g>
+        </g>
+
+        <path class="dashboard-request-area" :d="areaPath" aria-hidden="true" />
+        <polyline class="dashboard-request-line" :points="linePoints" aria-hidden="true" />
+
+        <g class="dashboard-request-points">
+          <circle v-for="point in chartPoints" :key="point.date" :cx="point.x" :cy="point.y" r="8">
+            <title>{{ point.date }}: {{ point.requests.toLocaleString() }}</title>
+          </circle>
+        </g>
+
+        <g class="dashboard-request-x-labels" aria-hidden="true">
+          <text
+            v-for="label in xLabels"
+            :key="label.date"
+            :x="label.x"
+            :y="chartHeight - 5"
+            :text-anchor="label.anchor"
+          >
+            {{ formatAxisDate(label.date) }}
+          </text>
+        </g>
+      </svg>
       <p v-else>{{ t('dashboard.noDataAvailable') }}</p>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  CategoryScale,
-  Chart as ChartJS,
-  Filler,
-  Legend,
-  LinearScale,
-  LineElement,
-  PointElement,
-  Tooltip,
-  type ChartData,
-  type ChartOptions,
-} from 'chart.js'
-import { Line } from 'vue-chartjs'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import type { TrendDataPoint } from '@/types'
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const props = defineProps<{
   trend: TrendDataPoint[]
@@ -65,79 +93,55 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const periods = [7, 30, 90] as const
-const isDark = ref(document.documentElement.classList.contains('dark'))
-let themeObserver: MutationObserver | null = null
+const chartRef = ref<SVGSVGElement | null>(null)
+const chartWidth = ref(720)
+const chartHeight = ref(250)
+const plotLeft = 44
+const plotRight = 8
+const plotTop = 8
+const plotBottom = 28
+const plotWidth = computed(() => chartWidth.value - plotLeft - plotRight)
+const plotHeight = computed(() => chartHeight.value - plotTop - plotBottom)
+let resizeObserver: ResizeObserver | null = null
 
 const totalRequests = computed(() => props.trend.reduce((sum, point) => sum + point.requests, 0))
+const maxRequests = computed(() => Math.max(1, ...props.trend.map((point) => point.requests)))
 
-const chartData = computed<ChartData<'line'> | null>(() => {
-  if (!props.trend.length) return null
+const chartPoints = computed(() => props.trend.map((point, index) => ({
+  date: point.date,
+  requests: point.requests,
+  x: plotLeft + (props.trend.length === 1 ? plotWidth.value / 2 : (index / (props.trend.length - 1)) * plotWidth.value),
+  y: plotTop + plotHeight.value - (point.requests / maxRequests.value) * plotHeight.value,
+})))
 
-  return {
-    labels: props.trend.map((point) => point.date),
-    datasets: [
-      {
-        label: t('dashboard.requestCount'),
-        data: props.trend.map((point) => point.requests),
-        borderColor: isDark.value ? '#4da3ff' : '#087af5',
-        backgroundColor: isDark.value ? 'rgba(77, 163, 255, 0.08)' : 'rgba(8, 122, 245, 0.06)',
-        borderWidth: 2.25,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        pointHitRadius: 16,
-        tension: 0.34,
-        fill: true,
-      },
-    ],
-  }
+const linePoints = computed(() => chartPoints.value.map((point) => `${point.x},${point.y}`).join(' '))
+const areaPath = computed(() => {
+  if (!chartPoints.value.length) return ''
+  const bottom = plotTop + plotHeight.value
+  const first = chartPoints.value[0]
+  const last = chartPoints.value[chartPoints.value.length - 1]
+  return `M ${first.x} ${bottom} L ${linePoints.value.split(' ').join(' L ')} L ${last.x} ${bottom} Z`
 })
 
-const chartOptions = computed<ChartOptions<'line'>>(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: {
-    duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 280,
-  },
-  interaction: {
-    intersect: false,
-    mode: 'index',
-  },
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      displayColors: false,
-      callbacks: {
-        label: (context) => `${t('dashboard.requestCount')}: ${Number(context.raw).toLocaleString()}`,
-      },
-    },
-  },
-  scales: {
-    x: {
-      border: { display: false },
-      grid: { display: false },
-      ticks: {
-        color: isDark.value ? '#818188' : '#8b8b92',
-        font: { size: 10 },
-        maxRotation: 0,
-        maxTicksLimit: 6,
-      },
-    },
-    y: {
-      beginAtZero: true,
-      border: { display: false },
-      grid: {
-        color: isDark.value ? 'rgba(255, 255, 255, 0.07)' : 'rgba(24, 24, 27, 0.07)',
-        tickBorderDash: [3, 4],
-      },
-      ticks: {
-        color: isDark.value ? '#818188' : '#8b8b92',
-        font: { size: 10 },
-        maxTicksLimit: 5,
-        callback: (value) => formatCompact(Number(value)),
-      },
-    },
-  },
-}))
+const yTicks = computed(() => [0, 0.5, 1].map((ratio) => ({
+  value: Math.round(maxRequests.value * (1 - ratio)),
+  y: plotTop + plotHeight.value * ratio,
+})))
+
+const xLabels = computed(() => {
+  const points = chartPoints.value
+  if (!points.length) return []
+  const indexes = Array.from(new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]))
+  return indexes.map((index, labelIndex) => ({
+    ...points[index],
+    anchor: labelIndex === 0 ? 'start' : labelIndex === indexes.length - 1 ? 'end' : 'middle',
+  }))
+})
+
+function formatAxisDate(value: string): string {
+  const parts = value.split('-')
+  return parts.length === 3 ? `${parts[1]}/${parts[2]}` : value
+}
 
 function formatCompact(value: number): string {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`
@@ -146,15 +150,20 @@ function formatCompact(value: number): string {
   return value.toLocaleString()
 }
 
-onMounted(() => {
-  themeObserver = new MutationObserver(() => {
-    isDark.value = document.documentElement.classList.contains('dark')
+watch(chartRef, (element) => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (!element || typeof ResizeObserver === 'undefined') return
+  resizeObserver = new ResizeObserver(([entry]) => {
+    if (!entry) return
+    chartWidth.value = Math.max(240, Math.round(entry.contentRect.width))
+    chartHeight.value = Math.max(160, Math.round(entry.contentRect.height))
   })
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  resizeObserver.observe(element)
 })
 
 onBeforeUnmount(() => {
-  themeObserver?.disconnect()
-  themeObserver = null
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 </script>

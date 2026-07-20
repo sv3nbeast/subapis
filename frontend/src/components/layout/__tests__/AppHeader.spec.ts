@@ -1,9 +1,19 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppHeader from '../AppHeader.vue'
 
-const { getStatus } = vi.hoisted(() => ({
-  getStatus: vi.fn(),
+const { appStore } = vi.hoisted(() => ({
+  appStore: {
+    contactInfo: '',
+    docUrl: '',
+    siteLogo: '',
+    siteName: 'Sub2API',
+    publicSettingsLoaded: true,
+    cachedPublicSettings: null,
+    mobileOpen: false,
+    serviceStatus: null as any,
+    toggleMobileSidebar: vi.fn(),
+  },
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -19,20 +29,8 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }))
 
-vi.mock('@/api/status', () => ({
-  statusAPI: { getStatus },
-}))
-
 vi.mock('@/stores', () => ({
-  useAppStore: () => ({
-    contactInfo: '',
-    docUrl: '',
-    siteLogo: '',
-    siteName: 'Sub2API',
-    publicSettingsLoaded: true,
-    cachedPublicSettings: null,
-    toggleMobileSidebar: vi.fn(),
-  }),
+  useAppStore: () => appStore,
   useAuthStore: () => ({
     isAdmin: false,
     isSimpleMode: false,
@@ -64,11 +62,11 @@ vi.mock('@/composables/useBottomSheetGesture', () => ({
 
 describe('AppHeader', () => {
   beforeEach(() => {
-    getStatus.mockReset()
+    appStore.serviceStatus = null
   })
 
-  it('shows the actual degraded service status in the v2 top bar', async () => {
-    getStatus.mockResolvedValue({
+  it('shows the shared degraded service status in the v2 top bar', () => {
+    appStore.serviceStatus = {
       overall_status: 'degraded',
       public_visible: true,
       interval_minutes: 5,
@@ -80,7 +78,7 @@ describe('AppHeader', () => {
         hourly_stats: [],
       }],
       last_updated: null,
-    })
+    }
 
     const wrapper = mount(AppHeader, {
       props: { uiVersion: 'v2' },
@@ -94,8 +92,6 @@ describe('AppHeader', () => {
         },
       },
     })
-
-    await flushPromises()
 
     const status = wrapper.get('.ui-v2-topbar-context')
     expect(status.classes()).toContain('is-degraded')

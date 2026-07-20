@@ -342,7 +342,6 @@ import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMi
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useBottomSheetGesture } from '@/composables/useBottomSheetGesture'
-import { statusAPI, type ServiceStatusResponse } from '@/api/status'
 import { sanitizeUrl } from '@/utils/url'
 
 const props = withDefaults(defineProps<{
@@ -364,7 +363,7 @@ const adminSettingsStore = useAdminSettingsStore()
 const onboardingStore = useOnboardingStore()
 
 const isV2 = computed(() => props.uiVersion === 'v2')
-const topbarServiceStatus = ref<ServiceStatusResponse['overall_status'] | null>(null)
+const topbarServiceStatus = computed(() => appStore.serviceStatus?.overall_status ?? null)
 const user = computed(() => authStore.user)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
@@ -480,19 +479,6 @@ function toggleTheme() {
   isDark.value = nextDark
 }
 
-async function loadTopbarServiceStatus() {
-  try {
-    const status = await statusAPI.getStatus()
-    const visible =
-      status.overall_status !== 'unknown' &&
-      status.models.length > 0 &&
-      (status.public_visible || authStore.isAdmin)
-    topbarServiceStatus.value = visible ? status.overall_status : null
-  } catch {
-    topbarServiceStatus.value = null
-  }
-}
-
 async function handleLogout() {
   closeDropdown()
   try {
@@ -524,9 +510,6 @@ let themeObserver: MutationObserver | null = null
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  if (isV2.value) {
-    void loadTopbarServiceStatus()
-  }
   themeObserver = new MutationObserver(() => {
     isDark.value = document.documentElement.classList.contains('dark')
   })

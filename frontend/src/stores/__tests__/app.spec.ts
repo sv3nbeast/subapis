@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { statusAPI, type ServiceStatusResponse } from '@/api/status'
 import type { PublicSettings } from '@/types'
 
 function createDeferred<T>() {
@@ -69,12 +70,17 @@ vi.mock('@/api/auth', () => ({
   getPublicSettings: vi.fn(),
 }))
 
+vi.mock('@/api/status', () => ({
+  statusAPI: { getStatus: vi.fn() },
+}))
+
 describe('useAppStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
     localStorage.clear()
     vi.mocked(getPublicSettings).mockReset()
+    vi.mocked(statusAPI.getStatus).mockReset()
     // 清除 window.__APP_CONFIG__
     delete (window as any).__APP_CONFIG__
   })
@@ -225,6 +231,39 @@ describe('useAppStore', () => {
 
       store.toggleMobileSidebar()
       expect(store.mobileOpen).toBe(false)
+    })
+  })
+
+  describe('服务状态缓存', () => {
+    it('并发调用共享同一请求并复用短缓存', async () => {
+      const deferred = createDeferred<ServiceStatusResponse>()
+      const response: ServiceStatusResponse = {
+        overall_status: 'operational',
+        public_visible: true,
+        interval_minutes: 5,
+        models: [{
+          model: 'claude-sonnet-4',
+          display_name: 'Claude',
+          current_status: 'operational',
+          uptime_percentage: 99.9,
+          hourly_stats: [],
+        }],
+        last_updated: null,
+      }
+      vi.mocked(statusAPI.getStatus).mockReturnValue(deferred.promise)
+      const store = useAppStore()
+
+      const first = store.fetchServiceStatus(false)
+      const second = store.fetchServiceStatus(false)
+      expect(statusAPI.getStatus).toHaveBeenCalledTimes(1)
+
+      deferred.resolve(response)
+      await expect(Promise.all([first, second])).resolves.toEqual([response, response])
+      expect(store.serviceStatus).toEqual(response)
+      expect(store.statusProbeEnabled).toBe(true)
+
+      await expect(store.fetchServiceStatus(false)).resolves.toEqual(response)
+      expect(statusAPI.getStatus).toHaveBeenCalledTimes(1)
     })
   })
 

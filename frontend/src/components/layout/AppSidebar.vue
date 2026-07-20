@@ -255,7 +255,6 @@ import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
-import { statusAPI } from '@/api/status'
 
 interface NavItem {
   path: string
@@ -1108,15 +1107,7 @@ onMounted(async () => {
   if (isAdmin.value) {
     adminSettingsStore.fetch()
   }
-  try {
-    const data = await statusAPI.getStatus()
-    appStore.statusProbeEnabled =
-      data.overall_status !== 'unknown' &&
-      data.models.length > 0 &&
-      (data.public_visible || isAdmin.value)
-  } catch {
-    appStore.statusProbeEnabled = false
-  }
+  await appStore.fetchServiceStatus(isAdmin.value)
 })
 
 onBeforeUnmount(() => {

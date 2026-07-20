@@ -66,8 +66,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { statusAPI } from '@/api/status'
-import type { ModelStatus, ServiceStatusResponse } from '@/api/status'
+import type { ModelStatus } from '@/api/status'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import ServiceStatusBar from '@/components/status/ServiceStatusBar.vue'
@@ -77,7 +76,7 @@ interface Props {
   compact?: boolean
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   compact: false
 })
 
@@ -86,8 +85,8 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 
-const status = ref<ServiceStatusResponse | null>(null)
-const loading = ref(true)
+const status = computed(() => appStore.serviceStatus)
+const loading = computed(() => appStore.serviceStatusLoading && !status.value)
 const currentTime = ref('')
 let clockTimer: ReturnType<typeof setInterval> | null = null
 
@@ -99,31 +98,12 @@ function updateClock() {
   })
 }
 
-onMounted(async () => {
-  updateClock()
-  clockTimer = setInterval(updateClock, 1000)
-  try {
-    const data = await statusAPI.getStatus()
-    const visible =
-      data.overall_status !== 'unknown' &&
-      data.models.length > 0 &&
-      (data.public_visible || authStore.isAdmin)
-
-    if (!visible) {
-      // Treat unknown as disabled; render nothing
-      status.value = null
-      appStore.statusProbeEnabled = false
-    } else {
-      status.value = data
-      appStore.statusProbeEnabled = true
-    }
-  } catch {
-    // Fetch failed; render nothing
-    status.value = null
-    appStore.statusProbeEnabled = false
-  } finally {
-    loading.value = false
+onMounted(() => {
+  if (!props.compact) {
+    updateClock()
+    clockTimer = setInterval(updateClock, 1000)
   }
+  void appStore.fetchServiceStatus(authStore.isAdmin)
 })
 
 onUnmounted(() => {

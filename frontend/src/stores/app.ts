@@ -12,7 +12,10 @@ import {
   type ReleaseInfo
 } from '@/api/admin/system'
 import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
+import { statusAPI, type ServiceStatusResponse } from '@/api/status'
 import { DEFAULT_SITE_NAME, normalizeSiteName } from '@/utils/siteBrand'
+
+const SERVICE_STATUS_CACHE_MS = 30_000
 
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
@@ -44,8 +47,14 @@ export const useAppStore = defineStore('app', () => {
   const buildType = ref<string>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
-  // Status probe visibility (set by ServiceStatusOverview on fetch)
+  // Shared service status cache
   const statusProbeEnabled = ref<boolean>(false)
+  const serviceStatus = ref<ServiceStatusResponse | null>(null)
+  const serviceStatusLoaded = ref<boolean>(false)
+  const serviceStatusLoading = ref<boolean>(false)
+  let cachedServiceStatus: ServiceStatusResponse | null = null
+  let serviceStatusCachedAt = 0
+  let serviceStatusRequest: Promise<ServiceStatusResponse | null> | null = null
 
   // Auto-incrementing ID for toasts
   let toastIdCounter = 0
@@ -185,6 +194,61 @@ export const useAppStore = defineStore('app', () => {
     toasts.value = []
   }
 
+  function applyServiceStatus(data: ServiceStatusResponse | null, isAdmin: boolean): ServiceStatusResponse | null {
+    const visible = Boolean(
+      data &&
+      data.overall_status !== 'unknown' &&
+      data.models.length > 0 &&
+      (data.public_visible || isAdmin)
+    )
+
+    serviceStatus.value = visible ? data : null
+    statusProbeEnabled.value = visible
+    return serviceStatus.value
+  }
+
+  /**
+   * Fetch service status once for all layout consumers. Concurrent callers share
+   * one request and route changes reuse a short cache.
+   */
+  function fetchServiceStatus(isAdmin = false, force = false): Promise<ServiceStatusResponse | null> {
+    if (serviceStatusRequest) {
+      return serviceStatusRequest.then((data) => applyServiceStatus(data, isAdmin))
+    }
+
+    const cacheFresh = serviceStatusLoaded.value && Date.now() - serviceStatusCachedAt < SERVICE_STATUS_CACHE_MS
+    if (!force && cacheFresh) {
+      return Promise.resolve(applyServiceStatus(cachedServiceStatus, isAdmin))
+    }
+
+    serviceStatusLoading.value = true
+    let apiRequest: Promise<ServiceStatusResponse>
+    try {
+      apiRequest = statusAPI.getStatus()
+    } catch {
+      serviceStatusLoading.value = false
+      return Promise.resolve(applyServiceStatus(cachedServiceStatus, isAdmin))
+    }
+
+    const request = apiRequest
+      .then((data) => {
+        cachedServiceStatus = data
+        serviceStatusCachedAt = Date.now()
+        serviceStatusLoaded.value = true
+        return data
+      })
+      .catch(() => cachedServiceStatus)
+      .finally(() => {
+        if (serviceStatusRequest === request) {
+          serviceStatusRequest = null
+          serviceStatusLoading.value = false
+        }
+      })
+
+    serviceStatusRequest = request
+    return request.then((data) => applyServiceStatus(data, isAdmin))
+  }
+
   /**
    * Execute an async operation with loading state
    * Automatically manages loading indicator
@@ -232,6 +296,13 @@ export const useAppStore = defineStore('app', () => {
     loading.value = false
     loadingCount.value = 0
     toasts.value = []
+    statusProbeEnabled.value = false
+    serviceStatus.value = null
+    serviceStatusLoaded.value = false
+    serviceStatusLoading.value = false
+    cachedServiceStatus = null
+    serviceStatusCachedAt = 0
+    serviceStatusRequest = null
   }
 
   // ==================== Version Management ====================
@@ -467,6 +538,9 @@ export const useAppStore = defineStore('app', () => {
 
     // Status probe
     statusProbeEnabled,
+    serviceStatus,
+    serviceStatusLoaded,
+    serviceStatusLoading,
 
     // Computed
     hasActiveToasts,
@@ -485,6 +559,7 @@ export const useAppStore = defineStore('app', () => {
     showWarning,
     hideToast,
     clearAllToasts,
+    fetchServiceStatus,
     withLoading,
     withLoadingAndError,
     reset,

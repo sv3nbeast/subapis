@@ -13,13 +13,6 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-vi.mock('vue-chartjs', () => ({
-  Line: {
-    props: ['data', 'options'],
-    template: '<div data-testid="request-chart"></div>',
-  },
-}))
-
 const trend: TrendDataPoint[] = [
   {
     date: '2026-07-18',
@@ -52,7 +45,9 @@ describe('DashboardRequestTrend', () => {
     })
 
     expect(wrapper.text()).toContain('3.7K')
-    expect(wrapper.find('[data-testid="request-chart"]').exists()).toBe(true)
+    expect(wrapper.find('svg.dashboard-request-svg').exists()).toBe(true)
+    expect(wrapper.find('polyline.dashboard-request-line').attributes('points')).not.toBe('')
+    expect(wrapper.find('path.dashboard-request-area').attributes('d')).toContain('Z')
 
     const periodButton = wrapper.findAll('button').find((button) => button.text() === '90 days')
     expect(periodButton).toBeTruthy()
