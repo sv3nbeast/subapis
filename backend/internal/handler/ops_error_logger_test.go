@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -367,6 +368,8 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 		{"known invalid_request_error", "invalid_request_error", "", "invalid_request_error"},
 		{"known rate_limit_error", "rate_limit_error", "", "rate_limit_error"},
 		{"known upstream_error", "upstream_error", "", "upstream_error"},
+		{"legacy model_not_found", "model_not_found", "", "not_found_error"},
+		{"explicit business code wins over legacy model_not_found", "model_not_found", "INSUFFICIENT_BALANCE", "billing_error"},
 
 		// Unknown/garbage types are rejected and fall through to code-based or default.
 		{"nil literal from upstream", "<nil>", "", "api_error"},
@@ -491,6 +494,54 @@ func TestClassifyOpsUpstreamRateLimitRemainsSLAError(t *testing.T) {
 	require.False(t, classifyOpsIsBusinessLimited("rate_limit_error", phase, "", http.StatusTooManyRequests, msg))
 	require.Equal(t, "provider", classifyOpsErrorOwner(phase, msg))
 	require.Equal(t, "upstream_http", classifyOpsErrorSource(phase, msg))
+}
+
+func TestClassifyOpsRoutingCapacityIsSLAError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	markOpsRoutingCapacityLimited(c)
+
+	phase, limited, owner, source := classifyOpsErrorLog(
+		c,
+		"api_error",
+		"Service temporarily unavailable",
+		"",
+		http.StatusServiceUnavailable,
+	)
+
+	require.Equal(t, "routing", phase)
+	require.False(t, limited)
+	require.Equal(t, "platform", owner)
+	require.Equal(t, "gateway", source)
+}
+
+type opsErrorLogSettingsRepoProbe struct {
+	service.SettingRepository
+	sawCanceled bool
+}
+
+func (r *opsErrorLogSettingsRepoProbe) GetValue(ctx context.Context, key string) (string, error) {
+	r.sawCanceled = ctx != nil && ctx.Err() != nil
+	if key != service.SettingKeyOpsAdvancedSettings {
+		return "", service.ErrSettingNotFound
+	}
+	raw, err := json.Marshal(map[string]any{"ignore_context_canceled": true})
+	return string(raw), err
+}
+
+func (r *opsErrorLogSettingsRepoProbe) Set(context.Context, string, string) error {
+	return nil
+}
+
+func TestShouldSkipOpsErrorLog_UsesDetachedContextAfterClientCancel(t *testing.T) {
+	repo := &opsErrorLogSettingsRepoProbe{}
+	ops := service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.True(t, shouldSkipOpsErrorLog(ctx, ops, "context canceled", "", "/v1/messages"))
+	require.False(t, repo.sawCanceled, "settings lookup must not inherit a canceled request context")
 }
 
 func TestClassifyOpsUpstreamConfirmedClientContextLimitIsExcludedFromSLA(t *testing.T) {

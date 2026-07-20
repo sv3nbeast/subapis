@@ -103,7 +103,7 @@ func TestClassifyNoAccountError_ModelNotSupported_Returns404(t *testing.T) {
 	cls := classifyNoAccountErrorFromGin(c, fd, apiKey, "gpt-5.1-codex-mini", "gpt-5.1-codex-mini", service.PlatformOpenAI)
 
 	require.Equal(t, http.StatusNotFound, cls.Status)
-	require.Equal(t, "model_not_found", cls.ErrType)
+	require.Equal(t, "not_found_error", cls.ErrType)
 	require.True(t, cls.ModelNotFound)
 	require.Contains(t, cls.Message, "gpt-5.1-codex-mini", "message must surface the requested model")
 

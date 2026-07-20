@@ -56,9 +56,20 @@ func TestOpenAIGatewayGrokFreeUsageExhausted429RateLimitsForRollingWindow(t *tes
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
-func TestResolveGrokFreeUsageResetPreservesExistingFutureLimit(t *testing.T) {
+func TestResolveGrokFreeUsageResetDoesNotReuseShortExistingLimit(t *testing.T) {
 	now := time.Now().UTC()
 	existing := now.Add(3 * time.Hour)
+	account := &Account{Platform: PlatformGrok, RateLimitResetAt: &existing}
+	body := []byte(`{"code":"subscription:free-usage-exhausted"}`)
+
+	resetAt := resolveGrokQuotaResetAtForResponse(account, body, now)
+
+	require.WithinDuration(t, now.Add(grokFreeUsageExhaustedCooldown), resetAt, time.Second)
+}
+
+func TestResolveGrokFreeUsageResetPreservesLaterProviderLimit(t *testing.T) {
+	now := time.Now().UTC()
+	existing := now.Add(48 * time.Hour)
 	account := &Account{Platform: PlatformGrok, RateLimitResetAt: &existing}
 	body := []byte(`{"code":"subscription:free-usage-exhausted"}`)
 
@@ -78,4 +89,22 @@ func TestOpenAIGatewayGrokGeneric429KeepsShortCooldown(t *testing.T) {
 	require.Zero(t, repo.rateLimitedCalls)
 	require.Equal(t, 1, repo.tempUnschedCalls)
 	require.WithinDuration(t, before.Add(2*time.Minute), repo.lastTempUnschedUntil, time.Second)
+}
+
+func TestHandleOpenAIAccountUpstreamError_Grok429UsesOnlyGrokCooldown(t *testing.T) {
+	repo := &grokFreeQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: &RateLimitService{accountRepo: repo},
+	}
+	account := &Account{ID: 62, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	body := []byte(`{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for now. Usage resets over a rolling 24-hour window."}`)
+	before := time.Now()
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body)
+
+	require.False(t, shouldDisable)
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.WithinDuration(t, before.Add(grokFreeUsageExhaustedCooldown), repo.lastRateLimitResetAt, time.Second)
 }

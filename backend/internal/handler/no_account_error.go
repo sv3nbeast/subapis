@@ -15,7 +15,7 @@ import (
 // account selection failed with ErrNoAvailableAccounts. Handlers obtain it
 // via classifyNoAccountError and choose between:
 //
-//   - 404 model_not_found — the group has accounts, but none of them are
+//   - 404 not_found_error — the group has accounts, but none of them are
 //     configured to serve the requested model (config / typo / unsupported
 //     model). Returning 503 here misleads operators and trips reverse-proxy
 //     health checks; 404 lets the client surface the real problem.
@@ -29,10 +29,10 @@ type noAccountErrorClassification struct {
 	Status        int
 	ErrType       string
 	Message       string
-	ModelNotFound bool // true when this is a 404 model_not_found classification
+	ModelNotFound bool // true when this is a 404 unsupported-model classification
 }
 
-// classifyNoAccountError decides between 404 model_not_found and 503
+// classifyNoAccountError decides between 404 not_found_error and 503
 // api_error for "no available accounts" failures.
 //
 // The classifier intentionally does not consume the original error: the
@@ -82,7 +82,7 @@ func classifyNoAccountError(
 	if result.HasAccountsInPool && !result.HasModelSupport {
 		return noAccountErrorClassification{
 			Status:        http.StatusNotFound,
-			ErrType:       "model_not_found",
+			ErrType:       "not_found_error",
 			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group", displayModel),
 			ModelNotFound: true,
 		}

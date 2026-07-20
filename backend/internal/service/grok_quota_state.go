@@ -95,10 +95,14 @@ func resolveGrokQuotaResetAtForResponse(account *Account, responseBody []byte, n
 	if !isGrokFreeUsageExhausted(responseBody) {
 		return resolveGrokQuotaResetAt(account, now)
 	}
-	if account != nil && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now) {
+	resetAt := now.Add(grokFreeUsageExhaustedCooldown)
+	// A generic 429 handler may have already written a short fallback reset.
+	// Never let that shorter window downgrade the rolling free-usage cooldown;
+	// preserve an existing later reset when it is a real provider window.
+	if account != nil && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(resetAt) {
 		return *account.RateLimitResetAt
 	}
-	return now.Add(grokFreeUsageExhaustedCooldown)
+	return resetAt
 }
 
 // resolveGrokQuotaResetAt uses the observed xAI billing period whenever

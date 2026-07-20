@@ -1377,6 +1377,12 @@ func normalizeOpsErrorType(errType string, code string) string {
 	if mapped, ok := mapOpsErrorCodeToType(code); ok && (errType == "" || !isKnownOpsErrorType(errType) || errType == "api_error") {
 		return mapped
 	}
+	// Older gateway paths emitted model_not_found for a group-level unsupported
+	// model. Normalize it to the canonical not_found_error enum before phase and
+	// SLA classification, after honoring an explicit business-limit code.
+	if strings.TrimSpace(errType) == "model_not_found" {
+		return "not_found_error"
+	}
 	if errType != "" && isKnownOpsErrorType(errType) {
 		return errType
 	}
@@ -1480,7 +1486,9 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	msg := strings.ToLower(message)
 	localClientAuthError := !upstreamError && phase == "auth" && isOpsClientAuthError(code, msg)
 	localBusinessLimited := !upstreamError && classifyOpsIsBusinessLimited(errType, phase, code, status, message, localClientAuthError)
-	isBusinessLimited = routingCapacityLimited || clientContextLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
+	// Routing exhaustion is a platform availability failure, not a user-level
+	// business limit. Keep it in the routing phase and include it in SLA.
+	isBusinessLimited = clientContextLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
 	errorOwner = classifyOpsErrorOwner(phase, message)
 	errorSource = classifyOpsErrorSource(phase, message)
 	if phase == "network" {
@@ -1766,8 +1774,17 @@ func shouldSkipOpsErrorLog(ctx context.Context, ops *service.OpsService, message
 		return false
 	}
 
-	// Get advanced settings to check filter configuration
-	settings, err := ops.GetOpsAdvancedSettings(ctx)
+	// The request context may already be canceled (especially for 499 client
+	// disconnects). Settings lookup is observability work and must not inherit
+	// that cancellation, otherwise the fail-open path records errors that the
+	// configured filters explicitly exclude.
+	settingsCtx := context.Background()
+	if ctx != nil {
+		settingsCtx = context.WithoutCancel(ctx)
+	}
+	settingsCtx, cancel := context.WithTimeout(settingsCtx, opsErrorLogTimeout)
+	defer cancel()
+	settings, err := ops.GetOpsAdvancedSettings(settingsCtx)
 	if err != nil || settings == nil {
 		// If we can't get settings, don't skip (fail open)
 		return false

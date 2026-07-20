@@ -168,10 +168,24 @@ func openAIOAuthModelUnsupportedKey(accountID int64, model string) string {
 }
 
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) bool {
+	if s == nil {
+		return false
+	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 	if len(requestedModel) > 0 {
 		s.markOpenAIOAuthModelUnsupported(account, requestedModel[0], responseBody)
+	}
+
+	// Grok has provider-specific quota semantics. Keep all Grok account state
+	// changes in the Grok handler so the generic 429 fallback cannot overwrite a
+	// rolling 24-hour free-usage cooldown with a short retry window.
+	if account != nil && account.Platform == PlatformGrok {
+		s.handleGrokAccountUpstreamError(stateCtx, account, statusCode, headers, responseBody)
+		if s.rateLimitService != nil && len(requestedModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody) {
+			return true
+		}
+		return false
 	}
 
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIContextWindowError("", responseBody) {
@@ -179,7 +193,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	}
 
 	if isOpenAIImageRateLimitError(statusCode, responseBody) {
-		if s != nil && s.rateLimitService != nil {
+		if s.rateLimitService != nil {
 			_ = s.rateLimitService.HandleOpenAIImageRateLimit(stateCtx, account, statusCode, headers, responseBody)
 		}
 		return false
