@@ -1308,7 +1308,7 @@ func (s *GatewayService) withKiroCooldownPrefetch(ctx context.Context, accounts 
 				err = getErr
 				break
 			}
-			if state != nil && state.Active {
+			if isKiroRoutingBlockingCooldown(state) {
 				statesByKey[key] = state
 			}
 		}
@@ -1320,7 +1320,7 @@ func (s *GatewayService) withKiroCooldownPrefetch(ctx context.Context, accounts 
 
 	states := make(map[int64]*kirocooldown.State)
 	for accountID, key := range accountKeys {
-		if state := statesByKey[key]; state != nil && state.Active {
+		if state := statesByKey[key]; isKiroRoutingBlockingCooldown(state) {
 			states[accountID] = state
 			slog.Info("kiro_scheduler_cooldown_observed",
 				"group_id", derefGroupID(groupID),
@@ -1337,6 +1337,10 @@ func (s *GatewayService) withKiroCooldownPrefetch(ctx context.Context, accounts 
 	})
 }
 
+func isKiroRoutingBlockingCooldown(state *kirocooldown.State) bool {
+	return state != nil && state.Active && state.Reason != kirocooldown.CooldownReasonUnresponsive
+}
+
 func kiroCooldownStateFromContext(ctx context.Context, account *Account) *kirocooldown.State {
 	if account == nil || account.Platform != PlatformKiro {
 		return nil
@@ -1345,7 +1349,11 @@ func kiroCooldownStateFromContext(ctx context.Context, account *Account) *kiroco
 	if prefetch == nil || !prefetch.enforced {
 		return nil
 	}
-	return prefetch.states[account.ID]
+	state := prefetch.states[account.ID]
+	if !isKiroRoutingBlockingCooldown(state) {
+		return nil
+	}
+	return state
 }
 
 func kiroCooldownExhaustedErrorFromContext(ctx context.Context, accountIDs map[int64]struct{}) error {
@@ -1361,7 +1369,7 @@ func kiroCooldownExhaustedErrorFromContext(ctx context.Context, accountIDs map[i
 		if _, ok := accountIDs[accountID]; !ok {
 			continue
 		}
-		if state == nil || !state.Active || state.Remaining <= 0 {
+		if !isKiroRoutingBlockingCooldown(state) || state.Remaining <= 0 {
 			continue
 		}
 		matched++

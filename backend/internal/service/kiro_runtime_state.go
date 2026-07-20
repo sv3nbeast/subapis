@@ -112,12 +112,16 @@ func (s *GatewayService) checkAndWaitKiroCooldownWithMode(ctx context.Context, t
 	}
 
 	switch state.Reason {
-	case kirocooldown.CooldownReason429, kirocooldown.CooldownReasonUnresponsive:
+	case kirocooldown.CooldownReason429:
 		if enforce {
 			return kirocooldown.NewError(state.Remaining, state.Reason)
 		}
 		// Legacy/observe traffic remains fail-open, but must not erase shared
 		// transient cooldowns established by an enforce group.
+		return nil
+	case kirocooldown.CooldownReasonUnresponsive:
+		// Network and response timeouts fail over only within the current request.
+		// Ignore legacy shared cooldowns so they cannot pause future account routing.
 		return nil
 	case kirocooldown.CooldownReasonSuspended:
 		return kirocooldown.NewError(state.Remaining, state.Reason)
@@ -251,31 +255,16 @@ func (s *GatewayService) markKiroAccount429(ctx context.Context, account *Accoun
 
 func (s *GatewayService) markKiroAccountUnresponsive(ctx context.Context, account *Account, groupID *int64, failureKind UpstreamFailureKind) time.Duration {
 	if s == nil || account == nil {
-		return 0
+		return defaultKiroTransportRetryAfter
 	}
-	base, maximum := s.kiroUnresponsiveCooldown(groupID)
-	if base <= 0 {
-		if s.kiroResilienceMode(groupID) != "off" {
-			slog.Info("kiro_unresponsive_cooldown_observed", "group_id", derefGroupID(groupID), "account_id", account.ID, "failure_kind", failureKind)
-		}
-		return 0
-	}
-	stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
-	defer stateCancel()
-	cooldown, err := s.markKiroUnresponsive(stateCtx, buildKiroCooldownKey(account), base, maximum)
-	if err != nil {
-		slog.Warn("kiro_unresponsive_cooldown_mark_failed", "group_id", derefGroupID(groupID), "account_id", account.ID, "failure_kind", failureKind, "error", err)
-		cooldown = base
-	}
-	s.persistKiroRuntimeCooldown(stateCtx, account, cooldown, string(failureKind))
-	slog.Info("kiro_unresponsive_cooldown_marked",
+	slog.Info("kiro_timeout_account_pause_skipped",
 		"request_id", resolveUsageBillingRequestID(ctx, ""),
 		"group_id", derefGroupID(groupID),
 		"account_id", account.ID,
 		"failure_kind", failureKind,
-		"cooldown_ms", cooldown.Milliseconds(),
+		"policy", "request_failover_only",
 	)
-	return cooldown
+	return defaultKiroTransportRetryAfter
 }
 
 func (s *GatewayService) observeKiroAccountUnresponsive(
@@ -288,67 +277,14 @@ func (s *GatewayService) observeKiroAccountUnresponsive(
 	if s == nil || account == nil {
 		return defaultKiroTransportRetryAfter
 	}
-	base, maximum := s.kiroUnresponsiveCooldown(groupID)
-	if base <= 0 {
-		if s.kiroResilienceMode(groupID) != "off" {
-			slog.Info("kiro_unresponsive_soft_failure_observed", "group_id", derefGroupID(groupID), "account_id", account.ID, "failure_kind", failureKind, "enforced", false)
-		}
-		return defaultKiroTransportRetryAfter
-	}
-	threshold, observationWindow := s.kiroUnresponsiveFailurePolicy()
-	stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
-	defer stateCancel()
-	result, err := s.observeKiroUnresponsive(
-		stateCtx,
-		buildKiroCooldownKey(account),
-		observationScope,
-		base,
-		maximum,
-		threshold,
-		observationWindow,
-	)
-	if err != nil {
-		slog.Warn("kiro_unresponsive_soft_failure_mark_failed",
-			"group_id", derefGroupID(groupID),
-			"account_id", account.ID,
-			"failure_kind", failureKind,
-			"error", err,
-		)
-		return defaultKiroTransportRetryAfter
-	}
-	if result == nil {
-		return defaultKiroTransportRetryAfter
-	}
-	if result.Escalated {
-		cooldown := result.Cooldown
-		if cooldown <= 0 {
-			cooldown = base
-		}
-		s.persistKiroRuntimeCooldown(stateCtx, account, cooldown, string(failureKind))
-		slog.Info("kiro_unresponsive_cooldown_escalated",
-			"request_id", resolveUsageBillingRequestID(ctx, ""),
-			"group_id", derefGroupID(groupID),
-			"account_id", account.ID,
-			"failure_kind", failureKind,
-			"failure_count", result.FailureCount,
-			"threshold", threshold,
-			"cooldown_ms", cooldown.Milliseconds(),
-		)
-		return cooldown
-	}
-	slog.Info("kiro_unresponsive_soft_failure_observed",
+	slog.Info("kiro_timeout_account_pause_skipped",
 		"request_id", resolveUsageBillingRequestID(ctx, ""),
 		"group_id", derefGroupID(groupID),
 		"account_id", account.ID,
 		"failure_kind", failureKind,
-		"failure_count", result.FailureCount,
-		"threshold", threshold,
-		"window_ms", observationWindow.Milliseconds(),
-		"existing_cooldown_ms", result.Cooldown.Milliseconds(),
+		"observation_scope", observationScope,
+		"policy", "request_failover_only",
 	)
-	if result.Cooldown > 0 {
-		return result.Cooldown
-	}
 	return defaultKiroTransportRetryAfter
 }
 

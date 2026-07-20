@@ -166,7 +166,7 @@ func TestGatewayServiceCheckAndWaitKiroCooldownIgnores429WithoutClearingSharedSt
 	require.Empty(t, store.clearKeys)
 }
 
-func TestGatewayServiceCheckAndWaitKiroUnresponsiveCooldownOnlyBlocksEnforceMode(t *testing.T) {
+func TestGatewayServiceCheckAndWaitKiroUnresponsiveCooldownNeverBlocksRouting(t *testing.T) {
 	store := &stubKiroCooldownStore{
 		state: &kirocooldown.State{
 			Active:        true,
@@ -178,10 +178,7 @@ func TestGatewayServiceCheckAndWaitKiroUnresponsiveCooldownOnlyBlocksEnforceMode
 	svc := &GatewayService{kiroCooldownStore: store}
 
 	require.NoError(t, svc.checkAndWaitKiroCooldownWithMode(context.Background(), "token1", false))
-	err := svc.checkAndWaitKiroCooldownWithMode(context.Background(), "token1", true)
-	var cooldownErr *kirocooldown.Error
-	require.ErrorAs(t, err, &cooldownErr)
-	require.Equal(t, kirocooldown.CooldownReasonUnresponsive, cooldownErr.Reason())
+	require.NoError(t, svc.checkAndWaitKiroCooldownWithMode(context.Background(), "token1", true))
 }
 
 func TestGatewayServiceCheckAndWaitKiroCooldownBlocksSuspendedState(t *testing.T) {
