@@ -16,6 +16,10 @@ type grokFreeQuotaAccountRepo struct {
 	lastRateLimitResetAt time.Time
 	tempUnschedCalls     int
 	lastTempUnschedUntil time.Time
+	modelRateLimitCalls  int
+	lastModel            string
+	lastModelResetAt     time.Time
+	lastModelReason      string
 }
 
 func (r *grokFreeQuotaAccountRepo) SetRateLimited(_ context.Context, _ int64, resetAt time.Time) error {
@@ -27,6 +31,16 @@ func (r *grokFreeQuotaAccountRepo) SetRateLimited(_ context.Context, _ int64, re
 func (r *grokFreeQuotaAccountRepo) SetTempUnschedulable(_ context.Context, _ int64, until time.Time, _ string) error {
 	r.tempUnschedCalls++
 	r.lastTempUnschedUntil = until
+	return nil
+}
+
+func (r *grokFreeQuotaAccountRepo) SetModelRateLimit(_ context.Context, _ int64, model string, resetAt time.Time, reason ...string) error {
+	r.modelRateLimitCalls++
+	r.lastModel = model
+	r.lastModelResetAt = resetAt
+	if len(reason) > 0 {
+		r.lastModelReason = reason[0]
+	}
 	return nil
 }
 
@@ -137,6 +151,30 @@ func TestOpenAIGatewayGrokGeneric429KeepsShortCooldown(t *testing.T) {
 	require.Zero(t, repo.rateLimitedCalls)
 	require.Equal(t, 1, repo.tempUnschedCalls)
 	require.WithinDuration(t, before.Add(2*time.Minute), repo.lastTempUnschedUntil, time.Second)
+}
+
+func TestOpenAIGatewayGrokZeroRPM429UsesModelCooldown(t *testing.T) {
+	repo := &grokFreeQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{ID: 1718, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	body := []byte(`{"code":"resource-exhausted","error":"Too many requests for team test and model grok-4.5. Your team's rate limit is - Requests per Minute (actual/limit): 0/0."}`)
+	before := time.Now()
+
+	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body, "grok-4.5")
+
+	require.Equal(t, 1, repo.modelRateLimitCalls)
+	require.Equal(t, "grok-4.5", repo.lastModel)
+	require.Equal(t, grokZeroRPMModelRateLimitReason, repo.lastModelReason)
+	require.WithinDuration(t, before.Add(grokZeroRPMModelCooldown), repo.lastModelResetAt, time.Second)
+	require.Zero(t, repo.rateLimitedCalls)
+	require.Zero(t, repo.tempUnschedCalls)
+}
+
+func TestGrokZeroRPMClassifierRequiresZeroLimit(t *testing.T) {
+	require.True(t, isGrokZeroRPMRateLimitResponse([]byte(`{"code":"resource-exhausted","error":"Requests per Minute (actual/limit): 0/0"}`)))
+	require.True(t, isGrokZeroRPMRateLimitResponse([]byte(`{"error":{"message":"Requests per Minute (actual/limit): 0 / 0"}}`)))
+	require.False(t, isGrokZeroRPMRateLimitResponse([]byte(`{"error":"Requests per Minute (actual/limit): 10/10"}`)))
+	require.False(t, isGrokZeroRPMRateLimitResponse([]byte(`{"error":"burst rate limit"}`)))
 }
 
 func TestHandleOpenAIAccountUpstreamError_Grok429UsesOnlyGrokCooldown(t *testing.T) {

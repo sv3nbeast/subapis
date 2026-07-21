@@ -357,7 +357,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if useGrokResponses {
 			s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
-			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 			if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
 				logger.L().Info("grok chat_completions: /responses unsupported, falling back to raw chat completions",
 					zap.Int64("account_id", account.ID),

@@ -992,6 +992,10 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	if s == nil || account == nil {
 		return
 	}
+	if statusCode == http.StatusTooManyRequests && len(requestedModel) > 0 &&
+		s.markGrokZeroRPMModelRateLimitIfDetected(ctx, account, requestedModel[0], responseBody) {
+		return
+	}
 	// A provider can advertise an exhausted request/token window in headers
 	// even when the body is generic (or when a final successful response used
 	// the last token). Persist that signal before body-specific handling so the
@@ -1048,6 +1052,30 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
+}
+
+func (s *OpenAIGatewayService) markGrokZeroRPMModelRateLimitIfDetected(ctx context.Context, account *Account, requestedModel string, responseBody []byte) bool {
+	if s == nil || account == nil || account.Platform != PlatformGrok || !isGrokZeroRPMRateLimitResponse(responseBody) {
+		return false
+	}
+	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
+	if modelKey == "" {
+		return false
+	}
+	resetAt := time.Now().Add(grokZeroRPMModelCooldown)
+	if s.accountRepo == nil {
+		slog.Warn("grok_zero_rpm_model_rate_limit_repo_unavailable", "account_id", account.ID, "model", modelKey)
+		return true
+	}
+	stateCtx, cancel := openAIAccountStateContext(ctx)
+	err := s.accountRepo.SetModelRateLimit(stateCtx, account.ID, modelKey, resetAt, grokZeroRPMModelRateLimitReason)
+	cancel()
+	if err != nil {
+		slog.Warn("grok_zero_rpm_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "error", err)
+		return true
+	}
+	slog.Info("grok_zero_rpm_model_rate_limited", "account_id", account.ID, "model", modelKey, "reset_at", resetAt)
+	return true
 }
 
 // markGrokQuotaExhaustedIfDetected rate-limits a Grok account until its

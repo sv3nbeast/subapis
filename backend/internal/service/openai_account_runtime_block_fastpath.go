@@ -287,6 +287,11 @@ func isGrokQuotaExhaustedForStatus(account *Account, statusCode int, responseBod
 	if account == nil || account.Platform != PlatformGrok {
 		return false
 	}
+	// A zero model RPM is credential-scoped and deterministic. It is not global
+	// credit exhaustion, but it needs the same bounded multi-account discovery.
+	if statusCode == http.StatusTooManyRequests && isGrokZeroRPMRateLimitResponse(responseBody) {
+		return true
+	}
 	// A 400 is also used for model/schema errors. Only an explicit quota code or
 	// message may classify it as spending-limit exhaustion; a billing snapshot
 	// alone is insufficient for that status.

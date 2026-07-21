@@ -34,6 +34,19 @@ func TestShouldStopOpenAIFailoverWithContext_ContinuesPastTwoAccountsWithinBudge
 	}
 }
 
+func TestShouldStopOpenAIFailoverWithContext_ZeroRPMContinuesWithinBudget(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 1718, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	body := []byte(`{"code":"resource-exhausted","error":"Requests per Minute (actual/limit): 0/0"}`)
+	ctx := WithGrokQuotaFailoverBudget(context.Background())
+
+	for failedSwitches := 1; failedSwitches <= 10; failedSwitches++ {
+		require.False(t, svc.ShouldStopOpenAIFailoverWithContext(ctx, account, http.StatusTooManyRequests, body, failedSwitches))
+	}
+	require.False(t, shouldRetryOpenAIAccountOnSameAccount(account, http.StatusTooManyRequests, body, true))
+	require.False(t, isGrokQuotaExhausted(account, body), "zero RPM is model-scoped, not global credit exhaustion")
+}
+
 func TestShouldStopOpenAIFailoverWithContext_StopsWhenQuotaDiscoveryBudgetExpires(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 49, Platform: PlatformGrok, Type: AccountTypeAPIKey}

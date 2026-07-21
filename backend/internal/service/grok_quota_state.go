@@ -15,6 +15,8 @@ const (
 	// accounts to be probed again every 30 minutes.
 	grokQuotaExhaustedFallbackCooldown = 24 * time.Hour
 	grokFreeUsageExhaustedCooldown     = 24 * time.Hour
+	grokZeroRPMModelCooldown           = 24 * time.Hour
+	grokZeroRPMModelRateLimitReason    = "grok_zero_rpm_model_tier"
 )
 
 func isGrokBillingExhausted(billing *xai.BillingSnapshot) bool {
@@ -54,6 +56,17 @@ func isGrokQuotaExhausted(account *Account, responseBody []byte) bool {
 // explicit xAI error code/message when choosing the client status.
 func IsGrokQuotaExhaustedResponse(responseBody []byte) bool {
 	return isGrokQuotaExhaustedBody(responseBody)
+}
+
+func isGrokZeroRPMRateLimitResponse(responseBody []byte) bool {
+	message := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		gjson.GetBytes(responseBody, "error").String(),
+		gjson.GetBytes(responseBody, "message").String(),
+		gjson.GetBytes(responseBody, "error.message").String(),
+		string(responseBody),
+	}, " ")))
+	compact := strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "").Replace(message)
+	return strings.Contains(compact, "requestsperminute(actual/limit):0/0")
 }
 
 func isGrokQuotaExhaustedBody(responseBody []byte) bool {
