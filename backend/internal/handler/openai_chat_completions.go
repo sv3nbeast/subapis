@@ -99,6 +99,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
 	kiroBridgeRequested := isOpenAIKiroBridgeChatRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	if kiroBridgeRequested {
+		c.Request = c.Request.WithContext(service.WithKiroGPTTimeoutsDisabled(c.Request.Context(), kiroBridgeModel))
+	}
 	forwardBody := body
 	if channelMapping.Mapped {
 		forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)

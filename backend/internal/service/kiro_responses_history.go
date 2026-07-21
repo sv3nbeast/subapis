@@ -37,6 +37,9 @@ type kiroResponsesHistoryEntry struct {
 	Instructions       string
 	Input              json.RawMessage
 	Output             []apicompat.ResponsesOutput
+	APIKeyID           int64
+	GroupID            int64
+	CompactSummary     string
 	StoredAt           time.Time
 }
 
@@ -47,6 +50,9 @@ type kiroResponsesHistoryDiskEntry struct {
 	Instructions       string                      `json:"instructions,omitempty"`
 	Input              json.RawMessage             `json:"input,omitempty"`
 	Output             []apicompat.ResponsesOutput `json:"output,omitempty"`
+	APIKeyID           int64                       `json:"api_key_id,omitempty"`
+	GroupID            int64                       `json:"group_id,omitempty"`
+	CompactSummary     string                      `json:"compact_summary,omitempty"`
 	StoredAt           int64                       `json:"stored_at"`
 }
 
@@ -287,6 +293,9 @@ func (s *kiroResponsesHistoryStore) saveToDiskLocked(entry kiroResponsesHistoryE
 		Instructions:       entry.Instructions,
 		Input:              append(json.RawMessage(nil), entry.Input...),
 		Output:             entry.Output,
+		APIKeyID:           entry.APIKeyID,
+		GroupID:            entry.GroupID,
+		CompactSummary:     entry.CompactSummary,
 		StoredAt:           entry.StoredAt.Unix(),
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -328,6 +337,9 @@ func (s *kiroResponsesHistoryStore) loadFromDiskLocked(id string) (kiroResponses
 		Instructions:       doc.Instructions,
 		Input:              append(json.RawMessage(nil), doc.Input...),
 		Output:             doc.Output,
+		APIKeyID:           doc.APIKeyID,
+		GroupID:            doc.GroupID,
+		CompactSummary:     doc.CompactSummary,
 	}
 	if doc.StoredAt > 0 {
 		entry.StoredAt = time.Unix(doc.StoredAt, 0)

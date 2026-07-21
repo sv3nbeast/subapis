@@ -44,6 +44,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	}
 	originalModel := ccReq.Model
 	clientStream := ccReq.Stream
+	if account != nil && account.Platform == PlatformKiro {
+		ctx = WithKiroGPTTimeoutsDisabled(ctx, originalModel)
+	}
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
 	reasoningEffort := extractCCReasoningEffortFromBody(body)
 

@@ -18,7 +18,8 @@ func openAIKiroBridgeModel(requestedModel string, mapping service.ChannelMapping
 }
 
 func isOpenAIKiroBridgeResponsesRequest(c *gin.Context, requestPlatform string, model string) bool {
-	return requestPlatform == service.PlatformOpenAI && service.IsOpenAIKiroBridgeModel(model) && isBareOpenAIResponsesPath(c)
+	return requestPlatform == service.PlatformOpenAI && service.IsOpenAIKiroBridgeModel(model) &&
+		(isBareOpenAIResponsesPath(c) || isOpenAIRemoteCompactPath(c))
 }
 
 func isOpenAIKiroBridgeChatRequest(c *gin.Context, requestPlatform string, model string) bool {

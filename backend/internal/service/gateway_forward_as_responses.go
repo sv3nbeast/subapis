@@ -66,9 +66,42 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
+	kiroGPTRequest := account != nil && account.Platform == PlatformKiro && IsOpenAIKiroBridgeModel(originalModel)
+	kiroCompactRequest := kiroGPTRequest && isOpenAIResponsesCompactPath(c)
+	kiroScope := kiroResponsesScopeForRequest(c, parsed)
+	if kiroGPTRequest {
+		ctx = WithKiroGPTTimeoutsDisabled(ctx, originalModel)
+		expandedInput, expandErr := expandKiroCompactionInput(responsesReq.Input, kiroScope)
+		if expandErr != nil {
+			if errors.Is(expandErr, errKiroCompactTokenNotFound) {
+				writeResponsesError(c, http.StatusNotFound, "invalid_request_error", "Kiro compact token was not found or does not belong to this API key and group")
+			}
+			return nil, fmt.Errorf("expand kiro compact input: %w", expandErr)
+		}
+		responsesReq.Input = expandedInput
+	}
+	if kiroCompactRequest {
+		compactInput, compactErr := prepareKiroCompactInput(responsesReq.Input, kiroScope)
+		if compactErr != nil {
+			if errors.Is(compactErr, errKiroCompactTokenNotFound) {
+				writeResponsesError(c, http.StatusNotFound, "invalid_request_error", "Kiro compact token was not found or does not belong to this API key and group")
+			}
+			return nil, fmt.Errorf("prepare kiro compact input: %w", compactErr)
+		}
+		responsesReq.Input = compactInput
+		responsesReq.Stream = false
+		responsesReq.Tools = nil
+		responsesReq.ToolChoice = nil
+		responsesReq.ParallelToolCalls = nil
+		kiroCodexTools = kiroCodexResponsesToolMetadata{CustomToolNames: make(map[string]struct{})}
+		clientStream = false
+	}
 	storeKiroResponse := true
 	if responsesReq.Store != nil {
 		storeKiroResponse = *responsesReq.Store
+	}
+	if kiroCompactRequest {
+		storeKiroResponse = false
 	}
 
 	// 2. Convert Responses → Anthropic
@@ -128,7 +161,11 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 
 	if account != nil && account.IsKiroDirect() {
-		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools)
+		var compactOptions *kiroCompactResponseOptions
+		if kiroCompactRequest {
+			compactOptions = &kiroCompactResponseOptions{Scope: kiroScope}
+		}
+		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools, compactOptions)
 		if handleErr == nil && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 				ID:                 result.ResponseID,
@@ -244,6 +281,12 @@ func (s *GatewayService) ForwardAsResponses(
 	var handleErr error
 	if clientStream {
 		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+	} else if kiroCompactRequest {
+		result, handleErr = s.handleResponsesBufferedStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
+			CoalesceInterleavedText: true,
+			NormalizeBufferedInput:  true,
+			KiroCompact:             &kiroCompactResponseOptions{Scope: kiroScope},
+		})
 	} else {
 		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
@@ -299,6 +342,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 	parsed *ParsedRequest,
 	startTime time.Time,
 	toolMetadata kiroCodexResponsesToolMetadata,
+	compactOptions *kiroCompactResponseOptions,
 ) (*ForwardResult, error) {
 	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
 	if err != nil {
@@ -343,6 +387,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),
+			KiroCompact:             compactOptions,
 		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
@@ -549,6 +594,18 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
 		CustomToolNames:         options.CustomToolNames,
 	})
 	responsesResp.Model = originalModel // Use original model name
+	if options.KiroCompact != nil {
+		compactOutput, compactErr := buildKiroCompactOutput(responsesResp.Output, options.KiroCompact.Scope)
+		if compactErr != nil {
+			return nil, &UpstreamFailoverError{
+				StatusCode:             http.StatusBadGateway,
+				FailureKind:            UpstreamFailureIncompleteStream,
+				RetryableOnSameAccount: true,
+				Cause:                  compactErr,
+			}
+		}
+		responsesResp.Output = compactOutput
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -561,7 +618,9 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if respBytes, err := json.Marshal(responsesResp); err == nil {
 		respBytes = reverseToolNamesIfPresent(c, respBytes)
-		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+		if !writeOpenAICompactSSEBridge(c, http.StatusOK, respBytes) {
+			c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+		}
 	} else {
 		c.JSON(http.StatusOK, responsesResp)
 	}
@@ -765,6 +824,7 @@ type responsesStreamingBridgeOptions struct {
 	CoalesceInterleavedText bool
 	CustomToolNames         map[string]struct{}
 	NormalizeBufferedInput  bool
+	KiroCompact             *kiroCompactResponseOptions
 }
 
 func (s *GatewayService) handleResponsesStreamingResponseWithOptions(

@@ -990,6 +990,7 @@ func resolveKiroUpstreamModel(mappedModel string) string {
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
+	ctx = WithKiroGPTTimeoutsDisabled(ctx, requestModel)
 	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	groupID := parsedGroupID(parsed)
 	resilienceEnforced := s.kiroResilienceEnforced(groupID)
@@ -1567,7 +1568,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			}}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 			accountRound, _ := AccountSwitchCountFromContext(ctx)
-			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForInput(groupID, requestCtx.PayloadInputTokenEstimate)
+			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForRequest(ctx, groupID, requestCtx.PayloadInputTokenEstimate)
 			responseHeaderObservationScope := kiroHeaderUnresponsiveScope(account, endpoint, proxyURL)
 			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1, responseHeaderTimeout)
 			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {

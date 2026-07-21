@@ -160,3 +160,15 @@ func TestNormalizeOpenAIResponsesCompactRequest_PathBasedStreamTrueNotMarked(t *
 	_, exists := c.Get(service.OpenAICompactClientStreamKeyForTest())
 	require.False(t, exists)
 }
+
+func TestNormalizeOpenAIResponsesCompactRequest_KiroBridgeRemainsEligibleAfterPromotion(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"input":[{"role":"user","content":"history"},{"type":"compaction_trigger"}]}`)
+	c := newCompactBodySignalTestContext(t, "/v1/responses", body)
+
+	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+
+	require.True(t, ok)
+	require.Equal(t, "/v1/responses/compact", c.Request.URL.Path)
+	require.True(t, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformOpenAI, "gpt-5.6-sol"))
+}

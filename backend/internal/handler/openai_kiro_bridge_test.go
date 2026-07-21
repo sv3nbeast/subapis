@@ -50,7 +50,8 @@ func TestOpenAIKiroBridgeEndpointScope(t *testing.T) {
 	}{
 		{path: "/v1/responses", responses: true},
 		{path: "/backend-api/codex/responses", responses: true},
-		{path: "/v1/responses/compact"},
+		{path: "/v1/responses/compact", responses: true},
+		{path: "/backend-api/codex/responses/compact", responses: true},
 		{path: "/v1/messages"},
 		{path: "/v1/chat/completions", chat: true},
 		{path: "/chat/completions", chat: true},

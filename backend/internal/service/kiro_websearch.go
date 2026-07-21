@@ -584,7 +584,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 		}
 		accountRound, _ := AccountSwitchCountFromContext(ctx)
-		responseHeaderTimeout := s.kiroResponseHeaderTimeout(groupID)
+		responseHeaderTimeout := s.kiroResponseHeaderTimeoutForRequest(ctx, groupID, 0)
 		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint, accountRound+1, attempt+1, responseHeaderTimeout)
 		resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 			return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)

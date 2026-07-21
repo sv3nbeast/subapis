@@ -22,6 +22,30 @@ import (
 var errKiroResponseHeaderTimeout = errors.New("kiro upstream response header timeout")
 var errKiroFirstSemanticTimeout = errors.New("kiro upstream first semantic output timeout")
 var errKiroFailoverBudgetExceeded = errors.New("kiro failover budget exceeded")
+
+type kiroGPTTimeoutsDisabledContextKey struct{}
+
+// WithKiroGPTTimeoutsDisabled marks native Kiro GPT traffic as exempt from
+// gateway-created response-header, first-semantic and request-wide deadlines.
+// Parent cancellation and strict terminal validation remain active.
+func WithKiroGPTTimeoutsDisabled(ctx context.Context, model string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !IsOpenAIKiroBridgeModel(model) {
+		return ctx
+	}
+	return context.WithValue(ctx, kiroGPTTimeoutsDisabledContextKey{}, true)
+}
+
+func KiroGPTTimeoutsDisabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(kiroGPTTimeoutsDisabledContextKey{}).(bool)
+	return disabled
+}
+
 var errKiroIncompleteCleanup = errors.New("kiro upstream cleanup did not finish within the grace period")
 
 const defaultKiroTransportRetryAfter = time.Second
@@ -894,8 +918,11 @@ func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupI
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.kiroResilienceEnforced(groupID) {
+	if s.kiroResilienceEnforced(groupID) && !KiroGPTTimeoutsDisabled(ctx) {
 		return s.StartKiroResilienceBudget(ctx, groupID)
+	}
+	if KiroGPTTimeoutsDisabled(ctx) {
+		return ctx, nil
 	}
 	if !s.kiroResilienceObserved(groupID) {
 		return ctx, nil
@@ -919,10 +946,10 @@ func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupI
 }
 
 func (s *GatewayService) startKiroFirstSemanticObservation(ctx context.Context, groupID *int64, account *Account, started time.Time, inputTokens int) *kiroFirstSemanticObserver {
-	if !s.kiroResilienceObserved(groupID) {
+	if !s.kiroResilienceObserved(groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return nil
 	}
-	timeout := s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
+	timeout := s.kiroFirstSemanticTimeoutForRequest(ctx, groupID, inputTokens)
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -991,7 +1018,7 @@ func (s *GatewayService) startKiroResponseHeaderObservation(
 	endpointAttempt int,
 	timeout time.Duration,
 ) func() {
-	if !s.kiroResilienceObserved(groupID) {
+	if !s.kiroResilienceObserved(groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return func() {}
 	}
 	if timeout <= 0 {
@@ -1064,7 +1091,7 @@ func (s *GatewayService) StartKiroResilienceBudget(ctx context.Context, groupID 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.kiroResilienceEnforced(groupID) {
+	if !s.kiroResilienceEnforced(groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return ctx, nil
 	}
 	budget, _ := ctx.Value(kiroResilienceBudgetContextKey{}).(*kiroResilienceBudget)
@@ -1129,6 +1156,10 @@ func (s *GatewayService) kiroContextWithinBudget(ctx context.Context, groupID *i
 // the first semantic event. stopTimer must be called as soon as that event is
 // accepted so a long, healthy generation is not canceled by a failover timer.
 func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *int64, inputTokens int) (context.Context, context.CancelCauseFunc, func(), error) {
+	if KiroGPTTimeoutsDisabled(ctx) {
+		child, cancel := context.WithCancelCause(ctx)
+		return child, cancel, func() {}, nil
+	}
 	ctx, err := s.StartKiroResilienceBudget(ctx, groupID)
 	if err != nil {
 		return ctx, func(error) {}, func() {}, err
@@ -1142,7 +1173,7 @@ func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *in
 	if remaining <= 0 {
 		return ctx, func(error) {}, func() {}, errKiroFailoverBudgetExceeded
 	}
-	timeout := s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
+	timeout := s.kiroFirstSemanticTimeoutForRequest(ctx, groupID, inputTokens)
 	cause := error(errKiroFirstSemanticTimeout)
 	if timeout <= 0 || remaining < timeout {
 		timeout = remaining
@@ -1209,6 +1240,13 @@ func (s *GatewayService) kiroResponseHeaderTimeoutForInput(groupID *int64, paylo
 	return timeout
 }
 
+func (s *GatewayService) kiroResponseHeaderTimeoutForRequest(ctx context.Context, groupID *int64, payloadInputTokens int) time.Duration {
+	if KiroGPTTimeoutsDisabled(ctx) {
+		return 0
+	}
+	return s.kiroResponseHeaderTimeoutForInput(groupID, payloadInputTokens)
+}
+
 func (s *GatewayService) kiroFirstSemanticTimeout(groupID *int64) time.Duration {
 	if !s.kiroResilienceEnforced(groupID) || s.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds <= 0 {
 		return 0
@@ -1233,6 +1271,13 @@ func (s *GatewayService) kiroFirstSemanticTimeoutForInput(groupID *int64, inputT
 		timeout = maximum
 	}
 	return timeout
+}
+
+func (s *GatewayService) kiroFirstSemanticTimeoutForRequest(ctx context.Context, groupID *int64, inputTokens int) time.Duration {
+	if KiroGPTTimeoutsDisabled(ctx) {
+		return 0
+	}
+	return s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
 }
 
 func (s *GatewayService) kiroPreSemanticBufferBytes(groupID *int64) int {

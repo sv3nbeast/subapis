@@ -323,6 +323,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
 	kiroBridgeRequested := isOpenAIKiroBridgeResponsesRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	if kiroBridgeRequested {
+		c.Request = c.Request.WithContext(service.WithKiroGPTTimeoutsDisabled(c.Request.Context(), kiroBridgeModel))
+	}
 	// The native OpenAI HTTP Responses path deliberately rejects
 	// previous_response_id because its server-side response store is only
 	// available through Responses WebSocket v2. The Kiro OpenAI bridge is
@@ -1621,6 +1624,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
 	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMappingWS)
 	kiroBridgeRequested := openAICompatibleRequestPlatform(apiKey) == service.PlatformOpenAI && service.IsOpenAIKiroBridgeModel(kiroBridgeModel) && isBareOpenAIResponsesPath(c)
+	if kiroBridgeRequested {
+		ctx = service.WithKiroGPTTimeoutsDisabled(ctx, kiroBridgeModel)
+		c.Request = c.Request.WithContext(ctx)
+	}
 	baseRequestContext := c.Request.Context()
 
 	var currentUserRelease func()
