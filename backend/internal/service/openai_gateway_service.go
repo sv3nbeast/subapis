@@ -1548,14 +1548,22 @@ type openAIQuotaAutoPauseDecision struct {
 }
 
 func shouldAutoPauseGrokAccountByQuota(account *Account) (bool, openAIQuotaAutoPauseDecision) {
-	if account == nil || !account.IsGrok() || account.Type != AccountTypeOAuth {
+	if account == nil || !account.IsGrok() {
 		return false, openAIQuotaAutoPauseDecision{}
+	}
+	now := time.Now()
+	// Billing snapshots exist only for CLI OAuth accounts. API-key accounts use
+	// passive x-ratelimit snapshots below, avoiding an unnecessary decode on the
+	// mixed-pool scheduling hot path.
+	if account.Type == AccountTypeOAuth {
+		if billing, err := grokBillingSnapshotFromExtra(account.Extra); err == nil && isGrokBillingExhaustionActive(billing, now) {
+			return true, openAIQuotaAutoPauseDecision{window: "billing", threshold: 1, utilization: 1}
+		}
 	}
 	snapshot, err := grokQuotaSnapshotFromExtra(account.Extra)
 	if err != nil || snapshot == nil {
 		return false, openAIQuotaAutoPauseDecision{}
 	}
-	now := time.Now()
 	if grokQuotaSnapshotStaleForPause(snapshot, now) {
 		return false, openAIQuotaAutoPauseDecision{}
 	}
@@ -3629,7 +3637,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
-					RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 				}
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
@@ -5200,7 +5208,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, body, false),
 		}
 	}
 
@@ -5386,7 +5394,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, body, false),
 		}
 	}
 

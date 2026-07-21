@@ -557,3 +557,59 @@ func TestShouldAutoPauseGrokAccountByQuota(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldAutoPauseGrokAPIKeyByQuotaSnapshot(t *testing.T) {
+	zero, limit := int64(0), int64(100)
+	resetAt := time.Now().Add(time.Hour).Unix()
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			grokQuotaSnapshotExtraKey: xai.QuotaSnapshot{
+				Tokens:    &xai.QuotaWindow{Limit: &limit, Remaining: &zero, ResetUnix: &resetAt},
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	paused, decision := shouldAutoPauseGrokAccountByQuota(account)
+	require.True(t, paused)
+	require.Equal(t, "tokens", decision.window)
+}
+
+func TestShouldAutoPauseGrokAccountByFreshBillingSnapshot(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			grokBillingSnapshotExtraKey: xai.BillingSnapshot{
+				CreditUsagePercent:     100,
+				CreditRemainingPercent: 0,
+				CurrentPeriodEnd:       time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+				UpdatedAt:              time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	paused, decision := shouldAutoPauseGrokAccountByQuota(account)
+	require.True(t, paused)
+	require.Equal(t, "billing", decision.window)
+}
+
+func TestShouldAutoPauseGrokAccountIgnoresExpiredBillingWindow(t *testing.T) {
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			grokBillingSnapshotExtraKey: xai.BillingSnapshot{
+				CreditUsagePercent:     100,
+				CreditRemainingPercent: 0,
+				CurrentPeriodEnd:       time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+				UpdatedAt:              time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	paused, _ := shouldAutoPauseGrokAccountByQuota(account)
+	require.False(t, paused)
+}

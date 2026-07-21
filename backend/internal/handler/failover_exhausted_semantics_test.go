@@ -167,6 +167,83 @@ func TestHandleKiroFailoverExhaustedReturnsStandard429WithRetryAfter(t *testing.
 	require.Contains(t, w.Body.String(), `"type":"rate_limit_error"`)
 }
 
+func TestHandleGrokQuotaFailoverExhaustedReturnsFast429(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request = request.WithContext(withPlatform(request.Context(), service.PlatformGrok))
+
+	h := &OpenAIGatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusPaymentRequired,
+		ResponseBody: []byte(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}`),
+	}, false)
+
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	require.Equal(t, "5", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"type":"rate_limit_error"`)
+	require.NotContains(t, w.Body.String(), "Kiro")
+	status, exists := c.Get(service.OpsUpstreamStatusCodeKey)
+	require.True(t, exists)
+	require.Equal(t, http.StatusTooManyRequests, status)
+}
+
+func TestHandleNonGrokCreditsErrorKeepsProviderMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request = request.WithContext(withPlatform(request.Context(), service.PlatformOpenAI))
+
+	h := &OpenAIGatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusPaymentRequired,
+		ResponseBody: []byte(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadGateway, w.Code)
+	require.NotEqual(t, "5", w.Header().Get("Retry-After"))
+}
+
+func TestHandleGrokModelUnsupportedFailoverExhaustedReturnsClient400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request = request.WithContext(withPlatform(request.Context(), service.PlatformGrok))
+
+	h := &OpenAIGatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusBadRequest,
+		ResponseBody: []byte(`{"error":{"message":"Requested model is not supported by this API key/group"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"type":"invalid_request_error"`)
+	require.Contains(t, w.Body.String(), "Requested model is not supported by this API key/group")
+	require.NotContains(t, w.Body.String(), "Kiro")
+}
+
+func TestHandleAnthropicGrokModelUnsupportedFailoverExhaustedReturnsClient400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request = request.WithContext(withPlatform(request.Context(), service.PlatformGrok))
+
+	h := &OpenAIGatewayHandler{}
+	h.handleAnthropicFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusBadRequest,
+		ResponseBody: []byte(`{"error":{"message":"Requested model is not supported by this API key/group"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Contains(t, w.Body.String(), `"type":"invalid_request_error"`)
+	require.NotContains(t, w.Body.String(), "Kiro")
+}
+
 func TestHandleAnthropicKiroTransportExhaustedReturns503WithRetryAfter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

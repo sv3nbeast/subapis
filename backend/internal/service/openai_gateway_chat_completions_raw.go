@@ -183,12 +183,12 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 			if s.shouldFailoverUpstreamError(resp.StatusCode) {
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
-					RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+					RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
 				}
 			}
 			return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)

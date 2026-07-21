@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,4 +178,57 @@ func TestGrokRuntimeBlock_MixedCLIAndAPIKeyPoolSelectsRecoveredCLI(t *testing.T)
 	require.NotNil(t, selection)
 	require.NotNil(t, selection.Account)
 	require.Equal(t, cliAccount.ID, selection.Account.ID)
+}
+
+func TestGrokScheduler_MixedPoolSkipsKnownExhaustedCLI(t *testing.T) {
+	groupID := int64(32)
+	limit, remaining := int64(2_000_000), int64(0)
+	resetAt := time.Now().Add(24 * time.Hour).Unix()
+	cliAccount := Account{
+		ID:          54,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+		Credentials: map[string]any{"base_url": "https://cli-chat-proxy.grok.com/v1"},
+		Extra: map[string]any{
+			grokQuotaSnapshotExtraKey: xai.QuotaSnapshot{
+				Tokens:    &xai.QuotaWindow{Limit: &limit, Remaining: &remaining, ResetUnix: &resetAt},
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+	apiKeyAccount := Account{
+		ID:          55,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+		Credentials: map[string]any{"base_url": "https://api.x.ai/v1", "api_key": "test-key"},
+	}
+	repo := &grokRuntimeRecoveryAccountRepo{accounts: []Account{cliAccount, apiKeyAccount}}
+	svc := &OpenAIGatewayService{accountRepo: repo, cfg: &config.Config{}}
+
+	selection, _, err := svc.SelectAccountWithSchedulerForCapability(
+		context.Background(),
+		&groupID,
+		"",
+		"",
+		"grok-4.5",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+		false,
+		PlatformGrok,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, apiKeyAccount.ID, selection.Account.ID)
 }

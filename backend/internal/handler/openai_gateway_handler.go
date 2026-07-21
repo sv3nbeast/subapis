@@ -397,6 +397,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
+	grokQuotaFailoverCtx := service.WithGrokQuotaFailoverBudget(c.Request.Context())
 	var lastFailoverErr *service.UpstreamFailoverError
 	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
 	kiroFailoverState.FailedAccountIDs = failedAccountIDs
@@ -611,12 +612,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					quotaFailure := service.IsGrokQuotaExhaustedForFailover(account, failoverErr.StatusCode, failoverErr.ResponseBody)
+					if switchCount >= maxAccountSwitches && !quotaFailure {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if h.gatewayService.ShouldStopOpenAIFailoverWithContext(grokQuotaFailoverCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -993,6 +995,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
+	grokQuotaFailoverCtx := service.WithGrokQuotaFailoverBudget(c.Request.Context())
 	var lastFailoverErr *service.UpstreamFailoverError
 	effectiveMappedModel := preferredMappedModel
 
@@ -1135,12 +1138,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					quotaFailure := service.IsGrokQuotaExhaustedForFailover(account, failoverErr.StatusCode, failoverErr.ResponseBody)
+					if switchCount >= maxAccountSwitches && !quotaFailure {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if h.gatewayService.ShouldStopOpenAIFailoverWithContext(grokQuotaFailoverCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1281,6 +1285,10 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	if applyGrokQuotaFailoverRetryAfter(c, failoverErr) {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "upstream quota exhausted", string(responseBody))
+		return http.StatusTooManyRequests, "rate_limit_error", "Upstream quota exhausted, please retry later"
+	}
 	platform := service.PlatformAnthropic
 	if c != nil && c.Request != nil {
 		if v, ok := c.Request.Context().Value(ctxkey.Platform).(string); ok && strings.TrimSpace(v) != "" {
@@ -1316,6 +1324,10 @@ func (h *OpenAIGatewayHandler) resolveAnthropicFailoverExhaustedError(c *gin.Con
 			}
 			return respCode, "upstream_error", msg
 		}
+	}
+	if service.IsUpstreamAccountModelUnsupportedError(statusCode, responseBody) {
+		service.SetOpsUpstreamError(c, statusCode, "upstream model unsupported", string(responseBody))
+		return http.StatusBadRequest, "invalid_request_error", "Requested model is not supported by this API key/group"
 	}
 
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
@@ -1706,6 +1718,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	grokQuotaFailoverCtx := service.WithGrokQuotaFailoverBudget(ctx)
 	var lastFailoverErr *service.UpstreamFailoverError
 	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
 	kiroFailoverState.FailedAccountIDs = failedAccountIDs
@@ -1753,7 +1766,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				lastFailoverErr = kiroFailoverState.LastFailoverErr
 			}
 			if lastFailoverErr != nil {
-				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
+				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr, requestPlatform)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			}
@@ -1761,7 +1774,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		if selection == nil || selection.Account == nil {
 			if lastFailoverErr != nil {
-				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
+				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr, requestPlatform)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			}
@@ -2047,19 +2060,20 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					case FailoverCanceled:
 						return
 					default:
-						closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
+						closeOpenAIWSFailoverExhausted(wsConn, failoverErr, account.Platform)
 						return
 					}
 				}
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
-				if switchCount >= maxAccountSwitches {
-					closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
+				quotaFailure := service.IsGrokQuotaExhaustedForFailover(account, failoverErr.StatusCode, failoverErr.ResponseBody)
+				if switchCount >= maxAccountSwitches && !quotaFailure {
+					closeOpenAIWSFailoverExhausted(wsConn, failoverErr, account.Platform)
 					return
 				}
 				switchCount++
-				if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
-					closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
+				if h.gatewayService.ShouldStopOpenAIFailoverWithContext(grokQuotaFailoverCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
+					closeOpenAIWSFailoverExhausted(wsConn, failoverErr, account.Platform)
 					return
 				}
 				h.gatewayService.RecordOpenAIAccountSwitch()
@@ -2300,6 +2314,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	applyFailoverRetryAfter(c, failoverErr)
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	if applyGrokQuotaFailoverRetryAfter(c, failoverErr) {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "upstream quota exhausted", string(responseBody))
+		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Upstream quota exhausted, please retry later", streamStarted)
+		return
+	}
 	if failoverErr.FailureKind == service.UpstreamFailureRateLimited {
 		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "Kiro upstream rate limited", string(responseBody))
 		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later", streamStarted)
@@ -2343,6 +2362,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
 			return
 		}
+	}
+	if service.IsUpstreamAccountModelUnsupportedError(statusCode, responseBody) {
+		service.SetOpsUpstreamError(c, statusCode, "upstream model unsupported", string(responseBody))
+		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "Requested model is not supported by this API key/group", streamStarted)
+		return
 	}
 
 	// 记录原始上游状态码，以便 ops 错误日志捕获真实的上游错误
@@ -2557,9 +2581,14 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 	_ = conn.CloseNow()
 }
 
-func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.UpstreamFailoverError) {
+func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.UpstreamFailoverError, platform ...string) {
 	if failoverErr == nil {
 		closeOpenAIClientWS(conn, coderws.StatusInternalError, "upstream websocket proxy failed")
+		return
+	}
+	if len(platform) > 0 && strings.TrimSpace(platform[0]) == service.PlatformGrok &&
+		service.IsGrokQuotaExhaustedResponse(failoverErr.ResponseBody) {
+		closeOpenAIClientWS(conn, coderws.StatusTryAgainLater, "upstream quota exhausted, please retry later")
 		return
 	}
 	switch failoverErr.StatusCode {

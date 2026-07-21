@@ -21,6 +21,13 @@ func isUpstreamAccountModelUnsupportedError(statusCode int, body []byte) bool {
 		strings.Contains(normalized, "requested model is not supported by this api key/group")
 }
 
+// IsUpstreamAccountModelUnsupportedError exposes the narrow capability-error
+// classifier to gateway handlers that need to preserve the client-error
+// contract after a multi-account failover loop is exhausted.
+func IsUpstreamAccountModelUnsupportedError(statusCode int, body []byte) bool {
+	return isUpstreamAccountModelUnsupportedError(statusCode, body)
+}
+
 func isUpstreamChatGPTCodexModelUnsupportedError(statusCode int, body []byte) bool {
 	if statusCode != http.StatusBadRequest {
 		return false

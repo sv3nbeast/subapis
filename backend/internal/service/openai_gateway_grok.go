@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -145,12 +146,12 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Kind:               "failover",
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
@@ -818,12 +819,12 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			Kind:               "failover",
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, grokComposerImageBridgeVisionModel)
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
 			}
 		}
 		return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream error: %s", upstreamMsg)
@@ -987,9 +988,25 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 	})
 }
 
-func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) {
+func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) {
 	if s == nil || account == nil {
 		return
+	}
+	// A provider can advertise an exhausted request/token window in headers
+	// even when the body is generic (or when a final successful response used
+	// the last token). Persist that signal before body-specific handling so the
+	// next scheduler pass cannot select the same credential again.
+	if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil {
+		s.markGrokQuotaExhaustedFromSnapshot(ctx, account, snapshot)
+	}
+	// The native Grok forwarding paths handle their own failover error
+	// construction and therefore do not pass through the generic OpenAI error
+	// side-effect hook. Persist deterministic model-capability failures here so
+	// the scheduler excludes this account/model on the next selection.
+	if s.rateLimitService != nil && len(requestedModel) > 0 {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		_ = s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, requestedModel[0], statusCode, responseBody)
+		cancel()
 	}
 	switch statusCode {
 	case http.StatusUnauthorized:
@@ -1043,18 +1060,64 @@ func (s *OpenAIGatewayService) markGrokQuotaExhaustedIfDetected(ctx context.Cont
 		return false
 	}
 	resetAt := resolveGrokQuotaResetAtForResponse(account, responseBody, time.Now())
+	s.markGrokQuotaExhaustedUntil(ctx, account, resetAt)
+	return true
+}
+
+// markGrokQuotaExhaustedFromSnapshot applies an explicit zero quota window
+// observed in response headers. It is intentionally shared by success and
+// error paths because a 2xx response may consume the final available token.
+func (s *OpenAIGatewayService) markGrokQuotaExhaustedFromSnapshot(ctx context.Context, account *Account, snapshot *xai.QuotaSnapshot) bool {
+	if account == nil || account.Platform != PlatformGrok {
+		return false
+	}
+	exhausted, resetAt := isGrokQuotaSnapshotExhausted(snapshot, time.Now())
+	if !exhausted {
+		return false
+	}
+	if resetAt.IsZero() {
+		resetAt = time.Now().Add(grokQuotaExhaustedFallbackCooldown)
+	}
+	s.markGrokQuotaExhaustedUntil(ctx, account, resetAt)
+	return true
+}
+
+func (s *OpenAIGatewayService) markGrokQuotaExhaustedUntil(ctx context.Context, account *Account, resetAt time.Time) {
+	if s == nil || account == nil || account.Platform != PlatformGrok {
+		return
+	}
+	now := time.Now()
+	if !resetAt.After(now) {
+		resetAt = now.Add(grokQuotaExhaustedFallbackCooldown)
+	}
+	// Never shorten a longer provider window already attached to this account.
+	if account.RateLimitResetAt != nil && account.RateLimitResetAt.After(resetAt) {
+		resetAt = *account.RateLimitResetAt
+	}
 	if account.RateLimitResetAt == nil || !account.RateLimitResetAt.Equal(resetAt) {
+		rateLimitedAt := now
+		account.RateLimitedAt = &rateLimitedAt
+		account.RateLimitResetAt = &resetAt
 		if s.accountRepo != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
-			defer cancel()
-			_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
+			if err := s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt); err != nil {
+				slog.Warn("grok_quota_set_rate_limited_failed", "account_id", account.ID, "error", err)
+			}
+			// Keep the distributed scheduler snapshot in sync immediately. The
+			// outbox worker remains the cross-process fallback, but a local stale
+			// snapshot must not hand this account out in the next request.
+			if s.schedulerSnapshot != nil {
+				if err := s.schedulerSnapshot.UpdateAccountInCache(stateCtx, account); err != nil {
+					slog.Debug("grok_quota_scheduler_cache_update_failed", "account_id", account.ID, "error", err)
+				}
+			}
+			cancel()
 		}
+	} else {
+		rateLimitedAt := now
+		account.RateLimitedAt = &rateLimitedAt
 	}
-	rateLimitedAt := time.Now()
-	account.RateLimitedAt = &rateLimitedAt
-	account.RateLimitResetAt = &resetAt
 	s.BlockAccountScheduling(account, resetAt, "grok quota exhausted")
-	return true
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

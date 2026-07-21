@@ -100,5 +100,7 @@ func (s *OpenAIGatewayService) commitGrokUpstreamSuccess(ctx context.Context, ac
 	defer cancel()
 
 	s.markGrokUpstreamSuccess(stateCtx, account)
-	s.updateGrokUsageSnapshot(stateCtx, account.ID, xai.ParseQuotaHeaders(headers, statusCode))
+	snapshot := xai.ParseQuotaHeaders(headers, statusCode)
+	s.updateGrokUsageSnapshot(stateCtx, account.ID, snapshot)
+	s.markGrokQuotaExhaustedFromSnapshot(stateCtx, account, snapshot)
 }

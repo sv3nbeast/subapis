@@ -17,7 +17,55 @@ const (
 	openAIOAuth429StormWindow             = 10 * time.Second
 	openAIOAuth429StormThreshold          = 20
 	openAIOAuth429StormMaxAccountSwitches = 1
+	// Grok quota responses are normally immediate. Give the request a bounded
+	// discovery window to try every still-unknown credential, while preventing a
+	// pathological upstream from consuming the whole client request timeout.
+	grokQuotaFailoverProbeBudget = 15 * time.Second
 )
+
+type grokQuotaFailoverDeadlineContextKey struct{}
+
+type grokQuotaFailoverBudgetState struct {
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (s *grokQuotaFailoverBudgetState) exceeded(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deadline.IsZero() {
+		// Start the budget at the first confirmed quota failure, not at request
+		// admission. A slow first upstream response must not consume all account
+		// discovery time before the scheduler knows failover is needed.
+		s.deadline = now.Add(grokQuotaFailoverProbeBudget)
+		return false
+	}
+	return !now.Before(s.deadline)
+}
+
+// WithGrokQuotaFailoverBudget attaches a request-local quota discovery budget.
+// It does not cancel the request context; successful generation may continue
+// past the discovery window after a healthy account has been selected.
+func WithGrokQuotaFailoverBudget(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, grokQuotaFailoverDeadlineContextKey{}, &grokQuotaFailoverBudgetState{})
+}
+
+func grokQuotaFailoverBudgetExceeded(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	state, ok := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState)
+	return ok && state.exceeded(time.Now())
+}
 
 type openAIAccountRuntimeBlock struct {
 	Until     time.Time
@@ -215,6 +263,46 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	return shouldDisable
 }
 
+// shouldRetryOpenAIAccountOnSameAccount centralizes pool-mode retry policy for
+// OpenAI-compatible providers. Deterministic model-capability and Grok quota
+// failures must not be repeated even when the pool-mode status list includes
+// their HTTP status.
+func shouldRetryOpenAIAccountOnSameAccount(account *Account, statusCode int, responseBody []byte, transient bool) bool {
+	if account == nil || !account.IsPoolMode() {
+		return false
+	}
+	// Model capability errors and provider quota errors are deterministic for
+	// the selected credential. Retrying the same credential only adds latency;
+	// the handler will either apply a model-level cooldown or rotate accounts.
+	if isUpstreamModelUnavailableError(statusCode, responseBody) || isGrokQuotaExhaustedForStatus(account, statusCode, responseBody) {
+		return false
+	}
+	return account.IsPoolModeRetryableStatus(statusCode) || transient
+}
+
+func isGrokQuotaExhaustedForStatus(account *Account, statusCode int, responseBody []byte) bool {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusPaymentRequired && statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
+		return false
+	}
+	if account == nil || account.Platform != PlatformGrok {
+		return false
+	}
+	// A 400 is also used for model/schema errors. Only an explicit quota code or
+	// message may classify it as spending-limit exhaustion; a billing snapshot
+	// alone is insufficient for that status.
+	if statusCode == http.StatusBadRequest {
+		return IsGrokQuotaExhaustedResponse(responseBody)
+	}
+	return isGrokQuotaExhausted(account, responseBody)
+}
+
+// IsGrokQuotaExhaustedForFailover exposes the deterministic quota classifier
+// to handlers that need to bypass their generic max-switch cap. It deliberately
+// remains body/status based; an unknown account is still probed normally.
+func IsGrokQuotaExhaustedForFailover(account *Account, statusCode int, responseBody []byte) bool {
+	return isGrokQuotaExhaustedForStatus(account, statusCode, responseBody)
+}
+
 func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
 	if s == nil || !isOpenAIOAuthAccount(account) {
 		return
@@ -389,4 +477,27 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account
 		return false
 	}
 	return s.isOpenAIOAuth429Storm()
+}
+
+// ShouldStopOpenAIFailover is the compatibility entry point for callers that
+// do not carry the request-local Grok discovery budget.
+func (s *OpenAIGatewayService) ShouldStopOpenAIFailover(account *Account, statusCode int, responseBody []byte, failedSwitches int) bool {
+	return s.ShouldStopOpenAIFailoverWithContext(context.Background(), account, statusCode, responseBody, failedSwitches)
+}
+
+// ShouldStopOpenAIFailoverWithContext applies the provider-specific failover
+// policy. Grok quota failures use the request discovery budget instead of a
+// fixed account count, so an available third/fourth account is actually tried.
+// The context-less wrapper retains the historical two-account safety fallback
+// for callers outside the HTTP request loop.
+func (s *OpenAIGatewayService) ShouldStopOpenAIFailoverWithContext(ctx context.Context, account *Account, statusCode int, responseBody []byte, failedSwitches int) bool {
+	if isGrokQuotaExhaustedForStatus(account, statusCode, responseBody) {
+		if ctx != nil {
+			if _, configured := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState); configured {
+				return grokQuotaFailoverBudgetExceeded(ctx)
+			}
+		}
+		return failedSwitches >= 2
+	}
+	return s.ShouldStopOpenAIOAuth429Failover(account, statusCode, failedSwitches)
 }

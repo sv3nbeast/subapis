@@ -178,7 +178,7 @@ func TestOpenAIGatewayGrokSpendingLimit402RateLimitsFreeAccount(t *testing.T) {
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account), "account must be blocked from re-scheduling")
 }
 
-func TestResolveGrokQuotaResetAtFallsBackToShortCooldown(t *testing.T) {
+func TestResolveGrokQuotaResetAtFallsBackToLongCooldown(t *testing.T) {
 	now := time.Now().UTC()
 	resetAt := resolveGrokQuotaResetAt(&Account{Platform: PlatformGrok}, now)
 	require.WithinDuration(t, now.Add(grokQuotaExhaustedFallbackCooldown), resetAt, time.Second)

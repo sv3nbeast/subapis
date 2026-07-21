@@ -1899,6 +1899,10 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	if applyGrokQuotaFailoverRetryAfter(c, failoverErr) {
+		service.SetOpsUpstreamError(c, http.StatusTooManyRequests, "upstream quota exhausted", string(responseBody))
+		return http.StatusTooManyRequests, "rate_limit_error", "Upstream quota exhausted, please retry later"
+	}
 	platform := fallbackPlatform
 	if c != nil && c.Request != nil {
 		if v, ok := c.Request.Context().Value(ctxkey.Platform).(string); ok && strings.TrimSpace(v) != "" {
@@ -1938,7 +1942,6 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 			return respCode, "upstream_error", msg
 		}
 	}
-
 	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
 	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, string(responseBody))
 

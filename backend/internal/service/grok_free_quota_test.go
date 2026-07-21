@@ -78,6 +78,54 @@ func TestResolveGrokFreeUsageResetPreservesLaterProviderLimit(t *testing.T) {
 	require.WithinDuration(t, existing, resetAt, time.Second)
 }
 
+func TestIsGrokQuotaExhaustedResponseRecognizesSpendingLimitWithoutAccount(t *testing.T) {
+	require.True(t, IsGrokQuotaExhaustedResponse([]byte(`{"code":"personal-team-blocked:spending-limit"}`)))
+	require.True(t, IsGrokQuotaExhaustedResponse([]byte(`{"error":{"message":"You have run out of credits"}}`)))
+	require.True(t, IsGrokQuotaExhaustedResponse([]byte(`{"error":{"type":"insufficient_quota","message":"Your team has no credits left"}}`)))
+	require.True(t, IsGrokQuotaExhaustedResponse([]byte(`{"detail":{"code":"quota_exceeded"},"message":"Quota exceeded"}`)))
+	require.False(t, IsGrokQuotaExhaustedResponse([]byte(`{"error":{"message":"This account is not entitled to use Grok."}}`)))
+	require.False(t, IsGrokQuotaExhaustedResponse([]byte(`{"error":{"message":"Requested model is not supported by this API key/group"}}`)))
+}
+
+func TestGrokQuotaSnapshotZeroImmediatelyRateLimitsAPIKeyAccount(t *testing.T) {
+	repo := &grokFreeQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	limit, remaining := int64(100), int64(0)
+	resetAt := time.Now().Add(45 * time.Minute).UTC()
+	resetUnix := resetAt.Unix()
+	snapshot := &xai.QuotaSnapshot{
+		Requests: &xai.QuotaWindow{
+			Limit:     &limit,
+			Remaining: &remaining,
+			ResetUnix: &resetUnix,
+		},
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	account := &Account{ID: 63, Platform: PlatformGrok, Type: AccountTypeAPIKey}
+
+	require.True(t, svc.markGrokQuotaExhaustedFromSnapshot(context.Background(), account, snapshot))
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.WithinDuration(t, resetAt, repo.lastRateLimitResetAt, time.Second)
+	require.NotNil(t, account.RateLimitResetAt)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestGrokQuotaSnapshotResetIgnoresHealthyLaterWindow(t *testing.T) {
+	now := time.Now().UTC()
+	limit, exhausted, available := int64(100), int64(0), int64(90)
+	requestReset := now.Add(10 * time.Minute).Unix()
+	tokenReset := now.Add(24 * time.Hour).Unix()
+	snapshot := &xai.QuotaSnapshot{
+		Requests:  &xai.QuotaWindow{Limit: &limit, Remaining: &exhausted, ResetUnix: &requestReset},
+		Tokens:    &xai.QuotaWindow{Limit: &limit, Remaining: &available, ResetUnix: &tokenReset},
+		UpdatedAt: now.Format(time.RFC3339),
+	}
+
+	isExhausted, resetAt := isGrokQuotaSnapshotExhausted(snapshot, now)
+	require.True(t, isExhausted)
+	require.WithinDuration(t, time.Unix(requestReset, 0), resetAt, time.Second)
+}
+
 func TestOpenAIGatewayGrokGeneric429KeepsShortCooldown(t *testing.T) {
 	repo := &grokFreeQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{accountRepo: repo}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -230,6 +231,47 @@ func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailov
 		seconds = 1
 	}
 	c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+}
+
+const grokQuotaFailoverRetryAfter = 5 * time.Second
+
+// isGrokQuotaFailoverError is intentionally body-based. Once the failover loop
+// is exhausted the selected account is no longer available to the handler, but
+// xAI's spending-limit/free-usage codes are explicit in the upstream payload.
+func isGrokQuotaFailoverError(c *gin.Context, failoverErr *service.UpstreamFailoverError) bool {
+	if failoverErr == nil {
+		return false
+	}
+	platform := ""
+	if c != nil && c.Request != nil {
+		platform, _ = c.Request.Context().Value(ctxkey.Platform).(string)
+	}
+	if strings.TrimSpace(platform) == "" && c != nil {
+		if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil {
+			platform = apiKey.Group.Platform
+		}
+	}
+	// Do not classify another provider's payload as a Grok quota error merely
+	// because it contains a generic credits/limit phrase.
+	if strings.TrimSpace(platform) != service.PlatformGrok {
+		return false
+	}
+	switch failoverErr.StatusCode {
+	case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
+		return service.IsGrokQuotaExhaustedResponse(failoverErr.ResponseBody)
+	default:
+		return false
+	}
+}
+
+func applyGrokQuotaFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailoverError) bool {
+	if !isGrokQuotaFailoverError(c, failoverErr) {
+		return false
+	}
+	if failoverErr.RetryAfter <= 0 && c != nil {
+		c.Header("Retry-After", fmt.Sprintf("%d", int(grokQuotaFailoverRetryAfter/time.Second)))
+	}
+	return true
 }
 
 func applyKiroBudgetExhaustedRetryAfter(c *gin.Context) {

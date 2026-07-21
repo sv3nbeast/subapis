@@ -152,7 +152,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if endpoint == service.GrokMediaEndpointVideoStatus {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID)
 	}
-	requestCtx := c.Request.Context()
+	requestCtx := service.WithGrokQuotaFailoverBudget(c.Request.Context())
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
@@ -277,11 +277,21 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				h.gatewayService.RecordOpenAIAccountSwitch()
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
-				if switchCount >= maxAccountSwitches {
+				quotaFailure := service.IsGrokQuotaExhaustedForFailover(account, failoverErr.StatusCode, failoverErr.ResponseBody)
+				if switchCount >= maxAccountSwitches && !quotaFailure {
 					h.handleFailoverExhausted(c, failoverErr, false)
 					return
 				}
 				switchCount++
+				if h.gatewayService.ShouldStopOpenAIFailoverWithContext(requestCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
+					reqLog.Warn("grok_media.upstream_failover_fast_stopped",
+						zap.Int64("account_id", account.ID),
+						zap.Int("upstream_status", failoverErr.StatusCode),
+						zap.Int("switch_count", switchCount),
+					)
+					h.handleFailoverExhausted(c, failoverErr, false)
+					return
+				}
 				reqLog.Warn("grok_media.upstream_failover_switching",
 					zap.Int64("account_id", account.ID),
 					zap.Int("upstream_status", failoverErr.StatusCode),
