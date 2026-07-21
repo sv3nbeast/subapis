@@ -514,6 +514,34 @@
         </div>
       </div>
 
+      <div v-if="isKiroOAuthAccount" class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div v-if="showKiroAuthRegion">
+          <label class="input-label">{{ t('admin.accounts.kiro.authRegionLabel') }}</label>
+          <input
+            v-model="editKiroAuthRegion"
+            type="text"
+            class="input font-mono"
+            placeholder="us-east-1"
+            autocomplete="off"
+            data-testid="kiro-auth-region-input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.authRegionHint') }}</p>
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.apiRegionLabel') }}</label>
+          <input
+            v-model="editKiroAPIRegion"
+            type="text"
+            class="input font-mono"
+            placeholder="eu-central-1"
+            autocomplete="off"
+            data-testid="kiro-api-region-input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.apiRegionHint') }}</p>
+        </div>
+      </div>
+
       <!-- OpenAI / Kiro / Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
         v-if="(account.platform === 'openai' || account.platform === 'kiro' || account.platform === 'grok') && account.type === 'oauth'"
@@ -2681,6 +2709,19 @@ const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
 const isKiroOAuthAccount = computed(() => props.account?.platform === 'kiro' && props.account?.type === 'oauth')
 const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
+const editKiroAuthRegion = ref('')
+const editKiroAPIRegion = ref('')
+const showKiroAuthRegion = computed(() => {
+  if (!isKiroOAuthAccount.value) return false
+  const credentials = props.account?.credentials as Record<string, unknown> | undefined
+  const authMethod = typeof credentials?.auth_method === 'string' ? credentials.auth_method.trim().toLowerCase() : ''
+  const hasStoredRegion = typeof credentials?.region === 'string' && credentials.region.trim() !== ''
+  return (
+    ['idc', 'external_idp', 'external-idp', 'externalidp'].includes(authMethod) ||
+    hasStoredRegion ||
+    editKiroAuthRegion.value !== ''
+  )
+})
 
 // Model mapping type
 interface ModelMapping {
@@ -3204,6 +3245,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
+  const isKiroOAuth = newAccount.platform === 'kiro' && newAccount.type === 'oauth'
+  editKiroAuthRegion.value = isKiroOAuth && typeof credentials?.region === 'string' ? credentials.region.trim() : ''
+  editKiroAPIRegion.value =
+    isKiroOAuth && typeof credentials?.api_region === 'string' ? credentials.api_region.trim() : ''
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
@@ -4361,11 +4406,27 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-    // Kiro OAuth: persist model mapping to credentials
+    // Kiro OAuth: persist auth/API regions and model mapping to credentials.
     if (props.account.platform === 'kiro' && props.account.type === 'oauth') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      if (showKiroAuthRegion.value) {
+        const authRegion = editKiroAuthRegion.value.trim()
+        if (authRegion) {
+          newCredentials.region = authRegion
+        } else {
+          delete newCredentials.region
+        }
+      }
+
+      const apiRegion = editKiroAPIRegion.value.trim()
+      if (apiRegion) {
+        newCredentials.api_region = apiRegion
+      } else {
+        delete newCredentials.api_region
+      }
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)
       if (modelMapping) {

@@ -4952,6 +4952,10 @@ export default {
       kiro: {
         baseUrlHint: '官方 Kiro API Key 直连请留空；仅外部 Anthropic 兼容中转需要填写。',
         apiKeyHint: 'Kiro 控制台或兼容上游服务提供的 API Key。',
+        authRegionLabel: 'AWS IDC 区域',
+        authRegionHint: '仅用于 IDC/OAuth 认证和 Token 刷新，不会限定 Kiro API 所在区域。',
+        apiRegionLabel: 'Kiro API 区域',
+        apiRegionHint: '用于模型调用、Profile 和用量查询，可与 IDC 区域不同。留空时将从 Profile 或 IDC 区域推断。',
         relayBaseUrlHint:
           '外部 Anthropic 兼容上游地址（如 https://your-relay.example.com），将请求 {base_url}/v1/messages',
         relayApiKeyHint: '外部中转服务使用的 API Key。',

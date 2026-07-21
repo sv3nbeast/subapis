@@ -311,6 +311,34 @@ function buildKiroAPIKeyAccount(baseUrl = '') {
   } as any
 }
 
+function buildKiroOAuthAccount() {
+  return {
+    id: 6,
+    name: 'Kiro Enterprise OAuth',
+    notes: '',
+    platform: 'kiro',
+    type: 'oauth',
+    credentials: {
+      auth_method: 'idc',
+      provider: 'Enterprise',
+      region: 'us-east-2',
+      api_region: 'us-east-1',
+      model_mapping: {
+        'claude-opus-4-8': 'claude-opus-4-8'
+      }
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -932,6 +960,49 @@ describe('EditAccountModal', () => {
     expect(payload.credentials?.api_key).toBe('kiro-test-key')
     expect(payload.extra?.kiro_credit_unit_price_usd).toBe(0.082)
     expect(payload.extra).not.toHaveProperty('anthropic_passthrough')
+  })
+
+  it('edits Kiro OAuth auth and API regions independently', async () => {
+    const account = buildKiroOAuthAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const authRegion = wrapper.get<HTMLInputElement>('[data-testid="kiro-auth-region-input"]')
+    const apiRegion = wrapper.get<HTMLInputElement>('[data-testid="kiro-api-region-input"]')
+
+    expect(authRegion.element.value).toBe('us-east-2')
+    expect(apiRegion.element.value).toBe('us-east-1')
+
+    await authRegion.setValue('  us-east-2  ')
+    await apiRegion.setValue('  eu-central-1  ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials?.region).toBe('us-east-2')
+    expect(credentials?.api_region).toBe('eu-central-1')
+    expect(credentials?.auth_method).toBe('idc')
+    expect(credentials?.provider).toBe('Enterprise')
+  })
+
+  it('clears the Kiro OAuth API region override without changing the IDC region', async () => {
+    const account = buildKiroOAuthAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="kiro-api-region-input"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).not.toHaveProperty('api_region')
+    expect(credentials?.region).toBe('us-east-2')
   })
 
   it('saves Kiro API Key relay mode with base URL passthrough and without credit unit price', async () => {

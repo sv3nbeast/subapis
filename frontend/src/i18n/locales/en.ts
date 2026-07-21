@@ -4901,6 +4901,11 @@ export default {
         baseUrlHint:
           'Leave empty for official Kiro API Key direct mode. Set only for an external Anthropic-compatible relay.',
         apiKeyHint: 'Kiro API Key from Kiro Console or your compatible upstream service.',
+        authRegionLabel: 'AWS IDC Region',
+        authRegionHint: 'Used only for IDC/OAuth authentication and token refresh. It does not select the Kiro API region.',
+        apiRegionLabel: 'Kiro API Region',
+        apiRegionHint:
+          'Used for model requests, profile discovery, and usage queries. It may differ from the IDC region. When empty, the region is inferred from the profile or IDC region.',
         relayBaseUrlHint:
           'External Anthropic-compatible upstream URL (e.g. https://your-relay.example.com); requests go to {base_url}/v1/messages',
         relayApiKeyHint: 'API Key for the external relay.',
