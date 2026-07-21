@@ -1873,7 +1873,9 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 			for {
 				selection, err := s.selectAccountWithLoadAwareness(ctx, groupID, platform, sessionHash, requestedModel, effectiveExcludedIDs, requireCompact, requiredCapability)
 				if err != nil {
-					return nil, decision, err
+					return nil, decision, s.refineOpenAIChannelRestrictionSelectionError(
+						ctx, groupID, platform, requestedModel, requireCompact, allowKiroBridge, kiroBridgeModel, err,
+					)
 				}
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
@@ -1898,7 +1900,9 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		for {
 			selection, err := s.selectAccountWithLoadAwareness(ctx, groupID, platform, sessionHash, requestedModel, effectiveExcludedIDs, requireCompact, requiredCapability)
 			if err != nil {
-				return nil, decision, err
+				return nil, decision, s.refineOpenAIChannelRestrictionSelectionError(
+					ctx, groupID, platform, requestedModel, requireCompact, allowKiroBridge, kiroBridgeModel, err,
+				)
 			}
 			if selection == nil || selection.Account == nil {
 				return selection, decision, nil
@@ -1940,7 +1944,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		stickyPreviousAccountID = s.ResolveAccountIDByPreviousResponseIDForScheduler(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	}
 
-	return scheduler.Select(ctx, OpenAIAccountScheduleRequest{
+	selection, decision, err := scheduler.Select(ctx, OpenAIAccountScheduleRequest{
 		GroupID:                 groupID,
 		Platform:                platform,
 		SessionHash:             sessionHash,
@@ -1960,6 +1964,71 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		KiroBridgeModel:         strings.TrimSpace(kiroBridgeModel),
 		ForcedAccountID:         forcedAccountIDFromContext(ctx),
 	})
+	if err != nil {
+		err = s.refineOpenAIChannelRestrictionSelectionError(
+			ctx, groupID, platform, requestedModel, requireCompact, allowKiroBridge, kiroBridgeModel, err,
+		)
+	}
+	return selection, decision, err
+}
+
+// refineOpenAIChannelRestrictionSelectionError distinguishes a permanent
+// upstream-model channel denial from transient account-pool exhaustion. It is
+// intentionally called only after selection fails, keeping successful requests
+// off this diagnostic path.
+func (s *OpenAIGatewayService) refineOpenAIChannelRestrictionSelectionError(
+	ctx context.Context,
+	groupID *int64,
+	platform string,
+	requestedModel string,
+	requireCompact bool,
+	allowKiroBridge bool,
+	kiroBridgeModel string,
+	err error,
+) error {
+	if err == nil || err == ErrNoAvailableCompactAccounts ||
+		strings.Contains(strings.ToLower(err.Error()), "channel pricing restriction") ||
+		!strings.Contains(strings.ToLower(err.Error()), "no available") ||
+		!s.needsUpstreamChannelRestrictionCheck(ctx, groupID) {
+		return err
+	}
+
+	accounts, listErr := s.listSchedulableAccountsForSchedule(ctx, groupID, platform, allowKiroBridge)
+	if listErr != nil {
+		return err
+	}
+
+	hasConfiguredCandidate := false
+	routingModel := strings.TrimSpace(requestedModel)
+	if allowKiroBridge && strings.TrimSpace(kiroBridgeModel) != "" {
+		routingModel = strings.TrimSpace(kiroBridgeModel)
+	}
+	for i := range accounts {
+		account := &accounts[i]
+		if account.Platform == PlatformKiro {
+			if !allowKiroBridge || !account.IsEligibleForOpenAIKiroBridge(kiroBridgeModel) {
+				continue
+			}
+		} else if !account.IsOpenAICompatible() ||
+			normalizeOpenAICompatiblePlatform(account.Platform) != normalizeOpenAICompatiblePlatform(platform) ||
+			(strings.TrimSpace(requestedModel) != "" && !account.IsModelSupported(requestedModel)) {
+			continue
+		}
+
+		hasConfiguredCandidate = true
+		if !s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, routingModel, requireCompact) {
+			return err
+		}
+	}
+	if !hasConfiguredCandidate {
+		return err
+	}
+
+	slog.Warn("channel pricing restriction blocked all configured OpenAI accounts",
+		"group_id", *groupID,
+		"model", requestedModel,
+		"billing_model_source", BillingModelSourceUpstream)
+	return fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 }
 
 func accountSupportsOpenAICapabilities(account *Account, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {

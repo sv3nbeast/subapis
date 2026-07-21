@@ -159,6 +159,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if cls := classifySelectionError(err); cls.Handled {
+					applySelectionErrorMonitoringClassification(c, cls)
+					h.handleStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
+					return
+				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestModel, requestModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)

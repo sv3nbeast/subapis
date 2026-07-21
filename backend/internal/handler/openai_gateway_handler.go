@@ -1024,14 +1024,17 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
-				if err != nil {
-					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, requestPlatform)
-					if !cls.ModelNotFound {
-						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-					}
-					h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+				if cls := classifySelectionError(err); cls.Handled {
+					applySelectionErrorMonitoringClassification(c, cls)
+					h.anthropicStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
 					return
 				}
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, requestPlatform)
+				if !cls.ModelNotFound {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+				}
+				h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+				return
 			} else {
 				if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
@@ -1756,6 +1759,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if len(failedAccountIDs) == 0 {
+				if cls := classifySelectionError(err); cls.Handled && cls.BusinessLimited {
+					applySelectionErrorMonitoringClassification(c, cls)
+					service.MarkOpsStreamError(c, cls.ErrorType, cls.Message, cls.StatusCode)
+					closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, cls.Message)
+					return
+				}
+			}
 			if kiroBridgeRequested && kiroFailoverState.LastFailoverErr != nil {
 				switch kiroFailoverState.HandleSelectionExhausted(c.Request.Context(), err) {
 				case FailoverContinue:

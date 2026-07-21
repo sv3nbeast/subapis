@@ -18,8 +18,22 @@ func TestClassifySelectionError_ChannelPricingRestriction(t *testing.T) {
 	if got.StatusCode != 400 || got.ErrorType != "invalid_request_error" {
 		t.Fatalf("unexpected classification: %#v", got)
 	}
-	if !got.SkipMonitoring {
-		t.Fatalf("expected skip monitoring")
+	if got.SkipMonitoring || !got.BusinessLimited {
+		t.Fatalf("expected auditable business-limited classification: %#v", got)
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	applySelectionErrorMonitoringClassification(c, got)
+	if !service.HasOpsClientBusinessLimitedReason(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied) {
+		t.Fatalf("expected local-policy-denied ops exclusion")
+	}
+	if _, exists := c.Get(service.OpsSkipPassthroughKey); exists {
+		t.Fatalf("channel rejection must remain visible in the excluded view")
+	}
+	phase, limited, owner, source := classifyOpsErrorLog(c, got.ErrorType, got.Message, "", got.StatusCode)
+	if phase != "auth" || !limited || owner != "client" || source != "client_request" {
+		t.Fatalf("unexpected ops classification: phase=%s limited=%v owner=%s source=%s", phase, limited, owner, source)
 	}
 }
 

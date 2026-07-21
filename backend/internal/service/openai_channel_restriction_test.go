@@ -138,3 +138,83 @@ func TestOpenAISelectAccountForModelWithExclusions_StickyRestrictedUpstreamFalls
 	require.Equal(t, 1, cache.deletedSessions["openai:sticky-session"])
 	require.Equal(t, int64(2), cache.sessionBindings["openai:sticky-session"])
 }
+
+func TestOpenAISelectAccountWithScheduler_UpstreamRestrictionPreservesReason(t *testing.T) {
+	channelSvc := newTestChannelService(makeStandardRepo(Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformOpenAI, Models: []string{"o3-mini"}},
+		},
+	}, map[int64]string{10: PlatformOpenAI}))
+
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"gpt-4.1": "gpt-4o"},
+				},
+			},
+		}},
+		channelService: channelSvc,
+	}
+
+	groupID := int64(10)
+	_, _, err := svc.SelectAccountWithScheduler(
+		context.Background(), &groupID, "", "", "gpt-4.1", nil, OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Contains(t, err.Error(), "channel pricing restriction")
+}
+
+func TestOpenAIRefineChannelRestrictionError_AllowedConfiguredAccountKeepsCapacityError(t *testing.T) {
+	channelSvc := newTestChannelService(makeStandardRepo(Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformOpenAI, Models: []string{"o3-mini"}},
+		},
+	}, map[int64]string{10: PlatformOpenAI}))
+
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"gpt-4.1": "gpt-4o"},
+				},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformOpenAI,
+				Status:      StatusActive,
+				Schedulable: true,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"gpt-4.1": "o3-mini"},
+				},
+			},
+		}},
+		channelService: channelSvc,
+	}
+
+	groupID := int64(10)
+	original := noAvailableOpenAISelectionError("gpt-4.1", false)
+	got := svc.refineOpenAIChannelRestrictionSelectionError(
+		context.Background(), &groupID, PlatformOpenAI, "gpt-4.1", false, false, "", original,
+	)
+	require.Same(t, original, got)
+	require.NotContains(t, got.Error(), "channel pricing restriction")
+}

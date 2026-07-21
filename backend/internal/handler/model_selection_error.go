@@ -12,12 +12,13 @@ import (
 )
 
 type selectionErrorClassification struct {
-	Handled        bool
-	StatusCode     int
-	ErrorType      string
-	Message        string
-	SkipMonitoring bool
-	RetryAfter     time.Duration
+	Handled         bool
+	StatusCode      int
+	ErrorType       string
+	Message         string
+	SkipMonitoring  bool
+	BusinessLimited bool
+	RetryAfter      time.Duration
 }
 
 var selectionFailureSummaryPattern = regexp.MustCompile(
@@ -50,11 +51,11 @@ func classifySelectionError(err error) selectionErrorClassification {
 
 	if strings.Contains(lower, "channel pricing restriction") {
 		return selectionErrorClassification{
-			Handled:        true,
-			StatusCode:     400,
-			ErrorType:      "invalid_request_error",
-			Message:        "Requested model is not supported by this API key/group",
-			SkipMonitoring: true,
+			Handled:         true,
+			StatusCode:      400,
+			ErrorType:       "invalid_request_error",
+			Message:         "Requested model is not supported by this API key/group",
+			BusinessLimited: true,
 		}
 	}
 
@@ -101,6 +102,9 @@ func applySelectionErrorMonitoringClassification(c *gin.Context, cls selectionEr
 	}
 	if cls.SkipMonitoring {
 		c.Set(service.OpsSkipPassthroughKey, true)
+	}
+	if cls.BusinessLimited {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
 	}
 }
 

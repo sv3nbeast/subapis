@@ -126,6 +126,11 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if cls := classifySelectionError(err); cls.Handled {
+					applySelectionErrorMonitoringClassification(c, cls)
+					h.errorResponse(c, cls.StatusCode, cls.ErrorType, cls.Message)
+					return
+				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
