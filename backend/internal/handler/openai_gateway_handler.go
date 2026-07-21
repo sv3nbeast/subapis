@@ -493,7 +493,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		account := selection.Account
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
-		setOpsSelectedAccount(c, account.ID, account.Platform)
+		setOpsSelectedAccountBeforeAttempt(c, account)
 
 		accountReleaseFunc, acquired, slotErr := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotErr != nil {
@@ -2019,6 +2019,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if switchCount > 0 {
 					forwardCtx = service.WithAccountSwitchCount(forwardCtx, switchCount, false)
 				}
+				setOpsKiroAttemptedAccount(bridgeContext, bridgeAccount)
 				gatewayResult, forwardErr := h.kiroBridgeService.ForwardAsResponsesWebSocketTurn(
 					forwardCtx,
 					bridgeContext,

@@ -67,6 +67,7 @@ func (h *OpenAIGatewayHandler) forwardOpenAIResponses(
 	if h.kiroBridgeService == nil || parsed == nil {
 		return nil, errors.New("kiro bridge service is unavailable")
 	}
+	setOpsKiroAttemptedAccount(c, account)
 	result, err := h.kiroBridgeService.ForwardAsResponses(ctx, c, account, body, parsed)
 	return openAIForwardResultFromGateway(result), err
 }
@@ -85,6 +86,7 @@ func (h *OpenAIGatewayHandler) forwardOpenAIChatCompletions(
 	if h.kiroBridgeService == nil || parsed == nil {
 		return nil, errors.New("kiro bridge service is unavailable")
 	}
+	setOpsKiroAttemptedAccount(c, account)
 	result, err := h.kiroBridgeService.ForwardAsChatCompletions(ctx, c, account, body, parsed)
 	return openAIForwardResultFromGateway(result), err
 }

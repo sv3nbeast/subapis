@@ -169,6 +169,58 @@ func TestSetOpsRequestContext_AcceptsOptionalBody(t *testing.T) {
 	require.Equal(t, "claude-3", c.Request.Context().Value(ctxkey.Model))
 }
 
+func TestOpsAccountAttribution_KiroCommitsOnlyWhenAttemptStarts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	previous := &service.Account{ID: 1945, Platform: service.PlatformKiro}
+	candidate := &service.Account{ID: 1960, Platform: service.PlatformKiro}
+
+	setOpsKiroAttemptedAccount(c, previous)
+	setOpsSelectedAccountBeforeAttempt(c, candidate)
+
+	accountID, exists := c.Get(opsAccountIDKey)
+	require.True(t, exists)
+	require.Equal(t, previous.ID, accountID)
+	require.Equal(t, previous.ID, c.Request.Context().Value(ctxkey.AccountID))
+	require.Equal(t, service.PlatformKiro, c.Request.Context().Value(ctxkey.Platform))
+
+	setOpsKiroAttemptedAccount(c, candidate)
+
+	accountID, exists = c.Get(opsAccountIDKey)
+	require.True(t, exists)
+	require.Equal(t, candidate.ID, accountID)
+	require.Equal(t, candidate.ID, c.Request.Context().Value(ctxkey.AccountID))
+	require.Equal(t, service.PlatformKiro, c.Request.Context().Value(ctxkey.Platform))
+
+	noPreviousRecorder := httptest.NewRecorder()
+	noPrevious, _ := gin.CreateTestContext(noPreviousRecorder)
+	noPrevious.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	setOpsSelectedAccountBeforeAttempt(noPrevious, candidate)
+	_, exists = noPrevious.Get(opsAccountIDKey)
+	require.False(t, exists)
+	require.Nil(t, noPrevious.Request.Context().Value(ctxkey.AccountID))
+}
+
+func TestOpsAccountAttribution_NonKiroCommitsWhenSelected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	account := &service.Account{ID: 77, Platform: service.PlatformAnthropic}
+
+	setOpsSelectedAccountBeforeAttempt(c, account)
+
+	accountID, exists := c.Get(opsAccountIDKey)
+	require.True(t, exists)
+	require.Equal(t, account.ID, accountID)
+	require.Equal(t, account.ID, c.Request.Context().Value(ctxkey.AccountID))
+	require.Equal(t, service.PlatformAnthropic, c.Request.Context().Value(ctxkey.Platform))
+}
+
 func TestEnqueueOpsErrorLog_EarlyReturnBranches(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 

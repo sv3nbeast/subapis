@@ -443,7 +443,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
 				)
 			}
-			setOpsSelectedAccount(c, account.ID, account.Platform)
+			setOpsSelectedAccountBeforeAttempt(c, account)
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			// 注意：连通性探测请求（max_tokens=1, !stream）无条件拦截，
@@ -566,6 +566,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
+			setOpsKiroAttemptedAccount(c, account)
 			if account.Platform == service.PlatformAntigravity {
 				result, err = h.antigravityGatewayService.ForwardGemini(
 					requestCtx,
@@ -797,7 +798,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.Bool("force_cache_billing", fs.ForceCacheBilling),
 				)
 			}
-			setOpsSelectedAccount(c, account.ID, account.Platform)
+			setOpsSelectedAccountBeforeAttempt(c, account)
 
 			// [DEBUG-STICKY] 打印账号选择结果。代理字段仅记录 ID/协议，避免泄露代理地址或凭据。
 			accountSelectedFields := []zap.Field{
@@ -1049,6 +1050,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
+			setOpsKiroAttemptedAccount(c, account)
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
 			} else {

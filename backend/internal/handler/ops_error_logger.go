@@ -486,6 +486,22 @@ func setOpsSelectedAccount(c *gin.Context, accountID int64, platform ...string) 
 	}
 }
 
+// Kiro selection is provisional until budget, queue, and slot checks pass.
+// Other platforms retain the historical selection-time attribution.
+func setOpsSelectedAccountBeforeAttempt(c *gin.Context, account *service.Account) {
+	if account == nil || account.Platform == service.PlatformKiro {
+		return
+	}
+	setOpsSelectedAccount(c, account.ID, account.Platform)
+}
+
+func setOpsKiroAttemptedAccount(c *gin.Context, account *service.Account) {
+	if account == nil || account.Platform != service.PlatformKiro {
+		return
+	}
+	setOpsSelectedAccount(c, account.ID, account.Platform)
+}
+
 func applyOpsIdentityFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput, apiKey *service.APIKey) {
 	if c == nil || entry == nil {
 		return

@@ -200,7 +200,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			}
 		}
 		account := selection.Account
-		setOpsSelectedAccount(c, account.ID, account.Platform)
+		setOpsSelectedAccountBeforeAttempt(c, account)
 		if budgetErr := prepareKiroAccountAttempt(c, h.gatewayService, apiKey.GroupID, account); budgetErr != nil {
 			if selection.Acquired && selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
@@ -256,6 +256,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 		// 5. Forward request
 		writerSizeBeforeForward := c.Writer.Size()
+		setOpsKiroAttemptedAccount(c, account)
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
