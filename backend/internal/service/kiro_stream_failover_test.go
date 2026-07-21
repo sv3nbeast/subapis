@@ -26,6 +26,20 @@ type kiroStreamFailoverCooldownStore struct {
 	mark429Calls int
 }
 
+func TestKiroEventDiagnosticsIsScopedToConfiguredUser(t *testing.T) {
+	t.Setenv(kiroEventDiagnosticsUserIDsEnv, "565, 701")
+
+	require.True(t, kiroEventDiagnosticsEnabledForUser(&ParsedRequest{
+		SessionContext: &SessionContext{UserID: 565},
+	}))
+	require.True(t, kiroEventDiagnosticsEnabledForUser(&ParsedRequest{
+		SessionContext: &SessionContext{UserID: 701},
+	}))
+	require.False(t, kiroEventDiagnosticsEnabledForUser(&ParsedRequest{
+		SessionContext: &SessionContext{UserID: 702},
+	}))
+}
+
 func TestKiroContextLimitErrorReturnsClaudeCodeCompactionSignal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

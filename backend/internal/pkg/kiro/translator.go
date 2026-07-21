@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -253,6 +254,27 @@ type KiroRequestContext struct {
 	StructuredOutputUserHint string
 	StopSequences            []string
 	MaxOutputTokens          int
+	// EventDiagnosticSink receives redacted Event Stream metadata before the
+	// event is mapped to an Anthropic semantic event. It is nil by default and
+	// must never receive prompt or assistant content.
+	EventDiagnosticSink KiroEventDiagnosticSink
+}
+
+type KiroEventDiagnosticSink func(KiroEventDiagnostic)
+
+type KiroEventDiagnostic struct {
+	EventType            string
+	PayloadBytes         int
+	PayloadHash          string
+	TopLevelKeys         []string
+	NestedKeys           []string
+	Reason               string
+	Message              string
+	StopReason           string
+	ContentBytes         int
+	ToolUseCount         int
+	HasUsage             bool
+	HasSemanticCandidate bool
 }
 
 type KiroBuildResult struct {
@@ -1661,6 +1683,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
 			err = markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
 			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, visibleTextBuf.String())
+		}
+		if requestCtx.EventDiagnosticSink != nil {
+			requestCtx.EventDiagnosticSink(buildKiroEventDiagnostic(msg, event))
 		}
 		sawKiroEvent = true
 
@@ -4730,6 +4755,88 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 	}
 
 	return out
+}
+
+func buildKiroEventDiagnostic(msg *eventStreamMessage, event map[string]any) KiroEventDiagnostic {
+	diagnostic := KiroEventDiagnostic{}
+	if msg == nil {
+		return diagnostic
+	}
+	diagnostic.EventType = strings.TrimSpace(msg.EventType)
+	diagnostic.PayloadBytes = len(msg.Payload)
+	if len(msg.Payload) > 0 {
+		sum := sha256.Sum256(msg.Payload)
+		diagnostic.PayloadHash = fmt.Sprintf("%x", sum[:8])
+	}
+	diagnostic.TopLevelKeys = sortedKiroJSONKeys(event)
+	nested := nestedEvent(event, diagnostic.EventType)
+	diagnostic.NestedKeys = sortedKiroJSONKeys(nested)
+	diagnostic.StopReason = readStopReason(event)
+	if nested != nil {
+		if stopReason := readStopReason(nested); stopReason != "" {
+			diagnostic.StopReason = stopReason
+		}
+	}
+
+	if diagnostic.EventType == "invalidStateEvent" {
+		diagnostic.Reason = truncateKiroDiagnosticString(firstKiroStringField(nested, "reason", "code", "errorCode"))
+		diagnostic.Message = truncateKiroDiagnosticString(firstKiroStringField(nested, "message", "error", "detail"))
+		if diagnostic.Reason == "" {
+			diagnostic.Reason = truncateKiroDiagnosticString(firstKiroStringField(event, "reason", "code", "errorCode"))
+		}
+		if diagnostic.Message == "" {
+			diagnostic.Message = truncateKiroDiagnosticString(firstKiroStringField(event, "message", "error", "detail"))
+		}
+	}
+
+	if diagnostic.EventType == "assistantResponseEvent" {
+		assistant := nested
+		if assistant == nil {
+			assistant = event
+		}
+		diagnostic.ContentBytes = len(getString(assistant, "content"))
+		diagnostic.ToolUseCount = len(readToolUses(assistant, event))
+	}
+	if diagnostic.EventType == "toolUseEvent" {
+		diagnostic.ToolUseCount = 1
+	}
+	diagnostic.HasUsage = hasKiroDiagnosticUsage(event, nested)
+	diagnostic.HasSemanticCandidate = diagnostic.ContentBytes > 0 || diagnostic.ToolUseCount > 0 || diagnostic.EventType == "reasoningContentEvent"
+	return diagnostic
+}
+
+func sortedKiroJSONKeys(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func hasKiroDiagnosticUsage(values ...map[string]any) bool {
+	for _, value := range values {
+		if len(value) == 0 {
+			continue
+		}
+		for _, key := range []string{"tokenUsage", "usage", "credits", "creditUsage", "contextUsagePercentage"} {
+			if _, ok := value[key]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func truncateKiroDiagnosticString(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\n", " "), "\r", " "))
+	if len(value) > 256 {
+		return value[:256]
+	}
+	return value
 }
 
 func kiroSemanticEventIsTerminal(eventType string) bool {

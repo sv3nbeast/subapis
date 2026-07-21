@@ -4325,6 +4325,34 @@ func TestStreamEventStreamAsAnthropicRejectsMetadataOnlyKiroTurnWithoutTerminal(
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
+func TestStreamEventStreamAsAnthropicCapturesInvalidStateDiagnostic(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "invalidStateEvent", map[string]any{
+		"invalidStateEvent": map[string]any{
+			"reason":  "INVALID_CONVERSATION_STATE",
+			"message": "conversation state is stale",
+		},
+	}))
+
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 10, KiroRequestContext{
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "metadata-only assistant output")
+	require.Len(t, diagnostics, 1)
+	require.Equal(t, "invalidStateEvent", diagnostics[0].EventType)
+	require.Equal(t, "INVALID_CONVERSATION_STATE", diagnostics[0].Reason)
+	require.Equal(t, "conversation state is stale", diagnostics[0].Message)
+	require.Contains(t, diagnostics[0].NestedKeys, "reason")
+	require.NotEmpty(t, diagnostics[0].PayloadHash)
+}
+
 func TestStreamEventStreamAsAnthropicRejectsKiroExceptionFrame(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamExceptionFrame(t, "ThrottlingException", map[string]any{

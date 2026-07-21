@@ -42,6 +42,8 @@ type kiroUpstreamRequestOptions struct {
 	NativeToolProgressRetry bool
 }
 
+const kiroEventDiagnosticsUserIDsEnv = "SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS"
+
 // kiroEndpointTransportError preserves which endpoint failed before an HTTP
 // response existed. The marker lets the gateway fail over accounts and lets
 // Ops classify proxy/DNS/TCP failures as network errors instead of provider
@@ -248,6 +250,52 @@ func kiroRetryBackoffDelay(attempt int) time.Duration {
 
 func sleepKiroRetry(ctx context.Context, attempt int) error {
 	return kiroRetrySleep(ctx, kiroRetryBackoffDelay(attempt))
+}
+
+func kiroEventDiagnosticsEnabledForUser(parsed *ParsedRequest) bool {
+	if parsed == nil || parsed.SessionContext == nil || parsed.SessionContext.UserID <= 0 {
+		return false
+	}
+	raw := strings.TrimSpace(os.Getenv(kiroEventDiagnosticsUserIDsEnv))
+	if raw == "" {
+		return false
+	}
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		if token == "all" || token == strconv.FormatInt(parsed.SessionContext.UserID, 10) {
+			return true
+		}
+	}
+	return false
+}
+
+func configureKiroEventDiagnostics(requestCtx *kiropkg.KiroRequestContext, parsed *ParsedRequest, accountID int64, requestID, upstreamRequestID string) {
+	if requestCtx == nil || !kiroEventDiagnosticsEnabledForUser(parsed) {
+		return
+	}
+	bodyAttempt := requestCtx.BodyAttempt
+	requestCtx.EventDiagnosticSink = func(event kiropkg.KiroEventDiagnostic) {
+		logger.L().Info("kiro.event_diagnostic",
+			zap.Int64("user_id", parsed.SessionContext.UserID),
+			zap.Int64("account_id", accountID),
+			zap.String("request_id", requestID),
+			zap.String("upstream_request_id", upstreamRequestID),
+			zap.Int("body_attempt", bodyAttempt),
+			zap.String("event_type", event.EventType),
+			zap.Int("payload_bytes", event.PayloadBytes),
+			zap.String("payload_hash", event.PayloadHash),
+			zap.Strings("top_level_keys", event.TopLevelKeys),
+			zap.Strings("nested_keys", event.NestedKeys),
+			zap.String("reason", event.Reason),
+			zap.String("message", event.Message),
+			zap.String("stop_reason", event.StopReason),
+			zap.Int("content_bytes", event.ContentBytes),
+			zap.Int("tool_use_count", event.ToolUseCount),
+			zap.Bool("has_usage", event.HasUsage),
+			zap.Bool("has_semantic_candidate", event.HasSemanticCandidate),
+		)
+	}
 }
 
 func kiroStreamBodyRetryMax() int {
@@ -1096,6 +1144,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			currentRequestCtx.FinalizeCacheEmulationUsage = s.kiroCacheEmulationTerminalFinalizer(streamCtx, cacheUsage)
 			currentRequestCtx.PriorAttemptKiroCredits = discardedKiroCredits
 			currentRequestCtx.RequireTerminalEvent = true
+			configureKiroEventDiagnostics(&currentRequestCtx, parsed, accountID, requestID, buildKiroClientRequestID(currentResp))
 			streamWriter := io.Writer(translatorWriter)
 			if semanticObserver != nil {
 				streamWriter = &kiroSemanticObserverWriter{dst: translatorWriter, observer: semanticObserver}
@@ -1501,6 +1550,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
 		logKiroStatelessReplay(account, buildResult.Payload)
+		logKiroPayloadDiagnostics(account, parsed, buildResult.Payload)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequestWithExplicitTarget(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account, attempt+1, maxRetries+1)
@@ -1763,6 +1813,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
 						logKiroStatelessReplay(account, buildResult.Payload)
+						logKiroPayloadDiagnostics(account, parsed, buildResult.Payload)
 						if sleepErr := sleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -2187,6 +2238,39 @@ func logKiroStatelessReplay(account *Account, payload []byte) {
 		zap.Int("system_prompt_len", len(systemPrompt)),
 		zap.String("current_content_hash", hashKiroLogString(currentContent)),
 		zap.Int("tool_count", len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array())),
+	)
+}
+
+func logKiroPayloadDiagnostics(account *Account, parsed *ParsedRequest, payload []byte) {
+	if account == nil || !kiroEventDiagnosticsEnabledForUser(parsed) {
+		return
+	}
+	tools := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	toolNameHashes := make([]string, 0, len(tools))
+	toolSchemaHashes := make([]string, 0, len(tools))
+	uniqueNames := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		name := strings.TrimSpace(tool.Get("toolSpecification.name").String())
+		if name != "" {
+			uniqueNames[name] = struct{}{}
+			toolNameHashes = append(toolNameHashes, hashKiroLogString(name))
+		}
+		schema := tool.Get("toolSpecification.inputSchema.json")
+		if schema.Exists() {
+			toolSchemaHashes = append(toolSchemaHashes, hashKiroLogString(schema.Raw))
+		}
+	}
+	logger.L().Info("kiro.payload_diagnostic",
+		zap.Int64("user_id", parsed.SessionContext.UserID),
+		zap.Int64("account_id", account.ID),
+		zap.String("conversation_id_hash", hashKiroLogString(gjson.GetBytes(payload, "conversationState.conversationId").String())),
+		zap.String("agent_continuation_id_hash", hashKiroLogString(gjson.GetBytes(payload, "conversationState.agentContinuationId").String())),
+		zap.String("payload_hash_no_conversation_id", hashKiroPayloadWithoutConversationID(payload)),
+		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
+		zap.Int("tool_count", len(tools)),
+		zap.Int("unique_tool_name_count", len(uniqueNames)),
+		zap.Strings("tool_name_hashes", toolNameHashes),
+		zap.Strings("tool_schema_hashes", toolSchemaHashes),
 	)
 }
 

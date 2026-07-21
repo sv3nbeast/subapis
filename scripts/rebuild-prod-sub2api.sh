@@ -26,6 +26,8 @@ Environment variables:
   GATEWAY_KIRO_RESILIENCE_GROUP_IDS
                                    Optional comma-separated rollout group IDs.
                                    When unset, preserve the running container value.
+  SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS
+                                   Optional comma-separated user IDs for redacted Kiro event diagnostics.
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -55,6 +57,7 @@ UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
+KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -137,6 +140,10 @@ fi
 if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
   KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_GROUP_IDS=${KIRO_RESILIENCE_GROUP_IDS}"$'\n'
 fi
+KIRO_EVENT_DIAGNOSTICS_ENV=""
+if [[ -n "${KIRO_EVENT_DIAGNOSTICS_USER_IDS}" ]]; then
+  KIRO_EVENT_DIAGNOSTICS_ENV="      - SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS=${KIRO_EVENT_DIAGNOSTICS_USER_IDS}"$'\n'
+fi
 
 if [[ ! -d "${REPO_ROOT}" ]]; then
   echo "Repo root not found: ${REPO_ROOT}" >&2
@@ -175,6 +182,7 @@ services:
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
       - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
 ${KIRO_RESILIENCE_ENV%$'\n'}
+${KIRO_EVENT_DIAGNOSTICS_ENV%$'\n'}
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
