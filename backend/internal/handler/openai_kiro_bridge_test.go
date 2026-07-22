@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -9,6 +10,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseOpenAIKiroBridgeRequestPropagatesAuthenticatedUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	parsed, err := parseOpenAIKiroBridgeRequest(c, &service.APIKey{ID: 969, UserID: 565}, []byte(`{"model":"gpt-5.6-sol","input":"test"}`), "responses")
+	require.NoError(t, err)
+	require.NotNil(t, parsed.SessionContext)
+	require.EqualValues(t, 969, parsed.SessionContext.APIKeyID)
+	require.EqualValues(t, 565, parsed.SessionContext.UserID)
+}
 
 func TestOpenAIForwardResultFromGatewayPreservesKiroUsage(t *testing.T) {
 	effort := "max"

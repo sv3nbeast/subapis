@@ -41,13 +41,16 @@ func parseOpenAIKiroBridgeRequest(c *gin.Context, apiKey *service.APIKey, body [
 	attachAPIKeyGroupToParsedRequest(parsed, apiKey)
 	if c != nil {
 		var apiKeyID int64
+		var userID int64
 		if apiKey != nil {
 			apiKeyID = apiKey.ID
+			userID = apiKey.UserID
 		}
 		parsed.SessionContext = &service.SessionContext{
 			ClientIP:  ip.GetClientIP(c),
 			UserAgent: c.GetHeader("User-Agent"),
 			APIKeyID:  apiKeyID,
+			UserID:    userID,
 		}
 		parsed.ExplicitSessionID = explicitStickySessionIDFromHeaders(c)
 	}
