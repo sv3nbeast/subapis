@@ -418,7 +418,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
-				c.Request.Context(),
+				grokQuotaFailoverCtx,
 				apiKey.GroupID,
 				previousResponseID,
 				sessionHash,
@@ -1006,7 +1006,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		reqLog.Debug("openai_messages.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			grokQuotaFailoverCtx,
 			apiKey.GroupID,
 			"", // no previous_response_id
 			sessionHash,
@@ -1741,7 +1741,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
-				ctx,
+				grokQuotaFailoverCtx,
 				apiKey.GroupID,
 				previousResponseID,
 				sessionHash,

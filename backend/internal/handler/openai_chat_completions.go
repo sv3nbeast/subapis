@@ -170,7 +170,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
-				c.Request.Context(),
+				grokQuotaFailoverCtx,
 				apiKey.GroupID,
 				"",
 				sessionHash,

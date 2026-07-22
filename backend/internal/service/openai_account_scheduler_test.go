@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -619,6 +620,100 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_AllowsG
 	require.NotNil(t, selection.Account)
 	require.Equal(t, int64(36041), selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+}
+
+func TestOpenAIGatewayService_GrokQuotaRecoveryPrefersRecentSuccessfulAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	now := time.Now()
+	stale := now.Add(-72 * time.Hour)
+	recent := now.Add(-10 * time.Minute)
+	accounts := []Account{
+		{ID: 36101, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0},
+		{ID: 36102, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 10, LastUsedAt: &recent},
+		{ID: 36103, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1, LastUsedAt: &stale},
+		{ID: 36104, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+	groupID := int64(10114)
+	requestCtx := WithGrokQuotaFailoverBudget(context.Background())
+
+	initial, _, err := svc.SelectAccountWithSchedulerForCapability(
+		requestCtx, &groupID, "", "", "grok-4.5", nil,
+		OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions,
+		false, false, PlatformGrok,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(36101), initial.Account.ID, "before a quota failure the normal priority/LRU policy must remain unchanged")
+	if initial.ReleaseFunc != nil {
+		initial.ReleaseFunc()
+	}
+
+	quotaBody := []byte(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}`)
+	require.False(t, svc.ShouldStopOpenAIFailoverWithContext(requestCtx, initial.Account, http.StatusPaymentRequired, quotaBody, 1))
+	recovery, _, err := svc.SelectAccountWithSchedulerForCapability(
+		requestCtx, &groupID, "", "", "grok-4.5", map[int64]struct{}{initial.Account.ID: {}},
+		OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions,
+		false, false, PlatformGrok,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(36102), recovery.Account.ID, "recently successful Grok account must outrank stale and never-used discovery candidates")
+	if recovery.ReleaseFunc != nil {
+		recovery.ReleaseFunc()
+	}
+}
+
+func TestDefaultOpenAIAccountScheduler_GrokQuotaRecoveryKeepsEligibilityAndConcurrencyFilters(t *testing.T) {
+	now := time.Now()
+	newest := now.Add(-time.Minute)
+	healthy := now.Add(-5 * time.Minute)
+	rateLimitReset := now.Add(time.Hour)
+	accounts := []Account{
+		{ID: 36115, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, LastUsedAt: &newest},
+		{ID: 36116, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, LastUsedAt: &newest, Credentials: map[string]any{"model_mapping": map[string]any{"grok-other": "grok-other"}}},
+		{ID: 36111, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, LastUsedAt: &newest},
+		{ID: 36112, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, LastUsedAt: &newest, RateLimitResetAt: &rateLimitReset},
+		{ID: 36113, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 20, LastUsedAt: &healthy},
+		{ID: 36114, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0},
+	}
+	cache := schedulerTestConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			36111: {AccountID: 36111, LoadRate: 0},
+			36113: {AccountID: 36113, LoadRate: 0},
+			36114: {AccountID: 36114, LoadRate: 0},
+		},
+		acquireResults: map[int64]bool{36111: false, 36113: true, 36114: true},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cfg:                &config.Config{},
+		concurrencyService: NewConcurrencyService(cache),
+	}
+	scheduler := newDefaultOpenAIAccountScheduler(svc, nil)
+	groupID := int64(10115)
+
+	selection, _, err := scheduler.Select(context.Background(), OpenAIAccountScheduleRequest{
+		GroupID:                 &groupID,
+		Platform:                PlatformGrok,
+		RequestedModel:          "grok-4.5",
+		RequiredTransport:       OpenAIUpstreamTransportAny,
+		RequiredCapability:      OpenAIEndpointCapabilityChatCompletions,
+		ExcludedIDs:             map[int64]struct{}{36115: {}},
+		PreferRecentGrokSuccess: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, int64(36113), selection.Account.ID, "busy and rate-limited recent accounts must be skipped before falling back")
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_EnabledUsesAdvancedPreviousResponseRouting(t *testing.T) {

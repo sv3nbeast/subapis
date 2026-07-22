@@ -1999,6 +1999,11 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	selectedCompactTier := -1
 	compactBlocked := false
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
+	preferRecentGrokSuccess := shouldPreferRecentGrokSuccess(ctx, platform)
+	var grokRecoveryNow time.Time
+	if preferRecentGrokSuccess {
+		grokRecoveryNow = time.Now()
+	}
 
 	for i := range accounts {
 		acc := &accounts[i]
@@ -2046,7 +2051,8 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			continue
 		}
 
-		if s.isBetterAccount(fresh, selected) {
+		better, decided := isBetterGrokQuotaRecoveryAccount(fresh, selected, preferRecentGrokSuccess, grokRecoveryNow)
+		if better || (!decided && s.isBetterAccount(fresh, selected)) {
 			selected = fresh
 			selectedCompactTier = compactTier
 		}
@@ -2086,6 +2092,41 @@ func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool
 		// 都使用过，选择最久未使用的
 		return candidate.LastUsedAt.Before(*current.LastUsedAt)
 	}
+}
+
+func isBetterGrokQuotaRecoveryAccount(candidate, current *Account, enabled bool, now time.Time) (better bool, decided bool) {
+	if !enabled || candidate == nil || current == nil {
+		return false, false
+	}
+	candidateRecent := hasRecentGrokSuccessfulUse(candidate, now)
+	currentRecent := hasRecentGrokSuccessfulUse(current, now)
+	if candidateRecent != currentRecent {
+		return candidateRecent, true
+	}
+	if candidateRecent && !candidate.LastUsedAt.Equal(*current.LastUsedAt) {
+		return candidate.LastUsedAt.After(*current.LastUsedAt), true
+	}
+	return false, false
+}
+
+func prioritizeRecentGrokAccounts(accounts []*Account, enabled bool, now time.Time) {
+	if !enabled || len(accounts) < 2 {
+		return
+	}
+	sort.SliceStable(accounts, func(i, j int) bool {
+		better, decided := isBetterGrokQuotaRecoveryAccount(accounts[i], accounts[j], true, now)
+		return decided && better
+	})
+}
+
+func prioritizeRecentGrokAccountLoads(accounts []accountWithLoad, enabled bool, now time.Time) {
+	if !enabled || len(accounts) < 2 {
+		return
+	}
+	sort.SliceStable(accounts, func(i, j int) bool {
+		better, decided := isBetterGrokQuotaRecoveryAccount(accounts[i].account, accounts[j].account, true, now)
+		return decided && better
+	})
 }
 
 // SelectAccountWithLoadAwareness selects an account with load-awareness and wait plan.
@@ -2136,6 +2177,11 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			Timeout:        cfg.FallbackWaitTimeout,
 			MaxWaiting:     cfg.FallbackMaxWaiting,
 		})
+	}
+	preferRecentGrokSuccess := shouldPreferRecentGrokSuccess(ctx, platform)
+	var grokRecoveryNow time.Time
+	if preferRecentGrokSuccess {
+		grokRecoveryNow = time.Now()
 	}
 
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
@@ -2294,6 +2340,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			}
 		})
 		shuffleWithinSortGroups(available)
+		prioritizeRecentGrokAccountLoads(available, preferRecentGrokSuccess, grokRecoveryNow)
 
 		selectionOrder := make([]accountWithLoad, 0, len(available))
 		if requireCompact {
@@ -2345,6 +2392,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	if err != nil {
 		ordered := append([]*Account(nil), candidates...)
 		sortAccountsByPriorityAndLastUsed(ordered, false)
+		prioritizeRecentGrokAccounts(ordered, preferRecentGrokSuccess, grokRecoveryNow)
 		if requireCompact {
 			ordered = prioritizeOpenAICompactAccounts(ordered)
 		}
@@ -2390,6 +2438,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 
 	// ============ Layer 3: Fallback wait ============
 	sortAccountsByPriorityAndLastUsed(candidates, false)
+	prioritizeRecentGrokAccounts(candidates, preferRecentGrokSuccess, grokRecoveryNow)
 	if requireCompact {
 		candidates = prioritizeOpenAICompactAccounts(candidates)
 	}

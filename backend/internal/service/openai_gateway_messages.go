@@ -985,12 +985,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// handleScanErr logs scanner errors if meaningful.
 	handleScanErr := func(err error) {
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			logger.L().Warn("openai messages stream: read error",
-				zap.Error(err),
-				zap.String("request_id", requestID),
-			)
+		if err == nil {
+			return
 		}
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil &&
+			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return
+		}
+		logger.L().Warn("openai messages stream: read error",
+			zap.Error(err),
+			zap.String("request_id", requestID),
+		)
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
 		result := resultWithUsage()
@@ -1003,6 +1008,43 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_missing_terminal", message)
 		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
+	}
+	streamReadErr := func(scanErr error) (*OpenAIForwardResult, error) {
+		handleScanErr(scanErr)
+		if scanErr == nil {
+			return resultWithUsage(), nil
+		}
+
+		// Request cancellation and downstream write failures are not upstream
+		// account failures. Replaying them could duplicate a canceled turn.
+		if c != nil && c.Request != nil {
+			if requestErr := c.Request.Context().Err(); requestErr != nil {
+				clientDisconnected = true
+				return resultWithUsage(), fmt.Errorf("stream usage incomplete after client disconnect: %w", requestErr)
+			}
+		}
+		if clientDisconnected {
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete after client disconnect: %w", scanErr)
+		}
+
+		message := "Upstream stream disconnected: " + sanitizeStreamError(scanErr)
+		if !clientOutputStarted {
+			failoverErr := s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, message)
+			failoverErr.FailureKind = UpstreamFailureIncompleteStream
+			failoverErr.Cause = scanErr
+			return resultWithUsage(), failoverErr
+		}
+
+		// Once any Anthropic SSE byte (including a keepalive) is visible, replay is
+		// unsafe. Finish the existing stream with an in-band error instead.
+		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_read_error", message)
+		writeStreamHeaders()
+		if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("api_error", message)); err != nil {
+			clientDisconnected = true
+		} else {
+			c.Writer.Flush()
+		}
+		return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", scanErr)
 	}
 	processFrame := func(frame openAICompatSSEFrame) bool {
 		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
@@ -1064,8 +1106,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			handleScanErr(err)
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+			return streamReadErr(err)
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
@@ -1137,8 +1178,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				return finalizeCleanEOF()
 			}
 			if ev.err != nil {
-				handleScanErr(ev.err)
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				return streamReadErr(ev.err)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

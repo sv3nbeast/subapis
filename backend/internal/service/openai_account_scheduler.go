@@ -77,6 +77,7 @@ type OpenAIAccountScheduleRequest struct {
 	AllowKiroBridge         bool
 	KiroBridgeModel         string
 	ForcedAccountID         int64
+	PreferRecentGrokSuccess bool
 }
 
 type openAIStickyFallbackMode uint8
@@ -973,6 +974,28 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 			}
 		}
 		return buildOpenAIWeightedSelectionOrder(ranked, req)
+	}
+	if req.PreferRecentGrokSuccess && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformGrok && !req.RequireCompact {
+		now := time.Now()
+		recent := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
+		fallback := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
+		for _, candidate := range plan.candidates {
+			if hasRecentGrokSuccessfulUse(candidate.account, now) {
+				recent = append(recent, candidate)
+				continue
+			}
+			fallback = append(fallback, candidate)
+		}
+		if len(recent) > 0 {
+			sort.SliceStable(recent, func(i, j int) bool {
+				left, right := recent[i], recent[j]
+				if !left.account.LastUsedAt.Equal(*right.account.LastUsedAt) {
+					return left.account.LastUsedAt.After(*right.account.LastUsedAt)
+				}
+				return isOpenAIAccountCandidateBetter(left, right)
+			})
+			return append(recent, buildSelectionOrder(fallback)...)
+		}
 	}
 
 	if req.RequireCompact {
@@ -1963,6 +1986,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		AllowKiroBridge:         allowKiroBridge,
 		KiroBridgeModel:         strings.TrimSpace(kiroBridgeModel),
 		ForcedAccountID:         forcedAccountIDFromContext(ctx),
+		PreferRecentGrokSuccess: shouldPreferRecentGrokSuccess(ctx, platform),
 	})
 	if err != nil {
 		err = s.refineOpenAIChannelRestrictionSelectionError(

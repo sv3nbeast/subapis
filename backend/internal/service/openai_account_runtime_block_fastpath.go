@@ -21,6 +21,7 @@ const (
 	// discovery window to try every still-unknown credential, while preventing a
 	// pathological upstream from consuming the whole client request timeout.
 	grokQuotaFailoverProbeBudget = 15 * time.Second
+	grokQuotaRecentSuccessWindow = 24 * time.Hour
 )
 
 type grokQuotaFailoverDeadlineContextKey struct{}
@@ -65,6 +66,29 @@ func grokQuotaFailoverBudgetExceeded(ctx context.Context) bool {
 	}
 	state, ok := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState)
 	return ok && state.exceeded(time.Now())
+}
+
+func grokQuotaFailoverActive(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	state, ok := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState)
+	if !ok || state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return !state.deadline.IsZero()
+}
+
+func shouldPreferRecentGrokSuccess(ctx context.Context, platform string) bool {
+	return normalizeOpenAICompatiblePlatform(platform) == PlatformGrok && grokQuotaFailoverActive(ctx)
+}
+
+func hasRecentGrokSuccessfulUse(account *Account, now time.Time) bool {
+	// LastUsedAt is advanced by accepted usage recording, so it is a cheap
+	// scheduler-snapshot signal that this credential recently completed a turn.
+	return account != nil && account.LastUsedAt != nil && !account.LastUsedAt.Before(now.Add(-grokQuotaRecentSuccessWindow))
 }
 
 type openAIAccountRuntimeBlock struct {

@@ -36,6 +36,10 @@ func (w *openAICompatFailingWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
+func (w *openAICompatFailingWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
 type openAICompatBlockingReadCloser struct {
 	data      []byte
 	offset    int
@@ -66,6 +70,23 @@ func (r *openAICompatBlockingReadCloser) Close() error {
 	})
 	return nil
 }
+
+type openAICompatDelayedErrorReadCloser struct {
+	delay time.Duration
+	err   error
+	sent  bool
+}
+
+func (r *openAICompatDelayedErrorReadCloser) Read(_ []byte) (int, error) {
+	if r.sent {
+		return 0, io.EOF
+	}
+	r.sent = true
+	time.Sleep(r.delay)
+	return 0, r.err
+}
+
+func (r *openAICompatDelayedErrorReadCloser) Close() error { return nil }
 
 func TestNormalizeOpenAICompatRequestedModel(t *testing.T) {
 	t.Parallel()
@@ -1969,6 +1990,153 @@ func TestForwardAsAnthropic_CompleteStreamDoesNotRecordMissingTerminalOps(t *tes
 	require.False(t, ok)
 }
 
+func TestHandleAnthropicStreamingResponse_ReadErrorBeforeOutputTriggersFailover(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{name: "synchronous scanner"},
+		{
+			name: "keepalive scanner",
+			cfg: &config.Config{Gateway: config.GatewayConfig{
+				StreamKeepaliveInterval: 1,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err, rec, _ := handleOpenAICompatAnthropicTestReader(
+				t,
+				&streamReadCloser{err: io.ErrUnexpectedEOF},
+				tt.cfg,
+				nil,
+			)
+
+			require.Error(t, err)
+			require.NotNil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+			require.ErrorIs(t, failoverErr, io.ErrUnexpectedEOF)
+			require.Empty(t, rec.Body.String())
+		})
+	}
+}
+
+func TestHandleAnthropicStreamingResponse_ReadErrorAfterOutputDoesNotReplay(t *testing.T) {
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_read_error","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","output_index":0,"delta":"partial"}`,
+		"",
+		"",
+	}, "\n")
+
+	result, err, rec, c := handleOpenAICompatAnthropicTestReader(
+		t,
+		&streamReadCloser{payload: []byte(upstreamBody), err: io.ErrUnexpectedEOF},
+		nil,
+		nil,
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Contains(t, rec.Body.String(), "event: message_start")
+	require.Contains(t, rec.Body.String(), "partial")
+	require.Contains(t, rec.Body.String(), "event: error")
+	require.Contains(t, rec.Body.String(), "Upstream stream disconnected: unexpected EOF")
+	events := openAICompatOpsEvents(t, c)
+	require.Len(t, events, 1)
+	require.Equal(t, "stream_read_error", events[0].Kind)
+}
+
+func TestHandleAnthropicStreamingResponse_ReadErrorAfterClientDisconnectDoesNotReplay(t *testing.T) {
+	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_client_disconnect","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		"",
+	}, "\n")
+
+	result, err, rec, c := handleOpenAICompatAnthropicTestReader(
+		t,
+		&streamReadCloser{payload: []byte(upstreamBody), err: io.ErrUnexpectedEOF},
+		nil,
+		func(c *gin.Context) {
+			c.Writer = &openAICompatFailingWriter{ResponseWriter: c.Writer, failAfter: 0}
+		},
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Empty(t, rec.Body.String())
+	_, recorded := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, recorded)
+}
+
+func TestHandleAnthropicStreamingResponse_CanceledRequestDoesNotReplay(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err, rec, c := handleOpenAICompatAnthropicTestReader(
+		t,
+		&streamReadCloser{err: io.ErrUnexpectedEOF},
+		nil,
+		func(c *gin.Context) {
+			c.Request = c.Request.WithContext(requestCtx)
+		},
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Empty(t, rec.Body.String())
+	_, recorded := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, recorded)
+}
+
+func TestHandleAnthropicStreamingResponse_InternalDeadlineBeforeOutputTriggersFailover(t *testing.T) {
+	result, err, rec, _ := handleOpenAICompatAnthropicTestReader(
+		t,
+		&streamReadCloser{err: context.DeadlineExceeded},
+		nil,
+		nil,
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.ErrorIs(t, failoverErr, context.DeadlineExceeded)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestHandleAnthropicStreamingResponse_ReadErrorAfterKeepaliveDoesNotReplay(t *testing.T) {
+	cfg := &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}}
+	result, err, rec, c := handleOpenAICompatAnthropicTestReader(
+		t,
+		&openAICompatDelayedErrorReadCloser{delay: 1200 * time.Millisecond, err: io.ErrUnexpectedEOF},
+		cfg,
+		nil,
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Contains(t, rec.Body.String(), "event: ping")
+	require.Contains(t, rec.Body.String(), "event: error")
+	events := openAICompatOpsEvents(t, c)
+	require.Len(t, events, 1)
+	require.Equal(t, "stream_read_error", events[0].Kind)
+}
+
 func TestForwardAsAnthropic_DoneSentinelFinalizesCompleteContentWithoutTerminal(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2159,6 +2327,36 @@ func forwardOpenAICompatAnthropicTestStream(
 	}
 
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	return result, err, rec, c
+}
+
+func handleOpenAICompatAnthropicTestReader(
+	t *testing.T,
+	upstreamBody io.ReadCloser,
+	cfg *config.Config,
+	configureContext func(*gin.Context),
+) (*OpenAIForwardResult, error, *httptest.ResponseRecorder, *gin.Context) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	if configureContext != nil {
+		configureContext(c)
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"X-Request-Id": []string{"rid_stream_read_error"},
+		},
+		Body: upstreamBody,
+	}
+	account := &Account{ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	result, err := svc.handleAnthropicStreamingResponse(resp, c, account, "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
 	return result, err, rec, c
 }
 
