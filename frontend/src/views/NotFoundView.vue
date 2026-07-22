@@ -1,6 +1,7 @@
 <template>
+  <PublicLayout>
   <div
-    class="relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-50 px-4 dark:bg-dark-950"
+    class="public-not-found-view relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-50 px-4 dark:bg-dark-950"
   >
     <!-- Background Decoration -->
     <div class="pointer-events-none absolute inset-0 overflow-hidden">
@@ -20,22 +21,8 @@
             >404</span
           >
           <div class="absolute inset-0 flex items-center justify-center">
-            <div
-              class="flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30"
-            >
-              <svg
-                class="h-12 w-12 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                />
-              </svg>
+            <div class="public-not-found-icon flex h-24 w-24 items-center justify-center rounded-2xl bg-primary-600 shadow-lg shadow-primary-500/30">
+              <Icon name="exclamationTriangle" size="xl" class="text-white" />
             </div>
           </div>
         </div>
@@ -57,9 +44,9 @@
           <Icon name="arrowLeft" size="md" class="mr-2" />
           {{ t('common.back') }}
         </button>
-        <router-link to="/dashboard" class="btn btn-primary">
+        <router-link :to="dashboardPath" class="btn btn-primary">
           <Icon name="home" size="md" class="mr-2" />
-          {{ t('home.goToDashboard') }}
+          {{ authStore.isAuthenticated ? t('home.goToDashboard') : t('docsGuide.nav.home') }}
         </router-link>
       </div>
 
@@ -75,15 +62,22 @@
       </p>
     </div>
   </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/icons/Icon.vue'
+import PublicLayout from '@/components/public/PublicLayout.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 const router = useRouter()
+const authStore = useAuthStore()
+const dashboardPath = authStore.isAuthenticated
+  ? (authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+  : '/home'
 
 function goBack(): void {
   router.back()

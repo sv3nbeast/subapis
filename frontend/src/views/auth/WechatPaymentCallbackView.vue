@@ -1,5 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900">
+  <div
+    class="public-payment-callback-view min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900"
+    :class="{ 'public-status-v2': isPublicUiV2 }"
+  >
     <div class="mx-auto max-w-2xl">
       <div class="card p-6">
         <h1 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -43,11 +46,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores'
+import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
+const { isPublicUiV2 } = usePublicUiVersion()
 
 const errorMessage = ref('')
 

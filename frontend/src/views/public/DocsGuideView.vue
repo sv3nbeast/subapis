@@ -1,6 +1,7 @@
 <template>
+  <PublicLayout>
   <div
-    class="docs-guide min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/40 to-cyan-50/30 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white"
+    class="public-docs-view docs-guide min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/40 to-cyan-50/30 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white"
     :class="{ 'docs-guide-dark': isDark }"
   >
     <div class="docs-guide-bg" aria-hidden="true">
@@ -291,6 +292,7 @@ OPENAI_BASE_URL={{ apiBaseUrl }}/v1</code></pre>
       </section>
     </main>
   </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
@@ -300,6 +302,7 @@ import { RouterLink } from 'vue-router'
 import { useAppStore, useAuthStore } from '@/stores'
 import Icon from '@/components/icons/Icon.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import PublicLayout from '@/components/public/PublicLayout.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { normalizeSiteName } from '@/utils/siteBrand'
 

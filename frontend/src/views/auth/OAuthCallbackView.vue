@@ -1,5 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900">
+  <div
+    class="public-oauth-callback-view min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900"
+    :class="{ 'public-status-v2': isPublicUiV2 }"
+  >
     <div class="mx-auto max-w-2xl">
       <div v-if="isProcessing" class="card p-6 text-center">
         <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
@@ -153,6 +156,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore, useAuthStore } from '@/stores'
 import { apiClient } from '@/api/client'
 import { buildApiUrl } from '@/api/url'
+import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
 import {
   exchangePendingOAuthCompletion,
   persistOAuthTokenContext,
@@ -170,6 +174,7 @@ const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const { isPublicUiV2 } = usePublicUiVersion()
 const isProcessing = ref(false)
 const isSubmitting = ref(false)
 const needsRegistrationCompletion = ref(false)

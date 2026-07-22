@@ -1,6 +1,7 @@
 <template>
+  <PublicLayout>
   <div
-    class="monitor-public min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/35 to-cyan-50/25 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white"
+    class="public-monitor-view monitor-public min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/35 to-cyan-50/25 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white"
     :class="{ 'monitor-public-dark': isDark }"
   >
     <div class="monitor-public-bg" aria-hidden="true">
@@ -241,6 +242,7 @@
       />
     </main>
   </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
@@ -251,6 +253,7 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProviderIcon from '@/components/user/monitor/ProviderIcon.vue'
 import MonitorDetailDialog from '@/components/user/MonitorDetailDialog.vue'
+import PublicLayout from '@/components/public/PublicLayout.vue'
 import { listPublicChannelMonitors, getPublicChannelMonitorStatus, type PublicMonitorDetail, type PublicMonitorTimelinePoint, type PublicMonitorView } from '@/api/publicChannelMonitor'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useChannelMonitorFormat, providerGradient } from '@/composables/useChannelMonitorFormat'
@@ -747,7 +750,7 @@ onBeforeUnmount(() => {
   color: #64748b;
   font-size: 0.84rem;
   font-weight: 700;
-  transition: all 180ms ease;
+  transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
 }
 
 .monitor-public-tab.is-active {

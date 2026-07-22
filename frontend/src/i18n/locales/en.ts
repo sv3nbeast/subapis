@@ -23,6 +23,7 @@ export default {
         'Use one domain, key system, and security policy to reach multiple model services, keeping the call path observable, extensible, and controlled.',
       baseUrlLabel: 'Swap the base URL to start integrating',
       stats: {
+        models: 'Models',
         channels: 'Core channels',
         sla: 'SLA availability',
         realtimeValue: 'Live',
@@ -31,7 +32,7 @@ export default {
       features: {
         routing: {
           title: 'Real-time scheduling',
-          description: 'Switch dynamically by health, latency, cost, and policy to prioritize critical requests.'
+          description: 'Switch dynamically by health, latency, cost, and policy to protect every critical request.'
         },
         observability: {
           title: 'Unified monitoring',
@@ -41,6 +42,52 @@ export default {
           title: 'Intelligent rate limits',
           description: 'Protect core business priority with multi-dimensional policies during traffic bursts.'
         }
+      }
+    },
+    experience: {
+      overview: {
+        section: 'Access overview',
+        ready: 'Endpoint ready',
+        proof: 'Service overview',
+        interfaces: 'Compatible APIs',
+        monitors: 'Public monitors',
+        routingLabel: 'Live routing control',
+        live: 'Live',
+        routingTitle: 'Choose a better path for every request',
+        routingDescription: 'Continuously evaluate health, latency, and policy constraints to route dynamically without client-side changes.',
+        policy: 'Routing policy online'
+      },
+      capabilities: {
+        section: 'Core capabilities'
+      },
+      workflow: {
+        section: 'Integration workflow',
+        description: 'Move from account and API key setup to production validation through one clear flow without changing how clients work.',
+        config: 'Base integration config'
+      },
+      models: {
+        section: 'Model ecosystem',
+        provider: 'Model channel',
+        capability: 'Capability scope',
+        state: 'Current state'
+      },
+      status: {
+        section: 'Live status',
+        liveMonitor: 'Public channel monitor',
+        availability: '7-day availability',
+        latency: 'Latest latency',
+        loading: 'Loading live status',
+        empty: 'No public monitoring data',
+        attention: 'Some channels need attention',
+        operational: 'Public monitors operational'
+      },
+      resources: {
+        section: 'Get started',
+        docs: 'Review integration steps, API formats, and client configuration.',
+        models: 'Browse public models, prices, rates, and available groups.',
+        monitor: 'Check model availability, latency, and recent status.',
+        usage: 'Query live usage and spend with an API key.',
+        service: 'Review platform service health and recent availability.'
       }
     },
     tags: {

@@ -16,7 +16,7 @@
   <div
     v-else
     class="home-page relative flex h-screen min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/40 to-cyan-50/30 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
-    :class="{ 'home-dark': isDark }"
+    :class="{ 'home-dark': isDark, 'home-apple': isPublicUiV2 }"
   >
     <div class="home-bg" aria-hidden="true">
       <div class="home-blob home-blob-a"></div>
@@ -257,16 +257,37 @@
 
     <!-- Main Content -->
     <main ref="snapContainerRef" class="home-snap-container relative z-10 flex-1">
-      <section class="home-section home-snap-section home-hero-section px-4 sm:px-6">
-        <div class="home-hero-shell mx-auto grid max-w-[72rem] items-center gap-8 lg:grid-cols-[minmax(0,38rem)_minmax(24rem,28rem)] lg:gap-10">
+      <PublicHomeV2
+        v-if="isPublicUiV2"
+        :site-name="siteName"
+        :api-base-url="apiBaseUrl"
+        :endpoint-paths="apiEndpointPaths"
+        :is-authenticated="isAuthenticated"
+        :dashboard-path="dashboardPath"
+        :public-model-market-enabled="publicModelMarketEnabled"
+        :model-count="heroModelCount"
+        :hero-features="heroFeatures"
+        :value-cards="valueCards"
+        :workflow-steps="workflowSteps"
+        :supported-channels="supportedChannels"
+        :public-monitor-items="publicMonitorItems"
+        :public-monitor-loading="publicMonitorLoading"
+        :legal-links="legalLinks"
+        :current-year="currentYear"
+        @copy-base-url="copyBaseUrl"
+      />
+
+      <template v-else>
+        <section class="home-section home-snap-section home-hero-section px-4 sm:px-6">
+        <div class="home-hero-shell mx-auto grid max-w-[72rem] items-center gap-8 lg:grid-cols-[minmax(0,38rem)_minmax(24rem,30rem)] lg:gap-10">
           <div class="home-hero-copy">
             <div class="inline-flex rounded-full border border-primary-200 bg-primary-50/80 px-3.5 py-1.5 text-[0.72rem] font-bold tracking-[0.14em] text-primary-700 shadow-sm dark:border-primary-800/70 dark:bg-primary-950/40 dark:text-primary-300">
               {{ t('home.hero.eyebrow') }}
             </div>
-            <h1 class="mt-5 text-[2.34rem] font-black leading-[1.02] tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.82rem] lg:text-[3.08rem]">
+            <h1 class="home-title-shimmer mt-5 text-[2.34rem] font-black leading-[1.02] tracking-[-0.05em] text-gray-950 dark:text-white sm:text-[2.82rem] lg:text-[3.08rem]">
               {{ t('home.hero.titleLine1') }}
               <br />
-              <span class="home-title-shimmer">
+              <span>
                 {{ t('home.hero.titleLine2') }}
                 <span class="home-title-gradient">{{ t('home.hero.titleHighlight') }}</span>
               </span>
@@ -329,17 +350,24 @@
               </router-link>
             </div>
 
-            <div class="home-stats-grid mt-6 grid max-w-[24rem] grid-cols-3 gap-3">
+            <div class="home-stats-grid mt-6 grid max-w-[30rem] grid-cols-3 gap-3">
               <div
                 v-for="stat in heroStats"
                 :key="stat.label"
                 class="home-stat-card"
+                :class="`home-stat-card--${stat.tone}`"
               >
-                <div class="text-lg font-black tracking-tight text-gray-950 dark:text-white sm:text-xl">
-                  {{ stat.value }}
+                <div class="home-stat-icon" aria-hidden="true">
+                  <Icon :name="stat.icon" size="sm" />
                 </div>
-                <div class="mt-1.5 text-xs font-medium text-gray-500 dark:text-dark-400">
-                  {{ stat.label }}
+                <div class="home-stat-copy">
+                  <div class="home-stat-value">
+                    {{ stat.value }}
+                    <span class="home-stat-signal" aria-hidden="true"></span>
+                  </div>
+                  <div class="home-stat-label">
+                    {{ stat.label }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -557,6 +585,7 @@
           </footer>
           </div>
       </section>
+      </template>
     </main>
   </div>
 </template>
@@ -568,17 +597,21 @@ import { useAuthStore, useAppStore, useAnnouncementStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import HomeChannelStatusPreview from '@/components/status/HomeChannelStatusPreview.vue'
+import PublicHomeV2 from '@/components/public/PublicHomeV2.vue'
 import { announcementsAPI } from '@/api'
 import { listPublicChannelMonitors, type PublicMonitorView } from '@/api/publicChannelMonitor'
+import { publicModelsAPI } from '@/api/publicModels'
 import { useClipboard } from '@/composables/useClipboard'
+import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { formatRelativeWithDateTime } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
-import type { UserAnnouncement } from '@/types' 
+import type { GroupPlatform, UserAnnouncement } from '@/types'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
+const { isPublicUiV2 } = usePublicUiVersion()
 
 type HomeIconName = InstanceType<typeof Icon>['$props']['name']
 
@@ -594,6 +627,7 @@ interface HomeWorkflowStep extends HomeIconCard {
 
 interface HomeChannel {
   name: string
+  platform: GroupPlatform
   shortName: string
   description: string
   status: string
@@ -610,6 +644,7 @@ const publicAnnouncements = ref<UserAnnouncement[]>([])
 const publicAnnouncementsLoading = ref(false)
 const publicMonitorItems = ref<PublicMonitorView[]>([])
 const publicMonitorLoading = ref(false)
+const publicModelCatalogCount = ref<number | null>(null)
 
 // Site settings - directly from appStore (already initialized from injected config)
 const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API'))
@@ -629,10 +664,36 @@ const apiEndpointPaths = [
   '/antigravity/v1/messages'
 ] as const
 
+const monitoredModelCount = computed(() => {
+  const models = new Set<string>()
+  publicMonitorItems.value.forEach((item) => {
+    if (item.primary_model) models.add(item.primary_model)
+    item.extra_models.forEach((model) => {
+      if (model.model) models.add(model.model)
+    })
+  })
+  return models.size
+})
+
+const heroModelCount = computed<number | null>(() => {
+  if (publicModelCatalogCount.value !== null) return publicModelCatalogCount.value
+  return monitoredModelCount.value > 0 ? monitoredModelCount.value : null
+})
+
 const heroStats = computed(() => [
-  { value: '4', label: t('home.hero.stats.channels') },
-  { value: '99.9%', label: t('home.hero.stats.sla') },
-  { value: t('home.hero.stats.realtimeValue'), label: t('home.hero.stats.billing') }
+  {
+    value: heroModelCount.value === null ? '—' : String(heroModelCount.value),
+    label: t('home.hero.stats.models'),
+    icon: 'cube' as HomeIconName,
+    tone: 'models'
+  },
+  { value: '99.9%', label: t('home.hero.stats.sla'), icon: 'badge' as HomeIconName, tone: 'sla' },
+  {
+    value: t('home.hero.stats.realtimeValue'),
+    label: t('home.hero.stats.billing'),
+    icon: 'chartBar' as HomeIconName,
+    tone: 'billing'
+  }
 ])
 
 const heroFeatures = computed<HomeIconCard[]>(() => [
@@ -700,6 +761,7 @@ const workflowSteps = computed<HomeWorkflowStep[]>(() => [
 const supportedChannels = computed<HomeChannel[]>(() => [
   {
     name: t('home.channels.items.claude.name'),
+    platform: 'anthropic',
     shortName: 'C',
     description: t('home.channels.items.claude.description'),
     status: t('home.channels.supported'),
@@ -707,6 +769,7 @@ const supportedChannels = computed<HomeChannel[]>(() => [
   },
   {
     name: t('home.channels.items.gpt.name'),
+    platform: 'openai',
     shortName: 'G',
     description: t('home.channels.items.gpt.description'),
     status: t('home.channels.supported'),
@@ -714,6 +777,7 @@ const supportedChannels = computed<HomeChannel[]>(() => [
   },
   {
     name: t('home.channels.items.gemini.name'),
+    platform: 'gemini',
     shortName: 'G',
     description: t('home.channels.items.gemini.description'),
     status: t('home.channels.supported'),
@@ -721,6 +785,7 @@ const supportedChannels = computed<HomeChannel[]>(() => [
   },
   {
     name: t('home.channels.items.antigravity.name'),
+    platform: 'antigravity',
     shortName: 'A',
     description: t('home.channels.items.antigravity.description'),
     status: t('home.channels.supported'),
@@ -728,6 +793,7 @@ const supportedChannels = computed<HomeChannel[]>(() => [
   },
   {
     name: t('home.channels.items.custom.name'),
+    platform: 'custom',
     shortName: '+',
     description: t('home.channels.items.custom.description'),
     status: t('home.channels.custom'),
@@ -819,6 +885,23 @@ async function loadPublicMonitorPreview() {
   }
 }
 
+async function loadPublicModelCount() {
+  if (!publicModelMarketEnabled.value) return
+
+  try {
+    const catalog = await publicModelsAPI.getPublicModels()
+    const models = new Set<string>()
+    catalog.groups.forEach((group) => {
+      group.models.forEach((model) => {
+        if (model.name) models.add(model.name)
+      })
+    })
+    publicModelCatalogCount.value = models.size
+  } catch {
+    publicModelCatalogCount.value = null
+  }
+}
+
 async function loadPublicAnnouncements(force = false) {
   if (
     isAuthenticated.value ||
@@ -882,7 +965,9 @@ function closeAnnouncementToday() {
 }
 
 function getSnapSections(): HTMLElement[] {
-  return Array.from(snapContainerRef.value?.querySelectorAll<HTMLElement>('.home-snap-section') ?? [])
+  return Array.from(
+    snapContainerRef.value?.querySelectorAll<HTMLElement>('.home-snap-section, .home-v2-screen') ?? []
+  )
 }
 
 function syncSnapIndex(): number {
@@ -987,11 +1072,16 @@ onMounted(() => {
 
   void loadPublicMonitorPreview()
 
+  if (isPublicUiV2.value) {
+    void loadPublicModelCount()
+    channelsVisible.value = true
+  }
+
   snapContainerRef.value?.scrollTo({ top: 0, left: 0 })
   snapContainerRef.value?.addEventListener('wheel', handleSnapWheel, { passive: false })
   window.addEventListener('keydown', handleSnapKeydown)
 
-  if (channelsSectionRef.value) {
+  if (!isPublicUiV2.value && channelsSectionRef.value) {
     channelsObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) {
@@ -1019,6 +1109,50 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.public-home-announcement-button {
+  position: relative;
+  display: inline-grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--ui2-text-secondary, #68686e);
+  transition: background-color 140ms ease-out, color 140ms ease-out, transform 90ms ease-out;
+}
+
+.public-home-announcement-button:hover,
+.public-home-announcement-button.is-active {
+  background: var(--ui2-surface-hover, #f0f1f3);
+  color: var(--ui2-text, #1d1d1f);
+}
+
+.public-home-announcement-button:active {
+  transform: scale(0.94);
+}
+
+.public-home-announcement-button:focus-visible {
+  outline: 2px solid var(--ui2-accent, #087af5);
+  outline-offset: 2px;
+}
+
+.public-home-announcement-button > span {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  display: grid;
+  min-width: 15px;
+  height: 15px;
+  place-items: center;
+  padding: 0 3px;
+  background: #d92d20;
+  border: 2px solid var(--ui2-toolbar, #f5f5f7);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .home-page {
   isolation: isolate;
 }
@@ -2636,6 +2770,1448 @@ onUnmounted(() => {
   .home-value-card,
   .home-workflow-card {
     padding: 1.5rem;
+  }
+}
+
+/* Apple-style public home: preserve the production information architecture. */
+.home-page.home-apple {
+  height: auto !important;
+  min-height: 100dvh;
+  overflow: visible !important;
+  background: #f5f5f7 !important;
+  color: #1d1d1f;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+.home-page.home-apple > header {
+  position: sticky;
+  top: 0;
+  padding: 0;
+  background: rgba(245, 245, 247, 0.78);
+  border-bottom: 1px solid rgba(24, 24, 27, 0.09);
+  backdrop-filter: blur(18px) saturate(145%);
+}
+
+.home-page.home-apple .home-nav {
+  max-width: 1180px;
+  min-height: 60px;
+  padding: 0 24px;
+}
+
+.home-page.home-apple .home-brand-name {
+  font-style: italic;
+  letter-spacing: 0;
+  transform: skewX(-6deg);
+}
+
+.home-page.home-apple :where(h1, h2, h3, p, a, button, span) {
+  letter-spacing: 0;
+}
+
+.home-page.home-apple .btn-primary {
+  background: #087af5 !important;
+  border-color: transparent !important;
+  box-shadow: 0 8px 18px rgba(8, 122, 245, 0.2) !important;
+  color: #fff !important;
+}
+
+.home-page.home-apple .btn-primary:hover {
+  background: #006ddc !important;
+}
+
+.home-page.home-apple .btn-secondary {
+  background: #fff !important;
+  border-color: rgba(24, 24, 27, 0.14) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035) !important;
+  color: #68686e !important;
+}
+
+.home-page.home-apple .btn-secondary:hover {
+  background: #f7f7f8 !important;
+  color: #1d1d1f !important;
+}
+
+.home-page.home-apple .home-bg {
+  display: none;
+}
+
+.home-page.home-apple .home-snap-container {
+  height: auto;
+  overflow: visible;
+  overscroll-behavior: auto;
+  scroll-behavior: auto;
+  scroll-snap-type: none;
+  scrollbar-width: auto;
+}
+
+.home-page.home-apple .home-snap-container::-webkit-scrollbar {
+  display: initial;
+}
+
+.home-page.home-apple .home-snap-section {
+  min-height: 0;
+  padding: 88px 24px;
+  scroll-snap-align: none;
+  scroll-snap-stop: normal;
+}
+
+.home-page.home-apple .home-hero-section {
+  padding-top: 86px;
+  padding-bottom: 74px;
+}
+
+.home-page.home-apple .home-hero-shell {
+  min-height: 0;
+  animation: apple-home-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.home-page.home-apple .home-title-gradient {
+  background: none;
+  color: #68686e;
+}
+
+.home-page.home-apple .home-title-shimmer::after {
+  display: none;
+}
+
+.home-page.home-apple .home-hero-panel {
+  max-width: 100%;
+  gap: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.home-page.home-apple .home-hero-card {
+  align-items: flex-start;
+  min-height: 92px;
+  padding: 20px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+  transition: color 140ms ease-out, border-color 140ms ease-out;
+}
+
+.home-page.home-apple .home-hero-card:first-child {
+  border-top: 1px solid rgba(24, 24, 27, 0.1);
+}
+
+.home-page.home-apple .home-hero-card:nth-child(2),
+.home-page.home-apple .home-hero-card:nth-child(3) {
+  margin-left: 0;
+}
+
+.home-page.home-apple .home-hero-card:hover {
+  border-color: rgba(8, 122, 245, 0.34);
+  box-shadow: none;
+  transform: none;
+}
+
+.home-page.home-apple .home-icon-soft {
+  width: 36px;
+  height: 36px;
+  background: #e8f2ff;
+  border: 1px solid rgba(8, 122, 245, 0.13);
+  border-radius: 8px;
+  color: #087af5;
+}
+
+.home-page.home-apple .home-url-card {
+  max-width: 100%;
+  margin-top: 28px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.11);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.045);
+  backdrop-filter: none;
+}
+
+.home-page.home-apple .home-url-card:hover {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.07);
+  transform: none;
+}
+
+.home-page.home-apple .home-url-field {
+  min-height: 46px;
+  background: #f7f7f8;
+  border: 1px solid rgba(24, 24, 27, 0.08);
+  border-radius: 8px;
+}
+
+.home-page.home-apple .home-url-copy {
+  width: 34px;
+  height: 34px;
+  background: #e8e9ec;
+  border-radius: 8px;
+  color: #68686e;
+}
+
+.home-page.home-apple .home-url-copy:hover {
+  background: #dfe1e6;
+  color: #1d1d1f;
+  transform: none;
+}
+
+.home-page.home-apple .home-stat-card {
+  padding: 12px 13px;
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 8px;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.home-page.home-apple .home-stat-card:hover {
+  border-color: rgba(8, 122, 245, 0.3);
+  box-shadow: none;
+  transform: none;
+}
+
+.home-page.home-apple .home-section-label {
+  color: #087af5;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.home-page.home-apple .home-value-card,
+.home-page.home-apple .home-workflow-card,
+.home-page.home-apple .home-channel-card {
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035), 0 8px 24px rgba(0, 0, 0, 0.025);
+}
+
+.home-page.home-apple .home-value-card:hover,
+.home-page.home-apple .home-workflow-card:hover,
+.home-page.home-apple .home-channel-card:hover {
+  border-color: rgba(8, 122, 245, 0.28);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.07);
+  transform: none;
+}
+
+.home-page.home-apple .home-card-wash {
+  display: none;
+}
+
+.home-page.home-apple .home-workflow-card::before {
+  width: 2px;
+  background: #087af5;
+}
+
+.home-page.home-apple .home-provider-mark {
+  border-radius: 8px;
+}
+
+.home-page.home-apple .home-provider-claude { background: #b85c38; }
+.home-page.home-apple .home-provider-gpt { background: #16826c; }
+.home-page.home-apple .home-provider-gemini { background: #3974d6; }
+.home-page.home-apple .home-provider-antigravity { background: #7251c8; }
+.home-page.home-apple .home-provider-custom { background: #5f6368; }
+
+.home-page.home-apple .home-channel-card {
+  opacity: 1;
+  transform: none;
+}
+
+.home-page.home-apple .home-channel-card-muted {
+  background: #f7f7f8;
+}
+
+.home-page.home-apple .home-status-showcase {
+  max-height: none;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035), 0 8px 24px rgba(0, 0, 0, 0.025);
+}
+
+.home-page.home-apple .home-final-content {
+  min-height: 0;
+}
+
+.home-page.home-apple .home-final-card {
+  padding: 40px;
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035), 0 8px 24px rgba(0, 0, 0, 0.025);
+}
+
+.home-page.home-apple .home-final-card::before,
+.home-page.home-apple .home-final-card::after,
+.home-page.home-apple .home-final-orbit::after {
+  display: none;
+}
+
+.home-page.home-apple .home-final-orbit {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 20px;
+  background: #e8f2ff;
+  border-radius: 8px;
+  box-shadow: none;
+  color: #087af5;
+}
+
+.home-page.home-apple .home-auth-actions {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.home-page.home-apple .home-auth-login,
+.home-page.home-apple .home-auth-register {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.home-page.home-apple .home-auth-register {
+  background: #087af5;
+  box-shadow: none;
+}
+
+.home-page.home-apple .home-auth-register:hover {
+  transform: none;
+  background: #006ddc;
+}
+
+.home-page.home-apple .home-nav-text-link,
+.home-page.home-apple .home-nav-action {
+  border-radius: 8px;
+  color: #68686e;
+}
+
+.home-page.home-apple .home-nav-text-link:hover,
+.home-page.home-apple .home-nav-action:hover,
+.home-page.home-apple .home-nav-action.is-active {
+  background: #e9eaed;
+  box-shadow: none;
+  color: #1d1d1f;
+  transform: none;
+}
+
+.home-page.home-apple .home-inline-link {
+  color: #087af5;
+}
+
+.home-page.home-apple .home-inline-link:hover {
+  color: #006ddc;
+  transform: none;
+}
+
+@keyframes apple-home-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 767px) {
+  .home-page.home-apple .home-nav {
+    min-height: 56px;
+    padding: 0 16px;
+  }
+
+  .home-page.home-apple .home-nav > div:last-child {
+    gap: 4px;
+  }
+
+  .home-page.home-apple .home-snap-section {
+    padding: 64px 16px;
+  }
+
+  .home-page.home-apple .home-hero-section {
+    padding-top: 54px;
+    padding-bottom: 56px;
+  }
+
+  .home-page.home-apple .home-final-card {
+    padding: 28px 20px;
+  }
+}
+
+.home-page.home-apple.home-dark {
+  background: #111113 !important;
+  color: #f5f5f7;
+}
+
+.home-page.home-apple.home-dark > header {
+  background: rgba(17, 17, 19, 0.78);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.home-page.home-apple.home-dark .home-nav-text-link,
+.home-page.home-apple.home-dark .home-nav-action {
+  color: #b1b1b7;
+}
+
+.home-page.home-apple.home-dark .home-nav-text-link:hover,
+.home-page.home-apple.home-dark .home-nav-action:hover,
+.home-page.home-apple.home-dark .home-nav-action.is-active {
+  background: #242427;
+  color: #f5f5f7;
+}
+
+.home-page.home-apple.home-dark .home-auth-actions,
+.home-page.home-apple.home-dark .home-url-card,
+.home-page.home-apple.home-dark .home-stat-card,
+.home-page.home-apple.home-dark .home-value-card,
+.home-page.home-apple.home-dark .home-workflow-card,
+.home-page.home-apple.home-dark .home-channel-card,
+.home-page.home-apple.home-dark .home-status-showcase,
+.home-page.home-apple.home-dark .home-final-card {
+  background: #1d1d20;
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 28px rgba(0, 0, 0, 0.12);
+}
+
+.home-page.home-apple.home-dark .btn-secondary {
+  background: #1d1d20 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: #b1b1b7 !important;
+}
+
+.home-page.home-apple.home-dark .btn-secondary:hover {
+  background: #242427 !important;
+  color: #f5f5f7 !important;
+}
+
+.home-page.home-apple.home-dark .btn-primary {
+  background: #4da3ff !important;
+  color: #0b1726 !important;
+}
+
+.home-page.home-apple.home-dark .home-url-field {
+  background: #242427;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.home-page.home-apple.home-dark .home-url-copy {
+  background: #2d2d31;
+  color: #b1b1b7;
+}
+
+.home-page.home-apple.home-dark .home-icon-soft,
+.home-page.home-apple.home-dark .home-final-orbit {
+  background: rgba(77, 163, 255, 0.13);
+  border-color: rgba(77, 163, 255, 0.18);
+  color: #4da3ff;
+}
+
+.home-page.home-apple.home-dark .home-title-gradient {
+  color: #b1b1b7;
+}
+
+.home-page.home-apple.home-dark .home-channel-card-muted {
+  background: #242427;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-page.home-apple .home-hero-shell {
+    animation: none;
+  }
+}
+/* Neutral material palette: the page is layered graphite, not a white canvas. */
+.home-page.home-apple:not(.home-dark) {
+  --apple-page: #e5e8ec;
+  --apple-band: #dfe3e8;
+  --apple-surface: #f3f5f7;
+  --apple-surface-muted: #d7dde4;
+  --apple-line: rgba(24, 24, 27, 0.12);
+  --apple-text: #1b1f24;
+  --apple-secondary: #626a74;
+  background: var(--apple-page) !important;
+  color: var(--apple-text);
+}
+
+.home-page.home-apple:not(.home-dark) > header {
+  background: rgba(229, 232, 236, 0.82);
+  border-color: var(--apple-line);
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section {
+  background: var(--apple-page) !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-channels-section,
+.home-page.home-apple:not(.home-dark) .home-status-section,
+.home-page.home-apple:not(.home-dark) .home-final-section {
+  background: var(--apple-band) !important;
+  border-top: 1px solid rgba(24, 24, 27, 0.06);
+  border-bottom: 1px solid rgba(24, 24, 27, 0.06);
+}
+
+.home-page.home-apple:not(.home-dark) .btn-secondary,
+.home-page.home-apple:not(.home-dark) .home-url-card,
+.home-page.home-apple:not(.home-dark) .home-stat-card,
+.home-page.home-apple:not(.home-dark) .home-value-card,
+.home-page.home-apple:not(.home-dark) .home-workflow-card,
+.home-page.home-apple:not(.home-dark) .home-channel-card,
+.home-page.home-apple:not(.home-dark) .home-status-showcase,
+.home-page.home-apple:not(.home-dark) .home-final-card {
+  background: var(--apple-surface) !important;
+  border-color: var(--apple-line);
+}
+
+.home-page.home-apple:not(.home-dark) .home-channel-card-muted {
+  background: var(--apple-surface-muted) !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-field {
+  background: var(--apple-surface-muted);
+  border-color: var(--apple-line);
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-copy {
+  background: #cbd2da;
+  color: #4f5863;
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-copy:hover {
+  background: #c1c9d2;
+  color: var(--apple-text);
+}
+
+.home-page.home-apple:not(.home-dark) .home-auth-actions {
+  background: rgba(243, 245, 247, 0.78);
+  border-color: var(--apple-line);
+}
+
+.home-page.home-apple:not(.home-dark) .home-nav-text-link,
+.home-page.home-apple:not(.home-dark) .home-nav-action {
+  color: var(--apple-secondary);
+}
+
+.home-page.home-apple:not(.home-dark) .home-nav-text-link:hover,
+.home-page.home-apple:not(.home-dark) .home-nav-action:hover,
+.home-page.home-apple:not(.home-dark) .home-nav-action.is-active {
+  background: var(--apple-surface-muted);
+  color: var(--apple-text);
+}
+
+.home-page.home-apple:not(.home-dark) .home-icon-soft,
+.home-page.home-apple:not(.home-dark) .home-final-orbit {
+  background: #d9e8fb;
+}
+/* Restore the production hero's visual anchor as a single dark tool surface. */
+.home-page.home-apple:not(.home-dark) {
+  --apple-page: #dfe5ea;
+  --apple-band: #d7dee5;
+  background: var(--apple-page) !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-title-gradient {
+  color: #16826c;
+}
+
+.home-page.home-apple .home-hero-visual {
+  min-height: 0;
+  padding: 22px;
+  background: #20242a;
+  border: 1px solid rgba(24, 28, 34, 0.28);
+  border-radius: 16px;
+  box-shadow: 0 24px 52px rgba(18, 23, 30, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.home-page.home-apple .home-hero-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.home-page.home-apple .home-hero-card,
+.home-page.home-apple .home-hero-card:first-child {
+  min-height: 86px;
+  padding: 17px;
+  background: #2a2f36;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 11px;
+  color: #f4f6f8;
+}
+
+.home-page.home-apple .home-hero-card:hover {
+  background: #303640;
+  border-color: rgba(77, 163, 255, 0.34);
+  transform: translateY(-2px);
+}
+
+.home-page.home-apple .home-hero-card h3 {
+  color: #f4f6f8 !important;
+}
+
+.home-page.home-apple .home-hero-card p {
+  color: #aeb7c2 !important;
+}
+
+.home-page.home-apple .home-hero-card .home-icon-soft {
+  background: rgba(77, 163, 255, 0.14);
+  border-color: rgba(77, 163, 255, 0.2);
+  color: #70b4ff;
+}
+
+.home-page.home-apple.home-dark .home-hero-visual {
+  background: #17191d;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 52px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.home-page.home-apple.home-dark .home-hero-card,
+.home-page.home-apple.home-dark .home-hero-card:first-child {
+  background: #22262c;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 767px) {
+  .home-page.home-apple .home-hero-visual {
+    padding: 14px;
+    border-radius: 12px;
+  }
+}
+
+/* White canvas refinement: strong hierarchy without a flat all-white page. */
+.home-page.home-apple:not(.home-dark) {
+  --apple-page: #ffffff;
+  --apple-band: #f5f5f7;
+  --apple-surface: #ffffff;
+  --apple-surface-muted: #eceef2;
+  --apple-line: rgba(24, 24, 27, 0.11);
+  background: #fff !important;
+}
+
+.home-page.home-apple:not(.home-dark) > header {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section {
+  background: #fff !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section:nth-child(even),
+.home-page.home-apple:not(.home-dark) .home-channels-section,
+.home-page.home-apple:not(.home-dark) .home-final-section {
+  background: var(--apple-band) !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-status-section {
+  background: #fff !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-title-gradient {
+  color: #087af5;
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-card {
+  background: #f7f7f8 !important;
+  border-color: var(--apple-line);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.055);
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-field {
+  background: #eceef2;
+}
+
+.home-page.home-apple:not(.home-dark) .home-value-card,
+.home-page.home-apple:not(.home-dark) .home-workflow-card,
+.home-page.home-apple:not(.home-dark) .home-channel-card,
+.home-page.home-apple:not(.home-dark) .home-status-showcase,
+.home-page.home-apple:not(.home-dark) .home-final-card {
+  background: #fff !important;
+}
+
+.home-page.home-apple .home-stats-grid {
+  gap: 0 !important;
+  overflow: hidden;
+  background: #f7f7f8;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 10px;
+}
+
+.home-page.home-apple .home-stat-card {
+  background: transparent !important;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.home-page.home-apple .home-stat-card + .home-stat-card {
+  border-left: 1px solid rgba(24, 24, 27, 0.1);
+}
+
+.home-page.home-apple .home-stat-card:hover {
+  background: #eef4fb !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-visual {
+  background: #1d2025;
+  box-shadow: 0 22px 48px rgba(20, 24, 30, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card,
+.home-page.home-apple:not(.home-dark) .home-hero-card:first-child {
+  background: #282c32;
+}
+
+.home-page.home-apple.home-dark .home-stats-grid {
+  background: #1d1d20;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.home-page.home-apple.home-dark .home-stat-card + .home-stat-card {
+  border-left-color: rgba(255, 255, 255, 0.1);
+}
+
+.home-page.home-apple.home-dark .home-stat-card:hover {
+  background: #242427 !important;
+}
+
+/* Wide-screen correction: compact the hero and integrate the feature panel. */
+.home-page.home-apple:not(.home-dark) .home-hero-section {
+  padding-top: 62px;
+  padding-bottom: 46px;
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section:not(.home-hero-section) {
+  padding-top: 68px;
+  padding-bottom: 68px;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-copy > div:first-child {
+  background: #eef5ff;
+  border-color: rgba(8, 122, 245, 0.2);
+  color: #087af5;
+  box-shadow: none;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-visual {
+  max-width: 430px;
+  justify-self: end;
+  padding: 12px;
+  background: #f1f3f6;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(20, 24, 30, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-panel {
+  gap: 8px;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card,
+.home-page.home-apple:not(.home-dark) .home-hero-card:first-child {
+  min-height: 78px;
+  padding: 15px;
+  background: #fff;
+  border: 1px solid rgba(24, 24, 27, 0.09);
+  border-radius: 10px;
+  color: #1d1d1f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:hover {
+  background: #f8fafc;
+  border-color: rgba(8, 122, 245, 0.25);
+  transform: none;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card h3 {
+  color: #1d1d1f !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card p {
+  color: #686f78 !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card .home-icon-soft {
+  background: #e8f2ff;
+  border-color: rgba(8, 122, 245, 0.16);
+  color: #087af5;
+}
+
+@media (max-width: 767px) {
+  .home-page.home-apple:not(.home-dark) .home-hero-section {
+    padding-top: 46px;
+    padding-bottom: 48px;
+  }
+
+  .home-page.home-apple:not(.home-dark) .home-hero-visual {
+    max-width: none;
+    width: 100%;
+    justify-self: stretch;
+    padding: 10px;
+  }
+}
+
+/* Restore the hero's signal animation and use one capability surface instead of nested cards. */
+.home-page.home-apple .home-title-shimmer::after {
+  animation: apple-title-sweep 6.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0) 34%,
+    rgba(255, 255, 255, 0.9) 48%,
+    rgba(255, 255, 255, 0) 62%,
+    transparent 100%
+  );
+  display: block;
+  pointer-events: none;
+  will-change: transform;
+}
+
+@keyframes apple-title-sweep {
+  0%,
+  22% {
+    transform: translateX(-70%);
+  }
+
+  70%,
+  100% {
+    transform: translateX(70%);
+  }
+}
+
+.home-page.home-apple:not(.home-dark) .home-title-gradient {
+  background: linear-gradient(90deg, #087af5 0%, #2d8cff 54%, #6bb2ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.home-page.home-apple h1.home-title-shimmer {
+  display: block;
+  width: fit-content;
+}
+
+.home-page.home-apple .home-hero-copy,
+.home-page.home-apple .home-hero-visual {
+  min-width: 0;
+}
+
+.home-page.home-apple .home-hero-section {
+  min-height: calc(100dvh - 61px);
+}
+
+@media (min-width: 768px) {
+  .home-page.home-apple .home-hero-section,
+  .home-page.home-apple:not(.home-dark) .home-hero-section {
+    align-items: flex-start;
+    padding-top: 88px;
+  }
+}
+
+.home-page.home-apple .home-hero-visual {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-visual {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-panel {
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 8px 18px;
+  background: #f7f7f8;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(20, 24, 30, 0.08);
+}
+
+.home-page.home-apple.home-dark .home-hero-panel {
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 8px 18px;
+  background: #1d1d20;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+}
+
+.home-page.home-apple .home-hero-card,
+.home-page.home-apple .home-hero-card:first-child {
+  align-items: center;
+  min-height: 0;
+  padding: 18px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+  transition: background-color 140ms ease-out, padding-left 140ms ease-out;
+}
+
+.home-page.home-apple .home-hero-card:last-child {
+  border-bottom: 0;
+}
+
+.home-page.home-apple .home-hero-card:hover {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(24, 24, 27, 0.1);
+  box-shadow: none;
+  padding-left: 8px;
+  transform: none;
+}
+
+.home-page.home-apple.home-dark .home-hero-card {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.home-page.home-apple.home-dark .home-hero-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Override the earlier light-theme card treatment so the rail stays a single surface. */
+.home-page.home-apple:not(.home-dark) .home-hero-card,
+.home-page.home-apple:not(.home-dark) .home-hero-card:first-child {
+  align-items: center;
+  min-height: 0;
+  padding: 18px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:last-child {
+  border-bottom: 0;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:hover {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(24, 24, 27, 0.1);
+  padding-left: 8px;
+  transform: none;
+}
+
+.home-page.home-apple .home-hero-card p {
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-visual,
+.home-page.home-apple.home-dark .home-hero-visual {
+  max-width: 480px;
+}
+
+/* Operational proof points: distinct signals instead of a plain number table. */
+.home-page.home-apple .home-stats-grid {
+  display: grid;
+  gap: 10px !important;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.home-page.home-apple .home-stat-card,
+.home-page.home-apple .home-stat-card + .home-stat-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  padding: 12px;
+  background: #f7f7f8 !important;
+  border: 1px solid rgba(24, 24, 27, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(20, 24, 30, 0.045);
+  text-align: left;
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out, transform 100ms ease-out;
+}
+
+.home-page.home-apple .home-stat-card:hover {
+  background: #f7f7f8 !important;
+  border-color: rgba(8, 122, 245, 0.22);
+  box-shadow: 0 9px 22px rgba(20, 24, 30, 0.075);
+  transform: translateY(-1px);
+}
+
+.home-page.home-apple .home-stat-card:active {
+  transform: scale(0.985);
+}
+
+.home-page.home-apple .home-stat-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.home-page.home-apple .home-stat-copy {
+  min-width: 0;
+}
+
+.home-page.home-apple .home-stat-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1d1d1f;
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.1;
+}
+
+.home-page.home-apple .home-stat-label {
+  margin-top: 5px;
+  overflow: hidden;
+  color: #68686e;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-page.home-apple .home-stat-signal {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px currentColor;
+  opacity: 0.22;
+}
+
+.home-page.home-apple .home-stat-card--channels .home-stat-icon {
+  background: #e8f2ff;
+  color: #087af5;
+}
+
+.home-page.home-apple .home-stat-card--channels .home-stat-signal {
+  color: #087af5;
+  background: #087af5;
+}
+
+.home-page.home-apple .home-stat-card--sla .home-stat-icon {
+  background: #e8f7ef;
+  color: #16826c;
+}
+
+.home-page.home-apple .home-stat-card--sla .home-stat-signal {
+  color: #16826c;
+  background: #16826c;
+}
+
+.home-page.home-apple .home-stat-card--billing .home-stat-icon {
+  background: #f1edfb;
+  color: #7251c8;
+}
+
+.home-page.home-apple .home-stat-card--billing .home-stat-signal {
+  color: #7251c8;
+  background: #7251c8;
+}
+
+.home-page.home-apple.home-dark .home-stat-card,
+.home-page.home-apple.home-dark .home-stat-card + .home-stat-card,
+.home-page.home-apple.home-dark .home-stat-card:hover {
+  background: #1d1d20 !important;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.home-page.home-apple.home-dark .home-stat-value {
+  color: #f5f5f7;
+}
+
+.home-page.home-apple.home-dark .home-stat-label {
+  color: #b1b1b7;
+}
+
+@media (max-width: 1023px) {
+  .home-page.home-apple .home-stats-grid {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .home-page.home-apple .home-hero-visual {
+    width: 100%;
+    justify-self: stretch;
+    padding: 0;
+  }
+
+  .home-page.home-apple:not(.home-dark) .home-hero-panel,
+  .home-page.home-apple.home-dark .home-hero-panel {
+    padding: 4px 14px;
+  }
+
+  .home-page.home-apple:not(.home-dark) .home-hero-section {
+    min-height: calc(100dvh - 57px);
+    padding-top: 22px;
+    padding-bottom: 40px;
+  }
+
+  .home-page.home-apple .home-url-card {
+    margin-top: 14px;
+  }
+
+  .home-page.home-apple .home-url-card + .mt-6 {
+    margin-top: 12px;
+  }
+
+  .home-page.home-apple .home-hero-card,
+  .home-page.home-apple .home-hero-card:first-child {
+    flex-direction: row;
+    padding: 14px 0;
+  }
+
+  .home-page.home-apple:not(.home-dark) .home-hero-card,
+  .home-page.home-apple:not(.home-dark) .home-hero-card:first-child {
+    flex-direction: row;
+    padding: 14px 0;
+  }
+
+  .home-page.home-apple .home-hero-card p {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-page.home-apple .home-title-shimmer::after {
+    animation: none;
+  }
+}
+
+/* Match production pagination: fixed chrome plus one snap page per section. */
+.home-page.home-apple {
+  height: 100dvh !important;
+  min-height: 100dvh;
+  overflow: hidden !important;
+}
+
+.home-page.home-apple > header {
+  position: fixed;
+  inset-inline: 0;
+  top: 0;
+  z-index: 50;
+}
+
+.home-page.home-apple .home-snap-container {
+  height: 100dvh;
+  flex: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-behavior: smooth;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+}
+
+.home-page.home-apple .home-snap-container::-webkit-scrollbar {
+  display: none;
+}
+
+.home-page.home-apple .home-snap-section {
+  min-height: 100dvh;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.home-page.home-apple .home-hero-section {
+  min-height: 100dvh;
+}
+
+@media (min-width: 768px) {
+  .home-page.home-apple .home-hero-section,
+  .home-page.home-apple:not(.home-dark) .home-hero-section {
+    padding-top: 149px;
+  }
+}
+
+@media (max-width: 767px) {
+  .home-page.home-apple .home-hero-section,
+  .home-page.home-apple:not(.home-dark) .home-hero-section {
+    min-height: 100dvh;
+    padding-top: 79px;
+  }
+}
+
+/* Match the production header rather than the denser console navigation. */
+.home-page.home-apple .home-nav-text-link {
+  min-height: 36px;
+  padding: 0 0.8rem;
+  border-radius: 9999px;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.home-page.home-apple .home-nav-text-link:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+.home-page.home-apple .home-nav-action {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  color: #475569;
+}
+
+.home-page.home-apple .home-nav-action:hover,
+.home-page.home-apple .home-nav-action.is-active {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+.home-page.home-apple .home-auth-actions {
+  gap: 0.15rem;
+  padding: 0.25rem;
+  background: rgba(241, 245, 249, 0.9);
+  border: 0;
+  border-radius: 9999px;
+}
+
+.home-page.home-apple .home-auth-login,
+.home-page.home-apple .home-auth-register {
+  min-height: 32px;
+  padding: 0 0.9rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.home-page.home-apple .home-auth-login {
+  color: #334155;
+}
+
+.home-page.home-apple .home-auth-login:hover {
+  background: #fff;
+  color: #1d1d1f;
+}
+
+.home-page.home-apple .home-auth-register {
+  background: linear-gradient(135deg, #14b8a6, #0891b2);
+  box-shadow: 0 10px 22px rgba(13, 148, 136, 0.25);
+  color: #fff;
+}
+
+.home-page.home-apple .home-auth-register:hover {
+  background: linear-gradient(135deg, #14b8a6, #0891b2);
+  transform: translateY(-1px);
+}
+
+.home-page.home-apple.home-dark .home-auth-login {
+  color: #f5f5f7;
+}
+
+.home-page.home-apple.home-dark .home-auth-login:hover {
+  background: #29292d;
+  color: #ffffff;
+}
+
+/* The animated path occupies a grid cell; center it against the base URL line. */
+.home-page.home-apple .home-api-base,
+.home-page.home-apple .home-endpoint-rotator,
+.home-page.home-apple .home-endpoint-path {
+  line-height: 1.2;
+}
+
+.home-page.home-apple .home-endpoint-rotator {
+  align-items: center;
+  min-height: 1.2em;
+}
+
+.home-page.home-apple .home-endpoint-path {
+  align-self: center;
+}
+
+.home-page.home-apple .home-stat-card--models .home-stat-icon {
+  background: #e8f2ff;
+  color: #087af5;
+}
+
+.home-page.home-apple .home-stat-card--models .home-stat-signal {
+  background: #087af5;
+  color: #087af5;
+}
+
+@media (max-width: 640px) {
+  .home-page.home-apple .home-brand-name {
+    display: none;
+  }
+
+  .home-page.home-apple .home-nav {
+    gap: 8px;
+    padding-inline: 10px;
+  }
+
+  .home-page.home-apple .home-nav > div:last-child,
+  .home-page.home-apple .home-auth-actions {
+    flex-shrink: 0;
+  }
+
+  .home-page.home-apple .home-auth-login,
+  .home-page.home-apple .home-auth-register {
+    min-height: 36px;
+    padding-inline: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+}
+
+/* Quiet color zoning: add depth without decorative blobs or a saturated canvas. */
+.home-page.home-apple:not(.home-dark) .home-hero-section {
+  background: linear-gradient(118deg, #eaf8f5 0%, #f9fbfc 48%, #edf3f8 100%) !important;
+}
+
+.home-page.home-apple:not(.home-dark) > header {
+  background: rgba(244, 249, 249, 0.84);
+  border-color: rgba(40, 74, 76, 0.1);
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section:nth-child(2) {
+  background: #ffffff !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section:nth-child(3) {
+  background: #f4f6f8 !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section.home-channels-section {
+  background: #edf6f3 !important;
+  border-color: rgba(22, 130, 108, 0.09);
+}
+
+.home-page.home-apple:not(.home-dark) .home-status-section {
+  background: #f2f5f8 !important;
+  border-color: rgba(57, 116, 214, 0.08);
+}
+
+.home-page.home-apple:not(.home-dark) .home-snap-section.home-final-section {
+  background: #eaf1f4 !important;
+  border-color: rgba(45, 82, 96, 0.09);
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-panel {
+  background: rgba(246, 250, 249, 0.94);
+  border-color: rgba(22, 130, 108, 0.14);
+  box-shadow: 0 16px 38px rgba(38, 71, 76, 0.1);
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-card {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(38, 71, 76, 0.13);
+  box-shadow: 0 10px 28px rgba(38, 71, 76, 0.065);
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-field {
+  background: #edf2f3;
+  border-color: rgba(38, 71, 76, 0.12);
+}
+
+.home-page.home-apple:not(.home-dark) .home-endpoint-rotator {
+  color: #0f766e;
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-copy {
+  background: #d9e4e5;
+  color: #465d61;
+}
+
+.home-page.home-apple:not(.home-dark) .home-url-copy:hover {
+  background: #cbdadc;
+  color: #18383a;
+}
+
+.home-page.home-apple:not(.home-dark) .home-stat-card {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: rgba(38, 71, 76, 0.1);
+}
+
+.home-page.home-apple:not(.home-dark) .home-section-label,
+.home-page.home-apple:not(.home-dark) .home-inline-link {
+  color: #0f766e;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .home-page.home-apple:not(.home-dark) > header,
+  .home-page.home-apple:not(.home-dark) .home-hero-panel,
+  .home-page.home-apple:not(.home-dark) .home-url-card,
+  .home-page.home-apple:not(.home-dark) .home-stat-card {
+    background-color: #f5f8f8 !important;
+    backdrop-filter: none;
+  }
+}
+
+/* Keep the production capability rail alive without making the page feel busy. */
+.home-page.home-apple:not(.home-dark) .home-hero-card,
+.home-page.home-apple:not(.home-dark) .home-hero-card:first-child,
+.home-page.home-apple.home-dark .home-hero-card,
+.home-page.home-apple.home-dark .home-hero-card:first-child {
+  animation: apple-capability-float 7.2s ease-in-out infinite !important;
+  will-change: transform;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:nth-child(2),
+.home-page.home-apple.home-dark .home-hero-card:nth-child(2) {
+  animation-delay: -2.4s !important;
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:nth-child(3),
+.home-page.home-apple.home-dark .home-hero-card:nth-child(3) {
+  animation-delay: -4.8s !important;
+}
+
+@media (min-width: 1024px) {
+  .home-page.home-apple:not(.home-dark) .home-hero-card:nth-child(2),
+  .home-page.home-apple.home-dark .home-hero-card:nth-child(2) {
+    margin-left: 0.8rem;
+  }
+
+  .home-page.home-apple:not(.home-dark) .home-hero-card:nth-child(3),
+  .home-page.home-apple.home-dark .home-hero-card:nth-child(3) {
+    margin-left: 0.25rem;
+  }
+}
+
+.home-page.home-apple:not(.home-dark) .home-hero-card:hover,
+.home-page.home-apple.home-dark .home-hero-card:hover {
+  animation-play-state: paused;
+  transform: translateY(-4px) !important;
+}
+
+@keyframes apple-capability-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-page.home-apple:not(.home-dark) .home-hero-card,
+  .home-page.home-apple:not(.home-dark) .home-hero-card:first-child,
+  .home-page.home-apple.home-dark .home-hero-card,
+  .home-page.home-apple.home-dark .home-hero-card:first-child {
+    animation: none !important;
+    will-change: auto;
   }
 }
 </style>

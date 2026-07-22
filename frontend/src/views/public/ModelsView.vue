@@ -1,5 +1,6 @@
 <template>
-  <div class="min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/25 to-cyan-50/20 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white">
+  <PublicLayout>
+  <div class="public-models-view min-h-screen overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/25 to-cyan-50/20 text-gray-950 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950 dark:text-white">
     <div class="pointer-events-none fixed inset-0" aria-hidden="true">
       <div class="absolute -left-40 top-20 h-80 w-80 rounded-full bg-primary-300/10 blur-3xl dark:bg-primary-700/10"></div>
       <div class="absolute -right-32 top-44 h-72 w-72 rounded-full bg-cyan-300/10 blur-3xl dark:bg-cyan-700/10"></div>
@@ -194,6 +195,7 @@
       </section>
     </main>
   </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
@@ -202,6 +204,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
+import PublicLayout from '@/components/public/PublicLayout.vue'
 import publicModelsAPI, { type PublicModel, type PublicModelFamily, type PublicModelGroup } from '@/api/publicModels'
 import type { UserPricingInterval } from '@/api/channels'
 import { useAppStore, useAuthStore } from '@/stores'

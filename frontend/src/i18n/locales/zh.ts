@@ -22,6 +22,7 @@ export default {
       description: '通过统一域名、密钥体系与安全策略接入多方模型服务，让调用链路更清晰，扩展更从容，运营更可控。',
       baseUrlLabel: '替换基础 URL 即可接入',
       stats: {
+        models: '模型数量',
         channels: '核心通道',
         sla: 'SLA 可用性',
         realtimeValue: '实时',
@@ -30,7 +31,7 @@ export default {
       features: {
         routing: {
           title: '实时调度',
-          description: '按健康度、延迟、成本与策略动态切换，保障关键请求优先响应。'
+          description: '按健康度、延迟、成本与策略动态切换，保障每一个关键请求。'
         },
         observability: {
           title: '统一监控',
@@ -40,6 +41,52 @@ export default {
           title: '智能限流',
           description: '多维策略保障核心业务优先级，避免突发拥堵拖垮服务。'
         }
+      }
+    },
+    experience: {
+      overview: {
+        section: '接入概览',
+        ready: '接口就绪',
+        proof: '服务概览',
+        interfaces: '兼容接口',
+        monitors: '公开监控',
+        routingLabel: '实时路由控制面',
+        live: '实时',
+        routingTitle: '为每一次请求选择更优路径',
+        routingDescription: '持续评估健康度、延迟与策略约束，在客户端无感的前提下完成动态路由。',
+        policy: '路由策略在线'
+      },
+      capabilities: {
+        section: '核心能力'
+      },
+      workflow: {
+        section: '接入流程',
+        description: '从账号、API Key 到生产验证，使用一条清晰流程完成接入，不改变现有客户端工作方式。',
+        config: '基础接入配置'
+      },
+      models: {
+        section: '模型生态',
+        provider: '模型通道',
+        capability: '能力范围',
+        state: '当前状态'
+      },
+      status: {
+        section: '实时状态',
+        liveMonitor: '公开通道监控',
+        availability: '7 日可用率',
+        latency: '最新延迟',
+        loading: '正在读取实时状态',
+        empty: '暂无公开监控数据',
+        attention: '部分通道需要关注',
+        operational: '公开监控运行正常'
+      },
+      resources: {
+        section: '开始使用',
+        docs: '查看接入步骤、接口格式与客户端配置。',
+        models: '浏览公开模型、价格、倍率和可用分组。',
+        monitor: '查看模型可用性、延迟和近期状态。',
+        usage: '使用 API Key 查询实时用量与消费记录。',
+        service: '查看平台服务运行情况与近期可用率。'
       }
     },
     tags: {
