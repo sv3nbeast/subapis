@@ -28,6 +28,7 @@ Environment variables:
                                    When unset, preserve the running container value.
   SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS
                                    Optional comma-separated user IDs for redacted Kiro event diagnostics.
+                                   When unset, preserve the running container value.
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -111,6 +112,13 @@ if docker inspect "${SERVICE_NAME}" >/dev/null 2>&1; then
     KIRO_RESILIENCE_GROUP_IDS="$(
       docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
         | sed -n 's/^GATEWAY_KIRO_RESILIENCE_GROUP_IDS=//p' \
+        | head -n 1
+    )"
+  fi
+  if [[ -z "${KIRO_EVENT_DIAGNOSTICS_USER_IDS}" ]]; then
+    KIRO_EVENT_DIAGNOSTICS_USER_IDS="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS=//p' \
         | head -n 1
     )"
   fi
