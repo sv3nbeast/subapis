@@ -285,7 +285,7 @@ func (e *KiroCooldownExhaustedError) Error() string {
 	if e == nil {
 		return ""
 	}
-	return fmt.Sprintf("all eligible Kiro accounts are cooling down for %s", e.RetryAfter.Round(time.Second))
+	return fmt.Sprintf("all eligible upstream accounts are cooling down for %s", e.RetryAfter.Round(time.Second))
 }
 
 type kiroUpstreamCleanupPendingError struct {
@@ -1407,7 +1407,7 @@ func kiroCooldownExhaustedErrorFromContext(ctx context.Context, accountIDs map[i
 		return nil
 	}
 	statusCode := http.StatusTooManyRequests
-	reason := kirocooldown.CooldownReason429
+	reason := ""
 	var earliest time.Duration
 	matched := 0
 	for accountID, state := range prefetch.states {
@@ -1421,13 +1421,18 @@ func kiroCooldownExhaustedErrorFromContext(ctx context.Context, accountIDs map[i
 		if earliest <= 0 || state.Remaining < earliest {
 			earliest = state.Remaining
 		}
-		if state.Reason != kirocooldown.CooldownReason429 {
+		if !isKiroRateLimitCooldownReason(state.Reason) {
 			statusCode = http.StatusServiceUnavailable
+			reason = state.Reason
+		} else if statusCode != http.StatusServiceUnavailable && (reason == "" || state.Reason == kirocooldown.CooldownReason429) {
 			reason = state.Reason
 		}
 	}
 	if matched == 0 || earliest <= 0 {
 		return nil
+	}
+	if reason == "" {
+		reason = kirocooldown.CooldownReason429
 	}
 	return &KiroCooldownExhaustedError{
 		StatusCode: statusCode,

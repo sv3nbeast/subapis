@@ -211,7 +211,7 @@ func TestAsKiroCooldownFailoverError(t *testing.T) {
 	failoverErr := asKiroCooldownFailoverError(err)
 	require.NotNil(t, failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-	require.Equal(t, "kiro token is in cooldown for 33s (reason: rate_limit_exceeded)", string(failoverErr.ResponseBody))
+	require.Equal(t, "upstream account is cooling down for 33s (reason: rate_limit_exceeded)", string(failoverErr.ResponseBody))
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 
@@ -292,7 +292,7 @@ func TestExecuteKiroUpstreamSuspendedCooldownReturnsFailoverError(t *testing.T) 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-	require.Equal(t, "kiro token is in cooldown for 33s (reason: account_suspended)", string(failoverErr.ResponseBody))
+	require.Equal(t, "upstream account is cooling down for 33s (reason: account_suspended)", string(failoverErr.ResponseBody))
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 

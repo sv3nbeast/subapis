@@ -10,11 +10,20 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 )
 
-var errKiroCooldownStoreUnavailable = errors.New("kiro cooldown store unavailable")
+var (
+	errKiroCooldownStoreUnavailable = errors.New("kiro cooldown store unavailable")
+	kiro429AdmissionResetSlots      = make(chan struct{}, 64)
+)
 
 const (
 	defaultKiroUnresponsiveFailureThreshold = 2
 	defaultKiroUnresponsiveFailureWindow    = 2 * time.Minute
+	defaultKiro429SoftPause                 = 5 * time.Second
+	defaultKiro429FailureThreshold          = 3
+	defaultKiro429FailureWindow             = 2 * time.Minute
+	defaultKiro429RetryLeaseTTL             = 2 * time.Minute
+	defaultKiro429StateTimeout              = time.Second
+	defaultKiro429AdmissionStateTimeout     = 100 * time.Millisecond
 )
 
 type KiroCooldownStore interface {
@@ -28,6 +37,25 @@ type KiroCooldownStore interface {
 
 type kiroCooldownRetryAfterStore interface {
 	Mark429WithRetryAfter(ctx context.Context, tokenKey string, retryAfter time.Duration) (time.Duration, error)
+}
+
+type kiroCooldown429ObservationStore interface {
+	Observe429(
+		ctx context.Context,
+		tokenKey string,
+		softPause time.Duration,
+		threshold int,
+		observationWindow time.Duration,
+	) (*kirocooldown.RateLimitObservationResult, error)
+}
+
+type kiroCooldown429RetryLeaseStore interface {
+	Acquire429RetryLease(ctx context.Context, tokenKey string, ttl time.Duration) (owner string, acquired bool, err error)
+	Release429RetryLease(ctx context.Context, tokenKey, owner string) error
+}
+
+type kiroCooldown429AdmissionStore interface {
+	Mark429AdmissionSuccess(ctx context.Context, tokenKey string, admittedAt time.Time) (bool, error)
 }
 
 type kiroCooldownUnresponsiveStore interface {
@@ -54,6 +82,15 @@ type kiroCooldownBatchStore interface {
 	GetStates(ctx context.Context, tokenKeys []string) (map[string]*kirocooldown.State, error)
 }
 
+func isKiroRateLimitCooldownReason(reason string) bool {
+	return reason == kirocooldown.CooldownReason429 || reason == kirocooldown.CooldownReason429Observed
+}
+
+func isKiroObserved429CooldownError(err error) bool {
+	var cooldownErr *kirocooldown.Error
+	return errors.As(err, &cooldownErr) && cooldownErr.Reason() == kirocooldown.CooldownReason429Observed
+}
+
 func asKiroCooldownFailoverError(err error) *UpstreamFailoverError {
 	if err == nil {
 		return nil
@@ -65,7 +102,7 @@ func asKiroCooldownFailoverError(err error) *UpstreamFailoverError {
 	statusCode := http.StatusServiceUnavailable
 	failureKind := UpstreamFailureTransportError
 	kiroRateLimited := false
-	if cooldownErr.Reason() == kirocooldown.CooldownReason429 {
+	if isKiroRateLimitCooldownReason(cooldownErr.Reason()) {
 		statusCode = http.StatusTooManyRequests
 		failureKind = UpstreamFailureRateLimited
 		kiroRateLimited = true
@@ -84,7 +121,13 @@ func (s *GatewayService) ensureKiro429Cooldown(ctx context.Context, account *Acc
 	if failoverErr == nil || failoverErr.KiroCooldownCommitted {
 		return
 	}
-	failoverErr.RetryAfter = s.markKiroAccount429(ctx, account, groupID, failoverErr.ResponseHeaders)
+	failoverErr.RetryAfter = s.markKiroAccount429(
+		ctx,
+		account,
+		groupID,
+		failoverErr.ResponseHeaders,
+		isConfirmedKiroRateLimitExhaustion(failoverErr.ResponseBody),
+	)
 	failoverErr.KiroCooldownCommitted = true
 }
 
@@ -112,7 +155,7 @@ func (s *GatewayService) checkAndWaitKiroCooldownWithMode(ctx context.Context, t
 	}
 
 	switch state.Reason {
-	case kirocooldown.CooldownReason429:
+	case kirocooldown.CooldownReason429, kirocooldown.CooldownReason429Observed:
 		if enforce {
 			return kirocooldown.NewError(state.Remaining, state.Reason)
 		}
@@ -174,6 +217,111 @@ func (s *GatewayService) markKiro429WithRetryAfter(ctx context.Context, tokenKey
 	return s.kiroCooldownStore.Mark429(ctx, tokenKey)
 }
 
+func (s *GatewayService) observeKiro429(ctx context.Context, tokenKey string) (*kirocooldown.RateLimitObservationResult, error) {
+	if s == nil || s.kiroCooldownStore == nil {
+		return nil, errKiroCooldownStoreUnavailable
+	}
+	extended, ok := s.kiroCooldownStore.(kiroCooldown429ObservationStore)
+	if !ok {
+		// A store without the observation API must fail open instead of restoring
+		// the old first-429 hard circuit.
+		return &kirocooldown.RateLimitObservationResult{
+			Cooldown:         defaultKiro429SoftPause,
+			ObservationCount: 1,
+		}, nil
+	}
+	return extended.Observe429(
+		ctx,
+		tokenKey,
+		defaultKiro429SoftPause,
+		defaultKiro429FailureThreshold,
+		defaultKiro429FailureWindow,
+	)
+}
+
+func (s *GatewayService) acquireKiro429RetryLease(ctx context.Context, tokenKey string) (func(), bool) {
+	if s == nil || s.kiroCooldownStore == nil {
+		return func() {}, false
+	}
+	extended, ok := s.kiroCooldownStore.(kiroCooldown429RetryLeaseStore)
+	if !ok {
+		return func() {}, false
+	}
+	leaseCtx, leaseCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultKiro429StateTimeout)
+	owner, acquired, err := extended.Acquire429RetryLease(leaseCtx, tokenKey, defaultKiro429RetryLeaseTTL)
+	leaseCancel()
+	if err != nil {
+		slog.Warn("kiro_429_retry_lease_acquire_failed", "error", err)
+		return func() {}, false
+	}
+	if !acquired {
+		return func() {}, false
+	}
+	release := func() {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), defaultKiro429StateTimeout)
+		defer releaseCancel()
+		if err := extended.Release429RetryLease(releaseCtx, tokenKey, owner); err != nil {
+			slog.Warn("kiro_429_retry_lease_release_failed", "error", err)
+		}
+	}
+	return release, true
+}
+
+func (s *GatewayService) markKiro429AdmissionSuccess(ctx context.Context, account *Account, groupID *int64) {
+	if s == nil || account == nil || !s.kiroResilienceEnforced(groupID) {
+		return
+	}
+	tokenKey := buildKiroCooldownKey(account)
+	if tokenKey == "" {
+		return
+	}
+	select {
+	case kiro429AdmissionResetSlots <- struct{}{}:
+	default:
+		slog.Debug("kiro_429_admission_state_reset_skipped", "reason", "worker_limit", "account_id", account.ID)
+		return
+	}
+	requestID := resolveUsageBillingRequestID(ctx, "")
+	resolvedGroupID := derefGroupID(groupID)
+	accountID := account.ID
+	admittedAt := time.Now()
+	go func() {
+		defer func() { <-kiro429AdmissionResetSlots }()
+		stateCtx, stateCancel := context.WithTimeout(context.Background(), defaultKiro429AdmissionStateTimeout)
+		defer stateCancel()
+		var err error
+		if s.kiroCooldownStore == nil {
+			err = errKiroCooldownStoreUnavailable
+		} else if extended, ok := s.kiroCooldownStore.(kiroCooldown429AdmissionStore); ok {
+			_, err = extended.Mark429AdmissionSuccess(stateCtx, tokenKey, admittedAt)
+		} else {
+			err = s.markKiroSuccessPreservingCooldown(stateCtx, tokenKey)
+		}
+		if err != nil {
+			slog.Warn(
+				"kiro_429_admission_state_reset_failed",
+				"request_id", requestID,
+				"group_id", resolvedGroupID,
+				"account_id", accountID,
+				"error", err,
+			)
+		}
+	}()
+}
+
+func isRetryableTransientKiro429(body []byte) bool {
+	return classifyKiroHTTPError(http.StatusTooManyRequests, string(body)).Category == kiroErrorRateLimited
+}
+
+func isConfirmedKiroRateLimitExhaustion(body []byte) bool {
+	switch classifyKiroHTTPError(http.StatusTooManyRequests, string(body)).Category {
+	case kiroErrorQuotaExhausted, kiroErrorOverageExhausted, kiroErrorMonthlyRequest:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *GatewayService) markKiroUnresponsive(ctx context.Context, tokenKey string, base, maximum time.Duration) (time.Duration, error) {
 	if s == nil || s.kiroCooldownStore == nil {
 		return 0, errKiroCooldownStoreUnavailable
@@ -220,7 +368,7 @@ func kiroRetryAfterDuration(headers http.Header, now time.Time) time.Duration {
 	return retryAfter
 }
 
-func (s *GatewayService) markKiroAccount429(ctx context.Context, account *Account, groupID *int64, headers http.Header) time.Duration {
+func (s *GatewayService) markKiroAccount429(ctx context.Context, account *Account, groupID *int64, headers http.Header, confirmedExhaustion bool) time.Duration {
 	if s == nil || account == nil {
 		return 0
 	}
@@ -233,24 +381,56 @@ func (s *GatewayService) markKiroAccount429(ctx context.Context, account *Accoun
 		return retryAfter
 	}
 
-	stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Second)
+	stateCtx, stateCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultKiro429StateTimeout)
 	defer stateCancel()
-	cooldown, err := s.markKiro429WithRetryAfter(stateCtx, buildKiroCooldownKey(account), retryAfter)
-	if err != nil {
-		slog.Warn("kiro_429_cooldown_mark_failed", "group_id", derefGroupID(groupID), "account_id", account.ID, "error", err)
-		cooldown = retryAfter
-		if cooldown <= 0 {
-			cooldown = kirocooldown.ShortCooldown
+	tokenKey := buildKiroCooldownKey(account)
+	if confirmedExhaustion || retryAfter > 0 {
+		cooldown, err := s.markKiro429WithRetryAfter(stateCtx, tokenKey, retryAfter)
+		if err != nil {
+			slog.Warn("kiro_429_cooldown_mark_failed", "group_id", derefGroupID(groupID), "account_id", account.ID, "error", err)
+			cooldown = retryAfter
+			if cooldown <= 0 {
+				cooldown = kirocooldown.ShortCooldown
+			}
 		}
+		s.persistKiroRuntimeCooldown(stateCtx, account, cooldown, "kiro_429")
+		slog.Info("kiro_429_cooldown_marked",
+			"request_id", resolveUsageBillingRequestID(ctx, ""),
+			"group_id", derefGroupID(groupID),
+			"account_id", account.ID,
+			"cooldown_ms", cooldown.Milliseconds(),
+			"policy", "confirmed_hard",
+			"confirmed_exhaustion", confirmedExhaustion,
+			"upstream_retry_after", retryAfter > 0,
+		)
+		return cooldown
 	}
-	s.persistKiroRuntimeCooldown(stateCtx, account, cooldown, "kiro_429")
-	slog.Info("kiro_429_cooldown_marked",
+
+	result, err := s.observeKiro429(stateCtx, tokenKey)
+	if err != nil {
+		slog.Warn("kiro_429_observation_failed", "group_id", derefGroupID(groupID), "account_id", account.ID, "error", err)
+		return defaultKiro429SoftPause
+	}
+	if result == nil || result.Cooldown <= 0 {
+		return defaultKiro429SoftPause
+	}
+	policy := "soft_pause"
+	if result.Escalated {
+		policy = "threshold_hard"
+		s.persistKiroRuntimeCooldown(stateCtx, account, result.Cooldown, "kiro_429")
+	} else if result.HardFailureCount > 0 && result.ObservationCount == 0 {
+		policy = "existing_hard"
+	}
+	slog.Info("kiro_429_observation_recorded",
 		"request_id", resolveUsageBillingRequestID(ctx, ""),
 		"group_id", derefGroupID(groupID),
 		"account_id", account.ID,
-		"cooldown_ms", cooldown.Milliseconds(),
+		"cooldown_ms", result.Cooldown.Milliseconds(),
+		"observation_count", result.ObservationCount,
+		"hard_failure_count", result.HardFailureCount,
+		"policy", policy,
 	)
-	return cooldown
+	return result.Cooldown
 }
 
 func (s *GatewayService) markKiroAccountUnresponsive(ctx context.Context, account *Account, groupID *int64, failureKind UpstreamFailureKind) time.Duration {

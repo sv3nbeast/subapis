@@ -49,6 +49,179 @@ func TestMark429WithRetryAfterPrefersBoundedUpstreamValue(t *testing.T) {
 	require.Equal(t, MaxCooldown, cooldown)
 }
 
+func TestObserve429EscalatesOnlyAfterRepeatedLogicalFailures(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, attempt, result.ObservationCount)
+		require.Equal(t, 5*time.Second, result.Cooldown)
+		require.False(t, result.Escalated)
+		require.Zero(t, result.HardFailureCount)
+
+		state, err := store.GetState(context.Background(), "credential-a")
+		require.NoError(t, err)
+		require.NotNil(t, state)
+		require.Equal(t, CooldownReason429Observed, state.Reason)
+		require.Zero(t, state.FailCount)
+	}
+
+	result, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 3, result.ObservationCount)
+	require.Equal(t, time.Minute, result.Cooldown)
+	require.True(t, result.Escalated)
+	require.Equal(t, 1, result.HardFailureCount)
+
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, CooldownReason429, state.Reason)
+	require.Equal(t, 1, state.FailCount)
+	require.NoError(t, client.HSet(
+		context.Background(),
+		RedisKey("credential-a"),
+		"cooldown_until_ms",
+		time.Now().Add(-time.Second).UnixMilli(),
+	).Err())
+	for range 3 {
+		result, err = store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+		require.NoError(t, err)
+	}
+	require.True(t, result.Escalated)
+	require.Equal(t, 2, result.HardFailureCount)
+	require.Equal(t, 2*time.Minute, result.Cooldown)
+
+}
+
+func TestMarkSuccessPreservingCooldownClearsSoft429Observation(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	first, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.ObservationCount)
+	require.NoError(t, store.MarkSuccessPreservingCooldown(context.Background(), "credential-a"))
+
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Nil(t, state)
+
+	afterSuccess, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, afterSuccess.ObservationCount)
+	require.False(t, afterSuccess.Escalated)
+}
+
+func TestMark429AdmissionSuccessPreservesNewerEvidenceAndHardCooldown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	staleAdmission := time.Now().Add(-time.Second)
+	_, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+	require.NoError(t, err)
+	cleared, err := store.Mark429AdmissionSuccess(context.Background(), "credential-a", staleAdmission)
+	require.NoError(t, err)
+	require.False(t, cleared)
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Equal(t, CooldownReason429Observed, state.Reason)
+
+	cleared, err = store.Mark429AdmissionSuccess(context.Background(), "credential-a", time.Now().Add(time.Second))
+	require.NoError(t, err)
+	require.True(t, cleared)
+	state, err = store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Nil(t, state)
+
+	for range 3 {
+		_, err = store.Observe429(context.Background(), "credential-b", 5*time.Second, 3, 2*time.Minute)
+		require.NoError(t, err)
+	}
+	cleared, err = store.Mark429AdmissionSuccess(context.Background(), "credential-b", time.Now().Add(time.Second))
+	require.NoError(t, err)
+	require.False(t, cleared)
+	state, err = store.GetState(context.Background(), "credential-b")
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, CooldownReason429, state.Reason)
+	require.Equal(t, 1, state.FailCount)
+
+	require.NoError(t, client.HSet(
+		context.Background(),
+		RedisKey("credential-b"),
+		"cooldown_until_ms",
+		time.Now().Add(-time.Second).UnixMilli(),
+	).Err())
+	cleared, err = store.Mark429AdmissionSuccess(context.Background(), "credential-b", time.Now())
+	require.NoError(t, err)
+	require.True(t, cleared, "a success after hard cooldown expiry resets the hard backoff history")
+	var result *RateLimitObservationResult
+	for range 3 {
+		result, err = store.Observe429(context.Background(), "credential-b", 5*time.Second, 3, 2*time.Minute)
+		require.NoError(t, err)
+	}
+	require.True(t, result.Escalated)
+	require.Equal(t, 1, result.HardFailureCount)
+	require.Equal(t, time.Minute, result.Cooldown)
+}
+
+func TestObserve429DoesNotMultiplyActiveHardCooldown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	for range 3 {
+		_, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+		require.NoError(t, err)
+	}
+	concurrent, err := store.Observe429(context.Background(), "credential-a", 5*time.Second, 3, 2*time.Minute)
+	require.NoError(t, err)
+	require.False(t, concurrent.Escalated)
+	require.Zero(t, concurrent.ObservationCount)
+	require.Equal(t, 1, concurrent.HardFailureCount)
+	require.Greater(t, concurrent.Cooldown, 55*time.Second)
+
+	state, err := store.GetState(context.Background(), "credential-a")
+	require.NoError(t, err)
+	require.Equal(t, 1, state.FailCount)
+}
+
+func Test429RetryLeaseAllowsOneOwnerAndProtectsRelease(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewStore(client)
+
+	owner, acquired, err := store.Acquire429RetryLease(context.Background(), "credential-a", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.NotEmpty(t, owner)
+
+	_, acquired, err = store.Acquire429RetryLease(context.Background(), "credential-a", time.Minute)
+	require.NoError(t, err)
+	require.False(t, acquired)
+
+	require.NoError(t, store.Release429RetryLease(context.Background(), "credential-a", "not-the-owner"))
+	_, acquired, err = store.Acquire429RetryLease(context.Background(), "credential-a", time.Minute)
+	require.NoError(t, err)
+	require.False(t, acquired, "a stale owner must not delete another request's lease")
+
+	require.NoError(t, store.Release429RetryLease(context.Background(), "credential-a", owner))
+	_, acquired, err = store.Acquire429RetryLease(context.Background(), "credential-a", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+}
+
 func TestGetStatesReturnsOnlyActiveCooldowns(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})

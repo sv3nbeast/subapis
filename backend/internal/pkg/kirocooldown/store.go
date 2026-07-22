@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,6 +20,7 @@ const (
 	MinRequestInterval = time.Second
 	MaxRequestInterval = 2 * time.Second
 
+	CooldownReason429Observed  = "rate_limit_observed"
 	CooldownReason429          = "rate_limit_exceeded"
 	CooldownReasonSuspended    = "account_suspended"
 	CooldownReasonUnresponsive = "upstream_unresponsive"
@@ -81,9 +83,12 @@ local state_ttl_ms = tonumber(ARGV[3])
 local reason = ARGV[4]
 local override_cooldown_ms = tonumber(ARGV[5]) or 0
 redis.call('HDEL', KEYS[1],
-  'unresponsive_observation_scope',
-  'unresponsive_observation_count',
-  'unresponsive_observation_at_ms'
+	'rate_limit_observation_count',
+	'rate_limit_observation_started_at_ms',
+	'rate_limit_observation_at_ms',
+	'unresponsive_observation_scope',
+	'unresponsive_observation_count',
+	'unresponsive_observation_at_ms'
 )
 local fail_count_field = 'fail_count_unresponsive'
 if reason == 'rate_limit_exceeded' then
@@ -120,6 +125,82 @@ redis.call('HSET', KEYS[1],
 )
 redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
 return cooldown_ms
+`)
+
+	observe429Script = redis.NewScript(`
+local t = redis.call('TIME')
+local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local soft_pause_ms = tonumber(ARGV[1])
+local base_cooldown_ms = tonumber(ARGV[2])
+local max_cooldown_ms = tonumber(ARGV[3])
+local state_ttl_ms = tonumber(ARGV[4])
+local threshold = tonumber(ARGV[5])
+local observation_window_ms = tonumber(ARGV[6])
+local existing_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
+local existing_reason = redis.call('HGET', KEYS[1], 'cooldown_reason') or ''
+
+-- A confirmed hard cooldown belongs to a previous logical failure. Concurrent
+-- requests must not multiply its backoff while it is still active.
+if existing_until_ms > now_ms and existing_reason ~= 'rate_limit_observed' then
+  local hard_fail_count = tonumber(redis.call('HGET', KEYS[1], 'fail_count_429') or redis.call('HGET', KEYS[1], 'fail_count') or '0')
+  return {existing_until_ms - now_ms, 0, 0, hard_fail_count}
+end
+if existing_until_ms > 0 and existing_until_ms <= now_ms then
+  redis.call('HDEL', KEYS[1], 'cooldown_until_ms', 'cooldown_reason')
+  existing_until_ms = 0
+  existing_reason = ''
+end
+
+local observation_count = tonumber(redis.call('HGET', KEYS[1], 'rate_limit_observation_count') or '0')
+local observation_started_at_ms = tonumber(redis.call('HGET', KEYS[1], 'rate_limit_observation_started_at_ms') or '0')
+if observation_started_at_ms <= 0 or now_ms - observation_started_at_ms > observation_window_ms then
+  observation_count = 1
+  observation_started_at_ms = now_ms
+else
+  observation_count = observation_count + 1
+end
+redis.call('HSET', KEYS[1],
+  'rate_limit_observation_count', observation_count,
+  'rate_limit_observation_started_at_ms', observation_started_at_ms,
+  'rate_limit_observation_at_ms', now_ms
+)
+
+if observation_count < threshold then
+  local soft_until_ms = now_ms + soft_pause_ms
+  if existing_reason == 'rate_limit_observed' and existing_until_ms > soft_until_ms then
+    soft_until_ms = existing_until_ms
+  end
+  redis.call('HSET', KEYS[1],
+    'cooldown_until_ms', soft_until_ms,
+    'cooldown_reason', 'rate_limit_observed'
+  )
+  redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
+  return {soft_until_ms - now_ms, observation_count, 0, 0}
+end
+
+local stored_fail_count = redis.call('HGET', KEYS[1], 'fail_count_429')
+if not stored_fail_count then
+  -- Existing deployments only had fail_count, and it represented 429s.
+  stored_fail_count = redis.call('HGET', KEYS[1], 'fail_count')
+end
+local hard_fail_count = tonumber(stored_fail_count or '0') + 1
+local cooldown_ms = base_cooldown_ms * (2 ^ (hard_fail_count - 1))
+if cooldown_ms > max_cooldown_ms then
+  cooldown_ms = max_cooldown_ms
+end
+redis.call('HSET', KEYS[1],
+  'fail_count', hard_fail_count,
+  'fail_count_429', hard_fail_count,
+  'cooldown_until_ms', now_ms + cooldown_ms,
+  'cooldown_reason', 'rate_limit_exceeded'
+)
+redis.call('HDEL', KEYS[1],
+  'rate_limit_observation_count',
+  'rate_limit_observation_started_at_ms',
+  'rate_limit_observation_at_ms'
+)
+redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
+return {cooldown_ms, observation_count, 1, hard_fail_count}
 `)
 
 	observeUnresponsiveScript = redis.NewScript(`
@@ -192,7 +273,10 @@ redis.call('HSET', KEYS[1],
   'cooldown_reason', ''
 )
 redis.call('HDEL', KEYS[1],
-  'unresponsive_observation_scope',
+	'rate_limit_observation_count',
+	'rate_limit_observation_started_at_ms',
+	'rate_limit_observation_at_ms',
+	'unresponsive_observation_scope',
   'unresponsive_observation_count',
   'unresponsive_observation_at_ms'
 )
@@ -204,11 +288,17 @@ return 1
 local t = redis.call('TIME')
 local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local cooldown_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
-if cooldown_until_ms > now_ms then
-  -- A concurrent success must not erase the failure streak that established
-  -- the active cooldown. Otherwise the next 429 restarts at one minute instead
-  -- of continuing the documented 1/2/4/5 minute backoff.
-  return 0
+local cooldown_reason = redis.call('HGET', KEYS[1], 'cooldown_reason') or ''
+if cooldown_until_ms > now_ms and cooldown_reason ~= 'rate_limit_observed' then
+	-- A concurrent success must not erase the failure streak that established
+	-- the active cooldown. Otherwise the next 429 restarts at one minute instead
+	-- of continuing the documented 1/2/4/5 minute backoff.
+	redis.call('HDEL', KEYS[1],
+	  'rate_limit_observation_count',
+	  'rate_limit_observation_started_at_ms',
+	  'rate_limit_observation_at_ms'
+	)
+	return 0
 end
 redis.call('HSET', KEYS[1],
   'fail_count', 0,
@@ -218,7 +308,10 @@ redis.call('HSET', KEYS[1],
   'cooldown_reason', ''
 )
 redis.call('HDEL', KEYS[1],
-  'unresponsive_observation_scope',
+	'rate_limit_observation_count',
+	'rate_limit_observation_started_at_ms',
+	'rate_limit_observation_at_ms',
+	'unresponsive_observation_scope',
   'unresponsive_observation_count',
   'unresponsive_observation_at_ms'
 )
@@ -239,12 +332,58 @@ redis.call('HSET', KEYS[1],
   'cooldown_reason', ARGV[3]
 )
 redis.call('HDEL', KEYS[1],
-  'unresponsive_observation_scope',
+	'rate_limit_observation_count',
+	'rate_limit_observation_started_at_ms',
+	'rate_limit_observation_at_ms',
+	'unresponsive_observation_scope',
   'unresponsive_observation_count',
   'unresponsive_observation_at_ms'
 )
 redis.call('PEXPIRE', KEYS[1], state_ttl_ms)
 return cooldown_ms
+`)
+
+	mark429AdmissionSuccessScript = redis.NewScript(`
+local admitted_at_ms = tonumber(ARGV[1])
+local active_ttl_ms = tonumber(ARGV[2])
+local observation_at_ms = tonumber(redis.call('HGET', KEYS[1], 'rate_limit_observation_at_ms') or '0')
+local hard_fail_count = tonumber(redis.call('HGET', KEYS[1], 'fail_count_429') or redis.call('HGET', KEYS[1], 'fail_count') or '0')
+if observation_at_ms > admitted_at_ms then
+  return 0
+end
+
+local t = redis.call('TIME')
+local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local cooldown_until_ms = tonumber(redis.call('HGET', KEYS[1], 'cooldown_until_ms') or '0')
+local cooldown_reason = redis.call('HGET', KEYS[1], 'cooldown_reason') or ''
+redis.call('HDEL', KEYS[1],
+  'rate_limit_observation_count',
+  'rate_limit_observation_started_at_ms',
+  'rate_limit_observation_at_ms'
+)
+
+-- Admission clears soft evidence, but never a confirmed active circuit.
+if cooldown_until_ms > now_ms and cooldown_reason ~= 'rate_limit_observed' then
+  return 0
+end
+if observation_at_ms <= 0 and hard_fail_count <= 0 and cooldown_reason ~= 'rate_limit_observed' then
+  return 0
+end
+redis.call('HSET', KEYS[1],
+  'fail_count', 0,
+  'fail_count_429', 0,
+  'cooldown_until_ms', 0,
+  'cooldown_reason', ''
+)
+redis.call('PEXPIRE', KEYS[1], active_ttl_ms)
+return 1
+`)
+
+	release429RetryLeaseScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
 `)
 )
 
@@ -267,6 +406,13 @@ type UnresponsiveObservationResult struct {
 	Escalated    bool
 }
 
+type RateLimitObservationResult struct {
+	Cooldown         time.Duration
+	ObservationCount int
+	HardFailureCount int
+	Escalated        bool
+}
+
 func NewError(remaining time.Duration, reason string) error {
 	return &Error{remaining: remaining, reason: reason}
 }
@@ -276,9 +422,9 @@ func (e *Error) Error() string {
 		return ""
 	}
 	if e.reason == "" {
-		return fmt.Sprintf("kiro token is in cooldown for %v", e.remaining.Round(time.Second))
+		return fmt.Sprintf("upstream account is cooling down for %v", e.remaining.Round(time.Second))
 	}
-	return fmt.Sprintf("kiro token is in cooldown for %v (reason: %s)", e.remaining.Round(time.Second), e.reason)
+	return fmt.Sprintf("upstream account is cooling down for %v (reason: %s)", e.remaining.Round(time.Second), e.reason)
 }
 
 func (e *Error) Remaining() time.Duration {
@@ -398,6 +544,35 @@ func (s *Store) MarkSuccessPreservingCooldown(ctx context.Context, tokenKey stri
 	return nil
 }
 
+// Mark429AdmissionSuccess clears ordinary 429 evidence that predates a 2xx
+// admission. A later 429 observation is preserved even when this best-effort
+// write runs asynchronously.
+func (s *Store) Mark429AdmissionSuccess(ctx context.Context, tokenKey string, admittedAt time.Time) (bool, error) {
+	if err := s.validate(); err != nil {
+		return false, err
+	}
+	if admittedAt.IsZero() {
+		admittedAt = time.Now()
+	}
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	value, err := mark429AdmissionSuccessScript.Run(
+		cacheCtx,
+		s.client,
+		[]string{RedisKey(tokenKey)},
+		admittedAt.UnixMilli(),
+		activeTTL.Milliseconds(),
+	).Result()
+	if err != nil {
+		return false, fmt.Errorf("kiro cooldown mark 429 admission success: %w", err)
+	}
+	cleared, err := luaInt64(value)
+	if err != nil {
+		return false, fmt.Errorf("kiro cooldown mark 429 admission success result: %w", err)
+	}
+	return cleared == 1, nil
+}
+
 func (s *Store) Mark429(ctx context.Context, tokenKey string) (time.Duration, error) {
 	return s.markTransient(ctx, tokenKey, ShortCooldown, MaxCooldown, 0, CooldownReason429)
 }
@@ -415,6 +590,115 @@ func (s *Store) Mark429WithRetryAfter(ctx context.Context, tokenKey string, retr
 		retryAfter = MaxCooldown
 	}
 	return s.markTransient(ctx, tokenKey, ShortCooldown, MaxCooldown, retryAfter, CooldownReason429)
+}
+
+// Observe429 treats a headerless, non-quota 429 as transient evidence. It
+// briefly pauses the credential and only opens the hard circuit after repeated
+// logical failures without an intervening success.
+func (s *Store) Observe429(
+	ctx context.Context,
+	tokenKey string,
+	softPause time.Duration,
+	threshold int,
+	observationWindow time.Duration,
+) (*RateLimitObservationResult, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if softPause <= 0 {
+		softPause = 5 * time.Second
+	}
+	if threshold < 2 {
+		threshold = 3
+	}
+	if observationWindow <= 0 {
+		observationWindow = 2 * time.Minute
+	}
+
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	value, err := observe429Script.Run(
+		cacheCtx,
+		s.client,
+		[]string{RedisKey(tokenKey)},
+		softPause.Milliseconds(),
+		ShortCooldown.Milliseconds(),
+		MaxCooldown.Milliseconds(),
+		stateTTL.Milliseconds(),
+		threshold,
+		observationWindow.Milliseconds(),
+	).Result()
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe 429: %w", err)
+	}
+	parts, ok := value.([]any)
+	if !ok || len(parts) != 4 {
+		return nil, fmt.Errorf("kiro cooldown observe 429: unexpected response %T", value)
+	}
+	cooldownMS, err := luaInt64(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe 429 cooldown: %w", err)
+	}
+	observationCount, err := luaInt64(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe 429 count: %w", err)
+	}
+	escalated, err := luaInt64(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe 429 escalation: %w", err)
+	}
+	hardFailureCount, err := luaInt64(parts[3])
+	if err != nil {
+		return nil, fmt.Errorf("kiro cooldown observe 429 hard count: %w", err)
+	}
+	return &RateLimitObservationResult{
+		Cooldown:         time.Duration(cooldownMS) * time.Millisecond,
+		ObservationCount: int(observationCount),
+		HardFailureCount: int(hardFailureCount),
+		Escalated:        escalated == 1,
+	}, nil
+}
+
+// Acquire429RetryLease serializes same-credential 429 retries across gateway
+// instances. The returned token owns the lease and is required for release.
+func (s *Store) Acquire429RetryLease(ctx context.Context, tokenKey string, ttl time.Duration) (string, bool, error) {
+	if err := s.validate(); err != nil {
+		return "", false, err
+	}
+	if ttl <= 0 {
+		ttl = 2 * time.Minute
+	}
+	owner := uuid.NewString()
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	acquired, err := s.client.SetNX(cacheCtx, retryLeaseRedisKey(tokenKey), owner, ttl).Result()
+	if err != nil {
+		return "", false, fmt.Errorf("kiro cooldown acquire 429 retry lease: %w", err)
+	}
+	if !acquired {
+		return "", false, nil
+	}
+	return owner, true, nil
+}
+
+func (s *Store) Release429RetryLease(ctx context.Context, tokenKey, owner string) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(owner) == "" {
+		return nil
+	}
+	cacheCtx, cancel := withRedisTimeout(ctx)
+	defer cancel()
+	if err := release429RetryLeaseScript.Run(
+		cacheCtx,
+		s.client,
+		[]string{retryLeaseRedisKey(tokenKey)},
+		owner,
+	).Err(); err != nil {
+		return fmt.Errorf("kiro cooldown release 429 retry lease: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) MarkUnresponsive(ctx context.Context, tokenKey string, base, maximum time.Duration) (time.Duration, error) {
@@ -717,7 +1001,7 @@ func (s *Store) ClearEarliestTransientCooldown(ctx context.Context, tokenKeys []
 		if err != nil && values[2] != nil {
 			return false, fmt.Errorf("kiro cooldown clear transient fail_count: %w", err)
 		}
-		if cooldownUntilMS <= now || reason != CooldownReason429 {
+		if cooldownUntilMS <= now || (reason != CooldownReason429 && reason != CooldownReason429Observed) {
 			continue
 		}
 		current := &candidate{redisKey: uniqueKeys[i], cooldownUntilMS: cooldownUntilMS, failCount: failCount}
@@ -744,6 +1028,10 @@ func RedisKey(tokenKey string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(tokenKey)))
 	digest := hex.EncodeToString(sum[:])
 	return keyPrefix + "{" + digest + "}"
+}
+
+func retryLeaseRedisKey(tokenKey string) string {
+	return RedisKey(tokenKey) + ":429-retry-lease"
 }
 
 func ActiveTTL() time.Duration {

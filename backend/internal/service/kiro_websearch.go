@@ -714,7 +714,13 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 					KiroRateLimited: true,
 					FailureKind:     UpstreamFailureRateLimited,
 				}
-				failoverErr.RetryAfter = s.markKiroAccount429(ctx, account, groupID, resp.Header)
+				failoverErr.RetryAfter = s.markKiroAccount429(
+					ctx,
+					account,
+					groupID,
+					resp.Header,
+					isConfirmedKiroRateLimitExhaustion(respBody),
+				)
 				failoverErr.KiroCooldownCommitted = true
 				return nil, currentToken, failoverErr
 			}
@@ -747,8 +753,10 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				continue
 			}
 		}
-		if !resilienceEnforced && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			if err := s.markKiroSuccessPreservingCooldown(ctx, cooldownKey); err != nil {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if resilienceEnforced {
+				s.markKiro429AdmissionSuccess(ctx, account, groupID)
+			} else if err := s.markKiroSuccessPreservingCooldown(ctx, cooldownKey); err != nil {
 				_ = resp.Body.Close()
 				return nil, currentToken, err
 			}

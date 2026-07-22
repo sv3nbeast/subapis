@@ -40,6 +40,9 @@ type kiroUpstreamRequestOptions struct {
 	ConversationRetryNonce  string
 	EndpointStartOffset     int
 	NativeToolProgressRetry bool
+	RateLimitRetryRound     int
+	RateLimitRetryDeadline  time.Time
+	RateLimitRetryLeaseHeld bool
 }
 
 const kiroEventDiagnosticsUserIDsEnv = "SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS"
@@ -226,6 +229,8 @@ const kiroInvalidModelTempUnschedDuration = time.Minute
 const (
 	kiroRetryBaseDelay             = 200 * time.Millisecond
 	kiroRetryMaxDelay              = 2 * time.Second
+	kiro429RetryMaxRounds          = 2
+	kiro429RetryStartBudget        = 5 * time.Second
 	kiroStreamBodyRetryDefaultMax  = 2
 	kiroStreamBodyRetryHardMax     = 4
 	kiroStreamBodyRetryEnvVariable = "SUB2API_KIRO_STREAM_BODY_RETRIES"
@@ -250,6 +255,30 @@ func kiroRetryBackoffDelay(attempt int) time.Duration {
 
 func sleepKiroRetry(ctx context.Context, attempt int) error {
 	return kiroRetrySleep(ctx, kiroRetryBackoffDelay(attempt))
+}
+
+func kiro429RetryBackoffDelay(round int) time.Duration {
+	if round <= 1 {
+		return 500*time.Millisecond + time.Duration(mathrand.Int63n(int64(400*time.Millisecond)+1))
+	}
+	return 1200*time.Millisecond + time.Duration(mathrand.Int63n(int64(600*time.Millisecond)+1))
+}
+
+func canStartKiro429Retry(ctx context.Context, deadline time.Time, wait time.Duration) bool {
+	if ctx == nil || ctx.Err() != nil || deadline.IsZero() {
+		return false
+	}
+	now := time.Now()
+	if !now.Add(wait).Before(deadline) {
+		return false
+	}
+	if contextDeadline, ok := ctx.Deadline(); ok && !now.Add(wait).Before(contextDeadline) {
+		return false
+	}
+	if kiroResilienceBudgetActive(ctx) && kiroResilienceBudgetRemaining(ctx) <= wait {
+		return false
+	}
+	return true
 }
 
 func kiroEventDiagnosticsEnabledForUser(parsed *ParsedRequest) bool {
@@ -1499,14 +1528,22 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 	accountKey := buildKiroAccountKey(account)
 	cooldownKey := buildKiroCooldownKey(account)
 	if err := s.checkAndWaitKiroCooldownWithMode(ctx, cooldownKey, resilienceEnforced); err != nil {
-		if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
-			if !resilienceEnforced {
-				failoverErr.StatusCode = http.StatusTooManyRequests
-				failoverErr.FailureKind = ""
+		if options.RateLimitRetryLeaseHeld && isKiroObserved429CooldownError(err) {
+			logger.L().Debug("kiro retry lease bypassed soft rate-limit pause",
+				zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+				zap.Int64("account_id", account.ID),
+				zap.Int("retry_round", options.RateLimitRetryRound),
+			)
+		} else {
+			if failoverErr := asKiroCooldownFailoverError(err); failoverErr != nil {
+				if !resilienceEnforced {
+					failoverErr.StatusCode = http.StatusTooManyRequests
+					failoverErr.FailureKind = ""
+				}
+				return nil, requestCtx, failoverErr
 			}
-			return nil, requestCtx, failoverErr
+			return nil, requestCtx, err
 		}
-		return nil, requestCtx, err
 	}
 
 	modelID := kiropkg.MapModel(mappedModel)
@@ -1525,6 +1562,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 	var lastKiro429 *UpstreamFailoverError
 	var kiro429CooldownHeaders http.Header
 	var maxKiro429RetryAfter time.Duration
+	kiro429EndpointCount := 0
+	allKiro429sRetryable := true
 	var lastKiroServiceFailure *UpstreamFailoverError
 	var lastTransportErr *kiroEndpointTransportError
 	transportFailedHosts := make(map[string]struct{})
@@ -1695,7 +1734,11 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					return nil, requestCtx, readErr
 				}
 				if len(respBody) == 0 {
-					respBody = []byte(`{"message":"kiro upstream rate limited"}`)
+					respBody = []byte(`{"message":"upstream rate limited"}`)
+				}
+				kiro429EndpointCount++
+				if !isRetryableTransientKiro429(respBody) {
+					allKiro429sRetryable = false
 				}
 				lastKiro429 = &UpstreamFailoverError{
 					StatusCode:      http.StatusTooManyRequests,
@@ -1705,6 +1748,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					FailureKind:     UpstreamFailureRateLimited,
 				}
 				candidateRetryAfter := kiroRetryAfterDuration(resp.Header, time.Now())
+				if candidateRetryAfter > 0 {
+					allKiro429sRetryable = false
+				}
 				if kiro429CooldownHeaders == nil || candidateRetryAfter > maxKiro429RetryAfter {
 					maxKiro429RetryAfter = candidateRetryAfter
 					kiro429CooldownHeaders = resp.Header.Clone()
@@ -1846,8 +1892,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 				return resp, requestCtx, nil
 			}
 
-			if !resilienceEnforced && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if err := s.markKiroSuccessPreservingCooldown(ctx, cooldownKey); err != nil {
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				if resilienceEnforced {
+					s.markKiro429AdmissionSuccess(ctx, account, groupID)
+				} else if err := s.markKiroSuccessPreservingCooldown(ctx, cooldownKey); err != nil {
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
 				}
@@ -1874,7 +1922,66 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 		if kiro429CooldownHeaders != nil {
 			lastKiro429.ResponseHeaders = kiro429CooldownHeaders
 		}
-		cooldown := s.markKiroAccount429(ctx, account, groupID, lastKiro429.ResponseHeaders)
+		pureRetryable429Round := resilienceEnforced &&
+			allKiro429sRetryable &&
+			kiro429EndpointCount == len(endpoints) &&
+			lastTransportErr == nil &&
+			lastKiroServiceFailure == nil
+		if pureRetryable429Round && options.RateLimitRetryRound < kiro429RetryMaxRounds {
+			nextRound := options.RateLimitRetryRound + 1
+			retryDeadline := options.RateLimitRetryDeadline
+			if retryDeadline.IsZero() {
+				retryDeadline = time.Now().Add(kiro429RetryStartBudget)
+			}
+			retryDelay := kiro429RetryBackoffDelay(nextRound)
+			if canStartKiro429Retry(ctx, retryDeadline, retryDelay) {
+				leaseHeld := options.RateLimitRetryLeaseHeld
+				releaseLease := func() {}
+				if !leaseHeld {
+					releaseLease, leaseHeld = s.acquireKiro429RetryLease(ctx, cooldownKey)
+					if leaseHeld {
+						defer releaseLease()
+					}
+				}
+				if leaseHeld {
+					logger.L().Warn("kiro transient rate limit; retrying credential",
+						zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+						zap.Int64("account_id", account.ID),
+						zap.Int("retry_round", nextRound),
+						zap.Int("retry_round_max", kiro429RetryMaxRounds),
+						zap.Int64("retry_delay_ms", retryDelay.Milliseconds()),
+					)
+					if sleepErr := kiroRetrySleep(ctx, retryDelay); sleepErr != nil {
+						return nil, requestCtx, sleepErr
+					}
+					if canStartKiro429Retry(ctx, retryDeadline, 0) {
+						nextOptions := options
+						nextOptions.EndpointStartOffset++
+						nextOptions.RateLimitRetryRound = nextRound
+						nextOptions.RateLimitRetryDeadline = retryDeadline
+						nextOptions.RateLimitRetryLeaseHeld = true
+						return s.executeKiroUpstreamWithParsedOptions(
+							ctx,
+							account,
+							parsed,
+							anthropicBody,
+							mappedModel,
+							requestModel,
+							currentToken,
+							headers,
+							nextOptions,
+						)
+					}
+				}
+			}
+		}
+		cooldown := s.markKiroAccount429(
+			ctx,
+			account,
+			groupID,
+			lastKiro429.ResponseHeaders,
+			isConfirmedKiroRateLimitExhaustion(lastKiro429.ResponseBody),
+		)
 		lastKiro429.RetryAfter = cooldown
 		lastKiro429.KiroCooldownCommitted = true
 		if lastTransportErr != nil && lastKiro429.Cause == nil {
