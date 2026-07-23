@@ -35,6 +35,7 @@ func TestUpdateAccountPreservesSensitiveCredsWhenIncomingOmits(t *testing.T) {
 				"refresh_token": "rt-existing",
 				"access_token":  "at-existing",
 				"id_token":      "id-existing",
+				"kiro_api_key":  "ksk-existing",
 				"base_url":      "https://old.example.com",
 			},
 		},
@@ -53,5 +54,6 @@ func TestUpdateAccountPreservesSensitiveCredsWhenIncomingOmits(t *testing.T) {
 	require.Equal(t, "rt-existing", repo.account.Credentials["refresh_token"])
 	require.Equal(t, "at-existing", repo.account.Credentials["access_token"])
 	require.Equal(t, "id-existing", repo.account.Credentials["id_token"])
+	require.Equal(t, "ksk-existing", repo.account.Credentials["kiro_api_key"])
 	require.Equal(t, "https://new.example.com", repo.account.Credentials["base_url"])
 }

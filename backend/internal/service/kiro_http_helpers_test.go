@@ -121,6 +121,11 @@ func TestAccountKiroCredentialsNormalizeLegacyShapes(t *testing.T) {
 	require.Equal(t, "legacy-key", account.KiroAPIKey())
 
 	account.Type = AccountTypeOAuth
+	account.Credentials = map[string]any{"kiro_api_key": " ksk_oauth_generation "}
+	require.Equal(t, "ksk_oauth_generation", account.KiroAPIKey())
+	account.Credentials = map[string]any{"api_key": "unrelated-legacy-field"}
+	require.Empty(t, account.KiroAPIKey())
+
 	account.Credentials = map[string]any{
 		"client_id":      "external-client",
 		"token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
@@ -409,6 +414,40 @@ func TestBuildKiroEndpointsKeepsLegacyCodeWhispererOnlyInUSEast1(t *testing.T) {
 		endpoints[2].Name,
 	})
 	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", kiroEndpointURLHost(endpoints[1].URL))
+}
+
+func TestBuildKiroEndpointsUsesCLIRuntimeForKSKAPIKey(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"kiro_api_key": "ksk_test_key",
+			"api_region":   "eu-central-1",
+			"access_token": "oauth-token-for-usage",
+		},
+	}
+
+	endpoints := buildKiroEndpointsForMode(account, KiroEndpointModeQ)
+	require.Len(t, endpoints, 1)
+	require.Equal(t, "KiroRuntime", endpoints[0].Name)
+	require.Equal(t, "https://runtime.eu-central-1.kiro.dev/", endpoints[0].URL)
+	require.Equal(t, "KIRO_CLI", endpoints[0].Origin)
+	require.Equal(t, kiroGenerateAssistantResponseTarget, endpoints[0].AmzTarget)
+}
+
+func TestBuildKiroEndpointsKeepsLegacyNonKSKAPIKeyOnQ(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":    "legacy-api-key",
+			"api_region": "us-east-1",
+		},
+	}
+
+	endpoints := buildKiroEndpointsForMode(account, KiroEndpointModeQ)
+	require.Len(t, endpoints, 3)
+	require.Equal(t, "KiroIDE", endpoints[0].Name)
 }
 
 func TestBuildKiroEndpointsSortsByPreferredEndpointWithFallback(t *testing.T) {

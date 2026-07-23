@@ -1841,7 +1841,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					return resp, requestCtx, nil
 				}
 
-				if !resilienceEnforced && s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
+				if !resilienceEnforced && account.KiroAPIKey() == "" && s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
 						currentToken = refreshedToken
@@ -2019,7 +2019,7 @@ func rotateKiroEndpoints(endpoints []kiroEndpointConfig, offset int) []kiroEndpo
 }
 
 func buildKiroEndpointsForMode(account *Account, mode string) []kiroEndpointConfig {
-	if isKiroRuntimeEndpointMode(account) && strings.TrimSpace(account.GetCredential("profile_arn")) != "" {
+	if isKiroCLIWireMode(account) && (isKiroCLIAPIKeyAccount(account) || strings.TrimSpace(account.GetCredential("profile_arn")) != "") {
 		region := kiroRuntimeAPIRegion(account)
 		return []kiroEndpointConfig{
 			{
@@ -2139,13 +2139,13 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 	_ = ctx
 	_ = token
 	var profileArn string
-	if endpoint.Name == "KiroRuntime" {
+	if endpoint.Name == "KiroRuntime" && !isKiroCLIAPIKeyAccount(account) {
 		profileArn = s.resolveKiroPayloadProfileArn(ctx, account, token)
 		if profileArn == "" {
 			profileArn = kiroResolveProfileArnForKRS(account)
 		}
 	}
-	if isKiroCLIWireMode(account) && profileArn == "" {
+	if isKiroCLIWireMode(account) && !isKiroCLIAPIKeyAccount(account) && profileArn == "" {
 		profileArn = kiroResolveProfileArnForKRS(account)
 	}
 	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired

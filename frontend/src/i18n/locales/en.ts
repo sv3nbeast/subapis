@@ -3317,7 +3317,7 @@ export default {
         endpointQ: 'AWS Q chain (KiroIDE → CodeWhisperer → AmazonQ)',
         endpointKRS: 'Kiro Runtime Service only',
         endpointAuto: 'Auto: AWS Q first, then KRS on fallback',
-        endpointModeHint: 'Applies only to Kiro OAuth accounts without explicit preferred_endpoint / kiro_endpoint_mode; API key accounts always use the AWS Q chain.',
+        endpointModeHint: 'Applies only to Kiro OAuth accounts without explicit preferred_endpoint / kiro_endpoint_mode; ksk_ API key accounts always use the regional Kiro CLI Runtime.',
         autoSticky: 'Enable automatic sticky sessions',
         stickyTTL: 'Sticky TTL (seconds)',
         stickyTTLHint: '60 to 86400. Default is 3600 seconds.',
@@ -4953,6 +4953,9 @@ export default {
         apiRegionLabel: 'Kiro API Region',
         apiRegionHint:
           'Used for model requests, profile discovery, and usage queries. It may differ from the IDC region. When empty, the region is inferred from the profile or IDC region.',
+        generationApiKeyLabel: 'Kiro CLI Generation Key',
+        generationApiKeyCreateHint: 'Optional. When an account ksk_ key is set, model requests use Kiro CLI Runtime while OAuth remains available for refresh and usage queries.',
+        generationApiKeyEditHint: 'Leave empty to keep the current key. A new ksk_ key routes model requests through Kiro CLI Runtime.',
         relayBaseUrlHint:
           'External Anthropic-compatible upstream URL (e.g. https://your-relay.example.com); requests go to {base_url}/v1/messages',
         relayApiKeyHint: 'API Key for the external relay.',

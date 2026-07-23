@@ -952,12 +952,14 @@ describe('EditAccountModal', () => {
 
     const wrapper = mountModal(account)
     await wrapper.get('[data-testid="kiro-credit-unit-price-usd"]').setValue('0.082')
+    await wrapper.get('[data-testid="kiro-api-region-input"]').setValue('eu-central-1')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     const payload = updateAccountMock.mock.calls[0]?.[1]
     expect(payload.credentials).not.toHaveProperty('base_url')
     expect(payload.credentials?.api_key).toBe('kiro-test-key')
+    expect(payload.credentials?.api_region).toBe('eu-central-1')
     expect(payload.extra?.kiro_credit_unit_price_usd).toBe(0.082)
     expect(payload.extra).not.toHaveProperty('anthropic_passthrough')
   })
@@ -978,12 +980,14 @@ describe('EditAccountModal', () => {
 
     await authRegion.setValue('  us-east-2  ')
     await apiRegion.setValue('  eu-central-1  ')
+    await wrapper.get('[data-testid="kiro-generation-api-key-input"]').setValue('  ksk_generation_key  ')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
     expect(credentials?.region).toBe('us-east-2')
     expect(credentials?.api_region).toBe('eu-central-1')
+    expect(credentials?.kiro_api_key).toBe('ksk_generation_key')
     expect(credentials?.auth_method).toBe('idc')
     expect(credentials?.provider).toBe('Enterprise')
   })

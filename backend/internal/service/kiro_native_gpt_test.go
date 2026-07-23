@@ -52,6 +52,18 @@ func assertKiroNativeGPTUpstreamRequest(t *testing.T, upstream *httpUpstreamReco
 	require.Equal(t, kiroNativeGPTTestModel, gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
 }
 
+func assertKiroCLINativeGPTUpstreamRequest(t *testing.T, upstream *httpUpstreamRecorder) {
+	t.Helper()
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://runtime.eu-central-1.kiro.dev/", upstream.lastReq.URL.String())
+	require.Equal(t, []string{"API_KEY"}, upstream.lastReq.Header["TokenType"])
+	require.Equal(t, kiroAWSJSONContentType, upstream.lastReq.Header.Get("Content-Type"))
+	require.Equal(t, kiroGenerateAssistantResponseTarget, upstream.lastReq.Header.Get("X-Amz-Target"))
+	require.Equal(t, "KIRO_CLI", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.origin").String())
+	require.Equal(t, kiroNativeGPTTestModel, gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "profileArn").Exists())
+}
+
 func TestForwardAsChatCompletionsKiroUsesNativeGPTModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello chat"}],"stream":false}`)
@@ -84,7 +96,8 @@ func TestForwardAsChatCompletionsKiroDirectAPIKeyUsesNativeRuntime(t *testing.T)
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "native api key chat ok")
 	account.Type = AccountTypeAPIKey
 	delete(account.Credentials, "access_token")
-	account.Credentials["kiro_api_key"] = "kiro-api-key"
+	account.Credentials["kiro_api_key"] = "ksk_generation_key"
+	account.Credentials["api_region"] = "eu-central-1"
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
 		Body:  NewRequestBodyRef(body),
@@ -93,8 +106,7 @@ func TestForwardAsChatCompletionsKiroDirectAPIKeyUsesNativeRuntime(t *testing.T)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assertKiroNativeGPTUpstreamRequest(t, upstream)
-	require.Equal(t, []string{"API_KEY"}, upstream.lastReq.Header["TokenType"])
+	assertKiroCLINativeGPTUpstreamRequest(t, upstream)
 	require.Equal(t, "native api key chat ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
 }
 
@@ -281,7 +293,8 @@ func TestForwardAsResponsesKiroDirectAPIKeyUsesNativeRuntime(t *testing.T) {
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "native api key responses ok")
 	account.Type = AccountTypeAPIKey
 	delete(account.Credentials, "access_token")
-	account.Credentials["api_key"] = "kiro-api-key"
+	account.Credentials["api_key"] = "ksk_generation_key"
+	account.Credentials["api_region"] = "eu-central-1"
 
 	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
 		Body:  NewRequestBodyRef(body),
@@ -290,8 +303,7 @@ func TestForwardAsResponsesKiroDirectAPIKeyUsesNativeRuntime(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assertKiroNativeGPTUpstreamRequest(t, upstream)
-	require.Equal(t, []string{"API_KEY"}, upstream.lastReq.Header["TokenType"])
+	assertKiroCLINativeGPTUpstreamRequest(t, upstream)
 	require.Equal(t, "native api key responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 }
 

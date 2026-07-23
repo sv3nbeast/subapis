@@ -215,6 +215,22 @@ func BuildRuntimeAmzUserAgent(accountKey, machineID string) string {
 	)
 }
 
+func BuildKiroCLIUserAgent(accountKey, machineID string) string {
+	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
+	return fmt.Sprintf(
+		"aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.16551 os/%s lang/rust/1.92.0 md/appVersion-2.6.0 app/AmazonQ-For-CLI",
+		fp.OSType,
+	)
+}
+
+func BuildKiroCLIAmzUserAgent(accountKey, machineID string) string {
+	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
+	return fmt.Sprintf(
+		"aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.16551 os/%s lang/rust/1.92.0 m/F app/AmazonQ-For-CLI",
+		fp.OSType,
+	)
+}
+
 func BuildRestUserAgent(accountKey, machineID string) string {
 	fp := globalRuntimeFingerprints().Get(accountKey, machineID)
 	return fmt.Sprintf(

@@ -38,6 +38,17 @@ func TestBuildRuntimeUserAgentStable(t *testing.T) {
 	require.Contains(t, amzUA, machineID)
 }
 
+func TestBuildKiroCLIUserAgents(t *testing.T) {
+	ua := BuildKiroCLIUserAgent("account-key", "machine-id")
+	amzUA := BuildKiroCLIAmzUserAgent("account-key", "machine-id")
+
+	require.Contains(t, ua, "aws-sdk-rust/1.3.15")
+	require.Contains(t, ua, "api/codewhispererstreaming/0.1.16551")
+	require.Contains(t, ua, "app/AmazonQ-For-CLI")
+	require.Contains(t, amzUA, "aws-sdk-rust/1.3.15")
+	require.Contains(t, amzUA, "app/AmazonQ-For-CLI")
+}
+
 func TestBuildKiroPayloadBasic(t *testing.T) {
 	SetCachedWebSearchDescription("")
 	body := []byte(`{

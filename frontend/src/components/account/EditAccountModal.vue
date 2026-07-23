@@ -52,7 +52,7 @@
                 : account.platform === 'gemini'
                   ? 'AIza...'
                   : account.platform === 'kiro'
-                    ? 'sk-...'
+                    ? 'ksk_...'
                     : account.platform === 'droid'
                       ? 'factory_...'
                       : account.platform === 'antigravity'
@@ -514,7 +514,7 @@
         </div>
       </div>
 
-      <div v-if="isKiroOAuthAccount" class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="isKiroDirectAccount" class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600">
         <div v-if="showKiroAuthRegion">
           <label class="input-label">{{ t('admin.accounts.kiro.authRegionLabel') }}</label>
           <input
@@ -539,6 +539,19 @@
             data-testid="kiro-api-region-input"
           />
           <p class="input-hint">{{ t('admin.accounts.kiro.apiRegionHint') }}</p>
+        </div>
+
+        <div v-if="isKiroOAuthAccount">
+          <label class="input-label">{{ t('admin.accounts.kiro.generationApiKeyLabel') }}</label>
+          <input
+            v-model="editKiroGenerationAPIKey"
+            type="password"
+            class="input font-mono"
+            placeholder="ksk_..."
+            autocomplete="off"
+            data-testid="kiro-generation-api-key-input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.generationApiKeyEditHint') }}</p>
         </div>
       </div>
 
@@ -2711,6 +2724,7 @@ const kiroCacheEmulationEnabled = ref(false)
 const kiroCacheEmulationRatio = ref(1)
 const editKiroAuthRegion = ref('')
 const editKiroAPIRegion = ref('')
+const editKiroGenerationAPIKey = ref('')
 const showKiroAuthRegion = computed(() => {
   if (!isKiroOAuthAccount.value) return false
   const credentials = props.account?.credentials as Record<string, unknown> | undefined
@@ -3247,8 +3261,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
   const isKiroOAuth = newAccount.platform === 'kiro' && newAccount.type === 'oauth'
   editKiroAuthRegion.value = isKiroOAuth && typeof credentials?.region === 'string' ? credentials.region.trim() : ''
+  const isKiroDirect =
+    newAccount.platform === 'kiro' &&
+    (newAccount.type === 'oauth' || (newAccount.type === 'apikey' && !credentials?.base_url))
   editKiroAPIRegion.value =
-    isKiroOAuth && typeof credentials?.api_region === 'string' ? credentials.api_region.trim() : ''
+    isKiroDirect && typeof credentials?.api_region === 'string' ? credentials.api_region.trim() : ''
+  editKiroGenerationAPIKey.value = ''
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
   editVertexClientEmail.value = ''
@@ -4237,6 +4255,14 @@ const handleSubmit = async () => {
           delete newCredentials.compact_model_mapping
         }
       }
+      if (props.account.platform === 'kiro' && !newBaseUrl) {
+        const apiRegion = editKiroAPIRegion.value.trim()
+        if (apiRegion) {
+          newCredentials.api_region = apiRegion
+        } else {
+          delete newCredentials.api_region
+        }
+      }
 
       // Add pool mode if enabled
       if (poolModeEnabled.value) {
@@ -4426,6 +4452,11 @@ const handleSubmit = async () => {
         newCredentials.api_region = apiRegion
       } else {
         delete newCredentials.api_region
+      }
+
+      const generationAPIKey = editKiroGenerationAPIKey.value.trim()
+      if (generationAPIKey) {
+        newCredentials.kiro_api_key = generationAPIKey
       }
 
       const modelMapping = buildModelMappingObject('mapping', [], modelMappings.value)

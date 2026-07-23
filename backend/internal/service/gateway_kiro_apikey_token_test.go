@@ -48,3 +48,21 @@ func TestGatewayServiceGetAccessTokenReadsKiroAPIKeyAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayServiceGetAccessTokenPrefersKiroCLIKeyOnOAuthAccount(t *testing.T) {
+	svc := &GatewayService{}
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "oauth-access-token",
+			"kiro_api_key": "ksk_generation_key",
+		},
+	}
+
+	token, tokenType, err := svc.GetAccessToken(context.Background(), account)
+
+	require.NoError(t, err)
+	require.Equal(t, "ksk_generation_key", token)
+	require.Equal(t, "apikey", tokenType)
+}

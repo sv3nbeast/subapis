@@ -57,6 +57,43 @@ func TestAccountTestService_KiroUsesKiroUpstreamInsteadOfAnthropic(t *testing.T)
 	require.NotContains(t, req.URL.Host, "api.anthropic.com")
 }
 
+func TestAccountTestService_KiroOAuthUsesAttachedCLIKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	account := &Account{
+		ID:          7,
+		Name:        "kiro-cli-key",
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "oauth-access-token",
+			"kiro_api_key": "ksk_generation_key",
+			"api_region":   "eu-central-1",
+		},
+	}
+	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusUnauthorized, `{"message":"invalid key"}`),
+	}}
+	svc := &AccountTestService{
+		accountRepo:         repo,
+		kiroTokenProvider:   NewKiroTokenProvider(nil, nil, nil),
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-5", "", AccountTestModeDefault)
+	require.Error(t, err)
+	require.Len(t, upstream.requests, 1)
+	req := upstream.requests[0]
+	require.Equal(t, "https://runtime.eu-central-1.kiro.dev/", req.URL.String())
+	require.Equal(t, "Bearer ksk_generation_key", req.Header.Get("Authorization"))
+	require.Equal(t, []string{"API_KEY"}, req.Header["TokenType"])
+	require.Equal(t, kiroAWSJSONContentType, req.Header.Get("Content-Type"))
+}
+
 func TestAccountTestService_Kiro429FallsBackToRegionalAmazonQEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()

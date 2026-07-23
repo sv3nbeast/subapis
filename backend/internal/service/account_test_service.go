@@ -426,11 +426,10 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 	}
 
 	var accessToken string
-	if account.Type == AccountTypeAPIKey {
-		accessToken = account.KiroAPIKey()
-		if accessToken == "" {
-			return s.sendErrorAndEnd(c, "No API key available")
-		}
+	if apiKey := account.KiroAPIKey(); apiKey != "" {
+		accessToken = apiKey
+	} else if account.Type == AccountTypeAPIKey {
+		return s.sendErrorAndEnd(c, "No API key available")
 	} else {
 		if s.kiroTokenProvider == nil {
 			return s.sendErrorAndEnd(c, "Kiro token provider not configured")

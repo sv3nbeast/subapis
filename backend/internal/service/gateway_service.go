@@ -5359,15 +5359,17 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 
 // GetAccessToken 获取账号凭证
 func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
+	if account != nil && account.Platform == PlatformKiro {
+		if apiKey := account.KiroAPIKey(); apiKey != "" {
+			return apiKey, "apikey", nil
+		}
+	}
 	switch account.Type {
 	case AccountTypeOAuth, AccountTypeSetupToken:
 		// Both oauth and setup-token use OAuth token flow
 		return s.getOAuthToken(ctx, account)
 	case AccountTypeAPIKey:
 		apiKey := account.GetCredential("api_key")
-		if account.Platform == PlatformKiro {
-			apiKey = account.KiroAPIKey()
-		}
 		if apiKey == "" {
 			return "", "", errors.New("api_key not found in credentials")
 		}

@@ -725,6 +725,36 @@
 
       <div
         v-if="form.platform === 'kiro' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.apiRegionLabel') }}</label>
+          <input
+            v-model="kiroAPIRegion"
+            type="text"
+            class="input font-mono"
+            placeholder="us-east-1"
+            autocomplete="off"
+            data-testid="kiro-create-api-region-input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.apiRegionHint') }}</p>
+        </div>
+        <div v-if="accountCategory === 'oauth-based'">
+          <label class="input-label">{{ t('admin.accounts.kiro.generationApiKeyLabel') }}</label>
+          <input
+            v-model="kiroGenerationAPIKey"
+            type="password"
+            class="input font-mono"
+            placeholder="ksk_..."
+            autocomplete="off"
+            data-testid="kiro-create-generation-api-key-input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.generationApiKeyCreateHint') }}</p>
+        </div>
+      </div>
+
+      <div
+        v-if="form.platform === 'kiro' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
         class="space-y-2"
       >
         <label class="input-label">{{ t('admin.accounts.kiroCreditUnitPriceUsd') }}</label>
@@ -745,7 +775,7 @@
       <div v-if="form.platform === 'kiro' && accountCategory === 'apikey'" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
-          <input v-model="apiKeyValue" type="password" required class="input font-mono" placeholder="sk-..." />
+          <input v-model="apiKeyValue" type="password" required class="input font-mono" placeholder="ksk_..." />
           <p class="input-hint">{{ apiKeyHint }}</p>
         </div>
       </div>
@@ -4149,6 +4179,8 @@ const kiroAccountType = ref<'oauth' | 'idc' | 'external_idp' | 'import'>('oauth'
 const kiroOAuthProvider = ref<'google' | 'github'>('google')
 const kiroIDCStartUrl = ref('https://view.awsapps.com/start')
 const kiroIDCRegion = ref('us-east-1')
+const kiroAPIRegion = ref('')
+const kiroGenerationAPIKey = ref('')
 const kiroTokenJson = ref('')
 const kiroDeviceRegistrationJson = ref('')
 const kiroModelMappings = ref<ModelMapping[]>([])
@@ -4815,6 +4847,8 @@ watch(
       kiroOAuthProvider.value = 'google'
       kiroIDCStartUrl.value = 'https://view.awsapps.com/start'
       kiroIDCRegion.value = 'us-east-1'
+      kiroAPIRegion.value = ''
+      kiroGenerationAPIKey.value = ''
       kiroTokenJson.value = ''
       kiroDeviceRegistrationJson.value = ''
       kiroCacheEmulationEnabled.value = false
@@ -5321,6 +5355,8 @@ const resetForm = () => {
   kiroOAuthProvider.value = 'google'
   kiroIDCStartUrl.value = 'https://view.awsapps.com/start'
   kiroIDCRegion.value = 'us-east-1'
+  kiroAPIRegion.value = ''
+  kiroGenerationAPIKey.value = ''
   kiroTokenJson.value = ''
   kiroDeviceRegistrationJson.value = ''
   kiroCacheEmulationEnabled.value = false
@@ -5678,7 +5714,8 @@ const handleSubmit = async () => {
     }
 
     const credentials: Record<string, unknown> = {
-      api_key: apiKeyValue.value.trim()
+      api_key: apiKeyValue.value.trim(),
+      api_region: kiroAPIRegion.value.trim() || 'us-east-1'
     }
 
     const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)
@@ -6635,6 +6672,14 @@ const handleGrokExchange = async (authCode: string) => {
 
 const buildKiroCredentials = (tokenInfo: Parameters<typeof kiroOAuth.buildCredentials>[0]) => {
   const credentials = kiroOAuth.buildCredentials(tokenInfo)
+  const apiRegion = kiroAPIRegion.value.trim()
+  if (apiRegion) {
+    credentials.api_region = apiRegion
+  }
+  const generationAPIKey = kiroGenerationAPIKey.value.trim()
+  if (generationAPIKey) {
+    credentials.kiro_api_key = generationAPIKey
+  }
   const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)
   if (modelMapping) {
     credentials.model_mapping = modelMapping

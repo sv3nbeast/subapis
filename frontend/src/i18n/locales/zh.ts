@@ -3311,7 +3311,7 @@ export default {
         endpointQ: 'AWS Q 链路（KiroIDE → CodeWhisperer → AmazonQ）',
         endpointKRS: '仅 Kiro Runtime Service',
         endpointAuto: '自动：先 AWS Q，失败后再 KRS',
-        endpointModeHint: '仅对未显式配置 preferred_endpoint / kiro_endpoint_mode 的 Kiro OAuth 账号生效；API Key 账号固定走 AWS Q 链路。',
+        endpointModeHint: '仅对未显式配置 preferred_endpoint / kiro_endpoint_mode 的 Kiro OAuth 账号生效；ksk_ API Key 账号固定走对应区域的 Kiro CLI Runtime。',
         autoSticky: '启用自动粘性会话',
         stickyTTL: '粘性 TTL（秒）',
         stickyTTLHint: '范围 60 到 86400。默认 3600 秒。',
@@ -5003,6 +5003,9 @@ export default {
         authRegionHint: '仅用于 IDC/OAuth 认证和 Token 刷新，不会限定 Kiro API 所在区域。',
         apiRegionLabel: 'Kiro API 区域',
         apiRegionHint: '用于模型调用、Profile 和用量查询，可与 IDC 区域不同。留空时将从 Profile 或 IDC 区域推断。',
+        generationApiKeyLabel: 'Kiro CLI 生成 Key',
+        generationApiKeyCreateHint: '可选。填写账号自身的 ksk_ Key 后，模型调用走 Kiro CLI Runtime；OAuth 凭证仍用于刷新和用量查询。',
+        generationApiKeyEditHint: '留空保留现有 Key。填写新的 ksk_ Key 后，模型调用走 Kiro CLI Runtime。',
         relayBaseUrlHint:
           '外部 Anthropic 兼容上游地址（如 https://your-relay.example.com），将请求 {base_url}/v1/messages',
         relayApiKeyHint: '外部中转服务使用的 API Key。',

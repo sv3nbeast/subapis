@@ -258,11 +258,17 @@ func (a *Account) KiroAuthMethod() string {
 }
 
 // KiroAPIKey accepts the persisted canonical key plus historical import aliases.
+// OAuth accounts may also carry a Kiro CLI key for generation while retaining
+// their OAuth credentials for refresh and usage queries.
 func (a *Account) KiroAPIKey() string {
-	if !a.IsKiro() || a.Type != AccountTypeAPIKey {
+	if !a.IsKiro() {
 		return ""
 	}
-	for _, key := range []string{"kiro_api_key", "kiroApiKey", "api_key"} {
+	keys := []string{"kiro_api_key", "kiroApiKey"}
+	if a.Type == AccountTypeAPIKey {
+		keys = append(keys, "api_key")
+	}
+	for _, key := range keys {
 		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
 			return value
 		}

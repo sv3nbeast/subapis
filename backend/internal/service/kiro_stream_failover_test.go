@@ -1291,6 +1291,7 @@ func TestOpenKiroAnthropicStreamResponseAllowsDirectAPIKey(t *testing.T) {
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"kiroApiKey": "ksk_test_key",
+			"api_region": "eu-central-1",
 		},
 	}
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
@@ -1301,8 +1302,15 @@ func TestOpenKiroAnthropicStreamResponseAllowsDirectAPIKey(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://runtime.eu-central-1.kiro.dev/", upstream.requests[0].URL.String())
 	require.Equal(t, "Bearer ksk_test_key", upstream.requests[0].Header.Get("Authorization"))
 	require.Equal(t, []string{"API_KEY"}, upstream.requests[0].Header["TokenType"])
+	require.Equal(t, kiroAWSJSONContentType, upstream.requests[0].Header.Get("Content-Type"))
+	require.Equal(t, kiroGenerateAssistantResponseTarget, upstream.requests[0].Header.Get("X-Amz-Target"))
+	requestBody, bodyErr := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, bodyErr)
+	require.Contains(t, string(requestBody), `"origin":"KIRO_CLI"`)
+	require.NotContains(t, string(requestBody), `"profileArn"`)
 	streamBytes, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
 	require.Contains(t, string(streamBytes), "hello from kiro api key")
