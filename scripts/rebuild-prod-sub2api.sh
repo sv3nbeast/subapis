@@ -18,6 +18,10 @@ Environment variables:
   VITE_UI_V2_ROLLOUT_MODE         UI rollout: off, preview, percentage, or full.
                                    Default: preview
   VITE_UI_V2_ROLLOUT_PERCENT      Stable cohort percentage for percentage mode. Default: 0
+  VITE_PUBLIC_UI_V2_ROLLOUT_MODE  Public UI rollout: off, preview, percentage, or full.
+                                   Default: preview
+  VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT
+                                   Stable public UI cohort percentage. Default: 0
   GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
                                    true/false. When unset, preserve the current
                                    sub2api container value; default false.
@@ -55,6 +59,8 @@ ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
 UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
@@ -84,6 +90,19 @@ esac
 
 if ! [[ "${UI_V2_ROLLOUT_PERCENT}" =~ ^[0-9]+$ ]] || (( UI_V2_ROLLOUT_PERCENT > 100 )); then
   echo "VITE_UI_V2_ROLLOUT_PERCENT must be an integer from 0 to 100." >&2
+  exit 1
+fi
+
+case "${PUBLIC_UI_V2_ROLLOUT_MODE}" in
+  off|preview|percentage|full) ;;
+  *)
+    echo "VITE_PUBLIC_UI_V2_ROLLOUT_MODE must be one of: off, preview, percentage, full." >&2
+    exit 1
+    ;;
+esac
+
+if ! [[ "${PUBLIC_UI_V2_ROLLOUT_PERCENT}" =~ ^[0-9]+$ ]] || (( PUBLIC_UI_V2_ROLLOUT_PERCENT > 100 )); then
+  echo "VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT must be an integer from 0 to 100." >&2
   exit 1
 fi
 
@@ -173,6 +192,8 @@ if [[ "${SKIP_BUILD}" != "1" ]]; then
   docker build \
     --build-arg "VITE_UI_V2_ROLLOUT_MODE=${UI_V2_ROLLOUT_MODE}" \
     --build-arg "VITE_UI_V2_ROLLOUT_PERCENT=${UI_V2_ROLLOUT_PERCENT}" \
+    --build-arg "VITE_PUBLIC_UI_V2_ROLLOUT_MODE=${PUBLIC_UI_V2_ROLLOUT_MODE}" \
+    --build-arg "VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT=${PUBLIC_UI_V2_ROLLOUT_PERCENT}" \
     -t "${IMAGE_REF}" \
     "${REPO_ROOT}"
 fi

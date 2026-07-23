@@ -20,6 +20,11 @@ Options:
   --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.23.2
   --ui-v2-rollout-mode MODE      UI rollout: off, preview, percentage, or full. Default: preview
   --ui-v2-rollout-percent N      Stable cohort percentage for percentage mode. Default: 0
+  --public-ui-v2-rollout-mode MODE
+                                  Public UI rollout: off, preview, percentage, or full.
+                                  Default: preview
+  --public-ui-v2-rollout-percent N
+                                  Stable public UI cohort percentage. Default: 0
   --kiro-resilience-mode MODE    Kiro resilience mode: off, observe, or enforce.
                                   When omitted, preserve the running container value
   --kiro-resilience-group-ids IDS
@@ -35,6 +40,7 @@ Examples:
   scripts/deploy-prod.sh --tag prod-manual-001
   scripts/deploy-prod.sh --host your-prod-host --skip-sync --tag prod-hotfix-001
   scripts/deploy-prod.sh --host your-prod-host --ui-v2-rollout-mode percentage --ui-v2-rollout-percent 5
+  scripts/deploy-prod.sh --host your-prod-host --public-ui-v2-rollout-mode full
 EOF
 }
 
@@ -55,6 +61,8 @@ IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
@@ -95,6 +103,14 @@ while (($# > 0)); do
       ;;
     --ui-v2-rollout-percent)
       UI_V2_ROLLOUT_PERCENT="$2"
+      shift 2
+      ;;
+    --public-ui-v2-rollout-mode)
+      PUBLIC_UI_V2_ROLLOUT_MODE="$2"
+      shift 2
+      ;;
+    --public-ui-v2-rollout-percent)
+      PUBLIC_UI_V2_ROLLOUT_PERCENT="$2"
       shift 2
       ;;
     --kiro-resilience-mode)
@@ -156,6 +172,19 @@ esac
 
 if ! [[ "${UI_V2_ROLLOUT_PERCENT}" =~ ^[0-9]+$ ]] || (( UI_V2_ROLLOUT_PERCENT > 100 )); then
   echo "UI rollout percent must be an integer from 0 to 100." >&2
+  exit 1
+fi
+
+case "${PUBLIC_UI_V2_ROLLOUT_MODE}" in
+  off|preview|percentage|full) ;;
+  *)
+    echo "Invalid public UI rollout mode: ${PUBLIC_UI_V2_ROLLOUT_MODE}" >&2
+    exit 1
+    ;;
+esac
+
+if ! [[ "${PUBLIC_UI_V2_ROLLOUT_PERCENT}" =~ ^[0-9]+$ ]] || (( PUBLIC_UI_V2_ROLLOUT_PERCENT > 100 )); then
+  echo "Public UI rollout percent must be an integer from 0 to 100." >&2
   exit 1
 fi
 
@@ -245,6 +274,7 @@ echo "Remote deploy dir:  ${REMOTE_DEPLOY_DIR}"
 echo "Image ref:          ${IMAGE_REF}"
 echo "Antigravity ver:    ${ANTIGRAVITY_VERSION}"
 echo "UI v2 rollout:      ${UI_V2_ROLLOUT_MODE} (${UI_V2_ROLLOUT_PERCENT}%)"
+echo "Public UI v2:       ${PUBLIC_UI_V2_ROLLOUT_MODE} (${PUBLIC_UI_V2_ROLLOUT_PERCENT}%)"
 echo "OpenAI Kiro bridge: ${OPENAI_KIRO_BRIDGE_ENABLED:-preserve-current}"
 echo "Kiro resilience:    ${KIRO_RESILIENCE_MODE:-preserve-current}"
 echo "Kiro rollout groups: ${KIRO_RESILIENCE_GROUP_IDS:-preserve-current}"
@@ -284,6 +314,8 @@ ssh "${REMOTE_HOST}" \
     ANTIGRAVITY_USER_AGENT_VERSION="${ANTIGRAVITY_VERSION}" \
     VITE_UI_V2_ROLLOUT_MODE="${UI_V2_ROLLOUT_MODE}" \
     VITE_UI_V2_ROLLOUT_PERCENT="${UI_V2_ROLLOUT_PERCENT}" \
+    VITE_PUBLIC_UI_V2_ROLLOUT_MODE="${PUBLIC_UI_V2_ROLLOUT_MODE}" \
+    VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT="${PUBLIC_UI_V2_ROLLOUT_PERCENT}" \
     GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED}" \
     GATEWAY_KIRO_RESILIENCE_MODE="${KIRO_RESILIENCE_MODE}" \
     GATEWAY_KIRO_RESILIENCE_GROUP_IDS="${KIRO_RESILIENCE_GROUP_IDS}" \
