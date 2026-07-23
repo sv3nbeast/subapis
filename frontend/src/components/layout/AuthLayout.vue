@@ -9,10 +9,7 @@
         <section class="auth-v2-form-pane">
           <div class="auth-v2-workspace">
             <header class="auth-v2-topbar">
-              <RouterLink to="/home" class="auth-v2-brand">
-                <span><img :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" /></span>
-                <strong>{{ siteName }}</strong>
-              </RouterLink>
+              <PublicBrand :site-logo="siteLogo" :site-name="siteName" />
               <div class="auth-v2-controls">
                 <LocaleSwitcher />
                 <button
@@ -101,11 +98,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink } from 'vue-router'
 import { useAppStore } from '@/stores'
 import { sanitizeUrl } from '@/utils/url'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import PublicLayout from '@/components/public/PublicLayout.vue'
+import PublicBrand from '@/components/public/PublicBrand.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
@@ -181,7 +178,6 @@ onMounted(() => {
 }
 
 .auth-v2-topbar,
-.auth-v2-brand,
 .auth-v2-controls {
   display: flex;
   align-items: center;
@@ -190,36 +186,6 @@ onMounted(() => {
 .auth-v2-topbar {
   justify-content: space-between;
   gap: 20px;
-}
-
-.auth-v2-brand {
-  min-width: 0;
-  gap: 10px;
-  color: var(--ui2-text);
-}
-
-.auth-v2-brand > span {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  overflow: hidden;
-  background: var(--ui2-surface-muted);
-  border: 1px solid var(--ui2-line);
-  border-radius: 8px;
-}
-
-.auth-v2-brand img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.auth-v2-brand strong {
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .auth-v2-controls {

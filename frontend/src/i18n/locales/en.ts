@@ -51,6 +51,9 @@ export default {
         proof: 'Service overview',
         interfaces: 'Compatible APIs',
         monitors: 'Public monitors',
+        catalog: 'Public catalog',
+        unified: 'Unified access',
+        synced: 'Live sync',
         routingLabel: 'Live routing control',
         live: 'Live',
         routingTitle: 'Choose a better path for every request',
@@ -240,7 +243,7 @@ export default {
       title: 'Track channel health and service quality at a glance',
       description:
         'Review core channel availability, latency trends, and failure states so integration and production risk stay visible.',
-      button: 'View service status',
+      button: 'View model status',
       guideLink: 'Read integration guide'
     },
     // CTA section

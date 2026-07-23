@@ -1,12 +1,12 @@
 <template>
   <header class="public-header">
     <nav class="public-header__bar" :aria-label="t('nav.mainNavigation')">
-      <RouterLink class="public-header__brand" to="/home" @click="closeMenu">
-        <span class="public-header__logo">
-          <img :src="siteLogo" :alt="t('common.logoAlt')" />
-        </span>
-        <span class="public-header__site-name">{{ siteName }}</span>
-      </RouterLink>
+      <PublicBrand
+        :site-logo="siteLogo"
+        :site-name="siteName"
+        collapse-on-mobile
+        @click="closeMenu"
+      />
 
       <div class="public-header__desktop-nav">
         <RouterLink
@@ -14,6 +14,7 @@
           :key="item.to"
           :to="item.to"
           class="public-header__nav-link"
+          :class="{ 'public-header__nav-link--wide': item.wideOnly }"
         >
           {{ item.label }}
         </RouterLink>
@@ -21,6 +22,19 @@
 
       <div class="public-header__actions">
         <slot name="actions" />
+        <button
+          type="button"
+          class="public-header__icon-button public-header__announcement"
+          :class="{ 'is-active': announcementBadgeCount > 0 }"
+          :title="t('home.announcements.modalTitle')"
+          :aria-label="t('home.announcements.modalTitle')"
+          @click="openAnnouncementDialog"
+        >
+          <Icon name="bell" size="md" />
+          <span v-if="announcementBadgeCount > 0" class="public-header__badge">
+            {{ announcementBadgeCount > 9 ? '9+' : announcementBadgeCount }}
+          </span>
+        </button>
         <LocaleSwitcher />
         <button
           type="button"
@@ -34,13 +48,14 @@
 
         <RouterLink
           v-if="authStore.isAuthenticated"
-          class="public-header__primary-action public-header__desktop-action"
+          class="public-header__dashboard public-header__desktop-action"
           :to="dashboardPath"
         >
+          <span>{{ userInitial }}</span>
           {{ t('home.dashboard') }}
-          <Icon name="arrowRight" size="sm" />
+          <Icon name="externalLink" size="xs" />
         </RouterLink>
-        <template v-else>
+        <div v-else class="public-header__auth-actions public-header__desktop-action">
           <RouterLink class="public-header__login public-header__desktop-action" to="/login">
             {{ t('home.login') }}
           </RouterLink>
@@ -51,7 +66,7 @@
           >
             {{ t('auth.signUp') }}
           </RouterLink>
-        </template>
+        </div>
 
         <button
           type="button"
@@ -69,7 +84,7 @@
     <Transition name="public-menu">
       <div v-if="menuOpen" id="public-mobile-menu" class="public-header__mobile-menu">
         <RouterLink
-          v-for="item in visibleNavigation"
+          v-for="item in mobileNavigation"
           :key="item.to"
           :to="item.to"
           class="public-header__mobile-link"
@@ -106,6 +121,17 @@
         </div>
       </div>
     </Transition>
+
+    <PublicAnnouncementDialog
+      :open="announcementDialogOpen"
+      :loading="announcementsLoading"
+      :items="activeAnnouncements"
+      :tab="announcementTab"
+      :is-authenticated="authStore.isAuthenticated"
+      @close="closeAnnouncementDialog"
+      @close-today="closeAnnouncementToday"
+      @update:tab="announcementTab = $event"
+    />
   </header>
 </template>
 
@@ -113,9 +139,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRoute } from 'vue-router'
+import { announcementsAPI } from '@/api'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { useAppStore, useAuthStore } from '@/stores'
+import PublicAnnouncementDialog from '@/components/public/PublicAnnouncementDialog.vue'
+import PublicBrand from '@/components/public/PublicBrand.vue'
+import { useAnnouncementStore, useAppStore, useAuthStore } from '@/stores'
+import type { UserAnnouncement } from '@/types'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import { normalizeSiteName } from '@/utils/siteBrand'
 import { sanitizeUrl } from '@/utils/url'
@@ -127,14 +157,21 @@ interface PublicNavigationItem {
   label: string
   icon: IconName
   enabled?: boolean
+  wideOnly?: boolean
 }
 
 const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const announcementStore = useAnnouncementStore()
 const menuOpen = ref(false)
 const isDark = ref(document.documentElement.classList.contains('dark'))
+const announcementDialogOpen = ref(false)
+const announcementTab = ref<'notifications' | 'system'>('system')
+const publicAnnouncements = ref<UserAnnouncement[]>([])
+const publicAnnouncementsLoading = ref(false)
+const publicAnnouncementsLoaded = ref(false)
 
 const siteName = computed(() => normalizeSiteName(appStore.siteName))
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '/logo.png', {
@@ -143,6 +180,7 @@ const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '/logo.png', {
 }) || '/logo.png')
 const registrationEnabled = computed(() => appStore.cachedPublicSettings?.registration_enabled !== false)
 const dashboardPath = computed(() => authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+const userInitial = computed(() => authStore.user?.email?.charAt(0).toUpperCase() || 'A')
 const visibleNavigation = computed<PublicNavigationItem[]>(() => {
   const items: PublicNavigationItem[] = [
     {
@@ -151,13 +189,37 @@ const visibleNavigation = computed<PublicNavigationItem[]>(() => {
       icon: 'cube',
       enabled: isFeatureFlagEnabled(FeatureFlags.publicModelMarket),
     },
-    { to: '/monitor', label: t('nav.modelStatus'), icon: 'chart' },
-    { to: '/status', label: t('nav.serviceStatus'), icon: 'server' },
-    { to: '/key-usage', label: t('keyUsage.title'), icon: 'key' },
-    { to: '/docs', label: t('nav.docs'), icon: 'book' },
+    { to: '/monitor', label: t('nav.modelStatus'), icon: 'chart', wideOnly: true },
+    { to: '/docs', label: t('nav.docs'), icon: 'book', wideOnly: true },
   ]
   return items.filter((item) => item.enabled !== false)
 })
+const secondaryNavigation = computed<PublicNavigationItem[]>(() => [
+  { to: '/key-usage', label: t('keyUsage.title'), icon: 'key' },
+])
+const mobileNavigation = computed(() => [...visibleNavigation.value, ...secondaryNavigation.value])
+const headerAnnouncements = computed(() => (
+  authStore.isAuthenticated ? announcementStore.announcements : publicAnnouncements.value
+).slice(0, 20))
+const notificationAnnouncements = computed(() => (
+  headerAnnouncements.value.filter((item) => item.notify_mode === 'popup')
+))
+const systemAnnouncements = computed(() => (
+  headerAnnouncements.value.filter((item) => item.notify_mode !== 'popup')
+))
+const announcementBadgeCount = computed(() => (
+  authStore.isAuthenticated
+    ? headerAnnouncements.value.filter((item) => !item.read_at).length
+    : publicAnnouncements.value.length
+))
+const announcementsLoading = computed(() => (
+  authStore.isAuthenticated ? announcementStore.loading : publicAnnouncementsLoading.value
+))
+const activeAnnouncements = computed(() => (
+  announcementTab.value === 'notifications'
+    ? notificationAnnouncements.value
+    : systemAnnouncements.value
+))
 
 function closeMenu() {
   menuOpen.value = false
@@ -167,6 +229,39 @@ function toggleTheme() {
   isDark.value = !isDark.value
   document.documentElement.classList.toggle('dark', isDark.value)
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+}
+
+async function openAnnouncementDialog() {
+  announcementDialogOpen.value = true
+  if (authStore.isAuthenticated) {
+    await announcementStore.fetchAnnouncements(true)
+    if (notificationAnnouncements.value.some((item) => !item.read_at)) {
+      announcementTab.value = 'notifications'
+    }
+    return
+  }
+
+  if (!publicAnnouncementsLoaded.value && !publicAnnouncementsLoading.value) {
+    publicAnnouncementsLoading.value = true
+    try {
+      publicAnnouncements.value = (await announcementsAPI.listPublic()).slice(0, 20)
+      if (notificationAnnouncements.value.length > 0) announcementTab.value = 'notifications'
+    } catch {
+      publicAnnouncements.value = []
+    } finally {
+      publicAnnouncementsLoaded.value = true
+      publicAnnouncementsLoading.value = false
+    }
+  }
+}
+
+function closeAnnouncementDialog() {
+  announcementDialogOpen.value = false
+}
+
+function closeAnnouncementToday() {
+  localStorage.setItem('home-announcement-closed-date', new Date().toISOString().slice(0, 10))
+  closeAnnouncementDialog()
 }
 
 function handleEscape(event: KeyboardEvent) {
@@ -184,114 +279,172 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
   top: 0;
   z-index: 40;
   width: 100%;
-  border-bottom: 1px solid var(--ui2-line, rgba(15, 23, 42, 0.09));
-  background: color-mix(in srgb, var(--ui2-page, #f5f6f8), transparent 12%);
+  border-bottom: 1px solid rgba(40, 74, 76, 0.1);
+  background: rgba(244, 249, 249, 0.84);
   backdrop-filter: blur(18px) saturate(145%);
 }
 
 .public-header__bar {
   display: flex;
-  min-height: 3.75rem;
-  max-width: 80rem;
+  min-height: 60px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 0.5rem 1.25rem;
+  padding: 0 24px;
   align-items: center;
-  gap: 1rem;
+  gap: 16px;
 }
 
-.public-header__brand,
 .public-header__actions,
 .public-header__desktop-nav,
 .public-header__primary-action,
+.public-header__dashboard,
+.public-header__auth-actions,
 .public-header__mobile-link,
 .public-header__mobile-actions {
   display: flex;
   align-items: center;
 }
 
-.public-header__brand {
-  min-width: 0;
-  color: var(--ui2-text, #111827);
-  gap: 0.625rem;
-  text-decoration: none;
-}
-
-.public-header__logo {
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 2rem;
-  overflow: hidden;
-  border: 1px solid var(--ui2-line, rgba(15, 23, 42, 0.09));
-  border-radius: 8px;
-  background: var(--ui2-surface, #fff);
-}
-
-.public-header__logo img { width: 100%; height: 100%; object-fit: contain; }
-.public-header__site-name { overflow: hidden; font-size: 0.9375rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-
-.public-header__desktop-nav { margin-left: auto; gap: 0.125rem; }
+.public-header__desktop-nav { margin-left: auto; gap: 12px; }
 .public-header__nav-link,
 .public-header__login {
-  border-radius: 7px;
-  color: var(--ui2-text-secondary, #4b5563);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 2.25rem;
-  padding: 0 0.75rem;
+  min-height: 36px;
+  border-radius: 999px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 36px;
+  padding: 0 13px;
   text-decoration: none;
+  transition: background-color 180ms ease-out, box-shadow 180ms ease-out, color 180ms ease-out, transform 100ms ease-out;
 }
 
 .public-header__nav-link:hover,
 .public-header__nav-link.router-link-active,
-.public-header__login:hover { background: var(--ui2-surface-hover, rgba(15, 23, 42, 0.055)); color: var(--ui2-text, #111827); }
+.public-header__login:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+  transform: translateY(-1px);
+}
 
-.public-header__actions { gap: 0.25rem; }
+.public-header__actions { gap: 4px; }
 .public-header__icon-button {
   display: inline-grid;
   width: 2.25rem;
   height: 2.25rem;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
-  color: var(--ui2-text-secondary, #4b5563);
+  color: #475569;
   cursor: pointer;
   transition: background-color 160ms ease, color 160ms ease, transform 100ms ease-out;
 }
-.public-header__icon-button:hover { background: var(--ui2-surface-hover, rgba(15, 23, 42, 0.055)); color: var(--ui2-text, #111827); }
+.public-header__icon-button:hover,
+.public-header__icon-button.is-active {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  color: #0f766e;
+}
 .public-header__icon-button:active,
 .public-header__primary-action:active,
 .public-header__login:active { transform: scale(0.97); }
 .public-header__icon-button:focus-visible,
 .public-header__nav-link:focus-visible,
 .public-header__primary-action:focus-visible,
+.public-header__dashboard:focus-visible,
 .public-header__login:focus-visible,
 .public-header__mobile-link:focus-visible { outline: 2px solid var(--ui2-accent, #2563eb); outline-offset: 2px; }
 
+.public-header__announcement {
+  position: relative;
+}
+
+.public-header__badge {
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  padding: 0 3px;
+  background: #e5484d;
+  border: 2px solid rgba(244, 249, 249, 0.96);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.public-header__auth-actions {
+  gap: 2px;
+  padding: 4px;
+  background: rgba(241, 245, 249, 0.9);
+  border-radius: 999px;
+}
+
+.public-header__auth-actions .public-header__login {
+  min-height: 32px;
+  line-height: 32px;
+  padding-inline: 14px;
+  color: #334155;
+  font-weight: 700;
+}
+
 .public-header__primary-action {
-  min-height: 2.25rem;
+  min-height: 32px;
   justify-content: center;
   gap: 0.375rem;
-  border-radius: 7px;
-  background: var(--ui2-accent, #2563eb);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #14b8a6, #0891b2);
+  box-shadow: 0 10px 22px rgba(13, 148, 136, 0.22);
   color: #fff;
   font-size: 0.8125rem;
-  font-weight: 650;
-  padding: 0 0.875rem;
+  font-weight: 700;
+  padding: 0 14px;
   text-decoration: none;
   transition: background-color 160ms ease, transform 100ms ease-out;
 }
-.public-header__primary-action:hover { background: color-mix(in srgb, var(--ui2-accent, #2563eb), #000 9%); }
+.public-header__primary-action:hover { background: linear-gradient(135deg, #0d9f90, #087f9b); }
+
+.public-header__dashboard {
+  min-height: 32px;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  background: #111827;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 160ms ease-out, transform 100ms ease-out;
+}
+
+.public-header__dashboard > span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  background: linear-gradient(135deg, #2dd4bf, #0891b2);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.public-header__dashboard:hover { background: #1f2937; }
+.public-header__dashboard:active { transform: scale(0.97); }
 .public-header__menu-button { display: none; }
 .public-header__mobile-menu { display: none; }
 
-@media (max-width: 71rem) {
-  .public-header__desktop-nav { display: none; }
-  .public-header__actions { margin-left: auto; }
+@media (max-width: 1023px) {
+  .public-header__nav-link--wide { display: none; }
   .public-header__menu-button { display: inline-grid; }
   .public-header__mobile-menu {
     display: grid;
-    max-width: 80rem;
+    max-width: 1180px;
     margin: 0 auto;
     padding: 0.375rem 1.25rem 1rem;
     gap: 0.125rem;
@@ -312,12 +465,45 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
   .public-header__mobile-actions { gap: 0.5rem; padding: 0.75rem 0.25rem 0; }
 }
 
-@media (max-width: 40rem) {
-  .public-header__bar { padding-inline: 1rem; }
-  .public-header__site-name { max-width: 8rem; }
+@media (max-width: 760px) {
+  .public-header__desktop-nav { display: none; }
+  .public-header__actions { margin-left: auto; }
+}
+
+@media (max-width: 640px) {
+  .public-header__bar { min-height: 56px; padding-inline: 10px; gap: 8px; }
   .public-header__desktop-action { display: none; }
   .public-header__mobile-menu { padding-inline: 1rem; }
   .public-header__mobile-actions > * { flex: 1; }
+}
+
+:global(.dark) .public-header {
+  background: rgba(17, 17, 19, 0.82);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+:global(.dark) .public-header__nav-link,
+:global(.dark) .public-header__icon-button,
+:global(.dark) .public-header__login {
+  color: #b1b1b7;
+}
+
+:global(.dark) .public-header__nav-link:hover,
+:global(.dark) .public-header__nav-link.router-link-active,
+:global(.dark) .public-header__icon-button:hover,
+:global(.dark) .public-header__icon-button.is-active,
+:global(.dark) .public-header__login:hover {
+  background: #242427;
+  box-shadow: none;
+  color: #f5f5f7;
+}
+
+:global(.dark) .public-header__auth-actions {
+  background: #1d1d20;
+}
+
+:global(.dark) .public-header__badge {
+  border-color: #111113;
 }
 
 .public-menu-enter-active,

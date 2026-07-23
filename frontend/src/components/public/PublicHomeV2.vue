@@ -44,17 +44,26 @@
           </div>
 
           <dl class="home-v2-proof" :aria-label="t('home.experience.overview.proof')">
-            <div>
-              <dt>{{ t('home.hero.stats.models') }}</dt>
-              <dd>{{ modelCountLabel }}</dd>
+            <div class="home-v2-proof-item home-v2-proof-item-models">
+              <span class="home-v2-proof-icon" aria-hidden="true"><Icon name="cube" size="sm" /></span>
+              <div>
+                <dt>{{ t('home.hero.stats.models') }} <small>{{ t('home.experience.overview.catalog') }}</small></dt>
+                <dd>{{ modelCountLabel }}</dd>
+              </div>
             </div>
-            <div>
-              <dt>{{ t('home.experience.overview.interfaces') }}</dt>
-              <dd>{{ endpointPaths.length }}</dd>
+            <div class="home-v2-proof-item home-v2-proof-item-interfaces">
+              <span class="home-v2-proof-icon" aria-hidden="true"><Icon name="link" size="sm" /></span>
+              <div>
+                <dt>{{ t('home.experience.overview.interfaces') }} <small>{{ t('home.experience.overview.unified') }}</small></dt>
+                <dd>{{ endpointPaths.length }}</dd>
+              </div>
             </div>
-            <div>
-              <dt>{{ t('home.experience.overview.monitors') }}</dt>
-              <dd>{{ publicMonitorItems.length || '—' }}</dd>
+            <div class="home-v2-proof-item home-v2-proof-item-monitors">
+              <span class="home-v2-proof-icon" aria-hidden="true"><Icon name="chart" size="sm" /></span>
+              <div>
+                <dt>{{ t('home.experience.overview.monitors') }} <small>{{ t('home.experience.overview.synced') }}</small></dt>
+                <dd>{{ publicMonitorItems.length || '—' }}</dd>
+              </div>
             </div>
           </dl>
         </div>
@@ -212,10 +221,6 @@
               <Icon name="chart" size="sm" />
               {{ t('home.statusPreview.button') }}
             </RouterLink>
-            <RouterLink to="/status" class="home-v2-text-link home-v2-text-link-light">
-              {{ t('nav.serviceStatus') }}
-              <Icon name="arrowRight" size="sm" />
-            </RouterLink>
           </div>
         </header>
 
@@ -289,11 +294,6 @@
           <RouterLink to="/key-usage">
             <Icon name="key" size="md" />
             <span><strong>{{ t('keyUsage.title') }}</strong><small>{{ t('home.experience.resources.usage') }}</small></span>
-            <Icon name="chevronRight" size="sm" />
-          </RouterLink>
-          <RouterLink to="/status">
-            <Icon name="server" size="md" />
-            <span><strong>{{ t('nav.serviceStatus') }}</strong><small>{{ t('home.experience.resources.service') }}</small></span>
             <Icon name="chevronRight" size="sm" />
           </RouterLink>
         </nav>
@@ -721,44 +721,84 @@ onBeforeUnmount(() => {
   border-color: var(--v2-line-strong);
 }
 
-.home-v2-proof {
+.home-v2 .home-v2-proof {
   display: grid;
   max-width: 620px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 0;
-  margin-top: 22px;
-  border-top: 1px solid var(--v2-line);
+  margin-top: 18px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.48);
+  border: 1px solid rgba(38, 71, 76, 0.12);
+  border-radius: 8px;
 }
 
-.home-v2-proof > div {
-  display: grid;
-  min-height: 58px;
-  grid-template-columns: minmax(0, 1fr) auto;
+.home-v2-proof-item {
+  display: flex;
+  min-width: 0;
+  min-height: 70px;
   align-items: center;
-  gap: 8px;
-  padding-right: 16px;
+  gap: 11px;
+  padding: 12px 15px;
   border-right: 1px solid var(--v2-line);
 }
 
-.home-v2-proof > div + div {
-  padding-left: 16px;
-}
-
-.home-v2-proof > div:last-child {
+.home-v2-proof-item:last-child {
   border-right: 0;
 }
 
+.home-v2-proof-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  background: var(--v2-accent-soft);
+  border-radius: 7px;
+  color: var(--v2-accent);
+}
+
+.home-v2-proof-item-interfaces .home-v2-proof-icon {
+  background: rgba(57, 116, 214, 0.1);
+  color: #3974d6;
+}
+
+.home-v2-proof-item-monitors .home-v2-proof-icon {
+  background: rgba(98, 91, 168, 0.1);
+  color: #625ba8;
+}
+
+.home-v2-proof-item > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
 .home-v2-proof dt {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
   color: var(--v2-secondary);
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.home-v2-proof dt small {
+  overflow: hidden;
+  color: var(--v2-tertiary);
+  font-size: 9px;
+  font-weight: 550;
+  text-overflow: ellipsis;
 }
 
 .home-v2-proof dd {
   margin-bottom: 0;
   color: var(--v2-text);
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 720;
+  line-height: 1.1;
 }
 
 .home-v2-routing {
@@ -1767,38 +1807,38 @@ onBeforeUnmount(() => {
     margin-left: auto;
   }
 
-  .home-v2-proof {
+  .home-v2 .home-v2-proof {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .home-v2-proof > div,
-  .home-v2-proof > div + div {
-    min-height: 58px;
-    grid-template-columns: 1fr;
-    align-content: center;
-    gap: 4px;
-    padding: 0 10px;
+  .home-v2-proof-item {
+    min-height: 64px;
+    gap: 7px;
+    padding: 10px 8px;
     border-right: 1px solid var(--v2-line);
     border-bottom: 0;
   }
 
-  .home-v2-proof > div:first-child {
-    padding-left: 0;
+  .home-v2-proof-icon {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
   }
 
-  .home-v2-proof > div:last-child {
-    padding-right: 0;
+  .home-v2-proof-item:last-child {
     border-right: 0;
   }
 
   .home-v2-proof dd {
-    grid-row: 1;
     font-size: 16px;
   }
 
   .home-v2-proof dt {
-    grid-row: 2;
     font-size: 10px;
+  }
+
+  .home-v2-proof dt small {
+    display: none;
   }
 
   .home-v2-routing-row-2,
@@ -1923,7 +1963,7 @@ onBeforeUnmount(() => {
     margin-top: 18px;
   }
 
-  .home-v2-proof {
+  .home-v2 .home-v2-proof {
     margin-top: 14px;
   }
 

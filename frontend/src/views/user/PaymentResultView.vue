@@ -1,9 +1,14 @@
 <template>
-  <div
-    class="public-payment-result-view flex min-h-screen items-center justify-center bg-gray-50 px-4 dark:bg-dark-900"
-    :class="{ 'public-status-v2': isPublicUiV2 }"
+  <PublicLayout
+    :show-chrome="isPublicUiV2"
+    :show-footer="false"
+    content-class="public-ui-v2__content--flush public-callback-content"
   >
-    <div class="w-full max-w-md space-y-6">
+    <div
+      class="public-payment-result-view flex min-h-screen items-center justify-center bg-gray-50 px-4 dark:bg-dark-900"
+      :class="{ 'public-status-v2': isPublicUiV2 }"
+    >
+      <div class="w-full max-w-md space-y-6">
       <!-- Loading -->
       <div v-if="loading" class="flex items-center justify-center py-20">
         <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary-500 border-t-transparent"></div>
@@ -90,8 +95,9 @@
           <button class="btn btn-primary flex-1" @click="router.push('/orders')">{{ t('payment.result.viewOrders') }}</button>
         </div>
       </template>
+      </div>
     </div>
-  </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
@@ -101,6 +107,7 @@ import { useRoute, useRouter } from 'vue-router'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
+import PublicLayout from '@/components/public/PublicLayout.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
   clearPaymentRecoverySnapshot,

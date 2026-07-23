@@ -1,9 +1,14 @@
 <template>
-  <div
-    class="public-oauth-callback-view min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900"
-    :class="{ 'public-status-v2': isPublicUiV2 }"
+  <PublicLayout
+    :show-chrome="isPublicUiV2"
+    :show-footer="false"
+    content-class="public-ui-v2__content--flush public-callback-content"
   >
-    <div class="mx-auto max-w-2xl">
+    <div
+      class="public-oauth-callback-view min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900"
+      :class="{ 'public-status-v2': isPublicUiV2 }"
+    >
+      <div class="mx-auto max-w-2xl">
       <div v-if="isProcessing" class="card p-6 text-center">
         <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
         <h1 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">
@@ -144,8 +149,9 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
-  </div>
+  </PublicLayout>
 </template>
 
 <script setup lang="ts">
@@ -157,6 +163,7 @@ import { useAppStore, useAuthStore } from '@/stores'
 import { apiClient } from '@/api/client'
 import { buildApiUrl } from '@/api/url'
 import { usePublicUiVersion } from '@/composables/usePublicUiVersion'
+import PublicLayout from '@/components/public/PublicLayout.vue'
 import {
   exchangePendingOAuthCompletion,
   persistOAuthTokenContext,

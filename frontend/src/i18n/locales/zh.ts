@@ -50,6 +50,9 @@ export default {
         proof: '服务概览',
         interfaces: '兼容接口',
         monitors: '公开监控',
+        catalog: '公开目录',
+        unified: '统一调用',
+        synced: '实时同步',
         routingLabel: '实时路由控制面',
         live: '实时',
         routingTitle: '为每一次请求选择更优路径',
@@ -233,7 +236,7 @@ export default {
       eyebrow: '运行状态',
       title: '随时掌握通道健康度与服务质量',
       description: '集中查看核心通道可用性、延迟趋势和异常状态，让接入前后的服务风险更清楚。',
-      button: '查看服务状态',
+      button: '查看模型状态',
       guideLink: '阅读接入教程'
     },
     // CTA 区块

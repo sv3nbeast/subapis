@@ -28,14 +28,7 @@
     <!-- Header -->
     <header class="fixed inset-x-0 top-0 z-50 px-4 py-3 sm:px-6">
       <nav class="home-nav mx-auto flex items-center justify-between gap-4">
-        <router-link to="/home" class="flex min-w-0 items-center gap-2.5">
-          <div class="h-9 w-9 overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-gray-200/70 dark:bg-dark-800 dark:ring-dark-700">
-            <img :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" class="h-full w-full object-contain" />
-          </div>
-          <span class="home-brand-name truncate text-base font-black tracking-tight text-gray-950 dark:text-white sm:text-lg">
-            {{ siteName }}
-          </span>
-        </router-link>
+        <PublicBrand :site-logo="siteLogo" :site-name="siteName" collapse-on-mobile />
 
         <div class="flex items-center gap-3">
           <router-link
@@ -597,6 +590,7 @@ import { useAuthStore, useAppStore, useAnnouncementStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import HomeChannelStatusPreview from '@/components/status/HomeChannelStatusPreview.vue'
+import PublicBrand from '@/components/public/PublicBrand.vue'
 import PublicHomeV2 from '@/components/public/PublicHomeV2.vue'
 import { announcementsAPI } from '@/api'
 import { listPublicChannelMonitors, type PublicMonitorView } from '@/api/publicChannelMonitor'
@@ -1160,12 +1154,6 @@ onUnmounted(() => {
 .home-nav {
   max-width: min(100% - 2rem, 104rem);
   padding: 0.35rem 0;
-}
-
-.home-brand-name {
-  font-style: italic;
-  letter-spacing: -0.045em;
-  transform: skewX(-6deg);
 }
 
 .home-nav-action {
@@ -2180,11 +2168,6 @@ onUnmounted(() => {
   background: rgba(45, 212, 191, 0.08);
 }
 
-.home-page.home-dark .home-brand-name {
-  color: #f8fafc;
-  text-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
-}
-
 .home-page.home-dark .home-auth-actions {
   background: rgba(226, 232, 240, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.5);
@@ -2797,12 +2780,6 @@ onUnmounted(() => {
   max-width: 1180px;
   min-height: 60px;
   padding: 0 24px;
-}
-
-.home-page.home-apple .home-brand-name {
-  font-style: italic;
-  letter-spacing: 0;
-  transform: skewX(-6deg);
 }
 
 .home-page.home-apple :where(h1, h2, h3, p, a, button, span) {
@@ -4050,10 +4027,6 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-  .home-page.home-apple .home-brand-name {
-    display: none;
-  }
-
   .home-page.home-apple .home-nav {
     gap: 8px;
     padding-inline: 10px;
