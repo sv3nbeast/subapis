@@ -2422,3 +2422,77 @@ dc64d597a 恢复dashboard cache metrics display
 - 增量基线: `0dec1ad2922ff8c9d27b67f8a31dfb35bce1902b`
 - 动作: 吸收官方版本号更新 `0.1.149 -> 0.1.150`，未提升到 `main`
 - 验证: `go test ./cmd/server -count=1` 通过
+
+## 2026-07-24 01:15:57 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `1adcfa85908c38e437d2f5bd3698aaf154b9608f`
+- 官方提交: `e316ebf52838a89d57fc790981cce7520f819ac8`
+- 合并基线: `9a2f11b4e21763cb7003ea29921d9a672ab50b1f`
+- 官方领先数量: `31`
+- 本地领先数量: `588`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+e316ebf52 合并拉取请求 #3989（来源：xlplbo/fix/codex-mcp-tools-bridge）
+07fac3471 合并拉取请求 #3991（来源：fengshao1227/fix/anthropic-usage-cache-creation-tokens）
+151b9265f 合并拉取请求 #3994（来源：fengshao1227/fix/compact-keepalive-nil-pointer）
+6c588bb95 杂项：将VERSION同步到 0.1.151 [skip ci]
+90e9d03de 修复（apicompat）：强制选择 tool_search 的 tool_choice 降级为指向代理的 function 选择
+e2b68d1f9 修复（apicompat）：tool_choice 仅转发实际存在于转换结果中的工具
+a2cdaa641 修复（apicompat）：内置 tool_search 与同名工具撞名时显式拒绝请求
+bc3cb2902 修复（handler）：补齐 opsCaptureWriter 全部委托方法的 nil 守卫
+89a551b96 修复（handler）：opsCaptureWriter 释放后访问 nil panic
+83f169e4f 修复（apicompat）：补齐 Responses→Anthropic 流式路径的 cache_creation_input_tokens
+eb4d00503 Merge remote-tracking branch 'upstream/main'
+0d28f7f90 修复（apicompat）：Responses↔Anthropic 转换补齐 cache_creation_input_tokens
+deff3123d 合并拉取请求 #3984（来源：Wei-Shaw/fix/issue-3901-codex-identity-pairing）
+8a51119e3 修复（openai）：pair originator 与 final User-Agent 针对 codex upstream
+f1082bb78 修复（apicompat）：namespace 摊平名撞名时显式拒绝请求
+794233832 修复（apicompat）：回程还原 namespace 子工具调用，修复 Codex MCP 工具 unsupported call
+5260a42a0 合并拉取请求 #3953（来源：lyon-le/feat/openai-fast-policy-user-scope）
+815516d8d 合并拉取请求 #3969（来源：jinfeijie/fix/grok-responses-reasoning-effort）
+5a0dd510e 修复（grok）：移除obsolete helper
+0fa1eb85e 修复（grok）：保留compatible reasoning effort
+
+### 本地领先
+
+1adcfa859 新增（release）：expose public UI rollout controls
+55c958841 修复（public）：use accurate Gemini 与 Antigravity logos
+85870a232 修复（kiro）：对before client-visible output执行故障切换
+0ae7ca23b 修复（public）：对齐navigation 与 status links
+411574312 修复（kiro）：isolate cli keys from OAuth control plane
+a2fd41d4a 修复（kiro）：route ksk keys through cli runtime
+8df41a663 新增（public）：增加public UI v2 preview rollout
+f57a14ef3 修复（grok）：recover truncated streams 与 quota failover
+859bce7a0 修复（deploy）：保留Kiro diagnostic users
+56aae8c1d 修复（kiro）：propagate user id 到 diagnostics
+ad5ee4039 修复（kiro）：retry transient rate limits safely
+b8c84600f 修复（grok）：对zero RPM accounts执行故障切换
+009d75a22 修复（kiro）：attribute ops errors 到 attempted accounts
+3aa51c7d9 修复（openai）：classify channel model denials
+215305cde 新增（kiro）：allow editing account regions
+d6eec961f 修复（grok）：bound quota failover latency
+2687041d1 修复（kiro）：bridge compact 与 remove GPT timeouts
+fb6fff182 新增（kiro）：增加targeted event diagnostics
+6b30f3eff 性能优化（ui）：streamline dashboard loading
+ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
+## 2026-07-24 01:35:11 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 本地主线基线: `1adcfa85908c38e437d2f5bd3698aaf154b9608f`
+- 官方目标: `e316ebf52838a89d57fc790981cce7520f819ac8`
+- 合并基线: `9a2f11b4e21763cb7003ea29921d9a672ab50b1f`
+- 动作: 完成 31 个官方提交的语义融合与验证，未提升到 `main`
+- 保留策略: 保留本地聚合式 OpenAI 网关、Kiro/Grok 路由、Responses-Lite、流式终态、Kiro credits 与缓存计费语义；将官方 custom/tool_search 桥接、Codex 身份配对、GPT-5.6 用量与定价、setup-token 刷新、Fast/Flex 用户规则和图片工具声明处理移植到本地归属文件
+- 网关回归审查: `PASS`，`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 后端验证: 聚焦包测试通过；`go test ./... -count=1` 通过；聚焦 `-race` 通过；`go build ./...` 通过
+- 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；受影响 34 个测试通过；全量 174/176 suites、1039 tests 通过，剩余 2 个 `vue-i18n` mock suite 在未同步的 `main` 基线同样失败
+- 延迟基准: 用量解析中位数 `1859ns -> 1702ns`；WS hot path 中位数 `74668ns -> 74267ns`；分配次数不变
