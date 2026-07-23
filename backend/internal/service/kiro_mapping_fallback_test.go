@@ -247,11 +247,11 @@ func TestNewKiroJSONRequestCLIWireHeaders(t *testing.T) {
 		3,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "application/json", req.Header.Get("Content-Type"))
+	require.Equal(t, kiroAWSJSONContentType, req.Header.Get("Content-Type"))
 	require.Equal(t, kiroGenerateAssistantResponseTarget, req.Header.Get("X-Amz-Target"))
 	require.Equal(t, "false", req.Header.Get("x-amzn-codewhisperer-optout"))
 	require.Equal(t, "attempt=2; max=3", req.Header.Get("Amz-Sdk-Request"))
-	require.Equal(t, "*/*", req.Header.Get("Accept"))
+	require.Equal(t, kiroEventStreamContentType, req.Header.Get("Accept"))
 	require.Equal(t, "Bearer access-token", req.Header.Get("Authorization"))
 	require.Equal(t, "arn:aws:codewhisperer:us-east-1:123456789012:profile/RUNTIME", req.Header.Get("x-amzn-kiro-profile-arn"))
 }

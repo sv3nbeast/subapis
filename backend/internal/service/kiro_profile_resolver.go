@@ -160,6 +160,10 @@ func (s *GatewayService) ensureKiroProfileArnForRequest(ctx context.Context, acc
 	if s == nil || account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
 		return
 	}
+	// CLI API keys use the Runtime data plane without an OAuth profile ARN.
+	if isKiroCLIAPIKeyAccount(account) {
+		return
+	}
 	if mode != KiroEndpointModeKRS && mode != KiroEndpointModeAuto {
 		return
 	}
@@ -303,7 +307,7 @@ func applyKiroRestHeaders(req *http.Request, account *Account, token string) {
 	if req.URL != nil && req.URL.Host != "" {
 		req.Host = req.URL.Host
 	}
-	applyKiroConditionalHeaders(req, account)
+	applyKiroConditionalHeaders(req, account, token)
 }
 
 func applyKiroListAvailableProfilesHeaders(req *http.Request, account *Account, token string, attempt, maxAttempts int) {
@@ -329,5 +333,5 @@ func applyKiroListAvailableProfilesHeaders(req *http.Request, account *Account, 
 	if req.URL != nil && req.URL.Host != "" {
 		req.Host = req.URL.Host
 	}
-	applyKiroConditionalHeaders(req, account)
+	applyKiroConditionalHeaders(req, account, token)
 }

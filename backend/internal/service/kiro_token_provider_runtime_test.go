@@ -202,3 +202,26 @@ func TestKiroTokenProviderGetAccessTokenMissingTokensRequiresReauthRuntime(t *te
 	require.Equal(t, account.ID, repo.setErrorID)
 	require.Contains(t, repo.setErrorMsg, "reauthorize Kiro account")
 }
+
+func TestKiroTokenProviderMissingOAuthDoesNotDisableAttachedCLIKeyRuntime(t *testing.T) {
+	account := &Account{
+		ID:       44,
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"kiro_api_key": "ksk_generation_key",
+		},
+	}
+	repo := &kiroTokenProviderRuntimeRepo{account: account}
+	cache := &kiroTokenProviderRuntimeCache{lockResult: true}
+	refresher := &kiroTokenProviderRuntimeRefresher{err: errors.New("kiro refresh_token is empty; reauthorize Kiro account")}
+	provider := NewKiroTokenProvider(repo, cache, nil)
+	provider.kiroOAuthService = refresher
+	provider.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache), NewKiroTokenRefresher(refresher))
+
+	token, err := provider.GetAccessToken(context.Background(), account)
+	require.Error(t, err)
+	require.Empty(t, token)
+	require.Zero(t, repo.setErrorCalls)
+}

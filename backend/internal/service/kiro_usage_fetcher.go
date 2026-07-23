@@ -324,7 +324,7 @@ func (s *AccountUsageService) applyKiroRuntimeHeaders(req *http.Request, account
 	req.Header.Set("x-amzn-codewhisperer-optout", "true")
 	req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
 	req.Header.Set("Amz-Sdk-Invocation-Id", uuid.NewString())
-	applyKiroConditionalHeaders(req, account)
+	applyKiroConditionalHeaders(req, account, token)
 }
 
 func accountProxyURL(account *Account) string {

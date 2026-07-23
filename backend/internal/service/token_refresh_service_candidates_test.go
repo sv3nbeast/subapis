@@ -212,3 +212,37 @@ func TestTokenRefreshService_RefreshFailureDoesNotCallPrivacy(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenRefreshService_KiroCLIKeyPreservesSchedulingWhenAuxiliaryOAuthFails(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "non-retryable", err: errors.New("invalid_grant: token revoked")},
+		{name: "retry exhausted", err: errors.New("temporary oauth failure")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &tokenRefreshCandidateRepo{}
+			svc := &TokenRefreshService{
+				accountRepo:   repo,
+				refreshPolicy: DefaultBackgroundRefreshPolicy(),
+				cfg:           &config.TokenRefreshConfig{MaxRetries: 1},
+			}
+			account := &Account{
+				ID:       1970,
+				Platform: PlatformKiro,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"kiro_api_key": "ksk_generation_key",
+				},
+			}
+
+			err := svc.refreshWithRetry(context.Background(), account, &tokenRefreshTestRefresher{err: tt.err}, nil, time.Hour)
+			require.Error(t, err)
+			require.Zero(t, repo.setErrorCalls)
+			require.Zero(t, repo.setTempUnschedCalls)
+		})
+	}
+}

@@ -184,7 +184,7 @@ func (p *KiroTokenProvider) ForceRefreshAccessToken(ctx context.Context, account
 				}
 			}
 		}
-		if isNonRetryableRefreshError(err) && p.accountRepo != nil {
+		if isNonRetryableRefreshError(err) && p.accountRepo != nil && !isKiroCLIAPIKeyAccount(account) {
 			errorMsg := "Token refresh failed (non-retryable): " + err.Error()
 			_ = p.accountRepo.SetError(ctx, account.ID, errorMsg)
 		}
@@ -242,6 +242,9 @@ func (p *KiroTokenProvider) cacheAccessToken(ctx context.Context, account *Accou
 
 func (p *KiroTokenProvider) disableAccountMissingTokens(ctx context.Context, account *Account, reason string) {
 	if p == nil || p.accountRepo == nil || account == nil {
+		return
+	}
+	if isKiroCLIAPIKeyAccount(account) {
 		return
 	}
 	if err := p.accountRepo.SetError(ctx, account.ID, reason); err != nil {

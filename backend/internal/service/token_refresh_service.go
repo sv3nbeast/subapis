@@ -327,6 +327,13 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
+			if isKiroCLIAPIKeyAccount(account) {
+				slog.Warn("token_refresh.auxiliary_oauth_failed_generation_key_preserved",
+					"account_id", account.ID,
+					"error", logredact.RedactText(err.Error()),
+				)
+				return err
+			}
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 			s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
@@ -361,6 +368,13 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		"max_retries", s.cfg.MaxRetries,
 		"error", lastErr,
 	)
+	if isKiroCLIAPIKeyAccount(account) {
+		slog.Warn("token_refresh.auxiliary_oauth_retry_exhausted_generation_key_preserved",
+			"account_id", account.ID,
+			"error", lastErr,
+		)
+		return lastErr
+	}
 
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
 	until := time.Now().Add(tokenRefreshTempUnschedDuration)

@@ -155,9 +155,10 @@ func TestNewKiroJSONRequestAddsConditionalHeaders(t *testing.T) {
 		Platform: PlatformKiro,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"auth_method": "external_idp",
-			"provider":    "Internal",
-			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER",
+			"auth_method":  "external_idp",
+			"provider":     "Internal",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/HEADER",
+			"kiro_api_key": "ksk_generation_key",
 		},
 	}
 

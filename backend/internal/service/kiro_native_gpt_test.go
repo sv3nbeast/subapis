@@ -110,6 +110,30 @@ func TestForwardAsChatCompletionsKiroDirectAPIKeyUsesNativeRuntime(t *testing.T)
 	require.Equal(t, "native api key chat ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
 }
 
+func TestForwardAsChatCompletionsKiroOAuthWithCLIKeySkipsOAuthProfileProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hello chat"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "native oauth plus cli key ok")
+	delete(account.Credentials, "profile_arn")
+	account.Credentials["kiro_api_key"] = "ksk_generation_key"
+	account.Credentials["api_region"] = "eu-central-1"
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	assertKiroCLINativeGPTUpstreamRequest(t, upstream)
+	require.Equal(t, "native oauth plus cli key ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
+}
+
 func TestForwardAsChatCompletionsKiroNativeGPTPreludeRetriesOnceThenEmitsTool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{

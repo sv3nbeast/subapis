@@ -154,6 +154,29 @@ func TestResolveKiroModelContextWindowTemporarilyCachesMetadataFailure(t *testin
 	require.Equal(t, int64(1), upstream.calls.Load(), "metadata 429 must not add one failed lookup to every inference request")
 }
 
+func TestResolveKiroModelContextWindowSkipsOAuthMetadataForCLIKey(t *testing.T) {
+	upstream := &failingKiroModelLimitsUpstream{}
+	svc := &GatewayService{
+		httpUpstream:         upstream,
+		kiroModelLimitsCache: newKiroModelLimitsCache(),
+	}
+	account := &Account{
+		ID:          1702,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_region":   "eu-central-1",
+			"kiro_api_key": "ksk_generation_key",
+		},
+	}
+
+	window, source := svc.resolveKiroModelContextWindow(context.Background(), account, "ksk_generation_key", "claude-sonnet-4-5")
+	require.Zero(t, window)
+	require.Empty(t, source)
+	require.Zero(t, upstream.calls.Load())
+}
+
 func TestApplyKiroContextWindowResolutionRestoresUnboundedPayloadEstimate(t *testing.T) {
 	requestCtx := kiropkg.KiroRequestContext{
 		PayloadInputTokenEstimate: 740_000,

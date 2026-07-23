@@ -46,6 +46,11 @@ func (s *GatewayService) resolveKiroModelContextWindow(ctx context.Context, acco
 	if s == nil || s.httpUpstream == nil || s.kiroModelLimitsCache == nil || account == nil || strings.TrimSpace(token) == "" {
 		return 0, ""
 	}
+	// ListAvailableModels is an OAuth control-plane operation. Keep the
+	// translator's static limit when generation uses a CLI API key.
+	if isKiroCLIAPIKeyAccount(account) {
+		return 0, ""
+	}
 	region := strings.ToLower(strings.TrimSpace(kiroUpstreamModelsRegion(account)))
 	if region == "" {
 		region = kiroDefaultRegion

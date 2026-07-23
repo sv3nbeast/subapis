@@ -249,12 +249,14 @@ func kiroRuntimeAPIRegion(account *Account) string {
 	return kiroDefaultRegion
 }
 
-func applyKiroConditionalHeaders(req *http.Request, account *Account) {
+func applyKiroConditionalHeaders(req *http.Request, account *Account, token string) {
 	if req == nil || account == nil {
 		return
 	}
-	if account.KiroAPIKey() != "" {
+	apiKey := strings.TrimSpace(account.KiroAPIKey())
+	if apiKey != "" && strings.TrimSpace(token) == apiKey {
 		req.Header["TokenType"] = []string{"API_KEY"}
+		return
 	}
 	if account.KiroAuthMethod() == kiropkg.AuthMethodExternalIDP {
 		req.Header.Set("TokenType", "EXTERNAL_IDP")
@@ -330,7 +332,7 @@ func newKiroJSONRequestWithAttemptAndDefaultTarget(ctx context.Context, endpoint
 			req.Header.Set("x-amzn-kiro-profile-arn", profileArn)
 		}
 	}
-	applyKiroConditionalHeaders(req, account)
+	applyKiroConditionalHeaders(req, account, token)
 	return req, nil
 }
 
