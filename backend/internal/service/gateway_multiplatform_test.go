@@ -156,6 +156,34 @@ func (m *mockAccountRepoForPlatform) ListSchedulableUngroupedByPlatform(ctx cont
 func (m *mockAccountRepoForPlatform) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
 	return m.ListSchedulableByPlatforms(ctx, platforms)
 }
+func (m *mockAccountRepoForPlatform) ListModelAvailabilityCandidates(_ context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error) {
+	platformSet := make(map[string]struct{}, len(platforms))
+	for _, platform := range platforms {
+		platformSet[platform] = struct{}{}
+	}
+	result := make([]Account, 0, len(m.accounts))
+	for _, acc := range m.accounts {
+		if _, ok := platformSet[acc.Platform]; !ok || acc.Status != StatusActive || !acc.Schedulable {
+			continue
+		}
+		if groupID != nil {
+			inGroup := false
+			for _, accountGroup := range acc.AccountGroups {
+				if accountGroup.GroupID == *groupID {
+					inGroup = true
+					break
+				}
+			}
+			if !inGroup {
+				continue
+			}
+		} else if !includeGrouped && (len(acc.AccountGroups) > 0 || len(acc.GroupIDs) > 0) {
+			continue
+		}
+		result = append(result, acc)
+	}
+	return result, nil
+}
 func (m *mockAccountRepoForPlatform) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	return nil
 }
@@ -321,7 +349,20 @@ func (s *snapshotOnlyCacheStub) GetSnapshot(context.Context, SchedulerBucket) ([
 	return s.accounts, s.hit, nil
 }
 
-func (s *snapshotOnlyCacheStub) SetSnapshot(context.Context, SchedulerBucket, []Account) error {
+func (s *snapshotOnlyCacheStub) CaptureBucketWriteToken(context.Context, SchedulerBucket) (SchedulerBucketWriteToken, error) {
+	return SchedulerBucketWriteToken{}, nil
+}
+func (s *snapshotOnlyCacheStub) SetSnapshot(context.Context, SchedulerBucket, SchedulerBucketWriteToken, []Account) error {
+	return nil
+}
+func (s *snapshotOnlyCacheStub) RetireBucket(context.Context, SchedulerBucket) error { return nil }
+func (s *snapshotOnlyCacheStub) ReopenBucket(context.Context, SchedulerBucket) (SchedulerBucketWriteToken, error) {
+	return SchedulerBucketWriteToken{}, nil
+}
+func (s *snapshotOnlyCacheStub) TryAcquireGroupLifecycleLease(context.Context, int64, time.Duration) (SchedulerGroupLifecycleLease, bool, error) {
+	return SchedulerGroupLifecycleLease{}, true, nil
+}
+func (s *snapshotOnlyCacheStub) ReleaseGroupLifecycleLease(context.Context, SchedulerGroupLifecycleLease) error {
 	return nil
 }
 func (s *snapshotOnlyCacheStub) GetAccount(_ context.Context, accountID int64) (*Account, error) {

@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	grokBillingSnapshotExtraKey = grokBillingExtraKey
 	// Spending-limit responses usually describe a billing window that is not
 	// present in the inference response. Keep the account out of the hot path
 	// for a full day in that case; a short fallback caused the same exhausted
@@ -23,7 +24,9 @@ func isGrokBillingExhausted(billing *xai.BillingSnapshot) bool {
 	if billing == nil {
 		return false
 	}
-	return billing.CreditUsagePercent >= 100 ||
+	return (billing.UsagePercent != nil && *billing.UsagePercent >= 100) ||
+		(billing.UsedPercent != nil && *billing.UsedPercent >= 100) ||
+		billing.CreditUsagePercent >= 100 ||
 		(billing.CreditUsagePercent > 0 && billing.CreditRemainingPercent <= 0)
 }
 
@@ -233,7 +236,7 @@ func isGrokBillingExhaustionActive(billing *xai.BillingSnapshot, now time.Time) 
 	if !isGrokBillingSnapshotFresh(billing, now) || !isGrokBillingExhausted(billing) {
 		return false
 	}
-	for _, raw := range []string{billing.CurrentPeriodEnd, billing.BillingPeriodEnd} {
+	for _, raw := range []string{billing.CurrentPeriodEnd, billing.PeriodEnd, billing.BillingPeriodEnd} {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
 			continue
@@ -269,7 +272,7 @@ func resolveGrokQuotaResetAtForResponse(account *Account, responseBody []byte, n
 func resolveGrokQuotaResetAt(account *Account, now time.Time) time.Time {
 	if account != nil {
 		if billing, err := grokBillingSnapshotFromExtra(account.Extra); err == nil && billing != nil {
-			for _, raw := range []string{billing.CurrentPeriodEnd, billing.BillingPeriodEnd} {
+			for _, raw := range []string{billing.CurrentPeriodEnd, billing.PeriodEnd, billing.BillingPeriodEnd} {
 				if resetAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw)); err == nil && resetAt.After(now) {
 					return resetAt
 				}

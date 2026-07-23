@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -13,6 +14,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxAPIKeyAuthorizationHeaderBytes = service.MaxAPIKeyCredentialBytes + 128
+
+func isAsyncImageTaskRead(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	return strings.HasPrefix(path, "/v1/images/tasks/") || strings.HasPrefix(path, "/images/tasks/")
+}
 
 // NewAPIKeyAuthMiddleware 创建 API Key 认证中间件
 func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) APIKeyAuthMiddleware {
@@ -141,8 +151,8 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		// ── 5. 加载订阅（订阅模式时始终加载） ───────────────────────
 
-		// skipBilling: /v1/usage 只需鉴权，跳过所有计费执行
-		skipBilling := c.Request.URL.Path == "/v1/usage"
+		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
+		skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
 
 		var subscription *service.UserSubscription
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
@@ -272,6 +282,22 @@ func GetOpsFallbackAPIKey(c *gin.Context) (*service.APIKey, bool) {
 	}
 	apiKey, ok := value.(*service.APIKey)
 	return apiKey, ok
+}
+
+func apiKeyHeadersTooLarge(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return len(c.GetHeader("Authorization")) > maxAPIKeyAuthorizationHeaderBytes ||
+		len(c.GetHeader("x-api-key")) > service.MaxAPIKeyCredentialBytes ||
+		len(c.GetHeader("x-goog-api-key")) > service.MaxAPIKeyCredentialBytes
+}
+
+func hasAPIKeyCredentialInput(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return c.GetHeader("Authorization") != "" || c.GetHeader("x-api-key") != "" || c.GetHeader("x-goog-api-key") != ""
 }
 
 // GetSubscriptionFromContext 从上下文中获取订阅信息

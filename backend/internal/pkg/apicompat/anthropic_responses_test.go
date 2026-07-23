@@ -1724,7 +1724,7 @@ func TestAnthropicToResponsesResponse_CacheTokensUseOpenAIInputSemantics(t *test
 		Content: []AnthropicContentBlock{
 			{Type: "text", Text: "ok"},
 		},
-		StopReason: "end_turn",
+		StopReason: AnthropicStopReasonPtr("end_turn"),
 		Usage: AnthropicUsage{
 			InputTokens:              3318,
 			OutputTokens:             123,
@@ -1750,7 +1750,7 @@ func TestAnthropicToResponsesResponse_NoCacheTokens(t *testing.T) {
 		Content: []AnthropicContentBlock{
 			{Type: "text", Text: "ok"},
 		},
-		StopReason: "end_turn",
+		StopReason: AnthropicStopReasonPtr("end_turn"),
 		Usage: AnthropicUsage{
 			InputTokens:  100,
 			OutputTokens: 50,

@@ -32,6 +32,10 @@ func NewGroupRepository(client *dbent.Client, sqlDB *sql.DB) service.GroupReposi
 	return newGroupRepositoryWithSQL(client, sqlDB)
 }
 
+func NewAdminGroupRepository(client *dbent.Client, sqlDB *sql.DB) service.AdminGroupRepository {
+	return newGroupRepositoryWithSQL(client, sqlDB)
+}
+
 func newGroupRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *groupRepository {
 	return &groupRepository{client: client, sql: sqlq}
 }
@@ -98,6 +102,9 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 
 	// 设置支持的模型系列（始终设置，空数组表示不限制）
 	builder = builder.SetSupportedModelScopes(groupIn.SupportedModelScopes)
+	if groupIn.DuplicateOperationID != "" {
+		builder = builder.SetDuplicateOperationID(groupIn.DuplicateOperationID)
+	}
 
 	created, err := builder.Save(ctx)
 	if err == nil {
@@ -109,6 +116,59 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		}
 	}
 	return translatePersistenceError(err, nil, service.ErrGroupExists)
+}
+
+func (r *groupRepository) FindByDuplicateOperationID(ctx context.Context, operationID string) (*service.Group, error) {
+	operationID = strings.TrimSpace(operationID)
+	if operationID == "" {
+		return nil, nil
+	}
+	row, err := r.client.Group.Query().Where(group.DuplicateOperationIDEQ(operationID)).Order(dbent.Asc(group.FieldID)).First(ctx)
+	if dbent.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find group duplicate operation: %w", err)
+	}
+	return groupEntityToService(row), nil
+}
+
+func (r *groupRepository) CreateFromSource(ctx context.Context, groupIn *service.Group, sourceGroupID int64) error {
+	if groupIn == nil {
+		return errors.New("group is nil")
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+		return err
+	}
+	var txClient *dbent.Client
+	if tx != nil {
+		defer func() { _ = tx.Rollback() }()
+		txClient = tx.Client()
+	} else {
+		txClient = r.client
+	}
+	txRepo := newGroupRepositoryWithSQL(txClient, txClient)
+	if err := txRepo.Create(ctx, groupIn); err != nil {
+		return err
+	}
+	result, err := txClient.ExecContext(ctx, `
+		INSERT INTO account_groups (account_id, group_id, priority, created_at)
+		SELECT ag.account_id, $2, ag.priority, NOW()
+		FROM account_groups ag
+		JOIN accounts a ON a.id = ag.account_id
+		WHERE ag.group_id = $1 AND a.deleted_at IS NULL AND (NOT $3 OR a.type <> $4)
+		ON CONFLICT (account_id, group_id) DO NOTHING`, sourceGroupID, groupIn.ID, groupIn.RequireOAuthOnly, service.AccountTypeAPIKey)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err == nil {
+		groupIn.AccountCount = count
+	}
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
 }
 
 func (r *groupRepository) GetByID(ctx context.Context, id int64) (*service.Group, error) {

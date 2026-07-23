@@ -85,6 +85,9 @@ func (r *authRegressionUserRepo) BatchSetConcurrency(context.Context, []int64, i
 func (r *authRegressionUserRepo) BatchAddConcurrency(context.Context, []int64, int) (int, error) {
 	panic("unexpected BatchAddConcurrency call")
 }
+func (r *authRegressionUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	panic("unexpected BatchUpdateLimits call")
+}
 func (r *authRegressionUserRepo) ExistsByEmail(context.Context, string) (bool, error) {
 	panic("unexpected ExistsByEmail call")
 }
@@ -134,7 +137,7 @@ func TestGenerateTokenUsesResolvedTokenVersion(t *testing.T) {
 	}
 
 	svc := newAuthServiceForRegressionTests(&authRegressionUserRepo{user: user})
-	token, err := svc.GenerateToken(user)
+	token, err := svc.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := svc.ValidateToken(token)
@@ -153,7 +156,7 @@ func TestRefreshTokenUsesResolvedTokenVersionComparison(t *testing.T) {
 	}
 
 	svc := newAuthServiceForRegressionTests(&authRegressionUserRepo{user: user})
-	token, err := svc.GenerateToken(user)
+	token, err := svc.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	newToken, err := svc.RefreshToken(context.Background(), token)

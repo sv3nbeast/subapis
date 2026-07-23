@@ -125,23 +125,23 @@ func TestGenerateSessionHash_DifferentSystemsSameMessages(t *testing.T) {
 func TestGenerateSessionHash_IgnoresAnthropicBillingHeaderBlocks(t *testing.T) {
 	svc := &GatewayService{}
 
-	withHeader, err := ParseGatewayRequest([]byte(`{
+	withHeader, err := ParseGatewayRequest(NewRequestBodyRef([]byte(`{
 		"model":"claude-3-7-sonnet",
 		"system":[
 			{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli; cch=00000;"},
 			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}
 		],
 		"messages":[{"role":"user","content":"hello"}]
-	}`), "anthropic")
+	}`)), "anthropic")
 	require.NoError(t, err)
 
-	withoutHeader, err := ParseGatewayRequest([]byte(`{
+	withoutHeader, err := ParseGatewayRequest(NewRequestBodyRef([]byte(`{
 		"model":"claude-3-7-sonnet",
 		"system":[
 			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude.","cache_control":{"type":"ephemeral"}}
 		],
 		"messages":[{"role":"user","content":"hello"}]
-	}`), "anthropic")
+	}`)), "anthropic")
 	require.NoError(t, err)
 
 	require.Equal(t, svc.GenerateSessionHash(withHeader), svc.GenerateSessionHash(withoutHeader))

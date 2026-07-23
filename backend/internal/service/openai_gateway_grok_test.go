@@ -588,19 +588,25 @@ func TestForwardGrokMediaVideoStatusUsesGETWithoutBody(t *testing.T) {
 	require.Equal(t, "xai-video-req", result.RequestID)
 }
 
-func TestBindGrokMediaVideoRequestAccountUsesRequestIDStickyHash(t *testing.T) {
+func TestBindGrokMediaVideoRequestAccountUsesOwnerScopedStickyHash(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(7)
+	userID := int64(11)
+	apiKeyID := int64(13)
 	cache := &stubGatewayCache{}
 	svc := &OpenAIGatewayService{cache: cache}
 
-	hash := GrokMediaVideoRequestSessionHash("video-request-123")
+	hash := GrokMediaVideoRequestSessionHash("video-request-123", userID, apiKeyID)
 	require.NotEmpty(t, hash)
-	require.NoError(t, svc.BindGrokMediaVideoRequestAccount(ctx, &groupID, "video-request-123", 63))
+	require.NoError(t, svc.BindGrokMediaVideoRequestAccount(ctx, &groupID, "video-request-123", userID, apiKeyID, 63))
 
-	accountID, err := svc.getStickySessionAccountID(ctx, &groupID, hash)
+	accountID, err := svc.ResolveGrokMediaVideoRequestAccount(ctx, &groupID, "video-request-123", userID, apiKeyID)
 	require.NoError(t, err)
 	require.Equal(t, int64(63), accountID)
+
+	otherOwnerID, err := svc.ResolveGrokMediaVideoRequestAccount(ctx, &groupID, "video-request-123", userID+1, apiKeyID)
+	require.NoError(t, err)
+	require.Zero(t, otherOwnerID)
 }
 
 func TestForwardGrokMediaErrorHonorsCustomErrorCodes(t *testing.T) {

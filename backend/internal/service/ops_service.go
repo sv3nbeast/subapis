@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -19,6 +21,9 @@ var ErrOpsDisabled = infraerrors.NotFound("OPS_DISABLED", "Ops monitoring is dis
 
 const (
 	opsMaxStoredErrorBodyBytes = 20 * 1024
+	// OpsErrorLogQueueBodyMaxBytes bounds attacker-controlled response data while
+	// it waits in the asynchronous error-log queue.
+	OpsErrorLogQueueBodyMaxBytes = 8 * 1024
 )
 
 // OpsService provides ingestion and query APIs for the Ops monitoring module.
@@ -33,12 +38,15 @@ type OpsService struct {
 	// getAccountAvailability is a unit-test hook for overriding account availability lookup.
 	getAccountAvailability func(ctx context.Context, platformFilter string, groupIDFilter *int64) (*OpsAccountAvailability, error)
 
-	concurrencyService        *ConcurrencyService
-	gatewayService            *GatewayService
-	openAIGatewayService      *OpenAIGatewayService
-	geminiCompatService       *GeminiMessagesCompatService
-	antigravityGatewayService *AntigravityGatewayService
-	systemLogSink             *OpsSystemLogSink
+	concurrencyService          *ConcurrencyService
+	gatewayService              *GatewayService
+	openAIGatewayService        *OpenAIGatewayService
+	geminiCompatService         *GeminiMessagesCompatService
+	antigravityGatewayService   *AntigravityGatewayService
+	systemLogSink               *OpsSystemLogSink
+	ingressRejectAggregator     *OpsIngressRejectAggregator
+	authCacheInvalidationWorker *AuthCacheInvalidationWorker
+	apiKeyService               *APIKeyService
 
 	// cleanupReloader 由 wire 在 OpsCleanupService 构造完成后通过 SetCleanupReloader 注入。
 	// 解耦避免 OpsService -> OpsCleanupService 的硬依赖（cleanup 也读 settings，会循环）。
@@ -48,6 +56,17 @@ type OpsService struct {
 	// UpdateOpsAdvancedSettings 写入新配置后调用，把最新的 quota auto-pause 全局默认阈值
 	// 立即同步到调度热路径读取的内存缓存，避免下次请求才能感知新值。
 	quotaAutoPauseSink func(OpsOpenAIAccountQuotaAutoPauseSettings)
+
+	runtimeSettings   atomic.Pointer[opsRuntimeSettingsSnapshot]
+	runtimeSettingsMu sync.Mutex
+
+	runtimeRefreshMu             sync.Mutex
+	runtimeRefreshCancel         context.CancelFunc
+	runtimeRefreshDone           chan struct{}
+	runtimeRefreshRunning        atomic.Bool
+	runtimeRefreshSuccess        atomic.Uint64
+	runtimeRefreshFailure        atomic.Uint64
+	runtimeRefreshLastFailureLog atomic.Int64
 }
 
 // CleanupReloader 由 OpsCleanupService 实现。
@@ -102,6 +121,7 @@ func NewOpsService(
 		antigravityGatewayService: antigravityGatewayService,
 		systemLogSink:             systemLogSink,
 	}
+	svc.initRuntimeSettings(context.Background())
 	svc.applyRuntimeLogConfigOnStartup(context.Background())
 	return svc
 }
@@ -114,28 +134,27 @@ func (s *OpsService) RequireMonitoringEnabled(ctx context.Context) error {
 }
 
 func (s *OpsService) IsMonitoringEnabled(ctx context.Context) bool {
+	_ = ctx
 	// Hard switch: disable ops entirely.
 	if s.cfg != nil && !s.cfg.Ops.Enabled {
 		return false
 	}
-	if s.settingRepo == nil {
-		return true
+	if snapshot := s.runtimeSettings.Load(); snapshot != nil {
+		return snapshot.monitoringEnabled
 	}
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpsMonitoringEnabled)
-	if err != nil {
-		// Default enabled when key is missing, and fail-open on transient errors
-		// (ops should never block gateway traffic).
-		if errors.Is(err, ErrSettingNotFound) {
-			return true
-		}
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "false", "0", "off", "disabled":
-		return false
-	default:
-		return true
-	}
+	return true
+}
+
+// SanitizeOpsErrorBodyForQueue removes credentials and bounds the body before
+// it can consume capacity in the asynchronous queue.
+func SanitizeOpsErrorBodyForQueue(raw string) (string, bool) {
+	return sanitizeErrorBodyForStorage(raw, OpsErrorLogQueueBodyMaxBytes)
+}
+
+// SanitizeOpsUpstreamErrorsForQueue bounds and serializes attempt-level data
+// before the entry can consume asynchronous queue capacity.
+func SanitizeOpsUpstreamErrorsForQueue(entry *OpsInsertErrorLogInput) error {
+	return sanitizeOpsUpstreamErrors(entry)
 }
 
 func (s *OpsService) RecordError(ctx context.Context, entry *OpsInsertErrorLogInput) error {
@@ -271,7 +290,7 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		return nil
 	}
 
-	const maxEvents = 32
+	const maxEvents = 16
 	events := entry.UpstreamErrors
 	if len(events) > maxEvents {
 		events = events[len(events)-maxEvents:]
@@ -284,9 +303,14 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		}
 		out := *ev
 
-		out.Platform = strings.TrimSpace(out.Platform)
+		out.Platform = truncateString(strings.TrimSpace(out.Platform), 32)
+		out.AccountName = truncateString(strings.TrimSpace(out.AccountName), 128)
 		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
+		out.UpstreamURL = truncateString(strings.TrimSpace(out.UpstreamURL), 2048)
 		out.Kind = truncateString(strings.TrimSpace(out.Kind), 64)
+		out.Stage = truncateString(strings.TrimSpace(out.Stage), 64)
+		out.Scope = truncateString(strings.TrimSpace(out.Scope), 64)
+		out.Reason = truncateString(strings.TrimSpace(out.Reason), 128)
 
 		if out.AccountID < 0 {
 			out.AccountID = 0
@@ -304,21 +328,21 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 
 		detail := strings.TrimSpace(out.Detail)
 		if detail != "" {
-			// Keep upstream detail small and strip image/base64 payloads before storage.
-			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, opsMaxStoredErrorBodyBytes)
+			// Keep upstream detail small and strip image/base64 payloads before queueing.
+			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, OpsErrorLogQueueBodyMaxBytes)
 			out.Detail = sanitizedDetail
 		} else {
 			out.Detail = ""
 		}
 
 		if body := strings.TrimSpace(out.UpstreamRequestBody); body != "" {
-			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, opsMaxStoredErrorBodyBytes)
+			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, OpsErrorLogQueueBodyMaxBytes)
 			out.UpstreamRequestBody = sanitizedBody
 		} else {
 			out.UpstreamRequestBody = ""
 		}
 		if body := strings.TrimSpace(out.UpstreamResponseBody); body != "" {
-			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, opsMaxStoredErrorBodyBytes)
+			sanitizedBody, _ := sanitizeErrorBodyForStorage(body, OpsErrorLogQueueBodyMaxBytes)
 			out.UpstreamResponseBody = sanitizedBody
 		} else {
 			out.UpstreamResponseBody = ""

@@ -15,15 +15,19 @@ import (
 
 type rateLimit429AccountRepoStub struct {
 	mockAccountRepoForGemini
-	rateLimitCalls  int
-	rateLimitIDs    []int64
-	rateLimitResets map[int64]time.Time
-	extraMatches    []Account
+	rateLimitCalls     int
+	rateLimitIDs       []int64
+	rateLimitResets    map[int64]time.Time
+	extraMatches       []Account
+	lastRateLimitID    int64
+	lastRateLimitReset time.Time
 }
 
 func (r *rateLimit429AccountRepoStub) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitCalls++
 	r.rateLimitIDs = append(r.rateLimitIDs, id)
+	r.lastRateLimitID = id
+	r.lastRateLimitReset = resetAt
 	if r.rateLimitResets == nil {
 		r.rateLimitResets = map[int64]time.Time{}
 	}

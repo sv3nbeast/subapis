@@ -2496,3 +2496,13 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 后端验证: 聚焦包测试通过；`go test ./... -count=1` 通过；聚焦 `-race` 通过；`go build ./...` 通过
 - 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；受影响 34 个测试通过；全量 174/176 suites、1039 tests 通过，剩余 2 个 `vue-i18n` mock suite 在未同步的 `main` 基线同样失败
 - 延迟基准: 用量解析中位数 `1859ns -> 1702ns`；WS hot path 中位数 `74668ns -> 74267ns`；分配次数不变
+
+## 2026-07-24 02:25:00 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 官方目标复核: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 在既有索引融合快照上补齐 Grok 手动探测资格门、OpenAI compact 探测 Codex window id，并同步 CLI 路由测试夹具；未提升到 `main`，未部署生产
+- 验证: `git diff --check`、`go build ./...`、前端 lint/typecheck/build、Kiro translator 聚焦测试、Grok/OpenAI 探测聚焦测试通过
+- 网关回归审查: `INCONCLUSIVE`；完整 service/handler 单测仍有本地历史分支与当前官方拆分布局冲突，`stream/cache-hit/recreate/latency` 不宣称通过
+- 发布结论: 阻止生产发布，待拆分布局回归清理并完成全量网关回归

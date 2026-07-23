@@ -24,6 +24,7 @@ func grokTestJWT(t *testing.T, claims map[string]any) string {
 
 type grokOAuthClientStub struct {
 	refreshResponse *xai.TokenResponse
+	ssoResponse     *xai.TokenResponse
 	exchangeCalls   int
 }
 
@@ -34,6 +35,10 @@ func (s *grokOAuthClientStub) ExchangeCode(context.Context, string, string, stri
 
 func (s *grokOAuthClientStub) RefreshToken(context.Context, string, string, string) (*xai.TokenResponse, error) {
 	return s.refreshResponse, nil
+}
+
+func (s *grokOAuthClientStub) ConvertSSOToBuild(context.Context, string, string) (*xai.TokenResponse, error) {
+	return s.ssoResponse, nil
 }
 
 func TestGrokOAuthServiceRefreshTokenPreservesOriginalRefreshTokenWhenNotRotated(t *testing.T) {

@@ -101,7 +101,7 @@ func TestTokenRefreshServiceKiroProfilePrefillRuntime(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	service.SetKiroProfileResolverDeps(upstream, &TLSFingerprintProfileService{})
 	refresher := &tokenRefreshKiroProfileRuntimeRefresher{credentials: map[string]any{
 		"access_token":  "fresh-token",

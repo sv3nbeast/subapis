@@ -7,7 +7,7 @@
   >
     <!-- provider tabs -->
     <div class="mb-4 border-b border-gray-200 dark:border-dark-700">
-      <div role="tablist" class="flex gap-1">
+      <div role="tablist" class="flex flex-wrap gap-1">
         <button
           v-for="tab in providerTabs"
           :key="tab.value"

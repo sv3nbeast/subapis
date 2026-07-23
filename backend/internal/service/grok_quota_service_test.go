@@ -19,28 +19,38 @@ import (
 
 type grokQuotaAccountRepo struct {
 	AccountRepository
-	accounts              map[int64]*Account
-	updates               map[int64]map[string]any
-	tempUnschedCalls      int
-	lastTempUnschedID     int64
-	lastTempUnschedUntil  time.Time
-	lastTempUnschedReason string
-	rateLimitedCalls      int
-	lastRateLimitedID     int64
-	lastRateLimitResetAt  time.Time
-	clearErrorCalls       int
+	mockAccountRepoForPlatform *mockAccountRepoForPlatform
+	accounts                   map[int64]*Account
+	updates                    map[int64]map[string]any
+	tempUnschedCalls           int
+	lastTempUnschedID          int64
+	lastTempUnschedUntil       time.Time
+	lastTempUnschedReason      string
+	rateLimitedCalls           int
+	lastRateLimitedID          int64
+	lastRateLimitResetAt       time.Time
+	clearErrorCalls            int
+	updateCalls                int
 }
 
 func (r *grokQuotaAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	if r.mockAccountRepoForPlatform != nil {
+		return r.mockAccountRepoForPlatform.accountsByID[id], nil
+	}
 	return r.accounts[id], nil
 }
 
 func (r *grokQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.updateCalls++
 	if r.updates == nil {
 		r.updates = make(map[int64]map[string]any)
 	}
 	r.updates[id] = updates
-	if account := r.accounts[id]; account != nil {
+	account := r.accounts[id]
+	if r.mockAccountRepoForPlatform != nil {
+		account = r.mockAccountRepoForPlatform.accountsByID[id]
+	}
+	if account != nil {
 		if account.Extra == nil {
 			account.Extra = make(map[string]any)
 		}
@@ -68,7 +78,11 @@ func (r *grokQuotaAccountRepo) SetRateLimited(_ context.Context, id int64, reset
 
 func (r *grokQuotaAccountRepo) ClearError(_ context.Context, id int64) error {
 	r.clearErrorCalls++
-	if account := r.accounts[id]; account != nil {
+	account := r.accounts[id]
+	if r.mockAccountRepoForPlatform != nil {
+		account = r.mockAccountRepoForPlatform.accountsByID[id]
+	}
+	if account != nil {
 		account.Status = StatusActive
 		account.ErrorMessage = ""
 		account.Schedulable = true
@@ -147,7 +161,7 @@ func TestGrokQuotaServiceProbeUsageStoresOfficialBillingSnapshot(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`)),
 		},
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 42)
 	require.NoError(t, err)
@@ -193,7 +207,7 @@ func TestGrokQuotaServiceProbeUsageRepairsLegacySpendingLimitErrorAsRateLimited(
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(billingBody))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`))},
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 43)
 
@@ -232,7 +246,7 @@ func TestGrokQuotaServiceProbeUsagePreservesUnrelatedErrorAtHundredPercent(t *te
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(billingBody))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`))},
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 44)
 
@@ -268,7 +282,7 @@ func TestGrokQuotaServiceProbeUsageDoesNotSendInferenceRequest(t *testing.T) {
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(grokBillingTestBody(0)))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 47)
 	require.NoError(t, err)
@@ -301,7 +315,7 @@ func TestGrokQuotaServiceProbeUsageReportsBillingUpstreamError(t *testing.T) {
 		Header:     http.Header{},
 		Body:       io.NopCloser(strings.NewReader(`{"code":"invalid-argument","error":"Model not found"}`)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	_, err := svc.ProbeUsage(context.Background(), 48)
 	require.Error(t, err)
@@ -341,7 +355,7 @@ func TestGrokQuotaServiceProbeUsageLoadsProxyWhenAccountEdgeMissing(t *testing.T
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(grokBillingTestBody(20)))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
 	}}
-	svc := NewGrokQuotaService(repo, proxyRepo, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, proxyRepo, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	_, err := svc.ProbeUsage(context.Background(), 46)
 	require.NoError(t, err)
@@ -369,7 +383,7 @@ func TestGrokQuotaServiceProbeUsageAcceptsOmittedZeroValues(t *testing.T) {
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-07-09T18:40:47Z","end":"2026-07-16T18:40:47Z"},"isUnifiedBillingUser":true}}`))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))},
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 45)
 	require.NoError(t, err)
@@ -404,7 +418,7 @@ func TestGrokQuotaServiceProbeUsageReturnsBillingRateLimitError(t *testing.T) {
 		Header:     http.Header{"Retry-After": []string{"45"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 43)
 	require.Error(t, err)
@@ -423,7 +437,7 @@ func TestGrokQuotaServiceResetQuotaUnsupported(t *testing.T) {
 	repo := &grokQuotaAccountRepo{
 		accounts: map[int64]*Account{44: account},
 	}
-	svc := NewGrokQuotaService(repo, nil, nil, nil)
+	svc := NewGrokQuotaService(repo, nil, nil, nil, nil)
 
 	_, err := svc.ResetQuota(context.Background(), 44)
 	require.Error(t, err)
@@ -452,7 +466,7 @@ func TestAccountUsageServiceRefreshesOfficialGrokBillingAndCachesSnapshot(t *tes
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(grokBillingTestBody(49)))},
 		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"subscription_tier_display":"SuperGrok"}`))},
 	}}
-	quotaService := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	quotaService := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 	usageService := NewAccountUsageService(repo, nil, nil, nil, nil, NewGrokQuotaFetcher(), nil, NewUsageCache(), nil, nil).
 		SetGrokQuotaService(quotaService)
 
@@ -485,7 +499,7 @@ func TestAccountUsageServiceDoesNotQueryOAuthBillingForGrokAPIKey(t *testing.T) 
 	}
 	repo := &grokQuotaAccountRepo{accounts: map[int64]*Account{50: account}}
 	upstream := &grokQuotaHTTPUpstream{}
-	quotaService := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	quotaService := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 	usageService := NewAccountUsageService(repo, nil, nil, nil, nil, NewGrokQuotaFetcher(), nil, NewUsageCache(), nil, nil).
 		SetGrokQuotaService(quotaService)
 
