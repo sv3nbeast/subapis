@@ -196,7 +196,15 @@
           </div>
           <article v-for="channel in supportedChannels" :key="channel.name">
             <div class="home-v2-channel-name">
-              <i :class="channel.markClass">{{ channel.shortName }}</i>
+              <span
+                class="home-v2-channel-logo"
+                :class="channel.markClass"
+                role="img"
+                :aria-label="channel.name"
+                :title="channel.name"
+              >
+                <PlatformIcon :platform="channel.platform" size="lg" />
+              </span>
               <strong>{{ channel.name }}</strong>
             </div>
             <p>{{ channel.description }}</p>
@@ -942,16 +950,13 @@ onBeforeUnmount(() => {
 }
 
 .home-v2-provider-logo,
-.home-v2-channel-name i {
+.home-v2-channel-logo {
   display: grid;
   width: 26px;
   height: 26px;
   place-items: center;
   border-radius: 6px;
-  color: #fff;
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 750;
+  border: 1px solid rgba(24, 32, 38, 0.08);
 }
 
 .home-v2-provider-logo {
@@ -962,11 +967,11 @@ onBeforeUnmount(() => {
   transform: scale(0.94);
 }
 
-.home-provider-claude { background: #b85c38; }
-.home-provider-gpt { background: #16826c; }
-.home-provider-gemini { background: #3974d6; }
-.home-provider-antigravity { background: #7251c8; }
-.home-provider-custom { background: #5f6368; }
+.home-provider-claude { background: #fff1eb; color: #b85c38; }
+.home-provider-gpt { background: #eaf7f1; color: #16826c; }
+.home-provider-gemini { background: #f3f6ff; color: #3974d6; }
+.home-provider-antigravity { background: #f5f1ff; color: #654bc2; }
+.home-provider-custom { background: #eef1f3; color: #5f6368; }
 
 .home-v2-capabilities {
   background: #fff;
