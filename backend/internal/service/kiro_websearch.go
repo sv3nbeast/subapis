@@ -300,15 +300,7 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 	releaseStreamCtx()
 	_ = rawReader.CloseWithError(gateErr)
 	_ = clientReader.CloseWithError(gateErr)
-	cleanupStarted := time.Now()
-	cleaned := waitKiroUpstreamCleanup(upstreamDone, s.kiroCleanupGrace(groupID))
-	if !cleaned {
-		logger.L().Error("kiro web search upstream cleanup exceeded grace",
-			zap.String("request_id", requestID),
-			zap.Int64("account_id", accountID),
-			zap.Int64("cleanup_ms", time.Since(cleanupStarted).Milliseconds()),
-		)
-	}
+	cleaned := kiroUpstreamCleanupDone(upstreamDone)
 	if requestCtx.Err() != nil {
 		if !cleaned {
 			return nil, inputTokens, &kiroUpstreamCleanupPendingError{cause: context.Cause(requestCtx), done: upstreamDone}
@@ -603,14 +595,13 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 		)
 		if err != nil {
 			if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, "", wroteRequest.Load()); failoverErr != nil {
-				if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+				if !kiroUpstreamCleanupDone(physicalDone) {
 					failoverErr.UpstreamDone = physicalDone
-					failoverErr.FailoverProhibited = true
 				}
 				return nil, currentToken, failoverErr
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+				if !kiroUpstreamCleanupDone(physicalDone) {
 					return nil, currentToken, &kiroUpstreamCleanupPendingError{cause: err, done: physicalDone}
 				}
 				return nil, currentToken, err
@@ -618,7 +609,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			if !resilienceEnforced {
 				return nil, currentToken, err
 			}
-			physicalCleaned := waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID))
+			physicalCleaned := kiroUpstreamCleanupDone(physicalDone)
 			if attempt == 0 && !wroteRequest.Load() && physicalCleaned {
 				continue
 			}
@@ -631,7 +622,6 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			}
 			failoverErr := newKiroEndpointTransportFailover(transportErr)
 			failoverErr.StatusCode = http.StatusServiceUnavailable
-			failoverErr.FailoverProhibited = wroteRequest.Load() || !physicalCleaned
 			failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 			var headerTimeout *kiroResponseHeaderTimeoutError
 			if errors.As(err, &headerTimeout) {

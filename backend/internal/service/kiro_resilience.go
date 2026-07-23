@@ -863,6 +863,18 @@ func waitKiroUpstreamCleanup(done <-chan struct{}, grace time.Duration) bool {
 	}
 }
 
+func kiroUpstreamCleanupDone(done <-chan struct{}) bool {
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 type kiroCooldownPrefetchContextKey struct{}
 
 type kiroCooldownPrefetch struct {
@@ -912,14 +924,15 @@ func (s *GatewayService) KiroResilienceEnforced(groupID *int64) bool {
 	return s.kiroResilienceEnforced(groupID)
 }
 
-// StartKiroResilienceTracking starts either the enforce budget or passive
-// observe timers. Observe mode never adds a deadline or changes selection.
+// StartKiroResilienceTracking starts either a fresh per-account attempt budget
+// or passive observe timers. Observe mode never adds a deadline or changes
+// selection.
 func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupID *int64, account *Account) (context.Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s.kiroResilienceEnforced(groupID) && !KiroGPTTimeoutsDisabled(ctx) {
-		return s.StartKiroResilienceBudget(ctx, groupID)
+		return s.startKiroResilienceAttemptBudget(ctx, groupID), nil
 	}
 	if KiroGPTTimeoutsDisabled(ctx) {
 		return ctx, nil
@@ -943,6 +956,20 @@ func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupI
 		budget,
 	)
 	return context.WithValue(ctx, kiroResilienceObservationContextKey{}, observation), nil
+}
+
+func (s *GatewayService) startKiroResilienceAttemptBudget(ctx context.Context, groupID *int64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !s.kiroResilienceEnforced(groupID) || KiroGPTTimeoutsDisabled(ctx) {
+		return ctx
+	}
+	duration := time.Duration(s.cfg.Gateway.KiroResilience.FailoverBudgetSeconds) * time.Second
+	if duration <= 0 {
+		duration = 105 * time.Second
+	}
+	return context.WithValue(ctx, kiroResilienceBudgetContextKey{}, &kiroResilienceBudget{duration: duration})
 }
 
 func (s *GatewayService) startKiroFirstSemanticObservation(ctx context.Context, groupID *int64, account *Account, started time.Time, inputTokens int) *kiroFirstSemanticObserver {
@@ -1084,9 +1111,9 @@ func (s *GatewayService) shouldBindSelectionBeforeSuccess(account *Account, grou
 	return account == nil || account.Platform != PlatformKiro || !s.kiroResilienceEnforced(groupID)
 }
 
-// StartKiroResilienceBudget lazily starts the request-wide Kiro budget. The
-// returned context must replace the caller's request context so queue waits and
-// every subsequent Kiro account attempt share the same deadline.
+// StartKiroResilienceBudget lazily starts the current Kiro account-attempt
+// budget. Handlers install a fresh budget before each selected account so one
+// slow account cannot consume the next account's opportunity to respond.
 func (s *GatewayService) StartKiroResilienceBudget(ctx context.Context, groupID *int64) (context.Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1152,7 +1179,7 @@ func (s *GatewayService) kiroContextWithinBudget(ctx context.Context, groupID *i
 	return budgetCtx, cancel, nil
 }
 
-// kiroPreSemanticContext applies the account and request budgets only until
+// kiroPreSemanticContext applies the current account-attempt budget only until
 // the first semantic event. stopTimer must be called as soon as that event is
 // accepted so a long, healthy generation is not canceled by a failover timer.
 func (s *GatewayService) kiroPreSemanticContext(ctx context.Context, groupID *int64, inputTokens int) (context.Context, context.CancelCauseFunc, func(), error) {
@@ -1217,7 +1244,7 @@ func (s *GatewayService) kiroResponseHeaderTimeout(groupID *int64) time.Duration
 }
 
 // kiroResponseHeaderTimeoutForInput gives large prompt uploads enough time to
-// reach Kiro without weakening the request-wide failover budget. The scaled
+// reach Kiro without weakening the current account-attempt budget. The scaled
 // first-semantic deadline remains authoritative and keeps parsing headroom.
 func (s *GatewayService) kiroResponseHeaderTimeoutForInput(groupID *int64, payloadInputTokens int) time.Duration {
 	base := s.kiroResponseHeaderTimeout(groupID)

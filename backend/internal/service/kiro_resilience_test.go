@@ -338,6 +338,27 @@ func TestStartKiroResilienceTrackingObservePreservesParentCancellation(t *testin
 	}
 }
 
+func TestStartKiroResilienceTrackingRefreshesBudgetForEachAccount(t *testing.T) {
+	svc := enforcedKiroResilienceTestService()
+	groupID := int64(171)
+	firstAccount := &Account{ID: 1711, Platform: PlatformKiro}
+	secondAccount := &Account{ID: 1712, Platform: PlatformKiro}
+
+	firstCtx, err := svc.StartKiroResilienceTracking(context.Background(), &groupID, firstAccount)
+	require.NoError(t, err)
+	firstBudget, ok := firstCtx.Value(kiroResilienceBudgetContextKey{}).(*kiroResilienceBudget)
+	require.True(t, ok)
+	firstBudget.once.Do(func() { firstBudget.deadline = time.Now().Add(-time.Second) })
+	require.LessOrEqual(t, firstBudget.remaining(), time.Duration(0))
+
+	secondCtx, err := svc.StartKiroResilienceTracking(firstCtx, &groupID, secondAccount)
+	require.NoError(t, err)
+	secondBudget, ok := secondCtx.Value(kiroResilienceBudgetContextKey{}).(*kiroResilienceBudget)
+	require.True(t, ok)
+	require.NotSame(t, firstBudget, secondBudget)
+	require.Greater(t, secondBudget.remaining(), time.Duration(0), "the next account must receive a fresh response opportunity")
+}
+
 func TestKiroSemanticObserverWriterPassesSplitSSEThroughUnchanged(t *testing.T) {
 	svc := observedKiroResilienceTestService()
 	groupID := int64(18)
@@ -1320,7 +1341,7 @@ func TestExecuteKiroUpstreamEnforceDoesNotRetryQuotaExhaustion429(t *testing.T) 
 	require.NotNil(t, account.RateLimitResetAt, "confirmed quota exhaustion persists a hard cooldown")
 }
 
-func TestExecuteKiroUpstreamEnforceDoesNotReplayAfterRequestWrite(t *testing.T) {
+func TestExecuteKiroUpstreamEnforceAllowsAccountFailoverAfterRequestWrite(t *testing.T) {
 	upstream := &writeObservedFailureKiroUpstream{}
 	svc := enforcedKiroResilienceTestService()
 	svc.httpUpstream = upstream
@@ -1345,8 +1366,8 @@ func TestExecuteKiroUpstreamEnforceDoesNotReplayAfterRequestWrite(t *testing.T) 
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Equal(t, UpstreamFailureTransportError, failoverErr.FailureKind)
-	require.True(t, failoverErr.FailoverProhibited, "a possibly delivered request must not be replayed on another account")
-	require.Equal(t, 1, upstream.requests, "a possibly delivered request must never be replayed on another endpoint")
+	require.False(t, failoverErr.FailoverProhibited, "a pre-response transport failure must allow another account to serve the user")
+	require.Equal(t, 1, upstream.requests, "the current account returns to the outer failover loop")
 }
 
 func TestExecuteKiroUpstreamEnforceAllowsOneUnwrittenRetryAcrossEndpointRound(t *testing.T) {
@@ -1408,7 +1429,7 @@ func TestExecuteKiroUpstreamHeaderTimeoutAfterWriteDoesNotPauseAccount(t *testin
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
-	require.True(t, failoverErr.FailoverProhibited, "a written request must never be replayed")
+	require.False(t, failoverErr.FailoverProhibited, "a response-header timeout before user output must switch accounts")
 	require.Equal(t, int32(1), upstream.calls.Load())
 	require.Zero(t, store.observeUnresponsiveCalls, "timeouts must not write account-level observations")
 	require.Zero(t, store.markUnresponsiveCalls, "timeouts must not open the credential circuit")
@@ -1512,11 +1533,11 @@ func TestDoKiroMCPJSONRequestEnforceReturns429WithoutSameAccountRetry(t *testing
 	require.Equal(t, 9*time.Second, failoverErr.RetryAfter)
 }
 
-func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t *testing.T) {
+func TestDoKiroMCPJSONRequestAllowsAccountFailoverWhileTimedOutTransportIsStillRunning(t *testing.T) {
 	upstream := &blockedKiroMCPHeaderUpstream{release: make(chan struct{}), exited: make(chan struct{})}
 	svc := enforcedKiroResilienceTestService()
 	svc.cfg.Gateway.KiroResilience.ResponseHeaderTimeoutSeconds = 1
-	svc.cfg.Gateway.KiroResilience.CleanupGraceSeconds = 1
+	svc.cfg.Gateway.KiroResilience.CleanupGraceSeconds = 5
 	svc.httpUpstream = upstream
 	store := &recordingKiroResilienceCooldownStore{}
 	svc.kiroCooldownStore = store
@@ -1529,12 +1550,14 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	ctx, err := svc.StartKiroResilienceBudget(context.Background(), &groupID)
 	require.NoError(t, err)
 
+	started := time.Now()
 	resp, _, err := svc.doKiroMCPJSONRequest(ctx, account, "https://example.test/mcp", []byte(`{"jsonrpc":"2.0"}`), "token", &groupID)
+	require.Less(t, time.Since(started), 3*time.Second, "old upstream cleanup must not delay account failover")
 	require.Nil(t, resp)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
-	require.True(t, failoverErr.FailoverProhibited, "a still-running request must not be replayed on another account")
+	require.False(t, failoverErr.FailoverProhibited, "a still-running pre-response request must not block another account")
 	require.NotNil(t, failoverErr.UpstreamDone)
 	require.Equal(t, int32(1), upstream.calls.Load(), "a still-running transport must block the one allowed connection retry")
 	require.Zero(t, store.observeUnresponsiveCalls, "timeouts must not write account-level observations")
@@ -1549,7 +1572,7 @@ func TestDoKiroMCPJSONRequestDoesNotRetryWhileTimedOutTransportIsStillRunning(t 
 	}
 }
 
-func TestNewKiroTimeoutFailoverProhibitsReplay(t *testing.T) {
+func TestNewKiroTimeoutFailoverAllowsPreSemanticAccountSwitch(t *testing.T) {
 	svc := enforcedKiroResilienceTestService()
 	store := &recordingKiroResilienceCooldownStore{}
 	svc.kiroCooldownStore = store
@@ -1563,7 +1586,7 @@ func TestNewKiroTimeoutFailoverProhibitsReplay(t *testing.T) {
 
 	require.NotNil(t, failoverErr)
 	require.Equal(t, UpstreamFailureFirstSemanticTimeout, failoverErr.FailureKind)
-	require.True(t, failoverErr.FailoverProhibited, "a request awaiting semantic output has already reached upstream")
+	require.False(t, failoverErr.FailoverProhibited, "no client-visible semantic output means another account may be tried")
 	require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
 	require.Zero(t, store.observeUnresponsiveCalls)
 	require.Zero(t, store.markUnresponsiveCalls)
@@ -1572,12 +1595,11 @@ func TestNewKiroTimeoutFailoverProhibitsReplay(t *testing.T) {
 
 func TestNewKiroTimeoutFailoverBeforeUpstreamDoesNotPenalizeCredential(t *testing.T) {
 	tests := []struct {
-		name               string
-		cause              error
-		failoverProhibited bool
+		name  string
+		cause error
 	}{
 		{name: "account attempt timeout can switch", cause: errKiroFirstSemanticTimeout},
-		{name: "exhausted total budget stops switching", cause: errKiroFailoverBudgetExceeded, failoverProhibited: true},
+		{name: "exhausted account attempt budget can switch", cause: errKiroFailoverBudgetExceeded},
 	}
 
 	for _, tt := range tests {
@@ -1594,7 +1616,7 @@ func TestNewKiroTimeoutFailoverBeforeUpstreamDoesNotPenalizeCredential(t *testin
 			failoverErr := svc.newKiroTimeoutFailover(context.Background(), account, &groupID, tt.cause, "claude-sonnet-4-6", false)
 
 			require.NotNil(t, failoverErr)
-			require.Equal(t, tt.failoverProhibited, failoverErr.FailoverProhibited)
+			require.False(t, failoverErr.FailoverProhibited)
 			require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
 			require.Zero(t, store.observeUnresponsiveCalls)
 			require.Zero(t, store.markUnresponsiveCalls)
@@ -1626,7 +1648,7 @@ func TestOpenKiroAnthropicStreamResponseExpiredBudgetDoesNotPenalizeSelectedAcco
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.ErrorIs(t, err, errKiroFailoverBudgetExceeded)
-	require.True(t, failoverErr.FailoverProhibited, "an exhausted request budget must stop further account switches")
+	require.False(t, failoverErr.FailoverProhibited, "an exhausted account budget must allow the next account")
 	require.Equal(t, defaultKiroTransportRetryAfter, failoverErr.RetryAfter)
 	require.Zero(t, store.observeUnresponsiveCalls)
 	require.Zero(t, store.markUnresponsiveCalls)

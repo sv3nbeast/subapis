@@ -1340,17 +1340,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			releaseStreamCtx()
 			_ = resp.Body.Close()
 			_ = pr.CloseWithError(gateErr)
-			cleanupStarted := time.Now()
-			cleaned := waitKiroUpstreamCleanup(upstreamDone, s.kiroCleanupGrace(groupID))
-			cleanupElapsed := time.Since(cleanupStarted)
-			if !cleaned {
-				logger.L().Error("kiro upstream cleanup exceeded grace",
-					zap.Int64("account_id", accountID),
-					zap.String("request_id", requestID),
-					zap.Int64("cleanup_grace_ms", s.kiroCleanupGrace(groupID).Milliseconds()),
-					zap.Int64("cleanup_ms", cleanupElapsed.Milliseconds()),
-				)
-			}
+			cleaned := kiroUpstreamCleanupDone(upstreamDone)
 			if ctx.Err() != nil {
 				if !cleaned {
 					return nil, inputTokens, &kiroUpstreamCleanupPendingError{cause: context.Cause(ctx), done: upstreamDone}
@@ -1478,12 +1468,11 @@ func (s *GatewayService) newKiroTimeoutFailover(ctx context.Context, account *Ac
 		},
 	})
 	failoverErr := &UpstreamFailoverError{
-		StatusCode:         http.StatusServiceUnavailable,
-		ResponseBody:       body,
-		FailureKind:        failureKind,
-		RetryAfter:         defaultKiroTransportRetryAfter,
-		FailoverProhibited: upstreamStarted || errors.Is(cause, errKiroFailoverBudgetExceeded),
-		Cause:              cause,
+		StatusCode:   http.StatusServiceUnavailable,
+		ResponseBody: body,
+		FailureKind:  failureKind,
+		RetryAfter:   defaultKiroTransportRetryAfter,
+		Cause:        cause,
 	}
 	if upstreamStarted {
 		failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
@@ -1600,9 +1589,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 
 			var wroteRequest atomic.Bool
 			trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) {
-				// The callback itself means a request write was attempted. Even when
-				// it reports an error, bytes may have reached the peer, so replay is
-				// no longer provably safe.
+				// Track whether a transport failure happened after upload. This is
+				// useful for endpoint retry policy, but pre-semantic account failover
+				// remains allowed until the client receives useful output.
 				wroteRequest.Store(true)
 			}}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
@@ -1629,21 +1618,20 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			)
 			if err != nil {
 				if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, mappedModel, wroteRequest.Load()); failoverErr != nil {
-					if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+					if !kiroUpstreamCleanupDone(physicalDone) {
 						failoverErr.UpstreamDone = physicalDone
-						failoverErr.FailoverProhibited = true
 					}
 					return nil, requestCtx, failoverErr
 				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					if physicalDone != nil && !waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID)) {
+					if !kiroUpstreamCleanupDone(physicalDone) {
 						return nil, requestCtx, &kiroUpstreamCleanupPendingError{cause: err, done: physicalDone}
 					}
 					return nil, requestCtx, err
 				}
 				var headerTimeout *kiroResponseHeaderTimeoutError
 				if errors.As(err, &headerTimeout) && physicalDone != nil {
-					cleaned := waitKiroUpstreamCleanup(physicalDone, s.kiroCleanupGrace(groupID))
+					cleaned := kiroUpstreamCleanupDone(physicalDone)
 					if !cleaned {
 						transportErr := &kiroEndpointTransportError{
 							EndpointName: endpoint.Name,
@@ -1653,7 +1641,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 							UpstreamDone: physicalDone,
 						}
 						failoverErr := newKiroEndpointTransportFailover(transportErr)
-						failoverErr.FailoverProhibited = true
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)
 						failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
 							ctx,
@@ -1675,7 +1662,6 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					}
 					failoverErr := newKiroEndpointTransportFailover(transportErr)
 					failoverErr.StatusCode = http.StatusServiceUnavailable
-					failoverErr.FailoverProhibited = true
 					failoverErr.RetryAfter = defaultKiroTransportRetryAfter
 					if errors.As(err, &headerTimeout) {
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)

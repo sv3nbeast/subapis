@@ -660,6 +660,24 @@ func TestHandleFailoverError_KiroEnforcedTransportDoesNotRetrySameAccount(t *tes
 	require.Empty(t, mock.calls)
 }
 
+func TestHandleFailoverError_KiroPendingPreSemanticRequestStillSwitchesAccount(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(2, false)
+	fs.KiroResilienceEnforced = true
+	done := make(chan struct{})
+	err := newTestFailoverErr(http.StatusServiceUnavailable, false, false)
+	err.FailureKind = service.UpstreamFailureResponseHeaderTimeout
+	err.UpstreamDone = done
+
+	action := fs.HandleFailoverError(context.Background(), mock, 42, service.PlatformKiro, err)
+
+	require.Equal(t, FailoverContinue, action)
+	require.Contains(t, fs.FailedAccountIDs, int64(42))
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Empty(t, mock.calls)
+	close(done)
+}
+
 func TestHandleFailoverError_KiroPostSemanticFailureNeverSwitches(t *testing.T) {
 	mock := &mockTempUnscheduler{}
 	fs := NewFailoverState(3, false)

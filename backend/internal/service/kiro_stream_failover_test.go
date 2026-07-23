@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -249,6 +250,24 @@ type kiroStreamFailoverQueuedUpstream struct {
 	requests  []*http.Request
 	errs      []error
 }
+
+type blockingKiroStreamBody struct {
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingKiroStreamBody() *blockingKiroStreamBody {
+	return &blockingKiroStreamBody{release: make(chan struct{})}
+}
+
+func (b *blockingKiroStreamBody) Read([]byte) (int, error) {
+	<-b.release
+	return 0, io.EOF
+}
+
+func (b *blockingKiroStreamBody) Close() error { return nil }
+
+func (b *blockingKiroStreamBody) unblock() { b.once.Do(func() { close(b.release) }) }
 
 type kiroScriptedUpstreamOutcome struct {
 	resp *http.Response
@@ -1389,6 +1408,88 @@ func TestOpenKiroAnthropicStreamResponseRetriesMetadataOnlyInResilienceMode(t *t
 		gjson.GetBytes(secondPayload, "conversationState.conversationId").String(),
 		"metadata-only retry must use a fresh conversation id")
 	require.Zero(t, store.markUnresponsiveCalls, "metadata-only output must not enter account unresponsive cooldown")
+}
+
+func TestOpenKiroAnthropicStreamResponseFirstAccountTimeoutThenSecondAccountCompletes(t *testing.T) {
+	firstBody := newBlockingKiroStreamBody()
+	t.Cleanup(firstBody.unblock)
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"served by second account"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+			Body:       firstBody,
+		},
+		newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+	}}
+	store := &kiroStreamFailoverCooldownStore{}
+	svc := enforcedKiroResilienceTestService()
+	svc.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds = 1
+	svc.cfg.Gateway.KiroResilience.FailoverBudgetSeconds = 2
+	svc.cfg.Gateway.KiroResilience.CleanupGraceSeconds = 5
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = store
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+
+	groupID := int64(291)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	newAccount := func(id int64) *Account {
+		return &Account{
+			ID: id, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+			Credentials: map[string]any{
+				"access_token": "test-token",
+				"api_region":   "us-east-1",
+				"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/FAILOVER",
+			},
+		}
+	}
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.Group = group
+	parsed.GroupID = &groupID
+
+	firstAccount := newAccount(2911)
+	firstCtx, err := svc.StartKiroResilienceTracking(context.Background(), &groupID, firstAccount)
+	require.NoError(t, err)
+	firstStarted := time.Now()
+	resp, _, err := svc.openKiroAnthropicStreamResponse(firstCtx, firstAccount, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.Less(t, time.Since(firstStarted), 3*time.Second, "slow cleanup must not delay selection of the second account")
+	require.Nil(t, resp)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, UpstreamFailureFirstSemanticTimeout, failoverErr.FailureKind)
+	require.False(t, failoverErr.FailoverProhibited)
+	require.NotNil(t, failoverErr.UpstreamDone, "slow cleanup must be tracked without blocking the next account")
+
+	secondAccount := newAccount(2912)
+	secondCtx, err := svc.StartKiroResilienceTracking(firstCtx, &groupID, secondAccount)
+	require.NoError(t, err)
+	resp, _, err = svc.openKiroAnthropicStreamResponse(secondCtx, secondAccount, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	streamBytes, readErr := io.ReadAll(resp.Body)
+	require.NoError(t, svc.finishKiroStreamResponse(secondCtx, resp, &groupID, readErr))
+	require.Contains(t, string(streamBytes), "served by seco")
+	require.Contains(t, string(streamBytes), "nd account")
+	require.Equal(t, 1, strings.Count(string(streamBytes), "event: message_stop"))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, StatusActive, firstAccount.Status)
+	require.True(t, firstAccount.Schedulable)
+
+	firstBody.unblock()
+	select {
+	case <-failoverErr.UpstreamDone:
+	case <-time.After(time.Second):
+		t.Fatal("first account upstream did not finish after release")
+	}
 }
 
 func TestForwardKiroMessagesStreamMissingTerminalAfterPartialOutputReturnsSSEError(t *testing.T) {
