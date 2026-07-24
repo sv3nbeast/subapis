@@ -60,6 +60,8 @@ function scheduleRootClassCleanup(): void {
   cancelPendingRootClassCleanup()
   pendingRootClassCleanup = setTimeout(() => {
     pendingRootClassCleanup = null
+    // A failed or interrupted route update can leave the current shell rendered
+    // after its component lifecycle has ended. Keep its root metrics stable.
     syncAppLayoutRootClassesAfterUnmount()
   }, 0)
 }
@@ -125,6 +127,8 @@ function unregisterRootClasses(): void {
   if (activeAppLayoutInstances > 0) {
     syncAppLayoutRootClasses()
   } else {
+    // Route views own AppLayout independently. Defer cleanup so a replacement
+    // layout can register without exposing the default root font for one frame.
     scheduleRootClassCleanup()
   }
 }

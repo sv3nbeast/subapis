@@ -238,16 +238,16 @@ onBeforeUnmount(() => {
 }
 
 :global(.dark .public-announcement-dialog) {
-  --ui2-surface: #1d1d20;
-  --ui2-surface-muted: #242427;
-  --ui2-surface-hover: #29292d;
-  --ui2-text: #f5f5f7;
-  --ui2-text-secondary: #b1b1b7;
-  --ui2-text-tertiary: #818188;
-  --ui2-line: rgba(255, 255, 255, 0.09);
-  --ui2-line-strong: rgba(255, 255, 255, 0.16);
-  --ui2-accent: #4da3ff;
-  --ui2-accent-soft: rgba(77, 163, 255, 0.13);
+  --ui2-surface: #29292e;
+  --ui2-surface-muted: #232326;
+  --ui2-surface-hover: #323237;
+  --ui2-text: #f4f4f6;
+  --ui2-text-secondary: #c5c5ca;
+  --ui2-text-tertiary: #94949c;
+  --ui2-line: rgba(255, 255, 255, 0.1);
+  --ui2-line-strong: rgba(255, 255, 255, 0.18);
+  --ui2-accent: #409cff;
+  --ui2-accent-soft: rgba(64, 156, 255, 0.15);
 }
 
 .public-announcement-dialog > header,

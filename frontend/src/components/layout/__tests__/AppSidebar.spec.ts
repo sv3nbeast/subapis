@@ -43,6 +43,12 @@ describe('AppSidebar scroll position persistence', () => {
 })
 
 describe('AppSidebar header styles', () => {
+  it('keeps a single account identity instead of duplicating the workspace', () => {
+    expect(componentSource).not.toContain('class="ui-v2-workspace-switcher"')
+    expect(componentSource).not.toContain('ui-v2-sidebar-brand-subtitle')
+    expect(componentSource).toContain('class="ui-v2-sidebar-profile"')
+  })
+
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)
     const sidebarBrandBlockMatch = componentSource.match(/\.sidebar-brand\s*\{[\s\S]*?\n\}/)
@@ -53,14 +59,70 @@ describe('AppSidebar header styles', () => {
     expect(sidebarBrandBlockMatch?.[0]).not.toContain('overflow: hidden;')
   })
 
-  it('keeps v2 navigation typography at the production equivalent pixel values', () => {
-    const parityBlock = styleSource.match(/\/\* Keep the production typography[\s\S]*?\.ui-v2 \.sidebar-link \{[\s\S]*?\n\}/)?.[0]
+  it('keeps the v2 sidebar and workspace on shared compact width tokens', () => {
+    expect(styleSource).toContain('--ui2-sidebar-width: 208px;')
+    expect(styleSource).toContain('--ui2-sidebar-collapsed-width: 64px;')
+    expect(styleSource).toContain('width: var(--ui2-sidebar-width) !important;')
+    expect(styleSource).toContain('margin-left: var(--ui2-sidebar-width) !important;')
+    expect(styleSource).toContain('width: min(calc(100vw - 3.5rem), 17.5rem) !important;')
+  })
 
-    expect(parityBlock).toContain('font-size: 12.1875px;')
-    expect(parityBlock).toContain('font-weight: 500;')
-    expect(parityBlock).toContain('font-synthesis: auto;')
-    expect(parityBlock).toContain('font-variation-settings: normal;')
-    expect(parityBlock).toContain('will-change: auto;')
+  it('keeps the default logo square and blends its transparent edge into the artwork', () => {
+    expect(componentSource).toContain("'sidebar-logo-default': sidebarLogoIsDefault")
+    expect(componentSource).toContain('const sidebarLogoIsDefault = computed(() => {')
+    expect(styleSource).toContain('flex: 0 0 32px;')
+    expect(styleSource).toContain('.ui-v2 .sidebar-logo-default {')
+    expect(styleSource).toContain('background: #0d2949;')
+    expect(styleSource).toContain('object-fit: cover;')
+  })
+
+  it('matches production navigation typography without rem-driven layout changes', () => {
+    const linkBlock = styleSource.match(/\.ui-v2 \.sidebar-link \{[\s\S]*?\n\}/)?.[0]
+    const activeBlock = styleSource.match(/\.ui-v2 \.sidebar-link-active \{[\s\S]*?\n\}/)?.[0]
+    const sectionTitleBlock = styleSource.match(/\.ui-v2 \.sidebar \.sidebar-section-title \{[\s\S]*?\n\}/)?.[0]
+
+    expect(sectionTitleBlock).toContain('min-height: 20px;')
+    expect(sectionTitleBlock).toContain('font-size: 9.375px;')
+    expect(sectionTitleBlock).toContain('font-weight: 650;')
+    expect(sectionTitleBlock).toContain('text-transform: uppercase;')
+    expect(linkBlock).toContain('min-height: 38px;')
+    expect(linkBlock).toContain('gap: 10px;')
+    expect(linkBlock).toContain('margin-bottom: 2px;')
+    expect(linkBlock).toContain('padding: 0 10px;')
+    expect(linkBlock).toContain('font-weight: 500;')
+    expect(linkBlock).toContain('font-size: 12.1875px;')
+    expect(linkBlock).toContain('font-synthesis: auto;')
+    expect(linkBlock).toContain('font-variation-settings: normal;')
+    expect(linkBlock).toContain('line-height: 20px;')
+    expect(linkBlock).toContain('transform: none;')
+    expect(linkBlock).toContain('will-change: auto;')
+    expect(activeBlock).toContain('font-size: 12.1875px;')
+    expect(activeBlock).toContain('font-weight: 620;')
+    expect(activeBlock).toContain('line-height: 20px;')
+    expect(activeBlock).toContain('color: var(--ui2-text-secondary) !important;')
+  })
+
+  it('uses color feedback without scaling sidebar text on press', () => {
+    const pressedBlock = styleSource.match(/\.ui-v2 \.sidebar-link:active \{[\s\S]*?\n\}/)?.[0]
+
+    expect(pressedBlock).toContain('background: var(--ui2-surface-recessed) !important;')
+    expect(pressedBlock).toContain('transform: none;')
+    expect(pressedBlock).not.toContain('scale(')
+  })
+
+  it('keeps the sidebar collapse icon at a fixed pixel size', () => {
+    const collapseIconBlock = styleSource.match(/\.ui-v2 \.sidebar \.ui-v2-sidebar-collapse svg \{[\s\S]*?\n\}/)?.[0]
+
+    expect(collapseIconBlock).toContain('width: 16px;')
+    expect(collapseIconBlock).toContain('height: 16px;')
+  })
+
+  it('matches the production dashboard metric value typography', () => {
+    const metricBlock = styleSource.match(/\.ui-v2 \.dashboard-metric-card \.text-xl \{[\s\S]*?\n\}/)?.[0]
+
+    expect(metricBlock).toContain('font-size: 22px;')
+    expect(metricBlock).toContain('font-weight: 650;')
+    expect(metricBlock).toContain('line-height: 1.2;')
   })
 })
 

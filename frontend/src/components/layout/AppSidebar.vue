@@ -9,14 +9,16 @@
     <!-- Logo/Brand -->
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
       <!-- Custom Logo or Default Logo -->
-      <div class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow">
+      <div
+        class="sidebar-logo flex items-center justify-center overflow-hidden"
+        :class="{ 'sidebar-logo-default': sidebarLogoIsDefault }"
+      >
         <img v-if="settingsLoaded" :src="siteLogo || '/logo.png'" :alt="t('common.logoAlt')" class="h-full w-full object-contain" />
       </div>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
         <span class="sidebar-brand-title text-lg font-bold text-gray-900 dark:text-white">
           {{ siteName }}
         </span>
-        <small class="ui-v2-sidebar-brand-subtitle">{{ t('nav.workspace') }}</small>
         <!-- Version Badge -->
         <VersionBadge class="sidebar-version-badge" :version="siteVersion" />
       </div>
@@ -30,15 +32,6 @@
         <ChevronDoubleLeftIcon v-if="!sidebarCollapsed" class="h-4 w-4" />
         <ChevronDoubleRightIcon v-else class="h-4 w-4" />
       </button>
-    </div>
-
-    <div v-if="currentUser" class="ui-v2-workspace-switcher">
-      <span class="ui-v2-workspace-avatar">{{ userInitials }}</span>
-      <span class="ui-v2-workspace-copy">
-        <strong>{{ t('nav.personalWorkspace') }}</strong>
-        <small>{{ displayName }}</small>
-      </span>
-      <ChevronDownIcon class="h-4 w-4 flex-shrink-0" />
     </div>
 
     <!-- Navigation -->
@@ -325,6 +318,10 @@ type ComponentImportFn = () => Promise<unknown>
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const sidebarLogoIsDefault = computed(() => {
+  const logo = siteLogo.value.trim()
+  return !logo || /(?:^|\/)logo\.png(?:[?#].*)?$/.test(logo)
+})
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 const currentUser = computed(() => authStore.user)
@@ -1120,8 +1117,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sidebar-logo {
-  flex: 0 0 2.25rem;
-  min-width: 2.25rem;
+  flex: 0 0 32px;
+  min-width: 32px;
 }
 
 .sidebar-header-collapsed {

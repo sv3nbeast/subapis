@@ -1151,7 +1151,7 @@ onBeforeUnmount(() => {
   margin-top: 18px;
   padding: 12px 14px 12px 18px;
   overflow: hidden;
-  background: #17191d;
+  background: #1e1e21;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   color: #f5f5f7;
@@ -1330,13 +1330,13 @@ onBeforeUnmount(() => {
 }
 
 .home-v2-status {
-  --v2-text: #f4f6f8;
-  --v2-secondary: #aeb7c2;
-  --v2-tertiary: #79838e;
+  --v2-text: #f4f4f6;
+  --v2-secondary: #c5c5ca;
+  --v2-tertiary: #94949c;
   --v2-line: rgba(255, 255, 255, 0.1);
   --v2-line-strong: rgba(255, 255, 255, 0.17);
   --v2-accent: #69d3bd;
-  background: #171a1e;
+  background: #1b1b1e;
   color: var(--v2-text);
 }
 
@@ -1396,7 +1396,7 @@ onBeforeUnmount(() => {
 
 .home-v2-monitor {
   overflow: hidden;
-  background: #20242a;
+  background: #232326;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   box-shadow: 0 22px 48px rgba(0, 0, 0, 0.28);
@@ -1413,7 +1413,7 @@ onBeforeUnmount(() => {
 
 .home-v2-monitor-head {
   min-height: 42px;
-  color: #77818d;
+  color: #94949c;
   font-size: 10px;
   font-weight: 700;
 }
@@ -1471,14 +1471,14 @@ onBeforeUnmount(() => {
 }
 
 .home-v2-monitor-name strong {
-  color: #f4f6f8;
+  color: #f4f4f6;
   font-size: 13px;
   font-weight: 700;
 }
 
 .home-v2-monitor-name small {
   margin-top: 4px;
-  color: #858e99;
+  color: #94949c;
   font-size: 10px;
 }
 
@@ -1518,7 +1518,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  color: #858e99;
+  color: #94949c;
   font-size: 13px;
 }
 
@@ -1672,13 +1672,13 @@ onBeforeUnmount(() => {
 }
 
 :global(.home-dark .home-v2) {
-  --v2-text: #f4f6f8;
-  --v2-secondary: #aeb7c2;
-  --v2-tertiary: #7f8994;
+  --v2-text: #f4f4f6;
+  --v2-secondary: #c5c5ca;
+  --v2-tertiary: #94949c;
   --v2-line: rgba(255, 255, 255, 0.1);
-  --v2-line-strong: rgba(255, 255, 255, 0.16);
-  --v2-surface: #20242a;
-  --v2-surface-muted: #262b32;
+  --v2-line-strong: rgba(255, 255, 255, 0.18);
+  --v2-surface: #232326;
+  --v2-surface-muted: #29292e;
   --v2-accent: #69d3bd;
   --v2-accent-hover: #78ddc7;
   --v2-accent-soft: rgba(105, 211, 189, 0.12);
@@ -1689,24 +1689,29 @@ onBeforeUnmount(() => {
 :global(.home-dark .home-v2-workflow),
 :global(.home-dark .home-v2-models),
 :global(.home-dark .home-v2-final) {
-  background: #15181c;
+  background: #161618;
 }
 
 :global(.home-dark .home-v2-capabilities),
 :global(.home-dark .home-v2-models) {
-  background: #191d22;
+  background: #1b1b1e;
 }
 
 :global(.home-dark .home-v2-endpoint),
 :global(.home-dark .home-v2-routing),
 :global(.home-dark .home-v2-channel-ledger) {
-  background: #20242a;
+  background: #232326;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+:global(.home-dark .home-v2 .home-v2-proof) {
+  background: #232326;
   border-color: rgba(255, 255, 255, 0.1);
 }
 
 :global(.home-dark .home-v2-endpoint-line),
 :global(.home-dark .home-v2-routing > footer) {
-  background: #262b32;
+  background: #29292e;
 }
 
 :global(.home-dark .home-v2-endpoint-line code),
@@ -1717,13 +1722,17 @@ onBeforeUnmount(() => {
 }
 
 :global(.home-dark .home-v2-button-secondary) {
-  background: #23282e;
+  background: #29292e;
   border-color: rgba(255, 255, 255, 0.12);
-  color: #f4f6f8;
+  color: #f4f4f6;
+}
+
+:global(.home-dark .home-v2-button-primary) {
+  color: #10211d;
 }
 
 :global(.home-dark .home-v2-workflow-rail li > span) {
-  background: #15181c;
+  background: #161618;
 }
 
 @media (max-width: 1023px) {
