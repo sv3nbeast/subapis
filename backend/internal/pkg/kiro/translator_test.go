@@ -80,24 +80,6 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
-func TestBuildKiroPayloadCompactsClaudeCodeSystemPrompt(t *testing.T) {
-	longPrompt := "You are an interactive agent that helps users with software engineering tasks.\n# Doing tasks\n# Using your tools\n" + strings.Repeat("large CLI instruction block ", 800)
-	body := []byte(fmt.Sprintf(`{
-		"model":"claude-opus-4-8",
-		"system":%q,
-		"messages":[{"role":"user","content":"inspect the workspace"}],
-		"tools":[{"name":"Bash","description":"run commands","input_schema":{"type":"object"}}]
-	}`, longPrompt))
-
-	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
-	require.NoError(t, err)
-	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "You are serving as the model backend for Claude Code CLI.")
-	require.NotContains(t, systemContent, "large CLI instruction block")
-	require.Less(t, len(systemContent), 5000)
-	require.Equal(t, "Claude Code is part of the deployment notes.", compactKiroClaudeCodeSystemPrompt("Claude Code is part of the deployment notes."))
-}
-
 func TestBuildKiroTemporalContextDefaultIsEmpty(t *testing.T) {
 	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "")
 
@@ -218,7 +200,7 @@ func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 	}
 }
 
-func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *testing.T) {
+func TestBuildKiroPayloadPreservesNativeToolHistoryLargerThanLegacyWireCap(t *testing.T) {
 	messages := []map[string]any{
 		{"role": "user", "content": "inspect the workspace"},
 		{"role": "assistant", "content": []map[string]any{
@@ -261,12 +243,11 @@ func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *tes
 			}
 		}
 	}
-	require.False(t, foundToolUse)
-	require.False(t, foundToolResult)
+	require.True(t, foundToolUse)
+	require.True(t, foundToolResult)
 	require.Equal(t, "finish the task", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
-	require.Contains(t, string(result.Payload), "Tool results:")
-	require.Contains(t, string(result.Payload), "[exec_command] /workspace")
+	require.NotContains(t, string(result.Payload), "Tool results:")
 	require.NotContains(t, string(result.Payload), "truncated to fit")
 }
 
@@ -2787,7 +2768,7 @@ func TestBuildKiroPayloadRemovesHistoryOrphanToolUse(t *testing.T) {
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
 }
 
-func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
+func TestBuildKiroPayloadPreservesCompletedHistoryToolCycles(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-8",
 		"messages":[
@@ -2827,29 +2808,23 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
 				require.Equal(t, "execCommand", toolUse.Get("name").String())
 			}
 		}
-		if msg.Get("userInputMessage.userInputMessageContext.toolResults").IsArray() {
-			t.Fatalf("completed history tool results must be flattened: %s", msg.Raw)
+		for _, toolResult := range msg.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
+			if toolResult.Get("toolUseId").String() == "t1" {
+				foundT1ToolResult = true
+				require.Equal(t, "build ok", toolResult.Get("content.0.text").String())
+			}
 		}
 		require.NotContains(t, msg.Get("assistantResponseMessage.content").String(), "[Called tool")
 	}
-	require.False(t, foundT1ToolUse)
-	require.False(t, foundT1ToolResult)
-	require.False(t, foundT2ToolUse)
-	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults").Exists())
-	var historyText strings.Builder
-	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
-		historyText.WriteString(msg.Get("userInputMessage.content").String())
-		historyText.WriteString("\n")
-		historyText.WriteString(msg.Get("assistantResponseMessage.content").String())
-		historyText.WriteString("\n")
-	}
-	require.Contains(t, historyText.String(), "[exec_command] build ok")
-	currentContent := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
-	require.Contains(t, currentContent, "[exec_command] tests pass")
-	require.Contains(t, currentContent, "Summarize everything")
+	require.True(t, foundT1ToolUse)
+	require.True(t, foundT1ToolResult)
+	require.True(t, foundT2ToolUse)
+	require.Equal(t, "t2", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "tests pass", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Contains(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String(), "Summarize everything")
 	require.Equal(t, "execCommand", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 	require.Equal(t, "exec_command", result.Context.ToolNameMap["execCommand"])
-	require.Contains(t, string(payload), "Tool results:")
+	require.NotContains(t, string(payload), "Tool results:")
 }
 
 func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
@@ -2982,7 +2957,7 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 		"tool_choice":{"type":"tool","name":%q},
 		"messages":[
 			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":%q,"input":{"path":"/tmp/a.txt"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}]}
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"},{"type":"text","text":"continue"}]}
 		],
 		"tools":[{"name":%q,"description":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}]
 	}`, longName, longName, longName))
@@ -3011,6 +2986,7 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, "toolu_01", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
 	require.Equal(t, "ok", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "continue")
 	require.NotContains(t, string(result.Payload), "Tool results:")
 }
 
