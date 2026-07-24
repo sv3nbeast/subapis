@@ -27,13 +27,13 @@ const (
 	grokUpstreamUserAgent                  = "sub2api-grok/1.0"
 	// Keep the legacy service-level alias in lockstep with the shared xAI CLI
 	// transport headers used by OAuth probes and Grok forwarding.
-	grokCLIVersion                         = xai.CLIClientVersion
-	grokDefaultResponsesModel              = "grok-4.5"
-	grokRateLimitFallbackCooldown          = 2 * time.Minute
-	grokRateLimitRepeatCooldown            = 10 * time.Minute
-	grokRateLimitSustainedCooldown         = 30 * time.Minute
-	grokRateLimitMaxAdaptiveCooldown       = time.Hour
-	grokRateLimitBackoffQuietPeriod        = time.Hour
+	grokCLIVersion                   = xai.CLIClientVersion
+	grokDefaultResponsesModel        = "grok-4.5"
+	grokRateLimitFallbackCooldown    = 2 * time.Minute
+	grokRateLimitRepeatCooldown      = 10 * time.Minute
+	grokRateLimitSustainedCooldown   = 30 * time.Minute
+	grokRateLimitMaxAdaptiveCooldown = time.Hour
+	grokRateLimitBackoffQuietPeriod  = time.Hour
 )
 
 func applyGrokCLIHeaders(headers http.Header) {
@@ -174,7 +174,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -855,7 +855,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, grokComposerImageBridgeVisionModel)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -1048,6 +1048,11 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	if s == nil || account == nil {
 		return
 	}
+	// Content-policy refusals are scoped to this request, not to the OAuth
+	// credential. Do not cool down, mark, or fail over the account for them.
+	if isGrokContentPolicyRejection(statusCode, responseBody) {
+		return
+	}
 	if statusCode == http.StatusTooManyRequests && len(requestedModel) > 0 &&
 		s.markGrokZeroRPMModelRateLimitIfDetected(ctx, account, requestedModel[0], responseBody) {
 		return
@@ -1084,6 +1089,9 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
 			return
 		}
+		if s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
+			return
+		}
 		if s.rateLimitService != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
 			defer cancel()
@@ -1091,7 +1099,7 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.rateLimitService.handleGrok403(stateCtx, account, upstreamMsg, responseBody)
 			return
 		}
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
+		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
 	case http.StatusTooManyRequests:
 		// Free Build reports its rolling 24-hour token allowance exhaustion as
 		// 429 subscription:free-usage-exhausted. This is not a short burst limit.

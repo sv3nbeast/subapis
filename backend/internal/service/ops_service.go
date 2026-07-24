@@ -277,12 +277,40 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 			}
 		}
 	}
+	applyOpsAccountAuthClassification(entry)
 
 	if err := sanitizeOpsUpstreamErrors(entry); err != nil {
 		return nil, false, err
 	}
 
 	return entry, true, nil
+}
+
+// applyOpsAccountAuthClassification promotes an explicit credential failure
+// attempt over stale inference metadata. Account-auth failures are gateway
+// state transitions, not upstream inference responses; persist the canonical
+// zero status and safe credential-action message while retaining the full
+// attempt list in UpstreamErrorsJSON for diagnostics.
+func applyOpsAccountAuthClassification(entry *OpsInsertErrorLogInput) {
+	if entry == nil {
+		return
+	}
+	for _, event := range entry.UpstreamErrors {
+		if event == nil || strings.TrimSpace(event.Stage) != string(GatewayFailureStageAccountAuth) {
+			continue
+		}
+		entry.ErrorPhase = string(GatewayFailureStageAccountAuth)
+		entry.ErrorSource = "gateway"
+		zero := 0
+		entry.UpstreamStatusCode = &zero
+		entry.UpstreamErrorDetail = nil
+		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(event.Message))
+		if message == "" {
+			message = "Upstream credentials require account action"
+		}
+		entry.UpstreamErrorMessage = &message
+		return
+	}
 }
 
 func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {

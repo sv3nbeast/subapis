@@ -24,6 +24,9 @@ func grokBaseURLValidator(account *Account, cfg *config.Config) (xai.BaseURLVali
 		// XAI_ALLOW_UNSAFE_URL_OVERRIDES debug switch, which must never let an
 		// OAuth bearer token reach an arbitrary custom host.
 		policyValidator := grokOperatorPolicyValidator(cfg)
+		if cfg == nil {
+			policyValidator = xai.ValidateTrustedBaseURL
+		}
 		return redactedGrokBaseURLValidator(func(raw string) (string, error) {
 			if xai.IsOfficialBaseURL(raw) {
 				return xai.ValidateTrustedBaseURL(raw)

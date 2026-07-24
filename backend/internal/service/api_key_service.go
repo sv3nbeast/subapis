@@ -904,9 +904,17 @@ func (s *APIKeyService) TouchLastUsed(ctx context.Context, keyID int64) error {
 			}
 		}
 
-		if err := s.apiKeyRepo.UpdateLastUsed(ctx, keyID, latest); err != nil {
+		updateErr := func() (err error) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err = fmt.Errorf("update api key last used panic: %v", recovered)
+				}
+			}()
+			return s.apiKeyRepo.UpdateLastUsed(ctx, keyID, latest)
+		}()
+		if updateErr != nil {
 			s.lastUsedTouchL1.Store(keyID, latest.Add(apiKeyLastUsedFailBackoff))
-			return nil, fmt.Errorf("touch api key last used: %w", err)
+			return nil, fmt.Errorf("touch api key last used: %w", updateErr)
 		}
 		s.lastUsedTouchL1.Store(keyID, latest.Add(apiKeyLastUsedMinTouch))
 		return nil, nil

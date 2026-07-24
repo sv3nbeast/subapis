@@ -2506,3 +2506,27 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 验证: `git diff --check`、`go build ./...`、前端 lint/typecheck/build、Kiro translator 聚焦测试、Grok/OpenAI 探测聚焦测试通过
 - 网关回归审查: `INCONCLUSIVE`；完整 service/handler 单测仍有本地历史分支与当前官方拆分布局冲突，`stream/cache-hit/recreate/latency` 不宣称通过
 - 发布结论: 阻止生产发布，待拆分布局回归清理并完成全量网关回归
+
+## 2026-07-24 08:26:00 +0800
+
+- 官方目标复核: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 补正: OAuth Messages → Responses 兼容桥在最终发送前恢复 Codex `User-Agent`、`originator`、`version` 与 `OpenAI-Beta`；同步 Grok OAuth CAS 刷新测试桩
+- 验证: `go build ./...`、`git diff --check`、全部 `TestForwardAsAnthropic_*` 与 Grok 凭据恢复聚焦测试通过
+- 全量 service 测试: 仍有本地历史/融合协议断言失败（旧 flush、WSv2、透传错误包装、图像 usage 等），不归因于本次 OAuth 身份头补正
+- 网关回归审查: `INCONCLUSIVE`；`stream/cache-hit/recreate/latency` 不宣称通过
+- 发布结论: 保持在 `codex/official-sync-review`，未 promote 到 `main`，未部署生产
+
+## 2026-07-24 08:53:02 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 融合工作树基线: `5847635388ca75dbc6f4ecafb0b639e1e161643f`
+- 官方目标: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 完成差分回归、网关四项不变量、race、性能与前端验证；未提升到 `main`，未部署生产
+- 全量差分验证: 当前 `go test ./... -count=1` 的 61 个顶层失败全部存在于同步前快照 `cbec44f63`；相对基线新增失败为 `0`，并修复基线中的 67 个顶层失败
+- 聚焦验证: `openai_ws_v2` 全包、Kiro Responses WebSocket 流生命周期/重放边界、Claude SSE 错误边界、Kiro/Grok 缓存身份与跨实例并发提交测试通过；缓存并发聚焦 `-race` 通过
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 延迟基准: WS hot path 中位数 `72806ns -> 72728ns`，`1583 allocs/op` 不变；终态 usage 解析因新增图片输入 token 字段读取，中位数 `1735ns -> 1902ns`（约 `+9.6%`，绝对增加约 `167ns/请求`），不处于首字节路径且不构成可感知 TTFT/吞吐回退
+- 后端验证: `go build ./...`、`git diff --check` 通过
+- 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；构建仅保留既有 chunk/导入警告
+- 发布结论: 融合内容达到回归门槛；主工作区仍有用户未提交的前端改动，提升流程继续阻止，避免覆盖或混入非本次同步内容

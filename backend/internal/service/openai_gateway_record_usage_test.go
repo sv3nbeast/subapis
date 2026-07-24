@@ -2409,7 +2409,7 @@ func TestOpenAIGatewayServiceRecordUsage_ChannelImageBillingUsesImageCountAndInd
 func newOpenAIImageChannelPricingResolverForTest(t *testing.T, groupID int64, model string, price float64) *ModelPricingResolver {
 	t.Helper()
 	cache := newEmptyChannelCache()
-	cache.pricingByGroupModel[channelModelKey{groupID: groupID, model: model}] = &ChannelModelPricing{
+	cache.pricingByGroupModel[channelModelKey{groupID: groupID, model: normalizeChannelModelName(model)}] = &ChannelModelPricing{
 		BillingMode:     BillingModeImage,
 		PerRequestPrice: &price,
 	}
@@ -2427,7 +2427,7 @@ func newOpenAITokenImageChannelPricingResolverForTest(t *testing.T, groupID int6
 	outputPrice := 15e-6
 	imageOutputPrice := 15e-6
 	cache := newEmptyChannelCache()
-	cache.pricingByGroupModel[channelModelKey{groupID: groupID, model: model}] = &ChannelModelPricing{
+	cache.pricingByGroupModel[channelModelKey{groupID: groupID, model: normalizeChannelModelName(model)}] = &ChannelModelPricing{
 		BillingMode:      BillingModeToken,
 		InputPrice:       &inputPrice,
 		OutputPrice:      &outputPrice,

@@ -791,11 +791,28 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity {
+			// The agent route is an explicit operator opt-in. Legacy mappings that
+			// only mention the public high/preview aliases must keep their target;
+			// otherwise old account configurations would silently change upstream
+			// model. When the canonical agent key is present, normalize only the
+			// stock alias targets while preserving custom overrides.
+			_, agentRouteConfigured := result[domain.AntigravityGemini31ProAgentModel]
+			for alias, value := range result {
+				if agentRouteConfigured && (alias == "gemini-3.1-pro" || alias == "gemini-3.1-pro-high" || alias == "gemini-3.1-pro-low" || alias == "gemini-3.1-pro-preview") &&
+					(value == "gemini-3.1-pro" || value == "gemini-3.1-pro-high" || value == "gemini-3.1-pro-low" || value == "gemini-3.1-pro-preview") {
+					result[alias] = domain.AntigravityGemini31ProAgentModel
+				}
+			}
 			ensureAntigravityDefaultPassthroughs(result, []string{
 				"gemini-3-flash",
 				"gemini-3.1-pro-high",
 				"gemini-3.1-pro-low",
 			})
+			if agentRouteConfigured {
+				for _, alias := range []string{"gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.1-pro-preview"} {
+					ensureAntigravityDefaultAlias(result, alias, domain.AntigravityGemini31ProAgentModel)
+				}
+			}
 			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
 		if a.Platform == domain.PlatformKiro {

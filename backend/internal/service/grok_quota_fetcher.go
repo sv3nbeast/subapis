@@ -22,6 +22,7 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 	now := time.Now()
 	usage := &UsageInfo{
 		Source:             "passive",
+		GrokBillingState:   "unknown",
 		UpdatedAt:          &now,
 		GrokFreeTokenLimit: xai.GrokFreeRolling24hTokenLimit,
 	}
@@ -34,11 +35,16 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 	billing, _ := grokBillingSnapshotFromExtra(account.Extra)
 	snapshot, err := grokQuotaSnapshotFromExtra(account.Extra)
 	activeProbeClearsForbidden := newerSuccessfulGrokActiveProbeClearsBillingForbidden(billing, snapshot)
+	billingExhausted := billing != nil && (billing.CreditRemainingPercent <= 0 || billing.CreditUsagePercent >= 100 || (billing.UsedPercent != nil && *billing.UsedPercent >= 100))
 	if billing != nil {
 		usage.GrokBilling = billing
-		if billing.Plan != "" {
-			usage.SubscriptionTier = billing.Plan
-			usage.SubscriptionTierRaw = billing.Plan
+		billingTier := strings.TrimSpace(billing.Plan)
+		if billingTier == "" {
+			billingTier = strings.TrimSpace(billing.SubscriptionTier)
+		}
+		if billingTier != "" {
+			usage.SubscriptionTier = billingTier
+			usage.SubscriptionTierRaw = billingTier
 		}
 		if parsedAt, parseErr := time.Parse(time.RFC3339, billing.UpdatedAt); parseErr == nil {
 			usage.UpdatedAt = &parsedAt
@@ -46,16 +52,24 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		if billing.FetchedAt != "" {
 			usage.GrokLastQuotaProbeAt = billing.FetchedAt
 		}
+		// Keep quota snapshot state tied to the quota snapshot, not to the
+		// presence of billing metadata. The UI distinguishes billing state via
+		// GrokBillingState and expects a later active probe to remain "observed".
 		usage.GrokQuotaSnapshotState = "billing_observed"
+		usage.GrokBillingState = "observed"
 		usage.GrokLastStatusCode = billing.StatusCode
 		switch billing.StatusCode {
 		case 401:
 			usage.NeedsReauth = true
 			usage.ErrorCode = "unauthenticated"
 		case 403:
-			usage.IsForbidden = true
-			usage.ForbiddenType = "forbidden"
-			usage.ErrorCode = "forbidden"
+			if billing.CreditRemainingPercent <= 0 || billing.CreditUsagePercent >= 100 || (billing.UsedPercent != nil && *billing.UsedPercent >= 100) {
+				usage.ErrorCode = "rate_limited"
+			} else {
+				usage.IsForbidden = true
+				usage.ForbiddenType = "forbidden"
+				usage.ErrorCode = "forbidden"
+			}
 		case 429:
 			usage.ErrorCode = "rate_limited"
 		}
@@ -64,8 +78,8 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 	if err != nil || snapshot == nil {
 		applyGrokCredentialUsageFallback(usage, account)
 		if billing == nil {
-			usage.ErrorCode = "quota_unknown"
-			usage.Error = "Grok quota is unknown until billing is probed or an upstream response includes xAI rate-limit headers"
+			usage.ErrorCode = "billing_unknown"
+			usage.Error = "Grok billing usage has not been queried"
 		}
 		return usage
 	}
@@ -99,13 +113,11 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 		usage.GrokLastStatusCode = snapshot.StatusCode
 	}
 	if snapshot.HasObservedHeaders() {
-		if usage.GrokQuotaSnapshotState == "" {
-			usage.GrokQuotaSnapshotState = "observed"
-		}
+		usage.GrokQuotaSnapshotState = "observed"
 	} else if billing == nil {
 		usage.GrokQuotaSnapshotState = "no_headers"
-		usage.ErrorCode = "quota_unknown"
-		usage.Error = "No xAI quota headers observed on the latest Grok probe"
+		usage.ErrorCode = "billing_unknown"
+		usage.Error = "Grok billing usage has not been queried"
 	}
 
 	if usage.ErrorCode == "" {
@@ -114,11 +126,15 @@ func (f *GrokQuotaFetcher) BuildUsageInfo(account *Account) *UsageInfo {
 			usage.NeedsReauth = true
 			usage.ErrorCode = "unauthenticated"
 		case 403:
-			usage.IsForbidden = true
-			usage.ForbiddenType = "forbidden"
-			usage.ErrorCode = "forbidden"
-			if usage.GrokEntitlementStatus == "" {
-				usage.GrokEntitlementStatus = "forbidden"
+			if billingExhausted {
+				usage.ErrorCode = "rate_limited"
+			} else {
+				usage.IsForbidden = true
+				usage.ForbiddenType = "forbidden"
+				usage.ErrorCode = "forbidden"
+				if usage.GrokEntitlementStatus == "" {
+					usage.GrokEntitlementStatus = "forbidden"
+				}
 			}
 		case 429:
 			usage.ErrorCode = "rate_limited"

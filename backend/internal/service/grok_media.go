@@ -804,6 +804,11 @@ func (s *OpenAIGatewayService) handleGrokMediaErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+	if isGrokContentPolicyRejection(resp.StatusCode, body) {
+		MarkResponseCommitted(c)
+		writeGrokMediaErrorResponse(c, resp.StatusCode, "invalid_request_error", grokContentPolicyClientMessage(body))
+		return nil, fmt.Errorf("grok content policy rejection: %s", upstreamMsg)
+	}
 
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
 		c,
@@ -837,7 +842,7 @@ func (s *OpenAIGatewayService) handleGrokMediaErrorResponse(
 
 	s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel)
 	kind := "http_error"
-	if s.shouldFailoverUpstreamError(resp.StatusCode) {
+	if s.shouldFailoverGrokUpstreamError(resp.StatusCode, body) {
 		kind = "failover"
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

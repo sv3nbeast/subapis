@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,21 @@ func (r *grokAuthRecoveryRepo) UpdateCredentials(_ context.Context, _ int64, cre
 	r.updateCalls++
 	r.account.Credentials = cloneCredentials(credentials)
 	return nil
+}
+
+func (r *grokAuthRecoveryRepo) UpdateGrokOAuthCredentialsIfUnchanged(
+	_ context.Context,
+	_ int64,
+	expectedCredentials map[string]any,
+	_ *int64,
+	credentials map[string]any,
+) (bool, error) {
+	if !reflect.DeepEqual(r.account.Credentials, expectedCredentials) {
+		return false, nil
+	}
+	r.updateCalls++
+	r.account.Credentials = cloneCredentials(credentials)
+	return true, nil
 }
 
 func (r *grokAuthRecoveryRepo) SetError(context.Context, int64, string) error {

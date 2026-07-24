@@ -126,6 +126,10 @@ func (c *githubReleaseClient) FetchLatestRelease(ctx context.Context, repo strin
 	if err != nil {
 		return nil, err
 	}
+	// Keep the single-release probe compatible with the public subapis branding;
+	// the paginated history endpoint retains the updater identifier used by
+	// existing update clients.
+	req.Header.Set("User-Agent", "subapis-Updater")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err

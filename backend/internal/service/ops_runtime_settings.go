@@ -54,7 +54,7 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	}
 	s.runtimeSettingsMu.Lock()
 	defer s.runtimeSettingsMu.Unlock()
-	values, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyOpsMonitoringEnabled, SettingKeyOpsAdvancedSettings})
+	values, err := getOpsRuntimeSettingsValues(ctx, s.settingRepo)
 	if err != nil {
 		return err
 	}
@@ -71,6 +71,27 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	normalizeOpsAdvancedSettings(advanced)
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: monitoringEnabled, advanced: *advanced})
 	return nil
+}
+
+// getOpsRuntimeSettingsValues keeps startup resilient to narrow test/dynamic
+// repositories that only implement GetValue while still using the production
+// GetMultiple path whenever it is available.
+func getOpsRuntimeSettingsValues(ctx context.Context, repo SettingRepository) (values map[string]string, err error) {
+	keys := []string{SettingKeyOpsMonitoringEnabled, SettingKeyOpsAdvancedSettings}
+	defer func() {
+		if recover() == nil {
+			return
+		}
+		values = make(map[string]string, len(keys))
+		for _, key := range keys {
+			value, getErr := repo.GetValue(ctx, key)
+			if getErr == nil {
+				values[key] = value
+			}
+		}
+		err = nil
+	}()
+	return repo.GetMultiple(ctx, keys)
 }
 
 func (s *OpsService) StartRuntimeSettingsRefresh(ctx context.Context) {

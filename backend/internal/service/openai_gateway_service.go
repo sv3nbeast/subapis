@@ -79,31 +79,35 @@ const (
 
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"user-agent":            true,
-	"originator":            true,
-	"x-codex-beta-features": true,
-	"session_id":            true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"user-agent":              true,
+	"originator":              true,
+	"x-codex-beta-features":   true,
+	"x-codex-window-id":       true,
+	"x-codex-installation-id": true,
+	"session_id":              true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
 }
 
 // OpenAI passthrough allowed headers whitelist.
 // 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
 var openaiPassthroughAllowedHeaders = map[string]bool{
-	"accept":                true,
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"openai-beta":           true,
-	"user-agent":            true,
-	"originator":            true,
-	"x-codex-beta-features": true,
-	"session_id":            true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
+	"accept":                  true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"openai-beta":             true,
+	"user-agent":              true,
+	"originator":              true,
+	"x-codex-beta-features":   true,
+	"x-codex-window-id":       true,
+	"x-codex-installation-id": true,
+	"session_id":              true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
 }
 
 // codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
@@ -1399,6 +1403,42 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 
 func isOpenAIRequestBodyTooLargeError(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	return statusCode == http.StatusRequestEntityTooLarge && !isOpenAIContextWindowError(upstreamMsg, upstreamBody)
+}
+
+// OpenAIRequestBodyTooLargeClientMessage is the fixed downstream message used
+// after all account-specific request body limit failovers are exhausted.
+const OpenAIRequestBodyTooLargeClientMessage = "Request payload is too large"
+
+const openAIRequestBodyTooLargeReason = GatewayFailureReason("openai_request_body_too_large")
+
+func newOpenAIUpstreamFailoverError(
+	statusCode int,
+	responseHeaders http.Header,
+	responseBody []byte,
+	upstreamMsg string,
+	retryableOnSameAccount bool,
+) *UpstreamFailoverError {
+	failoverErr := &UpstreamFailoverError{
+		StatusCode:             statusCode,
+		ResponseBody:           append([]byte(nil), responseBody...),
+		ResponseHeaders:        cloneHeader(responseHeaders),
+		RetryableOnSameAccount: retryableOnSameAccount,
+	}
+	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
+		failoverErr.RetryableOnSameAccount = false
+		failoverErr.Scope = GatewayFailureScopeAccount
+		failoverErr.Reason = openAIRequestBodyTooLargeReason
+		failoverErr.NextAccountAction = NextAccountRetry
+		failoverErr.ClientStatusCode = http.StatusRequestEntityTooLarge
+		failoverErr.ClientMessage = OpenAIRequestBodyTooLargeClientMessage
+	}
+	return failoverErr
+}
+
+// IsOpenAIRequestBodyTooLarge reports whether another account may accept the
+// same request even though the selected account rejected its serialized size.
+func (e *UpstreamFailoverError) IsOpenAIRequestBodyTooLarge() bool {
+	return e != nil && e.Reason == openAIRequestBodyTooLargeReason
 }
 
 // ExtractSessionID extracts the raw session ID from headers or body without hashing.
@@ -2972,6 +3012,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
+	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
 	if isUpstreamAccountModelUnsupportedError(statusCode, upstreamBody) {
 		return true
 	}
@@ -3879,11 +3922,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				})
 
 				s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
-				return nil, &UpstreamFailoverError{
-					StatusCode:             resp.StatusCode,
-					ResponseBody:           respBody,
-					RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
-				}
+				return nil, newOpenAIUpstreamFailoverError(
+					resp.StatusCode,
+					resp.Header,
+					respBody,
+					upstreamMsg,
+					shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+				)
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
 		}
@@ -4474,11 +4519,13 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
 	})
-	return &UpstreamFailoverError{
-		StatusCode:      resp.StatusCode,
-		ResponseBody:    body,
-		ResponseHeaders: resp.Header.Clone(),
-	}
+	return newOpenAIUpstreamFailoverError(
+		resp.StatusCode,
+		resp.Header,
+		body,
+		upstreamMsg,
+		shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, body, false),
+	)
 }
 
 func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
@@ -5471,6 +5518,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		})
 		return nil, fmt.Errorf("grok context length exceeded: %s", clientMessage)
 	}
+	if account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, body) {
+		MarkResponseCommitted(c)
+		c.JSON(resp.StatusCode, gin.H{"error": gin.H{
+			"type":    "invalid_request_error",
+			"message": grokContentPolicyClientMessage(body),
+		}})
+		return nil, fmt.Errorf("grok content policy rejection: %s", upstreamMsg)
+	}
 
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.openai_gateway",
@@ -5681,6 +5736,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		MarkResponseCommitted(c)
 		writeError(c, http.StatusBadRequest, "invalid_request_error", clientMessage)
 		return nil, fmt.Errorf("grok context length exceeded: %s", clientMessage)
+	}
+	if account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, body) {
+		MarkResponseCommitted(c)
+		writeError(c, resp.StatusCode, "invalid_request_error", grokContentPolicyClientMessage(body))
+		return nil, fmt.Errorf("grok content policy rejection: %s", upstreamMsg)
 	}
 
 	// Apply error passthrough rules
@@ -6566,12 +6626,17 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 	if imageOutputTokens == 0 {
 		imageOutputTokens = value.Get("completion_tokens_details.image_tokens").Int()
 	}
+	imageInputTokens := value.Get("input_tokens_details.image_tokens").Int()
+	if imageInputTokens == 0 {
+		imageInputTokens = value.Get("prompt_tokens_details.image_tokens").Int()
+	}
 	return OpenAIUsage{
 		InputTokens:              int(inputTokens),
 		OutputTokens:             int(outputTokens),
 		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     cacheReadTokens,
 		ImageOutputTokens:        int(imageOutputTokens),
+		ImageInputTokens:         int(imageInputTokens),
 		KiroCredits:              kiroCreditsFromUsageGJSON(value),
 	}, true
 }
@@ -7366,12 +7431,19 @@ func sanitizeEncryptedReasoningInputItem(item any) (next any, changed bool, keep
 		return item, false, true
 	}
 
+	content, hasContent := inputItem["content"]
 	_, hasEncryptedContent := inputItem["encrypted_content"]
-	if !hasEncryptedContent {
+	contentIsNull := hasContent && content == nil
+	if !hasEncryptedContent && !contentIsNull {
 		return item, false, true
 	}
 
-	delete(inputItem, "encrypted_content")
+	if hasEncryptedContent {
+		delete(inputItem, "encrypted_content")
+	}
+	if contentIsNull {
+		delete(inputItem, "content")
+	}
 	if len(inputItem) == 1 {
 		return nil, true, false
 	}
@@ -8574,6 +8646,25 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 
 	normalized := body
 	changed := false
+	if input := gjson.GetBytes(normalized, "input"); input.Exists() && !input.IsArray() {
+		wrapped := []byte("[" + input.Raw + "]")
+		if input.Type == gjson.String {
+			if strings.TrimSpace(input.String()) == "" {
+				wrapped = []byte("[]")
+			} else {
+				message, _ := json.Marshal([]map[string]any{{
+					"type": "message", "role": "user", "content": input.String(),
+				}})
+				wrapped = message
+			}
+		}
+		next, err := sjson.SetRawBytes(normalized, "input", wrapped)
+		if err != nil {
+			return body, false, fmt.Errorf("normalize passthrough body input: %w", err)
+		}
+		normalized = next
+		changed = true
+	}
 
 	for _, field := range openAIChatGPTInternalUnsupportedFields {
 		if value := gjson.GetBytes(normalized, field); !value.Exists() {

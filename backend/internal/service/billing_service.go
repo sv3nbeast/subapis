@@ -677,7 +677,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["claude-3-opus"]
 	}
 	if strings.Contains(modelLower, "sonnet") {
-		if strings.Contains(modelLower, "5") {
+		if strings.Contains(modelLower, "sonnet-5") || strings.Contains(modelLower, "sonnet 5") {
 			return s.fallbackPrices["claude-sonnet-5"]
 		}
 		if strings.Contains(modelLower, "4") && !strings.Contains(modelLower, "3") {
@@ -686,6 +686,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["claude-3-5-sonnet"]
 	}
 	if strings.Contains(modelLower, "haiku") {
+		if strings.Contains(modelLower, "haiku-4-5") || strings.Contains(modelLower, "haiku-4.5") {
+			return s.fallbackPrices["claude-3-5-haiku"]
+		}
 		if strings.Contains(modelLower, "3-5") || strings.Contains(modelLower, "3.5") {
 			return s.fallbackPrices["claude-3-5-haiku"]
 		}

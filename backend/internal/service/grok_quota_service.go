@@ -89,7 +89,9 @@ func (s *GrokQuotaService) QueryQuota(ctx context.Context, accountID int64) (*Gr
 		return billingResult, nil
 	}
 
-	probeResult, probeErr := s.ProbeUsage(ctx, accountID)
+	probeResult, probeErr := s.runProbeFlight(ctx, "active:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
+		return s.probeUsage(sharedCtx, accountID)
+	})
 	if probeErr != nil {
 		if billingResult != nil && billingResult.Billing != nil {
 			billingResult.ProbeError = probeErr.Error()
@@ -125,9 +127,91 @@ func grokBillingHasAuthoritativeQuota(billing *xai.BillingSummary) bool {
 }
 
 func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
-	return s.runProbeFlight(ctx, "active:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
-		return s.probeUsage(sharedCtx, accountID)
+	// The public usage probe is the billing observation used by account usage
+	// refreshes. Header/inference probing remains the fallback inside
+	// QueryQuota, where it is explicitly needed for accounts without
+	// authoritative billing quota fields.
+	return s.runProbeFlight(ctx, "billing:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
+		account, token, proxyURL, err := s.prepareProbe(sharedCtx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		callCtx, cancel := context.WithTimeout(sharedCtx, grokQuotaUpstreamTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(callCtx, http.MethodGet, xai.BillingCreditsURL, nil)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_PROBE_REQUEST_BUILD_FAILED", "failed to build upstream request: %v", err)
+		}
+		xai.ApplyCLIBillingHeaders(req, token)
+		account.ApplyHeaderOverrides(req.Header)
+		resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream billing query failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if readErr != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_RESPONSE_READ_FAILED", "failed to read upstream billing response: %v", readErr)
+		}
+		if resp.StatusCode >= 400 {
+			bodyText := truncate(strings.TrimSpace(string(bodyBytes)), 240)
+			return nil, infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "GROK_QUOTA_PROBE_UPSTREAM_ERROR", "upstream billing endpoint returned %d: %s", resp.StatusCode, bodyText)
+		}
+		billing, err := xai.ParseBillingCredits(bodyBytes, resp.StatusCode)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_BILLING_RESPONSE_INVALID", "%v", err)
+		}
+		billing.SubscriptionTier = s.fetchSubscriptionTier(callCtx, account, token, proxyURL)
+		if err := s.accountRepo.UpdateExtra(sharedCtx, account.ID, map[string]any{grokBillingSnapshotExtraKey: billing}); err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_SNAPSHOT_SAVE_FAILED", "failed to save Grok billing snapshot: %v", err)
+		}
+		if account.Extra == nil {
+			account.Extra = make(map[string]any)
+		}
+		account.Extra[grokBillingSnapshotExtraKey] = billing
+		if isGrokBillingExhausted(billing) {
+			legacyQuotaError := account.Status == StatusError && isLegacyGrokQuotaExhaustedError(account.ErrorMessage)
+			if legacyQuotaError {
+				if err := s.accountRepo.ClearError(sharedCtx, account.ID); err != nil {
+					return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_RECOVERY_FAILED", "failed to recover exhausted Grok account: %v", err)
+				}
+				account.Status = StatusActive
+				account.ErrorMessage = ""
+				account.Schedulable = true
+			}
+			if account.Status != StatusError || legacyQuotaError {
+				if err := s.accountRepo.SetRateLimited(sharedCtx, account.ID, resolveGrokQuotaResetAt(account, time.Now())); err != nil {
+					return nil, infraerrors.Newf(http.StatusInternalServerError, "GROK_QUOTA_RATE_LIMIT_SAVE_FAILED", "failed to save exhausted Grok quota state: %v", err)
+				}
+			}
+		}
+		return &GrokQuotaProbeResult{Source: "billing", Billing: billing, StatusCode: resp.StatusCode, FetchedAt: time.Now().Unix()}, nil
 	})
+}
+
+func (s *GrokQuotaService) fetchSubscriptionTier(ctx context.Context, account *Account, token, proxyURL string) string {
+	if s == nil || s.httpUpstream == nil || account == nil {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, xai.SettingsURL, nil)
+	if err != nil {
+		return ""
+	}
+	xai.ApplyCLIBillingHeaders(req, token)
+	account.ApplyHeaderOverrides(req.Header)
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ""
+	}
+	return xai.ParseSettingsSubscriptionTier(body)
 }
 
 func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
@@ -477,7 +561,10 @@ func (s *GrokQuotaService) prepareProbe(ctx context.Context, accountID int64) (*
 	}
 	proxyURL := s.resolveProxyURL(ctx, account)
 
-	token, err := s.tokenProvider.GetAccessToken(ctx, account)
+	// Quota probes are administrative recovery/observability operations. They
+	// must still be able to inspect an account in error or cooldown state and
+	// may use a currently valid access token without requiring a refresh token.
+	token, err := s.tokenProvider.GetAccessTokenForManualTest(ctx, account)
 	if err != nil {
 		return nil, "", "", infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_TOKEN_UNAVAILABLE", "failed to acquire access token: %v", err)
 	}
