@@ -35,6 +35,7 @@ const (
 	kiroHistoryImageKeepCount           = 5
 	kiroMinimalFallbackContent          = "."
 	kiroToolResultImageText             = "[Tool returned an image; the image is attached to this message.]"
+	kiroToolResultsPrefix               = "Tool results:"
 	kiroToolResultCompactLimit          = 12000
 	kiroToolResultKeepHead              = 4000
 	kiroToolResultKeepTail              = 2000
@@ -788,7 +789,13 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
 		}
 		currentToolResults = deduplicateToolResults(currentToolResults)
-		history = sanitizeKiroToolHistory(history)
+		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
+		if !isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+			currentToolResultIDs = nil
+			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
+			currentToolResults = nil
+		}
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx)
 		if envState != nil || len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				EnvState:    envState,
@@ -797,7 +804,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			}
 		}
 	} else {
-		history = sanitizeKiroToolHistory(history)
+		history = sanitizeKiroToolHistory(history, nil, requestCtx)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -2914,24 +2921,84 @@ func removeOrphanedToolUses(history []KiroHistoryMessage, orphaned map[string]bo
 	}
 }
 
-// sanitizeKiroToolHistory removes duplicate legacy narration while preserving
-// every valid native toolUse/toolResult pair. Kiro's official client sends
-// completed tool cycles in history; flattening them into "Tool results:" text
-// teaches the model to imitate tool calls instead of invoking them.
-func sanitizeKiroToolHistory(history []KiroHistoryMessage) []KiroHistoryMessage {
+func isKiroActiveToolResultTurn(history []KiroHistoryMessage, currentToolResultIDs map[string]bool) bool {
+	if len(history) == 0 || len(currentToolResultIDs) == 0 {
+		return false
+	}
+	last := history[len(history)-1]
+	if last.AssistantResponseMessage == nil || len(last.AssistantResponseMessage.ToolUses) == 0 {
+		return false
+	}
+	if len(currentToolResultIDs) != len(last.AssistantResponseMessage.ToolUses) {
+		return false
+	}
+	for _, toolUse := range last.AssistantResponseMessage.ToolUses {
+		if !currentToolResultIDs[toolUse.ToolUseID] {
+			return false
+		}
+	}
+	return true
+}
+
+func collectKiroToolResultIDs(toolResults []KiroToolResult) map[string]bool {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	ids := make(map[string]bool, len(toolResults))
+	for _, result := range toolResults {
+		if result.ToolUseID != "" {
+			ids[result.ToolUseID] = true
+		}
+	}
+	return ids
+}
+
+func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRequestContext) map[string]string {
+	names := make(map[string]string)
+	for _, item := range history {
+		if item.AssistantResponseMessage == nil {
+			continue
+		}
+		for _, toolUse := range item.AssistantResponseMessage.ToolUses {
+			if toolUse.ToolUseID != "" && toolUse.Name != "" {
+				names[toolUse.ToolUseID] = restoreResponseToolName(toolUse.Name, requestCtx)
+			}
+		}
+	}
+	return names
+}
+
+// sanitizeKiroToolHistory keeps only the final active tool turn structured.
+// Kiro accepts the request when older completed cycles are structured, but it
+// then emits only context usage and closes without an assistant response.
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
+	}
+
+	toolNames := collectKiroHistoryToolNames(history, requestCtx)
+	flattenedToolMessages := make(map[*KiroUserInputMessage]bool)
+	activeAssistantIdx := -1
+	if isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+		activeAssistantIdx = len(history) - 1
 	}
 
 	for i := range history {
 		msg := &history[i]
 		if msg.AssistantResponseMessage != nil {
 			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
+			if len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
+				msg.AssistantResponseMessage.ToolUses = nil
+			}
 		}
 		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
 			ctx := msg.UserInputMessage.UserInputMessageContext
-			// Tool definitions are carried only on currentMessage, matching the
-			// official Kiro wire format. Historical native results stay intact.
+			if len(ctx.ToolResults) > 0 {
+				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames))
+				flattenedToolMessages[msg.UserInputMessage] = true
+				ctx.ToolResults = nil
+			}
+			// Tool definitions are carried only on currentMessage.
 			ctx.Tools = nil
 			if len(ctx.Tools) == 0 && len(ctx.ToolResults) == 0 && ctx.EnvState == nil {
 				msg.UserInputMessage.UserInputMessageContext = nil
@@ -2956,8 +3023,8 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage) []KiroHistoryMessage 
 			if last.UserInputMessage != nil &&
 				content != "" &&
 				len(msg.UserInputMessage.Images) == 0 &&
-				!kiroUserMessageHasToolResults(msg.UserInputMessage) &&
-				!kiroUserMessageHasToolResults(last.UserInputMessage) &&
+				!flattenedToolMessages[msg.UserInputMessage] &&
+				!flattenedToolMessages[last.UserInputMessage] &&
 				strings.TrimSpace(last.UserInputMessage.Content) == content {
 				continue
 			}
@@ -2967,9 +3034,45 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage) []KiroHistoryMessage 
 	return trimLeadingKiroAssistantHistory(cleaned)
 }
 
-func kiroUserMessageHasToolResults(message *KiroUserInputMessage) bool {
-	return message != nil && message.UserInputMessageContext != nil &&
-		len(message.UserInputMessageContext.ToolResults) > 0
+func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]string) string {
+	if len(toolResults) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(toolResults))
+	for _, result := range toolResults {
+		texts := make([]string, 0, len(result.Content))
+		for _, content := range result.Content {
+			if text := strings.TrimSpace(content.Text); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		body := strings.Join(texts, "\n")
+		if strings.TrimSpace(body) == "" {
+			body = "(no output)"
+		}
+		if name := strings.TrimSpace(names[result.ToolUseID]); name != "" {
+			parts = append(parts, fmt.Sprintf("[%s] %s", name, body))
+		} else {
+			parts = append(parts, body)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
+}
+
+func joinKiroHistoryText(existing, addition string) string {
+	existing = strings.TrimSpace(existing)
+	addition = strings.TrimSpace(addition)
+	switch {
+	case existing != "" && addition != "":
+		return existing + "\n\n" + addition
+	case addition != "":
+		return addition
+	default:
+		return existing
+	}
 }
 
 var kiroPollutedToolCallTextPattern = regexp.MustCompile(`\[Called tool [^\]]*\]`)
