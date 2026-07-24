@@ -52,6 +52,16 @@ describe('AppSidebar header styles', () => {
     expect(sidebarHeaderBlockMatch?.[0]).not.toContain('@apply overflow-hidden;')
     expect(sidebarBrandBlockMatch?.[0]).not.toContain('overflow: hidden;')
   })
+
+  it('keeps v2 navigation typography at the production equivalent pixel values', () => {
+    const parityBlock = styleSource.match(/\/\* Keep the production typography[\s\S]*?\.ui-v2 \.sidebar-link \{[\s\S]*?\n\}/)?.[0]
+
+    expect(parityBlock).toContain('font-size: 12.1875px;')
+    expect(parityBlock).toContain('font-weight: 500;')
+    expect(parityBlock).toContain('font-synthesis: auto;')
+    expect(parityBlock).toContain('font-variation-settings: normal;')
+    expect(parityBlock).toContain('will-change: auto;')
+  })
 })
 
 describe('AppSidebar navigation responsiveness', () => {

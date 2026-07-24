@@ -31,6 +31,40 @@
   </div>
 </template>
 
+<script lang="ts">
+let activeAppLayoutInstances = 0
+let activeV2LayoutInstances = 0
+let pendingRootClassCleanup: ReturnType<typeof setTimeout> | null = null
+
+function syncAppLayoutRootClasses(): void {
+  document.documentElement.classList.toggle('app-density-compact', activeAppLayoutInstances > 0)
+  document.documentElement.classList.toggle('ui-v2-active', activeV2LayoutInstances > 0)
+}
+
+function syncAppLayoutRootClassesAfterUnmount(): void {
+  const renderedShell = document.querySelector('.app-shell')
+  const renderedV2Shell = document.querySelector('.app-shell.ui-v2')
+
+  document.documentElement.classList.toggle('app-density-compact', activeAppLayoutInstances > 0 || renderedShell !== null)
+  document.documentElement.classList.toggle('ui-v2-active', activeV2LayoutInstances > 0 || renderedV2Shell !== null)
+}
+
+function cancelPendingRootClassCleanup(): void {
+  if (pendingRootClassCleanup === null) return
+
+  clearTimeout(pendingRootClassCleanup)
+  pendingRootClassCleanup = null
+}
+
+function scheduleRootClassCleanup(): void {
+  cancelPendingRootClassCleanup()
+  pendingRootClassCleanup = setTimeout(() => {
+    pendingRootClassCleanup = null
+    syncAppLayoutRootClassesAfterUnmount()
+  }, 0)
+}
+</script>
+
 <script setup lang="ts">
 import '@/styles/onboarding.css'
 import { computed, onBeforeMount, onBeforeUnmount, onMounted, watch } from 'vue'
@@ -58,20 +92,51 @@ const { replayTour } = useOnboardingTour({
 
 const onboardingStore = useOnboardingStore()
 
-function syncUiVersionClass(): void {
-  document.documentElement.classList.toggle('ui-v2-active', isV2.value)
+let rootClassesRegistered = false
+let registeredAsV2 = false
+
+function registerRootClasses(): void {
+  if (rootClassesRegistered) return
+
+  cancelPendingRootClassCleanup()
+  rootClassesRegistered = true
+  registeredAsV2 = isV2.value
+  activeAppLayoutInstances += 1
+  if (registeredAsV2) activeV2LayoutInstances += 1
+  syncAppLayoutRootClasses()
+}
+
+function updateRegisteredUiVersion(nextIsV2: boolean): void {
+  if (!rootClassesRegistered || registeredAsV2 === nextIsV2) return
+
+  activeV2LayoutInstances += nextIsV2 ? 1 : -1
+  registeredAsV2 = nextIsV2
+  syncAppLayoutRootClasses()
+}
+
+function unregisterRootClasses(): void {
+  if (!rootClassesRegistered) return
+
+  activeAppLayoutInstances = Math.max(0, activeAppLayoutInstances - 1)
+  if (registeredAsV2) activeV2LayoutInstances = Math.max(0, activeV2LayoutInstances - 1)
+  rootClassesRegistered = false
+  registeredAsV2 = false
+
+  if (activeAppLayoutInstances > 0) {
+    syncAppLayoutRootClasses()
+  } else {
+    scheduleRootClassCleanup()
+  }
 }
 
 onBeforeMount(() => {
-  document.documentElement.classList.add('app-density-compact')
-  syncUiVersionClass()
+  registerRootClasses()
 })
 
-watch(isV2, syncUiVersionClass)
+watch(isV2, updateRegisteredUiVersion)
 
 onBeforeUnmount(() => {
-  document.documentElement.classList.remove('app-density-compact')
-  document.documentElement.classList.remove('ui-v2-active')
+  unregisterRootClasses()
 })
 
 onMounted(() => {

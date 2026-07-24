@@ -2840,3 +2840,47 @@ html.dark.ui-v2-active body {
     background: var(--ui2-surface) !important;
   }
 }
+
+/* Keep the production typography while making route transitions root-size safe. */
+.ui-v2 .sidebar .sidebar-section-title {
+  min-height: 20px;
+  font-size: 9.375px;
+  font-weight: 650;
+  line-height: 18px;
+  text-transform: uppercase;
+}
+
+.ui-v2 .sidebar-link {
+  min-height: 38px;
+  font-size: 12.1875px;
+  font-weight: 500;
+  font-synthesis: auto;
+  font-variation-settings: normal;
+  line-height: 20px;
+  transform: none;
+  transition: background-color 120ms ease-out;
+  will-change: auto;
+}
+
+.ui-v2 .sidebar-link .sidebar-label,
+.ui-v2 .sidebar-link .sidebar-label > span {
+  font-size: 12.1875px;
+  font-synthesis: auto;
+  font-variation-settings: normal;
+  line-height: 20px;
+}
+
+.ui-v2 .sidebar-link-active {
+  font-size: 12.1875px;
+  font-weight: 620;
+  line-height: 20px;
+}
+
+.ui-v2 .sidebar-link:active {
+  transform: none;
+}
+
+.ui-v2 .sidebar .ui-v2-sidebar-collapse svg {
+  width: 16px;
+  height: 16px;
+}
