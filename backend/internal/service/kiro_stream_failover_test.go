@@ -894,7 +894,7 @@ func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(
 	require.Empty(t, rec.Body.String(), "metadata-only empty stream must not write a successful empty response body")
 }
 
-func TestForwardKiroMessagesStreamMetadataOnlyRetriesWithFreshConversationAndEndpoint(t *testing.T) {
+func TestForwardKiroMessagesStreamMetadataOnlyRetriesThenCompactsHistory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -926,6 +926,7 @@ func TestForwardKiroMessagesStreamMetadataOnlyRetriesWithFreshConversationAndEnd
 	upstream := &kiroStreamFailoverQueuedUpstream{
 		responses: []*http.Response{
 			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody.Bytes()),
+			newKiroEventStreamResponse(http.StatusOK, metadataOnlyBody.Bytes()),
 			newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
 		},
 	}
@@ -946,7 +947,20 @@ func TestForwardKiroMessagesStreamMetadataOnlyRetriesWithFreshConversationAndEnd
 			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/METAONLY",
 		},
 	}
-	body := []byte(`{"model":"claude-sonnet-5","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hi"}]}`)
+	body := []byte(`{
+		"model":"claude-sonnet-5",
+		"stream":true,
+		"max_tokens":128,
+		"system":"CUSTOM_SYSTEM_MUST_SURVIVE",
+		"tools":[{"name":"bash","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"old request"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"old-tool","name":"bash","input":{"command":"pwd"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old-tool","content":"/workspace"}]},
+			{"role":"assistant","content":"old completed response"},
+			{"role":"user","content":"hi"}
+		]
+	}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
 
@@ -958,18 +972,113 @@ func TestForwardKiroMessagesStreamMetadataOnlyRetriesWithFreshConversationAndEnd
 	require.Equal(t, 11, result.Usage.InputTokens, "metadata-only retry usage must not be accumulated")
 	require.Equal(t, 4, result.Usage.OutputTokens)
 	require.Contains(t, rec.Body.String(), "recovered after retry")
-	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.requests, 3)
 	require.NotEqual(t, upstream.requests[0].URL.String(), upstream.requests[1].URL.String(), "body-level retry should rotate Kiro endpoint before falling back to handler failover")
 
 	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, err)
 	secondPayload, err := io.ReadAll(upstream.requests[1].Body)
 	require.NoError(t, err)
+	thirdPayload, err := io.ReadAll(upstream.requests[2].Body)
+	require.NoError(t, err)
 	firstConversationID := gjson.GetBytes(firstPayload, "conversationState.conversationId").String()
 	secondConversationID := gjson.GetBytes(secondPayload, "conversationState.conversationId").String()
+	thirdConversationID := gjson.GetBytes(thirdPayload, "conversationState.conversationId").String()
 	require.NotEmpty(t, firstConversationID)
 	require.NotEmpty(t, secondConversationID)
+	require.NotEmpty(t, thirdConversationID)
 	require.NotEqual(t, firstConversationID, secondConversationID, "metadata-only body retry must avoid replaying the same stable conversation id")
+	require.NotEqual(t, secondConversationID, thirdConversationID, "fallback retry must use another fresh conversation id")
+	require.Greater(t, len(gjson.GetBytes(firstPayload, "conversationState.history").Array()), 2)
+	require.Equal(t, len(gjson.GetBytes(firstPayload, "conversationState.history").Array()), len(gjson.GetBytes(secondPayload, "conversationState.history").Array()), "first retry must preserve full history")
+	require.Len(t, gjson.GetBytes(thirdPayload, "conversationState.history").Array(), 2)
+	require.Contains(t, gjson.GetBytes(thirdPayload, "conversationState.history.0.userInputMessage.content").String(), "CUSTOM_SYSTEM_MUST_SURVIVE")
+	require.Equal(t, "hi", gjson.GetBytes(thirdPayload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "bash", gjson.GetBytes(thirdPayload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.False(t, gjson.GetBytes(thirdPayload, "conversationState.agentContinuationId").Exists())
+}
+
+func TestApplyKiroMetadataOnlyHistoryFallbackKeepsSystemAndActiveToolTurn(t *testing.T) {
+	payload := []byte(`{
+		"conversationState": {
+			"agentContinuationId": "continuation-1",
+			"chatTriggerType": "MANUAL",
+			"conversationId": "conversation-1",
+			"history": [
+				{"userInputMessage":{"content":"SYSTEM_PROMPT","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"I will follow it."}},
+				{"userInputMessage":{"content":"sensitive old history","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"old response","toolUses":[{"toolUseId":"old-tool","name":"read","input":{"path":"old"}}]}},
+				{"userInputMessage":{"content":"old result","modelId":"claude-opus-4.8","origin":"AI_EDITOR","userInputMessageContext":{"toolResults":[{"content":[{"text":"old"}],"status":"success","toolUseId":"old-tool"}]}}},
+				{"assistantResponseMessage":{"content":"running now","toolUses":[{"toolUseId":"active-tool","name":"bash","input":{"command":"pwd"}}]}}
+			],
+			"currentMessage": {"userInputMessage":{
+				"content":"Tool results provided.",
+				"modelId":"claude-opus-4.8",
+				"origin":"AI_EDITOR",
+				"userInputMessageContext":{
+					"tools":[{"toolSpecification":{"name":"bash","description":"run","inputSchema":{"json":{"type":"object"}}}}],
+					"toolResults":[{"content":[{"text":"/workspace"}],"status":"success","toolUseId":"active-tool"}]
+				}
+			}}
+		}
+	}`)
+
+	result, applied := applyKiroMetadataOnlyHistoryFallback(payload)
+	require.True(t, applied)
+	require.Len(t, gjson.GetBytes(result, "conversationState.history").Array(), 2)
+	require.Equal(t, "SYSTEM_PROMPT", gjson.GetBytes(result, "conversationState.history.0.userInputMessage.content").String())
+	require.Equal(t, "active-tool", gjson.GetBytes(result, "conversationState.history.1.assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "active-tool", gjson.GetBytes(result, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "bash", gjson.GetBytes(result, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.False(t, gjson.GetBytes(result, "conversationState.agentContinuationId").Exists())
+	require.NotContains(t, string(result), "sensitive old history")
+	require.NotContains(t, string(result), "old-tool")
+}
+
+func TestApplyKiroMetadataOnlyHistoryFallbackKeepsBootstrapForPlainTurn(t *testing.T) {
+	payload := []byte(`{
+		"conversationState": {
+			"agentContinuationId": "continuation-1",
+			"chatTriggerType": "MANUAL",
+			"conversationId": "conversation-1",
+			"history": [
+				{"userInputMessage":{"content":"SYSTEM_PROMPT","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"I will follow it."}},
+				{"userInputMessage":{"content":"old user turn","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"old assistant turn"}}
+			],
+			"currentMessage": {"userInputMessage":{"content":"current request","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}}
+		}
+	}`)
+
+	result, applied := applyKiroMetadataOnlyHistoryFallback(payload)
+	require.True(t, applied)
+	require.Len(t, gjson.GetBytes(result, "conversationState.history").Array(), 2)
+	require.Equal(t, "SYSTEM_PROMPT", gjson.GetBytes(result, "conversationState.history.0.userInputMessage.content").String())
+	require.Equal(t, "I will follow it.", gjson.GetBytes(result, "conversationState.history.1.assistantResponseMessage.content").String())
+	require.Equal(t, "current request", gjson.GetBytes(result, "conversationState.currentMessage.userInputMessage.content").String())
+	require.NotContains(t, string(result), "old user turn")
+}
+
+func TestApplyKiroMetadataOnlyHistoryFallbackRejectsMismatchedActiveToolTurn(t *testing.T) {
+	payload := []byte(`{
+		"conversationState": {
+			"chatTriggerType": "MANUAL",
+			"conversationId": "conversation-1",
+			"history": [
+				{"userInputMessage":{"content":"SYSTEM_PROMPT","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"I will follow it."}},
+				{"userInputMessage":{"content":"latest request","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"running","toolUses":[{"toolUseId":"active-tool","name":"bash","input":{"command":"pwd"}}]}}
+			],
+			"currentMessage": {"userInputMessage":{"content":"result","modelId":"claude-opus-4.8","origin":"AI_EDITOR","userInputMessageContext":{"toolResults":[{"content":[{"text":"bad"}],"status":"success","toolUseId":"different-tool"}]}}}
+		}
+	}`)
+
+	result, applied := applyKiroMetadataOnlyHistoryFallback(payload)
+	require.False(t, applied)
+	require.Equal(t, payload, result)
 }
 
 func TestForwardKiroMessagesStreamMetadataOnlyExhaustionDoesNotAmplifySameAccountRetry(t *testing.T) {
@@ -996,6 +1105,7 @@ func TestForwardKiroMessagesStreamMetadataOnlyExhaustionDoesNotAmplifySameAccoun
 
 	upstream := &kiroStreamFailoverQueuedUpstream{
 		responses: []*http.Response{
+			newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
 			newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
 			newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
 		},
@@ -1032,7 +1142,7 @@ func TestForwardKiroMessagesStreamMetadataOnlyExhaustionDoesNotAmplifySameAccoun
 	require.True(t, failoverErr.SuppressTempUnschedule, "metadata-only empty stream must not mark a healthy Kiro account unschedulable")
 	require.Contains(t, ExtractUpstreamErrorMessage(failoverErr.ResponseBody), "metadata-only assistant output")
 	require.Empty(t, rec.Body.String(), "metadata-only exhaustion must not write a successful empty response body")
-	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.requests, 3)
 }
 
 func TestForwardKiroMessagesStreamFinalMeteringAllowsMissingTerminal(t *testing.T) {

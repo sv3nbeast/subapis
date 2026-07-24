@@ -37,12 +37,13 @@ type kiroEndpointConfig struct {
 const kiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt incorrectly claimed that native tools were unavailable or ended after announcing tool-backed work without making a tool call. The tools listed in this request are available. Do not describe tool limitations or repeat the announcement; call one of the available native tools now.]"
 
 type kiroUpstreamRequestOptions struct {
-	ConversationRetryNonce  string
-	EndpointStartOffset     int
-	NativeToolProgressRetry bool
-	RateLimitRetryRound     int
-	RateLimitRetryDeadline  time.Time
-	RateLimitRetryLeaseHeld bool
+	ConversationRetryNonce      string
+	EndpointStartOffset         int
+	NativeToolProgressRetry     bool
+	MetadataOnlyHistoryFallback bool
+	RateLimitRetryRound         int
+	RateLimitRetryDeadline      time.Time
+	RateLimitRetryLeaseHeld     bool
 }
 
 const kiroEventDiagnosticsUserIDsEnv = "SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS"
@@ -667,8 +668,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 			break
 		}
 		nextResp, nextRequestCtx, openErr := s.executeKiroUpstreamWithParsedOptions(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header, kiroUpstreamRequestOptions{
-			ConversationRetryNonce: retryNonce,
-			EndpointStartOffset:    retryAttempt,
+			ConversationRetryNonce:      retryNonce,
+			EndpointStartOffset:         retryAttempt,
+			MetadataOnlyHistoryFallback: isKiroMetadataOnlyStreamError(err) && bodyAttempt >= 1,
 		})
 		if openErr != nil {
 			logger.L().Warn("kiro.non_stream_body_retry_open_failed",
@@ -1220,11 +1222,15 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			retryLimit := maxBodyRetries
 			metadataOnlyOutput := isKiroMetadataOnlyStreamError(streamErr)
 			// A metadata-only turn has reached Kiro and completed without any
-			// semantic output. It is safe to replay before the semantic gate is
-			// released, even when resilience mode disables generic body retries.
-			// Use a fresh conversation nonce so a cached empty turn is not replayed.
-			if (nativeToolProgressStalled || metadataOnlyOutput) && retryLimit < 1 {
+			// semantic output. One full-history retry protects transient endpoint
+			// failures; only a second consecutive metadata-only result activates
+			// the minimal-history fallback. All retries remain behind the semantic
+			// gate and use a fresh conversation nonce.
+			if nativeToolProgressStalled && retryLimit < 1 {
 				retryLimit = 1
+			}
+			if metadataOnlyOutput && retryLimit < 2 {
+				retryLimit = 2
 			}
 			if retryLimit <= 0 {
 				_ = translatorWriter.CloseWithError(streamErr)
@@ -1285,9 +1291,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				endpointStartOffset = 0
 			}
 			nextResp, nextRequestCtx, err := s.executeKiroUpstreamWithParsedOptions(streamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, kiroUpstreamRequestOptions{
-				ConversationRetryNonce:  retryNonce,
-				EndpointStartOffset:     endpointStartOffset,
-				NativeToolProgressRetry: nativeToolProgressStalled,
+				ConversationRetryNonce:      retryNonce,
+				EndpointStartOffset:         endpointStartOffset,
+				NativeToolProgressRetry:     nativeToolProgressStalled,
+				MetadataOnlyHistoryFallback: metadataOnlyOutput && bodyAttempt >= 1,
 			})
 			if err != nil {
 				logger.L().Warn("kiro.stream_body_retry_open_failed",
@@ -1575,7 +1582,15 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			return nil, requestCtx, err
 		}
 		applyKiroContextWindowResolution(&buildResult.Context, contextWindowTokens, contextWindowSource)
-		applyKiroUpstreamRequestOptions(buildResult, options)
+		metadataFallbackApplied := applyKiroUpstreamRequestOptions(buildResult, options)
+		if options.MetadataOnlyHistoryFallback {
+			logger.L().Warn("kiro.metadata_only_history_fallback",
+				zap.Int64("account_id", account.ID),
+				zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+				zap.Int("history_count", len(gjson.GetBytes(buildResult.Payload, "conversationState.history").Array())),
+				zap.Bool("compacted", metadataFallbackApplied),
+			)
+		}
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
 		logKiroStatelessReplay(account, buildResult.Payload)
@@ -1842,7 +1857,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 							contextWindowTokens, contextWindowSource = s.resolveKiroModelContextWindow(ctx, account, currentToken, modelID)
 						}
 						applyKiroContextWindowResolution(&buildResult.Context, contextWindowTokens, contextWindowSource)
-						applyKiroUpstreamRequestOptions(buildResult, options)
+						_ = applyKiroUpstreamRequestOptions(buildResult, options)
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
 						logKiroStatelessReplay(account, buildResult.Payload)
@@ -2178,9 +2193,9 @@ func applyStableKiroConversationID(account *Account, parsed *ParsedRequest, anth
 	return buildResult
 }
 
-func applyKiroUpstreamRequestOptions(buildResult *kiropkg.KiroBuildResult, options kiroUpstreamRequestOptions) {
+func applyKiroUpstreamRequestOptions(buildResult *kiropkg.KiroBuildResult, options kiroUpstreamRequestOptions) bool {
 	if buildResult == nil {
-		return
+		return false
 	}
 	if strings.TrimSpace(options.ConversationRetryNonce) != "" {
 		buildResult.Payload = applyKiroConversationRetryNonce(buildResult.Payload, options.ConversationRetryNonce)
@@ -2188,6 +2203,69 @@ func applyKiroUpstreamRequestOptions(buildResult *kiropkg.KiroBuildResult, optio
 	if options.NativeToolProgressRetry {
 		buildResult.Payload = applyKiroNativeToolProgressRetryInstruction(buildResult.Payload)
 	}
+	if options.MetadataOnlyHistoryFallback {
+		var applied bool
+		buildResult.Payload, applied = applyKiroMetadataOnlyHistoryFallback(buildResult.Payload)
+		return applied
+	}
+	return false
+}
+
+func applyKiroMetadataOnlyHistoryFallback(payload []byte) ([]byte, bool) {
+	var request kiropkg.KiroPayload
+	if len(payload) == 0 || json.Unmarshal(payload, &request) != nil {
+		return payload, false
+	}
+
+	history := request.ConversationState.History
+	if len(history) <= 2 || history[0].UserInputMessage == nil {
+		return payload, false
+	}
+
+	trimmed := make([]kiropkg.KiroHistoryMessage, 0, 2)
+	trimmed = append(trimmed, history[0])
+	currentContext := request.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext
+	if currentContext != nil && len(currentContext.ToolResults) > 0 {
+		if !kiroToolResultsExactlyMatchAssistant(currentContext.ToolResults, history[len(history)-1].AssistantResponseMessage) {
+			return payload, false
+		}
+		trimmed = append(trimmed, history[len(history)-1])
+	} else if history[1].AssistantResponseMessage != nil {
+		trimmed = append(trimmed, history[1])
+	} else {
+		return payload, false
+	}
+
+	request.ConversationState.History = trimmed
+	request.ConversationState.AgentContinuationID = ""
+	next, err := json.Marshal(request)
+	if err != nil {
+		return payload, false
+	}
+	return next, true
+}
+
+func kiroToolResultsExactlyMatchAssistant(results []kiropkg.KiroToolResult, assistant *kiropkg.KiroAssistantResponseMessage) bool {
+	if len(results) == 0 || assistant == nil || len(results) != len(assistant.ToolUses) {
+		return false
+	}
+	ids := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		id := strings.TrimSpace(result.ToolUseID)
+		if id == "" {
+			return false
+		}
+		ids[id] = struct{}{}
+	}
+	if len(ids) != len(results) {
+		return false
+	}
+	for _, toolUse := range assistant.ToolUses {
+		if _, ok := ids[strings.TrimSpace(toolUse.ToolUseID)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func applyKiroNativeToolProgressRetryInstruction(payload []byte) []byte {
