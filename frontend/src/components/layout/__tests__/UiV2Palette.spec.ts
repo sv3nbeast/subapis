@@ -24,16 +24,18 @@ describe('UI v2 dark palette', () => {
     expect(appStyles).toContain('--ui2-surface-recessed: #11161c;')
   })
 
-  it('keeps secondary text readable in both themes', () => {
-    expect(appStyles).toContain('--ui2-text-secondary: #4f4f55;')
-    expect(appStyles).toContain('--ui2-text-tertiary: #727279;')
-    expect(appStyles).toContain('--ui2-text: #f8fafc;')
-    expect(appStyles).toContain('--ui2-text-secondary: #e1e7ef;')
-    expect(appStyles).toContain('--ui2-text-tertiary: #aeb9c7;')
+  it('keeps the upstream text hierarchy in both themes', () => {
+    expect(appStyles).toContain('--ui2-text: #111827;')
+    expect(appStyles).toContain('--ui2-text-secondary: #4b5563;')
+    expect(appStyles).toContain('--ui2-text-tertiary: #6b7280;')
+    expect(appStyles).toContain('--ui2-text: #f3f4f6;')
+    expect(appStyles).toContain('--ui2-text-secondary: #cbd5e1;')
+    expect(appStyles).toContain('--ui2-text-tertiary: #94a3b8;')
+    expect(appStyles).not.toContain('.ui-v2 .text-gray-500,')
     expect(appStyles).toContain('.dark .ui-v2 table td {')
-    expect(appStyles).toContain('color: #edf2f7;')
+    expect(appStyles).toContain('color: #d1d5db;')
     expect(appStyles).toContain('.dark .ui-v2 table th {')
-    expect(appStyles).toContain('color: #b9c3cf;')
+    expect(appStyles).toContain('color: #cbd5e1;')
   })
 
   it('reserves blue for selection while primary commands invert with the theme', () => {

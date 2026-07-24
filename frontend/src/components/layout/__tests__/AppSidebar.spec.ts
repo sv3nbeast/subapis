@@ -99,7 +99,7 @@ describe('AppSidebar header styles', () => {
     expect(activeBlock).toContain('font-size: 12.1875px;')
     expect(activeBlock).toContain('font-weight: 620;')
     expect(activeBlock).toContain('line-height: 20px;')
-    expect(activeBlock).toContain('color: var(--ui2-text-secondary) !important;')
+    expect(activeBlock).toContain('color: #0d9488 !important;')
   })
 
   it('uses color feedback without scaling sidebar text on press', () => {

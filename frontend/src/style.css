@@ -813,9 +813,9 @@ html.ui-v2-active,
   --ui2-surface-recessed: #e8e8eb;
   --ui2-sidebar: #eeeef1;
   --ui2-toolbar: #f5f5f7;
-  --ui2-text: #1d1d1f;
-  --ui2-text-secondary: #4f4f55;
-  --ui2-text-tertiary: #727279;
+  --ui2-text: #111827;
+  --ui2-text-secondary: #4b5563;
+  --ui2-text-tertiary: #6b7280;
   --ui2-line: rgba(24, 24, 27, 0.1);
   --ui2-line-strong: rgba(24, 24, 27, 0.16);
   --ui2-accent: #087af5;
@@ -849,9 +849,9 @@ html.dark.ui-v2-active,
   --ui2-surface-recessed: #11161c;
   --ui2-sidebar: #15191f;
   --ui2-toolbar: rgba(15, 18, 22, 0.94);
-  --ui2-text: #f8fafc;
-  --ui2-text-secondary: #e1e7ef;
-  --ui2-text-tertiary: #aeb9c7;
+  --ui2-text: #f3f4f6;
+  --ui2-text-secondary: #cbd5e1;
+  --ui2-text-tertiary: #94a3b8;
   --ui2-line: rgba(226, 232, 240, 0.075);
   --ui2-line-strong: rgba(226, 232, 240, 0.13);
   --ui2-accent: #86b4ff;
@@ -873,21 +873,6 @@ html.dark.ui-v2-active,
 .ui-v2 *::before,
 .ui-v2 *::after {
   letter-spacing: 0;
-}
-
-.ui-v2 .text-gray-500,
-.ui-v2 .text-gray-600,
-.dark .ui-v2 .dark\:text-gray-300,
-.dark .ui-v2 .dark\:text-gray-400,
-.dark .ui-v2 .dark\:text-dark-300,
-.dark .ui-v2 .dark\:text-dark-400 {
-  color: var(--ui2-text-secondary) !important;
-}
-
-.ui-v2 .text-gray-400,
-.dark .ui-v2 .dark\:text-gray-500,
-.dark .ui-v2 .dark\:text-dark-500 {
-  color: var(--ui2-text-tertiary) !important;
 }
 
 html.ui-v2-active,
@@ -986,7 +971,7 @@ html.dark.ui-v2-active body {
   min-height: 20px;
   margin: 0 10px 5px;
   padding: 0;
-  color: var(--ui2-text-tertiary) !important;
+  color: #9ca3af !important;
   font-size: 9.375px;
   font-weight: 650;
   line-height: 18px;
@@ -999,7 +984,7 @@ html.dark.ui-v2-active body {
   margin-bottom: 2px;
   padding: 0 10px;
   border-radius: 7px !important;
-  color: var(--ui2-text-secondary) !important;
+  color: #4b5563 !important;
   font-size: 12.1875px;
   font-weight: 500;
   font-synthesis: auto;
@@ -1009,6 +994,14 @@ html.dark.ui-v2-active body {
   transition:
     background-color 120ms ease-out;
   will-change: auto;
+}
+
+.dark .ui-v2 .sidebar-link {
+  color: #cbd5e1 !important;
+}
+
+.dark .ui-v2 .sidebar .sidebar-section-title {
+  color: #64748b !important;
 }
 
 .ui-v2 .sidebar-link > svg.h-5,
@@ -1044,8 +1037,12 @@ html.dark.ui-v2-active body {
 
 .ui-v2 .sidebar-link:hover {
   background: color-mix(in srgb, var(--ui2-surface), transparent 34%) !important;
-  color: var(--ui2-text) !important;
+  color: #111827 !important;
   transform: none;
+}
+
+.dark .ui-v2 .sidebar-link:hover {
+  color: #ffffff !important;
 }
 
 .ui-v2 .sidebar-link:active {
@@ -1060,7 +1057,7 @@ html.dark.ui-v2-active body {
 
 .ui-v2 .sidebar-link-active {
   background: var(--ui2-surface) !important;
-  color: var(--ui2-text-secondary) !important;
+  color: #0d9488 !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.035);
   font-size: 12.1875px;
   font-weight: 620;
@@ -1069,7 +1066,7 @@ html.dark.ui-v2-active body {
 
 .dark .ui-v2 .sidebar-link-active {
   background: #212730 !important;
-  color: var(--ui2-text) !important;
+  color: #2dd4bf !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -1673,7 +1670,7 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 }
 
 .ui-v2 .page-description {
-  color: var(--ui2-text-secondary) !important;
+  color: var(--ui2-text-tertiary) !important;
   font-size: 0.8125rem;
 }
 
@@ -1687,7 +1684,7 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 
 .ui-v2 table td {
   border-color: var(--ui2-line) !important;
-  color: var(--ui2-text);
+  color: #374151;
 }
 
 .ui-v2 table tbody tr:hover {
@@ -1708,17 +1705,17 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 
 .ui-v2 table th {
   background: transparent !important;
-  color: var(--ui2-text-secondary);
+  color: #4b5563;
   font-size: 0.6875rem;
   font-weight: 620;
 }
 
 .dark .ui-v2 table td {
-  color: #edf2f7;
+  color: #d1d5db;
 }
 
 .dark .ui-v2 table th {
-  color: #b9c3cf;
+  color: #cbd5e1;
 }
 
 .dark .ui-v2 .dashboard-chart-grid table,
