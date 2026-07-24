@@ -18,24 +18,24 @@ const dataTable = readFileSync(resolve(currentDir, '../../common/DataTable.vue')
 
 describe('UI v2 dark palette', () => {
   it('keeps distinct page, card, raised, and interaction surfaces', () => {
-    expect(appStyles).toContain('--ui2-page: #161618;')
-    expect(appStyles).toContain('--ui2-surface-soft: #232326;')
-    expect(appStyles).toContain('--ui2-surface-raised: #2d2d32;')
-    expect(appStyles).toContain('--ui2-surface-recessed: #19191c;')
+    expect(appStyles).toContain('--ui2-page: #0f1216;')
+    expect(appStyles).toContain('--ui2-surface-soft: #1b2027;')
+    expect(appStyles).toContain('--ui2-surface-raised: #242a33;')
+    expect(appStyles).toContain('--ui2-surface-recessed: #11161c;')
   })
 
   it('keeps secondary text readable in both themes', () => {
     expect(appStyles).toContain('--ui2-text-secondary: #4f4f55;')
     expect(appStyles).toContain('--ui2-text-tertiary: #727279;')
-    expect(appStyles).toContain('--ui2-text-secondary: #dedee3;')
-    expect(appStyles).toContain('--ui2-text-tertiary: #aaaab2;')
+    expect(appStyles).toContain('--ui2-text-secondary: #c7ced8;')
+    expect(appStyles).toContain('--ui2-text-tertiary: #929daa;')
   })
 
   it('reserves blue for selection while primary commands invert with the theme', () => {
-    expect(appStyles).toContain('--ui2-accent: #409cff;')
-    expect(appStyles).toContain('--ui2-accent-strong: #0f72d6;')
+    expect(appStyles).toContain('--ui2-accent: #86b4ff;')
+    expect(appStyles).toContain('--ui2-accent-strong: #4a88e8;')
     expect(appStyles).toContain('--ui2-command: #1d1d1f;')
-    expect(appStyles).toContain('--ui2-command: #f1f1f3;')
+    expect(appStyles).toContain('--ui2-command: #eef3fb;')
     expect(appStyles).toContain('background: var(--ui2-command) !important;')
     expect(appStyles).toContain('background: var(--ui2-surface-recessed);')
   })

@@ -188,6 +188,21 @@ const chartColors = [
   '#84cc16'
 ]
 
+const darkChartColors = [
+  '#668dcd',
+  '#5ca488',
+  '#b99258',
+  '#ad6d6d',
+  '#9182c2',
+  '#a57589',
+  '#5797a2',
+  '#7e976d',
+  '#7888b2',
+  '#a98a68'
+]
+
+const chartPalette = computed(() => document.documentElement.classList.contains('dark') ? darkChartColors : chartColors)
+
 const displayGroupStats = computed(() => {
   if (!props.groupStats?.length) return []
 
@@ -203,8 +218,9 @@ const chartData = computed(() => {
     datasets: [
       {
         data: displayGroupStats.value.map((g) => toFiniteNumber(props.metric === 'actual_cost' ? g.actual_cost : g.total_tokens)),
-        backgroundColor: chartColors.slice(0, displayGroupStats.value.length),
-        borderWidth: 0
+        backgroundColor: chartPalette.value.slice(0, displayGroupStats.value.length),
+        borderColor: document.documentElement.classList.contains('dark') ? '#1b2027' : '#ffffff',
+        borderWidth: 2
       }
     ]
   }

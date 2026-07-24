@@ -226,6 +226,23 @@ const chartColors = [
   '#a855f7'
 ]
 
+const darkChartColors = [
+  '#668dcd',
+  '#5ca488',
+  '#b99258',
+  '#ad6d6d',
+  '#9182c2',
+  '#a57589',
+  '#5797a2',
+  '#7e976d',
+  '#7888b2',
+  '#a98a68',
+  '#5f9eae',
+  '#9a88bd'
+]
+
+const chartPalette = computed(() => document.documentElement.classList.contains('dark') ? darkChartColors : chartColors)
+
 const displayEndpointStats = computed(() => {
   const sourceStats = props.source === 'upstream'
     ? props.upstreamEndpointStats
@@ -248,8 +265,9 @@ const chartData = computed(() => {
         data: displayEndpointStats.value.map((item) =>
           props.metric === 'actual_cost' ? item.actual_cost : item.total_tokens
         ),
-        backgroundColor: chartColors.slice(0, displayEndpointStats.value.length),
-        borderWidth: 0
+        backgroundColor: chartPalette.value.slice(0, displayEndpointStats.value.length),
+        borderColor: document.documentElement.classList.contains('dark') ? '#1b2027' : '#ffffff',
+        borderWidth: 2
       }
     ]
   }

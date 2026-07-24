@@ -354,6 +354,23 @@ const chartColors = [
   '#a855f7'
 ]
 
+const darkChartColors = [
+  '#668dcd',
+  '#5ca488',
+  '#b99258',
+  '#ad6d6d',
+  '#9182c2',
+  '#a57589',
+  '#5797a2',
+  '#7e976d',
+  '#7888b2',
+  '#a98a68',
+  '#5f9eae',
+  '#9a88bd'
+]
+
+const chartPalette = computed(() => document.documentElement.classList.contains('dark') ? darkChartColors : chartColors)
+
 const displayModelStats = computed(() => {
   const sourceStats = props.source === 'upstream'
     ? props.upstreamModelStats
@@ -374,8 +391,9 @@ const chartData = computed(() => {
     datasets: [
       {
         data: displayModelStats.value.map((m) => toFiniteNumber(props.metric === 'actual_cost' ? m.actual_cost : m.total_tokens)),
-        backgroundColor: chartColors.slice(0, displayModelStats.value.length),
-        borderWidth: 0
+        backgroundColor: chartPalette.value.slice(0, displayModelStats.value.length),
+        borderColor: document.documentElement.classList.contains('dark') ? '#1b2027' : '#ffffff',
+        borderWidth: 2
       }
     ]
   }
@@ -386,7 +404,7 @@ const rankingChartData = computed(() => {
 
   const labels = props.rankingItems.map((item, index) => `#${index + 1} ${getRankingUserLabel(item)}`)
   const data = props.rankingItems.map((item) => toFiniteNumber(item.actual_cost))
-  const backgroundColor = chartColors.slice(0, props.rankingItems.length)
+  const backgroundColor = chartPalette.value.slice(0, props.rankingItems.length)
 
   if (otherRankingItem.value) {
     labels.push(t('admin.dashboard.spendingRankingOther'))
@@ -400,7 +418,8 @@ const rankingChartData = computed(() => {
       {
         data,
         backgroundColor,
-        borderWidth: 0
+        borderColor: document.documentElement.classList.contains('dark') ? '#1b2027' : '#ffffff',
+        borderWidth: 2
       }
     ]
   }

@@ -841,32 +841,32 @@ html.ui-v2-active,
 
 html.dark.ui-v2-active,
 .dark .ui-v2 {
-  --ui2-page: #161618;
-  --ui2-surface: #29292e;
-  --ui2-surface-soft: #232326;
-  --ui2-surface-raised: #2d2d32;
-  --ui2-surface-hover: #323237;
-  --ui2-surface-recessed: #19191c;
-  --ui2-sidebar: #1b1b1e;
-  --ui2-toolbar: #18181b;
-  --ui2-text: #f4f4f6;
-  --ui2-text-secondary: #dedee3;
-  --ui2-text-tertiary: #aaaab2;
-  --ui2-line: rgba(255, 255, 255, 0.1);
-  --ui2-line-strong: rgba(255, 255, 255, 0.18);
-  --ui2-accent: #409cff;
-  --ui2-accent-strong: #0f72d6;
-  --ui2-accent-soft: rgba(64, 156, 255, 0.15);
-  --ui2-command: #f1f1f3;
+  --ui2-page: #0f1216;
+  --ui2-surface: #171b21;
+  --ui2-surface-soft: #1b2027;
+  --ui2-surface-raised: #242a33;
+  --ui2-surface-hover: #29313b;
+  --ui2-surface-recessed: #11161c;
+  --ui2-sidebar: #15191f;
+  --ui2-toolbar: rgba(15, 18, 22, 0.94);
+  --ui2-text: #f4f6f8;
+  --ui2-text-secondary: #c7ced8;
+  --ui2-text-tertiary: #929daa;
+  --ui2-line: rgba(226, 232, 240, 0.075);
+  --ui2-line-strong: rgba(226, 232, 240, 0.13);
+  --ui2-accent: #86b4ff;
+  --ui2-accent-strong: #4a88e8;
+  --ui2-accent-soft: rgba(134, 180, 255, 0.13);
+  --ui2-command: #eef3fb;
   --ui2-command-hover: #ffffff;
-  --ui2-command-text: #18181b;
-  --ui2-green: #5bd18b;
-  --ui2-green-soft: rgba(91, 209, 139, 0.14);
-  --ui2-amber: #f2b24c;
-  --ui2-amber-soft: rgba(242, 178, 76, 0.14);
-  --ui2-violet: #b7a0f5;
-  --ui2-violet-soft: rgba(183, 160, 245, 0.15);
-  --ui2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 34px rgba(0, 0, 0, 0.22);
+  --ui2-command-text: #101318;
+  --ui2-green: #6bccaa;
+  --ui2-green-soft: rgba(107, 204, 170, 0.12);
+  --ui2-amber: #e6b86d;
+  --ui2-amber-soft: rgba(230, 184, 109, 0.12);
+  --ui2-violet: #aa9be0;
+  --ui2-violet-soft: rgba(170, 155, 224, 0.12);
+  --ui2-shadow: 0 1px 0 rgba(255, 255, 255, 0.035), 0 12px 32px rgba(0, 0, 0, 0.22);
 }
 
 .ui-v2 *,
@@ -897,7 +897,7 @@ html.ui-v2-active body {
 
 html.dark.ui-v2-active,
 html.dark.ui-v2-active body {
-  background: #161618;
+  background: var(--ui2-page);
 }
 
 .ui-v2 > .bg-mesh-gradient {
@@ -1065,6 +1065,12 @@ html.dark.ui-v2-active body {
   font-size: 12.1875px;
   font-weight: 620;
   line-height: 20px;
+}
+
+.dark .ui-v2 .sidebar-link-active {
+  background: #212730 !important;
+  color: var(--ui2-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 .ui-v2 .sidebar-link-active::before {
@@ -1269,6 +1275,10 @@ html.dark.ui-v2-active body {
   border-color: var(--ui2-line) !important;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+.dark .ui-v2 .app-header {
+  box-shadow: 0 1px 0 rgba(226, 232, 240, 0.045), 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 .ui-v2 .app-header::after {
@@ -1519,7 +1529,9 @@ html.dark.ui-v2-active body {
 
 .dark .ui-v2 .card,
 .dark .ui-v2 .glass-card {
-  box-shadow: var(--ui2-shadow) !important;
+  background: var(--ui2-surface-soft) !important;
+  border-color: var(--ui2-line) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.028), var(--ui2-shadow) !important;
 }
 
 .ui-v2 .card-hover:hover {
@@ -1529,7 +1541,8 @@ html.dark.ui-v2-active body {
 }
 
 .dark .ui-v2 .card-hover:hover {
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035), 0 16px 36px rgba(0, 0, 0, 0.28) !important;
+  border-color: var(--ui2-line-strong) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 16px 34px rgba(0, 0, 0, 0.3) !important;
 }
 
 .ui-v2 .rounded-2xl,
@@ -1681,11 +1694,55 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
   background: var(--ui2-surface-hover) !important;
 }
 
+.dark .ui-v2 table thead {
+  background: #161b21 !important;
+}
+
+.dark .ui-v2 table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.dark .ui-v2 table tbody tr:hover {
+  background: #252c35 !important;
+}
+
 .ui-v2 table th {
   background: transparent !important;
   color: var(--ui2-text-tertiary);
   font-size: 0.6875rem;
   font-weight: 620;
+}
+
+.dark .ui-v2 .dashboard-chart-grid table,
+.dark .ui-v2 .dashboard-chart-grid table tbody {
+  background: transparent !important;
+}
+
+.dark .ui-v2 .dashboard-chart-grid table thead {
+  background: var(--ui2-surface) !important;
+}
+
+.dark .ui-v2 .dashboard-chart-grid table tr {
+  border-color: var(--ui2-line) !important;
+}
+
+/* Chart controls use legacy utility classes inside the shared chart components. */
+.dark .ui-v2 .dashboard-chart-grid .bg-dark-800,
+.dark .ui-v2 .usage-page .bg-dark-800 {
+  background: var(--ui2-surface-recessed) !important;
+  border-color: var(--ui2-line) !important;
+}
+
+.dark .ui-v2 .dashboard-chart-grid button[class*="dark:bg-dark-700"],
+.dark .ui-v2 .usage-page button[class*="dark:bg-dark-700"] {
+  background: var(--ui2-surface-raised) !important;
+  color: var(--ui2-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.dark .ui-v2 .dashboard-chart-grid button[class*="dark:text-gray-400"],
+.dark .ui-v2 .usage-page button[class*="dark:text-gray-400"] {
+  color: var(--ui2-text-tertiary) !important;
 }
 
 .ui-v2 .data-table-empty {
@@ -2701,6 +2758,12 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
   }
 }
 
+@media (min-width: 1024px) and (max-width: 1120px) {
+  .ui-v2 .usage-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
 .ui-v2-mobile-brand,
 .ui-v2-mobile-dock {
   display: none;
@@ -2851,6 +2914,10 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
   .ui-v2 .usage-stat-card {
     min-height: 122px;
     padding: 13px !important;
+  }
+
+  .ui-v2 .usage-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   }
 
   .ui-v2 .usage-stat-card > div:first-child {
@@ -3085,6 +3152,10 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 }
 
 @media (max-width: 420px) {
+  .ui-v2 .usage-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
   .ui-v2 .app-header-actions {
     gap: 0;
   }
@@ -3167,48 +3238,4 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
   .ui-v2 .card {
     background: var(--ui2-surface) !important;
   }
-}
-
-/* Keep the production typography while making route transitions root-size safe. */
-.ui-v2 .sidebar .sidebar-section-title {
-  min-height: 20px;
-  font-size: 9.375px;
-  font-weight: 650;
-  line-height: 18px;
-  text-transform: uppercase;
-}
-
-.ui-v2 .sidebar-link {
-  min-height: 38px;
-  font-size: 12.1875px;
-  font-weight: 500;
-  font-synthesis: auto;
-  font-variation-settings: normal;
-  line-height: 20px;
-  transform: none;
-  transition: background-color 120ms ease-out;
-  will-change: auto;
-}
-
-.ui-v2 .sidebar-link .sidebar-label,
-.ui-v2 .sidebar-link .sidebar-label > span {
-  font-size: 12.1875px;
-  font-synthesis: auto;
-  font-variation-settings: normal;
-  line-height: 20px;
-}
-
-.ui-v2 .sidebar-link-active {
-  font-size: 12.1875px;
-  font-weight: 620;
-  line-height: 20px;
-}
-
-.ui-v2 .sidebar-link:active {
-  transform: none;
-}
-
-.ui-v2 .sidebar .ui-v2-sidebar-collapse svg {
-  width: 16px;
-  height: 16px;
 }
