@@ -27,8 +27,13 @@ describe('UI v2 dark palette', () => {
   it('keeps secondary text readable in both themes', () => {
     expect(appStyles).toContain('--ui2-text-secondary: #4f4f55;')
     expect(appStyles).toContain('--ui2-text-tertiary: #727279;')
-    expect(appStyles).toContain('--ui2-text-secondary: #c7ced8;')
-    expect(appStyles).toContain('--ui2-text-tertiary: #929daa;')
+    expect(appStyles).toContain('--ui2-text: #f8fafc;')
+    expect(appStyles).toContain('--ui2-text-secondary: #e1e7ef;')
+    expect(appStyles).toContain('--ui2-text-tertiary: #aeb9c7;')
+    expect(appStyles).toContain('.dark .ui-v2 table td {')
+    expect(appStyles).toContain('color: #edf2f7;')
+    expect(appStyles).toContain('.dark .ui-v2 table th {')
+    expect(appStyles).toContain('color: #b9c3cf;')
   })
 
   it('reserves blue for selection while primary commands invert with the theme', () => {

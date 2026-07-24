@@ -849,9 +849,9 @@ html.dark.ui-v2-active,
   --ui2-surface-recessed: #11161c;
   --ui2-sidebar: #15191f;
   --ui2-toolbar: rgba(15, 18, 22, 0.94);
-  --ui2-text: #f4f6f8;
-  --ui2-text-secondary: #c7ced8;
-  --ui2-text-tertiary: #929daa;
+  --ui2-text: #f8fafc;
+  --ui2-text-secondary: #e1e7ef;
+  --ui2-text-tertiary: #aeb9c7;
   --ui2-line: rgba(226, 232, 240, 0.075);
   --ui2-line-strong: rgba(226, 232, 240, 0.13);
   --ui2-accent: #86b4ff;
@@ -1044,7 +1044,7 @@ html.dark.ui-v2-active body {
 
 .ui-v2 .sidebar-link:hover {
   background: color-mix(in srgb, var(--ui2-surface), transparent 34%) !important;
-  color: var(--ui2-text-secondary) !important;
+  color: var(--ui2-text) !important;
   transform: none;
 }
 
@@ -1687,7 +1687,7 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 
 .ui-v2 table td {
   border-color: var(--ui2-line) !important;
-  color: var(--ui2-text-secondary);
+  color: var(--ui2-text);
 }
 
 .ui-v2 table tbody tr:hover {
@@ -1708,9 +1708,17 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 
 .ui-v2 table th {
   background: transparent !important;
-  color: var(--ui2-text-tertiary);
+  color: var(--ui2-text-secondary);
   font-size: 0.6875rem;
   font-weight: 620;
+}
+
+.dark .ui-v2 table td {
+  color: #edf2f7;
+}
+
+.dark .ui-v2 table th {
+  color: #b9c3cf;
 }
 
 .dark .ui-v2 .dashboard-chart-grid table,
@@ -1742,7 +1750,7 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 
 .dark .ui-v2 .dashboard-chart-grid button[class*="dark:text-gray-400"],
 .dark .ui-v2 .usage-page button[class*="dark:text-gray-400"] {
-  color: var(--ui2-text-tertiary) !important;
+  color: var(--ui2-text-secondary) !important;
 }
 
 .ui-v2 .data-table-empty {
