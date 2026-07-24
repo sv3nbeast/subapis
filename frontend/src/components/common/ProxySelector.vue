@@ -87,10 +87,11 @@
                 <span class="truncate font-medium">{{ proxy.name }}</span>
                 <!-- Account count badge -->
                 <span
-                  v-if="proxy.account_count !== undefined"
+                  v-if="displayedAccountCounts[proxy.id] !== undefined"
+                  :data-testid="`proxy-account-count-${proxy.id}`"
                   class="inline-flex flex-shrink-0 items-center rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600 dark:bg-dark-600 dark:text-gray-400"
                 >
-                  {{ proxy.account_count }}
+                  {{ displayedAccountCounts[proxy.id] }}
                 </span>
                 <!-- Test result badges -->
                 <template v-if="testResults[proxy.id]">
@@ -189,6 +190,7 @@ interface ProxyTestResult {
 interface Props {
   modelValue: number | null
   proxies: Proxy[]
+  accountCounts?: Record<number, number>
   disabled?: boolean
 }
 
@@ -209,6 +211,20 @@ const searchInputRef = ref<HTMLInputElement | null>(null)
 const testResults = reactive<Record<number, ProxyTestResult>>({})
 const testingProxyIds = reactive(new Set<number>())
 const batchTesting = ref(false)
+
+// Callers such as the create-account form can provide platform-scoped counts.
+// When an override map is present, missing/invalid entries intentionally stay
+// hidden instead of falling back to the all-platform account_count value.
+const displayedAccountCounts = computed<Record<number, number>>(() => {
+  const counts: Record<number, number> = {}
+  for (const proxy of props.proxies) {
+    const count = props.accountCounts === undefined ? proxy.account_count : props.accountCounts[proxy.id]
+    if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
+      counts[proxy.id] = count
+    }
+  }
+  return counts
+})
 
 const selectedProxy = computed(() => {
   if (props.modelValue === null) return null

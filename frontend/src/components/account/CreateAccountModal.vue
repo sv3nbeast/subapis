@@ -3072,7 +3072,11 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxies"
+          :account-counts="proxyAccountCountsForSelector"
+        />
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -4376,7 +4380,7 @@ const proxyPlatformCounts = ref<Record<number, number>>({})
 const proxyAutoSelectLimits = reactive<Record<ProxyAutoSelectPlatform, number>>({
   ...DEFAULT_PROXY_AUTO_SELECT_LIMITS
 })
-let proxyAutoSelectRun = 0
+let proxyPlatformCountRun = 0
 
 const autoProxyPlatform = computed<ProxyAutoSelectPlatform | null>(() => {
   if (
@@ -4390,6 +4394,11 @@ const autoProxyPlatform = computed<ProxyAutoSelectPlatform | null>(() => {
   }
   return null
 })
+
+const proxyCountPlatform = computed<AccountPlatform | null>(() => form.platform || null)
+const proxyAccountCountsForSelector = computed<Record<number, number> | undefined>(() =>
+  proxyCountPlatform.value ? proxyPlatformCounts.value : undefined
+)
 
 const normalizeProxyAutoSelectLimit = (value: unknown, fallback: number) => {
   const numericValue = Math.floor(Number(value))
@@ -4439,19 +4448,23 @@ const clearProxyAutoSelection = () => {
 }
 
 const loadProxyPlatformCounts = async () => {
-  const platform = autoProxyPlatform.value
+  const platform = proxyCountPlatform.value
   if (!props.show || !platform) {
+    proxyPlatformCountRun++
     proxyPlatformCounts.value = {}
     clearProxyAutoSelection()
     return
   }
   if (props.proxies.length === 0) {
+    proxyPlatformCountRun++
     proxyPlatformCounts.value = {}
     autoSelectProxy()
     return
   }
 
-  const runId = ++proxyAutoSelectRun
+  const runId = ++proxyPlatformCountRun
+  // Do not render the previous platform's counts while the new snapshot loads.
+  proxyPlatformCounts.value = {}
   try {
     const entries = await Promise.all(
       props.proxies
@@ -4469,13 +4482,13 @@ const loadProxyPlatformCounts = async () => {
           }
         })
     )
-    if (runId !== proxyAutoSelectRun || autoProxyPlatform.value !== platform) {
+    if (runId !== proxyPlatformCountRun || proxyCountPlatform.value !== platform) {
       return
     }
     proxyPlatformCounts.value = Object.fromEntries(entries)
     autoSelectProxy()
   } catch {
-    if (runId === proxyAutoSelectRun) {
+    if (runId === proxyPlatformCountRun) {
       proxyPlatformCounts.value = {}
     }
   }
@@ -5340,7 +5353,7 @@ const resetForm = () => {
   userMsgQueueMode.value = ''
   tlsFingerprintEnabled.value = false
   tlsFingerprintProfileId.value = null
-  proxyAutoSelectRun++
+  proxyPlatformCountRun++
   proxyPlatformCounts.value = {}
   autoSelectedProxyId.value = null
   sessionIdMaskingEnabled.value = false
