@@ -493,9 +493,17 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		if openAIStreamFailedEventShouldFailover(payload, message) {
 			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
 		}
-		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		clientStatus, clientErrType, clientErrMsg, clientError := openAIStreamFailedEventBuiltInClientError(payload, message)
+		if clientError {
+			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
+			message = s.recordOpenAIStreamUpstreamErrorWithStatus(
+				c, account, false, clientStatus, requestID, "client_context_limit", payload, message,
+			)
+		} else {
+			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		}
 		// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
-		// 使按错误码配置的透传规则可命中。
+		// 使按错误码配置的透传规则可命中，且保留其对内建语义的优先级。
 		if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(
 			c, account.Platform, payload, message,
 		); matched {
@@ -505,6 +513,11 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			MarkResponseCommitted(c)
 			writeAnthropicError(c, status, errType, errMsg)
 			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
+		}
+		if clientError {
+			MarkResponseCommitted(c)
+			writeAnthropicError(c, clientStatus, clientErrType, clientErrMsg)
+			return nil, fmt.Errorf("upstream response failed (client input): %s", clientErrMsg)
 		}
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", message)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
@@ -892,10 +905,21 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
 					return true
 				}
-				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
+				clientStatus, clientErrType, clientErrMsg, clientError := openAIStreamFailedEventBuiltInClientError(payloadBytes, message)
+				if clientError {
+					MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonContextLimit)
+					message = s.recordOpenAIStreamUpstreamErrorWithStatus(
+						c, account, false, clientStatus, requestID, "client_context_limit", payloadBytes, message,
+					)
+				} else {
+					message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
+				}
 				errStatus, errType, errMsg := http.StatusBadGateway, "api_error", message
+				if clientError {
+					errStatus, errType, errMsg = clientStatus, clientErrType, clientErrMsg
+				}
 				// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
-				// 使按错误码配置的透传规则可命中。
+				// 使按错误码配置的透传规则可命中，并优先于内建语义。
 				if status, et, em, matched := applyOpenAIStreamFailedErrorPassthroughRule(
 					c, account.Platform, payloadBytes, message,
 				); matched {
@@ -903,6 +927,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 						em = errMsg
 					}
 					errStatus, errType, errMsg = status, et, em
+					MarkResponseCommitted(c)
+				}
+				if clientError {
 					MarkResponseCommitted(c)
 				}
 				if !clientDisconnected {

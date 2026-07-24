@@ -4397,6 +4397,39 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	}
 }
 
+func isOpenAIStreamFailedEventContextWindowError(payload []byte, message string) bool {
+	if isOpenAIContextWindowError(message, nil) {
+		return true
+	}
+	for _, path := range []string{
+		"response.error.message",
+		"response.error.code",
+		"error.message",
+		"error.code",
+		"message",
+		"code",
+	} {
+		if isOpenAIContextWindowError(gjson.GetBytes(payload, path).String(), nil) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIStreamFailedEventBuiltInClientError(payload []byte, message string) (status int, errType string, errMsg string, matched bool) {
+	if !isOpenAIStreamFailedEventContextWindowError(payload, message) {
+		return 0, "", "", false
+	}
+
+	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
+	if message == "" {
+		message = "prompt is too long"
+	} else if !strings.Contains(strings.ToLower(message), "prompt is too long") {
+		message = "prompt is too long: " + message
+	}
+	return http.StatusBadRequest, "invalid_request_error", message, true
+}
+
 func openAIStreamFailedEventPassthroughBody(payload []byte, failedMessage string) []byte {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return payload
@@ -4514,9 +4547,27 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 	payload []byte,
 	message string,
 ) string {
+	return s.recordOpenAIStreamUpstreamErrorWithStatus(
+		c, account, passthrough, http.StatusBadGateway, upstreamRequestID, kind, payload, message,
+	)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamErrorWithStatus(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamStatusCode int,
+	upstreamRequestID string,
+	kind string,
+	payload []byte,
+	message string,
+) string {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "OpenAI upstream response failed"
+	}
+	if upstreamStatusCode <= 0 {
+		upstreamStatusCode = http.StatusBadGateway
 	}
 	detail := ""
 	if len(payload) > 0 && s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
@@ -4527,10 +4578,10 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 		detail = truncateString(string(payload), maxBytes)
 	}
 	if c != nil {
-		setOpsUpstreamError(c, http.StatusBadGateway, message, detail)
+		setOpsUpstreamError(c, upstreamStatusCode, message, detail)
 		event := OpsUpstreamErrorEvent{
 			Platform:           PlatformOpenAI,
-			UpstreamStatusCode: http.StatusBadGateway,
+			UpstreamStatusCode: upstreamStatusCode,
 			UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
 			Passthrough:        passthrough,
 			Kind:               kind,
