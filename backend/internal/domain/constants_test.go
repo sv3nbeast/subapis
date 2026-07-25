@@ -59,6 +59,20 @@ func TestDefaultKiroModelMapping_DefaultsSonnet5(t *testing.T) {
 	}
 }
 
+func TestDefaultKiroModelMapping_DefaultsOpus5Aliases(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"claude-opus-5":          "claude-opus-5",
+		"claude-opus-5-thinking": "claude-opus-5",
+	}
+	for from, want := range cases {
+		if got, ok := DefaultKiroModelMapping[from]; !ok || got != want {
+			t.Fatalf("unexpected default Kiro %q mapping: got %q exists=%v want %q", from, got, ok, want)
+		}
+	}
+}
+
 func TestDefaultKiroModelMapping_DefaultsNativeGPTFamily(t *testing.T) {
 	t.Parallel()
 

@@ -126,6 +126,16 @@ func TestResolveAnthropicUpstreamModel(t *testing.T) {
 			wantSource:     "alias",
 		},
 		{
+			name: "oauth falls back to opus 5 thinking default alias mapping",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+			},
+			requestedModel: "claude-opus-5-thinking",
+			wantModel:      "claude-opus-5",
+			wantSource:     "alias",
+		},
+		{
 			name: "oauth normalizes sonnet 5 thinking suffix without enabling thinking alias",
 			account: &Account{
 				Platform: PlatformAnthropic,
@@ -175,12 +185,14 @@ func TestIsAnthropicThinkingModelAlias(t *testing.T) {
 		{model: "claude-opus-4.7-thinking", want: true},
 		{model: "claude-opus-4-8-thinking", want: true},
 		{model: "claude-opus-4.8-thinking", want: true},
+		{model: "claude-opus-5-thinking", want: true},
 		{model: "claude-opus-4-6", want: false},
 		{model: "claude-opus-4.6", want: false},
 		{model: "claude-opus-4-7", want: false},
 		{model: "claude-opus-4.7", want: false},
 		{model: "claude-opus-4-8", want: false},
 		{model: "claude-opus-4.8", want: false},
+		{model: "claude-opus-5", want: false},
 		{model: "claude-sonnet-4-5-thinking", want: false},
 		{model: "claude-sonnet-5-thinking", want: false},
 	}
@@ -191,5 +203,14 @@ func TestIsAnthropicThinkingModelAlias(t *testing.T) {
 				t.Fatalf("isAnthropicThinkingModelAlias(%q) = %v, want %v", tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAnthropicThinkingModeForAlias_Opus5UsesAdaptive(t *testing.T) {
+	if got := anthropicThinkingModeForAlias("claude-opus-5-thinking"); got != "adaptive" {
+		t.Fatalf("anthropicThinkingModeForAlias() = %q, want adaptive", got)
+	}
+	if got := anthropicThinkingModeForAlias("claude-opus-4-8-thinking"); got != "enabled" {
+		t.Fatalf("anthropicThinkingModeForAlias() = %q, want enabled", got)
 	}
 }

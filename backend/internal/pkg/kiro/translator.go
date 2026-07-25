@@ -100,6 +100,7 @@ var (
 		"gpt-5.6-sol":          {"low", "medium", "high", "xhigh", "max"},
 		"gpt-5.6-terra":        {"low", "medium", "high", "xhigh", "max"},
 		"gpt-5.6-luna":         {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-5":        {"low", "medium", "high", "xhigh", "max"},
 		"claude-sonnet-5":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.8":      {"low", "medium", "high", "xhigh", "max"},
 		"claude-opus-4.7":      {"low", "medium", "high", "xhigh", "max"},
@@ -520,6 +521,7 @@ func contextWindowTokensForModel(model string) int {
 	}
 	switch normalizeModelAlias(normalized) {
 	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"claude-opus-5",
 		"claude-sonnet-5", "claude-sonnet-5.0",
 		"claude-sonnet-4-6", "claude-sonnet-4.6",
 		"claude-opus-4-6", "claude-opus-4.6",
@@ -550,7 +552,8 @@ func isRejectedKiroModelVariant(model string) bool {
 // 也不会改写 inferenceConfig,避免改变上游请求语义。
 func requiresImplicitThinkingTagStripping(modelID string) bool {
 	switch strings.TrimSpace(strings.ToLower(modelID)) {
-	case "claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
+	case "claude-opus-5", "claude-opus-5-thinking",
+		"claude-opus-4.7", "claude-opus-4-7", "claude-opus-4-7-thinking",
 		"claude-opus-4.8", "claude-opus-4-8", "claude-opus-4-8-thinking":
 		return true
 	}
@@ -604,6 +607,9 @@ func resolveKiroNativeEffort(modelID string, body []byte, thinking *thinkingDire
 
 func isKiroOutputConfigPathModel(modelID string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(modelID))
+	if normalizeModelAlias(normalized) == "claude-opus-5" {
+		return true
+	}
 	normalized = kiroClaudeVersion.ReplaceAllString(normalized, "claude-$1-$2.$3")
 	match := kiroDottedVersion.FindStringSubmatch(normalized)
 	if match == nil {
@@ -653,7 +659,7 @@ func normalizeKiroEnvPlatform(platform string) string {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5", "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7", "claude-opus-4-6", "claude-opus-4.6":
 		return 128000
 	case "claude-sonnet-4-6", "claude-sonnet-4.6":
 		return 64000
@@ -1965,9 +1971,10 @@ func thinkingDirectiveFromModel(model string) *thinkingDirective {
 			BudgetTokens: 20000,
 			Effort:       "high",
 		}
-	// opus 4.7/4.8 走 adaptive 高预算,budget 对齐 Antigravity 的 ClaudeAdaptiveHighThinkingBudgetTokens
+	// opus 4.7+ 走 adaptive 高预算,budget 对齐 Antigravity 的 ClaudeAdaptiveHighThinkingBudgetTokens
 	// 避免 thinking 提前耗尽导致流式中途断开
-	case "claude-opus-4-7", "claude-opus-4.7",
+	case "claude-opus-5",
+		"claude-opus-4-7", "claude-opus-4.7",
 		"claude-opus-4-8", "claude-opus-4.8":
 		return &thinkingDirective{
 			Mode:         "adaptive",

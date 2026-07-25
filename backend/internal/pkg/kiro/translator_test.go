@@ -736,7 +736,30 @@ func TestBuildKiroPayloadOptionsSupportsFutureClaudeNativeEffort(t *testing.T) {
 	require.Equal(t, "summarized", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.display").String())
 	require.Equal(t, "medium", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
 	require.True(t, isKiroOutputConfigPathModel("claude-sonnet-5-0-thinking"))
+	require.True(t, isKiroOutputConfigPathModel("claude-opus-5"))
 	require.False(t, isKiroOutputConfigPathModel("claude-haiku-4.5"))
+}
+
+func TestBuildKiroPayloadOptionsSupportsOpus5ThinkingAlias(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5-thinking",
+		"max_tokens":999999,
+		"output_config":{"effort":"xhigh"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())
+	require.Equal(t, "summarized", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.display").String())
+	require.Equal(t, "xhigh", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+	require.Equal(t, int64(128000), gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int())
+	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
+	require.Equal(t, 128000, result.Context.MaxOutputTokens)
 }
 
 func TestBuildKiroPayloadOptionsSupportsNativeGPTModels(t *testing.T) {
@@ -787,15 +810,16 @@ func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffor
 	require.Equal(t, "AI_EDITOR", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.origin").String())
 }
 
-// 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
+// 客户端未请求 thinking 但模型是 Opus 4.7+ 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
-func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *testing.T) {
+func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForCurrentOpus(t *testing.T) {
 	cases := []struct {
 		name    string
 		model   string
 		mapped  string
 		wantStr bool
 	}{
+		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStr: true},
 		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStr: true},
 		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStr: true},
 		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStr: false},
@@ -3597,6 +3621,7 @@ func TestKiroContextWindowResolution(t *testing.T) {
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-sol"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-terra"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-luna"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4-6"))
@@ -4064,6 +4089,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
+		"claude-opus-5":                       "claude-opus-5",
+		"claude-opus-5-thinking":              "claude-opus-5",
 		"claude-opus-4-8":                     "claude-opus-4.8",
 		"claude-opus-4-8-thinking":            "claude-opus-4.8",
 		"claude-opus-4.8":                     "claude-opus-4.8",

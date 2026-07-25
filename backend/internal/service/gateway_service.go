@@ -1683,15 +1683,24 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 }
 
 func ensureAnthropicThinkingForModelAlias(body []byte, requestedModel string) []byte {
-	if !isAnthropicThinkingModelAlias(requestedModel) || len(body) == 0 {
+	mode := anthropicThinkingModeForAlias(requestedModel)
+	if mode == "" || len(body) == 0 {
 		return body
 	}
 
 	out := body
-	if thinkingType := gjson.GetBytes(out, "thinking.type").String(); thinkingType != "enabled" {
-		if next, ok := setJSONValueBytes(out, "thinking.type", "enabled"); ok {
+	if thinkingType := gjson.GetBytes(out, "thinking.type").String(); thinkingType != mode {
+		if next, ok := setJSONValueBytes(out, "thinking.type", mode); ok {
 			out = next
 		}
+	}
+	if mode == "adaptive" {
+		if gjson.GetBytes(out, "thinking.budget_tokens").Exists() {
+			if next, ok := deleteJSONPathBytes(out, "thinking.budget_tokens"); ok {
+				out = next
+			}
+		}
+		return out
 	}
 	if !gjson.GetBytes(out, "thinking.budget_tokens").Exists() {
 		if next, ok := setJSONValueBytes(out, "thinking.budget_tokens", BudgetRectifyBudgetTokens); ok {
@@ -1704,6 +1713,44 @@ func ensureAnthropicThinkingForModelAlias(body []byte, requestedModel string) []
 		}
 	}
 	return out
+}
+
+func normalizeAnthropicOpus5Thinking(body []byte, model string) []byte {
+	if len(body) == 0 || !isAnthropicOpus5Model(model) {
+		return body
+	}
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	if thinkingType != "enabled" && thinkingType != "adaptive" {
+		return body
+	}
+	out := body
+	if thinkingType == "enabled" {
+		if next, ok := setJSONValueBytes(out, "thinking.type", "adaptive"); ok {
+			out = next
+		}
+	}
+	if gjson.GetBytes(out, "thinking.budget_tokens").Exists() {
+		if next, ok := deleteJSONPathBytes(out, "thinking.budget_tokens"); ok {
+			out = next
+		}
+	}
+	return out
+}
+
+func normalizeAnthropicOpus5ThinkingRequest(req *apicompat.AnthropicRequest, model string) {
+	if req == nil || req.Thinking == nil || !isAnthropicOpus5Model(model) {
+		return
+	}
+	thinkingType := strings.ToLower(strings.TrimSpace(req.Thinking.Type))
+	if thinkingType != "enabled" && thinkingType != "adaptive" {
+		return
+	}
+	req.Thinking.Type = "adaptive"
+	req.Thinking.BudgetTokens = 0
+}
+
+func isAnthropicOpus5Model(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "claude-opus-5")
 }
 
 func sanitizeAnthropicUpstreamRequestBody(body []byte) []byte {
@@ -1954,18 +2001,22 @@ func sanitizeAnthropicCountTokensRequestBody(body []byte) []byte {
 }
 
 func applyAnthropicThinkingAliasToRequest(req *apicompat.AnthropicRequest, requestedModel string) {
-	if req == nil || !isAnthropicThinkingModelAlias(requestedModel) {
+	if req == nil {
 		return
 	}
-	if req.Thinking == nil || req.Thinking.Type != "enabled" {
-		req.Thinking = &apicompat.AnthropicThinking{Type: "enabled"}
+	mode := anthropicThinkingModeForAlias(requestedModel)
+	if mode == "adaptive" {
+		req.Thinking = &apicompat.AnthropicThinking{Type: "adaptive"}
+	} else if mode != "" && (req.Thinking == nil || req.Thinking.Type != mode) {
+		req.Thinking = &apicompat.AnthropicThinking{Type: mode}
 	}
-	if req.Thinking.BudgetTokens <= 0 {
+	if mode == "enabled" && req.Thinking.BudgetTokens <= 0 {
 		req.Thinking.BudgetTokens = BudgetRectifyBudgetTokens
 	}
-	if req.MaxTokens < BudgetRectifyMinMaxTokens {
+	if mode == "enabled" && req.MaxTokens < BudgetRectifyMinMaxTokens {
 		req.MaxTokens = BudgetRectifyMaxTokens
 	}
+	normalizeAnthropicOpus5ThinkingRequest(req, req.Model)
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
@@ -6618,6 +6669,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
+		passthroughBody = normalizeAnthropicOpus5Thinking(passthroughBody, passthroughModel)
 		passthroughBody = sanitizeAnthropicUpstreamRequestBody(passthroughBody)
 		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account, passthroughModel)
 		if migratedBody, migrated := migrateAnthropicInlineSystemMessages(passthroughBody); migrated {
@@ -6801,6 +6853,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
 	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
+	body = normalizeAnthropicOpus5Thinking(body, reqModel)
 	body = sanitizeAnthropicUpstreamRequestBody(body)
 	if err := replaceBody(PrepareSharedAnthropicThinkingHistory(body, account, reqModel)); err != nil {
 		return nil, err
@@ -12216,6 +12269,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			}
 		}
 		passthroughBody = ensureAnthropicThinkingForModelAlias(passthroughBody, originalModel)
+		passthroughBody = normalizeAnthropicOpus5Thinking(passthroughBody, passthroughModel)
 		passthroughBody = sanitizeAnthropicCountTokensRequestBody(passthroughBody)
 		passthroughBody = PrepareSharedAnthropicThinkingHistory(passthroughBody, account, passthroughModel)
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
@@ -12236,6 +12290,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 	reqModel := parsed.Model
+	originalModel := reqModel
 
 	// Pre-filter: strip empty text blocks to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
@@ -12297,7 +12352,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=%s)", originalReqModel, mappedModel, account.Name, mappingSource)
 		}
 	}
-	body = ensureAnthropicThinkingForModelAlias(body, parsed.Model)
+	body = ensureAnthropicThinkingForModelAlias(body, originalModel)
+	body = normalizeAnthropicOpus5Thinking(body, reqModel)
 	body = sanitizeAnthropicCountTokensRequestBody(body)
 	if err := replaceBody(PrepareSharedAnthropicThinkingHistory(body, account, reqModel)); err != nil {
 		return err

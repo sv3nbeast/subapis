@@ -198,6 +198,25 @@ func TestEnsureAnthropicThinkingForModelAlias_NormalizesAdaptiveThinking(t *test
 	require.Equal(t, int64(80000), gjson.GetBytes(result, "max_tokens").Int())
 }
 
+func TestEnsureAnthropicThinkingForModelAlias_Opus5UsesAdaptiveWithoutBudget(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":12345},"messages":[]}`)
+
+	result := ensureAnthropicThinkingForModelAlias(body, "claude-opus-5-thinking")
+
+	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+	require.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+	require.Equal(t, int64(1024), gjson.GetBytes(result, "max_tokens").Int())
+}
+
+func TestNormalizeAnthropicOpus5Thinking_ConvertsEnabledAndDropsBudget(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","thinking":{"type":"enabled","budget_tokens":24576},"messages":[]}`)
+
+	result := normalizeAnthropicOpus5Thinking(body, "claude-opus-5")
+
+	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
+	require.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+}
+
 func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-7","speed":"fast","max_tokens":64000,"messages":[{"role":"user","content":[{"type":"text","text":"keep speed mention"}]}],"metadata":{"speed":"nested"}}`)
 
@@ -385,6 +404,33 @@ func TestApplyAnthropicThinkingAliasToRequest_Opus48(t *testing.T) {
 	require.Equal(t, "enabled", req.Thinking.Type)
 	require.Equal(t, BudgetRectifyBudgetTokens, req.Thinking.BudgetTokens)
 	require.Equal(t, BudgetRectifyMaxTokens, req.MaxTokens)
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_Opus5UsesAdaptiveWithoutBudget(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:     "claude-opus-5",
+		MaxTokens: 1024,
+		Thinking:  &apicompat.AnthropicThinking{Type: "enabled", BudgetTokens: 24576},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-5-thinking")
+
+	require.NotNil(t, req.Thinking)
+	require.Equal(t, "adaptive", req.Thinking.Type)
+	require.Zero(t, req.Thinking.BudgetTokens)
+	require.Equal(t, 1024, req.MaxTokens)
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_Opus5BaseNormalizesConvertedReasoning(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:    "claude-opus-5",
+		Thinking: &apicompat.AnthropicThinking{Type: "enabled", BudgetTokens: 16000},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-5")
+
+	require.Equal(t, "adaptive", req.Thinking.Type)
+	require.Zero(t, req.Thinking.BudgetTokens)
 }
 
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {
