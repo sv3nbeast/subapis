@@ -18,11 +18,11 @@ Options:
   --tag TAG                      Docker image tag suffix. Default: prod-YYYYmmdd-HHMMSS-<gitsha>
   --image-repo NAME              Docker image repo name. Default: sub2api
   --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.23.2
-  --ui-v2-rollout-mode MODE      UI rollout: off, preview, percentage, or full. Default: preview
+  --ui-v2-rollout-mode MODE      UI rollout: off, preview, percentage, or full. Default: full
   --ui-v2-rollout-percent N      Stable cohort percentage for percentage mode. Default: 0
   --public-ui-v2-rollout-mode MODE
                                   Public UI rollout: off, preview, percentage, or full.
-                                  Default: preview
+                                  Default: full
   --public-ui-v2-rollout-percent N
                                   Stable public UI cohort percentage. Default: 0
   --kiro-resilience-mode MODE    Kiro resilience mode: off, observe, or enforce.
@@ -59,9 +59,9 @@ REMOTE_SRC_DIR="${REMOTE_SRC_DIR:-/root/sub2api-src}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
-UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
+UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-full}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
-PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-full}"
 PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"

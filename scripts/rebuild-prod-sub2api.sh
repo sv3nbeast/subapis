@@ -16,10 +16,10 @@ Environment variables:
   ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
                                    Default: true
   VITE_UI_V2_ROLLOUT_MODE         UI rollout: off, preview, percentage, or full.
-                                   Default: preview
+                                   Default: full
   VITE_UI_V2_ROLLOUT_PERCENT      Stable cohort percentage for percentage mode. Default: 0
   VITE_PUBLIC_UI_V2_ROLLOUT_MODE  Public UI rollout: off, preview, percentage, or full.
-                                   Default: preview
+                                   Default: full
   VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT
                                    Stable public UI cohort percentage. Default: 0
   GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
@@ -57,9 +57,9 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
-UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
+UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-full}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
-PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-full}"
 PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
