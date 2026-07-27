@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	claudepkg "github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -929,6 +930,144 @@ func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, upstream.requests, 1)
 	require.Contains(t, rec.Body.String(), "我先读取工作区")
+}
+
+func TestShouldGuardKiroClaude1MToolProgressScope(t *testing.T) {
+	bodyWithTools := []byte(`{
+		"model":"claude-opus-4-6",
+		"messages":[{"role":"user","content":"inspect"}],
+		"tools":[{"name":"read","input_schema":{"type":"object"}}]
+	}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(bodyWithTools))
+
+	require.False(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "claude-opus-4.6"))
+	c.Request.Header.Set("Anthropic-Beta", "other-beta,"+claudepkg.BetaContext1M)
+	require.True(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "claude-opus-4.6"))
+	require.False(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "gpt-5.6-sol"))
+	require.False(t, shouldGuardKiroClaude1MToolProgress(c,
+		[]byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"answer"}]}`),
+		"claude-opus-4.6",
+	))
+}
+
+func TestForwardMessagesKiroClaude1MCallMarkerRetriesOnceThenEmitsTool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Anthropic-Beta", claudepkg.BetaContext1M)
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "找到问题——按钮设置了状态，但还要检查面板的渲染条件。\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_1m_retry", "read", `{"path":"README.md"}`),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "找到问题")
+	require.NotContains(t, rec.Body.String(), "\n\ncall")
+	require.Contains(t, rec.Body.String(), `"type":"tool_use"`)
+	require.Contains(t, rec.Body.String(), `"name":"read"`)
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+
+	firstSystem := gjson.GetBytes(upstream.bodies[0], "conversationState.history.0.userInputMessage.content").String()
+	secondContent := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, firstSystem, "[NATIVE TOOL PROGRESS:")
+	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
+}
+
+func TestForwardMessagesKiroClaude1MCallMarkerRetriesForNonStreamingClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":false
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Anthropic-Beta", claudepkg.BetaContext1M)
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "查看按钮和面板的条件逻辑。\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_1m_sync_retry", "read", `{"path":"README.md"}`),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "查看按钮")
+	require.Equal(t, "tool_use", gjson.Get(rec.Body.String(), "content.0.type").String(), "response=%s", rec.Body.String())
+	require.Equal(t, "read", gjson.Get(rec.Body.String(), "content.0.name").String(), "response=%s", rec.Body.String())
+	require.Equal(t, "README.md", gjson.Get(rec.Body.String(), "content.0.input.path").String(), "response=%s", rec.Body.String())
+}
+
+func TestForwardMessagesKiroClaude1MCallMarkerRetryExhaustionIsNotFalseSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Anthropic-Beta", claudepkg.BetaContext1M)
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "找到问题，接下来检查渲染条件。\n\ncall"),
+		kiroNativeGPTPreludeResponse(t, "查看按钮的绑定逻辑。\n\ncall"),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.True(t, failoverErr.FailoverProhibited)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.Len(t, upstream.requests, 2)
+	require.Empty(t, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
 }
 
 func TestForwardMessagesKiroUsesNativeGPTModel(t *testing.T) {

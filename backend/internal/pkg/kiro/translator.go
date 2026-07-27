@@ -113,14 +113,15 @@ var (
 		"claude-opus-4.6-1m":   {"low", "medium", "high", "max"},
 		"claude-sonnet-4.6-1m": {"low", "medium", "high", "max"},
 	}
-	nativeToolProgressChinesePrefixes = []string{"我现在", "我继续", "我会", "我将", "我先", "让我", "接下来", "下面我", "首先"}
-	nativeToolProgressEnglishPrefixes = []string{"i will", "i'll", "i am going to", "i'm going to", "let me", "first i", "first, i", "next i", "next, i"}
-	nativeToolProgressChineseActions  = []string{"读取", "检查", "查看", "搜索", "定位", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
-	nativeToolProgressNegations       = []string{"无法", "不能", "无需", "不需要", "没有权限", "未提供", "can't", "cannot", "unable to", "do not have access", "don't have access", "not "}
-	nativeToolProgressToolTerms       = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
-	nativeToolProgressRefusalTerms    = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
-	nativeToolProgressRefusalPrefixes = []string{"当前任务仍被", "当前任务被", "本会话没有", "本会话未", "the current task", "this session", "i cannot", "i can't", "unable to", "no terminal", "no file"}
-	nativeToolProgressCompletionTerms = []string{"已完成", "已经完成", "执行完成", "扫描结果", "结果如下", "completed", "results:"}
+	nativeToolProgressChinesePrefixes   = []string{"我现在", "我继续", "我会", "我将", "我先", "让我", "接下来", "下面我", "首先"}
+	nativeToolProgressEnglishPrefixes   = []string{"i will", "i'll", "i am going to", "i'm going to", "let me", "first i", "first, i", "next i", "next, i"}
+	nativeToolCallMarkerChinesePrefixes = []string{"查看", "找到问题"}
+	nativeToolProgressChineseActions    = []string{"读取", "检查", "查看", "搜索", "定位", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
+	nativeToolProgressNegations         = []string{"无法", "不能", "无需", "不需要", "没有权限", "未提供", "can't", "cannot", "unable to", "do not have access", "don't have access", "not "}
+	nativeToolProgressToolTerms         = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
+	nativeToolProgressRefusalTerms      = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
+	nativeToolProgressRefusalPrefixes   = []string{"当前任务仍被", "当前任务被", "本会话没有", "本会话未", "the current task", "this session", "i cannot", "i can't", "unable to", "no terminal", "no file"}
+	nativeToolProgressCompletionTerms   = []string{"已完成", "已经完成", "执行完成", "扫描结果", "结果如下", "completed", "results:"}
 )
 
 var kiroModelAliases = []struct {
@@ -212,9 +213,13 @@ type KiroRequestContext struct {
 	ToolNameMap         map[string]string
 	EmptyInputToolNames map[string]bool
 	ThinkingEnabled     bool
-	// NativeToolProgressRequired is enabled only for the Kiro GPT Responses
-	// bridge used by Codex clients. It must remain false for Kiro Claude paths.
+	// NativeToolProgressRequired is an explicit caller opt-in for tool-backed
+	// turns where a narration-only prelude must remain private until completion.
 	NativeToolProgressRequired bool
+	// NativeToolCallMarkerRequired narrows a stalled turn to a standalone "call"
+	// line. Claude extended-context requests use this to avoid retrying legitimate
+	// short narration while recovering the provider's malformed tool prelude.
+	NativeToolCallMarkerRequired bool
 	// PriorAttemptKiroCredits accounts for a discarded corrective attempt as
 	// provider cost without adding its hidden text tokens to client billing.
 	PriorAttemptKiroCredits float64
@@ -288,11 +293,12 @@ type KiroBuildResult struct {
 }
 
 type KiroPayloadOptions struct {
-	Origin                     string
-	UseNativeEffort            bool
-	AttachEnvState             bool
-	InjectThinkingSystemPrompt bool
-	RequireNativeToolProgress  bool
+	Origin                      string
+	UseNativeEffort             bool
+	AttachEnvState              bool
+	InjectThinkingSystemPrompt  bool
+	RequireNativeToolProgress   bool
+	RequireNativeToolCallMarker bool
 }
 
 type KiroPayload struct {
@@ -786,8 +792,8 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
 	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
-	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress &&
-		strings.HasPrefix(normalizeModelAlias(modelID), "gpt-") && len(kiroTools) > 0
+	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress && len(kiroTools) > 0
+	requestCtx.NativeToolCallMarkerRequired = requestCtx.NativeToolProgressRequired && options.RequireNativeToolCallMarker
 	if currentUserMsg != nil {
 		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
 			currentUserMsg.Content = " "
@@ -1187,8 +1193,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		text := visibleTextBuf.String()
-		if looksLikeKiroNativeToolProgressFailure(text) ||
-			mayBecomeKiroNativeToolPrelude(text) || mayBecomeKiroNativeToolRefusal(text) {
+		if shouldHoldKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, text) {
 			return nil
 		}
 		nativeToolProgressGuard = false
@@ -1856,11 +1861,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			break
 		}
 		if err != nil {
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if err := msg.ExceptionError(); err != nil {
 			err = markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
@@ -1872,7 +1877,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
 			err = markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if requestCtx.EventDiagnosticSink != nil {
 			requestCtx.EventDiagnosticSink(buildKiroEventDiagnostic(msg, event))
@@ -1908,7 +1913,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				sawExplicitCompletionReason = true
 			}
 			if err := applySemanticEvent(semanticEvent); err != nil {
-				return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, visibleTextBuf.String())
+				return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 			}
 		}
 		if requestCtx.RequireTerminalEvent && !sawTerminalEvent && len(semanticEvents) > 0 {
@@ -1944,7 +1949,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
 	}
-	if nativeToolProgressGuard && !nativeToolEmitted && looksLikeKiroNativeToolProgressFailure(visibleTextBuf.String()) {
+	if nativeToolProgressGuard && !nativeToolEmitted && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
 		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 	}
 	// 移除"thinking-only 强制 max_tokens"误判分支
@@ -2404,30 +2409,75 @@ func hasKiroNativeToolProgressBlockingNegation(text string) bool {
 	return false
 }
 
-func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted bool, text string) error {
-	if err == nil || !guard || toolEmitted || !looksLikeKiroNativeToolProgressFailure(text) {
+func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted, requireCallMarker bool, text string) error {
+	if err == nil || !guard || toolEmitted || !shouldRetryKiroNativeToolProgress(requireCallMarker, text) {
 		return err
 	}
 	return &NativeToolProgressBufferedError{Cause: err}
 }
 
-// looksLikeKiroNativeToolProgressFailure recognizes a GPT bridge response that
-// cannot complete a tool-backed turn. Besides the usual "I will inspect ..."
-// prelude, Kiro sometimes emits a capability refusal such as "this session has
-// no terminal/file tools" even though the request contains native tools. Keep
-// both forms private so the corrective retry can turn them into a real call.
+func shouldRetryKiroNativeToolProgress(requireCallMarker bool, text string) bool {
+	if requireCallMarker {
+		return looksLikeKiroNativeToolCallMarker(text)
+	}
+	return looksLikeKiroNativeToolProgressFailure(text)
+}
+
+func shouldHoldKiroNativeToolProgress(requireCallMarker bool, text string) bool {
+	if requireCallMarker {
+		return looksLikeKiroNativeToolCallMarker(text) || mayBecomeKiroNativeToolCallMarkerPrelude(text)
+	}
+	return looksLikeKiroNativeToolProgressFailure(text) ||
+		mayBecomeKiroNativeToolPrelude(text) ||
+		mayBecomeKiroNativeToolRefusal(text)
+}
+
+// looksLikeKiroNativeToolProgressFailure recognizes provider output that cannot
+// complete a tool-backed turn. Besides the usual "I will inspect ..." prelude,
+// Kiro sometimes emits a capability refusal such as "this session has no
+// terminal/file tools" even though the request contains native tools. Keep
+// these forms private so the corrective retry can turn them into a real call.
 func looksLikeKiroNativeToolProgressFailure(text string) bool {
 	return looksLikeKiroNativeToolPrelude(text) ||
 		looksLikeKiroNativeToolRefusal(text) ||
 		looksLikeKiroNativeToolIntent(text)
 }
 
+// looksLikeKiroNativeToolCallMarker recognizes the provider-only text marker
+// that normally precedes a structured toolUseEvent. A standalone final line is
+// required so ordinary prose containing the word "call" remains untouched.
+func looksLikeKiroNativeToolCallMarker(text string) bool {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if strings.EqualFold(trimmed, "call") {
+		return true
+	}
+	lastLine := strings.LastIndexByte(trimmed, '\n')
+	return lastLine >= 0 && strings.EqualFold(strings.TrimSpace(trimmed[lastLine+1:]), "call")
+}
+
+// mayBecomeKiroNativeToolCallMarkerPrelude covers the two short openings seen
+// before Kiro's standalone "call" marker on affected Claude 1M turns. Keep
+// these prefixes separate from the GPT guard so the workaround cannot broaden
+// retry behavior for other models.
+func mayBecomeKiroNativeToolCallMarkerPrelude(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	for _, prefix := range nativeToolCallMarkerChinesePrefixes {
+		if strings.HasPrefix(prefix, normalized) || strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // looksLikeKiroNativeToolIntent covers provider wording that starts with a
 // conversational prefix or formatting marker before the known prelude. It is
 // intentionally limited to text containing both a tool-related term and an
-// action. The guard is enabled only for Kiro native GPT requests that already
-// declared callable tools, so a bounded corrective retry is safer than
-// exposing a narration-only turn as a successful Codex completion.
+// action. Callers enable this only for explicitly guarded, tool-backed Kiro
+// requests, so a bounded corrective retry is safer than exposing a
+// narration-only turn as a successful completion.
 func looksLikeKiroNativeToolIntent(text string) bool {
 	normalized := normalizeKiroNativeToolProgressText(text)
 	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {

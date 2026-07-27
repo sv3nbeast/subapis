@@ -648,6 +648,11 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
 // 错误语义与 handleStreamingResponse 对齐：流体内出现 `event: error` 时返回
 // *sseStreamErrorEventError，交由调用方走既有 failover 处理；流中断/无响应时返回
 // 可重试的 *UpstreamFailoverError。
+type bufferedAnthropicStreamingOptions struct {
+	StrictTerminal     bool
+	NormalizeToolInput bool
+}
+
 func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 	ctx context.Context,
 	resp *http.Response,
@@ -656,9 +661,12 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 	startTime time.Time,
 	originalModel string,
 	mappedModel string,
-	strictTerminalOpt ...bool,
+	optionsOpt ...bufferedAnthropicStreamingOptions,
 ) (*ClaudeUsage, error) {
-	strictTerminal := len(strictTerminalOpt) > 0 && strictTerminalOpt[0]
+	options := bufferedAnthropicStreamingOptions{}
+	if len(optionsOpt) > 0 {
+		options = optionsOpt[0]
+	}
 	_ = account
 	_ = mappedModel
 	requestID := resp.Header.Get("x-request-id")
@@ -732,6 +740,9 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 				case "thinking_delta":
 					finalResp.Content[idx].Thinking += event.Delta.Thinking
 				case "input_json_delta":
+					if options.NormalizeToolInput && strings.TrimSpace(string(finalResp.Content[idx].Input)) == "{}" {
+						finalResp.Content[idx].Input = nil
+					}
 					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
 				}
 			}
@@ -748,7 +759,7 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 		// Kiro enforce treats a missing terminal event as incomplete. The outer
 		// semantic gate decides whether failover is still safe; after semantic
 		// output, finishKiroStreamResponse marks the error as non-replayable.
-		if strictTerminal {
+		if options.StrictTerminal {
 			return nil, &UpstreamFailoverError{
 				StatusCode:  http.StatusServiceUnavailable,
 				FailureKind: UpstreamFailureIncompleteStream,
@@ -793,12 +804,12 @@ func (s *GatewayService) handleBufferedAnthropicStreamingResponse(
 	// 上游被强制流式后会返回 text/event-stream，这里显式改回 JSON，避免下游中间层
 	// 按 Content-Type 误判为流式。
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if respBytes, err := json.Marshal(finalResp); err == nil {
-		respBytes = reverseToolNamesIfPresent(c, respBytes)
-		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
-	} else {
-		c.JSON(http.StatusOK, finalResp)
+	respBytes, err := json.Marshal(finalResp)
+	if err != nil {
+		return nil, fmt.Errorf("buffered anthropic stream: marshal response: %w", err)
 	}
+	respBytes = reverseToolNamesIfPresent(c, respBytes)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
 
 	return &usage, nil
 }

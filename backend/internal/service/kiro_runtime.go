@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	claudepkg "github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/cespare/xxhash/v2"
@@ -367,6 +368,10 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
+	if shouldGuardKiroClaude1MToolProgress(c, body, mappedModel) {
+		parsed.KiroNativeToolProgressRequired = true
+		parsed.KiroNativeToolCallMarkerRequired = true
+	}
 	logger.L().Debug("gateway forward_kiro_messages: request prepared",
 		zap.Int64("account_id", account.ID),
 		zap.String("auth_method", strings.TrimSpace(account.GetCredential("auth_method"))),
@@ -385,7 +390,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}
 
 	clientStream := parsed.Stream
-	if clientStream || s.kiroResilienceEnforced(parsed.GroupID) {
+	if clientStream || s.kiroResilienceEnforced(parsed.GroupID) || parsed.KiroNativeToolProgressRequired {
 		resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group)
 		if err != nil {
 			if s.handleKiroContextLimitError(c, account, err) {
@@ -439,7 +444,10 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		}
 		upstreamModel := resolveKiroUpstreamModel(mappedModel)
 		if !clientStream {
-			usage, bufferErr := s.handleBufferedAnthropicStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, true)
+			usage, bufferErr := s.handleBufferedAnthropicStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, bufferedAnthropicStreamingOptions{
+				StrictTerminal:     true,
+				NormalizeToolInput: true,
+			})
 			bufferErr = s.finishKiroStreamResponse(ctx, resp, parsed.GroupID, bufferErr)
 			if bufferErr != nil {
 				if failoverErr := s.kiroStreamErrorToFailover(ctx, account, bufferErr); failoverErr != nil {
@@ -763,6 +771,14 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		Stream:        false,
 		Duration:      time.Since(startTime),
 	}, nil
+}
+
+func shouldGuardKiroClaude1MToolProgress(c *gin.Context, body []byte, mappedModel string) bool {
+	if c == nil || !anthropicBetaTokensContains(c.GetHeader("Anthropic-Beta"), claudepkg.BetaContext1M) {
+		return false
+	}
+	modelID := strings.ToLower(strings.TrimSpace(kiropkg.MapModel(mappedModel)))
+	return strings.HasPrefix(modelID, "claude-") && hasKiroNativeToolProgressInput(body)
 }
 
 func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account *Account, err error) *UpstreamFailoverError {
@@ -2159,14 +2175,16 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 		profileArn = kiroResolveProfileArnForKRS(account)
 	}
 	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
+	requireNativeToolCallMarker := parsed != nil && parsed.KiroNativeToolCallMarkerRequired
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	if isKiroCLIWireMode(account) {
 		buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
-			Origin:                     "KIRO_CLI",
-			UseNativeEffort:            true,
-			AttachEnvState:             true,
-			InjectThinkingSystemPrompt: false,
-			RequireNativeToolProgress:  requireNativeToolProgress,
+			Origin:                      "KIRO_CLI",
+			UseNativeEffort:             true,
+			AttachEnvState:              true,
+			InjectThinkingSystemPrompt:  false,
+			RequireNativeToolProgress:   requireNativeToolProgress,
+			RequireNativeToolCallMarker: requireNativeToolCallMarker,
 		})
 		if err != nil {
 			return nil, err
@@ -2178,11 +2196,12 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 		origin = "AI_EDITOR"
 	}
 	buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
-		Origin:                     origin,
-		UseNativeEffort:            false,
-		AttachEnvState:             false,
-		InjectThinkingSystemPrompt: true,
-		RequireNativeToolProgress:  requireNativeToolProgress,
+		Origin:                      origin,
+		UseNativeEffort:             false,
+		AttachEnvState:              false,
+		InjectThinkingSystemPrompt:  true,
+		RequireNativeToolProgress:   requireNativeToolProgress,
+		RequireNativeToolCallMarker: requireNativeToolCallMarker,
 	})
 	if err != nil {
 		return nil, err

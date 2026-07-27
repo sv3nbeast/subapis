@@ -4799,6 +4799,29 @@ func TestKiroNativeToolProgressIntentDetection(t *testing.T) {
 	require.False(t, looksLikeKiroNativeToolProgressFailure("这里是完整答案，不需要调用工具。"))
 }
 
+func TestKiroNativeToolCallMarkerDetection(t *testing.T) {
+	require.True(t, looksLikeKiroNativeToolCallMarker("call"))
+	require.True(t, looksLikeKiroNativeToolCallMarker("查看按钮和面板的条件逻辑。\n\ncall"))
+	require.True(t, looksLikeKiroNativeToolCallMarker("找到问题，接下来检查渲染条件。\r\n\r\nCALL"))
+	require.False(t, looksLikeKiroNativeToolCallMarker("I will make a call"))
+	require.False(t, looksLikeKiroNativeToolCallMarker("recall"))
+}
+
+func TestKiroNativeToolCallMarkerRequiredNarrowsRetry(t *testing.T) {
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。\n\ncall"))
+	require.False(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(false, "我先查看按钮和面板的条件逻辑。"))
+}
+
+func TestKiroNativeToolCallMarkerPreludeIsScopedToMarkerGuard(t *testing.T) {
+	text := "找到问题，接下来检查面板的渲染条件。"
+	require.False(t, looksLikeKiroNativeToolProgressFailure(text))
+	require.False(t, shouldHoldKiroNativeToolProgress(false, text))
+	require.True(t, shouldHoldKiroNativeToolProgress(true, text))
+	require.False(t, shouldHoldKiroNativeToolProgress(true, "我先查看工作区，再汇报结果。"))
+	require.False(t, looksLikeKiroNativeToolProgressFailure("ordinary prose\n\ncall"))
+}
+
 func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
 	tests := []struct {
 		name string
@@ -4837,7 +4860,7 @@ func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
 	require.True(t, mayBecomeKiroNativeToolRefusal("This session has no"))
 }
 
-func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T) {
+func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
 		"messages":[{"role":"user","content":"inspect the workspace"}],
@@ -4853,11 +4876,13 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T)
 	require.Contains(t, gjson.GetBytes(gptResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
 
 	claudeResult, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-4-6", "", nil, KiroPayloadOptions{
-		Origin:                    "AI_EDITOR",
-		RequireNativeToolProgress: true,
+		Origin:                      "AI_EDITOR",
+		RequireNativeToolProgress:   true,
+		RequireNativeToolCallMarker: true,
 	})
 	require.NoError(t, err)
-	require.False(t, claudeResult.Context.NativeToolProgressRequired)
+	require.True(t, claudeResult.Context.NativeToolProgressRequired)
+	require.True(t, claudeResult.Context.NativeToolCallMarkerRequired)
 	require.NotContains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
 
 	noToolsBody := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"answer directly"}]}`)
@@ -4899,6 +4924,109 @@ func TestStreamKiroNativeToolProgressPreludeWithoutToolReturnsPrivateStall(t *te
 	require.NotContains(t, out.String(), "我现在直接读取工作区")
 	require.NotContains(t, out.String(), "event: message_start")
 	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "找到问题，接下来检查按钮的渲染条件。\n\ncall", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "找到问题")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeFragmentedCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "找到问题——按钮设置了状态，"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "接下来检查面板的渲染条件。\n\ncall"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 19}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "找到问题")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "查看按钮和面板的条件逻辑。", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), "查看按钮和面板的条件逻辑。")
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestStreamKiroClaude1MNormalTextReleasesBeforeTerminal(t *testing.T) {
+	inputReader, inputWriter := io.Pipe()
+	out := newSynchronizedKiroTestWriter()
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), inputReader, out, "claude-opus-4.6", 20, KiroRequestContext{
+			NativeToolProgressRequired:   true,
+			NativeToolCallMarkerRequired: true,
+			RequireTerminalEvent:         true,
+		})
+		resultCh <- err
+	}()
+
+	_, err := inputWriter.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "这里是完整答案，不需要调用工具。"},
+	}))
+	require.NoError(t, err)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for !strings.Contains(out.String(), "这里是完整答案") {
+		select {
+		case <-out.updated:
+		case <-deadline.C:
+			t.Fatal("normal Claude 1M text remained buffered until terminal event")
+		}
+	}
+
+	_, err = inputWriter.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	require.NoError(t, err)
+	require.NoError(t, inputWriter.Close())
+	select {
+	case streamErr := <-resultCh:
+		require.NoError(t, streamErr)
+	case <-time.After(time.Second):
+		t.Fatal("translator did not finish after terminal event")
+	}
 }
 
 func TestStreamKiroNativeToolProgressPreludeThenUpstreamFailureIsNonReplayable(t *testing.T) {
