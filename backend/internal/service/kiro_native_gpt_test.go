@@ -284,6 +284,42 @@ func TestForwardAsChatCompletionsKiroClaudeToolPreludeIsUnchanged(t *testing.T) 
 	require.Contains(t, rec.Body.String(), "我先读取工作区，再定位路由。")
 }
 
+func TestForwardAsChatCompletionsKiroFutureClaudeCallMarkerRetries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-6",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"function","function":{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "I'll inspect the repository before continuing.\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_future_chat", "read", `{"path":"README.md"}`),
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: "claude-opus-6",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "I'll inspect")
+	require.NotContains(t, rec.Body.String(), "\n\ncall")
+	require.Contains(t, rec.Body.String(), `"tool_calls"`)
+	require.Contains(t, rec.Body.String(), `"name":"read"`)
+	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
 func TestForwardAsResponsesKiroUsesNativeGPTModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetKiroResponsesHistoryStoreForTest()
@@ -305,6 +341,43 @@ func TestForwardAsResponsesKiroUsesNativeGPTModel(t *testing.T) {
 	require.Equal(t, "native gpt responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 	require.Equal(t, kiroNativeGPTTestModel, result.Model)
 	require.Equal(t, kiroNativeGPTTestModel, result.UpstreamModel)
+}
+
+func TestForwardAsResponsesKiroFutureClaudeCallMarkerRetries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := []byte(`{
+		"model":"claude-opus-6",
+		"input":[{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]}],
+		"tools":[{"type":"function","name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我会先检查代码，再追踪请求链路。\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_future_responses", "read", `{"path":"README.md"}`),
+	}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: "claude-opus-6",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我会先检查代码")
+	require.NotContains(t, rec.Body.String(), "\n\ncall")
+	require.Contains(t, rec.Body.String(), `"type":"function_call"`)
+	require.Contains(t, rec.Body.String(), `"name":"read"`)
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.completed"))
 }
 
 func TestForwardAsResponsesKiroDirectAPIKeyUsesNativeRuntime(t *testing.T) {
@@ -906,6 +979,51 @@ func TestKiroNativeGPTPreludeRetryCommitsCacheOnlyAfterSuccessfulTerminal(t *tes
 	require.Positive(t, nextUsage.CacheReadInputTokens, "successful retry must leave the stable prefix reusable")
 }
 
+func TestKiroFutureClaudeCallMarkerRetryCommitsCacheOnlyAfterSuccessfulTerminal(t *testing.T) {
+	resetKiroCacheTracker()
+	longPrefix := strings.Repeat("stable future claude context ", 1600)
+	body := []byte(fmt.Sprintf(`{
+		"model":"claude-opus-6",
+		"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral","ttl":"1h"}}],
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`, longPrefix))
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	group := kiroCacheGroup(1)
+	parsed.Group = group
+	parsed.GroupID = &group.ID
+	configureKiroNativeToolProgressGuard(parsed, "claude-opus-6", true, false)
+	require.True(t, parsed.KiroNativeToolProgressRequired)
+	require.True(t, parsed.KiroNativeToolCallMarkerRequired)
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	cache := newFakeKiroGatewayCache()
+	svc.cache = cache
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我先查看工作区，再定位相关实现。\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_future_cache", "read", `{"path":"README.md"}`),
+	}
+
+	resp, inputTokens, err := svc.openKiroAnthropicStreamResponse(context.Background(), account, parsed, body, "claude-opus-6", "claude-opus-6", http.Header{}, group)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(streamBytes), `"name":"read"`)
+	require.NoError(t, svc.finishKiroStreamResponse(context.Background(), resp, parsed.GroupID, nil))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, 1, cache.CommitCalls(), "discarded call-marker attempt must not commit cache state")
+
+	resetKiroCacheTracker()
+	nextUsage := svc.buildKiroCacheEmulationUsageForRequest(context.Background(), account, group, body, "claude-opus-6", inputTokens)
+	require.NotNil(t, nextUsage)
+	require.Positive(t, nextUsage.CacheReadInputTokens, "successful retry must leave the stable prefix reusable")
+}
+
 func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
@@ -932,23 +1050,31 @@ func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "我先读取工作区")
 }
 
-func TestShouldGuardKiroClaude1MToolProgressScope(t *testing.T) {
-	bodyWithTools := []byte(`{
-		"model":"claude-opus-4-6",
-		"messages":[{"role":"user","content":"inspect"}],
-		"tools":[{"name":"read","input_schema":{"type":"object"}}]
-	}`)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(bodyWithTools))
-
-	require.False(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "claude-opus-4.6"))
-	c.Request.Header.Set("Anthropic-Beta", "other-beta,"+claudepkg.BetaContext1M)
-	require.True(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "claude-opus-4.6"))
-	require.False(t, shouldGuardKiroClaude1MToolProgress(c, bodyWithTools, "gpt-5.6-sol"))
-	require.False(t, shouldGuardKiroClaude1MToolProgress(c,
-		[]byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"answer"}]}`),
-		"claude-opus-4.6",
-	))
+func TestConfigureKiroNativeToolProgressGuardScope(t *testing.T) {
+	tests := []struct {
+		name                string
+		mappedModel         string
+		toolBacked          bool
+		requireBroadPrelude bool
+		wantProgress        bool
+		wantCallMarker      bool
+	}{
+		{name: "current claude", mappedModel: "claude-opus-4.6", toolBacked: true, wantProgress: true, wantCallMarker: true},
+		{name: "future claude", mappedModel: "claude-opus-6", toolBacked: true, wantProgress: true, wantCallMarker: true},
+		{name: "future sonnet", mappedModel: "claude-sonnet-7-thinking", toolBacked: true, wantProgress: true, wantCallMarker: true},
+		{name: "native gpt broad guard", mappedModel: "gpt-5.6-sol", toolBacked: true, requireBroadPrelude: true, wantProgress: true},
+		{name: "gpt without bridge opt in", mappedModel: "gpt-5.6-sol", toolBacked: true},
+		{name: "claude without tools", mappedModel: "claude-opus-6", toolBacked: false, requireBroadPrelude: true},
+		{name: "unsupported family", mappedModel: "gemini-4-pro", toolBacked: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := &ParsedRequest{}
+			configureKiroNativeToolProgressGuard(parsed, tt.mappedModel, tt.toolBacked, tt.requireBroadPrelude)
+			require.Equal(t, tt.wantProgress, parsed.KiroNativeToolProgressRequired)
+			require.Equal(t, tt.wantCallMarker, parsed.KiroNativeToolCallMarkerRequired)
+		})
+	}
 }
 
 func TestForwardMessagesKiroClaude1MCallMarkerRetriesOnceThenEmitsTool(t *testing.T) {
@@ -993,10 +1119,79 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetriesOnceThenEmitsTool(t *testin
 	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
 }
 
-func TestForwardMessagesKiroClaude1MCallMarkerRetriesForNonStreamingClient(t *testing.T) {
+func TestForwardMessagesKiroClaudeFamilyCallMarkerRetriesWithoutModelAllowlist(t *testing.T) {
+	for _, model := range []string{"claude-opus-5", "claude-opus-6"} {
+		t.Run(model, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(fmt.Sprintf(`{
+				"model":%q,
+				"max_tokens":256,
+				"messages":[{"role":"user","content":"inspect the workspace"}],
+				"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+				"stream":true
+			}`, model))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+			enableKiroNativeGPTEnforceMode(svc)
+			upstream.resp = nil
+			upstream.responses = []*http.Response{
+				kiroNativeGPTPreludeResponse(t, "我先查看工作区，再定位相关实现。\n\ncall"),
+				kiroCustomToolEventStreamResponse(t, "toolu_read_claude_retry", "read", `{"path":"README.md"}`),
+			}
+
+			result, err := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 2)
+			require.NotContains(t, rec.Body.String(), "我先查看工作区")
+			require.NotContains(t, rec.Body.String(), "\n\ncall")
+			require.Contains(t, rec.Body.String(), `"type":"tool_use"`)
+			require.Contains(t, rec.Body.String(), `"name":"read"`)
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+		})
+	}
+}
+
+func TestForwardMessagesKiroFutureClaudeNormalTextDoesNotRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
-		"model":"claude-opus-4-6",
+		"model":"claude-opus-6",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"answer directly"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = kiroNativeGPTPreludeResponse(t, "这里是完整答案，不需要调用工具。")
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Contains(t, rec.Body.String(), "这里是完整答案")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+}
+
+func TestForwardMessagesKiroFutureClaudeCallMarkerRetriesForNonStreamingClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-6",
 		"max_tokens":256,
 		"messages":[{"role":"user","content":"inspect the workspace"}],
 		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
@@ -1008,14 +1203,13 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetriesForNonStreamingClient(t *te
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("Anthropic-Beta", claudepkg.BetaContext1M)
 
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
 	enableKiroNativeGPTEnforceMode(svc)
 	upstream.resp = nil
 	upstream.responses = []*http.Response{
 		kiroNativeGPTPreludeResponse(t, "查看按钮和面板的条件逻辑。\n\ncall"),
-		kiroCustomToolEventStreamResponse(t, "toolu_read_1m_sync_retry", "read", `{"path":"README.md"}`),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_future_sync_retry", "read", `{"path":"README.md"}`),
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
@@ -1030,10 +1224,10 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetriesForNonStreamingClient(t *te
 	require.Equal(t, "README.md", gjson.Get(rec.Body.String(), "content.0.input.path").String(), "response=%s", rec.Body.String())
 }
 
-func TestForwardMessagesKiroClaude1MCallMarkerRetryExhaustionIsNotFalseSuccess(t *testing.T) {
+func TestForwardMessagesKiroFutureClaudeCallMarkerRetryExhaustionIsNotFalseSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
-		"model":"claude-opus-4-6",
+		"model":"claude-opus-6",
 		"max_tokens":256,
 		"messages":[{"role":"user","content":"inspect the workspace"}],
 		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
@@ -1045,7 +1239,6 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetryExhaustionIsNotFalseSuccess(t
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("Anthropic-Beta", claudepkg.BetaContext1M)
 
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
 	enableKiroNativeGPTEnforceMode(svc)

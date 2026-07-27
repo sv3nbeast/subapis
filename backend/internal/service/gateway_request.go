@@ -297,8 +297,8 @@ type ParsedRequest struct {
 	// KiroNativeToolProgressRequired keeps a possible tool-call prelude private
 	// until the upstream either emits a native tool call or completes normally.
 	KiroNativeToolProgressRequired bool
-	// KiroNativeToolCallMarkerRequired limits the stalled-turn decision to the
-	// standalone "call" marker emitted by affected Claude extended-context turns.
+	// KiroNativeToolCallMarkerRequired limits Kiro Claude recovery to the
+	// standalone "call" marker emitted by malformed provider tool turns.
 	KiroNativeToolCallMarkerRequired bool
 
 	// ExplicitSessionID 是客户端通过 HTTP 请求头显式传递的会话标识。

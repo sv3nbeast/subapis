@@ -217,7 +217,7 @@ type KiroRequestContext struct {
 	// turns where a narration-only prelude must remain private until completion.
 	NativeToolProgressRequired bool
 	// NativeToolCallMarkerRequired narrows a stalled turn to a standalone "call"
-	// line. Claude extended-context requests use this to avoid retrying legitimate
+	// line. Guarded Claude tool requests use this to avoid retrying legitimate
 	// short narration while recovering the provider's malformed tool prelude.
 	NativeToolCallMarkerRequired bool
 	// PriorAttemptKiroCredits accounts for a discarded corrective attempt as
@@ -2425,7 +2425,10 @@ func shouldRetryKiroNativeToolProgress(requireCallMarker bool, text string) bool
 
 func shouldHoldKiroNativeToolProgress(requireCallMarker bool, text string) bool {
 	if requireCallMarker {
-		return looksLikeKiroNativeToolCallMarker(text) || mayBecomeKiroNativeToolCallMarkerPrelude(text)
+		return looksLikeKiroNativeToolCallMarker(text) ||
+			mayBecomeKiroNativeToolCallMarkerPrelude(text) ||
+			looksLikeKiroNativeToolProgressFailure(text) ||
+			mayBecomeKiroNativeToolPrelude(text)
 	}
 	return looksLikeKiroNativeToolProgressFailure(text) ||
 		mayBecomeKiroNativeToolPrelude(text) ||
@@ -2455,10 +2458,10 @@ func looksLikeKiroNativeToolCallMarker(text string) bool {
 	return lastLine >= 0 && strings.EqualFold(strings.TrimSpace(trimmed[lastLine+1:]), "call")
 }
 
-// mayBecomeKiroNativeToolCallMarkerPrelude covers the two short openings seen
-// before Kiro's standalone "call" marker on affected Claude 1M turns. Keep
-// these prefixes separate from the GPT guard so the workaround cannot broaden
-// retry behavior for other models.
+// mayBecomeKiroNativeToolCallMarkerPrelude covers short provider openings seen
+// before Kiro's standalone "call" marker. The marker mode also reuses the
+// general tool-progress detector above, but retry remains gated by the exact
+// standalone marker so ordinary tool narration is only delayed, never replayed.
 func mayBecomeKiroNativeToolCallMarkerPrelude(text string) bool {
 	normalized := normalizeKiroNativeToolProgressText(text)
 	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {

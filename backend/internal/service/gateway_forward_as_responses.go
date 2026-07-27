@@ -349,11 +349,11 @@ func (s *GatewayService) forwardKiroAsResponses(
 		return nil, err
 	}
 	// The Codex Lite declaration is extracted before Responses is converted to
-	// Anthropic. Keep the metadata signal, but also inspect the converted body:
-	// this makes the guard fail closed if a future converter changes the
-	// additional_tools bookkeeping while still forwarding callable tools.
-	kiroParsed.KiroNativeToolProgressRequired = IsOpenAIKiroBridgeModel(originalModel) &&
-		(toolMetadata.ForwardedToolCount > 0 || len(toolMetadata.CustomToolNames) > 0 || hasKiroNativeToolProgressInput(anthropicBody))
+	// Anthropic. Keep the metadata signal, but also inspect the converted body so
+	// both native GPT and every current or future Kiro Claude model share the
+	// correct provider-specific recovery policy.
+	toolBacked := toolMetadata.ForwardedToolCount > 0 || len(toolMetadata.CustomToolNames) > 0 || hasKiroNativeToolProgressInput(anthropicBody)
+	configureKiroNativeToolProgressGuard(kiroParsed, mappedModel, toolBacked, IsOpenAIKiroBridgeModel(originalModel))
 	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	if err != nil {
 		return nil, err

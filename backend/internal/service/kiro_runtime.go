@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	claudepkg "github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/cespare/xxhash/v2"
@@ -368,10 +367,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
-	if shouldGuardKiroClaude1MToolProgress(c, body, mappedModel) {
-		parsed.KiroNativeToolProgressRequired = true
-		parsed.KiroNativeToolCallMarkerRequired = true
-	}
+	configureKiroNativeToolProgressGuard(parsed, mappedModel, hasKiroNativeToolProgressInput(body), false)
 	logger.L().Debug("gateway forward_kiro_messages: request prepared",
 		zap.Int64("account_id", account.ID),
 		zap.String("auth_method", strings.TrimSpace(account.GetCredential("auth_method"))),
@@ -773,12 +769,23 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}, nil
 }
 
-func shouldGuardKiroClaude1MToolProgress(c *gin.Context, body []byte, mappedModel string) bool {
-	if c == nil || !anthropicBetaTokensContains(c.GetHeader("Anthropic-Beta"), claudepkg.BetaContext1M) {
-		return false
+// configureKiroNativeToolProgressGuard scopes provider-specific recovery to
+// Kiro requests. Claude tool turns use the exact standalone "call" marker,
+// while existing native-GPT bridge callers may opt into the broader prelude
+// recovery mode. Matching the mapped upstream family keeps future Claude
+// models covered without affecting direct Anthropic traffic.
+func configureKiroNativeToolProgressGuard(parsed *ParsedRequest, mappedModel string, toolBacked, requireBroadPrelude bool) {
+	if parsed == nil || !toolBacked {
+		return
+	}
+	if requireBroadPrelude {
+		parsed.KiroNativeToolProgressRequired = true
 	}
 	modelID := strings.ToLower(strings.TrimSpace(kiropkg.MapModel(mappedModel)))
-	return strings.HasPrefix(modelID, "claude-") && hasKiroNativeToolProgressInput(body)
+	if strings.HasPrefix(modelID, "claude-") {
+		parsed.KiroNativeToolProgressRequired = true
+		parsed.KiroNativeToolCallMarkerRequired = true
+	}
 }
 
 func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account *Account, err error) *UpstreamFailoverError {
@@ -1293,9 +1300,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 			logger.L().Warn("kiro.stream_body_retry",
 				zap.Int64("account_id", accountID),
 				zap.String("request_id", requestID),
+				zap.String("mapped_model", mappedModel),
 				zap.Int("retry_attempt", retryAttempt),
 				zap.Int("retry_max", retryLimit),
 				zap.Bool("native_tool_progress_retry", nativeToolProgressStalled),
+				zap.Bool("native_tool_call_marker_retry", nativeToolProgressStalled && currentRequestCtx.NativeToolCallMarkerRequired),
 				zap.Bool("metadata_only_retry", metadataOnlyOutput),
 				zap.String("reason", sanitizeUpstreamErrorMessage(emptyStreamMsg)),
 			)
