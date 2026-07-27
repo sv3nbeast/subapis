@@ -555,9 +555,9 @@ func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
 // DefaultBetaPolicySettings 返回默认的 Beta 策略配置
 //
 // context-1m-2025-08-07 的默认策略：
-//   - 仅 claude-sonnet-5 及后续版本（如 claude-sonnet-5-*）在上游默认支持 1M 上下文。
-//   - Sonnet 4.x 及以下、Opus、Haiku 上游都不支持该 beta，透传上去会被上游 400 或降级。
-//   - 因此默认对 sonnet-5* 放行、其余全部过滤，与上游能力保持一致。
+//   - claude-sonnet-5 系列与 claude-opus-5 支持 1M 上下文。
+//   - Sonnet 4.x 及以下、Opus 4.x、Haiku 上游不支持该 beta，透传会被上游 400 或降级。
+//   - 因此默认只对已验证的 1M 模型放行、其余全部过滤。
 //
 // 白名单需要覆盖每个上游路径的模型 ID 变形：
 //   - 直连 Anthropic API（OAuth mimic / API Key / SetupToken）：模型保持客户端原样
@@ -586,6 +586,8 @@ func DefaultBetaPolicySettings() *BetaPolicySettings {
 					// 直连 Anthropic API（客户端请求 model 原样）
 					"claude-sonnet-5",
 					"claude-sonnet-5-*",
+					"claude-opus-5",
+					"claude-opus-5-thinking",
 					// Vertex AI 走 normalizeVertexAnthropicModelID 后 "@YYYYMMDD" 格式
 					"claude-sonnet-5@*",
 					// AWS Bedrock cross-region inference profile

@@ -244,6 +244,7 @@ describe('UseKeyModal', () => {
       }
     })
     expect(config.provider.anthropic.models['claude-opus-4-8'].limit).toEqual({ context: 200000, output: 128000 })
+    expect(config.provider.anthropic.models['claude-opus-5'].limit).toEqual({ context: 1000000, output: 128000 })
     expect(config.provider.anthropic.models['claude-sonnet-5'].limit).toEqual({ context: 1000000, output: 128000 })
     expect(config.provider.anthropic.models['claude-sonnet-4-6'].limit).toEqual({ context: 200000, output: 64000 })
     expect(config.provider.anthropic.models['claude-haiku-4-5'].limit).toEqual({ context: 200000, output: 64000 })
@@ -251,6 +252,10 @@ describe('UseKeyModal', () => {
       type: 'enabled',
       budgetTokens: 24576
     })
+    expect(config.provider.anthropic.models['claude-opus-5-thinking'].options.thinking).toEqual({
+      type: 'adaptive'
+    })
+    expect(config.provider.anthropic.models['claude-opus-5-thinking'].options.thinking).not.toHaveProperty('budgetTokens')
   })
 
   it('includes Claude Code default model in anthropic settings config', () => {

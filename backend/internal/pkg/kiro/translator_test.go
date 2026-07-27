@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -176,21 +177,22 @@ func TestBuildKiroPayloadUsesRandomConversationIDForSyntheticAnchor(t *testing.T
 	require.NotEqual(t, firstConversationID, secondConversationID)
 }
 
-func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
+func TestBuildKiroPayloadTruncatesOversizedHistoryAtSafeWireLimit(t *testing.T) {
 	big := strings.Repeat("lorem ipsum dolor sit amet ", 80)
 	messages := []map[string]string{
 		{"role": "user", "content": "start the long task"},
 	}
 	for i := 0; i < 800; i++ {
 		messages = append(messages,
-			map[string]string{"role": "assistant", "content": "step result: " + big},
-			map[string]string{"role": "user", "content": "next: " + big},
+			map[string]string{"role": "assistant", "content": fmt.Sprintf("assistant-%03d: %s", i, big)},
+			map[string]string{"role": "user", "content": fmt.Sprintf("user-%03d: %s", i, big)},
 		)
 	}
+	messages = append(messages, map[string]string{"role": "assistant", "content": "RECENT_ASSISTANT_MARKER"})
 	messages = append(messages, map[string]string{"role": "user", "content": "FINAL: summarize everything above"})
 	bodyMap := map[string]any{
 		"model":    "claude-opus-4-8",
-		"system":   "You are a helpful assistant.",
+		"system":   "CUSTOM_SYSTEM_RULE_MUST_SURVIVE_IN_FULL",
 		"messages": messages,
 	}
 	body, err := json.Marshal(bodyMap)
@@ -198,38 +200,54 @@ func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	require.Greater(t, len(result.Payload), 900*1024)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
 	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.PayloadInputTokenEstimate)
 	require.Equal(t, min(estimateKiroPayloadInputTokens(result.Payload), kiroExtendedContextTokens), result.Context.InputTokenBudget)
 	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
 	require.Equal(t, "static_fallback", result.Context.ContextWindowSource)
-	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
+	require.Equal(t, "FINAL: summarize everything above", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
-	require.Len(t, history, len(messages), "system priming offsets the merged adjacent final user messages and currentMessage extraction")
-	require.Contains(t, history[0].Get("userInputMessage.content").String(), "helpful assistant")
-	require.Equal(t, "start the long task", history[2].Get("userInputMessage.content").String())
+	require.Less(t, len(history), len(messages))
+	require.Contains(t, history[0].Get("userInputMessage.content").String(), "CUSTOM_SYSTEM_RULE_MUST_SURVIVE_IN_FULL")
+	require.Equal(t, "I will follow these instructions.", history[1].Get("assistantResponseMessage.content").String())
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.Contains(t, string(result.Payload), "RECENT_ASSISTANT_MARKER")
+	require.NotContains(t, string(result.Payload), "start the long task")
+
+	repeated, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, gjson.GetBytes(result.Payload, "conversationState.history").Raw, gjson.GetBytes(repeated.Payload, "conversationState.history").Raw)
+	require.Equal(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage").Raw, gjson.GetBytes(repeated.Payload, "conversationState.currentMessage").Raw)
 
 	for _, item := range history {
-		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
+		if item.Get("userInputMessage.content").String() == kiroHistoryTruncationPlaceholder {
+			return
+		}
 	}
+	t.Fatal("expected one history truncation placeholder")
 }
 
-func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *testing.T) {
+func TestBuildKiroPayloadTruncationKeepsActiveToolTurnStructured(t *testing.T) {
 	messages := []map[string]any{
 		{"role": "user", "content": "inspect the workspace"},
-		{"role": "assistant", "content": []map[string]any{
-			{"type": "tool_use", "id": "toolu_legacy", "name": "exec_command", "input": map[string]any{"cmd": "pwd"}},
-		}},
-		{"role": "user", "content": []map[string]any{
-			{"type": "tool_result", "tool_use_id": "toolu_legacy", "content": "/workspace"},
-		}},
-		{"role": "assistant", "content": "workspace located"},
-		{"role": "user", "content": strings.Repeat("preserved context block ", 50000)},
-		{"role": "assistant", "content": "context acknowledged"},
-		{"role": "user", "content": "finish the task"},
 	}
+	big := strings.Repeat("preserved context block ", 80)
+	for i := 0; i < 320; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("history-assistant-%03d %s", i, big)},
+			map[string]any{"role": "user", "content": fmt.Sprintf("history-user-%03d %s", i, big)},
+		)
+	}
+	messages = append(messages,
+		map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "tool_use", "id": "toolu_active", "name": "exec_command", "input": map[string]any{"cmd": "go test ./..."}},
+		}},
+		map[string]any{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_active", "content": "all tests passed"},
+		}},
+	)
 	body, err := json.Marshal(map[string]any{
 		"model":    "claude-opus-4-8",
 		"messages": messages,
@@ -241,31 +259,58 @@ func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *tes
 
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	require.Greater(t, len(result.Payload), 900*1024)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.NotContains(t, string(result.Payload), "inspect the workspace")
+	require.Contains(t, string(result.Payload), "history-user-319")
+	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
+	require.NotEmpty(t, history)
+	require.Equal(t, "toolu_active", history[len(history)-1].Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "execCommand", history[len(history)-1].Get("assistantResponseMessage.toolUses.0.name").String())
+	require.Equal(t, "toolu_active", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "all tests passed", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+}
 
-	foundToolUse := false
-	foundToolResult := false
-	for _, message := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
-		for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
-			if toolUse.Get("toolUseId").String() == "toolu_legacy" {
-				foundToolUse = true
-				require.Equal(t, "execCommand", toolUse.Get("name").String())
-			}
-		}
-		for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
-			if toolResult.Get("toolUseId").String() == "toolu_legacy" {
-				foundToolResult = true
-				require.Equal(t, "/workspace", toolResult.Get("content.0.text").String())
-			}
-		}
+func TestBuildKiroPayloadTruncationFlattensCompletedToolHistory(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "user", "content": "inspect the workspace"},
 	}
-	require.False(t, foundToolUse)
-	require.False(t, foundToolResult)
+	big := strings.Repeat("preserved context block ", 80)
+	for i := 0; i < 320; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("history-assistant-%03d %s", i, big)},
+			map[string]any{"role": "user", "content": fmt.Sprintf("history-user-%03d %s", i, big)},
+		)
+	}
+	messages = append(messages,
+		map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "tool_use", "id": "toolu_completed", "name": "exec_command", "input": map[string]any{"cmd": "pwd"}},
+		}},
+		map[string]any{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_completed", "content": "/workspace"},
+		}},
+		map[string]any{"role": "assistant", "content": "workspace located"},
+		map[string]any{"role": "user", "content": "finish the task"},
+	)
+	body, err := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-8",
+		"messages": messages,
+		"tools": []map[string]any{
+			{"name": "exec_command", "description": "run a command", "input_schema": map[string]any{"type": "object"}},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.NotContains(t, string(result.Payload), `"toolUseId":"toolu_completed"`)
 	require.Equal(t, "finish the task", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 	require.Contains(t, string(result.Payload), "Tool results:")
 	require.Contains(t, string(result.Payload), "[exec_command] /workspace")
-	require.NotContains(t, string(result.Payload), "truncated to fit")
 }
 
 func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testing.T) {
@@ -284,6 +329,91 @@ func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testi
 	for _, item := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
 		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
 	}
+}
+
+func TestLimitKiroPayloadBytesLeavesSmallPayloadByteExact(t *testing.T) {
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "stable-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "stable-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: "unchanged current message",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+			History: []KiroHistoryMessage{{UserInputMessage: &KiroUserInputMessage{
+				Content: "unchanged history",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}}},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	limited, err := limitKiroPayloadBytes(payload, original, false)
+	require.NoError(t, err)
+	require.Equal(t, original, limited)
+	after, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestLimitKiroPayloadBytesTruncatesCurrentMessageOnUTF8Boundary(t *testing.T) {
+	originalContent := strings.Repeat("中文🙂", 100000)
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "utf8-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "utf8-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: originalContent,
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Greater(t, len(original), kiroMaxPayloadBytes)
+
+	limited, err := limitKiroPayloadBytes(payload, original, false)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(limited), kiroMaxPayloadBytes)
+	limitedContent := gjson.GetBytes(limited, "conversationState.currentMessage.userInputMessage.content").String()
+	require.True(t, utf8.ValidString(limitedContent))
+	require.NotEqual(t, originalContent, limitedContent)
+	require.True(t, strings.HasPrefix(originalContent, limitedContent))
+}
+
+func TestLimitKiroPayloadBytesRejectsUntrimmablePrimingWithoutMutatingIt(t *testing.T) {
+	systemPrompt := strings.Repeat("SYSTEM_RULE_MUST_NOT_BE_TRUNCATED ", 30000)
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "untrimmable-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "untrimmable-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: "current question",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+			History: []KiroHistoryMessage{
+				{UserInputMessage: &KiroUserInputMessage{Content: systemPrompt, ModelID: "claude-opus-4.8", Origin: "AI_EDITOR"}},
+				{AssistantResponseMessage: &KiroAssistantResponseMessage{Content: "I will follow these instructions."}},
+			},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Greater(t, len(original), kiroMaxPayloadBytes)
+
+	_, err = limitKiroPayloadBytes(payload, original, true)
+	var contextErr *ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, kiroPromptTooLongMessage, contextErr.ClientErrorMessage())
+	require.Equal(t, systemPrompt, payload.ConversationState.History[0].UserInputMessage.Content)
 }
 
 func TestBuildKiroPayloadDoesNotInsertUserDotBeforeLeadingAssistant(t *testing.T) {
@@ -753,7 +883,30 @@ func TestBuildKiroPayloadOptionsSupportsFutureClaudeNativeEffort(t *testing.T) {
 	require.Equal(t, "summarized", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.display").String())
 	require.Equal(t, "medium", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
 	require.True(t, isKiroOutputConfigPathModel("claude-sonnet-5-0-thinking"))
+	require.True(t, isKiroOutputConfigPathModel("claude-opus-5"))
 	require.False(t, isKiroOutputConfigPathModel("claude-haiku-4.5"))
+}
+
+func TestBuildKiroPayloadOptionsSupportsOpus5ThinkingAlias(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5-thinking",
+		"max_tokens":999999,
+		"output_config":{"effort":"xhigh"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.modelId").String())
+	require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())
+	require.Equal(t, "summarized", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.display").String())
+	require.Equal(t, "xhigh", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+	require.Equal(t, int64(128000), gjson.GetBytes(result.Payload, "inferenceConfig.maxTokens").Int())
+	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
+	require.Equal(t, 128000, result.Context.MaxOutputTokens)
 }
 
 func TestBuildKiroPayloadOptionsSupportsNativeGPTModels(t *testing.T) {
@@ -804,15 +957,16 @@ func TestBuildKiroPayloadWithContextKeepsDefaultWireWithoutEnvStateOrNativeEffor
 	require.Equal(t, "AI_EDITOR", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.origin").String())
 }
 
-// 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
+// 客户端未请求 thinking 但模型是 Opus 4.7+ 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
-func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *testing.T) {
+func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForCurrentOpus(t *testing.T) {
 	cases := []struct {
 		name    string
 		model   string
 		mapped  string
 		wantStr bool
 	}{
+		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStr: true},
 		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStr: true},
 		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStr: true},
 		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStr: false},
@@ -3670,6 +3824,7 @@ func TestKiroContextWindowResolution(t *testing.T) {
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-sol"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-terra"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("gpt-5.6-luna"))
+	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-opus-4.8"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-5"))
 	require.Equal(t, kiroExtendedContextTokens, contextWindowTokensForModel("claude-sonnet-4-6"))
@@ -4137,6 +4292,8 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
+		"claude-opus-5":                       "claude-opus-5",
+		"claude-opus-5-thinking":              "claude-opus-5",
 		"claude-opus-4-8":                     "claude-opus-4.8",
 		"claude-opus-4-8-thinking":            "claude-opus-4.8",
 		"claude-opus-4.8":                     "claude-opus-4.8",
@@ -4683,6 +4840,31 @@ func TestKiroNativeToolProgressIntentDetection(t *testing.T) {
 	require.False(t, looksLikeKiroNativeToolProgressFailure("这里是完整答案，不需要调用工具。"))
 }
 
+func TestKiroNativeToolCallMarkerDetection(t *testing.T) {
+	require.True(t, looksLikeKiroNativeToolCallMarker("call"))
+	require.True(t, looksLikeKiroNativeToolCallMarker("查看按钮和面板的条件逻辑。\n\ncall"))
+	require.True(t, looksLikeKiroNativeToolCallMarker("找到问题，接下来检查渲染条件。\r\n\r\nCALL"))
+	require.False(t, looksLikeKiroNativeToolCallMarker("I will make a call"))
+	require.False(t, looksLikeKiroNativeToolCallMarker("recall"))
+}
+
+func TestKiroNativeToolCallMarkerRequiredNarrowsRetry(t *testing.T) {
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。\n\ncall"))
+	require.False(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(false, "我先查看按钮和面板的条件逻辑。"))
+}
+
+func TestKiroNativeToolCallMarkerPreludeIsScopedToMarkerGuard(t *testing.T) {
+	text := "找到问题，接下来检查面板的渲染条件。"
+	require.False(t, looksLikeKiroNativeToolProgressFailure(text))
+	require.False(t, shouldHoldKiroNativeToolProgress(false, text))
+	require.True(t, shouldHoldKiroNativeToolProgress(true, text))
+	require.True(t, shouldHoldKiroNativeToolProgress(true, "我先查看工作区，再汇报结果。"))
+	require.True(t, shouldHoldKiroNativeToolProgress(true, "I'll inspect the repository before continuing."))
+	require.False(t, shouldHoldKiroNativeToolProgress(true, "这里是完整答案，不需要调用工具。"))
+	require.False(t, looksLikeKiroNativeToolProgressFailure("ordinary prose\n\ncall"))
+}
+
 func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
 	tests := []struct {
 		name string
@@ -4721,7 +4903,7 @@ func TestKiroNativeToolProgressRefusalDetection(t *testing.T) {
 	require.True(t, mayBecomeKiroNativeToolRefusal("This session has no"))
 }
 
-func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T) {
+func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
 		"messages":[{"role":"user","content":"inspect the workspace"}],
@@ -4737,11 +4919,13 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsGPTResponsesOnly(t *testing.T)
 	require.Contains(t, gjson.GetBytes(gptResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
 
 	claudeResult, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-4-6", "", nil, KiroPayloadOptions{
-		Origin:                    "AI_EDITOR",
-		RequireNativeToolProgress: true,
+		Origin:                      "AI_EDITOR",
+		RequireNativeToolProgress:   true,
+		RequireNativeToolCallMarker: true,
 	})
 	require.NoError(t, err)
-	require.False(t, claudeResult.Context.NativeToolProgressRequired)
+	require.True(t, claudeResult.Context.NativeToolProgressRequired)
+	require.True(t, claudeResult.Context.NativeToolCallMarkerRequired)
 	require.NotContains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
 
 	noToolsBody := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"answer directly"}]}`)
@@ -4783,6 +4967,138 @@ func TestStreamKiroNativeToolProgressPreludeWithoutToolReturnsPrivateStall(t *te
 	require.NotContains(t, out.String(), "我现在直接读取工作区")
 	require.NotContains(t, out.String(), "event: message_start")
 	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "找到问题，接下来检查按钮的渲染条件。\n\ncall", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "找到问题")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeFragmentedCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "找到问题——按钮设置了状态，"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "接下来检查面板的渲染条件。\n\ncall"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 19}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "找到问题")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeGeneralToolPreludeThenCallMarkerReturnsPrivateStall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "我先查看工作区，再定位相关实现。"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "\n\ncall"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 18}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "我先查看工作区")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "查看按钮和面板的条件逻辑。", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), "查看按钮和面板的条件逻辑。")
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestStreamKiroClaudeNormalTextReleasesBeforeTerminal(t *testing.T) {
+	inputReader, inputWriter := io.Pipe()
+	out := newSynchronizedKiroTestWriter()
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), inputReader, out, "claude-opus-6", 20, KiroRequestContext{
+			NativeToolProgressRequired:   true,
+			NativeToolCallMarkerRequired: true,
+			RequireTerminalEvent:         true,
+		})
+		resultCh <- err
+	}()
+
+	_, err := inputWriter.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "这里是完整答案，不需要调用工具。"},
+	}))
+	require.NoError(t, err)
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for !strings.Contains(out.String(), "这里是完整答案") {
+		select {
+		case <-out.updated:
+		case <-deadline.C:
+			t.Fatal("normal Kiro Claude text remained buffered until terminal event")
+		}
+	}
+
+	_, err = inputWriter.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	require.NoError(t, err)
+	require.NoError(t, inputWriter.Close())
+	select {
+	case streamErr := <-resultCh:
+		require.NoError(t, streamErr)
+	case <-time.After(time.Second):
+		t.Fatal("translator did not finish after terminal event")
+	}
 }
 
 func TestStreamKiroNativeToolProgressPreludeThenUpstreamFailureIsNonReplayable(t *testing.T) {

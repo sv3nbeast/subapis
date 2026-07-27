@@ -75,7 +75,7 @@
         </a>
 
         <!-- Language Switcher -->
-        <LocaleSwitcher class="header-locale" />
+        <LocaleSwitcher class="header-locale" appearance="icon" />
 
         <!-- Subscription Progress (for users with active subscriptions) -->
         <SubscriptionProgressMini v-if="user" class="header-subscription" />
@@ -85,6 +85,7 @@
           v-if="user"
           class="header-balance group relative hidden items-center gap-2 rounded-xl bg-primary-50 px-3 py-1.5 dark:bg-primary-900/20 sm:flex"
         >
+          <span v-if="isV2" class="ui-v2-balance-label">{{ t('common.balance') }}</span>
           <svg
             class="h-4 w-4 text-primary-600 dark:text-primary-400"
             fill="none"

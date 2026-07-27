@@ -3119,25 +3119,37 @@ onUnmounted(() => {
 }
 
 .home-page.home-apple.home-dark {
-  background: #111113 !important;
-  color: #f5f5f7;
+  --ui2-page: #161618;
+  --ui2-surface: #29292e;
+  --ui2-surface-soft: #232326;
+  --ui2-surface-hover: #323237;
+  --ui2-toolbar: rgba(24, 24, 27, 0.82);
+  --ui2-text: #f4f4f6;
+  --ui2-text-secondary: #c5c5ca;
+  --ui2-text-tertiary: #94949c;
+  --ui2-line: rgba(255, 255, 255, 0.1);
+  --ui2-line-strong: rgba(255, 255, 255, 0.18);
+  --ui2-accent: #409cff;
+  --ui2-accent-soft: rgba(64, 156, 255, 0.15);
+  background: var(--ui2-page) !important;
+  color: var(--ui2-text);
 }
 
 .home-page.home-apple.home-dark > header {
-  background: rgba(17, 17, 19, 0.78);
-  border-color: rgba(255, 255, 255, 0.09);
+  background: var(--ui2-toolbar);
+  border-color: var(--ui2-line);
 }
 
 .home-page.home-apple.home-dark .home-nav-text-link,
 .home-page.home-apple.home-dark .home-nav-action {
-  color: #b1b1b7;
+  color: var(--ui2-text-secondary);
 }
 
 .home-page.home-apple.home-dark .home-nav-text-link:hover,
 .home-page.home-apple.home-dark .home-nav-action:hover,
 .home-page.home-apple.home-dark .home-nav-action.is-active {
-  background: #242427;
-  color: #f5f5f7;
+  background: var(--ui2-surface-hover);
+  color: var(--ui2-text);
 }
 
 .home-page.home-apple.home-dark .home-auth-actions,
@@ -3148,50 +3160,50 @@ onUnmounted(() => {
 .home-page.home-apple.home-dark .home-channel-card,
 .home-page.home-apple.home-dark .home-status-showcase,
 .home-page.home-apple.home-dark .home-final-card {
-  background: #1d1d20;
-  border-color: rgba(255, 255, 255, 0.09);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 28px rgba(0, 0, 0, 0.12);
+  background: var(--ui2-surface-soft);
+  border-color: var(--ui2-line);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
 .home-page.home-apple.home-dark .btn-secondary {
-  background: #1d1d20 !important;
-  border-color: rgba(255, 255, 255, 0.14) !important;
-  color: #b1b1b7 !important;
+  background: var(--ui2-surface) !important;
+  border-color: var(--ui2-line-strong) !important;
+  color: var(--ui2-text-secondary) !important;
 }
 
 .home-page.home-apple.home-dark .btn-secondary:hover {
-  background: #242427 !important;
-  color: #f5f5f7 !important;
+  background: var(--ui2-surface-hover) !important;
+  color: var(--ui2-text) !important;
 }
 
 .home-page.home-apple.home-dark .btn-primary {
-  background: #4da3ff !important;
-  color: #0b1726 !important;
+  background: #0f72d6 !important;
+  color: #ffffff !important;
 }
 
 .home-page.home-apple.home-dark .home-url-field {
-  background: #242427;
-  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--ui2-surface);
+  border-color: var(--ui2-line);
 }
 
 .home-page.home-apple.home-dark .home-url-copy {
-  background: #2d2d31;
-  color: #b1b1b7;
+  background: var(--ui2-surface-hover);
+  color: var(--ui2-text-secondary);
 }
 
 .home-page.home-apple.home-dark .home-icon-soft,
 .home-page.home-apple.home-dark .home-final-orbit {
-  background: rgba(77, 163, 255, 0.13);
-  border-color: rgba(77, 163, 255, 0.18);
-  color: #4da3ff;
+  background: var(--ui2-accent-soft);
+  border-color: rgba(64, 156, 255, 0.2);
+  color: var(--ui2-accent);
 }
 
 .home-page.home-apple.home-dark .home-title-gradient {
-  color: #b1b1b7;
+  color: var(--ui2-text-secondary);
 }
 
 .home-page.home-apple.home-dark .home-channel-card-muted {
-  background: #242427;
+  background: var(--ui2-surface);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3337,15 +3349,15 @@ onUnmounted(() => {
 }
 
 .home-page.home-apple.home-dark .home-hero-visual {
-  background: #17191d;
-  border-color: rgba(255, 255, 255, 0.1);
+  background: #1e1e21;
+  border-color: var(--ui2-line);
   box-shadow: 0 24px 52px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .home-page.home-apple.home-dark .home-hero-card,
 .home-page.home-apple.home-dark .home-hero-card:first-child {
-  background: #22262c;
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--ui2-surface);
+  border-color: var(--ui2-line);
 }
 
 @media (max-width: 767px) {

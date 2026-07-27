@@ -13,6 +13,7 @@
   --ui2-text-tertiary: #8b8b92;
   --ui2-line: rgba(24, 24, 27, 0.1);
   --ui2-accent: #087af5;
+  --ui2-accent-strong: #0f72d6;
   --ui2-shadow: 0 1px 2px rgba(0, 0, 0, 0.035), 0 8px 24px rgba(0, 0, 0, 0.025);
   background: var(--ui2-page) !important;
   color: var(--ui2-text);
@@ -21,15 +22,16 @@
 }
 
 .dark .public-status-v2 {
-  --ui2-page: #111113;
-  --ui2-surface: #1d1d20;
-  --ui2-surface-muted: #242427;
-  --ui2-text: #f5f5f7;
-  --ui2-text-secondary: #b1b1b7;
-  --ui2-text-tertiary: #818188;
-  --ui2-line: rgba(255, 255, 255, 0.09);
-  --ui2-accent: #4da3ff;
-  --ui2-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 28px rgba(0, 0, 0, 0.12);
+  --ui2-page: #161618;
+  --ui2-surface: #29292e;
+  --ui2-surface-muted: #232326;
+  --ui2-text: #f4f4f6;
+  --ui2-text-secondary: #c5c5ca;
+  --ui2-text-tertiary: #94949c;
+  --ui2-line: rgba(255, 255, 255, 0.1);
+  --ui2-accent: #409cff;
+  --ui2-accent-strong: #0f72d6;
+  --ui2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
 .public-status-v2 *,
@@ -44,7 +46,7 @@
 
 .public-ui-v2 .btn-primary,
 .public-status-v2 .btn-primary {
-  background: var(--ui2-accent) !important;
+  background: var(--ui2-accent-strong, var(--ui2-accent)) !important;
   border-color: transparent !important;
   box-shadow: 0 1px 2px rgba(0, 70, 150, 0.18) !important;
   color: #fff !important;
@@ -52,7 +54,7 @@
 
 .public-ui-v2 .btn-primary:hover,
 .public-status-v2 .btn-primary:hover {
-  background: color-mix(in srgb, var(--ui2-accent), #000 9%) !important;
+  background: color-mix(in srgb, var(--ui2-accent-strong, var(--ui2-accent)), #000 9%) !important;
 }
 
 .public-ui-v2 .btn-secondary,

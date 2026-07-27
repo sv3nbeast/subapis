@@ -2547,3 +2547,17 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 拓扑整理: 将当前 `main`（含 `a7612038` Kiro 修复）合入融合线，生成合并提交 `13c82fbfd`；合并树相对融合线第一父提交无额外代码变化
 - 结果: `main` 已成为 `codex/official-sync-review` 的祖先，满足后续 `--ff-only` 提升的提交拓扑要求
 - 保护: 主工作区仍有未提交 UI 改动，未执行清理、stash、checkout 或覆盖操作
+
+## 2026-07-27 22:17:20 +0800
+
+- 模式: `ai`
+- fork 目标: `sv3nbeast/main` -> `9c242fa037c1e7452668e946916c5365df299266`（相对本地 `main` 21 个提交）
+- 动作: 将 fork 的 Claude Opus 5、Kiro 1M/tool prelude/payload 上限/超时策略、OpenAI context error、UI v2 和生产重建保护合入 `codex/official-sync-review`
+- 冲突处理: OpenAI Messages 保留“客户端上下文超限不处罚账号”并使用按模型调度统计；Kiro 同时保留超大历史截断后的活动 tool turn 结构化和已完成 tool cycle 文本化测试
+- 后端验证: Kiro、Opus 5、Messages context/account health、迁移、WSv2、网关聚焦测试、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个同步前基线失败；新增失败 `0`，基线失败修复 `67`
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`；Kiro 正常 payload 仅增加长度判断，超过 900 KiB 才裁剪旧历史并重序列化
+- race 验证: Kiro translator、缓存跨实例并发提交和 Responses WebSocket 流 race 通过
+- 前端验证: lint、typecheck、build、6 个受影响测试文件（50 tests）通过；仅保留既有 Vitest/Vite 警告
+- 发布脚本验证: `scripts/rebuild-prod-sub2api_test.sh` 通过，Kiro timeout policy 能被保留并校验
+- 发布结论: fork 与官方融合内容达到回归门槛；主工作区仍有未提交前端改动，未 promote、未 push、未部署生产

@@ -67,7 +67,7 @@ func TestClaudeCodeMimicryBetaConstants(t *testing.T) {
 	}
 }
 
-func TestDefaultModelsContainSonnet5WithoutDuplicates(t *testing.T) {
+func TestDefaultModelsContainCurrentModelsWithoutDuplicates(t *testing.T) {
 	seen := make(map[string]bool, len(DefaultModels))
 	for _, model := range DefaultModels {
 		if seen[model.ID] {
@@ -78,5 +78,8 @@ func TestDefaultModelsContainSonnet5WithoutDuplicates(t *testing.T) {
 
 	if !seen["claude-sonnet-5"] {
 		t.Fatalf("DefaultModels must include claude-sonnet-5")
+	}
+	if !seen["claude-opus-5"] {
+		t.Fatalf("DefaultModels must include claude-opus-5")
 	}
 }

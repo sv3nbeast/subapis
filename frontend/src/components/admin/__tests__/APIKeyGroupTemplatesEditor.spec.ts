@@ -98,6 +98,9 @@ describe('APIKeyGroupTemplatesEditor', () => {
     expect(content.provider.anthropic.npm).toBe('@ai-sdk/anthropic')
     expect(content.provider.anthropic.options.baseURL).toBe('{{base_url_v1}}')
     expect(content.provider.anthropic.models['claude-opus-4-8'].limit.context).toBe(200000)
+    expect(content.provider.anthropic.models['claude-opus-5'].limit).toEqual({ context: 1000000, output: 128000 })
+    expect(content.provider.anthropic.models['claude-opus-5-thinking'].options.thinking).toEqual({ type: 'adaptive' })
+    expect(content.provider.anthropic.models['claude-opus-5-thinking'].options.thinking).not.toHaveProperty('budgetTokens')
     expect(content.provider.anthropic.models['claude-sonnet-5'].limit.context).toBe(1000000)
   })
 

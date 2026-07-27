@@ -18,17 +18,26 @@ Options:
   --tag TAG                      Docker image tag suffix. Default: prod-YYYYmmdd-HHMMSS-<gitsha>
   --image-repo NAME              Docker image repo name. Default: sub2api
   --antigravity-version VERSION  ANTIGRAVITY_USER_AGENT_VERSION to inject. Default: 1.23.2
-  --ui-v2-rollout-mode MODE      UI rollout: off, preview, percentage, or full. Default: preview
+  --ui-v2-rollout-mode MODE      UI rollout: off, preview, percentage, or full. Default: full
   --ui-v2-rollout-percent N      Stable cohort percentage for percentage mode. Default: 0
   --public-ui-v2-rollout-mode MODE
                                   Public UI rollout: off, preview, percentage, or full.
-                                  Default: preview
+                                  Default: full
   --public-ui-v2-rollout-percent N
                                   Stable public UI cohort percentage. Default: 0
   --kiro-resilience-mode MODE    Kiro resilience mode: off, observe, or enforce.
                                   When omitted, preserve the running container value
   --kiro-resilience-group-ids IDS
                                   Comma-separated rollout group IDs. When omitted,
+                                  preserve the running container value
+  --kiro-response-header-timeout-seconds N
+                                  Kiro response-header timeout. When omitted,
+                                  preserve the running container value
+  --kiro-first-semantic-timeout-seconds N
+                                  Kiro first-semantic timeout. When omitted,
+                                  preserve the running container value
+  --kiro-failover-budget-seconds N
+                                  Kiro per-account failover budget. When omitted,
                                   preserve the running container value
   --skip-sync                    Skip rsync and only trigger remote rebuild/redeploy
   --no-delete                    Disable rsync --delete
@@ -41,6 +50,7 @@ Examples:
   scripts/deploy-prod.sh --host your-prod-host --skip-sync --tag prod-hotfix-001
   scripts/deploy-prod.sh --host your-prod-host --ui-v2-rollout-mode percentage --ui-v2-rollout-percent 5
   scripts/deploy-prod.sh --host your-prod-host --public-ui-v2-rollout-mode full
+  scripts/deploy-prod.sh --host your-prod-host --kiro-response-header-timeout-seconds 60 --kiro-first-semantic-timeout-seconds 90 --kiro-failover-budget-seconds 150
 EOF
 }
 
@@ -59,13 +69,16 @@ REMOTE_SRC_DIR="${REMOTE_SRC_DIR:-/root/sub2api-src}"
 REMOTE_DEPLOY_DIR="${REMOTE_DEPLOY_DIR:-/root/sub2api-deploy}"
 IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
-UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
+UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-full}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
-PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-full}"
 PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
+KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS:-}"
+KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS:-}"
+KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
 IMAGE_TAG=""
 SKIP_SYNC=0
 DRY_RUN=0
@@ -121,6 +134,18 @@ while (($# > 0)); do
       KIRO_RESILIENCE_GROUP_IDS="$2"
       shift 2
       ;;
+    --kiro-response-header-timeout-seconds)
+      KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --kiro-first-semantic-timeout-seconds)
+      KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --kiro-failover-budget-seconds)
+      KIRO_FAILOVER_BUDGET_SECONDS="$2"
+      shift 2
+      ;;
     --skip-sync)
       SKIP_SYNC=1
       shift
@@ -159,6 +184,25 @@ fi
 if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]] &&
   [[ ! "${KIRO_RESILIENCE_GROUP_IDS}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   echo "Invalid Kiro resilience group IDs: ${KIRO_RESILIENCE_GROUP_IDS}" >&2
+  exit 1
+fi
+
+validate_optional_positive_integer() {
+  local name="$1"
+  local value="$2"
+  if [[ -n "${value}" ]] && { [[ ! "${value}" =~ ^[0-9]+$ ]] || ((10#${value} <= 0)); }; then
+    echo "${name} must be a positive integer" >&2
+    exit 1
+  fi
+}
+
+validate_optional_positive_integer "Kiro response-header timeout" "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"
+validate_optional_positive_integer "Kiro first-semantic timeout" "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"
+validate_optional_positive_integer "Kiro failover budget" "${KIRO_FAILOVER_BUDGET_SECONDS}"
+
+if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" && -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]] &&
+  ((10#${KIRO_FAILOVER_BUDGET_SECONDS} < 10#${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS})); then
+  echo "Kiro failover budget must be greater than or equal to the response-header timeout" >&2
   exit 1
 fi
 
@@ -278,6 +322,9 @@ echo "Public UI v2:       ${PUBLIC_UI_V2_ROLLOUT_MODE} (${PUBLIC_UI_V2_ROLLOUT_P
 echo "OpenAI Kiro bridge: ${OPENAI_KIRO_BRIDGE_ENABLED:-preserve-current}"
 echo "Kiro resilience:    ${KIRO_RESILIENCE_MODE:-preserve-current}"
 echo "Kiro rollout groups: ${KIRO_RESILIENCE_GROUP_IDS:-preserve-current}"
+echo "Kiro header timeout: ${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS:-preserve-current}"
+echo "Kiro semantic timeout: ${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS:-preserve-current}"
+echo "Kiro failover budget: ${KIRO_FAILOVER_BUDGET_SECONDS:-preserve-current}"
 
 if [[ "${SKIP_SYNC}" -eq 0 ]]; then
   ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_SRC_DIR}'"
@@ -319,5 +366,8 @@ ssh "${REMOTE_HOST}" \
     GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED="${OPENAI_KIRO_BRIDGE_ENABLED}" \
     GATEWAY_KIRO_RESILIENCE_MODE="${KIRO_RESILIENCE_MODE}" \
     GATEWAY_KIRO_RESILIENCE_GROUP_IDS="${KIRO_RESILIENCE_GROUP_IDS}" \
+    GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS="${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" \
+    GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS="${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" \
+    GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS="${KIRO_FAILOVER_BUDGET_SECONDS}" \
     SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}" \
     bash "${REMOTE_SRC_DIR}/scripts/rebuild-prod-sub2api.sh"

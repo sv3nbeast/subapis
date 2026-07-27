@@ -499,6 +499,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			endpoint:      "messages",
 		},
 		{
+			name:          "Forward: 无账号映射时应用 Anthropic Opus 5 adaptive thinking 别名",
+			model:         "claude-opus-5-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-5",
+			endpoint:      "messages",
+		},
+		{
 			name:          "Forward: 无账号映射时应用 Anthropic 4.6 thinking 默认别名",
 			model:         "claude-opus-4-6-thinking",
 			modelMapping:  nil,
@@ -552,6 +559,13 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 			model:         "claude-opus-4.8-thinking",
 			modelMapping:  nil,
 			expectedModel: "claude-opus-4-8",
+			endpoint:      "count_tokens",
+		},
+		{
+			name:          "CountTokens: 无账号映射时应用 Anthropic Opus 5 adaptive thinking 别名",
+			model:         "claude-opus-5-thinking",
+			modelMapping:  nil,
+			expectedModel: "claude-opus-5",
 			endpoint:      "count_tokens",
 		},
 		{
@@ -631,10 +645,15 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 				require.NotNil(t, result)
 				require.Equal(t, tt.expectedModel, gjson.GetBytes(upstream.lastBody, "model").String(),
 					"Forward 上游请求体中的模型应为: %s", tt.expectedModel)
-				if isAnthropicThinkingModelAlias(tt.model) {
-					require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
-					require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
-					require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+				if mode := anthropicThinkingModeForAlias(tt.model); mode != "" {
+					require.Equal(t, mode, gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+					if mode == "adaptive" {
+						require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+						require.False(t, gjson.GetBytes(upstream.lastBody, "max_tokens").Exists())
+					} else {
+						require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+						require.Equal(t, int64(BudgetRectifyMaxTokens), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+					}
 				}
 			} else {
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
@@ -657,14 +676,58 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingEdgeCases(t *test
 				require.NoError(t, err)
 				require.Equal(t, tt.expectedModel, gjson.GetBytes(upstream.lastBody, "model").String(),
 					"CountTokens 上游请求体中的模型应为: %s", tt.expectedModel)
-				if isAnthropicThinkingModelAlias(tt.model) {
-					require.Equal(t, "enabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
-					require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+				if mode := anthropicThinkingModeForAlias(tt.model); mode != "" {
+					require.Equal(t, mode, gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+					if mode == "adaptive" {
+						require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+					} else {
+						require.Equal(t, int64(BudgetRectifyBudgetTokens), gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Int())
+					}
 					require.False(t, gjson.GetBytes(upstream.lastBody, "max_tokens").Exists())
 				}
 			}
 		})
 	}
+}
+
+func TestGatewayService_AnthropicOAuth_CountTokensPreservesOpus5ThinkingAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-opus-5-thinking","max_tokens":2048,"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"hello"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
+	}}
+	svc := &GatewayService{
+		cfg:              &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:     upstream,
+		rateLimitService: &RateLimitService{},
+	}
+	account := &Account{
+		ID:          305,
+		Name:        "anthropic-oauth-opus5-count",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-5", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "adaptive", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "max_tokens").Exists())
 }
 
 // TestGatewayService_AnthropicAPIKeyPassthrough_ModelMappingPreservesOtherFields

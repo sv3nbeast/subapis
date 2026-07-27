@@ -16,10 +16,10 @@ Environment variables:
   ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
                                    Default: true
   VITE_UI_V2_ROLLOUT_MODE         UI rollout: off, preview, percentage, or full.
-                                   Default: preview
+                                   Default: full
   VITE_UI_V2_ROLLOUT_PERCENT      Stable cohort percentage for percentage mode. Default: 0
   VITE_PUBLIC_UI_V2_ROLLOUT_MODE  Public UI rollout: off, preview, percentage, or full.
-                                   Default: preview
+                                   Default: full
   VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT
                                    Stable public UI cohort percentage. Default: 0
   GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
@@ -30,6 +30,15 @@ Environment variables:
   GATEWAY_KIRO_RESILIENCE_GROUP_IDS
                                    Optional comma-separated rollout group IDs.
                                    When unset, preserve the running container value.
+  GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS
+                                   Optional positive integer. When unset, preserve
+                                   the running container value.
+  GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS
+                                   Optional positive integer. When unset, preserve
+                                   the running container value.
+  GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS
+                                   Optional positive integer. When unset, preserve
+                                   the running container value.
   SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS
                                    Optional comma-separated user IDs for redacted Kiro event diagnostics.
                                    When unset, preserve the running container value.
@@ -57,13 +66,16 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
 PREFER_BORINGCRYPTO="${ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO:-true}"
-UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-preview}"
+UI_V2_ROLLOUT_MODE="${VITE_UI_V2_ROLLOUT_MODE:-full}"
 UI_V2_ROLLOUT_PERCENT="${VITE_UI_V2_ROLLOUT_PERCENT:-0}"
-PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-preview}"
+PUBLIC_UI_V2_ROLLOUT_MODE="${VITE_PUBLIC_UI_V2_ROLLOUT_MODE:-full}"
 PUBLIC_UI_V2_ROLLOUT_PERCENT="${VITE_PUBLIC_UI_V2_ROLLOUT_PERCENT:-0}"
 OPENAI_KIRO_BRIDGE_ENABLED="${GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED:-}"
 KIRO_RESILIENCE_MODE="${GATEWAY_KIRO_RESILIENCE_MODE:-}"
 KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
+KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS:-}"
+KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS:-}"
+KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
 KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -134,6 +146,27 @@ if docker inspect "${SERVICE_NAME}" >/dev/null 2>&1; then
         | head -n 1
     )"
   fi
+  if [[ -z "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" ]]; then
+    KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS=//p' \
+        | head -n 1
+    )"
+  fi
+  if [[ -z "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" ]]; then
+    KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS=//p' \
+        | head -n 1
+    )"
+  fi
+  if [[ -z "${KIRO_FAILOVER_BUDGET_SECONDS}" ]]; then
+    KIRO_FAILOVER_BUDGET_SECONDS="$(
+      docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        | sed -n 's/^GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS=//p' \
+        | head -n 1
+    )"
+  fi
   if [[ -z "${KIRO_EVENT_DIAGNOSTICS_USER_IDS}" ]]; then
     KIRO_EVENT_DIAGNOSTICS_USER_IDS="$(
       docker inspect "${SERVICE_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' \
@@ -160,12 +193,49 @@ if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]] &&
   exit 1
 fi
 
+validate_optional_positive_integer() {
+  local name="$1"
+  local value="$2"
+  if [[ -n "${value}" ]] && { [[ ! "${value}" =~ ^[0-9]+$ ]] || ((10#${value} <= 0)); }; then
+    echo "${name} must be a positive integer" >&2
+    exit 1
+  fi
+}
+
+validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS" "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"
+validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS" "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"
+validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS" "${KIRO_FAILOVER_BUDGET_SECONDS}"
+
+if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" && -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]] &&
+  ((10#${KIRO_FAILOVER_BUDGET_SECONDS} < 10#${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS})); then
+  echo "GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS must be greater than or equal to GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+
+if [[ "${KIRO_RESILIENCE_MODE}" == "enforce" ]]; then
+  if [[ -z "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" ||
+    -z "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" ||
+    -z "${KIRO_FAILOVER_BUDGET_SECONDS}" ]]; then
+    echo "Kiro enforce rollout requires explicit response-header, first-semantic, and failover-budget values; pass them once or preserve them from the running container" >&2
+    exit 1
+  fi
+fi
+
 KIRO_RESILIENCE_ENV=""
 if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
   KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_MODE=${KIRO_RESILIENCE_MODE}"$'\n'
 fi
 if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
   KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_GROUP_IDS=${KIRO_RESILIENCE_GROUP_IDS}"$'\n'
+fi
+if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" ]]; then
+  KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS=${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"$'\n'
+fi
+if [[ -n "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" ]]; then
+  KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS=${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"$'\n'
+fi
+if [[ -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]]; then
+  KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS=${KIRO_FAILOVER_BUDGET_SECONDS}"$'\n'
 fi
 KIRO_EVENT_DIAGNOSTICS_ENV=""
 if [[ -n "${KIRO_EVENT_DIAGNOSTICS_USER_IDS}" ]]; then
@@ -253,14 +323,39 @@ docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_USER_AGENT_VERSION
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
 echo "--- OpenAI Kiro bridge env ---"
 docker exec "${CONTAINER_ID}" printenv GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
+
+assert_container_env() {
+  local name="$1"
+  local expected="$2"
+  local actual
+  if ! actual="$(docker exec "${CONTAINER_ID}" printenv "${name}")"; then
+    echo "Required production environment variable is missing after rollout: ${name}" >&2
+    exit 1
+  fi
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "Production environment mismatch for ${name}: expected ${expected}, got ${actual}" >&2
+    exit 1
+  fi
+  printf '%s=%s\n' "${name}" "${actual}"
+}
+
 if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
   echo "--- Kiro resilience env ---"
-  docker exec "${CONTAINER_ID}" printenv GATEWAY_KIRO_RESILIENCE_MODE
+  assert_container_env GATEWAY_KIRO_RESILIENCE_MODE "${KIRO_RESILIENCE_MODE}"
   if [[ -n "${KIRO_RESILIENCE_GROUP_IDS}" ]]; then
-    docker exec "${CONTAINER_ID}" printenv GATEWAY_KIRO_RESILIENCE_GROUP_IDS
+    assert_container_env GATEWAY_KIRO_RESILIENCE_GROUP_IDS "${KIRO_RESILIENCE_GROUP_IDS}"
   else
     echo "all groups"
   fi
+fi
+if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" ]]; then
+  assert_container_env GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"
+fi
+if [[ -n "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" ]]; then
+  assert_container_env GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"
+fi
+if [[ -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]]; then
+  assert_container_env GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS "${KIRO_FAILOVER_BUDGET_SECONDS}"
 fi
 echo "--- antigravity worker files ---"
 docker exec "${CONTAINER_ID}" sh -lc 'ls -l /app/antigravityworker*'

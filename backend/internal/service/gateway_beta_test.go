@@ -243,10 +243,10 @@ func TestIsCountTokensUnsupported404(t *testing.T) {
 	}
 }
 
-// TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist 验证默认策略下 context-1m-2025-08-07 的分模型行为：
-//   - claude-sonnet-5 及后续版本：pass（放行），保留 1M 上下文能力
-//   - 其他 sonnet 版本（4.x 及以下）、opus、haiku：filter（过滤），因为上游不支持
-func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
+// TestDefaultBetaPolicy_Context1M_CurrentModelsWhitelist 验证默认策略下 context-1m-2025-08-07 的分模型行为：
+//   - claude-sonnet-5 系列与 claude-opus-5：pass（放行），保留 1M 上下文能力
+//   - Sonnet 4.x、Opus 4.x、Haiku：filter（过滤），因为上游不支持
+func TestDefaultBetaPolicy_Context1M_CurrentModelsWhitelist(t *testing.T) {
 	settings := DefaultBetaPolicySettings()
 
 	// 找到 context-1m-2025-08-07 规则
@@ -260,7 +260,7 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 	require.NotNil(t, rule, "default policy must include context-1m-2025-08-07 rule")
 	require.Equal(t, BetaPolicyActionPass, rule.Action, "primary action for whitelisted models is pass")
 	require.Equal(t, BetaPolicyActionFilter, rule.FallbackAction, "non-whitelisted models must be filtered")
-	require.NotEmpty(t, rule.ModelWhitelist, "context-1m must be scoped to sonnet-5+ via whitelist")
+	require.NotEmpty(t, rule.ModelWhitelist, "context-1m must be scoped to verified 1M models via whitelist")
 
 	// 表驱动：模型 → 期望 action
 	// 覆盖每种上游路径下的模型 ID 变形：直连 Anthropic API、Vertex AI（"@YYYYMMDD" 后缀）、
@@ -274,6 +274,9 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 		{"claude-sonnet-5", BetaPolicyActionPass, "sonnet-5 canonical"},
 		{"claude-sonnet-5-20260701", BetaPolicyActionPass, "sonnet-5 dated variant matches wildcard"},
 		{"claude-sonnet-5-thinking", BetaPolicyActionPass, "sonnet-5 thinking variant matches wildcard"},
+		// —— 直连 Anthropic API —— Opus 5 已验证支持 1M
+		{"claude-opus-5", BetaPolicyActionPass, "opus-5 canonical"},
+		{"claude-opus-5-thinking", BetaPolicyActionPass, "opus-5 thinking alias"},
 		// —— Vertex AI 归一化后的 sonnet-5 —— 也应放行
 		{"claude-sonnet-5@20260701", BetaPolicyActionPass, "sonnet-5 Vertex-normalized dated form"},
 		// —— AWS Bedrock 各跨区域前缀 sonnet-5 —— 也应放行
@@ -293,7 +296,7 @@ func TestDefaultBetaPolicy_Context1M_Sonnet5Whitelist(t *testing.T) {
 		{"claude-sonnet-4-5@20250929", BetaPolicyActionFilter, "sonnet-4.5 Vertex format must be filtered"},
 		{"us.anthropic.claude-sonnet-4-6", BetaPolicyActionFilter, "bedrock us. sonnet-4.6 must be filtered"},
 		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", BetaPolicyActionFilter, "bedrock us. sonnet-4.5 must be filtered"},
-		// —— Opus / Haiku 必须过滤（无 1M） ——
+		// —— Opus 4.x / Haiku 必须过滤（无 1M） ——
 		{"claude-opus-4-8", BetaPolicyActionFilter, "opus must be filtered"},
 		{"claude-opus-4-7", BetaPolicyActionFilter, "opus 4.7 must be filtered"},
 		{"us.anthropic.claude-opus-4-8-v1", BetaPolicyActionFilter, "bedrock opus 4.8 must be filtered"},

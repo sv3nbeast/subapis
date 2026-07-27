@@ -4,7 +4,7 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import { buildModelMappingObject, getModelsByPlatform, getPresetMappingsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -50,6 +50,18 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-sonnet-5')
     expect(getModelsByPlatform('kiro')).toContain('claude-sonnet-5')
     expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5')
+  })
+
+  it('Claude 和 Kiro 模型列表及预设映射包含 Opus 5', () => {
+    for (const platform of ['claude', 'kiro']) {
+      expect(getModelsByPlatform(platform)).toContain('claude-opus-5')
+      expect(getModelsByPlatform(platform)).toContain('claude-opus-5-thinking')
+      expect(getPresetMappingsByPlatform(platform)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ from: 'claude-opus-5', to: 'claude-opus-5' }),
+        expect.objectContaining({ from: 'claude-opus-5-thinking', to: 'claude-opus-5' })
+      ]))
+    }
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5')
   })
 
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {

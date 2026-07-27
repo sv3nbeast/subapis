@@ -1263,6 +1263,8 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   const claudeModels = {
     'claude-fable-5': claudeModel('Claude Fable 5', 1048576, 128000, { type: 'adaptive' }),
     'claude-sonnet-5': claudeModel('Claude Sonnet 5', 1000000, 128000),
+    'claude-opus-5': claudeModel('Claude Opus 5', 1000000, 128000),
+    'claude-opus-5-thinking': claudeModel('Claude Opus 5 (Thinking)', 1000000, 128000, { type: 'adaptive' }),
     'claude-opus-4-8': claudeModel('Claude Opus 4.8', 200000, 128000),
     'claude-opus-4-8-thinking': claudeModel('Claude Opus 4.8 (Thinking)', 200000, 128000, { type: 'enabled', budgetTokens: 24576 }),
     'claude-opus-4-7': claudeModel('Claude Opus 4.7', 200000, 128000),

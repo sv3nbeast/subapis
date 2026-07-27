@@ -220,13 +220,8 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	if err != nil {
 		return nil, err
 	}
-	// Chat Completions is another OpenAI-facing Kiro GPT bridge entry point.
-	// Keep the native-tool progress guard in parity with Responses so a Kiro
-	// turn that only announces tool-backed work is held back and corrected once
-	// before any partial text reaches the client. The model gate deliberately
-	// excludes Kiro Claude and ordinary Messages traffic.
-	kiroParsed.KiroNativeToolProgressRequired = IsOpenAIKiroBridgeModel(originalModel) &&
-		hasKiroNativeToolProgressInput(anthropicBody)
+	toolBacked := hasKiroNativeToolProgressInput(anthropicBody)
+	configureKiroNativeToolProgressGuard(kiroParsed, mappedModel, toolBacked, IsOpenAIKiroBridgeModel(originalModel))
 	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	if err != nil {
 		return nil, err

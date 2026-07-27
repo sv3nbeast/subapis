@@ -48,14 +48,49 @@ describe('AppLayout density', () => {
     },
   })
 
-  it('keeps compact density scoped to the app layout lifecycle', () => {
+  it('keeps compact density scoped to the app layout lifecycle', async () => {
     const wrapper = mountLayout()
 
     expect(document.documentElement.classList.contains('app-density-compact')).toBe(true)
 
     wrapper.unmount()
+    await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(document.documentElement.classList.contains('app-density-compact')).toBe(false)
+  })
+
+  it('keeps compact density across sequential route layout replacement', async () => {
+    const outgoingLayout = mountLayout()
+
+    outgoingLayout.unmount()
+
+    expect(document.documentElement.classList.contains('app-density-compact')).toBe(true)
+
+    const incomingLayout = mountLayout()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(document.documentElement.classList.contains('app-density-compact')).toBe(true)
+
+    incomingLayout.unmount()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(document.documentElement.classList.contains('app-density-compact')).toBe(false)
+  })
+
+  it('keeps root metrics while an interrupted route update leaves the shell rendered', async () => {
+    window.history.replaceState({}, '', '/dashboard?ui=v2')
+    const wrapper = mountLayout()
+    const retainedShell = document.createElement('div')
+    retainedShell.className = 'app-shell ui-v2'
+    document.body.appendChild(retainedShell)
+
+    wrapper.unmount()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(document.documentElement.classList.contains('app-density-compact')).toBe(true)
+    expect(document.documentElement.classList.contains('ui-v2-active')).toBe(true)
+
+    retainedShell.remove()
   })
 
   it('keeps the legacy shell and original slot content by default', () => {

@@ -41,6 +41,7 @@ const { isPublicUiV2 } = usePublicUiVersion()
   --ui2-page: #f5f5f7;
   --ui2-surface: #ffffff;
   --ui2-surface-soft: rgba(255, 255, 255, 0.78);
+  --ui2-surface-raised: #ffffff;
   --ui2-surface-muted: #f7f7f8;
   --ui2-surface-hover: #f0f1f3;
   --ui2-toolbar: rgba(245, 245, 247, 0.74);
@@ -50,6 +51,7 @@ const { isPublicUiV2 } = usePublicUiVersion()
   --ui2-line: rgba(24, 24, 27, 0.1);
   --ui2-line-strong: rgba(24, 24, 27, 0.16);
   --ui2-accent: #087af5;
+  --ui2-accent-strong: #0f72d6;
   --ui2-accent-soft: rgba(8, 122, 245, 0.1);
   --ui2-green: #128a4b;
   --ui2-green-soft: rgba(18, 138, 75, 0.1);
@@ -82,26 +84,28 @@ const { isPublicUiV2 } = usePublicUiVersion()
 }
 
 :global(.dark .public-ui-v2) {
-  --ui2-page: #111113;
-  --ui2-surface: #1d1d20;
-  --ui2-surface-soft: rgba(30, 30, 33, 0.84);
-  --ui2-surface-muted: #242427;
-  --ui2-surface-hover: #29292d;
-  --ui2-toolbar: rgba(17, 17, 19, 0.76);
-  --ui2-text: #f5f5f7;
-  --ui2-text-secondary: #b1b1b7;
-  --ui2-text-tertiary: #818188;
-  --ui2-line: rgba(255, 255, 255, 0.09);
-  --ui2-line-strong: rgba(255, 255, 255, 0.16);
-  --ui2-accent: #4da3ff;
-  --ui2-accent-soft: rgba(77, 163, 255, 0.13);
-  --ui2-green: #48c982;
-  --ui2-green-soft: rgba(72, 201, 130, 0.12);
-  --ui2-amber: #ffad42;
-  --ui2-amber-soft: rgba(255, 173, 66, 0.13);
-  --ui2-violet: #aa8df0;
-  --ui2-violet-soft: rgba(170, 141, 240, 0.13);
-  --ui2-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 28px rgba(0, 0, 0, 0.12);
+  --ui2-page: #161618;
+  --ui2-surface: #29292e;
+  --ui2-surface-soft: rgba(35, 35, 38, 0.9);
+  --ui2-surface-raised: #2d2d32;
+  --ui2-surface-muted: #29292e;
+  --ui2-surface-hover: #323237;
+  --ui2-toolbar: rgba(24, 24, 27, 0.82);
+  --ui2-text: #f4f4f6;
+  --ui2-text-secondary: #c5c5ca;
+  --ui2-text-tertiary: #94949c;
+  --ui2-line: rgba(255, 255, 255, 0.1);
+  --ui2-line-strong: rgba(255, 255, 255, 0.18);
+  --ui2-accent: #409cff;
+  --ui2-accent-strong: #0f72d6;
+  --ui2-accent-soft: rgba(64, 156, 255, 0.15);
+  --ui2-green: #5bd18b;
+  --ui2-green-soft: rgba(91, 209, 139, 0.14);
+  --ui2-amber: #f2b24c;
+  --ui2-amber-soft: rgba(242, 178, 76, 0.14);
+  --ui2-violet: #b7a0f5;
+  --ui2-violet-soft: rgba(183, 160, 245, 0.15);
+  --ui2-shadow: 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
 .public-ui-v2__main { display: flex; width: 100%; flex: 1; flex-direction: column; }
