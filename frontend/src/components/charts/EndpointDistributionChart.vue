@@ -1,5 +1,5 @@
 <template>
-  <div class="card p-4">
+  <div class="ui-v2-data-chart card p-4">
     <div class="mb-4 flex items-center justify-between gap-3">
       <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
         {{ title || t('usage.endpointDistribution') }}

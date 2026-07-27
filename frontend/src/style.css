@@ -814,6 +814,12 @@ html.ui-v2-active,
   --ui2-sidebar: #eeeef1;
   --ui2-toolbar: #f5f5f7;
   --ui2-text: #111827;
+  --ui2-text-data: #1f2937;
+  --ui2-text-label: #4b5563;
+  --ui2-text-helper: #6b7280;
+  --ui2-text-positive: #128a4b;
+  --ui2-text-cost: #9a4d00;
+  --ui2-text-disabled: #9ca3af;
   --ui2-text-secondary: #4b5563;
   --ui2-text-tertiary: #6b7280;
   --ui2-line: rgba(24, 24, 27, 0.1);
@@ -849,9 +855,15 @@ html.dark.ui-v2-active,
   --ui2-surface-recessed: #11161c;
   --ui2-sidebar: #15191f;
   --ui2-toolbar: rgba(15, 18, 22, 0.94);
-  --ui2-text: #f3f4f6;
-  --ui2-text-secondary: #cbd5e1;
-  --ui2-text-tertiary: #94a3b8;
+  --ui2-text: #ffffff;
+  --ui2-text-data: #eef5ff;
+  --ui2-text-label: #a9c7ff;
+  --ui2-text-helper: #c8b9ff;
+  --ui2-text-positive: #bdf8e5;
+  --ui2-text-cost: #ffe2ae;
+  --ui2-text-disabled: #7284a0;
+  --ui2-text-secondary: var(--ui2-text-data);
+  --ui2-text-tertiary: var(--ui2-text-label);
   --ui2-line: rgba(226, 232, 240, 0.075);
   --ui2-line-strong: rgba(226, 232, 240, 0.13);
   --ui2-accent: #86b4ff;
@@ -997,11 +1009,11 @@ html.dark.ui-v2-active body {
 }
 
 .dark .ui-v2 .sidebar-link {
-  color: #cbd5e1 !important;
+  color: var(--ui2-text-data) !important;
 }
 
 .dark .ui-v2 .sidebar .sidebar-section-title {
-  color: #64748b !important;
+  color: var(--ui2-text-label) !important;
 }
 
 .ui-v2 .sidebar-link > svg.h-5,
@@ -1711,11 +1723,83 @@ html.ui-v2-active .select-dropdown-portal .select-option-group {
 }
 
 .dark .ui-v2 table td {
-  color: #d1d5db;
+  color: var(--ui2-text-data);
+  font-variant-numeric: tabular-nums;
 }
 
 .dark .ui-v2 table th {
-  color: #cbd5e1;
+  color: var(--ui2-text-label);
+}
+
+/* UI v2 dark mode uses chromatic text roles instead of a stack of gray utilities. */
+.dark .ui-v2 :where(
+  [class~="text-gray-900"],
+  [class~="dark:text-white"],
+  [class~="dark:text-gray-100"],
+  [class~="dark:text-gray-200"],
+  [class~="dark:text-dark-100"],
+  [class~="dark:text-dark-200"]
+) {
+  color: var(--ui2-text) !important;
+}
+
+.dark .ui-v2 :where(
+  [class~="text-gray-600"],
+  [class~="text-gray-700"],
+  [class~="dark:text-gray-300"],
+  [class~="dark:text-dark-300"]
+) {
+  color: var(--ui2-text-data) !important;
+}
+
+.dark .ui-v2 :where(
+  [class~="text-gray-500"],
+  [class~="dark:text-gray-400"],
+  [class~="dark:text-dark-400"]
+) {
+  color: var(--ui2-text-label) !important;
+}
+
+.dark .ui-v2 :where(
+  [class~="text-gray-400"],
+  [class~="dark:text-gray-500"],
+  [class~="dark:text-dark-500"]
+) {
+  color: var(--ui2-text-helper) !important;
+}
+
+.dark .ui-v2 :where(
+  [disabled],
+  [aria-disabled="true"],
+  [class~="dark:text-dark-600"]
+) {
+  color: var(--ui2-text-disabled) !important;
+}
+
+.dark .ui-v2 .ui-v2-data-chart table td[class~="dark:text-green-400"] {
+  color: var(--ui2-text-positive) !important;
+}
+
+.dark .ui-v2 .ui-v2-data-chart table td[class~="dark:text-orange-400"],
+.dark .ui-v2 .ui-v2-data-chart table td[class~="dark:text-gray-500"] {
+  color: var(--ui2-text-cost) !important;
+}
+
+.dark .ui-v2 .usage-stat-card > div:last-child > p:first-child {
+  color: var(--ui2-text-label) !important;
+}
+
+.dark .ui-v2 .usage-stat-card > div:last-child > p:last-child {
+  color: var(--ui2-text-helper) !important;
+}
+
+.dark .ui-v2 .date-picker-trigger,
+.dark .ui-v2 .date-picker-value {
+  color: var(--ui2-text-data) !important;
+}
+
+.dark .ui-v2 .input-label {
+  color: var(--ui2-text-label) !important;
 }
 
 .dark .ui-v2 .dashboard-chart-grid table,

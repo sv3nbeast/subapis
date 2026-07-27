@@ -24,18 +24,22 @@ describe('UI v2 dark palette', () => {
     expect(appStyles).toContain('--ui2-surface-recessed: #11161c;')
   })
 
-  it('keeps the upstream text hierarchy in both themes', () => {
+  it('keeps neutral light text and chromatic dark text roles', () => {
     expect(appStyles).toContain('--ui2-text: #111827;')
     expect(appStyles).toContain('--ui2-text-secondary: #4b5563;')
     expect(appStyles).toContain('--ui2-text-tertiary: #6b7280;')
-    expect(appStyles).toContain('--ui2-text: #f3f4f6;')
-    expect(appStyles).toContain('--ui2-text-secondary: #cbd5e1;')
-    expect(appStyles).toContain('--ui2-text-tertiary: #94a3b8;')
+    expect(appStyles).toContain('--ui2-text: #ffffff;')
+    expect(appStyles).toContain('--ui2-text-data: #eef5ff;')
+    expect(appStyles).toContain('--ui2-text-label: #a9c7ff;')
+    expect(appStyles).toContain('--ui2-text-helper: #c8b9ff;')
+    expect(appStyles).toContain('--ui2-text-positive: #bdf8e5;')
+    expect(appStyles).toContain('--ui2-text-cost: #ffe2ae;')
     expect(appStyles).not.toContain('.ui-v2 .text-gray-500,')
     expect(appStyles).toContain('.dark .ui-v2 table td {')
-    expect(appStyles).toContain('color: #d1d5db;')
+    expect(appStyles).toContain('color: var(--ui2-text-data);')
     expect(appStyles).toContain('.dark .ui-v2 table th {')
-    expect(appStyles).toContain('color: #cbd5e1;')
+    expect(appStyles).toContain('color: var(--ui2-text-label);')
+    expect(appStyles).toContain('.dark .ui-v2 .ui-v2-data-chart table td[class~="dark:text-green-400"]')
   })
 
   it('reserves blue for selection while primary commands invert with the theme', () => {

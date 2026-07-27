@@ -1,5 +1,5 @@
 <template>
-  <div class="card p-4">
+  <div class="ui-v2-data-chart card p-4">
     <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
       {{ t('admin.dashboard.tokenUsageTrend') }}
     </h3>
@@ -59,7 +59,7 @@ const isDarkMode = computed(() => {
 })
 
 const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#e5e7eb' : '#374151',
+  text: isDarkMode.value ? '#eef5ff' : '#374151',
   grid: isDarkMode.value ? 'rgba(226, 232, 240, 0.075)' : '#e5e7eb',
   input: isDarkMode.value ? '#668dcd' : '#3b82f6',
   output: isDarkMode.value ? '#5ca488' : '#10b981',
