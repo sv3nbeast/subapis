@@ -123,6 +123,7 @@ scripts/*
 !scripts/deploy-prod.sh
 !scripts/mitm_claude_flow_summary.py
 !scripts/rebuild-prod-sub2api.sh
+!scripts/rebuild-prod-sub2api_test.sh
 !scripts/rollback-prod.sh
 !scripts/rollback-prod-sub2api.sh
 !scripts/verify-prod-proxy-dns.sh
