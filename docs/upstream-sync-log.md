@@ -2541,3 +2541,9 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对同步前 `cbec44f63` 新增失败 `0`，基线失败修复 `67`
 - 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
 - 发布结论: 融合线继续保持可发布；主线仍有未提交前端改动，未 promote、未 push、未部署生产
+
+## 2026-07-27 13:42:00 +0800
+
+- 拓扑整理: 将当前 `main`（含 `a7612038` Kiro 修复）合入融合线，生成合并提交 `13c82fbfd`；合并树相对融合线第一父提交无额外代码变化
+- 结果: `main` 已成为 `codex/official-sync-review` 的祖先，满足后续 `--ff-only` 提升的提交拓扑要求
+- 保护: 主工作区仍有未提交 UI 改动，未执行清理、stash、checkout 或覆盖操作
