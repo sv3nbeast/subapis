@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -176,21 +177,22 @@ func TestBuildKiroPayloadUsesRandomConversationIDForSyntheticAnchor(t *testing.T
 	require.NotEqual(t, firstConversationID, secondConversationID)
 }
 
-func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
+func TestBuildKiroPayloadTruncatesOversizedHistoryAtSafeWireLimit(t *testing.T) {
 	big := strings.Repeat("lorem ipsum dolor sit amet ", 80)
 	messages := []map[string]string{
 		{"role": "user", "content": "start the long task"},
 	}
 	for i := 0; i < 800; i++ {
 		messages = append(messages,
-			map[string]string{"role": "assistant", "content": "step result: " + big},
-			map[string]string{"role": "user", "content": "next: " + big},
+			map[string]string{"role": "assistant", "content": fmt.Sprintf("assistant-%03d: %s", i, big)},
+			map[string]string{"role": "user", "content": fmt.Sprintf("user-%03d: %s", i, big)},
 		)
 	}
+	messages = append(messages, map[string]string{"role": "assistant", "content": "RECENT_ASSISTANT_MARKER"})
 	messages = append(messages, map[string]string{"role": "user", "content": "FINAL: summarize everything above"})
 	bodyMap := map[string]any{
 		"model":    "claude-opus-4-8",
-		"system":   "You are a helpful assistant.",
+		"system":   "CUSTOM_SYSTEM_RULE_MUST_SURVIVE_IN_FULL",
 		"messages": messages,
 	}
 	body, err := json.Marshal(bodyMap)
@@ -198,38 +200,54 @@ func TestBuildKiroPayloadPreservesHistoryLargerThanLegacyWireCap(t *testing.T) {
 
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	require.Greater(t, len(result.Payload), 900*1024)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
 	require.Greater(t, result.Context.InputTokenBudget, 0)
 	require.Equal(t, estimateKiroPayloadInputTokens(result.Payload), result.Context.PayloadInputTokenEstimate)
 	require.Equal(t, min(estimateKiroPayloadInputTokens(result.Payload), kiroExtendedContextTokens), result.Context.InputTokenBudget)
 	require.Equal(t, kiroExtendedContextTokens, result.Context.ContextWindowTokens)
 	require.Equal(t, "static_fallback", result.Context.ContextWindowSource)
-	require.Contains(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String(), "FINAL: summarize everything above")
+	require.Equal(t, "FINAL: summarize everything above", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
 
 	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
-	require.Len(t, history, len(messages), "system priming offsets the merged adjacent final user messages and currentMessage extraction")
-	require.Contains(t, history[0].Get("userInputMessage.content").String(), "helpful assistant")
-	require.Equal(t, "start the long task", history[2].Get("userInputMessage.content").String())
+	require.Less(t, len(history), len(messages))
+	require.Contains(t, history[0].Get("userInputMessage.content").String(), "CUSTOM_SYSTEM_RULE_MUST_SURVIVE_IN_FULL")
+	require.Equal(t, "I will follow these instructions.", history[1].Get("assistantResponseMessage.content").String())
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.Contains(t, string(result.Payload), "RECENT_ASSISTANT_MARKER")
+	require.NotContains(t, string(result.Payload), "start the long task")
+
+	repeated, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, gjson.GetBytes(result.Payload, "conversationState.history").Raw, gjson.GetBytes(repeated.Payload, "conversationState.history").Raw)
+	require.Equal(t, gjson.GetBytes(result.Payload, "conversationState.currentMessage").Raw, gjson.GetBytes(repeated.Payload, "conversationState.currentMessage").Raw)
 
 	for _, item := range history {
-		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
+		if item.Get("userInputMessage.content").String() == kiroHistoryTruncationPlaceholder {
+			return
+		}
 	}
+	t.Fatal("expected one history truncation placeholder")
 }
 
-func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *testing.T) {
+func TestBuildKiroPayloadTruncationKeepsActiveToolTurnStructured(t *testing.T) {
 	messages := []map[string]any{
 		{"role": "user", "content": "inspect the workspace"},
-		{"role": "assistant", "content": []map[string]any{
-			{"type": "tool_use", "id": "toolu_legacy", "name": "exec_command", "input": map[string]any{"cmd": "pwd"}},
-		}},
-		{"role": "user", "content": []map[string]any{
-			{"type": "tool_result", "tool_use_id": "toolu_legacy", "content": "/workspace"},
-		}},
-		{"role": "assistant", "content": "workspace located"},
-		{"role": "user", "content": strings.Repeat("preserved context block ", 50000)},
-		{"role": "assistant", "content": "context acknowledged"},
-		{"role": "user", "content": "finish the task"},
 	}
+	big := strings.Repeat("preserved context block ", 80)
+	for i := 0; i < 320; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("history-assistant-%03d %s", i, big)},
+			map[string]any{"role": "user", "content": fmt.Sprintf("history-user-%03d %s", i, big)},
+		)
+	}
+	messages = append(messages,
+		map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "tool_use", "id": "toolu_active", "name": "exec_command", "input": map[string]any{"cmd": "go test ./..."}},
+		}},
+		map[string]any{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_active", "content": "all tests passed"},
+		}},
+	)
 	body, err := json.Marshal(map[string]any{
 		"model":    "claude-opus-4-8",
 		"messages": messages,
@@ -241,31 +259,17 @@ func TestBuildKiroPayloadFlattensNativeToolHistoryLargerThanLegacyWireCap(t *tes
 
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
-	require.Greater(t, len(result.Payload), 900*1024)
-
-	foundToolUse := false
-	foundToolResult := false
-	for _, message := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
-		for _, toolUse := range message.Get("assistantResponseMessage.toolUses").Array() {
-			if toolUse.Get("toolUseId").String() == "toolu_legacy" {
-				foundToolUse = true
-				require.Equal(t, "execCommand", toolUse.Get("name").String())
-			}
-		}
-		for _, toolResult := range message.Get("userInputMessage.userInputMessageContext.toolResults").Array() {
-			if toolResult.Get("toolUseId").String() == "toolu_legacy" {
-				foundToolResult = true
-				require.Equal(t, "/workspace", toolResult.Get("content.0.text").String())
-			}
-		}
-	}
-	require.False(t, foundToolUse)
-	require.False(t, foundToolResult)
-	require.Equal(t, "finish the task", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.NotContains(t, string(result.Payload), "inspect the workspace")
+	require.Contains(t, string(result.Payload), "history-user-319")
+	history := gjson.GetBytes(result.Payload, "conversationState.history").Array()
+	require.NotEmpty(t, history)
+	require.Equal(t, "toolu_active", history[len(history)-1].Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "execCommand", history[len(history)-1].Get("assistantResponseMessage.toolUses.0.name").String())
+	require.Equal(t, "toolu_active", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "all tests passed", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
 	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
-	require.Contains(t, string(result.Payload), "Tool results:")
-	require.Contains(t, string(result.Payload), "[exec_command] /workspace")
-	require.NotContains(t, string(result.Payload), "truncated to fit")
 }
 
 func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testing.T) {
@@ -284,6 +288,91 @@ func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testi
 	for _, item := range gjson.GetBytes(result.Payload, "conversationState.history").Array() {
 		require.NotContains(t, item.Get("userInputMessage.content").String(), "truncated to fit")
 	}
+}
+
+func TestLimitKiroPayloadBytesLeavesSmallPayloadByteExact(t *testing.T) {
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "stable-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "stable-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: "unchanged current message",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+			History: []KiroHistoryMessage{{UserInputMessage: &KiroUserInputMessage{
+				Content: "unchanged history",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}}},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	limited, err := limitKiroPayloadBytes(payload, original, false)
+	require.NoError(t, err)
+	require.Equal(t, original, limited)
+	after, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Equal(t, original, after)
+}
+
+func TestLimitKiroPayloadBytesTruncatesCurrentMessageOnUTF8Boundary(t *testing.T) {
+	originalContent := strings.Repeat("中文🙂", 100000)
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "utf8-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "utf8-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: originalContent,
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Greater(t, len(original), kiroMaxPayloadBytes)
+
+	limited, err := limitKiroPayloadBytes(payload, original, false)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(limited), kiroMaxPayloadBytes)
+	limitedContent := gjson.GetBytes(limited, "conversationState.currentMessage.userInputMessage.content").String()
+	require.True(t, utf8.ValidString(limitedContent))
+	require.NotEqual(t, originalContent, limitedContent)
+	require.True(t, strings.HasPrefix(originalContent, limitedContent))
+}
+
+func TestLimitKiroPayloadBytesRejectsUntrimmablePrimingWithoutMutatingIt(t *testing.T) {
+	systemPrompt := strings.Repeat("SYSTEM_RULE_MUST_NOT_BE_TRUNCATED ", 30000)
+	payload := KiroPayload{
+		ConversationState: KiroConversationState{
+			AgentContinuationID: "untrimmable-continuation",
+			ChatTriggerType:     "MANUAL",
+			ConversationID:      "untrimmable-conversation",
+			CurrentMessage: KiroCurrentMessage{UserInputMessage: KiroUserInputMessage{
+				Content: "current question",
+				ModelID: "claude-opus-4.8",
+				Origin:  "AI_EDITOR",
+			}},
+			History: []KiroHistoryMessage{
+				{UserInputMessage: &KiroUserInputMessage{Content: systemPrompt, ModelID: "claude-opus-4.8", Origin: "AI_EDITOR"}},
+				{AssistantResponseMessage: &KiroAssistantResponseMessage{Content: "I will follow these instructions."}},
+			},
+		},
+	}
+	original, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Greater(t, len(original), kiroMaxPayloadBytes)
+
+	_, err = limitKiroPayloadBytes(payload, original, true)
+	var contextErr *ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, kiroPromptTooLongMessage, contextErr.ClientErrorMessage())
+	require.Equal(t, systemPrompt, payload.ConversationState.History[0].UserInputMessage.Content)
 }
 
 func TestBuildKiroPayloadDoesNotInsertUserDotBeforeLeadingAssistant(t *testing.T) {

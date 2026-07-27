@@ -73,6 +73,124 @@ func TestKiroContextLimitErrorUsesSSEAfterResponseStarted(t *testing.T) {
 	require.True(t, HasGatewaySSEErrorWritten(c))
 }
 
+func TestForwardKiroMessagesBuildTimeContextLimitSignalsCompaction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body, err := json.Marshal(map[string]any{
+				"model":      "claude-opus-4-8",
+				"stream":     stream,
+				"max_tokens": 128,
+				"system":     strings.Repeat("SYSTEM_RULE_MUST_NOT_BE_TRUNCATED ", 30000),
+				"messages":   []map[string]string{{"role": "user", "content": "current question"}},
+			})
+			require.NoError(t, err)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+
+			upstream := &kiroStreamFailoverQueuedUpstream{}
+			svc := &GatewayService{
+				httpUpstream:        upstream,
+				kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+			}
+			account := &Account{
+				ID:          88,
+				Platform:    PlatformKiro,
+				Type:        AccountTypeOAuth,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "test-token",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/CONTEXT-BUILD",
+				},
+			}
+
+			result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+			require.Nil(t, result)
+			var contextErr *kiropkg.ContextLimitError
+			require.ErrorAs(t, err, &contextErr)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+			require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
+			require.NotContains(t, strings.ToLower(rec.Body.String()), "kiro")
+			require.Empty(t, upstream.requests, "untrimmable requests must fail before reaching upstream")
+		})
+	}
+}
+
+func TestExecuteKiroUpstreamTruncatesOversizedHistoryAcrossStreamModes(t *testing.T) {
+	longBlock := strings.Repeat("long history block ", 100)
+	messages := make([]map[string]string, 0, 1202)
+	messages = append(messages, map[string]string{"role": "user", "content": "oldest history marker"})
+	for i := 0; i < 600; i++ {
+		messages = append(messages,
+			map[string]string{"role": "assistant", "content": fmt.Sprintf("assistant-%03d %s", i, longBlock)},
+			map[string]string{"role": "user", "content": fmt.Sprintf("user-%03d %s", i, longBlock)},
+		)
+	}
+	messages = append(messages,
+		map[string]string{"role": "assistant", "content": "recent history marker"},
+		map[string]string{"role": "user", "content": "current question"},
+	)
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"model":      "claude-opus-4-8",
+				"stream":     stream,
+				"max_tokens": 128,
+				"system":     "SYSTEM_RULE_MUST_SURVIVE",
+				"messages":   messages,
+			})
+			require.NoError(t, err)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+
+			upstream := &kiroStreamFailoverQueuedUpstream{
+				responses: []*http.Response{newKiroEventStreamResponse(http.StatusOK, nil)},
+			}
+			svc := &GatewayService{
+				httpUpstream:        upstream,
+				kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+			}
+			account := &Account{
+				ID:          89,
+				Platform:    PlatformKiro,
+				Type:        AccountTypeOAuth,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "test-token",
+					"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/LONG-HISTORY",
+				},
+			}
+
+			resp, requestCtx, err := svc.executeKiroUpstreamWithParsed(
+				context.Background(), account, parsed, body, parsed.Model, parsed.Model, "test-token", nil,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.NoError(t, resp.Body.Close())
+			require.Len(t, upstream.requests, 1)
+			upstreamBody, err := io.ReadAll(upstream.requests[0].Body)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(upstreamBody), 900*1024)
+			require.Contains(t, string(upstreamBody), "Earlier conversation history was truncated to fit")
+			require.NotContains(t, string(upstreamBody), "oldest history marker")
+			require.Contains(t, string(upstreamBody), "recent history marker")
+			require.Equal(t, "current question", gjson.GetBytes(upstreamBody, "conversationState.currentMessage.userInputMessage.content").String())
+			require.Positive(t, requestCtx.PayloadInputTokenEstimate)
+		})
+	}
+}
+
 func TestKiroContextLimitErrorIsEligibleForOneConversationRetry(t *testing.T) {
 	err := &kiropkg.ContextLimitError{Reason: "CONTENT_LENGTH_EXCEEDS_THRESHOLD"}
 	require.Equal(t, "prompt is too long", kiroEmptyEventStreamMessage(err))

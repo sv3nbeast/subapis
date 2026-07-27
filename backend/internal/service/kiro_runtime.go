@@ -388,6 +388,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if clientStream || s.kiroResilienceEnforced(parsed.GroupID) {
 		resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group)
 		if err != nil {
+			if s.handleKiroContextLimitError(c, account, err) {
+				return nil, err
+			}
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				recordKiroFailoverOps(c, account, failoverErr)
@@ -548,6 +551,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 				Duration:      time.Since(startTime),
 			}, nil
 		default:
+			if s.handleKiroContextLimitError(c, account, webSearchErr) {
+				return nil, webSearchErr
+			}
 			var httpErr *kiroWebSearchHTTPError
 			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
 				return nil, s.handleKiroHTTPError(ctx, httpErr.Response, c, account, mappedModel, body)
@@ -580,6 +586,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	originalInputTokens := inputTokens
 	resp, requestCtx, err := s.executeKiroUpstreamWithParsed(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header)
 	if err != nil {
+		if s.handleKiroContextLimitError(c, account, err) {
+			return nil, err
+		}
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
 			recordKiroFailoverOps(c, account, failoverErr)

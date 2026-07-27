@@ -48,6 +48,9 @@ const (
 	kiroInternalPingEvent               = "sub2api_internal_kiro_ping"
 	kiroDefaultContextTokens            = 200_000
 	kiroExtendedContextTokens           = 1_000_000
+	kiroMaxPayloadBytes                 = 900 * 1024
+	kiroMinRecentHistoryEntries         = 4
+	kiroHistoryTruncationPlaceholder    = "[Earlier conversation history was truncated to fit the model's input limit. Older messages and tool activity have been omitted.]"
 	kiroContextLimitReason              = "CONTENT_LENGTH_EXCEEDS_THRESHOLD"
 	kiroPromptTooLongMessage            = "prompt is too long"
 	minFrameSize                        = 16
@@ -873,14 +876,188 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	if err != nil {
 		return nil, err
 	}
+	if len(payloadBytes) > kiroMaxPayloadBytes {
+		payloadBytes, err = limitKiroPayloadBytes(payload, payloadBytes, systemPrompt != "")
+		if err != nil {
+			return nil, err
+		}
+	}
 	requestCtx.PayloadInputTokenEstimate = estimateKiroPayloadInputTokens(payloadBytes)
 	requestCtx.InputTokenBudget = requestCtx.PayloadInputTokenEstimate
 	if requestCtx.ContextWindowTokens > 0 && requestCtx.InputTokenBudget > requestCtx.ContextWindowTokens {
-		// This is a billing/usage bound only. The complete payload above remains
-		// untouched and Kiro decides whether it fits the real model context.
+		// This is a billing/usage bound only. It does not further mutate the
+		// already wire-size-bounded payload above.
 		requestCtx.InputTokenBudget = requestCtx.ContextWindowTokens
 	}
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
+}
+
+// limitKiroPayloadBytes removes only the oldest history when the serialized
+// request exceeds Kiro's observed safe wire limit. Normal requests return the
+// original bytes without another marshal or any payload mutation.
+func limitKiroPayloadBytes(payload KiroPayload, payloadBytes []byte, hasSystemPriming bool) ([]byte, error) {
+	if len(payloadBytes) <= kiroMaxPayloadBytes {
+		return payloadBytes, nil
+	}
+
+	history := payload.ConversationState.History
+	primingCount := 0
+	if hasSystemPriming && len(history) >= 2 {
+		primingCount = 2
+	}
+	priming := history[:primingCount]
+	conversation := history[primingCount:]
+	placeholder := KiroHistoryMessage{
+		UserInputMessage: &KiroUserInputMessage{
+			Content: kiroHistoryTruncationPlaceholder,
+			ModelID: payload.ConversationState.CurrentMessage.UserInputMessage.ModelID,
+			Origin:  payload.ConversationState.CurrentMessage.UserInputMessage.Origin,
+		},
+	}
+
+	entrySizes := make([]int, len(conversation))
+	for i := range conversation {
+		entryBytes, err := json.Marshal(conversation[i])
+		if err != nil {
+			return nil, err
+		}
+		entrySizes[i] = len(entryBytes) + 1 // JSON array comma
+	}
+
+	baseHistory := make([]KiroHistoryMessage, 0, len(priming)+1)
+	baseHistory = append(baseHistory, priming...)
+	baseHistory = append(baseHistory, placeholder)
+	payload.ConversationState.History = baseHistory
+	baseBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	keepFrom := len(conversation)
+	runningSize := len(baseBytes)
+	for i := len(conversation) - 1; i >= 0; i-- {
+		nextSize := runningSize + entrySizes[i]
+		kept := len(conversation) - i
+		if nextSize > kiroMaxPayloadBytes && kept > kiroMinRecentHistoryEntries {
+			break
+		}
+		runningSize = nextSize
+		keepFrom = i
+	}
+
+	activeToolIndex := activeKiroToolHistoryIndex(conversation, payload.ConversationState.CurrentMessage.UserInputMessage)
+	if activeToolIndex >= 0 && keepFrom > activeToolIndex {
+		keepFrom = activeToolIndex
+	}
+
+	rebuild := func(tail []KiroHistoryMessage) {
+		truncated := len(tail) < len(conversation)
+		capacity := len(priming) + len(tail)
+		if truncated {
+			capacity++
+		}
+		next := make([]KiroHistoryMessage, 0, capacity)
+		next = append(next, priming...)
+		if truncated {
+			next = append(next, placeholder)
+		}
+		next = append(next, tail...)
+		payload.ConversationState.History = next
+	}
+
+	tail := conversation[keepFrom:]
+	rebuild(tail)
+	limitedBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// A few unusually large recent entries may still exceed the cap. Prefer the
+	// current request and the active structured tool turn over older context.
+	for len(limitedBytes) > kiroMaxPayloadBytes && len(tail) > 0 {
+		currentStart := len(conversation) - len(tail)
+		if activeToolIndex >= 0 && currentStart >= activeToolIndex {
+			break
+		}
+		tail = tail[1:]
+		rebuild(tail)
+		limitedBytes, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(limitedBytes) <= kiroMaxPayloadBytes {
+		return limitedBytes, nil
+	}
+
+	return truncateKiroCurrentMessageToLimit(&payload)
+}
+
+func activeKiroToolHistoryIndex(history []KiroHistoryMessage, current KiroUserInputMessage) int {
+	if current.UserInputMessageContext == nil || len(current.UserInputMessageContext.ToolResults) == 0 {
+		return -1
+	}
+	resultIDs := make(map[string]bool, len(current.UserInputMessageContext.ToolResults))
+	for _, result := range current.UserInputMessageContext.ToolResults {
+		resultIDs[result.ToolUseID] = true
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		assistant := history[i].AssistantResponseMessage
+		if assistant == nil || len(assistant.ToolUses) == 0 || len(assistant.ToolUses) != len(resultIDs) {
+			continue
+		}
+		matches := true
+		for _, toolUse := range assistant.ToolUses {
+			if !resultIDs[toolUse.ToolUseID] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return i
+		}
+	}
+	return -1
+}
+
+func truncateKiroCurrentMessageToLimit(payload *KiroPayload) ([]byte, error) {
+	current := &payload.ConversationState.CurrentMessage.UserInputMessage
+	original := current.Content
+	current.Content = kiroMinimalFallbackContent
+	bestBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(bestBytes) > kiroMaxPayloadBytes {
+		return nil, &ContextLimitError{
+			Reason:  kiroContextLimitReason,
+			Message: "request components exceed the upstream input limit",
+		}
+	}
+
+	bestContent := current.Content
+	low, high := 0, len(original)
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate := truncateUTF8(original, mid)
+		if candidate == "" {
+			candidate = kiroMinimalFallbackContent
+		}
+		current.Content = candidate
+		candidateBytes, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if len(candidateBytes) <= kiroMaxPayloadBytes {
+			bestContent = candidate
+			bestBytes = candidateBytes
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	current.Content = bestContent
+	return bestBytes, nil
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
