@@ -2530,3 +2530,14 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 后端验证: `go build ./...`、`git diff --check` 通过
 - 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；构建仅保留既有 chunk/导入警告
 - 发布结论: 融合内容达到回归门槛；主工作区仍有用户未提交的前端改动，提升流程继续阻止，避免覆盖或混入非本次同步内容
+
+## 2026-07-27 13:35:06 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 新增本地提交: `a761203874c695c7dc0b8f689b86f241078f2af2`（`fix(kiro): flatten completed tool history cycles`）已无冲突 cherry-pick 为 `dbb92bfc5`
+- 保留策略: 将主线最新 Kiro tool history 修复纳入官方融合，保留完成周期的文本化结果，仅让最终活动 tool turn 保持结构化
+- 验证: `go test ./internal/pkg/kiro -count=1`、Kiro race、Kiro 缓存并发 race、Responses WebSocket 流 race、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对同步前 `cbec44f63` 新增失败 `0`，基线失败修复 `67`
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 发布结论: 融合线继续保持可发布；主线仍有未提交前端改动，未 promote、未 push、未部署生产
