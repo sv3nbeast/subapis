@@ -868,6 +868,104 @@ func TestBuildKiroPayloadOptionsSupportsOpus5ThinkingAlias(t *testing.T) {
 	require.Equal(t, 128000, result.Context.MaxOutputTokens)
 }
 
+func TestBuildKiroPayloadOpus5NormalizesEnabledThinkingForOAuthAndCLI(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"thinking":{"type":"enabled","budget_tokens":8192},
+		"output_config":{"effort":"medium"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	t.Run("oauth system prompt", func(t *testing.T) {
+		result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+		require.NoError(t, err)
+
+		systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+		require.Contains(t, systemContent, "<thinking_mode>adaptive</thinking_mode>\n<thinking_effort>medium</thinking_effort>")
+		require.NotContains(t, systemContent, "<thinking_mode>enabled</thinking_mode>")
+		require.True(t, result.Context.ThinkingEnabled)
+	})
+
+	t.Run("cli native fields", func(t *testing.T) {
+		result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+			Origin:                     "KIRO_CLI",
+			UseNativeEffort:            true,
+			InjectThinkingSystemPrompt: false,
+		})
+		require.NoError(t, err)
+
+		require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())
+		require.Equal(t, "summarized", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.display").String())
+		require.Equal(t, "medium", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+		systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+		require.NotContains(t, systemContent, "<thinking_mode>")
+	})
+}
+
+func TestBuildKiroPayloadOpus5EnablesAdaptiveThinkingForEffortOnlyRequest(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"output_config":{"effort":"high"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "<thinking_mode>adaptive</thinking_mode>\n<thinking_effort>high</thinking_effort>")
+	require.NotContains(t, systemContent, "<thinking_mode>enabled</thinking_mode>")
+	require.True(t, result.Context.ThinkingEnabled)
+
+	cliResult, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                     "KIRO_CLI",
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "adaptive", gjson.GetBytes(cliResult.Payload, "additionalModelRequestFields.thinking.type").String())
+	require.Equal(t, "summarized", gjson.GetBytes(cliResult.Payload, "additionalModelRequestFields.thinking.display").String())
+	require.Equal(t, "high", gjson.GetBytes(cliResult.Payload, "additionalModelRequestFields.output_config.effort").String())
+}
+
+func TestBuildKiroPayloadOpus5HonorsExplicitDisabledThinking(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"thinking":{"type":"disabled"},
+		"output_config":{"effort":"high"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	// Opus 5 still enables parser-side tag stripping for implicit upstream CoT;
+	// the explicit disabled request only suppresses the injected Kiro directive.
+	require.True(t, result.Context.ThinkingEnabled)
+
+	cliResult, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                     "KIRO_CLI",
+		UseNativeEffort:            true,
+		InjectThinkingSystemPrompt: false,
+	})
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(cliResult.Payload, "additionalModelRequestFields").Exists())
+}
+
+func TestBuildKiroPayloadOpus48KeepsEnabledThinkingProtocol(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"thinking":{"type":"enabled","budget_tokens":8192},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>8192</max_thinking_length>")
+	require.NotContains(t, systemContent, "<thinking_mode>adaptive</thinking_mode>")
+}
+
 func TestBuildKiroPayloadOptionsSupportsNativeGPTModels(t *testing.T) {
 	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
 		t.Run(model, func(t *testing.T) {
@@ -4779,6 +4877,7 @@ func TestKiroNativeToolProgressPreludeDetection(t *testing.T) {
 	}{
 		{name: "production chinese prelude", text: "我现在直接读取工作区，先确定仓库边界、技术栈、HTTP 路由，再沿调用链追踪。", want: true},
 		{name: "previous production continuation prelude", text: "我继续直接读取工作区代码，先定位所有仓库和 HTTP 路由，再逐接口追踪。", want: true},
+		{name: "Opus 5 confirmation prelude from production screenshot", text: "我需要先确认远程数据库的实际路径和容器内的挂载位置。", want: true},
 		{name: "english prelude", text: "I'll inspect the repository first, then trace the request path.", want: true},
 		{name: "later negation does not hide prelude", text: "我会先检查代码，确保不会影响现有 Claude 路径。", want: true},
 		{name: "normal answer", text: "这个问题由请求终止事件顺序错误导致，修复点如下。", want: false},
@@ -4811,6 +4910,7 @@ func TestKiroNativeToolCallMarkerRequiredRetriesRecognizedPrelude(t *testing.T) 
 	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。\n\ncall"))
 	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
 	require.True(t, shouldRetryKiroNativeToolProgress(true, "我先查看工作区，再定位相关实现。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "我需要先确认远程数据库的实际路径和容器内的挂载位置。"))
 	require.False(t, shouldRetryKiroNativeToolProgress(true, "这里是完整答案，不需要调用工具。"))
 	require.True(t, shouldRetryKiroNativeToolProgress(false, "我先查看按钮和面板的条件逻辑。"))
 }
@@ -4887,7 +4987,22 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testi
 	require.NoError(t, err)
 	require.True(t, claudeResult.Context.NativeToolProgressRequired)
 	require.True(t, claudeResult.Context.NativeToolCallMarkerRequired)
-	require.NotContains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
+	require.Contains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
+
+	forcedBody := []byte(`{
+		"model":"claude-opus-5",
+		"messages":[{"role":"user","content":"inspect the database"}],
+		"tools":[{"name":"read_db","description":"read database metadata","input_schema":{"type":"object"}}],
+		"tool_choice":{"type":"any"}
+	}`)
+	forcedResult, err := BuildKiroPayloadWithOptions(forcedBody, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                      "AI_EDITOR",
+		RequireNativeToolProgress:   true,
+		RequireNativeToolCallMarker: true,
+	})
+	require.NoError(t, err)
+	require.True(t, forcedResult.Context.NativeToolProgressRequired)
+	require.True(t, forcedResult.Context.NativeToolCallRequired)
 
 	noToolsBody := []byte(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"answer directly"}]}`)
 	noToolsResult, err := BuildKiroPayloadWithOptions(noToolsBody, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
@@ -4974,6 +5089,54 @@ func TestStreamKiroClaudeThinkingOnlyWithoutToolReturnsPrivateStall(t *testing.T
 	require.NotContains(t, out.String(), "I am inspecting")
 	require.NotContains(t, out.String(), "event: message_start")
 	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroClaudeOpus5ConfirmationPreludeWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "我需要先确认远程数据库的实际路径和容器内的挂载位置。", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "我需要先确认远程数据库")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroForcedToolChoiceRejectsTextOnlyCompletion(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, "This is a complete-looking answer without a structured call.", false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		NativeToolCallRequired:     true,
+		RequireTerminalEvent:       true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "complete-looking answer")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroForcedToolChoiceDoesNotReleaseAtProgressBufferLimit(t *testing.T) {
+	stream := buildNativeToolProgressStream(t, strings.Repeat("ordinary text ", nativeToolProgressMaxBufferedBytes/8), false)
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		NativeToolCallRequired:     true,
+		RequireTerminalEvent:       true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.Empty(t, out.String())
 }
 
 func TestStreamKiroClaudeFragmentedCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {

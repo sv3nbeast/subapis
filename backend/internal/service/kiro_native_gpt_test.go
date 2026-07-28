@@ -1128,7 +1128,7 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetriesOnceThenEmitsTool(t *testin
 
 	firstSystem := gjson.GetBytes(upstream.bodies[0], "conversationState.history.0.userInputMessage.content").String()
 	secondContent := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
-	require.NotContains(t, firstSystem, "[NATIVE TOOL PROGRESS:")
+	require.Contains(t, firstSystem, "[NATIVE TOOL PROGRESS:")
 	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
 }
 

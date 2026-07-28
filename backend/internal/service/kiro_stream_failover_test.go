@@ -1017,6 +1017,76 @@ func TestForwardKiroMessagesStreamClaudeToolThinkingOnlyRetries(t *testing.T) {
 	require.Len(t, upstream.requests, 2)
 }
 
+func TestOpenKiroAnthropicStreamResponseOpus5PreludeRetriesPrivately(t *testing.T) {
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我需要先确认远程数据库的实际路径和容器内的挂载位置。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_db_path", "read_db", `{"scope":"mounts"}`),
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          1999,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"api_region":   "us-east-1",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/OPUS5-PRELUDE",
+		},
+	}
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"stream":true,
+		"max_tokens":4096,
+		"output_config":{"effort":"xhigh"},
+		"tools":[{"name":"read_db","description":"read database metadata","input_schema":{"type":"object","properties":{"scope":{"type":"string"}}}}],
+		"messages":[{"role":"user","content":"back up the database before deleting data"}]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	configureKiroNativeToolProgressGuard(parsed, parsed.Model, true, false)
+	require.True(t, parsed.KiroNativeToolProgressRequired)
+	require.True(t, parsed.KiroNativeToolCallMarkerRequired)
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), account, parsed, body, parsed.Model, parsed.Model, http.Header{}, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	wire := string(streamBytes)
+	require.NotContains(t, wire, "我需要先确认远程数据库")
+	require.Contains(t, wire, `"type":"tool_use"`)
+	require.Contains(t, wire, `"name":"read_db"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+	require.Len(t, upstream.requests, 2)
+
+	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	secondPayload, err := io.ReadAll(upstream.requests[1].Body)
+	require.NoError(t, err)
+	firstSystem := gjson.GetBytes(firstPayload, "conversationState.history.0.userInputMessage.content").String()
+	secondSystem := gjson.GetBytes(secondPayload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, firstSystem, "<thinking_mode>adaptive</thinking_mode>")
+	require.Contains(t, firstSystem, "never end the turn after only announcing what you will do")
+	require.Contains(t, secondSystem, "<thinking_mode>adaptive</thinking_mode>")
+	require.NotContains(t, gjson.GetBytes(firstPayload, "conversationState.currentMessage.userInputMessage.content").String(), kiroNativeToolProgressRetryInstruction)
+	require.Contains(t, gjson.GetBytes(secondPayload, "conversationState.currentMessage.userInputMessage.content").String(), kiroNativeToolProgressRetryInstruction)
+	require.NotEqual(t,
+		gjson.GetBytes(firstPayload, "conversationState.conversationId").String(),
+		gjson.GetBytes(secondPayload, "conversationState.conversationId").String(),
+		"the private retry must use a fresh conversation nonce")
+}
+
 func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(t *testing.T) {
 	t.Setenv(kiroStreamBodyRetryEnvVariable, "0")
 	gin.SetMode(gin.TestMode)

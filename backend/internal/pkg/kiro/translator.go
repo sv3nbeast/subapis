@@ -113,10 +113,13 @@ var (
 		"claude-opus-4.6-1m":   {"low", "medium", "high", "max"},
 		"claude-sonnet-4.6-1m": {"low", "medium", "high", "max"},
 	}
-	nativeToolProgressChinesePrefixes   = []string{"我现在", "我继续", "我会", "我将", "我先", "让我", "接下来", "下面我", "首先"}
-	nativeToolProgressEnglishPrefixes   = []string{"i will", "i'll", "i am going to", "i'm going to", "let me", "first i", "first, i", "next i", "next, i"}
+	// These phrase lists are a bounded compatibility fallback for tool_choice=auto,
+	// where the client protocol does not promise that a tool call must occur. A
+	// forced tool choice is validated from structured request/event state instead.
+	nativeToolProgressChinesePrefixes   = []string{"我现在", "我继续", "我会", "我将", "我先", "我需要", "我得", "我想先", "需要先", "让我", "接下来", "下面我", "首先"}
+	nativeToolProgressEnglishPrefixes   = []string{"i will", "i'll", "i am going to", "i'm going to", "i need to", "i need", "i have to", "let me", "first i", "first, i", "next i", "next, i"}
 	nativeToolCallMarkerChinesePrefixes = []string{"查看", "找到问题"}
-	nativeToolProgressChineseActions    = []string{"读取", "检查", "查看", "搜索", "定位", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
+	nativeToolProgressChineseActions    = []string{"读取", "检查", "查看", "搜索", "定位", "确认", "核实", "获取", "查找", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
 	nativeToolProgressNegations         = []string{"无法", "不能", "无需", "不需要", "没有权限", "未提供", "can't", "cannot", "unable to", "do not have access", "don't have access", "not "}
 	nativeToolProgressToolTerms         = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
 	nativeToolProgressRefusalTerms      = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
@@ -165,11 +168,11 @@ type ParseResult struct {
 	StopReason   string
 }
 
-// NativeToolProgressStalledError marks a Kiro GPT turn that only announced
-// tool-backed work and then ended without invoking any native tool. The stream
-// is kept private until this decision, so callers may issue one bounded
-// corrective request without splicing two responses into the client stream.
-// Provider credits from the discarded attempt remain reportable on the error.
+// NativeToolProgressStalledError marks a guarded Kiro turn that ended without
+// satisfying its native-tool completion contract. The stream is kept private
+// until this decision, so callers may issue one bounded corrective request
+// without splicing two responses into the client stream. Provider credits from
+// the discarded attempt remain reportable on the error.
 type NativeToolProgressStalledError struct {
 	KiroCredits float64
 }
@@ -220,6 +223,10 @@ type KiroRequestContext struct {
 	// line. Guarded Claude tool requests use this to avoid retrying legitimate
 	// short narration while recovering the provider's malformed tool prelude.
 	NativeToolCallMarkerRequired bool
+	// NativeToolCallRequired is the protocol-level guarantee from
+	// tool_choice=any/tool. A successful turn must contain a structured native
+	// tool call; text-only completion is never accepted for this request shape.
+	NativeToolCallRequired bool
 	// PriorAttemptKiroCredits accounts for a discarded corrective attempt as
 	// provider cost without adding its hidden text tokens to client billing.
 	PriorAttemptKiroCredits float64
@@ -554,7 +561,7 @@ func isRejectedKiroModelVariant(model string) bool {
 // requiresImplicitThinkingTagStripping 判断是否需要在客户端未显式请求 thinking 时
 // 仍开启流式/非流式解析器的 <thinking> tag 抽取。
 //
-// Opus 4.7/4.8 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
+// Opus 5/4.7/4.8 的内部 CoT 在 Kiro 上游以 <thinking>...</thinking> 文本形式流出,
 // 不开启抽取会让标签和思考内容直接落到 assistant 正文,客户端看到形如
 // "<thinking>...</thinking>final" 的乱码。
 //
@@ -794,6 +801,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
 	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress && len(kiroTools) > 0
 	requestCtx.NativeToolCallMarkerRequired = requestCtx.NativeToolProgressRequired && options.RequireNativeToolCallMarker
+	requestCtx.NativeToolCallRequired = requestCtx.NativeToolProgressRequired && hasForcedClaudeToolChoice(claudeBody)
 	if currentUserMsg != nil {
 		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
 			currentUserMsg.Content = " "
@@ -849,12 +857,23 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 
 	var additionalModelRequestFields *KiroAdditionalModelRequestFields
 	if options.UseNativeEffort {
-		if effort := resolveKiroNativeEffort(modelID, claudeBody, thinking); effort != "" {
+		explicitThinkingDisabled := strings.EqualFold(
+			strings.TrimSpace(gjson.GetBytes(claudeBody, "thinking.type").String()),
+			"disabled",
+		)
+		effort := resolveKiroNativeEffort(modelID, claudeBody, thinking)
+		if explicitThinkingDisabled && normalizeModelAlias(modelID) == "claude-opus-5" {
+			// Opus 5 rejects output_config.effort while thinking is disabled.
+			// Preserve the explicit disable request and remove the conflicting
+			// native field instead of manufacturing adaptive thinking.
+			effort = ""
+		}
+		if effort != "" {
 			requestCtx.ThinkingEnabled = true
 			additionalModelRequestFields = &KiroAdditionalModelRequestFields{
 				OutputConfig: &KiroOutputConfig{Effort: effort},
 			}
-			if isKiroOutputConfigPathModel(modelID) {
+			if isKiroOutputConfigPathModel(modelID) && !explicitThinkingDisabled {
 				additionalModelRequestFields.Thinking = &KiroAdaptiveThinking{
 					Type:    "adaptive",
 					Display: "summarized",
@@ -1159,6 +1178,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		block := "event: " + event + "\ndata: " + string(payload) + "\n\n"
 		if !streamOutputReleased && nativeToolProgressGuard && bufferedStreamOutput.Len()+len(block) > nativeToolProgressMaxBufferedBytes {
+			if requestCtx.NativeToolCallRequired {
+				// tool_choice=any/tool is a protocol guarantee. Never turn a
+				// provider text-only violation into client-visible output merely
+				// because the private buffer reached its safety bound.
+				return &NativeToolProgressStalledError{}
+			}
 			// A long reasoning stream must not turn the progress guard into an
 			// unbounded response buffer. Once the bound is reached, preserve the
 			// original streaming behavior and disable retry for this attempt.
@@ -1190,6 +1215,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	evaluateNativeToolProgress := func() error {
 		if !nativeToolProgressGuard || nativeToolEmitted {
+			return nil
+		}
+		if requestCtx.NativeToolCallRequired {
+			// Forced tool choices stay private until a structured tool event is
+			// emitted. Natural-language classification is neither necessary nor
+			// authoritative for this request shape.
 			return nil
 		}
 		text := visibleTextBuf.String()
@@ -1861,11 +1892,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			break
 		}
 		if err != nil {
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallRequired, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if err := msg.ExceptionError(); err != nil {
 			err = markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallRequired, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
@@ -1877,7 +1908,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		if err := contextLimitErrorFromEvent(msg.EventType, event); err != nil {
 			err = markKiroContextResponseStarted(err, streamOutputReleased && sawDeliverableOutput)
-			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
+			return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallRequired, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 		}
 		if requestCtx.EventDiagnosticSink != nil {
 			requestCtx.EventDiagnosticSink(buildKiroEventDiagnostic(msg, event))
@@ -1913,7 +1944,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				sawExplicitCompletionReason = true
 			}
 			if err := applySemanticEvent(semanticEvent); err != nil {
-				return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
+				return nil, wrapKiroNativeToolProgressBufferedFailure(err, nativeToolProgressGuard, nativeToolEmitted, requestCtx.NativeToolCallRequired, requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
 			}
 		}
 		if requestCtx.RequireTerminalEvent && !sawTerminalEvent && len(semanticEvents) > 0 {
@@ -1956,7 +1987,8 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		// response and makes Claude clients report an interrupted session.
 		thinkingOnlyToolProgress := requestCtx.NativeToolCallMarkerRequired &&
 			stopSequenceMatched == "" && strings.TrimSpace(visibleTextBuf.String()) == ""
-		if thinkingOnlyToolProgress || shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
+		mandatoryToolMissing := requestCtx.NativeToolCallRequired && !toolBlockEmitted
+		if mandatoryToolMissing || thinkingOnlyToolProgress || shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
 			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 		}
 	}
@@ -2118,11 +2150,31 @@ func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirectiv
 	if override := thinkingDirectiveFromModel(gjson.GetBytes(body, "model").String()); override != nil {
 		return override
 	}
-	switch thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String())); thinkingType {
+	model := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	effort := strings.ToLower(strings.TrimSpace(firstNonEmptyString(
+		gjson.GetBytes(body, "output_config.effort").String(),
+		gjson.GetBytes(body, "thinking.effort").String(),
+		gjson.GetBytes(body, "reasoning_effort").String(),
+	)))
+	// Kiro's Opus 5 runtime accepts Anthropic's adaptive thinking contract, but
+	// an SDK/Desktop request may still send the legacy enabled form.  The
+	// generic Anthropic path already performs this normalization; keep the
+	// native Kiro path consistent so it does not end a turn after reasoning-only
+	// output.  Some Claude Desktop requests carry only output_config.effort;
+	// Opus 5 requires thinking to be explicitly enabled for those effort levels.
+	// An explicit disabled value remains authoritative. Thinking aliases are
+	// handled above by thinkingDirectiveFromModel.
+	if normalizeModelAlias(model) == "claude-opus-5" &&
+		(thinkingType == "enabled" || (thinkingType == "" && isKiroAdaptiveEffort(effort))) {
+		thinkingType = "adaptive"
+	}
+	switch thinkingType {
 	case "adaptive":
 		effort := firstNonEmptyString(
 			gjson.GetBytes(body, "output_config.effort").String(),
 			gjson.GetBytes(body, "thinking.effort").String(),
+			gjson.GetBytes(body, "reasoning_effort").String(),
 		)
 		effort = strings.TrimSpace(effort)
 		if effort == "" {
@@ -2148,11 +2200,19 @@ func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirectiv
 	if effort := gjson.GetBytes(body, "reasoning_effort").String(); effort != "" && effort != "none" {
 		return &thinkingDirective{Mode: "enabled", BudgetTokens: 16000}
 	}
-	model := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
 	if strings.Contains(model, "-reason") {
 		return &thinkingDirective{Mode: "enabled", BudgetTokens: 16000}
 	}
 	return nil
+}
+
+func isKiroAdaptiveEffort(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
 }
 
 func thinkingDirectiveFromModel(model string) *thinkingDirective {
@@ -2288,7 +2348,10 @@ func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestConte
 }
 
 func buildKiroNativeToolProgressHint(claudeBody []byte, hasSyntheticTool bool, modelID string, enabled bool) string {
-	if !enabled || !strings.HasPrefix(normalizeModelAlias(modelID), "gpt-") || isToolChoiceNone(claudeBody) {
+	modelFamily := normalizeModelAlias(modelID)
+	if !enabled ||
+		(!strings.HasPrefix(modelFamily, "gpt-") && !strings.HasPrefix(modelFamily, "claude-")) ||
+		isToolChoiceNone(claudeBody) {
 		return ""
 	}
 	tools := gjson.GetBytes(claudeBody, "tools")
@@ -2417,8 +2480,8 @@ func hasKiroNativeToolProgressBlockingNegation(text string) bool {
 	return false
 }
 
-func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted, requireCallMarker bool, text string) error {
-	if err == nil || !guard || toolEmitted || !shouldRetryKiroNativeToolProgress(requireCallMarker, text) {
+func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted, toolCallRequired, requireCallMarker bool, text string) error {
+	if err == nil || !guard || toolEmitted || (!toolCallRequired && !shouldRetryKiroNativeToolProgress(requireCallMarker, text)) {
 		return err
 	}
 	return &NativeToolProgressBufferedError{Cause: err}
