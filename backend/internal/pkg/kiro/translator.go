@@ -2418,7 +2418,18 @@ func wrapKiroNativeToolProgressBufferedFailure(err error, guard, toolEmitted, re
 
 func shouldRetryKiroNativeToolProgress(requireCallMarker bool, text string) bool {
 	if requireCallMarker {
-		return looksLikeKiroNativeToolCallMarker(text)
+		if strings.TrimSpace(text) == "" {
+			return false
+		}
+		// Claude tool turns normally end the prelude with Kiro's standalone
+		// "call" marker, but Opus 5 has also been observed to close directly
+		// after a recognized tool-intent prelude. Keep both forms private and
+		// retry before exposing a false successful turn to the client.
+		return looksLikeKiroNativeToolCallMarker(text) ||
+			looksLikeKiroNativeToolProgressFailure(text) ||
+			mayBecomeKiroNativeToolCallMarkerPrelude(text) ||
+			mayBecomeKiroNativeToolPrelude(text) ||
+			mayBecomeKiroNativeToolRefusal(text)
 	}
 	return looksLikeKiroNativeToolProgressFailure(text)
 }
@@ -2459,9 +2470,9 @@ func looksLikeKiroNativeToolCallMarker(text string) bool {
 }
 
 // mayBecomeKiroNativeToolCallMarkerPrelude covers short provider openings seen
-// before Kiro's standalone "call" marker. The marker mode also reuses the
-// general tool-progress detector above, but retry remains gated by the exact
-// standalone marker so ordinary tool narration is only delayed, never replayed.
+// before Kiro's standalone "call" marker. These prefixes are also a complete
+// malformed turn when the provider closes without emitting the marker or a
+// structured tool event, so the bounded retry path handles both forms.
 func mayBecomeKiroNativeToolCallMarkerPrelude(text string) bool {
 	normalized := normalizeKiroNativeToolProgressText(text)
 	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {

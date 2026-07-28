@@ -4807,9 +4807,11 @@ func TestKiroNativeToolCallMarkerDetection(t *testing.T) {
 	require.False(t, looksLikeKiroNativeToolCallMarker("recall"))
 }
 
-func TestKiroNativeToolCallMarkerRequiredNarrowsRetry(t *testing.T) {
+func TestKiroNativeToolCallMarkerRequiredRetriesRecognizedPrelude(t *testing.T) {
 	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。\n\ncall"))
-	require.False(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "我先查看工作区，再定位相关实现。"))
+	require.False(t, shouldRetryKiroNativeToolProgress(true, "这里是完整答案，不需要调用工具。"))
 	require.True(t, shouldRetryKiroNativeToolProgress(false, "我先查看按钮和面板的条件逻辑。"))
 }
 
@@ -5003,7 +5005,7 @@ func TestStreamKiroClaudeGeneralToolPreludeThenCallMarkerReturnsPrivateStall(t *
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
-func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T) {
+func TestStreamKiroClaudePreludeWithoutCallMarkerReturnsPrivateStall(t *testing.T) {
 	stream := buildNativeToolProgressStream(t, "查看按钮和面板的条件逻辑。", false)
 	var out bytes.Buffer
 
@@ -5013,10 +5015,11 @@ func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T)
 		RequireTerminalEvent:         true,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Contains(t, out.String(), "查看按钮和面板的条件逻辑。")
-	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "查看按钮和面板的条件逻辑。")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
 }
 
 func TestStreamKiroClaudeNormalTextReleasesBeforeTerminal(t *testing.T) {

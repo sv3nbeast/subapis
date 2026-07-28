@@ -257,7 +257,7 @@ func TestForwardAsResponsesKiroNativeGPTCapabilityRefusalRetriesOnceThenEmitsToo
 	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
 }
 
-func TestForwardAsChatCompletionsKiroClaudeToolPreludeIsUnchanged(t *testing.T) {
+func TestForwardAsChatCompletionsKiroClaudeToolPreludeRetriesForNonStreamingClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
 		"model":"claude-sonnet-4-6",
@@ -271,7 +271,11 @@ func TestForwardAsChatCompletionsKiroClaudeToolPreludeIsUnchanged(t *testing.T) 
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
-	upstream.resp = kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。")
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_exec_prelude_chat", "exec", `{"input":"text(\"done\")"}`),
+	}
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
 		Body:  NewRequestBodyRef(body),
@@ -280,8 +284,10 @@ func TestForwardAsChatCompletionsKiroClaudeToolPreludeIsUnchanged(t *testing.T) 
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 1)
-	require.Contains(t, rec.Body.String(), "我先读取工作区，再定位路由。")
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我先读取工作区，再定位路由。")
+	require.Contains(t, rec.Body.String(), `"finish_reason":"tool_calls"`)
+	require.Contains(t, rec.Body.String(), `"name":"exec"`)
 }
 
 func TestForwardAsChatCompletionsKiroFutureClaudeCallMarkerRetries(t *testing.T) {
@@ -1024,7 +1030,7 @@ func TestKiroFutureClaudeCallMarkerRetryCommitsCacheOnlyAfterSuccessfulTerminal(
 	require.Positive(t, nextUsage.CacheReadInputTokens, "successful retry must leave the stable prefix reusable")
 }
 
-func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
+func TestForwardMessagesKiroClaudePreludeWithoutCallMarkerRetriesForNonStreamingClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
 		"model":"claude-sonnet-4-6",
@@ -1040,14 +1046,21 @@ func TestForwardMessagesKiroClaudePreludeIsUnchanged(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
-	upstream.resp = kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。")
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我先读取工作区，再定位路由。"),
+		kiroCustomToolEventStreamResponse(t, "toolu_read_prelude_nonstream", "read", `{"path":"README.md"}`),
+	}
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 1)
-	require.Contains(t, rec.Body.String(), "我先读取工作区")
+	require.False(t, result.Stream)
+	require.Len(t, upstream.requests, 2)
+	require.NotContains(t, rec.Body.String(), "我先读取工作区")
+	require.Equal(t, "tool_use", gjson.Get(rec.Body.String(), "content.0.type").String(), "response=%s", rec.Body.String())
+	require.Equal(t, "read", gjson.Get(rec.Body.String(), "content.0.name").String(), "response=%s", rec.Body.String())
 }
 
 func TestConfigureKiroNativeToolProgressGuardScope(t *testing.T) {
@@ -1152,6 +1165,45 @@ func TestForwardMessagesKiroClaudeFamilyCallMarkerRetriesWithoutModelAllowlist(t
 			require.Len(t, upstream.requests, 2)
 			require.NotContains(t, rec.Body.String(), "我先查看工作区")
 			require.NotContains(t, rec.Body.String(), "\n\ncall")
+			require.Contains(t, rec.Body.String(), `"type":"tool_use"`)
+			require.Contains(t, rec.Body.String(), `"name":"read"`)
+			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+		})
+	}
+}
+
+func TestForwardMessagesKiroClaudePreludeWithoutCallMarkerRetriesOnceThenEmitsTool(t *testing.T) {
+	for _, model := range []string{"claude-opus-5", "claude-opus-6"} {
+		t.Run(model, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(fmt.Sprintf(`{
+				"model":%q,
+				"max_tokens":256,
+				"messages":[{"role":"user","content":"inspect the workspace"}],
+				"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+				"stream":true
+			}`, model))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+			enableKiroNativeGPTEnforceMode(svc)
+			upstream.resp = nil
+			upstream.responses = []*http.Response{
+				kiroNativeGPTPreludeResponse(t, "查看按钮和面板的条件逻辑。"),
+				kiroCustomToolEventStreamResponse(t, "toolu_read_prelude_retry", "read", `{"path":"README.md"}`),
+			}
+
+			result, err := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 2)
+			require.NotContains(t, rec.Body.String(), "查看按钮和面板的条件逻辑")
 			require.Contains(t, rec.Body.String(), `"type":"tool_use"`)
 			require.Contains(t, rec.Body.String(), `"name":"read"`)
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
