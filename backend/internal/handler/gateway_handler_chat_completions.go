@@ -270,7 +270,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				if service.ShouldPreferDifferentEmailDomainSuffixForFailover(account.Platform, failoverErr) {
 					fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 				}
-				action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+				action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr, account)
 				switch action {
 				case FailoverContinue:
 					continue

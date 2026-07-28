@@ -596,7 +596,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 					}
 					forceCacheBillingBefore := fs.ForceCacheBilling
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr, account)
 					if sessionDiag {
 						reqLog.Warn("gateway.session_diag.failover",
 							zap.String("diag_path", "gemini"),
@@ -1135,7 +1135,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 					}
 					forceCacheBillingBefore := fs.ForceCacheBilling
-					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr, account)
 					if sessionDiag {
 						reqLog.Warn("gateway.session_diag.failover",
 							zap.String("diag_path", "messages"),

@@ -304,7 +304,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 					if account.Platform == service.PlatformKiro {
 						kiroFailoverState.SwitchCount = switchCount
-						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr)
+						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr, account)
 						switchCount = kiroFailoverState.SwitchCount
 						lastFailoverErr = failoverErr
 						switch action {

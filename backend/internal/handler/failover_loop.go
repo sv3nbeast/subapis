@@ -20,6 +20,13 @@ type TempUnscheduler interface {
 	TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError)
 }
 
+// AnthropicSoftRateLimitCommitter persists a soft Claude 429 only after the
+// dedicated same-account retry has failed. It is optional so existing test
+// doubles and non-Claude gateway implementations remain source compatible.
+type AnthropicSoftRateLimitCommitter interface {
+	CommitAnthropicSoftRateLimit(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError, account ...*service.Account)
+}
+
 // FailoverAction 表示 failover 错误处理后的下一步动作
 type FailoverAction int
 
@@ -37,6 +44,8 @@ const (
 	maxSameAccountRetries = 3
 	// sameAccountRetryDelay 同账号重试间隔
 	sameAccountRetryDelay = 500 * time.Millisecond
+	// anthropicSoftRateLimitRetryCount 同一请求对 Claude 软 429 只允许一次
+	anthropicSoftRateLimitRetryCount = 1
 	// singleAccountBackoffDelay 单账号分组 503 退避重试固定延时。
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
@@ -54,12 +63,18 @@ const (
 	kiro429DecisionExhausted     = "exhausted"
 )
 
+// Kept as a variable so failover state tests can exercise the transition
+// without sleeping five real seconds. Production value is fixed by the
+// service policy and must not be changed at runtime.
+var anthropicSoftRateLimitRetryDelay = service.AnthropicSoftRateLimitRetryDelay()
+
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
 	SwitchCount              int
 	MaxSwitches              int
 	FailedAccountIDs         map[int64]struct{}
 	SameAccountRetryCount    map[int64]int
+	AnthropicSoft429Retries  map[int64]int
 	Kiro429RetryCount        map[int64]int
 	Kiro429SoftExcludedIDs   map[int64]struct{}
 	Kiro429LastSoftExcluded  int64
@@ -84,6 +99,7 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		MaxSwitches:              maxSwitches,
 		FailedAccountIDs:         make(map[int64]struct{}),
 		SameAccountRetryCount:    make(map[int64]int),
+		AnthropicSoft429Retries:  make(map[int64]int),
 		Kiro429RetryCount:        make(map[int64]int),
 		Kiro429SoftExcludedIDs:   make(map[int64]struct{}),
 		AvoidEmailDomainSuffixes: make(map[string]struct{}),
@@ -126,6 +142,7 @@ func (s *FailoverState) HandleFailoverError(
 	accountID int64,
 	platform string,
 	failoverErr *service.UpstreamFailoverError,
+	selectedAccount ...*service.Account,
 ) FailoverAction {
 	s.LastFailoverErr = failoverErr
 	s.ForceAccountID = 0
@@ -143,6 +160,15 @@ func (s *FailoverState) HandleFailoverError(
 	// 缓存计费判断
 	if !(platform == service.PlatformKiro && s.KiroResilienceEnforced) && needForceCacheBilling(s.hasBoundSession, failoverErr) {
 		s.ForceCacheBilling = true
+	}
+
+	// Anthropic's reset-less rate_limit_error is a soft signal. Keep the
+	// account eligible, pin selection to it, and wait once before considering
+	// failover. The rate-limit side effect is intentionally deferred until the
+	// retry fails; otherwise the scheduler would exclude the account we need to
+	// probe.
+	if platform == service.PlatformAnthropic && service.IsAnthropicSoftRateLimitFailover(failoverErr) {
+		return s.handleAnthropicSoftRateLimit(ctx, gatewayService, accountID, failoverErr, selectedAccount...)
 	}
 
 	if isKiro429Failover(platform, failoverErr) {
@@ -221,6 +247,59 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int64("retry_after_ms", failoverErr.RetryAfter.Milliseconds()),
 	)
 
+	return FailoverContinue
+}
+
+func (s *FailoverState) handleAnthropicSoftRateLimit(
+	ctx context.Context,
+	gatewayService TempUnscheduler,
+	accountID int64,
+	failoverErr *service.UpstreamFailoverError,
+	selectedAccount ...*service.Account,
+) FailoverAction {
+	if s.AnthropicSoft429Retries == nil {
+		s.AnthropicSoft429Retries = make(map[int64]int)
+	}
+	retryCount := s.AnthropicSoft429Retries[accountID]
+	if retryCount < anthropicSoftRateLimitRetryCount {
+		s.AnthropicSoft429Retries[accountID] = retryCount + 1
+		s.ForceAccountID = accountID
+		logger.FromContext(ctx).Warn("gateway.anthropic_soft_429_same_account_retry",
+			zap.Int64("account_id", accountID),
+			zap.Int("retry_count", retryCount+1),
+			zap.Int("retry_max", anthropicSoftRateLimitRetryCount),
+			zap.Duration("retry_delay", anthropicSoftRateLimitRetryDelay),
+		)
+		if !sleepWithContext(ctx, anthropicSoftRateLimitRetryDelay) {
+			return FailoverCanceled
+		}
+		return FailoverContinue
+	}
+
+	// This is the second soft 429 for the account in this request. Commit the
+	// adaptive 10/30/60 second cooldown before excluding it from selection.
+	if committer, ok := gatewayService.(AnthropicSoftRateLimitCommitter); ok {
+		committer.CommitAnthropicSoftRateLimit(ctx, accountID, failoverErr, selectedAccount...)
+	} else {
+		logger.FromContext(ctx).Warn("gateway.anthropic_soft_429_commit_unavailable",
+			zap.Int64("account_id", accountID),
+		)
+	}
+	failoverErr.RetryableOnSameAccount = false
+	s.FailedAccountIDs[accountID] = struct{}{}
+
+	if s.SwitchCount >= s.MaxSwitches {
+		return FailoverExhausted
+	}
+	s.SwitchCount++
+	logger.FromContext(ctx).Warn("gateway.failover_switch_account",
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", failoverErr.StatusCode),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("max_switches", s.MaxSwitches),
+		zap.String("switch_reason", string(failoverErr.FailureKind)),
+		zap.Int64("retry_after_ms", failoverErr.RetryAfter.Milliseconds()),
+	)
 	return FailoverContinue
 }
 
@@ -354,6 +433,14 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionE
 	if s.KiroAttempted && s.LastFailoverErr != nil && s.LastFailoverErr.FailureKind != "" {
 		return FailoverExhausted
 	}
+	// The one-shot Anthropic retry pins selection to the original account. A
+	// concurrent request can legitimately cool that account during the five
+	// second wait, in which case the forced selector has no candidate even
+	// though another account is available. Drop only that forced retry and
+	// continue normal failover instead of surfacing a false no-account error.
+	if s.releaseUnavailableAnthropicSoftRetry(ctx) {
+		return FailoverContinue
+	}
 
 	if s.LastFailoverErr != nil &&
 		s.LastFailoverErr.StatusCode == http.StatusServiceUnavailable &&
@@ -375,6 +462,31 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionE
 		return FailoverContinue
 	}
 	return FailoverExhausted
+}
+
+func (s *FailoverState) releaseUnavailableAnthropicSoftRetry(ctx context.Context) bool {
+	if s == nil || s.ForceAccountID <= 0 || s.LastFailoverErr == nil ||
+		!service.IsAnthropicSoftRateLimitFailover(s.LastFailoverErr) ||
+		s.AnthropicSoft429Retries[s.ForceAccountID] < anthropicSoftRateLimitRetryCount {
+		return false
+	}
+
+	accountID := s.ForceAccountID
+	s.ForceAccountID = 0
+	if s.FailedAccountIDs == nil {
+		s.FailedAccountIDs = make(map[int64]struct{})
+	}
+	s.FailedAccountIDs[accountID] = struct{}{}
+	if s.SwitchCount >= s.MaxSwitches {
+		return false
+	}
+	s.SwitchCount++
+	logger.FromContext(ctx).Warn("gateway.anthropic_soft_429_forced_retry_unavailable",
+		zap.Int64("account_id", accountID),
+		zap.Int("switch_count", s.SwitchCount),
+		zap.Int("max_switches", s.MaxSwitches),
+	)
+	return true
 }
 
 func (s *FailoverState) recordKiroSelectionCooldown(selectionErrs ...error) {

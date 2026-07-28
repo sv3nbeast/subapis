@@ -32,6 +32,17 @@ func TestAnthropicExplicit429WithoutResetUsesAdaptiveCooldown(t *testing.T) {
 	require.WithinDuration(t, before.Add(anthropicNoReset429FirstCooldown), *repo.resetAt, time.Second)
 }
 
+func TestAnthropicNoReset429CooldownEscalatesWithinTwoMinutes(t *testing.T) {
+	svc := NewRateLimitService(&anthropicNoResetAccountRepo{}, nil, &config.Config{}, nil, nil)
+	account := &Account{ID: 1937, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	now := time.Now()
+
+	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now, false))
+	require.Equal(t, 30*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(time.Second), false))
+	require.Equal(t, 60*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(2*time.Second), false))
+	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(anthropicNoReset429BackoffWindow+2*time.Second), false))
+}
+
 func TestAnthropicAmbiguous429WithoutResetDoesNotCoolAccount(t *testing.T) {
 	repo := &anthropicNoResetAccountRepo{}
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)

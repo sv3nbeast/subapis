@@ -212,8 +212,8 @@ func TestHandle429_AnthropicRateLimitWithoutResetBacksOffWithinWindow(t *testing
 
 	require.Equal(t, 3, accountRepo.rateLimitCalls)
 	require.True(t, !firstReset.Before(beforeFirst.Add(10*time.Second)) && !firstReset.After(afterFirst.Add(10*time.Second)))
-	require.True(t, !secondReset.Before(beforeSecond.Add(15*time.Second)) && !secondReset.After(afterSecond.Add(15*time.Second)))
-	require.True(t, !thirdReset.Before(beforeThird.Add(30*time.Second)) && !thirdReset.After(afterThird.Add(30*time.Second)))
+	require.True(t, !secondReset.Before(beforeSecond.Add(30*time.Second)) && !secondReset.After(afterSecond.Add(30*time.Second)))
+	require.True(t, !thirdReset.Before(beforeThird.Add(60*time.Second)) && !thirdReset.After(afterThird.Add(60*time.Second)))
 }
 
 func TestHandle429_AnthropicRateLimitWithoutResetBackoffIsSharedByOrg(t *testing.T) {
@@ -237,10 +237,10 @@ func TestHandle429_AnthropicRateLimitWithoutResetBackoffIsSharedByOrg(t *testing
 	afterSecond := time.Now()
 
 	require.Equal(t, 2, accountRepo.rateLimitCalls)
-	require.True(t, !accountRepo.rateLimitResets[46].Before(beforeSecond.Add(15*time.Second)) && !accountRepo.rateLimitResets[46].After(afterSecond.Add(15*time.Second)))
+	require.True(t, !accountRepo.rateLimitResets[46].Before(beforeSecond.Add(30*time.Second)) && !accountRepo.rateLimitResets[46].After(afterSecond.Add(30*time.Second)))
 }
 
-func TestHandle429_AnthropicRateLimitWithoutResetKeepsLargerConfiguredCooldown(t *testing.T) {
+func TestHandle429_AnthropicRateLimitWithoutResetIgnoresGlobalConfiguredCooldown(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{}
 	settingRepo := newMockSettingRepo()
 	data, _ := json.Marshal(RateLimit429CooldownSettings{Enabled: true, CooldownSeconds: 60})
@@ -256,7 +256,7 @@ func TestHandle429_AnthropicRateLimitWithoutResetKeepsLargerConfiguredCooldown(t
 	after := time.Now()
 
 	require.Equal(t, 1, accountRepo.rateLimitCalls)
-	require.True(t, !accountRepo.rateLimitResets[45].Before(before.Add(60*time.Second)) && !accountRepo.rateLimitResets[45].After(after.Add(60*time.Second)))
+	require.True(t, !accountRepo.rateLimitResets[45].Before(before.Add(10*time.Second)) && !accountRepo.rateLimitResets[45].After(after.Add(10*time.Second)))
 }
 
 func TestHandle429_AnthropicRateLimitWithoutResetCoolsSameOrgPeersWhenOptedIn(t *testing.T) {
