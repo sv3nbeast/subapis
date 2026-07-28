@@ -39,6 +39,8 @@ Environment variables:
   GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS
                                    Optional positive integer. When unset, preserve
                                    the running container value.
+  GATEWAY_FIRST_SEMANTIC_TIMEOUT   Generic Anthropic stream first-semantic timeout
+                                   in seconds. Default: 50; 0 disables the guard.
   SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS
                                    Optional comma-separated user IDs for redacted Kiro event diagnostics.
                                    When unset, preserve the running container value.
@@ -76,6 +78,7 @@ KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
 KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS:-}"
 KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS:-}"
 KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
+FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_FIRST_SEMANTIC_TIMEOUT:-50}"
 KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -205,6 +208,10 @@ validate_optional_positive_integer() {
 validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS" "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"
 validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS" "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"
 validate_optional_positive_integer "GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS" "${KIRO_FAILOVER_BUDGET_SECONDS}"
+if [[ ! "${FIRST_SEMANTIC_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || ((10#${FIRST_SEMANTIC_TIMEOUT_SECONDS} > 110)); then
+  echo "GATEWAY_FIRST_SEMANTIC_TIMEOUT must be an integer from 0 to 110 seconds" >&2
+  exit 1
+fi
 
 if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" && -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]] &&
   ((10#${KIRO_FAILOVER_BUDGET_SECONDS} < 10#${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS})); then
@@ -280,6 +287,7 @@ services:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
       - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
+      - GATEWAY_FIRST_SEMANTIC_TIMEOUT=${FIRST_SEMANTIC_TIMEOUT_SECONDS}
 ${KIRO_RESILIENCE_ENV%$'\n'}
 ${KIRO_EVENT_DIAGNOSTICS_ENV%$'\n'}
 EOF
@@ -338,6 +346,9 @@ assert_container_env() {
   fi
   printf '%s=%s\n' "${name}" "${actual}"
 }
+
+echo "--- Generic first-semantic timeout env ---"
+assert_container_env GATEWAY_FIRST_SEMANTIC_TIMEOUT "${FIRST_SEMANTIC_TIMEOUT_SECONDS}"
 
 if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
   echo "--- Kiro resilience env ---"
