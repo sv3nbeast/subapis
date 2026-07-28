@@ -1933,6 +1933,45 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingDataIntervalTimeout(
 	require.False(t, result.clientDisconnect)
 }
 
+func TestGatewayService_AnthropicAPIKeyPassthrough_FirstSemanticTimeoutIsFailoverSafe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				FirstSemanticTimeout:    1,
+				StreamKeepaliveInterval: 1,
+				MaxLineSize:             defaultMaxLineSize,
+			},
+		},
+		rateLimitService: &RateLimitService{},
+	}
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       pr,
+	}
+
+	result, err := svc.handleStreamingResponseAnthropicAPIKeyPassthrough(context.Background(), resp, c, &Account{ID: 12}, time.Now(), "claude-opus-5")
+	_ = pw.Close()
+	_ = pr.Close()
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusGatewayTimeout, failoverErr.StatusCode)
+	require.Equal(t, UpstreamFailureFirstSemanticTimeout, failoverErr.FailureKind)
+	require.True(t, failoverErr.PreSemanticTimeout)
+	require.Empty(t, rec.Body.String(), "首语义失败前不得提交 SSE，handler 才能安全切号")
+	if result != nil {
+		t.Fatalf("first semantic timeout should return a failover error without a streaming result: %#v", result)
+	}
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingSendsKeepaliveDuringIdle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

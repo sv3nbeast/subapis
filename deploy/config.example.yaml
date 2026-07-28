@@ -379,6 +379,9 @@ gateway:
   # Stream data interval timeout (seconds), 0=disable
   # 流数据间隔超时（秒），0=禁用
   stream_data_interval_timeout: 900
+  # First upstream event timeout (seconds), 0=disable; keeps failover below edge proxy limits
+  # 首个上游事件等待超时（秒），0=禁用；超时前不会提交 SSE，网关可自动切换账号
+  first_semantic_timeout: 50
   # Stream keepalive interval (seconds), 0=disable
   # 流式 keepalive 间隔（秒），0=禁用
   stream_keepalive_interval: 10

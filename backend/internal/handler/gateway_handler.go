@@ -1918,7 +1918,12 @@ func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverE
 	}
 	switch failoverErr.FailureKind {
 	case service.UpstreamFailureResponseHeaderTimeout, service.UpstreamFailureFirstSemanticTimeout:
-		recordKiroGatewayTimeoutOps(c, failoverErr)
+		if failoverErr.PreSemanticTimeout {
+			service.MarkOpsNetworkError(c, string(failoverErr.FailureKind))
+			service.SetOpsUpstreamError(c, 0, "upstream first semantic timeout", "network_error_type="+string(failoverErr.FailureKind))
+		} else {
+			recordKiroGatewayTimeoutOps(c, failoverErr)
+		}
 		return http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable"
 	case service.UpstreamFailureTransportError, service.UpstreamFailureIncompleteStream:
 		service.SetOpsUpstreamError(c, http.StatusServiceUnavailable, "Kiro upstream temporarily unavailable", string(responseBody))

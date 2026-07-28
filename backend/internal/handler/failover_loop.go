@@ -63,6 +63,7 @@ type FailoverState struct {
 	Kiro429RetryCount        map[int64]int
 	Kiro429SoftExcludedIDs   map[int64]struct{}
 	Kiro429LastSoftExcluded  int64
+	PreSemanticTimeoutCount  int
 	AvoidEmailDomainSuffixes map[string]struct{}
 	ModelCapacityRetryState  *service.ModelCapacityRetryState
 	LastFailoverErr          *service.UpstreamFailoverError
@@ -157,6 +158,25 @@ func (s *FailoverState) HandleFailoverError(
 	}
 	if failoverErr.FailoverProhibited {
 		return FailoverExhausted
+	}
+	// 首语义超时发生在客户端收到任何字节之前，可以安全重放一次到
+	// 备用账号；限制为两轮，避免多个慢账号串行等待穿透 Cloudflare 的
+	// 120 秒代理读取窗口。Kiro 自己的 resilience 错误不设置该标记，
+	// 继续使用其专用预算和账号池状态机。
+	if failoverErr.PreSemanticTimeout {
+		s.PreSemanticTimeoutCount++
+		s.FailedAccountIDs[accountID] = struct{}{}
+		if s.PreSemanticTimeoutCount >= 2 || s.SwitchCount >= s.MaxSwitches {
+			return FailoverExhausted
+		}
+		s.SwitchCount++
+		logger.FromContext(ctx).Warn("gateway.failover_presemantic_switch",
+			zap.Int64("account_id", accountID),
+			zap.Int("attempt", s.PreSemanticTimeoutCount),
+			zap.Int("max_attempts", 2),
+			zap.Int("switch_count", s.SwitchCount),
+		)
+		return FailoverContinue
 	}
 
 	// 同账号重试：对 RetryableOnSameAccount 的临时性错误，先在同一账号上重试

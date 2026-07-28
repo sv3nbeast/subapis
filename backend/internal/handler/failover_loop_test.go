@@ -228,6 +228,30 @@ func TestHandleFailoverError_BasicSwitch(t *testing.T) {
 	})
 }
 
+func TestHandleFailoverError_PreSemanticTimeoutLimitsProbeToTwoAccounts(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, false)
+	first := &service.UpstreamFailoverError{
+		StatusCode:         http.StatusGatewayTimeout,
+		FailureKind:        service.UpstreamFailureFirstSemanticTimeout,
+		PreSemanticTimeout: true,
+	}
+
+	require.Equal(t, FailoverContinue, fs.HandleFailoverError(context.Background(), mock, 101, service.PlatformAnthropic, first))
+	require.Equal(t, 1, fs.SwitchCount)
+	require.Contains(t, fs.FailedAccountIDs, int64(101))
+
+	second := &service.UpstreamFailoverError{
+		StatusCode:         http.StatusGatewayTimeout,
+		FailureKind:        service.UpstreamFailureFirstSemanticTimeout,
+		PreSemanticTimeout: true,
+	}
+	require.Equal(t, FailoverExhausted, fs.HandleFailoverError(context.Background(), mock, 202, service.PlatformAnthropic, second))
+	require.Equal(t, 1, fs.SwitchCount, "第二个慢账号失败后不应继续探测更多账号")
+	require.Contains(t, fs.FailedAccountIDs, int64(202))
+	require.Empty(t, mock.calls, "首语义超时不应触发账号临时封禁")
+}
+
 func TestFailoverState_RecordAvoidEmailDomainSuffix(t *testing.T) {
 	fs := NewFailoverState(3, false)
 
