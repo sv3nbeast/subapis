@@ -1949,11 +1949,19 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
 	}
-	if nativeToolProgressGuard && !nativeToolEmitted && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
-		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+	if nativeToolProgressGuard && !nativeToolEmitted && sawDeliverableOutput {
+		// Claude tool turns must either produce a native tool call or a visible
+		// assistant answer. Opus 5 can terminate after reasoning-only output;
+		// treating that as end_turn exposes a thinking block with no actionable
+		// response and makes Claude clients report an interrupted session.
+		thinkingOnlyToolProgress := requestCtx.NativeToolCallMarkerRequired &&
+			stopSequenceMatched == "" && strings.TrimSpace(visibleTextBuf.String()) == ""
+		if thinkingOnlyToolProgress || shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
+			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+		}
 	}
-	// 移除"thinking-only 强制 max_tokens"误判分支
-	// 仅有 thinking 块、无 text 输出不代表截断,opus 4.8 思考密集场景常见
+	// 普通 Claude 响应仅有 thinking 块时仍允许正常完成；只有上面的
+	// Claude 工具进度保护分支会把无正文/无工具的 thinking-only 终态重试。
 	// 真正的截断由上游 ContentLengthExceededException 异常帧设置 stop_reason
 	// 此处由后续 stopReason == "" 兜底分支按 tool_use/end_turn 自然处理
 
