@@ -26,7 +26,7 @@ func TestGatewayChatCredentialStopDoesNotSelectAnotherAccountAndReturnsSafe503(t
 		ClientMessage:     "invalid_client client_secret=must-not-leak",
 	}
 	state := NewFailoverState(3, false)
-	action := state.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 71, service.PlatformGrok, 0, stopErr)
+	action := state.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, 71, service.PlatformGrok, stopErr)
 
 	require.Equal(t, FailoverExhausted, action)
 	require.Zero(t, state.SwitchCount)
@@ -40,6 +40,28 @@ func TestGatewayChatCredentialStopDoesNotSelectAnotherAccountAndReturnsSafe503(t
 	require.Contains(t, recorder.Body.String(), service.GrokCredentialUnavailableClientMessage)
 	require.NotContains(t, recorder.Body.String(), "invalid_client")
 	require.NotContains(t, recorder.Body.String(), "client_secret")
+}
+
+func TestGatewayChatAntigravityCredentialFailureReturnsActionableMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	(&GatewayHandler{}).handleCCFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:        http.StatusUnauthorized,
+		Stage:             service.GatewayFailureStageAccountAuth,
+		Scope:             service.GatewayFailureScopeAccount,
+		Reason:            service.AntigravityCredentialRejectedReason,
+		NextAccountAction: service.NextAccountRetry,
+		ClientStatusCode:  http.StatusBadGateway,
+		ClientMessage:     service.AntigravityCredentialRejectedClientMessage,
+		ResponseBody:      []byte(`{"error":{"message":"Invalid bearer token","refresh_token":"must-not-leak"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadGateway, recorder.Code)
+	require.Contains(t, recorder.Body.String(), service.AntigravityCredentialRejectedClientMessage)
+	require.NotContains(t, strings.ToLower(recorder.Body.String()), "bearer")
+	require.NotContains(t, strings.ToLower(recorder.Body.String()), "refresh_token")
 }
 
 func TestGatewayChatInferenceExhaustionRestoresRetryAfter(t *testing.T) {

@@ -2577,3 +2577,20 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 验证: Anthropic soft-429 handler/service 聚焦测试、429 冷却回归测试、`go build ./...` 与相同范围 `-race` 全部通过；`git diff --check` 通过。
 - 全量回归: `go test ./... -count=1` 仍为 61 个同步前基线失败；相对 `/tmp/baseline-all-fails.txt` 新增失败 `0`，基线失败修复 `67`。
 - 发布结论: fork 最新提交已合入融合线；未触碰主工作区未提交改动，未 promote、未 push、未部署生产。
+
+## 2026-07-29 02:41:47 +0800
+
+- 模式: `ai`
+- 隔离工作树: `/private/tmp/sub2api-official-sync-20260724-011058`
+- 融合分支: `codex/official-sync-review`
+- 本地融合基线: `d47fb3d1a2db3011c35a0b6abb52be74234717c8`
+- 官方目标: `8fd01c2814f42997d79bdb4bafcbcfab2fabeee3`（相对融合基线新增 145 个官方提交）
+- 共同祖先: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 完成官方增量的语义融合、冲突消解和差分验证；未提升到 `main`，未 push，未部署生产。
+- 保留策略: 保留本地 Anthropic/Kiro/Grok/OpenAI 的调度、故障切换、流式终态、缓存计费和错误分类语义，同时吸收官方 OpenAI Live、Passkey、模型广场、session id、Responses namespace/item id 清理、Gemini 图片兼容、Antigravity 兼容桥、Ollama 云端用量刷新和面板限流能力。
+- 融合补正: 恢复 Ollama 请求活跃度记录和最终 upstream model；恢复 OpenAI rejected-field/max token 有界重试；保留 Claude system `cache_control`；修正 Opus 4.8/Gemini 3.6 定价、Grok OAuth 测试 token provider、AppHeader store mock，以及 Responses `function_call_output.output` 数组到 Anthropic 文本/图片 block 的结构化转换。
+- 后端聚焦验证: handler/server unit、官方 service contract、`internal/pkg/apicompat`、`internal/service/openai_ws_v2`、OpenAI Live/WS、Antigravity 首事件超时、Kiro/Grok 缓存身份与并发提交、用量/终态/首 token 边界通过；关键并发范围 `-race` 通过；`go build ./...` 通过。
+- 后端全量差分: service 同步前 138 个失败、当前 130 个失败，新增失败 `0`，修复基线失败 `8`；非 service 当前仅保留与同步前完全相同的 2 个 config 失败和 1 个 Antigravity 失败，`apicompat` 新增失败已清零。
+- 前端验证: lint、typecheck、production build 通过；全量测试为 `25 failed files / 91 failed tests`，与同步前基线精确一致，新增失败 `0`。
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`。批量/单独运行仍失败的旧 OpenAI flush 断言均存在于同步前 service 基线，不属于本次增量；受影响的终态、首输出、缓存和 failover 合同测试已独立通过。
+- 工作区保护: 主工作区 17 项 Anthropic/429 未提交改动未被修改、stash、reset 或混入；本次仅提交隔离融合工作树。

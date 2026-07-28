@@ -105,7 +105,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 
 	// Grok Composer does not accept image_url parts directly, but Grok Build
 	// can describe the images first. Bridge only this exact failure mode.
-	token, tokenKind, err := s.GetAccessToken(ctx, account)
+	token, tokenKind, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
 		return nil, err
 	}

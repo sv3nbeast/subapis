@@ -214,7 +214,7 @@ func (p *StreamingProcessor) emitMessageStart(v1Resp *V1InternalResponse) []byte
 		responseID = v1Resp.Response.ResponseID
 	}
 	if responseID == "" {
-		responseID = "msg_" + generateRandomID()
+		responseID = generateAnthropicMsgID()
 	}
 
 	message := map[string]any{

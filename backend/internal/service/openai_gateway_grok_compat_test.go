@@ -187,10 +187,10 @@ func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 	c.Request.Header.Set("User-Agent", "Codex Desktop/test")
 
 	account := &Account{
-		ID: 520, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1,
+		ID: 520, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1, Status: StatusActive, Schedulable: true,
 		Credentials: map[string]any{
 			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
 			"base_url":     xai.DefaultCLIBaseURL,
 		},
 	}
@@ -205,7 +205,10 @@ func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {
 		{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(modelInputError))},
 		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Xai-Request-Id": []string{"xai-retry"}}, Body: io.NopCloser(strings.NewReader(completed))},
 	}}
-	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
 
 	result, err := svc.forwardGrokResponses(context.Background(), c, account, body, "grok", true, time.Now())
 	require.NoError(t, err)
@@ -227,9 +230,16 @@ func TestForwardGrokResponsesDoesNotRetryUnrelated422Default(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	body := []byte(`{"model":"grok","input":[{"type":"reasoning","id":"rs_1"},{"role":"user","content":[{"type":"input_text","text":"hi"}]}],"stream":true}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	account := &Account{ID: 521, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{"access_token": "access-token", "base_url": xai.DefaultCLIBaseURL}}
+	account := &Account{ID: 521, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
+		"access_token": "access-token",
+		"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
+		"base_url":     xai.DefaultCLIBaseURL,
+	}}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusUnprocessableEntity, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"invalid tool schema"}`))}}
-	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
 
 	_, err := svc.forwardGrokResponses(context.Background(), c, account, body, "grok", true, time.Now())
 	require.Error(t, err)

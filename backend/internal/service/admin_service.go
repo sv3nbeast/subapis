@@ -265,6 +265,7 @@ type CreateGroupInput struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool
+	AllowLive                    bool
 	DefaultMappedModel           string
 	RequireOAuthOnly             bool
 	RequirePrivacySet            bool
@@ -331,6 +332,7 @@ type UpdateGroupInput struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        *bool
 	AllowNonStreamMessages       *bool
+	AllowLive                    *bool
 	DefaultMappedModel           *string
 	RequireOAuthOnly             *bool
 	RequirePrivacySet            *bool
@@ -938,7 +940,35 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		user.AllowedGroups = *input.AllowedGroups
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	fields := UserUpdateFields{}
+	if input.Email != "" {
+		fields.Email = true
+	}
+	if input.Password != "" {
+		fields.PasswordHash = true
+	}
+	if input.Username != nil {
+		fields.Username = true
+	}
+	if input.Notes != nil {
+		fields.Notes = true
+	}
+	if input.Role != "" {
+		fields.Role = true
+	}
+	if input.Status != "" {
+		fields.Status = true
+	}
+	if input.Concurrency != nil {
+		fields.Concurrency = true
+	}
+	if input.RPMLimit != nil {
+		fields.RPMLimit = true
+	}
+	if input.AllowedGroups != nil {
+		fields.AllowedGroups = true
+	}
+	if err := s.userRepo.Update(ctx, user, fields); err != nil {
 		return nil, err
 	}
 
@@ -1168,30 +1198,27 @@ func (s *adminServiceImpl) BatchUpdateLimits(ctx context.Context, userIDs []int6
 }
 
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {
+	var change BalanceChange
+	var err error
+	switch operation {
+	case "set":
+		change, err = s.userRepo.SetBalance(ctx, userID, balance)
+	case "add":
+		change, err = s.userRepo.AdjustBalance(ctx, userID, balance)
+	case "subtract":
+		change, err = s.userRepo.AdjustBalance(ctx, userID, -balance)
+	default:
+		return nil, fmt.Errorf("invalid balance operation: %s", operation)
+	}
+	if err != nil {
+		return nil, err
+	}
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	oldBalance := user.Balance
-
-	switch operation {
-	case "set":
-		user.Balance = balance
-	case "add":
-		user.Balance += balance
-	case "subtract":
-		user.Balance -= balance
-	}
-
-	if user.Balance < 0 {
-		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", oldBalance, user.Balance)
-	}
-
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return nil, err
-	}
-	balanceDiff := user.Balance - oldBalance
+	user.Balance = change.New
+	balanceDiff := change.New - change.Old
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
@@ -2362,6 +2389,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		SupportedModelScopes:            input.SupportedModelScopes,
 		AllowMessagesDispatch:           input.AllowMessagesDispatch,
 		AllowNonStreamMessages:          input.AllowNonStreamMessages,
+		AllowLive:                       input.AllowLive,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
 		DefaultMappedModel:              input.DefaultMappedModel,
@@ -2686,6 +2714,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.AllowNonStreamMessages != nil {
 		group.AllowNonStreamMessages = *input.AllowNonStreamMessages
 	}
+	if input.AllowLive != nil {
+		group.AllowLive = *input.AllowLive
+	}
 	if input.RequireOAuthOnly != nil {
 		group.RequireOAuthOnly = *input.RequireOAuthOnly
 	}
@@ -2993,7 +3024,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 			if addErr := s.userRepo.AddGroupToAllowedGroups(opCtx, apiKey.UserID, gid); addErr != nil {
 				return nil, fmt.Errorf("add group to user allowed groups: %w", addErr)
 			}
-			if err := s.apiKeyRepo.Update(opCtx, apiKey); err != nil {
+			if err := s.apiKeyRepo.Update(opCtx, apiKey, APIKeyUpdateFields{GroupID: true}); err != nil {
 				return nil, fmt.Errorf("update api key: %w", err)
 			}
 			if tx != nil {
@@ -3017,7 +3048,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 	}
 
 	// 非专属分组 / 解绑：无需事务，单步更新即可
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{GroupID: true}); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
 
@@ -3042,7 +3073,7 @@ func (s *adminServiceImpl) AdminResetAPIKeyRateLimitUsage(ctx context.Context, k
 	apiKey.Window5hStart = nil
 	apiKey.Window1dStart = nil
 	apiKey.Window7dStart = nil
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{RateLimitUsage: true}); err != nil {
 		return nil, fmt.Errorf("reset api key rate limit usage: %w", err)
 	}
 	if s.authCacheInvalidator != nil {

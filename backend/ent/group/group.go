@@ -104,6 +104,8 @@ const (
 	FieldSortOrder = "sort_order"
 	// FieldAllowMessagesDispatch holds the string denoting the allow_messages_dispatch field in the database.
 	FieldAllowMessagesDispatch = "allow_messages_dispatch"
+	// FieldAllowLive holds the string denoting the allow_live field in the database.
+	FieldAllowLive = "allow_live"
 	// FieldAllowNonStreamMessages holds the string denoting the allow_non_stream_messages field in the database.
 	FieldAllowNonStreamMessages = "allow_non_stream_messages"
 	// FieldRequireOauthOnly holds the string denoting the require_oauth_only field in the database.
@@ -255,6 +257,7 @@ var Columns = []string{
 	FieldSupportedModelScopes,
 	FieldSortOrder,
 	FieldAllowMessagesDispatch,
+	FieldAllowLive,
 	FieldAllowNonStreamMessages,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
@@ -370,6 +373,8 @@ var (
 	DefaultSortOrder int
 	// DefaultAllowMessagesDispatch holds the default value on creation for the "allow_messages_dispatch" field.
 	DefaultAllowMessagesDispatch bool
+	// DefaultAllowLive holds the default value on creation for the "allow_live" field.
+	DefaultAllowLive bool
 	// DefaultAllowNonStreamMessages holds the default value on creation for the "allow_non_stream_messages" field.
 	DefaultAllowNonStreamMessages bool
 	// DefaultRequireOauthOnly holds the default value on creation for the "require_oauth_only" field.
@@ -623,6 +628,11 @@ func BySortOrder(opts ...sql.OrderTermOption) OrderOption {
 // ByAllowMessagesDispatch orders the results by the allow_messages_dispatch field.
 func ByAllowMessagesDispatch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowMessagesDispatch, opts...).ToFunc()
+}
+
+// ByAllowLive orders the results by the allow_live field.
+func ByAllowLive(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowLive, opts...).ToFunc()
 }
 
 // ByAllowNonStreamMessages orders the results by the allow_non_stream_messages field.

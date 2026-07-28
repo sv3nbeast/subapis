@@ -204,6 +204,11 @@ type SettingService struct {
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
 
+	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。
+	// 面板每个认证请求都会读取，禁止在热路径上直接访问 DB。
+	panelRateLimitCache atomic.Value
+	panelRateLimitSF    singleflight.Group
+
 	// openAIQuotaAutoPauseSettingsCache holds the most recently observed quota auto-pause
 	// settings. GetOpenAIQuotaAutoPauseSettings reads this atomic.Value on the request hot
 	// path without ever blocking on the DB; when the cached entry expires, a background
@@ -232,6 +237,15 @@ type AuthSourceDefaultSettings struct {
 	Google                       ProviderDefaultGrantSettings
 	DingTalk                     ProviderDefaultGrantSettings
 	ForceEmailOnThirdPartySignup bool
+}
+
+// OmittedSettingKeys marks settings absent from a partial update payload.
+type OmittedSettingKeys map[string]struct{}
+
+func (o OmittedSettingKeys) dropFrom(updates map[string]string) {
+	for key := range o {
+		delete(updates, key)
+	}
 }
 
 type authSourceDefaultKeySet struct {
@@ -1159,6 +1173,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyModelPlazaEnabled,
+		SettingKeyModelPlazaRequireAuth,
 		SettingKeyPublicModelMarketEnabled,
 		SettingKeyPublicModelMarketReferenceUSDCNYRate,
 		SettingKeyPublicModelMarketSettlementUSDCNYRate,
@@ -1278,6 +1294,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled:              settings[SettingKeyAvailableChannelsEnabled] == "true",
+		ModelPlazaEnabled:                     settings[SettingKeyModelPlazaEnabled] == "true",
+		ModelPlazaRequireAuth:                 settings[SettingKeyModelPlazaRequireAuth] != "false",
 		PublicModelMarketEnabled:              settings[SettingKeyPublicModelMarketEnabled] == "true",
 		PublicModelMarketReferenceUSDCNYRate:  parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketReferenceUSDCNYRate], publicModelMarketReferenceUSDCNYRateDefault),
 		PublicModelMarketSettlementUSDCNYRate: parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketSettlementUSDCNYRate], publicModelMarketSettlementUSDCNYRateDefault),
@@ -1997,6 +2015,7 @@ type PublicSettingsInjectionPayload struct {
 	PasswordResetEnabled             bool                     `json:"password_reset_enabled"`
 	InvitationCodeEnabled            bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                     `json:"totp_enabled"`
+	PasskeyEnabled                   bool                     `json:"passkey_enabled"`
 	LoginAgreementEnabled            bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
@@ -2046,6 +2065,8 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                 bool    `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds  int     `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
+	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
 	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
 	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
@@ -2074,6 +2095,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		PasswordResetEnabled:             settings.PasswordResetEnabled,
 		InvitationCodeEnabled:            settings.InvitationCodeEnabled,
 		TotpEnabled:                      settings.TotpEnabled,
+		PasskeyEnabled:                   settings.PasskeyEnabled,
 		LoginAgreementEnabled:            settings.LoginAgreementEnabled,
 		LoginAgreementMode:               settings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:          settings.LoginAgreementUpdatedAt,
@@ -2119,6 +2141,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                 settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
+		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
 		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
 		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
 		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
@@ -2430,16 +2454,20 @@ func oidcCompatibilityWriteDefault(base config.OIDCConnectConfig, configured boo
 
 // UpdateSettings 更新系统设置
 func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSettings) error {
+	return s.UpdateSettingsOmitting(ctx, settings, nil)
+}
+
+func (s *SettingService) UpdateSettingsOmitting(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) error {
 	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
 	if err != nil {
 		return err
 	}
-
-	err = s.settingRepo.SetMultiple(ctx, updates)
-	if err == nil {
-		s.refreshCachedSettings(settings)
+	omitted.dropFrom(updates)
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
 	}
-	return err
+	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	return nil
 }
 
 func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, bool, error) {
@@ -2466,6 +2494,10 @@ func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, b
 
 // UpdateSettingsWithAuthSourceDefaults persists system settings and auth-source defaults in a single write.
 func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Context, settings *SystemSettings, authDefaults *AuthSourceDefaultSettings) error {
+	return s.UpdateSettingsWithAuthSourceDefaultsOmitting(ctx, settings, authDefaults, nil)
+}
+
+func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx context.Context, settings *SystemSettings, authDefaults *AuthSourceDefaultSettings, omitted OmittedSettingKeys) error {
 	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
 	if err != nil {
 		return err
@@ -2478,12 +2510,25 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Contex
 	for key, value := range authSourceUpdates {
 		updates[key] = value
 	}
-
-	err = s.settingRepo.SetMultiple(ctx, updates)
-	if err == nil {
-		s.refreshCachedSettings(settings)
+	omitted.dropFrom(updates)
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
 	}
-	return err
+	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	return nil
+}
+
+func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) {
+	if len(omitted) == 0 {
+		s.refreshCachedSettings(settings)
+		return
+	}
+	stored, err := s.GetAllSettings(ctx)
+	if err != nil {
+		slog.Warn("refresh cached settings after partial update failed", "error", err)
+		return
+	}
+	s.refreshCachedSettings(stored)
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
@@ -2583,6 +2628,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
 	updates[SettingKeyInvitationCodeEnabled] = strconv.FormatBool(settings.InvitationCodeEnabled)
 	updates[SettingKeyTotpEnabled] = strconv.FormatBool(settings.TotpEnabled)
+	updates[SettingKeyPasskeyEnabled] = strconv.FormatBool(settings.PasskeyEnabled)
 	updates[SettingKeySessionBindingEnabled] = strconv.FormatBool(settings.SessionBindingEnabled)
 	updates[SettingKeyStepUpEnabled] = strconv.FormatBool(settings.StepUpEnabled)
 	updates[SettingKeyAuditLogRetentionDays] = strconv.Itoa(settings.AuditLogRetentionDays)
@@ -2802,6 +2848,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+	updates[SettingKeyModelPlazaEnabled] = strconv.FormatBool(settings.ModelPlazaEnabled)
+	updates[SettingKeyModelPlazaRequireAuth] = strconv.FormatBool(settings.ModelPlazaRequireAuth)
+	updates[SettingKeyModelPlazaDescription] = strings.TrimSpace(settings.ModelPlazaDescription)
 
 	// Public model market feature switch
 	updates[SettingKeyPublicModelMarketEnabled] = strconv.FormatBool(settings.PublicModelMarketEnabled)
@@ -3908,6 +3957,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
+		SettingKeyModelPlazaEnabled:        "false",
+		SettingKeyModelPlazaRequireAuth:    "true",
+		SettingKeyModelPlazaDescription:    "",
 
 		// Public model market feature (default disabled; opt-in)
 		SettingKeyPublicModelMarketEnabled:              "false",
@@ -4418,6 +4470,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
+	result.ModelPlazaEnabled = settings[SettingKeyModelPlazaEnabled] == "true"
+	result.ModelPlazaRequireAuth = settings[SettingKeyModelPlazaRequireAuth] != "false"
+	result.ModelPlazaDescription = strings.TrimSpace(settings[SettingKeyModelPlazaDescription])
 
 	// Public model market feature (default: disabled; strict true)
 	result.PublicModelMarketEnabled = settings[SettingKeyPublicModelMarketEnabled] == "true"
@@ -4854,11 +4909,9 @@ func mergeProviderDefaultGrantSettings(globalDefaults ProviderDefaultGrantSettin
 }
 
 func (s *SettingService) GetDefaultPlatformQuotas(ctx context.Context) (map[string]*DefaultPlatformQuotaSetting, error) {
-	out := map[string]*DefaultPlatformQuotaSetting{
-		PlatformAnthropic:   {},
-		PlatformOpenAI:      {},
-		PlatformGemini:      {},
-		PlatformAntigravity: {},
+	out := make(map[string]*DefaultPlatformQuotaSetting, len(AllowedQuotaPlatforms))
+	for _, platform := range AllowedQuotaPlatforms {
+		out[platform] = &DefaultPlatformQuotaSetting{}
 	}
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultPlatformQuotas)
 	if err != nil || strings.TrimSpace(raw) == "" {

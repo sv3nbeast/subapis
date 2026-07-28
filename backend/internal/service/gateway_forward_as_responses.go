@@ -39,9 +39,15 @@ func (s *GatewayService) ForwardAsResponses(
 		return s.forwardDroidOpenAI(ctx, c, account, body, droidEndpointOpenAI, startTime)
 	}
 
-	// 1. Parse Responses request
+	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
+	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
+	if err != nil {
+		return nil, fmt.Errorf("adapt responses client tools: %w", err)
+	}
+
+	// 2. Parse Responses request
 	var responsesReq apicompat.ResponsesRequest
-	if err := json.Unmarshal(body, &responsesReq); err != nil {
+	if err := json.Unmarshal(adaptedBody, &responsesReq); err != nil {
 		return nil, fmt.Errorf("parse responses request: %w", err)
 	}
 	kiroCodexTools := kiroCodexResponsesToolMetadata{CustomToolNames: make(map[string]struct{})}
@@ -108,7 +114,6 @@ func (s *GatewayService) ForwardAsResponses(
 	// Kiro previous_response_id 延续场景：本轮 input 的 tool_result 对应历史里的 tool_use，
 	// 必须保留孤立 tool_result 待历史 prepend 后配对，故走不丢 orphan 的变体。
 	var anthropicReq *apicompat.AnthropicRequest
-	var err error
 	if account != nil && account.Platform == PlatformKiro && strings.TrimSpace(responsesReq.PreviousResponseID) != "" {
 		anthropicReq, err = apicompat.ResponsesToAnthropicRequestForKiroContinuation(&responsesReq)
 	} else {
@@ -284,7 +289,7 @@ func (s *GatewayService) ForwardAsResponses(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientToolMapping)
 	} else if kiroCompactRequest {
 		result, handleErr = s.handleResponsesBufferedStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
 			CoalesceInterleavedText: true,
@@ -292,7 +297,7 @@ func (s *GatewayService) ForwardAsResponses(
 			KiroCompact:             &kiroCompactResponseOptions{Scope: kiroScope},
 		})
 	} else {
-		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime, clientToolMapping)
 	}
 	if handleErr == nil && account != nil && account.Platform == PlatformKiro && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 		globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
@@ -398,6 +403,62 @@ func (s *GatewayService) forwardKiroAsResponses(
 	return result, bufferErr
 }
 
+func adaptResponsesClientToolsForAnthropic(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var requestBody map[string]any
+	if err := decoder.Decode(&requestBody); err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	additionalToolsChanged, err := liftResponsesAdditionalTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	mapping, changed, err := apicompat.AdaptResponsesClientTools(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	changed = changed || additionalToolsChanged
+	if !changed {
+		return body, mapping, nil
+	}
+	rebuilt, err := json.Marshal(requestBody)
+	if err != nil {
+		return body, apicompat.ResponsesClientToolMapping{}, err
+	}
+	return rebuilt, mapping, nil
+}
+
+func liftResponsesAdditionalTools(requestBody map[string]any) (bool, error) {
+	input, ok := requestBody["input"].([]any)
+	if !ok {
+		return false, nil
+	}
+
+	tools, _ := requestBody["tools"].([]any)
+	kept := make([]any, 0, len(input))
+	changed := false
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(item["type"])) != "additional_tools" {
+			kept = append(kept, raw)
+			continue
+		}
+		additional, ok := item["tools"].([]any)
+		if !ok {
+			return false, fmt.Errorf("additional_tools.tools must be an array")
+		}
+		tools = append(tools, additional...)
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	requestBody["tools"] = tools
+	requestBody["input"] = kept
+	return true, nil
+}
+
 // ExtractResponsesReasoningEffortFromBody reads Responses API reasoning.effort
 // and normalizes it for usage logging.
 func ExtractResponsesReasoningEffortFromBody(body []byte) *string {
@@ -472,11 +533,18 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-	strictTerminalOpt ...bool,
+	legacyArgs ...any,
 ) (*ForwardResult, error) {
-	return s.handleResponsesBufferedStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
-		StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
-	})
+	options := responsesStreamingBridgeOptions{}
+	for _, arg := range legacyArgs {
+		switch value := arg.(type) {
+		case bool:
+			options.StrictTerminal = value
+		case apicompat.ResponsesClientToolMapping:
+			options.ClientToolMapping = value
+		}
+	}
+	return s.handleResponsesBufferedStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, options)
 }
 
 func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
@@ -633,6 +701,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponseWithOptions(
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if respBytes, err := json.Marshal(responsesResp); err == nil {
 		respBytes = reverseToolNamesIfPresent(c, respBytes)
+		respBytes, _, err = apicompat.RestoreResponsesClientToolPayload(respBytes, options.ClientToolMapping)
+		if err != nil {
+			return nil, fmt.Errorf("restore responses client tools: %w", err)
+		}
 		if !writeOpenAICompactSSEBridge(c, http.StatusOK, respBytes) {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
 		}
@@ -838,11 +910,18 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-	strictTerminalOpt ...bool,
+	legacyArgs ...any,
 ) (*ForwardResult, error) {
-	return s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
-		StrictTerminal: len(strictTerminalOpt) > 0 && strictTerminalOpt[0],
-	})
+	options := responsesStreamingBridgeOptions{}
+	for _, arg := range legacyArgs {
+		switch value := arg.(type) {
+		case bool:
+			options.StrictTerminal = value
+		case apicompat.ResponsesClientToolMapping:
+			options.ClientToolMapping = value
+		}
+	}
+	return s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, options)
 }
 
 type responsesStreamingBridgeOptions struct {
@@ -851,6 +930,7 @@ type responsesStreamingBridgeOptions struct {
 	CustomToolNames         map[string]struct{}
 	NormalizeBufferedInput  bool
 	KiroCompact             *kiroCompactResponseOptions
+	ClientToolMapping       apicompat.ResponsesClientToolMapping
 }
 
 func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
@@ -881,6 +961,7 @@ func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
 	state.Model = originalModel
 	xmlInvokeBridge := newOpenAICompatAnthropicXMLInvokeBridge()
 	outputAccumulator := apicompat.NewBufferedResponseAccumulator()
+	clientToolRestorer := apicompat.NewResponsesClientToolStreamRestorer(options.ClientToolMapping)
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
@@ -912,7 +993,7 @@ func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
 	writeResponseEvents := func(events []apicompat.ResponsesStreamEvent) bool {
 		for _, evt := range events {
 			outputAccumulator.ProcessEvent(&evt)
-			sse, err := apicompat.ResponsesEventToSSE(evt)
+			payload, err := json.Marshal(evt)
 			if err != nil {
 				logger.L().Warn("forward_as_responses stream: failed to marshal event",
 					zap.Error(err),
@@ -920,13 +1001,19 @@ func (s *GatewayService) handleResponsesStreamingResponseWithOptions(
 				)
 				continue
 			}
-			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
-			if _, err := fmt.Fprint(c.Writer, out); err != nil {
-				clientDisconnected = true
-				logger.L().Info("forward_as_responses stream: client disconnected",
-					zap.String("request_id", requestID),
-				)
-				return true
+			payloads, _, restoreErr := clientToolRestorer.RestoreEvent(reverseToolNamesIfPresent(c, payload))
+			if restoreErr != nil {
+				logger.L().Warn("forward_as_responses stream: failed to restore client tools", zap.Error(restoreErr), zap.String("request_id", requestID))
+				continue
+			}
+			for _, payload := range payloads {
+				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", gjson.GetBytes(payload, "type").String(), payload); err != nil {
+					clientDisconnected = true
+					logger.L().Info("forward_as_responses stream: client disconnected",
+						zap.String("request_id", requestID),
+					)
+					return true
+				}
 			}
 		}
 		if len(events) > 0 {

@@ -4,7 +4,10 @@
 // formats can be served through a unified gateway.
 package apicompat
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // ---------------------------------------------------------------------------
 // Anthropic Messages API types
@@ -112,7 +115,7 @@ type AnthropicTool struct {
 	Type         string                 `json:"type,omitempty"` // e.g. "web_search_20250305" for server tools
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description,omitempty"`
-	InputSchema  json.RawMessage        `json:"input_schema"` // JSON Schema object
+	InputSchema  json.RawMessage        `json:"input_schema,omitempty"` // JSON Schema object
 	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -263,7 +266,8 @@ type ResponsesInputItem struct {
 	ID         string `json:"id,omitempty"`
 
 	// type=function_call_output
-	Output string `json:"output,omitempty"`
+	Output    string `json:"output,omitempty"`
+	outputRaw json.RawMessage
 
 	// type=input_image / image_url
 	ImageURL string `json:"image_url,omitempty"`
@@ -298,7 +302,13 @@ func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 		ID:         aux.ID,
 		ImageURL:   aux.ImageURL,
 	}
-	item.Output = rawJSONToString(aux.Output)
+	output := bytes.TrimSpace(aux.Output)
+	if len(output) == 0 || bytes.Equal(output, []byte("null")) {
+		item.Output = ""
+	} else if err := json.Unmarshal(output, &item.Output); err != nil {
+		item.outputRaw = append(item.outputRaw[:0], output...)
+		item.Output = string(output)
+	}
 	if len(aux.Arguments) > 0 && string(aux.Arguments) != "null" {
 		item.Arguments = rawJSONToString(aux.Arguments)
 	}

@@ -787,8 +787,8 @@ func TestHandleFailoverError_ContextCanceled(t *testing.T) {
 
 		require.Equal(t, FailoverCanceled, action)
 		require.Less(t, elapsed, 100*time.Millisecond, "应立即返回")
-		// 重试计数仍应递增
-		require.Equal(t, 1, fs.SameAccountRetryCount[100])
+		// 请求在进入 failover 前已取消，不应再改变重试状态。
+		require.Zero(t, fs.SameAccountRetryCount[100])
 	})
 
 }

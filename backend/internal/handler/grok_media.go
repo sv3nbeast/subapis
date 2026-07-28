@@ -178,6 +178,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	switchCount := 0
 	maxAccountSwitches := h.maxAccountSwitches
 	if maxAccountSwitches <= 0 {
@@ -188,6 +189,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	mediaEligibilityRejected := false
 
 	for {
+		if requestCtx.Err() != nil {
+			return
+		}
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			requestCtx,
 			apiKey.GroupID,
@@ -343,7 +347,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					return
 				}
 				switchCount++
-				if h.gatewayService.ShouldStopOpenAIFailoverWithContext(requestCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
+				if h.gatewayService.ShouldStopOpenAIFailoverWithContext(requestCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount, &oauth429FailoverState) {
 					reqLog.Warn("grok_media.upstream_failover_fast_stopped",
 						zap.Int64("account_id", account.ID),
 						zap.Int("upstream_status", failoverErr.StatusCode),
@@ -444,6 +448,7 @@ func recordGrokMediaUsage(
 ) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
+	sessionID := service.ExtractClientSessionID(c)
 	payloadForHash := body
 	if len(payloadForHash) == 0 && strings.TrimSpace(requestID) != "" {
 		payloadForHash = []byte(requestID)
@@ -469,6 +474,7 @@ func recordGrokMediaUsage(
 			RequestPayloadHash: service.HashUsageRequestPayload(payloadForHash),
 			APIKeyService:      h.apiKeyService,
 			QuotaPlatform:      quotaPlatform,
+			SessionID:          sessionID,
 			ChannelUsageFields: channelUsageFields,
 		}); err != nil {
 			logger.L().With(

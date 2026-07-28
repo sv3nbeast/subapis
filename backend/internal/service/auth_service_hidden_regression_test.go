@@ -18,6 +18,9 @@ type authRegressionUserRepo struct {
 func (r *authRegressionUserRepo) Create(context.Context, *User) error {
 	panic("unexpected Create call")
 }
+func (r *authRegressionUserRepo) CreateWithEmailAliasGuard(context.Context, *User) error {
+	panic("unexpected CreateWithEmailAliasGuard call")
+}
 func (r *authRegressionUserRepo) GetByID(_ context.Context, id int64) (*User, error) {
 	if r.user == nil || r.user.ID != id {
 		return nil, ErrUserNotFound
@@ -40,7 +43,7 @@ func (r *authRegressionUserRepo) GetByEmail(_ context.Context, email string) (*U
 func (r *authRegressionUserRepo) GetFirstAdmin(context.Context) (*User, error) {
 	panic("unexpected GetFirstAdmin call")
 }
-func (r *authRegressionUserRepo) Update(context.Context, *User) error {
+func (r *authRegressionUserRepo) Update(context.Context, *User, UserUpdateFields) error {
 	panic("unexpected Update call")
 }
 func (r *authRegressionUserRepo) Delete(context.Context, int64) error {
@@ -76,6 +79,12 @@ func (r *authRegressionUserRepo) UpdateBalance(context.Context, int64, float64) 
 func (r *authRegressionUserRepo) DeductBalance(context.Context, int64, float64) error {
 	panic("unexpected DeductBalance call")
 }
+func (r *authRegressionUserRepo) AdjustBalance(context.Context, int64, float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+func (r *authRegressionUserRepo) SetBalance(context.Context, int64, float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
+}
 func (r *authRegressionUserRepo) UpdateConcurrency(context.Context, int64, int) error {
 	panic("unexpected UpdateConcurrency call")
 }
@@ -90,6 +99,9 @@ func (r *authRegressionUserRepo) BatchUpdateLimits(context.Context, []int64, *in
 }
 func (r *authRegressionUserRepo) ExistsByEmail(context.Context, string) (bool, error) {
 	panic("unexpected ExistsByEmail call")
+}
+func (r *authRegressionUserRepo) ExistsByEmailAlias(context.Context, string) (bool, error) {
+	panic("unexpected ExistsByEmailAlias call")
 }
 func (r *authRegressionUserRepo) RemoveGroupFromAllowedGroups(context.Context, int64) (int64, error) {
 	panic("unexpected RemoveGroupFromAllowedGroups call")

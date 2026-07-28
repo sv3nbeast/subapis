@@ -731,11 +731,16 @@ func (h *UserHandler) UpdateUserPlatformQuotas(c *gin.Context) {
 		}
 	}
 
-	records := make([]service.UserPlatformQuotaRecord, 0, len(req.Quotas))
+	requestedByPlatform := make(map[string]PlatformQuotaInput, len(req.Quotas))
 	for _, q := range req.Quotas {
+		requestedByPlatform[q.Platform] = q
+	}
+	records := make([]service.UserPlatformQuotaRecord, 0, len(service.AllowedQuotaPlatforms))
+	for _, platform := range service.AllowedQuotaPlatforms {
+		q := requestedByPlatform[platform]
 		records = append(records, service.UserPlatformQuotaRecord{
 			UserID:          userID,
-			Platform:        q.Platform,
+			Platform:        platform,
 			DailyLimitUSD:   q.DailyLimitUSD,
 			WeeklyLimitUSD:  q.WeeklyLimitUSD,
 			MonthlyLimitUSD: q.MonthlyLimitUSD,

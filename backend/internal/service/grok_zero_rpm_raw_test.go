@@ -37,8 +37,9 @@ func TestForwardAsRawChatCompletions_GrokZeroRPMTriggersModelFailover(t *testing
 			Enabled:           false,
 			AllowInsecureHTTP: true,
 		}}},
-		httpUpstream: upstream,
-		accountRepo:  repo,
+		httpUpstream:      upstream,
+		accountRepo:       repo,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
 	}
 	account := &Account{
 		ID:          1718,
@@ -46,13 +47,14 @@ func TestForwardAsRawChatCompletions_GrokZeroRPMTriggersModelFailover(t *testing
 		Platform:    PlatformGrok,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
+		Status:      StatusActive,
+		Schedulable: true,
 		Credentials: map[string]any{
 			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"expires_at":   time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
 			"base_url":     xai.DefaultCLIBaseURL,
 		},
 	}
-
 	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
 
 	require.Nil(t, result)

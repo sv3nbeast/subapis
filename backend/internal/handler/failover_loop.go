@@ -145,7 +145,13 @@ func (s *FailoverState) HandleFailoverError(
 	failoverErr *service.UpstreamFailoverError,
 	selectedAccount ...*service.Account,
 ) FailoverAction {
+	if ctx != nil && ctx.Err() != nil {
+		return FailoverCanceled
+	}
 	s.LastFailoverErr = failoverErr
+	if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() {
+		return FailoverExhausted
+	}
 	s.ForceAccountID = 0
 	if s.KiroResilienceEnforced {
 		if platform == service.PlatformKiro {

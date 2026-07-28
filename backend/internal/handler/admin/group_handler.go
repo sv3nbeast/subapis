@@ -13,6 +13,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,16 @@ type GroupHandler struct {
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
+}
+
+// GetLiveCapability 返回当前服务端是否具备生成 Live attestation 的运行环境。
+func (h *GroupHandler) GetLiveCapability(c *gin.Context) {
+	err := liveattestation.NewProvider().Check(c.Request.Context())
+	result := gin.H{"supported": err == nil}
+	if err != nil {
+		result["reason"] = err.Error()
+	}
+	response.Success(c, result)
 }
 
 type optionalLimitField struct {
@@ -126,6 +137,7 @@ type CreateGroupRequest struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       bool                                      `json:"allow_non_stream_messages"`
+	AllowLive                    bool                                      `json:"allow_live"`
 	RequireOAuthOnly             bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           string                                    `json:"default_mapped_model"`
@@ -191,6 +203,7 @@ type UpdateGroupRequest struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        *bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       *bool                                      `json:"allow_non_stream_messages"`
+	AllowLive                    *bool                                      `json:"allow_live"`
 	RequireOAuthOnly             *bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            *bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           *string                                    `json:"default_mapped_model"`
@@ -495,6 +508,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		SupportedModelScopes:            req.SupportedModelScopes,
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
+		AllowLive:                       req.AllowLive,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,
@@ -618,6 +632,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		SupportedModelScopes:            req.SupportedModelScopes,
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
+		AllowLive:                       req.AllowLive,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,

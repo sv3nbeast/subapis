@@ -266,8 +266,8 @@ func (s *BillingService) initFallbackPricing() {
 	// Claude 4.7 Opus (暂与4.6同价，待官方定价更新)
 	s.fallbackPrices["claude-opus-4.7"] = s.fallbackPrices["claude-opus-4.6"]
 
-	// Claude Opus 5
-	s.fallbackPrices["claude-opus-5"] = &ModelPricing{
+	// Claude 4.8 Opus / Claude Opus 5（官方同价：$5 输入 / $25 输出 per MTok）。
+	opus5Pricing := &ModelPricing{
 		InputPricePerToken:         5e-6,    // $5 per MTok
 		OutputPricePerToken:        25e-6,   // $25 per MTok
 		CacheCreationPricePerToken: 6.25e-6, // $6.25 per MTok
@@ -276,6 +276,8 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreation1hPrice:       10e-6,   // $10 per MTok
 		SupportsCacheBreakdown:     true,
 	}
+	s.fallbackPrices["claude-opus-4.8"] = opus5Pricing
+	s.fallbackPrices["claude-opus-5"] = opus5Pricing
 
 	// Claude Fable 5
 	s.fallbackPrices["claude-fable-5"] = &ModelPricing{
@@ -299,17 +301,6 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     true,
 	}
 
-	// Claude Sonnet 5 (promotional pricing through 2026-08-31)
-	s.fallbackPrices["claude-sonnet-5"] = &ModelPricing{
-		InputPricePerToken:         2e-6,   // $2 per MTok
-		OutputPricePerToken:        10e-6,  // $10 per MTok
-		CacheCreationPricePerToken: 2.5e-6, // $2.50 per MTok
-		CacheReadPricePerToken:     0.2e-6, // $0.20 per MTok
-		CacheCreation5mPrice:       2.5e-6, // $2.50 per MTok
-		CacheCreation1hPrice:       4e-6,   // $4 per MTok
-		SupportsCacheBreakdown:     true,
-	}
-
 	// Gemini 3.1 Pro
 	s.fallbackPrices["gemini-3.1-pro"] = &ModelPricing{
 		InputPricePerToken:         2e-6,   // $2 per MTok
@@ -317,6 +308,13 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreationPricePerToken: 2e-6,   // $2 per MTok
 		CacheReadPricePerToken:     0.2e-6, // $0.20 per MTok
 		SupportsCacheBreakdown:     false,
+	}
+	// Antigravity thinking-tier aliases share the public Gemini 3.6 Flash rate.
+	s.fallbackPrices["gemini-3.6-flash"] = &ModelPricing{
+		InputPricePerToken:     1.5e-6,
+		OutputPricePerToken:    7.5e-6,
+		CacheReadPricePerToken: 0.15e-6,
+		SupportsCacheBreakdown: false,
 	}
 
 	// OpenAI GPT-5.1（本地兜底，防止动态定价不可用时拒绝计费）
@@ -554,6 +552,15 @@ func (s *BillingService) initFallbackPricing() {
 	//       交叉验证：https://www.tmtpost.com/7961404.html (USD 口径)
 	// Moonshot V1 (¥2/¥5/¥10 多 tier) 公开页未直接标注 USD 价，本分支不覆盖，避免误计价。
 	// K2-0905 / K2-0711 官方页面未保留定价，不覆盖。
+	// Kimi K3 国际站 USD 价目：https://platform.kimi.ai/docs/pricing/chat-k3.md
+	// Kimi Code bare aliases（k3 / k3-256k）官方无按 token 价目；复用 API Platform
+	// kimi-k3 档位作代理计费 fallback（同 kimi-for-coding 对 K2.6 的处理口径）。
+	s.fallbackPrices["kimi-k3"] = &ModelPricing{
+		InputPricePerToken:     3e-6,    // $3.00 per MTok (cache miss)
+		OutputPricePerToken:    15e-6,   // $15.00 per MTok
+		CacheReadPricePerToken: 0.30e-6, // $0.30 per MTok (cache hit)
+		SupportsCacheBreakdown: false,
+	}
 	s.fallbackPrices["kimi-k2.6"] = &ModelPricing{
 		InputPricePerToken:     0.95e-6, // $0.95 per MTok (cache miss)
 		OutputPricePerToken:    4e-6,    // $4.00 per MTok
@@ -676,8 +683,11 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["claude-fable-5"]
 	}
 	if strings.Contains(modelLower, "opus") {
-		if strings.Contains(modelLower, "opus-5") {
+		if strings.Contains(modelLower, "opus-5") || strings.Contains(modelLower, "opus5") {
 			return s.fallbackPrices["claude-opus-5"]
+		}
+		if strings.Contains(modelLower, "4.8") || strings.Contains(modelLower, "4-8") {
+			return s.fallbackPrices["claude-opus-4.8"]
 		}
 		if strings.Contains(modelLower, "4.7") || strings.Contains(modelLower, "4-7") {
 			return s.fallbackPrices["claude-opus-4.7"]
@@ -714,6 +724,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "gemini-3.1-pro") || strings.Contains(modelLower, "gemini-3-1-pro") {
 		return s.fallbackPrices["gemini-3.1-pro"]
+	}
+	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
+		return s.fallbackPrices["gemini-3.6-flash"]
 	}
 
 	// DeepSeek V4 系列：仅匹配已知 V4 Pro/Flash 与官方兼容别名
@@ -774,10 +787,18 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["glm-4-32b-0414-128k"]
 	}
 
-	// 月之暗面 Kimi（kimi-k2.6 / kimi-for-coding / kimi-k2.5 / kimi-k2-thinking / kimi-k2）
+	// 月之暗面 Kimi（kimi-k3 / k3 / k3-256k / kimi-k2.6 / kimi-for-coding / kimi-k2.5 / kimi-k2-thinking / kimi-k2）
 	// K2-0905 / K2-0711 官方未保留定价，不进入 fallback。
+	// K3 规则置于 K2 前：API Platform 仅官方 kimi-k3（及 / 路径后缀）；
+	// Code bare aliases 仅精确 k3 / k3-256k 或 /k3|/k3-256k 后缀，避免 kimi-k30 等未知型号误命中。
+	// 注意：kimi-k3[1m] 是 Claude Code 上下文选择语法，不是 Kimi API 模型 ID，不进入 fallback。
 	if strings.Contains(modelLower, "kimi-for-coding") {
 		return s.fallbackPrices["kimi-for-coding"]
+	}
+	if modelLower == "kimi-k3" || strings.HasSuffix(modelLower, "/kimi-k3") ||
+		modelLower == "k3" || modelLower == "k3-256k" ||
+		strings.HasSuffix(modelLower, "/k3") || strings.HasSuffix(modelLower, "/k3-256k") {
+		return s.fallbackPrices["kimi-k3"]
 	}
 	if strings.Contains(modelLower, "kimi-k2.6") || strings.Contains(modelLower, "kimi-k2-6") {
 		return s.fallbackPrices["kimi-k2.6"]

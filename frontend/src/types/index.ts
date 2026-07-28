@@ -282,6 +282,7 @@ export interface PublicSettings {
   login_agreement_revision?: string
   login_agreement_documents?: LoginAgreementDocument[]
   turnstile_enabled: boolean
+  passkey_enabled?: boolean
   turnstile_site_key: string
   site_name: string
   site_logo: string
@@ -321,10 +322,13 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
-  public_model_market_enabled: boolean
-  public_model_market_reference_usd_cny_rate: number
-  public_model_market_settlement_usd_cny_rate: number
-  web_chat_enabled: boolean
+	public_model_market_enabled: boolean
+	public_model_market_reference_usd_cny_rate: number
+	public_model_market_settlement_usd_cny_rate: number
+	model_plaza_enabled: boolean
+	model_plaza_require_auth: boolean
+	model_plaza_description?: string
+	web_chat_enabled: boolean
   web_chat_projects_enabled?: boolean
   web_chat_templates_enabled?: boolean
   web_chat_history_enabled?: boolean
@@ -586,7 +590,7 @@ export interface PaginationConfig {
 export type KnownGroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'kiro' | 'droid' | 'grok'
 // Keep known values discoverable while allowing newly added backend platforms
 // to work with template profiles before the frontend is released again.
-export type GroupPlatform = KnownGroupPlatform | (string & {})
+export type GroupPlatform = KnownGroupPlatform | 'composite' | (string & {})
 
 export type SubscriptionType = 'standard' | 'subscription'
 
@@ -612,7 +616,8 @@ export interface Group {
   id: number
   name: string
   description: string | null
-  platform: GroupPlatform
+	platform: GroupPlatform
+	allow_live: boolean
   rate_multiplier: number
   rpm_limit?: number // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
   max_reasoning_effort?: string
@@ -817,7 +822,8 @@ export interface UpdateApiKeyRequest {
 export interface CreateGroupRequest {
   name: string
   description?: string | null
-  platform?: GroupPlatform
+	platform?: GroupPlatform
+	allow_live?: boolean
   rate_multiplier?: number
   is_exclusive?: boolean
   subscription_type?: SubscriptionType
@@ -872,7 +878,8 @@ export interface CreateGroupRequest {
 export interface UpdateGroupRequest {
   name?: string
   description?: string | null
-  platform?: GroupPlatform
+	platform?: GroupPlatform
+	allow_live?: boolean
   rate_multiplier?: number
   is_exclusive?: boolean
   status?: 'active' | 'inactive'
@@ -1139,7 +1146,10 @@ export interface OllamaCloudUsageState {
 
 export interface OllamaCloudUsageSettings {
   enabled: boolean
+  /** Max wait while model requests keep arriving (minutes). */
   interval_minutes: number
+  /** Trailing quiet period after the latest model request (minutes). */
+  debounce_minutes: number
 }
 
 export interface Account {
@@ -1658,7 +1668,7 @@ export interface CodexSessionImportResult {
 // ==================== Usage & Redeem Types ====================
 
 export type RedeemCodeType = 'balance' | 'concurrency' | 'subscription' | 'invitation'
-export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber'
+export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 

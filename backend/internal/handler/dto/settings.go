@@ -37,9 +37,13 @@ type SystemSettings struct {
 	InvitationCodeEnabled            bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                     `json:"totp_enabled"`                   // TOTP 双因素认证
 	TotpEncryptionKeyConfigured      bool                     `json:"totp_encryption_key_configured"` // TOTP 加密密钥是否已配置
-	SessionBindingEnabled            bool                     `json:"session_binding_enabled"`        // 会话 IP/UA 绑定
-	StepUpEnabled                    bool                     `json:"step_up_enabled"`                // 敏感操作 step-up 2FA
-	AuditLogRetentionDays            int                      `json:"audit_log_retention_days"`       // 审计日志保留天数
+	PasskeyEnabled                   bool                     `json:"passkey_enabled"`
+	PasskeyConfigured                bool                     `json:"passkey_configured"`
+	PasskeyRPID                      string                   `json:"passkey_rp_id"`
+	PasskeyRPOrigins                 []string                 `json:"passkey_rp_origins"`
+	SessionBindingEnabled            bool                     `json:"session_binding_enabled"`  // 会话 IP/UA 绑定
+	StepUpEnabled                    bool                     `json:"step_up_enabled"`          // 敏感操作 step-up 2FA
+	AuditLogRetentionDays            int                      `json:"audit_log_retention_days"` // 审计日志保留天数
 	LoginAgreementEnabled            bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
@@ -247,34 +251,37 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string  `json:"openai_advanced_scheduler_effective_weight_session_sticky"`
 
 	// Payment configuration
-	PaymentEnabled                   bool     `json:"payment_enabled"`
-	PaymentMinAmount                 float64  `json:"payment_min_amount"`
-	PaymentMaxAmount                 float64  `json:"payment_max_amount"`
-	PaymentDailyLimit                float64  `json:"payment_daily_limit"`
-	PaymentOrderTimeoutMin           int      `json:"payment_order_timeout_minutes"`
-	PaymentMaxPendingOrders          int      `json:"payment_max_pending_orders"`
-	PaymentEnabledTypes              []string `json:"payment_enabled_types"`
-	PaymentBalanceDisabled           bool     `json:"payment_balance_disabled"`
-	PaymentBalanceRechargeMultiplier float64  `json:"payment_balance_recharge_multiplier"`
-	PaymentSubscriptionUSDToCNYRate  float64  `json:"payment_subscription_usd_to_cny_rate"`
-	PaymentRechargeFeeRate           float64  `json:"payment_recharge_fee_rate"`
-	PaymentLoadBalanceStrat          string   `json:"payment_load_balance_strategy"`
-	PaymentProductNamePrefix         string   `json:"payment_product_name_prefix"`
-	PaymentProductNameSuffix         string   `json:"payment_product_name_suffix"`
-	PaymentHelpImageURL              string   `json:"payment_help_image_url"`
-	PaymentHelpText                  string   `json:"payment_help_text"`
-	PaymentCancelRateLimitEnabled    bool     `json:"payment_cancel_rate_limit_enabled"`
-	PaymentCancelRateLimitMax        int      `json:"payment_cancel_rate_limit_max"`
-	PaymentCancelRateLimitWindow     int      `json:"payment_cancel_rate_limit_window"`
-	PaymentCancelRateLimitUnit       string   `json:"payment_cancel_rate_limit_unit"`
-	PaymentCancelRateLimitMode       string   `json:"payment_cancel_rate_limit_window_mode"`
+	PaymentEnabled                       bool     `json:"payment_enabled"`
+	PaymentMinAmount                     float64  `json:"payment_min_amount"`
+	PaymentMaxAmount                     float64  `json:"payment_max_amount"`
+	PaymentDailyLimit                    float64  `json:"payment_daily_limit"`
+	PaymentOrderTimeoutMin               int      `json:"payment_order_timeout_minutes"`
+	PaymentMaxPendingOrders              int      `json:"payment_max_pending_orders"`
+	PaymentEnabledTypes                  []string `json:"payment_enabled_types"`
+	PaymentBalanceDisabled               bool     `json:"payment_balance_disabled"`
+	PaymentBalanceRechargeMultiplier     float64  `json:"payment_balance_recharge_multiplier"`
+	PaymentSubscriptionUSDToCNYRate      float64  `json:"payment_subscription_usd_to_cny_rate"`
+	PaymentRechargeFeeRate               float64  `json:"payment_recharge_fee_rate"`
+	PaymentLoadBalanceStrat              string   `json:"payment_load_balance_strategy"`
+	PaymentProductNamePrefix             string   `json:"payment_product_name_prefix"`
+	PaymentProductNameSuffix             string   `json:"payment_product_name_suffix"`
+	PaymentHelpImageURL                  string   `json:"payment_help_image_url"`
+	PaymentHelpText                      string   `json:"payment_help_text"`
+	PaymentCancelRateLimitEnabled        bool     `json:"payment_cancel_rate_limit_enabled"`
+	PaymentCancelRateLimitMax            int      `json:"payment_cancel_rate_limit_max"`
+	PaymentCancelRateLimitWindow         int      `json:"payment_cancel_rate_limit_window"`
+	PaymentCancelRateLimitUnit           string   `json:"payment_cancel_rate_limit_unit"`
+	PaymentCancelRateLimitMode           string   `json:"payment_cancel_rate_limit_window_mode"`
+	PaymentAlipayForceQRCode             bool     `json:"payment_alipay_force_qrcode"`
+	PaymentAlipayMobilePrecreateDeepLink bool     `json:"payment_alipay_mobile_precreate_deep_link"`
 
 	// Balance low notification
-	BalanceLowNotifyEnabled     bool               `json:"balance_low_notify_enabled"`
-	BalanceLowNotifyThreshold   float64            `json:"balance_low_notify_threshold"`
-	BalanceLowNotifyRechargeURL string             `json:"balance_low_notify_recharge_url"`
-	AccountQuotaNotifyEnabled   bool               `json:"account_quota_notify_enabled"`
-	AccountQuotaNotifyEmails    []NotifyEmailEntry `json:"account_quota_notify_emails"`
+	BalanceLowNotifyEnabled         bool               `json:"balance_low_notify_enabled"`
+	BalanceLowNotifyThreshold       float64            `json:"balance_low_notify_threshold"`
+	BalanceLowNotifyRechargeURL     string             `json:"balance_low_notify_recharge_url"`
+	SubscriptionExpiryNotifyEnabled bool               `json:"subscription_expiry_notify_enabled"`
+	AccountQuotaNotifyEnabled       bool               `json:"account_quota_notify_enabled"`
+	AccountQuotaNotifyEmails        []NotifyEmailEntry `json:"account_quota_notify_emails"`
 
 	// Channel Monitor feature switch
 	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
@@ -282,6 +289,11 @@ type SystemSettings struct {
 
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Model Plaza feature switch
+	ModelPlazaEnabled     bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription string `json:"model_plaza_description"`
 
 	// Public Model Market feature switch (anonymous model and pricing catalog)
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
@@ -328,6 +340,7 @@ type PublicSettings struct {
 	PasswordResetEnabled             bool                      `json:"password_reset_enabled"`
 	InvitationCodeEnabled            bool                      `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                      `json:"totp_enabled"` // TOTP 双因素认证
+	PasskeyEnabled                   bool                      `json:"passkey_enabled"`
 	LoginAgreementEnabled            bool                      `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                    `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                    `json:"login_agreement_updated_at"`
@@ -377,6 +390,8 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
+	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
 	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
 	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
@@ -409,6 +424,15 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+// PanelRateLimitSettings 面板 API 限流配置 DTO
+type PanelRateLimitSettings struct {
+	Enabled     bool `json:"enabled"`
+	UserRPM     int  `json:"user_rpm"`
+	HeavyRPM    int  `json:"heavy_rpm"`
+	ExemptAdmin bool `json:"exempt_admin"`
+	PublicIPRPM int  `json:"public_ip_rpm"`
 }
 
 // StreamTimeoutSettings 流超时处理配置 DTO

@@ -311,6 +311,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s == nil {
 		return false
 	}
+	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 	if len(requestedModel) > 0 {
@@ -657,7 +658,7 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIFailover(account *Account, status
 // fixed account count, so an available third/fourth account is actually tried.
 // The context-less wrapper retains the historical two-account safety fallback
 // for callers outside the HTTP request loop.
-func (s *OpenAIGatewayService) ShouldStopOpenAIFailoverWithContext(ctx context.Context, account *Account, statusCode int, responseBody []byte, failedSwitches int) bool {
+func (s *OpenAIGatewayService) ShouldStopOpenAIFailoverWithContext(ctx context.Context, account *Account, statusCode int, responseBody []byte, failedSwitches int, states ...*OpenAIOAuth429FailoverState) bool {
 	if isGrokQuotaExhaustedForStatus(account, statusCode, responseBody) {
 		if ctx != nil {
 			if _, configured := ctx.Value(grokQuotaFailoverDeadlineContextKey{}).(*grokQuotaFailoverBudgetState); configured {
@@ -666,5 +667,5 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIFailoverWithContext(ctx context.C
 		}
 		return failedSwitches >= 2
 	}
-	return s.ShouldStopOpenAIOAuth429Failover(account, statusCode, failedSwitches)
+	return s.ShouldStopOpenAIOAuth429Failover(account, statusCode, failedSwitches, states...)
 }

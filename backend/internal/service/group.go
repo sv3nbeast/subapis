@@ -80,6 +80,7 @@ type Group struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
+	AllowLive                    bool // 是否允许 OpenAI Live 接口
 	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	DefaultMappedModel           string

@@ -15,6 +15,8 @@ const {
   getOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getPanelRateLimitSettings,
+  updatePanelRateLimitSettings,
   getStreamTimeoutSettings,
   getRectifierSettings,
   getBetaPolicySettings,
@@ -43,6 +45,14 @@ const {
   getOverloadCooldownSettings: vi.fn(),
   getRateLimit429CooldownSettings: vi.fn(),
   updateRateLimit429CooldownSettings: vi.fn(),
+  getPanelRateLimitSettings: vi.fn().mockResolvedValue({
+    enabled: true,
+    user_rpm: 240,
+    heavy_rpm: 60,
+    exempt_admin: true,
+    public_ip_rpm: 300,
+  }),
+  updatePanelRateLimitSettings: vi.fn().mockImplementation(async (payload) => payload),
   getStreamTimeoutSettings: vi.fn(),
   getRectifierSettings: vi.fn(),
   getBetaPolicySettings: vi.fn(),
@@ -54,6 +64,7 @@ const {
   getOllamaCloudUsageSettings: vi.fn().mockResolvedValue({
     enabled: false,
     interval_minutes: 60,
+    debounce_minutes: 1,
   }),
   updateOllamaCloudUsageSettings: vi.fn().mockImplementation(async (payload) => payload),
   getGroups: vi.fn(),
@@ -83,6 +94,8 @@ vi.mock("@/api", () => ({
       getOverloadCooldownSettings,
       getRateLimit429CooldownSettings,
       updateRateLimit429CooldownSettings,
+      getPanelRateLimitSettings,
+      updatePanelRateLimitSettings,
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
@@ -356,6 +369,10 @@ const baseSettingsResponse = {
   password_reset_enabled: false,
   totp_enabled: false,
   totp_encryption_key_configured: false,
+  passkey_enabled: true,
+  passkey_configured: true,
+  passkey_rp_id: "sub3.nebula-spaces.com",
+  passkey_rp_origins: ["https://sub3.nebula-spaces.com"],
   default_balance: 0,
   default_concurrency: 1,
   default_subscriptions: [],
@@ -672,6 +689,7 @@ describe("admin SettingsView payment visible method controls", () => {
     getOllamaCloudUsageSettings.mockResolvedValue({
       enabled: false,
       interval_minutes: 60,
+      debounce_minutes: 1,
     });
     updateOllamaCloudUsageSettings.mockImplementation(async (payload) => payload);
     getGroups.mockResolvedValue([]);
@@ -795,6 +813,47 @@ describe("admin SettingsView payment visible method controls", () => {
 
     expect(wrapper.text()).not.toContain("可见方式");
     expect(wrapper.text()).not.toContain("支付来源");
+  });
+
+  it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    const toggle = settings.get('[data-testid="passkey-toggle"]');
+    expect(toggle.attributes("disabled")).toBeUndefined();
+    expect(settings.text()).toContain("sub3.nebula-spaces.com");
+    expect(settings.text()).toContain("https://sub3.nebula-spaces.com");
+
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ passkey_enabled: false }),
+    );
+  });
+
+  it("disables passkey sign-in when the RP configuration is unavailable", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      passkey_enabled: false,
+      passkey_configured: false,
+      passkey_rp_id: "",
+      passkey_rp_origins: [],
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    expect(settings.get('[data-testid="passkey-toggle"]').attributes("disabled")).toBeDefined();
+    expect(settings.get('[data-testid="passkey-config-status"]').text()).toContain(
+      "admin.settings.security.passkeyNotConfigured",
+    );
   });
 
   it("loads, edits, validates, and saves forwarded client-IP headers", async () => {
@@ -1194,6 +1253,7 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(card.find('[data-testid="ollama-cloud-usage-global-interval"]').exists()).toBe(false);
 
     await card.get('[data-testid="ollama-cloud-usage-global-enabled"]').setValue(true);
+    await card.get('[data-testid="ollama-cloud-usage-global-debounce"]').setValue(3);
     await card.get('[data-testid="ollama-cloud-usage-global-interval"]').setValue(90);
     await card.get('[data-testid="ollama-cloud-usage-global-save"]').trigger("click");
     await flushPromises();
@@ -1201,6 +1261,7 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateOllamaCloudUsageSettings).toHaveBeenCalledWith({
       enabled: true,
       interval_minutes: 90,
+      debounce_minutes: 3,
     });
   });
 

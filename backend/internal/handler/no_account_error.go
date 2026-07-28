@@ -120,7 +120,7 @@ func classifyOpenAICompatibleNoAccountErrorFromGin(
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 	}
-	return classifyNoAccountErrorFromGin(
+	classification := classifyNoAccountErrorFromGin(
 		c,
 		diag,
 		apiKey,
@@ -128,6 +128,10 @@ func classifyOpenAICompatibleNoAccountErrorFromGin(
 		displayModel,
 		openAICompatibleRequestPlatform(ctx, apiKey),
 	)
+	if classification.ModelNotFound && openAICompatibleRequestPlatform(ctx, apiKey) == service.PlatformGrok {
+		classification.ErrType = "model_not_found"
+	}
+	return classification
 }
 
 func openAICompatibleSelectionErrorForLog(err error, platform string) error {

@@ -161,7 +161,7 @@ func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
 		opsNullString(input.ErrorBody),
 		opsNullString(input.ErrorSource),
 		opsNullString(input.ErrorOwner),
-		opsNullInt(input.UpstreamStatusCode),
+		opsNullableIntPointer(input.UpstreamStatusCode),
 		opsNullString(input.UpstreamErrorMessage),
 		opsNullString(input.UpstreamErrorDetail),
 		opsNullString(input.UpstreamErrorsJSON),
@@ -594,7 +594,7 @@ LIMIT 1`
 		s := clientIP.String
 		out.ClientIP = &s
 	}
-	if upstreamStatusCode.Valid && upstreamStatusCode.Int64 > 0 {
+	if upstreamStatusCode.Valid {
 		v := int(upstreamStatusCode.Int64)
 		out.UpstreamStatusCode = &v
 	}
@@ -1305,6 +1305,16 @@ func opsNullInt(v any) any {
 	default:
 		return sql.NullInt64{}
 	}
+}
+
+// opsNullableIntPointer distinguishes an absent value from an explicitly
+// observed zero. Credential-stage failures intentionally persist upstream
+// status 0 because no inference request was sent.
+func opsNullableIntPointer(v *int) any {
+	if v == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*v), Valid: true}
 }
 
 func opsNullInt16(v *int16) any {

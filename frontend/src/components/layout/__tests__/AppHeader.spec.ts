@@ -47,6 +47,10 @@ vi.mock('@/stores', () => ({
   useOnboardingStore: () => ({ replay: vi.fn() }),
 }))
 
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => appStore,
+}))
+
 vi.mock('@/stores/adminSettings', () => ({
   useAdminSettingsStore: () => ({ customMenuItems: [] }),
 }))
