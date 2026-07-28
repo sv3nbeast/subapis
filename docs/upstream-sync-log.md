@@ -2569,3 +2569,11 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 验证: handler/service/Kiro/config 聚焦测试、Kiro/handler/service race、stream/cache 四项不变量、`go build ./...` 通过
 - 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对 `cbec44f63` 新增失败 `0`，修复基线失败 `67`
 - 发布结论: fork 增量已合并到融合线，主工作区仍有新的未提交 Anthropic/429 网关改动，未 promote、未 push、未部署生产
+
+## 2026-07-28 22:13:55 +0800
+
+- fork 增量: `d62a8b73ae73bd2eb861060cb3263828af354ec9`（`fix(anthropic): retry soft 429 before cooldown`），吸收 Anthropic 无 reset soft-429 的同账号重试、冷却延后与多协议转发分类。
+- 冲突处理: `backend/internal/service/gateway_service.go` 的 `UpstreamFailoverError` 保留融合线已有 failure stage/scope、客户端错误映射、SSE 安全切换与 Kiro 状态字段，并加入 `AnthropicSoftRateLimit` / `AnthropicSoftRateLimitCommitted`。
+- 验证: Anthropic soft-429 handler/service 聚焦测试、429 冷却回归测试、`go build ./...` 与相同范围 `-race` 全部通过；`git diff --check` 通过。
+- 全量回归: `go test ./... -count=1` 仍为 61 个同步前基线失败；相对 `/tmp/baseline-all-fails.txt` 新增失败 `0`，基线失败修复 `67`。
+- 发布结论: fork 最新提交已合入融合线；未触碰主工作区未提交改动，未 promote、未 push、未部署生产。

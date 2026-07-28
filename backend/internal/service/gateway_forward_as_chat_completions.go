@@ -161,6 +161,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -170,12 +171,15 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			if s.rateLimitService != nil {
+			if s.rateLimitService != nil && !softRateLimit {
 				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
 			}
 			return nil, &UpstreamFailoverError{
-				StatusCode:   resp.StatusCode,
-				ResponseBody: respBody,
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: softRateLimit,
+				AnthropicSoftRateLimit: softRateLimit,
 			}
 		}
 

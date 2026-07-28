@@ -487,7 +487,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				if service.ShouldPreferDifferentEmailDomainSuffixForFailover(account.Platform, failoverErr) {
 					fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 				}
-				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
+				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr, account)
 				switch failoverAction {
 				case FailoverContinue:
 					continue

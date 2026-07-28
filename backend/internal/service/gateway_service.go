@@ -755,14 +755,19 @@ type UpstreamFailoverError struct {
 	ClientStatusCode         int
 	ClientMessage            string
 	SuppressTempUnschedule   bool // 可同账号重试但不应写入账号临时禁调（如 Kiro 流协议尾帧缺失/空解析）
-	KiroRateLimited          bool // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
-	FailureKind              UpstreamFailureKind
-	RetryAfter               time.Duration
-	FailoverProhibited       bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
-	PreSemanticTimeout       bool            // 首语义阶段超时；仅允许一次备用账号探测，避免边缘代理窗口被串行耗尽
-	KiroCooldownCommitted    bool            // the credential cooldown was already persisted for this failure
-	UpstreamDone             <-chan struct{} // nil means no detached physical upstream remains
-	Cause                    error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
+	// AnthropicSoftRateLimit indicates a reset-less Anthropic rate_limit_error.
+	// The handler retries the same account once, and persists cooldown only if
+	// that retry also fails.
+	AnthropicSoftRateLimit          bool
+	AnthropicSoftRateLimitCommitted bool
+	KiroRateLimited                 bool // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
+	FailureKind                     UpstreamFailureKind
+	RetryAfter                      time.Duration
+	FailoverProhibited              bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
+	PreSemanticTimeout              bool            // 首语义阶段超时；仅允许一次备用账号探测，避免边缘代理窗口被串行耗尽
+	KiroCooldownCommitted           bool            // the credential cooldown was already persisted for this failure
+	UpstreamDone                    <-chan struct{} // nil means no detached physical upstream remains
+	Cause                           error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
 }
 
 func (s *GatewayService) firstSemanticTimeout() time.Duration {
@@ -7322,8 +7327,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 		}
 
+		// A reset-less Anthropic rate_limit_error has a dedicated same-account
+		// retry in the handler. Classify it before generic retries can mask it.
+		softAnthropic429 := false
+		if resp.StatusCode == http.StatusTooManyRequests && account.Platform == PlatformAnthropic {
+			respBody, _ := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			softAnthropic429 = IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+		}
+
 		// 检查是否需要通用重试（排除400，因为400已经在上面特殊处理过了）
-		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		if !softAnthropic429 && resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {
 				elapsed := time.Since(retryStart)
 				if elapsed >= maxRetryElapsed {
@@ -7397,7 +7412,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+			if !softRateLimit {
+				s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -7416,7 +7434,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
+				AnthropicSoftRateLimit: softRateLimit,
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -7432,7 +7452,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-		s.handleFailoverSideEffects(ctx, resp, account)
+		softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+		if !softRateLimit {
+			s.handleFailoverSideEffects(ctx, resp, account)
+		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -7450,7 +7473,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			ResponseHeaders:        resp.Header.Clone(),
+			RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
+			AnthropicSoftRateLimit: softRateLimit,
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -7711,7 +7736,14 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		}
 
 		// 透传分支禁止 400 请求体降级重试（该重试会改写请求体）
-		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		softAnthropic429 := false
+		if resp.StatusCode == http.StatusTooManyRequests && account.Platform == PlatformAnthropic {
+			respBody, _ := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			softAnthropic429 = IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+		}
+		if !softAnthropic429 && resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 			if attempt < maxRetryAttempts {
 				elapsed := time.Since(retryStart)
 				if elapsed >= maxRetryElapsed {
@@ -7772,7 +7804,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+			if !softRateLimit {
+				s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -7792,7 +7827,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
+				AnthropicSoftRateLimit: softRateLimit,
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -7806,7 +7843,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-		s.handleFailoverSideEffects(ctx, resp, account)
+		softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
+		if !softRateLimit {
+			s.handleFailoverSideEffects(ctx, resp, account)
+		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -7826,7 +7866,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			ResponseHeaders:        resp.Header.Clone(),
+			RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
+			AnthropicSoftRateLimit: softRateLimit,
 		}
 	}
 

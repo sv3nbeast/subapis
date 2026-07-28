@@ -77,8 +77,8 @@ const (
 const (
 	anthropicNoReset429BackoffWindow = 2 * time.Minute
 	anthropicNoReset429FirstCooldown = 10 * time.Second
-	anthropicNoReset429NextCooldown  = 15 * time.Second
-	anthropicNoReset429MaxCooldown   = 30 * time.Second
+	anthropicNoReset429NextCooldown  = 30 * time.Second
+	anthropicNoReset429MaxCooldown   = 60 * time.Second
 )
 
 const (
@@ -1260,14 +1260,19 @@ func isAnthropicRateLimitErrorBody(body []byte) bool {
 }
 
 func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context, account *Account) {
-	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+	// Anthropic soft-429 backoff is deliberately independent of the legacy
+	// global cooldown_seconds setting. That setting is shared by other
+	// providers and a production value such as 60s must not turn the first
+	// Claude failure into a 60s account ban. The admin switch still controls
+	// whether local fallback cooldowns are enabled at all.
+	_, enabled := s.get429FallbackCooldown(ctx, account)
 	propagateOrg := s.shouldPropagateOrgPeers(ctx)
 	if enabled {
-		if adaptiveCooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now(), propagateOrg); cooldown < adaptiveCooldown {
-			cooldown = adaptiveCooldown
-		}
+		cooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now(), propagateOrg)
+		s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", cooldown, true)
+		return
 	}
-	s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", cooldown, enabled)
+	s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", 0, false)
 }
 
 func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now time.Time, propagateOrg bool) time.Duration {
@@ -1281,14 +1286,14 @@ func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now
 	}
 	if len(s.anthropicNoReset429) > 128 {
 		for existingKey, state := range s.anthropicNoReset429 {
-			if now.Sub(state.LastAt) > anthropicNoReset429BackoffWindow {
+			if now.Sub(state.LastAt) >= anthropicNoReset429BackoffWindow {
 				delete(s.anthropicNoReset429, existingKey)
 			}
 		}
 	}
 
 	state := s.anthropicNoReset429[key]
-	if state.LastAt.IsZero() || now.Sub(state.LastAt) > anthropicNoReset429BackoffWindow {
+	if state.LastAt.IsZero() || now.Sub(state.LastAt) >= anthropicNoReset429BackoffWindow {
 		state.Count = 0
 	}
 	state.Count++
