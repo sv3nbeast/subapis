@@ -759,9 +759,41 @@ type UpstreamFailoverError struct {
 	FailureKind              UpstreamFailureKind
 	RetryAfter               time.Duration
 	FailoverProhibited       bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
+	PreSemanticTimeout       bool            // 首语义阶段超时；仅允许一次备用账号探测，避免边缘代理窗口被串行耗尽
 	KiroCooldownCommitted    bool            // the credential cooldown was already persisted for this failure
 	UpstreamDone             <-chan struct{} // nil means no detached physical upstream remains
 	Cause                    error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
+}
+
+func (s *GatewayService) firstSemanticTimeout() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.FirstSemanticTimeout <= 0 {
+		return 0
+	}
+	return time.Duration(s.cfg.Gateway.FirstSemanticTimeout) * time.Second
+}
+
+func newAnthropicFirstSemanticTimeoutFailover(account *Account, model string) *UpstreamFailoverError {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "upstream_timeout",
+			"message": "Upstream did not produce a response in time",
+		},
+	})
+	logger.LegacyPrintf("service.gateway", "stream.first_semantic_timeout account_id=%d model=%s", accountID, model)
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusGatewayTimeout,
+		ResponseBody:           body,
+		RetryableOnSameAccount: false,
+		SuppressTempUnschedule: true,
+		FailureKind:            UpstreamFailureFirstSemanticTimeout,
+		PreSemanticTimeout:     true,
+		Cause:                  context.DeadlineExceeded,
+	}
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -7977,6 +8009,16 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
+	firstSemanticInterval := s.firstSemanticTimeout()
+	var firstSemanticTimer *time.Timer
+	if firstSemanticInterval > 0 {
+		firstSemanticTimer = time.NewTimer(firstSemanticInterval)
+		defer firstSemanticTimer.Stop()
+	}
+	var firstSemanticCh <-chan time.Time
+	if firstSemanticTimer != nil {
+		firstSemanticCh = firstSemanticTimer.C
+	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
 		intervalTicker = time.NewTicker(streamInterval)
@@ -8215,8 +8257,19 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 
+		case <-firstSemanticCh:
+			if firstTokenMs != nil {
+				continue
+			}
+			return nil, newAnthropicFirstSemanticTimeoutFailover(account, model)
+
 		case <-keepaliveCh:
-			if clientDisconnected {
+			if clientDisconnected || (firstSemanticInterval > 0 && firstTokenMs == nil) {
+				// Do not commit an SSE response before the first upstream event. A
+				// pre-semantic timeout must remain failover-safe and invisible to the
+				// client; otherwise the handler cannot replay the request on another
+				// account without corrupting the stream.
+				resetKeepaliveTimer()
 				continue
 			}
 			if partialEventOpen || downstreamPartialEventOpen {
@@ -10311,6 +10364,16 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
+	firstSemanticInterval := s.firstSemanticTimeout()
+	var firstSemanticTimer *time.Timer
+	if firstSemanticInterval > 0 {
+		firstSemanticTimer = time.NewTimer(firstSemanticInterval)
+		defer firstSemanticTimer.Stop()
+	}
+	var firstSemanticCh <-chan time.Time
+	if firstSemanticTimer != nil {
+		firstSemanticCh = firstSemanticTimer.C
+	}
 	// 仅监控上游数据间隔超时，避免下游写入阻塞导致误判
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -10783,8 +10846,17 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			sendErrorEvent("stream_timeout", fmt.Sprintf("upstream stream idle for %s", streamInterval))
 			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
 
+		case <-firstSemanticCh:
+			if firstTokenMs != nil {
+				continue
+			}
+			return nil, newAnthropicFirstSemanticTimeoutFailover(account, originalModel)
+
 		case <-keepaliveCh:
-			if clientDisconnected {
+			if clientDisconnected || (firstSemanticInterval > 0 && firstTokenMs == nil) {
+				// Keep the response uncommitted until the first upstream event so a
+				// pre-semantic timeout can be retried on another account safely.
+				resetKeepaliveTimer()
 				continue
 			}
 			if time.Since(lastDataAt) < keepaliveInterval {

@@ -4848,9 +4848,11 @@ func TestKiroNativeToolCallMarkerDetection(t *testing.T) {
 	require.False(t, looksLikeKiroNativeToolCallMarker("recall"))
 }
 
-func TestKiroNativeToolCallMarkerRequiredNarrowsRetry(t *testing.T) {
+func TestKiroNativeToolCallMarkerRequiredRetriesRecognizedPrelude(t *testing.T) {
 	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。\n\ncall"))
-	require.False(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "查看按钮和面板的条件逻辑。"))
+	require.True(t, shouldRetryKiroNativeToolProgress(true, "我先查看工作区，再定位相关实现。"))
+	require.False(t, shouldRetryKiroNativeToolProgress(true, "这里是完整答案，不需要调用工具。"))
 	require.True(t, shouldRetryKiroNativeToolProgress(false, "我先查看按钮和面板的条件逻辑。"))
 }
 
@@ -4986,6 +4988,35 @@ func TestStreamKiroClaudeCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) 
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
+func TestStreamKiroClaudeThinkingOnlyWithoutToolReturnsPrivateStall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "I am inspecting the available tools before continuing."},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 12},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		ThinkingEnabled:              true,
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "I am inspecting")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
 func TestStreamKiroClaudeFragmentedCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
@@ -5044,7 +5075,7 @@ func TestStreamKiroClaudeGeneralToolPreludeThenCallMarkerReturnsPrivateStall(t *
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
-func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T) {
+func TestStreamKiroClaudePreludeWithoutCallMarkerReturnsPrivateStall(t *testing.T) {
 	stream := buildNativeToolProgressStream(t, "查看按钮和面板的条件逻辑。", false)
 	var out bytes.Buffer
 
@@ -5054,10 +5085,11 @@ func TestStreamKiroClaudePreludeWithoutCallMarkerCompletesNormally(t *testing.T)
 		RequireTerminalEvent:         true,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Contains(t, out.String(), "查看按钮和面板的条件逻辑。")
-	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "查看按钮和面板的条件逻辑。")
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
 }
 
 func TestStreamKiroClaudeNormalTextReleasesBeforeTerminal(t *testing.T) {

@@ -958,6 +958,65 @@ func TestForwardKiroMessagesStreamThinkingOnlyReturnsCompleteThinkingResponse(t 
 	require.Contains(t, rec.Body.String(), "event: message_stop")
 }
 
+func TestForwardKiroMessagesStreamClaudeToolThinkingOnlyRetries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	thinkingOnlyBody := bytes.NewBuffer(nil)
+	_, _ = thinkingOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "reasoningContentEvent",
+	}, []byte(`{"reasoningContentEvent":{"text":"I am inspecting the available tools before continuing."}}`)))
+	_, _ = thinkingOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":20,"outputTokens":12}}}`)))
+	_, _ = thinkingOnlyBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
+
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"recovered with a real answer"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":20,"outputTokens":7}}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{
+		newKiroEventStreamResponse(http.StatusOK, thinkingOnlyBody.Bytes()),
+		newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 88, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/THINK-ONLY-RETRY",
+		},
+	}
+	body := []byte(`{"model":"claude-opus-5","stream":true,"thinking":{"type":"enabled","budget_tokens":1024},"max_tokens":128,"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],"messages":[{"role":"user","content":"inspect the workspace"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	result, err := svc.forwardKiroMessages(context.Background(), c, account, parsed, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Contains(t, rec.Body.String(), "recovered with a r")
+	require.Contains(t, rec.Body.String(), "eal answer")
+	require.NotContains(t, rec.Body.String(), "I am inspecting the available tools")
+	require.Len(t, upstream.requests, 2)
+}
+
 func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(t *testing.T) {
 	t.Setenv(kiroStreamBodyRetryEnvVariable, "0")
 	gin.SetMode(gin.TestMode)

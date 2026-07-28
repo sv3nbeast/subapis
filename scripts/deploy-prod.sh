@@ -39,6 +39,9 @@ Options:
   --kiro-failover-budget-seconds N
                                   Kiro per-account failover budget. When omitted,
                                   preserve the running container value
+  --first-semantic-timeout-seconds N
+                                  Generic Anthropic stream first-semantic timeout.
+                                  Default: 50; 0 disables the guard
   --skip-sync                    Skip rsync and only trigger remote rebuild/redeploy
   --no-delete                    Disable rsync --delete
   -n, --dry-run                  Show rsync changes only; skip remote rebuild
@@ -79,6 +82,7 @@ KIRO_RESILIENCE_GROUP_IDS="${GATEWAY_KIRO_RESILIENCE_GROUP_IDS:-}"
 KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS:-}"
 KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS:-}"
 KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
+FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_FIRST_SEMANTIC_TIMEOUT:-50}"
 IMAGE_TAG=""
 SKIP_SYNC=0
 DRY_RUN=0
@@ -146,6 +150,10 @@ while (($# > 0)); do
       KIRO_FAILOVER_BUDGET_SECONDS="$2"
       shift 2
       ;;
+    --first-semantic-timeout-seconds)
+      FIRST_SEMANTIC_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
     --skip-sync)
       SKIP_SYNC=1
       shift
@@ -199,6 +207,10 @@ validate_optional_positive_integer() {
 validate_optional_positive_integer "Kiro response-header timeout" "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}"
 validate_optional_positive_integer "Kiro first-semantic timeout" "${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}"
 validate_optional_positive_integer "Kiro failover budget" "${KIRO_FAILOVER_BUDGET_SECONDS}"
+if [[ ! "${FIRST_SEMANTIC_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || ((10#${FIRST_SEMANTIC_TIMEOUT_SECONDS} > 110)); then
+  echo "Generic first-semantic timeout must be an integer from 0 to 110 seconds" >&2
+  exit 1
+fi
 
 if [[ -n "${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" && -n "${KIRO_FAILOVER_BUDGET_SECONDS}" ]] &&
   ((10#${KIRO_FAILOVER_BUDGET_SECONDS} < 10#${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS})); then
@@ -325,6 +337,7 @@ echo "Kiro rollout groups: ${KIRO_RESILIENCE_GROUP_IDS:-preserve-current}"
 echo "Kiro header timeout: ${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS:-preserve-current}"
 echo "Kiro semantic timeout: ${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS:-preserve-current}"
 echo "Kiro failover budget: ${KIRO_FAILOVER_BUDGET_SECONDS:-preserve-current}"
+echo "Generic first-semantic timeout: ${FIRST_SEMANTIC_TIMEOUT_SECONDS}s"
 
 if [[ "${SKIP_SYNC}" -eq 0 ]]; then
   ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_SRC_DIR}'"
@@ -369,5 +382,6 @@ ssh "${REMOTE_HOST}" \
     GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS="${KIRO_RESPONSE_HEADER_TIMEOUT_SECONDS}" \
     GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TIMEOUT_SECONDS="${KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS}" \
     GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS="${KIRO_FAILOVER_BUDGET_SECONDS}" \
+    GATEWAY_FIRST_SEMANTIC_TIMEOUT="${FIRST_SEMANTIC_TIMEOUT_SECONDS}" \
     SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}" \
     bash "${REMOTE_SRC_DIR}/scripts/rebuild-prod-sub2api.sh"

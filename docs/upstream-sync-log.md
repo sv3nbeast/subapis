@@ -2561,3 +2561,11 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 前端验证: lint、typecheck、build、6 个受影响测试文件（50 tests）通过；仅保留既有 Vitest/Vite 警告
 - 发布脚本验证: `scripts/rebuild-prod-sub2api_test.sh` 通过，Kiro timeout policy 能被保留并校验
 - 发布结论: fork 与官方融合内容达到回归门槛；主工作区仍有未提交前端改动，未 promote、未 push、未部署生产
+
+## 2026-07-28 21:56:12 +0800
+
+- fork 增量: `cc796b688`、`72720626f`、`d41da732e`、`206d13bd0`，吸收 Kiro Claude prelude/call-marker/thinking-only 重试、Anthropic 首语义超时 failover 与生产 timeout 配置传播
+- 冲突处理: `gateway_service.go` 保留融合线完整 `GatewayFailureStage/Scope/NextAccountAction/SafeToFailoverAfterWrite` 字段，并加入 `PreSemanticTimeout` 与 fork 首语义超时实现
+- 验证: handler/service/Kiro/config 聚焦测试、Kiro/handler/service race、stream/cache 四项不变量、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对 `cbec44f63` 新增失败 `0`，修复基线失败 `67`
+- 发布结论: fork 增量已合并到融合线，主工作区仍有新的未提交 Anthropic/429 网关改动，未 promote、未 push、未部署生产

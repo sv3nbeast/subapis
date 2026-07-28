@@ -265,6 +265,19 @@ func TestLoadOpenAIResponseHeaderTimeoutFromEnv(t *testing.T) {
 	require.Equal(t, 1800, cfg.Gateway.OpenAIResponseHeaderTimeout)
 }
 
+func TestLoadFirstSemanticTimeout(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 50, cfg.Gateway.FirstSemanticTimeout)
+
+	t.Setenv("GATEWAY_FIRST_SEMANTIC_TIMEOUT", "75")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, 75, cfg.Gateway.FirstSemanticTimeout)
+}
+
 func TestLoadDefaultClaudeCodeAuxCompatConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
