@@ -1,4 +1,10 @@
-export default {
+import { mergeLocaleMessages } from '../mergeLocaleMessages'
+import adminAuditMessages from './zh/admin/audit'
+import adminPromptAuditMessages from './zh/admin/promptAudit'
+import adminSettingsMessages from './zh/admin/settings'
+import batchImageMessages from './zh/batchImage'
+
+const baseMessages = {
   // Home Page
   home: {
     viewOnGithub: '在 GitHub 上查看',
@@ -1901,7 +1907,7 @@ export default {
     category: '分类',
     language: '语言',
     templateBody: '模板正文',
-    templateVariableHint: '在正文中使用 {{variable_name}}；变量只做纯文本替换。',
+    templateVariableHint: "在正文中使用 {'{'}{'{'}variable_name{'}'}{'}'}；变量只做纯文本替换。",
     variableLabel: '字段标签',
     singleLine: '单行',
     multiLine: '多行',
@@ -7386,7 +7392,7 @@ export default {
         claudeOAuthSystemPromptPlaceholder: '留空时使用内置 Claude Code 扩展提示词。',
         claudeOAuthSystemPromptHint: '兼容旧配置：仅控制第三个注入的 system block。',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
-        claudeOAuthSystemPromptBlocksPlaceholder: '留空时使用内置 3 个 blocks。支持数组或 {"blocks": [...]}。',
+        claudeOAuthSystemPromptBlocksPlaceholder: `留空时使用内置 3 个 blocks。支持数组或 {'{'}"blocks": [...]{'}'}。`,
         claudeOAuthSystemPromptBlocksHint:
           '每个 block 会保存为带 enabled、type、text、可选 cache_control 的 JSON。{billing_header} 会按请求动态生成；Claude Code 身份提示词和扩展提示词可直接编辑，也可用预设恢复默认值。',
         systemBlockTitle: 'System Block {index}',
@@ -9096,3 +9102,15 @@ export default {
     saveFailed: '保存服务状态配置失败'
   }
 }
+
+export default mergeLocaleMessages(
+  baseMessages,
+  batchImageMessages,
+  {
+    admin: mergeLocaleMessages(
+      adminAuditMessages,
+      adminPromptAuditMessages,
+      adminSettingsMessages,
+    ),
+  },
+)

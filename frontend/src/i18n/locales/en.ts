@@ -1,4 +1,10 @@
-export default {
+import { mergeLocaleMessages } from '../mergeLocaleMessages'
+import adminAuditMessages from './en/admin/audit'
+import adminPromptAuditMessages from './en/admin/promptAudit'
+import adminSettingsMessages from './en/admin/settings'
+import batchImageMessages from './en/batchImage'
+
+const baseMessages = {
   // Home Page
   home: {
     viewOnGithub: 'View on GitHub',
@@ -1971,7 +1977,7 @@ export default {
     category: 'Category',
     language: 'Language',
     templateBody: 'Template body',
-    templateVariableHint: 'Use {{variable_name}} in the body. Variables are plain-text replacements only.',
+    templateVariableHint: "Use {'{'}{'{'}variable_name{'}'}{'}'} in the body. Variables are plain-text replacements only.",
     variableLabel: 'Field label',
     singleLine: 'Single line',
     multiLine: 'Multi-line',
@@ -7412,7 +7418,7 @@ export default {
         claudeOAuthSystemPromptHint: 'Legacy compatibility: controls only the third injected system block.',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
         claudeOAuthSystemPromptBlocksPlaceholder:
-          'Leave empty to use the built-in 3 blocks. Supports an array or {"blocks": [...]}.',
+          `Leave empty to use the built-in 3 blocks. Supports an array or {'{'}"blocks": [...]{'}'}.`,
         claudeOAuthSystemPromptBlocksHint:
           'Each block is saved as JSON with enabled, type, text, and optional cache_control. {billing_header} stays dynamic per request; the Claude Code identity and expansion prompts can be edited directly or restored from presets.',
         systemBlockTitle: 'System Block {index}',
@@ -9169,3 +9175,15 @@ export default {
     saveFailed: 'Failed to save status probe settings'
   }
 }
+
+export default mergeLocaleMessages(
+  baseMessages,
+  batchImageMessages,
+  {
+    admin: mergeLocaleMessages(
+      adminAuditMessages,
+      adminPromptAuditMessages,
+      adminSettingsMessages,
+    ),
+  },
+)
