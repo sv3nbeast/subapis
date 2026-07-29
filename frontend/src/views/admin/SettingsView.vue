@@ -1486,6 +1486,57 @@
                 </p>
               </div>
 
+              <!-- Email Suffix Blacklist -->
+              <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+                <label class="font-medium text-gray-900 dark:text-white">{{
+                  t("admin.settings.registration.emailSuffixBlacklist")
+                }}</label>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.registration.emailSuffixBlacklistHint") }}
+                </p>
+                <div
+                  class="mt-3 rounded-lg border border-gray-300 bg-white p-2 dark:border-dark-500 dark:bg-dark-700"
+                >
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      v-for="suffix in registrationEmailSuffixBlacklistTags"
+                      :key="suffix"
+                      class="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-1 text-xs font-mono text-gray-700 dark:bg-dark-600 dark:text-gray-200"
+                    >
+                      <span v-if="!suffix.startsWith('*.')" class="text-gray-400 dark:text-gray-500">@</span>
+                      <span>{{ suffix }}</span>
+                      <button
+                        type="button"
+                        class="rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-dark-500 dark:hover:text-white"
+                        @click="removeRegistrationEmailSuffixBlacklistTag(suffix)"
+                      >
+                        <Icon name="x" size="xs" class="h-3.5 w-3.5" :stroke-width="2" />
+                      </button>
+                    </span>
+
+                    <div
+                      class="flex min-w-[220px] flex-1 items-center gap-1 rounded border border-transparent px-2 py-1 focus-within:border-primary-300 dark:focus-within:border-primary-700"
+                    >
+                      <span class="font-mono text-sm text-gray-400 dark:text-gray-500">@</span>
+                      <input
+                        v-model="registrationEmailSuffixBlacklistDraft"
+                        data-testid="registration-email-suffix-blacklist-input"
+                        type="text"
+                        class="w-full bg-transparent text-sm font-mono text-gray-900 outline-none placeholder:text-gray-400 dark:text-white dark:placeholder:text-gray-500"
+                        :placeholder="t('admin.settings.registration.emailSuffixBlacklistPlaceholder')"
+                        @input="handleRegistrationEmailSuffixBlacklistDraftInput"
+                        @keydown="handleRegistrationEmailSuffixBlacklistDraftKeydown"
+                        @blur="commitRegistrationEmailSuffixBlacklistDraft"
+                        @paste="handleRegistrationEmailSuffixBlacklistPaste"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.registration.emailSuffixBlacklistInputHint") }}
+                </p>
+              </div>
+
               <!-- Promo Code -->
               <div
                 class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
@@ -5105,6 +5156,84 @@
                 />
               </div>
 
+              <!-- Proxy Auto Select Capacity -->
+              <div
+                class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60"
+              >
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.proxyAutoSelectCapacity") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.proxyAutoSelectCapacityHint") }}
+                  </p>
+                </div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectAnthropic") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_anthropic_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectOpenAI") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_openai_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectAntigravity") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_antigravity_accounts_per_proxy"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectGrok") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_grok_accounts_per_proxy"
+                      data-testid="proxy-auto-select-grok"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.proxyAutoSelectKiro") }}
+                    </label>
+                    <input
+                      v-model.number="form.proxy_auto_select_max_kiro_accounts_per_proxy"
+                      data-testid="proxy-auto-select-kiro"
+                      type="number"
+                      min="1"
+                      max="100"
+                      class="input"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <!-- Antigravity UA 版本 -->
               <div>
                 <label
@@ -5132,6 +5261,22 @@
                       "admin.settings.gatewayForwarding.antigravityUserAgentVersionHint",
                     )
                   }}
+                </p>
+              </div>
+
+              <!-- Claude/Anthropic 上游 UA -->
+              <div>
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t("admin.settings.gatewayForwarding.claudeUpstreamUserAgent") }}
+                </label>
+                <input
+                  v-model="form.claude_upstream_user_agent"
+                  type="text"
+                  class="input font-mono text-sm"
+                  :placeholder="t('admin.settings.gatewayForwarding.claudeUpstreamUserAgentPlaceholder')"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.gatewayForwarding.claudeUpstreamUserAgentHint") }}
                 </p>
               </div>
 
@@ -6179,6 +6324,179 @@
                 </svg>
                 {{ t("admin.settings.customMenu.add") }}
               </button>
+            </div>
+          </div>
+
+          <div class="card" data-testid="api-key-usage-config-card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.apiKeyUsage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.apiKeyUsage.description") }}
+              </p>
+            </div>
+
+            <div v-if="apiKeyUsageLoading" class="flex items-center gap-2 p-6 text-gray-500">
+              <div class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"></div>
+              {{ t("common.loading") }}
+            </div>
+
+            <div v-else class="space-y-6 p-6">
+              <div>
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">Claude Code / Gemini CLI</h3>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.claudeModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.claude_code_default_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.geminiModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.gemini_cli_default_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.disableClaudeTraffic") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.claude_code_disable_nonessential_traffic" />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.attributionHeader") }}
+                    </label>
+                    <select
+                      v-model.number="apiKeyUsageConfig.claude_code_attribution_header"
+                      class="input w-28 font-mono text-sm"
+                    >
+                      <option :value="0">0</option>
+                      <option :value="1">1</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t border-gray-100 pt-6 dark:border-dark-700">
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">Codex</h3>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.codexModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_model"
+                      data-testid="api-key-usage-codex-model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.codexReviewModel") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_review_model"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.reasoningEffort") }}
+                    </label>
+                    <Select
+                      v-model="apiKeyUsageConfig.codex_reasoning_effort"
+                      :options="codexReasoningEffortOptions"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.networkAccess") }}
+                    </label>
+                    <input
+                      v-model="apiKeyUsageConfig.codex_network_access"
+                      type="text"
+                      class="input font-mono text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.disableStorage") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_disable_response_storage" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.goals") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_goals_enabled" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.websocket") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_websocket_enabled" />
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.apiKeyUsage.legacyWsFeature") }}
+                    </label>
+                    <Toggle v-model="apiKeyUsageConfig.codex_include_legacy_ws_feature" />
+                  </div>
+                </div>
+
+                <div class="mt-5">
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.apiKeyUsage.extraConfig") }}
+                  </label>
+                  <textarea
+                    v-model="apiKeyUsageConfig.codex_extra_config"
+                    rows="5"
+                    class="input min-h-32 font-mono text-sm"
+                    :placeholder="t('admin.settings.apiKeyUsage.extraConfigPlaceholder')"
+                  ></textarea>
+                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.apiKeyUsage.extraConfigHint") }}
+                  </p>
+                </div>
+              </div>
+
+              <APIKeyGroupTemplatesEditor
+                v-model="apiKeyUsageConfig.group_templates"
+                :groups="apiKeyTemplateGroups"
+                @validity="apiKeyGroupTemplatesValid = $event"
+              />
+              <APIKeyTemplateProfilesEditor
+                v-model="apiKeyUsageConfig.template_profiles"
+                :groups="apiKeyTemplateGroups"
+                @validity="apiKeyTemplateProfilesValid = $event"
+              />
+
+              <div class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700">
+                <button
+                  type="button"
+                  class="btn btn-primary btn-sm"
+                  data-testid="api-key-usage-save"
+                  :disabled="apiKeyUsageSaving || !apiKeyGroupTemplatesValid || !apiKeyTemplateProfilesValid"
+                  @click="saveAPIKeyUsageConfig"
+                >
+                  {{ apiKeyUsageSaving ? t("common.saving") : t("common.save") }}
+                </button>
+              </div>
             </div>
           </div>
 	        </div>
@@ -8092,6 +8410,7 @@ import type {
 } from "@/api/admin/settings";
 import type {
   AdminGroup,
+  APIKeyUsageConfig,
   LoginAgreementDocument,
   NotifyEmailEntry,
   Proxy,
@@ -8106,6 +8425,8 @@ import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vu
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
+import APIKeyGroupTemplatesEditor from "@/components/admin/APIKeyGroupTemplatesEditor.vue";
+import APIKeyTemplateProfilesEditor from "@/components/admin/APIKeyTemplateProfilesEditor.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
@@ -8244,6 +8565,8 @@ const smtpPasswordManuallyEdited = ref(false);
 const testEmailAddress = ref("");
 const registrationEmailSuffixWhitelistTags = ref<string[]>([]);
 const registrationEmailSuffixWhitelistDraft = ref("");
+const registrationEmailSuffixBlacklistTags = ref<string[]>([]);
+const registrationEmailSuffixBlacklistDraft = ref("");
 const forwardedClientIpHeaderDraft = ref("");
 const tablePageSizeOptionsInput = ref("10, 20, 50, 100");
 
@@ -8254,6 +8577,75 @@ const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
+const apiKeyTemplateGroups = ref<AdminGroup[]>([]);
+
+const DEFAULT_API_KEY_USAGE_CONFIG: APIKeyUsageConfig = {
+  claude_code_default_model: "claude-opus-4-7",
+  claude_code_disable_nonessential_traffic: true,
+  claude_code_attribution_header: 0,
+  gemini_cli_default_model: "gemini-2.0-flash",
+  codex_model: "gpt-5.5",
+  codex_review_model: "gpt-5.5",
+  codex_reasoning_effort: "xhigh",
+  codex_disable_response_storage: true,
+  codex_network_access: "enabled",
+  codex_goals_enabled: true,
+  codex_websocket_enabled: true,
+  codex_include_legacy_ws_feature: false,
+  codex_extra_config: "",
+  group_templates: [],
+  template_profiles: [],
+};
+const apiKeyUsageConfig = reactive<APIKeyUsageConfig>({
+  ...DEFAULT_API_KEY_USAGE_CONFIG,
+});
+const apiKeyUsageLoading = ref(false);
+const apiKeyUsageSaving = ref(false);
+const apiKeyGroupTemplatesValid = ref(true);
+const apiKeyTemplateProfilesValid = ref(true);
+const codexReasoningEffortOptions = computed(() =>
+  ["none", "minimal", "low", "medium", "high", "xhigh"].map((value) => ({
+    value,
+    label: value,
+  })),
+);
+
+async function loadAPIKeyUsageConfig() {
+  apiKeyUsageLoading.value = true;
+  try {
+    const config = await adminAPI.settings.getAPIKeyUsageConfig();
+    Object.assign(apiKeyUsageConfig, DEFAULT_API_KEY_USAGE_CONFIG, config);
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.apiKeyUsage.loadFailed")),
+    );
+  } finally {
+    apiKeyUsageLoading.value = false;
+  }
+}
+
+async function saveAPIKeyUsageConfig() {
+  apiKeyUsageSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateAPIKeyUsageConfig({
+      ...apiKeyUsageConfig,
+      claude_code_default_model: apiKeyUsageConfig.claude_code_default_model.trim(),
+      gemini_cli_default_model: apiKeyUsageConfig.gemini_cli_default_model.trim(),
+      codex_model: apiKeyUsageConfig.codex_model.trim(),
+      codex_review_model: apiKeyUsageConfig.codex_review_model.trim(),
+      codex_network_access: apiKeyUsageConfig.codex_network_access.trim(),
+      codex_extra_config: apiKeyUsageConfig.codex_extra_config.trim(),
+    });
+    Object.assign(apiKeyUsageConfig, DEFAULT_API_KEY_USAGE_CONFIG, updated);
+    appStore.showSuccess(t("admin.settings.apiKeyUsage.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.apiKeyUsage.saveFailed")),
+    );
+  } finally {
+    apiKeyUsageSaving.value = false;
+  }
+}
 
 // Upstream billing probe state
 const upstreamBillingProbeLoading = ref(true);
@@ -8820,6 +9212,7 @@ const form = reactive<SettingsForm>({
   registration_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
+  registration_email_suffix_blacklist: [],
   promo_code_enabled: true,
   invitation_code_enabled: false,
   password_reset_enabled: false,
@@ -9045,6 +9438,7 @@ const form = reactive<SettingsForm>({
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
   antigravity_user_agent_version: "",
+  claude_upstream_user_agent: "",
   openai_codex_user_agent: "",
   // codex_cli_only 加固
   min_codex_version: "",
@@ -9497,6 +9891,62 @@ function handleRegistrationEmailSuffixWhitelistPaste(event: ClipboardEvent) {
   const tokens = parseRegistrationEmailSuffixWhitelistInput(text);
   for (const token of tokens) {
     addRegistrationEmailSuffixWhitelistTag(token);
+  }
+}
+
+function removeRegistrationEmailSuffixBlacklistTag(suffix: string) {
+  registrationEmailSuffixBlacklistTags.value =
+    registrationEmailSuffixBlacklistTags.value.filter((item) => item !== suffix);
+}
+
+function addRegistrationEmailSuffixBlacklistTag(raw: string) {
+  const suffix = normalizeRegistrationEmailSuffixDomain(raw);
+  if (
+    !isRegistrationEmailSuffixDomainValid(suffix) ||
+    registrationEmailSuffixBlacklistTags.value.includes(suffix)
+  ) {
+    return;
+  }
+  registrationEmailSuffixBlacklistTags.value = [
+    ...registrationEmailSuffixBlacklistTags.value,
+    suffix,
+  ];
+}
+
+function commitRegistrationEmailSuffixBlacklistDraft() {
+  if (!registrationEmailSuffixBlacklistDraft.value) return;
+  addRegistrationEmailSuffixBlacklistTag(registrationEmailSuffixBlacklistDraft.value);
+  registrationEmailSuffixBlacklistDraft.value = "";
+}
+
+function handleRegistrationEmailSuffixBlacklistDraftInput() {
+  registrationEmailSuffixBlacklistDraft.value = normalizeRegistrationEmailSuffixDomain(
+    registrationEmailSuffixBlacklistDraft.value,
+  );
+}
+
+function handleRegistrationEmailSuffixBlacklistDraftKeydown(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  if (registrationEmailSuffixWhitelistSeparatorKeys.has(event.key)) {
+    event.preventDefault();
+    commitRegistrationEmailSuffixBlacklistDraft();
+    return;
+  }
+  if (
+    event.key === "Backspace" &&
+    !registrationEmailSuffixBlacklistDraft.value &&
+    registrationEmailSuffixBlacklistTags.value.length > 0
+  ) {
+    registrationEmailSuffixBlacklistTags.value.pop();
+  }
+}
+
+function handleRegistrationEmailSuffixBlacklistPaste(event: ClipboardEvent) {
+  const text = event.clipboardData?.getData("text") || "";
+  if (!text.trim()) return;
+  event.preventDefault();
+  for (const token of parseRegistrationEmailSuffixWhitelistInput(text)) {
+    addRegistrationEmailSuffixBlacklistTag(token);
   }
 }
 
@@ -10019,6 +10469,10 @@ async function loadSettings() {
       normalizeRegistrationEmailSuffixDomains(
         settings.registration_email_suffix_whitelist,
       );
+    registrationEmailSuffixBlacklistTags.value =
+      normalizeRegistrationEmailSuffixDomains(
+        settings.registration_email_suffix_blacklist,
+      );
     form.forwarded_client_ip_headers = normalizeForwardedClientIpHeaders(
       settings.forwarded_client_ip_headers,
     );
@@ -10029,6 +10483,7 @@ async function loadSettings() {
         : [10, 20, 50, 100],
     );
     registrationEmailSuffixWhitelistDraft.value = "";
+    registrationEmailSuffixBlacklistDraft.value = "";
     form.smtp_password = "";
     smtpPasswordManuallyEdited.value = false;
     form.turnstile_secret_key = "";
@@ -10126,11 +10581,13 @@ async function loadSettings() {
 async function loadSubscriptionGroups() {
   try {
     const groups = await adminAPI.groups.getAll();
+    apiKeyTemplateGroups.value = groups;
     subscriptionGroups.value = groups.filter(
       (group) =>
         group.subscription_type === "subscription" && group.status === "active",
     );
   } catch (_error: unknown) {
+    apiKeyTemplateGroups.value = [];
     subscriptionGroups.value = [];
   }
 }
@@ -10347,6 +10804,10 @@ async function saveSettings() {
         registrationEmailSuffixWhitelistTags.value.map((suffix) =>
           suffix.startsWith("*.") ? suffix : `@${suffix}`,
         ),
+      registration_email_suffix_blacklist:
+        registrationEmailSuffixBlacklistTags.value.map((suffix) =>
+          suffix.startsWith("*.") ? suffix : `@${suffix}`,
+        ),
       promo_code_enabled: form.promo_code_enabled,
       invitation_code_enabled: form.invitation_code_enabled,
       password_reset_enabled: form.password_reset_enabled,
@@ -10515,6 +10976,18 @@ async function saveSettings() {
         form.enable_client_dateline_normalization,
       antigravity_user_agent_version:
         form.antigravity_user_agent_version?.trim() || "",
+      claude_upstream_user_agent:
+        form.claude_upstream_user_agent?.trim() || "",
+      proxy_auto_select_max_anthropic_accounts_per_proxy:
+        form.proxy_auto_select_max_anthropic_accounts_per_proxy,
+      proxy_auto_select_max_openai_accounts_per_proxy:
+        form.proxy_auto_select_max_openai_accounts_per_proxy,
+      proxy_auto_select_max_antigravity_accounts_per_proxy:
+        form.proxy_auto_select_max_antigravity_accounts_per_proxy,
+      proxy_auto_select_max_grok_accounts_per_proxy:
+        form.proxy_auto_select_max_grok_accounts_per_proxy,
+      proxy_auto_select_max_kiro_accounts_per_proxy:
+        form.proxy_auto_select_max_kiro_accounts_per_proxy,
       openai_codex_user_agent:
         form.openai_codex_user_agent?.trim() || "",
       min_codex_version: form.min_codex_version?.trim() || "",
@@ -10675,6 +11148,10 @@ async function saveSettings() {
       normalizeRegistrationEmailSuffixDomains(
         updated.registration_email_suffix_whitelist,
       );
+    registrationEmailSuffixBlacklistTags.value =
+      normalizeRegistrationEmailSuffixDomains(
+        updated.registration_email_suffix_blacklist,
+      );
     form.forwarded_client_ip_headers = normalizeForwardedClientIpHeaders(
       updated.forwarded_client_ip_headers,
     );
@@ -10685,6 +11162,7 @@ async function saveSettings() {
         : [10, 20, 50, 100],
     );
     registrationEmailSuffixWhitelistDraft.value = "";
+    registrationEmailSuffixBlacklistDraft.value = "";
     form.smtp_password = "";
     smtpPasswordManuallyEdited.value = false;
     form.turnstile_secret_key = "";
@@ -11683,6 +12161,7 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
+  loadAPIKeyUsageConfig();
   loadSubscriptionGroups();
   loadAdminApiKey();
   loadUpstreamBillingProbeSettings();

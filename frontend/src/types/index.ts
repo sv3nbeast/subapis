@@ -1469,6 +1469,7 @@ export interface CreateAccountRequest {
   type: AccountType
   credentials: Record<string, unknown>
   extra?: Record<string, unknown>
+  upstream_billing_probe_enabled?: boolean
   proxy_id?: number | null
   concurrency?: number
   load_factor?: number | null

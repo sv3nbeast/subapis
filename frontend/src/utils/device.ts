@@ -41,6 +41,24 @@ export function detectMobileDevice(input?: {
   return false
 }
 
+/** Detect native iOS/iPadOS browsers, including iPadOS desktop mode. */
+export function detectIOSDevice(input?: {
+  navigator?: Partial<Navigator> & Record<string, unknown>
+}): boolean {
+  const nav = (input?.navigator ?? navigator) as Partial<Navigator> & Record<string, unknown>
+  const userAgent = String(nav.userAgent || '')
+
+  if (/iPhone|iPad|iPod/i.test(userAgent)) {
+    return true
+  }
+
+  return (
+    /Macintosh/i.test(userAgent) &&
+    String(nav.platform || '').toLowerCase().includes('mac') &&
+    Number(nav.maxTouchPoints || 0) > 1
+  )
+}
+
 export function isMobileDevice(): boolean {
   return detectMobileDevice()
 }

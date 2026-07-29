@@ -72,7 +72,7 @@ export function extractApiErrorMessage(
 
 export function extractI18nErrorMessage(
   err: unknown,
-  fallbackOrTranslator: string | ((key: string) => string) = 'Unknown error',
+  fallbackOrTranslator: string | ((key: string, params?: Record<string, unknown>) => string) = 'Unknown error',
   namespaceOrI18nMap?: string | Record<string, string>,
   fallbackMaybe?: string,
 ): string {
@@ -82,7 +82,10 @@ export function extractI18nErrorMessage(
     const fallback = fallbackMaybe ?? 'Unknown error'
     const code = extractApiErrorCode(err)
     if (code && namespace) {
-      const translated = t(`${namespace}.${code}`)
+      const metadata = typeof err === 'object' && err !== null
+        ? (err as ApiErrorLike).metadata
+        : undefined
+      const translated = t(`${namespace}.${code}`, metadata)
       if (translated && translated !== `${namespace}.${code}`) {
         return translated
       }

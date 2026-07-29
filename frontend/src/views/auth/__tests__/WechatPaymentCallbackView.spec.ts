@@ -26,18 +26,22 @@ vi.mock('vue-router', () => ({
   }),
 }))
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({
-    t: (key: string) => {
-      if (key === 'auth.wechatPayment.callbackTitle') return '正在恢复微信支付'
-      if (key === 'auth.wechatPayment.callbackProcessing') return '正在恢复微信支付...'
-      if (key === 'auth.wechatPayment.backToPayment') return '返回支付页'
-      if (key === 'auth.wechatPayment.callbackMissingResumeToken') return '微信支付回调缺少恢复令牌。'
-      return key
-    },
-    locale: { value: 'zh-CN' },
-  }),
-}))
+vi.mock('vue-i18n', async () => {
+  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+  return {
+    ...actual,
+    useI18n: () => ({
+      t: (key: string) => {
+        if (key === 'auth.wechatPayment.callbackTitle') return '正在恢复微信支付'
+        if (key === 'auth.wechatPayment.callbackProcessing') return '正在恢复微信支付...'
+        if (key === 'auth.wechatPayment.backToPayment') return '返回支付页'
+        if (key === 'auth.wechatPayment.callbackMissingResumeToken') return '微信支付回调缺少恢复令牌。'
+        return key
+      },
+      locale: { value: 'zh-CN' },
+    }),
+  }
+})
 
 vi.mock('@/stores', () => ({
   useAppStore: () => ({

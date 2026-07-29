@@ -463,7 +463,17 @@ function setDateRange(key: DateRangeKey) {
 
 function getDateParams(): string {
   const now = new Date()
-  const fmt = (d: Date) => d.toISOString().split('T')[0]
+  const fmt = (d: Date) => {
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+  const daysAgo = (days: number) => {
+    const date = new Date(now)
+    date.setDate(date.getDate() - days)
+    return fmt(date)
+  }
   const params = new URLSearchParams()
 
   if (currentRange.value === 'custom') {
@@ -476,9 +486,9 @@ function getDateParams(): string {
     let start: string
     switch (currentRange.value) {
       case 'today': start = end; break
-      case '7d': start = fmt(new Date(now.getTime() - 7 * 86400000)); break
-      case '30d': start = fmt(new Date(now.getTime() - 30 * 86400000)); break
-      default: start = fmt(new Date(now.getTime() - 30 * 86400000))
+      case '7d': start = daysAgo(7); break
+      case '30d': start = daysAgo(30); break
+      default: start = daysAgo(30)
     }
     params.set('start_date', start)
     params.set('end_date', end)

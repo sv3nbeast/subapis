@@ -7,6 +7,7 @@ import { apiClient } from "../client";
 import type {
   CustomEndpoint,
   CustomMenuItem,
+  APIKeyUsageConfig,
   LoginAgreementDocument,
   NotifyEmailEntry,
 } from "@/types";
@@ -17,7 +18,7 @@ export interface DefaultSubscriptionSetting {
 }
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok"
+export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "kiro" | "droid" | "grok"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -30,7 +31,7 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "grok"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "kiro", "droid", "grok"]
 
 /** 归一化为全 4 平台 × 3 窗口（缺失填 null），供模板非空绑定 */
 export function normalizePlatformQuotasMap(input?: DefaultPlatformQuotasMap | null): DefaultPlatformQuotasMap {
@@ -360,6 +361,7 @@ export interface SystemSettings {
   registration_enabled: boolean;
   email_verify_enabled: boolean;
   registration_email_suffix_whitelist: string[];
+  registration_email_suffix_blacklist: string[];
   promo_code_enabled: boolean;
   password_reset_enabled: boolean;
   frontend_url: string;
@@ -577,6 +579,7 @@ export interface SystemSettings {
   rewrite_message_cache_control: boolean;
   enable_client_dateline_normalization: boolean;
   antigravity_user_agent_version: string;
+  claude_upstream_user_agent: string;
   openai_codex_user_agent: string;
   // codex_cli_only 加固
   min_codex_version: string;
@@ -689,6 +692,7 @@ export interface UpdateSettingsRequest {
   registration_enabled?: boolean;
   email_verify_enabled?: boolean;
   registration_email_suffix_whitelist?: string[];
+  registration_email_suffix_blacklist?: string[];
   promo_code_enabled?: boolean;
   password_reset_enabled?: boolean;
   frontend_url?: string;
@@ -769,6 +773,11 @@ export interface UpdateSettingsRequest {
   backend_mode_enabled?: boolean;
   custom_menu_items?: CustomMenuItem[];
   custom_endpoints?: CustomEndpoint[];
+  proxy_auto_select_max_anthropic_accounts_per_proxy?: number;
+  proxy_auto_select_max_openai_accounts_per_proxy?: number;
+  proxy_auto_select_max_antigravity_accounts_per_proxy?: number;
+  proxy_auto_select_max_grok_accounts_per_proxy?: number;
+  proxy_auto_select_max_kiro_accounts_per_proxy?: number;
   smtp_host?: string;
   smtp_port?: number;
   smtp_username?: string;
@@ -873,6 +882,7 @@ export interface UpdateSettingsRequest {
   rewrite_message_cache_control?: boolean;
   enable_client_dateline_normalization?: boolean;
   antigravity_user_agent_version?: string;
+  claude_upstream_user_agent?: string;
   openai_codex_user_agent?: string;
   // codex_cli_only 加固
   min_codex_version?: string;
@@ -966,13 +976,38 @@ export interface UpdateSettingsRequest {
   allow_user_view_error_requests?: boolean;
 }
 
+function normalizeSettingsArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeSystemSettings(settings: SystemSettings): SystemSettings {
+  const tablePageSizeOptions = normalizeSettingsArray(settings.table_page_size_options);
+  return {
+    ...settings,
+    registration_email_suffix_whitelist: normalizeSettingsArray(
+      settings.registration_email_suffix_whitelist,
+    ),
+    registration_email_suffix_blacklist: normalizeSettingsArray(
+      settings.registration_email_suffix_blacklist,
+    ),
+    table_page_size_options:
+      tablePageSizeOptions.length > 0 ? tablePageSizeOptions : [10, 20, 50, 100],
+    custom_menu_items: normalizeSettingsArray(settings.custom_menu_items),
+    custom_endpoints: normalizeSettingsArray(settings.custom_endpoints),
+    default_subscriptions: normalizeSettingsArray(settings.default_subscriptions),
+    default_platform_quotas: normalizePlatformQuotasMap(settings.default_platform_quotas),
+    payment_enabled_types: normalizeSettingsArray(settings.payment_enabled_types),
+    account_quota_notify_emails: normalizeSettingsArray(settings.account_quota_notify_emails),
+  };
+}
+
 /**
  * Get all system settings
  * @returns System settings
  */
 export async function getSettings(): Promise<SystemSettings> {
   const { data } = await apiClient.get<SystemSettings>("/admin/settings");
-  return data;
+  return normalizeSystemSettings(data);
 }
 
 /**
@@ -986,6 +1021,23 @@ export async function updateSettings(
   const { data } = await apiClient.put<SystemSettings>(
     "/admin/settings",
     settings,
+  );
+  return normalizeSystemSettings(data);
+}
+
+export async function getAPIKeyUsageConfig(): Promise<APIKeyUsageConfig> {
+  const { data } = await apiClient.get<APIKeyUsageConfig>(
+    "/admin/settings/api-key-usage-config",
+  );
+  return data;
+}
+
+export async function updateAPIKeyUsageConfig(
+  config: APIKeyUsageConfig,
+): Promise<APIKeyUsageConfig> {
+  const { data } = await apiClient.put<APIKeyUsageConfig>(
+    "/admin/settings/api-key-usage-config",
+    config,
   );
   return data;
 }
@@ -1483,6 +1535,8 @@ export async function resetWebSearchUsage(payload: {
 export const settingsAPI = {
   getSettings,
   updateSettings,
+  getAPIKeyUsageConfig,
+  updateAPIKeyUsageConfig,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

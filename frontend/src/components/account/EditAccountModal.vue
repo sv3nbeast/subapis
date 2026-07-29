@@ -29,16 +29,23 @@
                 ? 'https://api.openai.com'
                 : account.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : account.platform === 'kiro'
-                    ? 'https://your-kiro-upstream.example.com'
-                    : account.platform === 'droid'
-                      ? 'https://api.factory.ai/api/llm'
-                      : account.platform === 'antigravity'
-                        ? 'https://cloudcode-pa.googleapis.com'
-                        : 'https://api.anthropic.com'
+                  : account.platform === 'grok'
+                    ? 'https://api.x.ai/v1'
+                    : account.platform === 'kiro'
+                      ? 'https://your-kiro-upstream.example.com'
+                      : account.platform === 'droid'
+                        ? 'https://api.factory.ai/api/llm'
+                        : account.platform === 'antigravity'
+                          ? 'https://cloudcode-pa.googleapis.com'
+                          : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
+          <GrokBaseUrlPresets
+            v-if="account.platform === 'grok'"
+            class="mt-2"
+            @select="editBaseUrl = $event"
+          />
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
@@ -51,13 +58,15 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
-                  : account.platform === 'kiro'
-                    ? 'ksk_...'
-                    : account.platform === 'droid'
-                      ? 'factory_...'
-                      : account.platform === 'antigravity'
-                        ? 'sk-...'
-                        : 'sk-ant-...'
+                  : account.platform === 'grok'
+                    ? 'xai-...'
+                    : account.platform === 'kiro'
+                      ? 'ksk_...'
+                      : account.platform === 'droid'
+                        ? 'factory_...'
+                        : account.platform === 'antigravity'
+                          ? 'sk-...'
+                          : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -440,6 +449,100 @@
               </span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div
+        v-if="account.platform === 'grok' && account.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.grokClientToolCache.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.grokClientToolCache.hint') }}
+            </p>
+          </div>
+          <Toggle
+            v-model="grokClientToolCacheEnabled"
+            data-testid="grok-client-tool-cache-toggle"
+            :aria-label="t('admin.accounts.grokClientToolCache.title')"
+          />
+        </div>
+      </div>
+
+      <div
+        v-if="account.platform === 'grok' && account.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.grokCustomBaseUrl.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.grokCustomBaseUrl.hint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="grok-custom-base-url-toggle"
+            @click="grokOAuthCustomBaseUrlEnabled = !grokOAuthCustomBaseUrlEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              grokOAuthCustomBaseUrlEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                grokOAuthCustomBaseUrlEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <div v-if="grokOAuthCustomBaseUrlEnabled" class="space-y-2">
+          <input
+            v-model="grokOAuthBaseUrl"
+            type="text"
+            class="input"
+            data-testid="grok-custom-base-url-input"
+            :placeholder="t('admin.accounts.grokCustomBaseUrl.placeholder')"
+          />
+          <GrokBaseUrlPresets @select="grokOAuthBaseUrl = $event" />
+        </div>
+      </div>
+
+      <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.headerOverride.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.headerOverride.hint') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            @click="headerOverrideEnabled = !headerOverrideEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              headerOverrideEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                headerOverrideEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <div v-if="headerOverrideEnabled" class="space-y-3">
+          <div class="rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+            <p class="text-xs text-blue-700 dark:text-blue-400">
+              <Icon name="exclamationCircle" size="sm" class="mr-1 inline" :stroke-width="2" />
+              {{ t('admin.accounts.headerOverride.info') }}
+            </p>
+          </div>
+          <HeaderOverrideEditor :rows="headerOverrideRows" @update:rows="headerOverrideRows = $event" />
         </div>
       </div>
 
@@ -1541,6 +1644,23 @@
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
 
+      <div
+        v-if="account.platform === 'openai' && account.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.upstreamBilling.autoProbe') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.upstreamBilling.autoProbeHint') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="upstreamBillingAutoProbeEnabled"
+          data-testid="upstream-billing-auto-probe"
+          :aria-label="t('admin.accounts.upstreamBilling.autoProbe')"
+        />
+      </div>
+
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -1571,6 +1691,38 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'openai' && !isSparkShadow && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.longContextBilling') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.longContextBillingDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="openai-long-context-billing-toggle"
+            role="switch"
+            :aria-checked="openAILongContextBillingEnabled"
+            @click="openAILongContextBillingEnabled = !openAILongContextBillingEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              openAILongContextBillingEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                openAILongContextBillingEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- OpenAI Codex 图片生成桥接账号级覆盖 -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -1587,7 +1739,7 @@
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
-                <label class="input-label mb-0">{{ t('admin.accounts.openai.codexImageGenerationBridge') }}</label>
+                <label class="input-label mb-0">{{ t('admin.accounts.openai.codexImageTool') }}</label>
                 <span
                   class="rounded-full px-2 py-0.5 text-[11px] font-medium"
                   :class="codexImageGenerationBridgeBadgeClass"
@@ -1596,7 +1748,7 @@
                 </span>
               </div>
               <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                {{ t('admin.accounts.openai.codexImageGenerationBridgeDesc') }}
+                {{ t('admin.accounts.openai.codexImageToolDesc') }}
               </p>
             </div>
           </div>
@@ -2656,12 +2808,27 @@ import type {
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
-import { applyAntigravityProjectID, applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import {
+  applyAntigravityProjectID,
+  applyHeaderOverride,
+  applyInterceptWarmup,
+  isCustomGrokBaseUrl,
+  isHeaderOverrideCapable,
+  splitHeaderOverridesObject,
+  validateHeaderOverrideRows,
+  HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
+  HEADER_OVERRIDES_CREDENTIAL_KEY,
+  type HeaderOverrideRow
+} from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { needsMixedChannelCheck as platformNeedsMixedChannelCheck } from '@/utils/mixedChannel'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
@@ -2784,6 +2951,15 @@ const poolModeRetryCount = ref(DEFAULT_POOL_MODE_RETRY_COUNT)
 const customErrorCodesEnabled = ref(false)
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
+const headerOverrideEnabled = ref(false)
+const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+const headerOverrideCapable = computed(
+  () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
+)
+const grokOAuthCustomBaseUrlEnabled = ref(false)
+const grokOAuthBaseUrl = ref('')
+const GROK_CLIENT_TOOL_CACHE_EXTRA_KEY = 'grok_client_tool_cache_enabled'
+const grokClientToolCacheEnabled = ref(true)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(false)
 const autoPause5hThreshold = ref<number | null>(null)
@@ -2849,6 +3025,8 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const openAILongContextBillingEnabled = ref(false)
+const upstreamBillingAutoProbeEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>(['chat_completions', 'embeddings'])
@@ -2936,35 +3114,35 @@ const codexImageGenerationBridgeOptions = computed<
 >(() => [
   {
     value: 'inherit',
-    label: t('admin.accounts.openai.codexImageGenerationBridgeInherit'),
-    description: t('admin.accounts.openai.codexImageGenerationBridgeInheritDesc')
+    label: t('admin.accounts.openai.codexImageToolInherit'),
+    description: t('admin.accounts.openai.codexImageToolInheritDesc')
   },
   {
     value: 'enabled',
-    label: t('admin.accounts.openai.codexImageGenerationBridgeEnabled'),
-    description: t('admin.accounts.openai.codexImageGenerationBridgeEnabledDesc')
+    label: t('admin.accounts.openai.codexImageToolEnabled'),
+    description: t('admin.accounts.openai.codexImageToolEnabledDesc')
   },
   {
     value: 'disabled',
-    label: t('admin.accounts.openai.codexImageGenerationBridgeDisabled'),
-    description: t('admin.accounts.openai.codexImageGenerationBridgeDisabledDesc')
+    label: t('admin.accounts.openai.codexImageToolDisabled'),
+    description: t('admin.accounts.openai.codexImageToolDisabledDesc')
   },
   {
     value: 'block',
-    label: t('admin.accounts.openai.codexImageGenerationBridgeBlock'),
-    description: t('admin.accounts.openai.codexImageGenerationBridgeBlockDesc')
+    label: t('admin.accounts.openai.codexImageToolBlock'),
+    description: t('admin.accounts.openai.codexImageToolBlockDesc')
   }
 ])
 const codexImageGenerationBridgeBadgeLabel = computed(() => {
   switch (codexImageGenerationBridgeMode.value) {
     case 'enabled':
-      return t('admin.accounts.openai.codexImageGenerationBridgeBadgeEnabled')
+      return t('admin.accounts.openai.codexImageToolBadgeEnabled')
     case 'disabled':
-      return t('admin.accounts.openai.codexImageGenerationBridgeBadgeDisabled')
+      return t('admin.accounts.openai.codexImageToolBadgeDisabled')
     case 'block':
-      return t('admin.accounts.openai.codexImageGenerationBridgeBadgeBlock')
+      return t('admin.accounts.openai.codexImageToolBadgeBlock')
     default:
-      return t('admin.accounts.openai.codexImageGenerationBridgeBadgeInherit')
+      return t('admin.accounts.openai.codexImageToolBadgeInherit')
   }
 })
 const codexImageGenerationBridgeBadgeClass = computed(() => {
@@ -3145,6 +3323,7 @@ const tempUnschedPresets = computed(() => [
 const defaultBaseUrl = computed(() => {
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
+  if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
   if (props.account?.platform === 'kiro') return ''
   return 'https://api.anthropic.com'
 })
@@ -3290,6 +3469,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
   autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
   autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
+  upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   const rawKiroCreditUnitPrice = extra?.kiro_credit_unit_price_usd
   kiroCreditUnitPriceUsd.value =
     typeof rawKiroCreditUnitPrice === 'number'
@@ -3301,6 +3481,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
+  openAILongContextBillingEnabled.value = false
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
@@ -3316,6 +3497,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    openAILongContextBillingEnabled.value = extra?.openai_long_context_billing_enabled === true
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
     const accountCredentials = newAccount.credentials as Record<string, unknown> | undefined
     if (newAccount.type === 'apikey') {
@@ -3471,6 +3653,32 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   loadTempUnschedRules(credentials)
 
+  headerOverrideEnabled.value = false
+  headerOverrideRows.value = []
+  if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
+    const overrideCreds = newAccount.credentials as Record<string, unknown>
+    headerOverrideEnabled.value = overrideCreds[HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY] === true
+    headerOverrideRows.value = splitHeaderOverridesObject(overrideCreds[HEADER_OVERRIDES_CREDENTIAL_KEY])
+  }
+
+  grokOAuthCustomBaseUrlEnabled.value = false
+  grokOAuthBaseUrl.value = ''
+  const grokClientToolCacheSetting =
+    newAccount.platform === 'grok' && newAccount.type === 'oauth'
+      ? newAccount.extra?.[GROK_CLIENT_TOOL_CACHE_EXTRA_KEY]
+      : undefined
+  grokClientToolCacheEnabled.value =
+    newAccount.platform === 'grok' &&
+    newAccount.type === 'oauth' &&
+    (grokClientToolCacheSetting === undefined || grokClientToolCacheSetting === true)
+  if (newAccount.platform === 'grok' && newAccount.type === 'oauth' && newAccount.credentials) {
+    const grokCreds = newAccount.credentials as Record<string, unknown>
+    if (isCustomGrokBaseUrl(grokCreds.base_url)) {
+      grokOAuthCustomBaseUrlEnabled.value = true
+      grokOAuthBaseUrl.value = (grokCreds.base_url as string).trim()
+    }
+  }
+
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
@@ -3479,11 +3687,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'kiro'
-            ? ''
-            : newAccount.platform === 'droid'
-              ? 'https://api.factory.ai/api/llm'
-              : 'https://api.anthropic.com'
+          : newAccount.platform === 'grok'
+            ? 'https://api.x.ai/v1'
+            : newAccount.platform === 'kiro'
+              ? ''
+              : newAccount.platform === 'droid'
+                ? 'https://api.factory.ai/api/llm'
+                : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
 
     // Load model mappings and detect mode
@@ -3636,9 +3846,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? 'https://api.openai.com'
         : newAccount.platform === 'gemini'
           ? 'https://generativelanguage.googleapis.com'
-          : newAccount.platform === 'droid'
-            ? 'https://api.factory.ai/api/llm'
-            : 'https://api.anthropic.com'
+          : newAccount.platform === 'grok'
+            ? 'https://api.x.ai/v1'
+            : newAccount.platform === 'droid'
+              ? 'https://api.factory.ai/api/llm'
+              : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
     // Load model mappings for OAuth accounts
@@ -4282,6 +4494,17 @@ const handleSubmit = async () => {
         delete newCredentials.custom_error_codes
       }
 
+      if (isHeaderOverrideCapable(props.account.platform, 'apikey')) {
+        if (headerOverrideEnabled.value) {
+          const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+          if (headerError) {
+            appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
+            return
+          }
+        }
+        applyHeaderOverride(newCredentials, headerOverrideEnabled.value, headerOverrideRows.value, 'edit')
+      }
+
       // Add intercept warmup requests setting
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
       if (!applyTempUnschedConfig(newCredentials)) {
@@ -4470,7 +4693,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-    // Grok OAuth: persist model mapping to credentials
+    // Grok OAuth: persist model mapping, upstream endpoint, header overrides and cache policy.
     if (props.account.platform === 'grok' && props.account.type === 'oauth') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
@@ -4483,7 +4706,37 @@ const handleSubmit = async () => {
         delete newCredentials.model_mapping
       }
 
+      if (grokOAuthCustomBaseUrlEnabled.value) {
+        const trimmedBaseUrl = grokOAuthBaseUrl.value.trim()
+        if (!trimmedBaseUrl) {
+          appStore.showError(t('admin.accounts.grokCustomBaseUrl.required'))
+          return
+        }
+        if (!/^https?:\/\//i.test(trimmedBaseUrl)) {
+          appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
+          return
+        }
+        newCredentials.base_url = trimmedBaseUrl
+      } else {
+        delete newCredentials.base_url
+      }
+
+      if (headerOverrideEnabled.value) {
+        const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
+        if (headerError) {
+          appStore.showError(t(`admin.accounts.headerOverride.${headerError}`))
+          return
+        }
+      }
+      applyHeaderOverride(newCredentials, headerOverrideEnabled.value, headerOverrideRows.value, 'edit')
+
       updatePayload.credentials = newCredentials
+
+      const newExtra: Record<string, unknown> = {
+        ...((props.account.extra as Record<string, unknown>) || {})
+      }
+      newExtra[GROK_CLIENT_TOOL_CACHE_EXTRA_KEY] = grokClientToolCacheEnabled.value
+      updatePayload.extra = newExtra
     }
 
     // Anthropic OAuth/SetupToken: persist model mapping to credentials.
@@ -4756,12 +5009,18 @@ const handleSubmit = async () => {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
       }
+      if (isSparkShadow.value) {
+        delete newExtra.openai_long_context_billing_enabled
+      } else {
+        newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
+      }
       if (openAICompactMode.value === 'auto') {
         delete newExtra.openai_compact_mode
       } else {
         newExtra.openai_compact_mode = openAICompactMode.value
       }
       if (props.account.type === 'apikey') {
+        newExtra.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
         if (!openAITextGenerationCapabilityEnabled.value || openAIResponsesMode.value === 'auto') {
           delete newExtra.openai_responses_mode
         } else {
