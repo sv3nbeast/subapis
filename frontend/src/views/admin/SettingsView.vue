@@ -6475,49 +6475,66 @@
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('admin.settings.features.modelPlaza.title') }}
+              {{ t('admin.settings.features.publicModelMarket.title') }}
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              {{ t('admin.settings.features.modelPlaza.description') }}
+              {{ t('admin.settings.features.publicModelMarket.description') }}
+            </p>
+            <p class="mt-1.5 text-xs">
+              <router-link
+                to="/admin/channels/pricing"
+                class="inline-flex items-center gap-1 text-primary-600 hover:underline dark:text-primary-400"
+              >
+                {{ t('admin.settings.features.publicModelMarket.configureLink') }}
+                <span aria-hidden="true">→</span>
+              </router-link>
             </p>
           </div>
           <div class="space-y-5 p-6">
             <div class="flex items-center justify-between">
               <div>
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('admin.settings.features.modelPlaza.enabled') }}
+                  {{ t('admin.settings.features.publicModelMarket.enabled') }}
                 </label>
                 <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.modelPlaza.enabledHint') }}
+                  {{ t('admin.settings.features.publicModelMarket.enabledHint') }}
                 </p>
               </div>
-              <Toggle v-model="form.model_plaza_enabled" />
+              <Toggle v-model="form.public_model_market_enabled" />
             </div>
-
-            <div v-if="form.model_plaza_enabled" class="flex items-center justify-between">
+            <div class="grid gap-4 border-t border-gray-100 pt-5 dark:border-dark-700 sm:grid-cols-2">
               <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('admin.settings.features.modelPlaza.requireAuth') }}
+                <label class="input-label">
+                  {{ t('admin.settings.features.publicModelMarket.referenceRate') }}
                 </label>
-                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.modelPlaza.requireAuthHint') }}
+                <input
+                  v-model.number="form.public_model_market_reference_usd_cny_rate"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  class="input"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.publicModelMarket.referenceRateHint') }}
                 </p>
               </div>
-              <Toggle v-model="form.model_plaza_require_auth" />
-            </div>
-
-            <div v-if="form.model_plaza_enabled">
-              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {{ t('admin.settings.features.modelPlaza.priceDescription') }}
-              </label>
-              <p class="mb-2 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.settings.features.modelPlaza.priceDescriptionHint') }}
-              </p>
-              <textarea
-                v-model="form.model_plaza_description"
-                rows="6"
-                class="input font-mono text-sm"
-              ></textarea>
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.publicModelMarket.settlementRate') }}
+                </label>
+                <input
+                  v-model.number="form.public_model_market_settlement_usd_cny_rate"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  class="input"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.publicModelMarket.settlementRateHint') }}
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -8760,6 +8777,9 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | "model_plaza_enabled"
+  | "model_plaza_require_auth"
+  | "model_plaza_description"
 > & {
   smtp_password: string;
   turnstile_secret_key: string;
@@ -9045,10 +9065,10 @@ const form = reactive<SettingsForm>({
   channel_monitor_default_interval_seconds: 60,
   // Available Channels feature switch
   available_channels_enabled: false,
-  // Model Plaza feature switches + description
-  model_plaza_enabled: false,
-  model_plaza_require_auth: false,
-  model_plaza_description: '',
+  // Public model market feature switch and display rates
+  public_model_market_enabled: false,
+  public_model_market_reference_usd_cny_rate: 7.2,
+  public_model_market_settlement_usd_cny_rate: 1,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
   // Allow user view error requests
@@ -10594,10 +10614,12 @@ async function saveSettings() {
         Number(form.channel_monitor_default_interval_seconds) || 60,
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
-      // Model Plaza feature switches + description
-      model_plaza_enabled: form.model_plaza_enabled,
-      model_plaza_require_auth: form.model_plaza_require_auth,
-      model_plaza_description: form.model_plaza_description,
+      // Public model market feature switch and display rates
+      public_model_market_enabled: form.public_model_market_enabled,
+      public_model_market_reference_usd_cny_rate:
+        Number(form.public_model_market_reference_usd_cny_rate) || 7.2,
+      public_model_market_settlement_usd_cny_rate:
+        Number(form.public_model_market_settlement_usd_cny_rate) || 1,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
       allow_user_view_error_requests: form.allow_user_view_error_requests,

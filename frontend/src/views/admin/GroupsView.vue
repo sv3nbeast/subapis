@@ -363,6 +363,37 @@
                 <span class="text-xs">{{ t("common.edit") }}</span>
               </button>
               <button
+                data-testid="group-duplicate"
+                :title="
+                  duplicatingGroupIds.has(row.id)
+                    ? t('admin.groups.duplicating')
+                    : t('admin.groups.duplicate')
+                "
+                :disabled="duplicatingGroupIds.has(row.id)"
+                @click="handleDuplicate(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+              >
+                <Icon name="copy" size="sm" />
+                <span class="text-xs">
+                  {{
+                    duplicatingGroupIds.has(row.id)
+                      ? t("admin.groups.duplicating")
+                      : t("admin.groups.duplicate")
+                  }}
+                </span>
+              </button>
+              <button
+                v-if="row.platform === 'composite'"
+                data-testid="group-composite-routes"
+                @click="handleCompositeRoutes(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-cyan-600 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
+              >
+                <Icon name="swap" size="sm" />
+                <span class="text-xs">{{
+                  t("admin.groups.compositeRoutes.action")
+                }}</span>
+              </button>
+              <button
                 @click="handleRateMultipliers(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-purple-600 dark:hover:bg-dark-700 dark:hover:text-purple-400"
               >
@@ -3665,6 +3696,12 @@
       </template>
     </BaseDialog>
 
+    <CompositeRoutesModal
+      :show="showCompositeRoutesModal"
+      :group="compositeRoutesGroup"
+      @close="closeCompositeRoutesModal"
+    />
+
     <!-- Group Rate Multipliers Modal -->
     <GroupRateMultipliersModal
       :show="showRateMultipliersModal"
@@ -3701,6 +3738,7 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
+import CompositeRoutesModal from "@/components/admin/group/CompositeRoutesModal.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import SubscriptionModelQuotaEditor from "@/components/admin/group/SubscriptionModelQuotaEditor.vue";
@@ -3877,6 +3915,7 @@ const platformOptions = computed(() => [
   { value: "kiro", label: "Kiro" },
   { value: "droid", label: "Droid" },
   { value: "grok", label: "Grok" },
+  { value: "composite", label: t("admin.groups.platforms.composite") },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3888,6 +3927,7 @@ const platformFilterOptions = computed(() => [
   { value: "kiro", label: "Kiro" },
   { value: "droid", label: "Droid" },
   { value: "grok", label: "Grok" },
+  { value: "composite", label: t("admin.groups.platforms.composite") },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -3982,29 +4022,42 @@ const invalidRequestFallbackOptionsForEdit = computed(() => {
   return options;
 });
 
-// 复制账号的源分组选项（创建时）- 仅包含相同平台且有账号的分组
+const canCopyAccountsFromGroup = (
+  targetPlatform: GroupPlatform,
+  sourcePlatform: GroupPlatform,
+) => targetPlatform === "composite" || sourcePlatform === targetPlatform;
+
+const copyAccountsGroupLabel = (group: AdminGroup) => {
+  const count = group.account_count || 0;
+  const platform = t("admin.groups.platforms." + group.platform);
+  return `${group.name} - ${platform} (${t("admin.groups.accountsCount", { count })})`;
+};
+
+// Composite 分组可从多个具体平台复制账号；普通分组仍只允许相同平台。
 const copyAccountsGroupOptions = computed(() => {
   const eligibleGroups = groups.value.filter(
-    (g) => g.platform === createForm.platform && (g.account_count || 0) > 0,
+    (g) =>
+      canCopyAccountsFromGroup(createForm.platform, g.platform) &&
+      (g.account_count || 0) > 0,
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${t("admin.groups.accountsCount", { count: g.account_count || 0 })})`,
+    label: copyAccountsGroupLabel(g),
   }));
 });
 
-// 复制账号的源分组选项（编辑时）- 仅包含相同平台且有账号的分组，排除自身
+// 编辑时沿用相同规则并排除当前分组。
 const copyAccountsGroupOptionsForEdit = computed(() => {
   const currentId = editingGroup.value?.id;
   const eligibleGroups = groups.value.filter(
     (g) =>
-      g.platform === editForm.platform &&
+      canCopyAccountsFromGroup(editForm.platform, g.platform) &&
       (g.account_count || 0) > 0 &&
       g.id !== currentId,
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${t("admin.groups.accountsCount", { count: g.account_count || 0 })})`,
+    label: copyAccountsGroupLabel(g),
   }));
 });
 
@@ -4066,17 +4119,20 @@ const submitting = ref(false);
 const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
 const deletingGroup = ref<AdminGroup | null>(null);
+const duplicatingGroupIds = reactive(new Set<number>());
 const showRateMultipliersModal = ref(false);
 const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
+const showCompositeRoutesModal = ref(false);
+const compositeRoutesGroup = ref<AdminGroup | null>(null);
 const createMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
 
 const canConfigureModelsList = (platform: GroupPlatform) =>
-  ["anthropic", "openai", "gemini", "antigravity", "kiro", "droid"].includes(platform);
+  ["anthropic", "openai", "gemini", "antigravity", "kiro", "droid", "composite"].includes(platform);
 
 const loadModelsListCandidates = async (
   mode: "create" | "edit",
@@ -5270,6 +5326,35 @@ const handleRateMultipliers = (group: AdminGroup) => {
 const handleRPMOverrides = (group: AdminGroup) => {
   rpmOverridesGroup.value = group;
   showRPMOverridesModal.value = true;
+};
+
+const handleDuplicate = async (group: AdminGroup) => {
+  if (duplicatingGroupIds.has(group.id)) return;
+
+  duplicatingGroupIds.add(group.id);
+  try {
+    const duplicate = await adminAPI.groups.duplicate(group.id);
+    appStore.showSuccess(
+      t("admin.groups.duplicateSuccess", { name: duplicate.name }),
+    );
+    await loadGroups();
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.groups.duplicateFailed")),
+    );
+  } finally {
+    duplicatingGroupIds.delete(group.id);
+  }
+};
+
+const handleCompositeRoutes = (group: AdminGroup) => {
+  compositeRoutesGroup.value = group;
+  showCompositeRoutesModal.value = true;
+};
+
+const closeCompositeRoutesModal = () => {
+  showCompositeRoutesModal.value = false;
+  compositeRoutesGroup.value = null;
 };
 
 const handleDelete = (group: AdminGroup) => {

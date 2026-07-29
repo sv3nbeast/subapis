@@ -516,7 +516,6 @@ onMounted(() => {
   align-items: center;
   border-radius: 9999px;
   color: #475569;
-  display: inline-flex;
   font-size: 0.82rem;
   font-weight: 800;
   justify-content: center;

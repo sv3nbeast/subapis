@@ -13,6 +13,9 @@ describe('locale module integration', () => {
     expect(zh.admin.promptAudit.events.requestId).toBe('请求 ID')
     expect(zh.admin.settings.oidc.clientId).toBe('客户端 ID')
     expect(zh.admin.settings.gatewayForwarding.systemBlockTitle).toBe('系统块 {index}')
+    expect(zh.admin.groups.platforms.composite).toBe('组合分组')
+    expect(zh.admin.groups.compositeRoutes.title).toBe('组合路由')
+    expect(zh.admin.groups.duplicate).toBe('复制')
     expect(zh.batchImage.actions.createJob).toBe('创建批量任务')
   })
 

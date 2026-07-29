@@ -664,9 +664,15 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
-  // Model Plaza feature switches + description
+  // Public model market feature switch and display rates
+  public_model_market_enabled: boolean;
+  public_model_market_reference_usd_cny_rate: number;
+  public_model_market_settlement_usd_cny_rate: number;
+  /** @deprecated Retained for backend response compatibility. */
   model_plaza_enabled: boolean;
+  /** @deprecated Retained for backend response compatibility. */
   model_plaza_require_auth: boolean;
+  /** @deprecated Retained for backend response compatibility. */
   model_plaza_description: string;
 
   // Affiliate (邀请返利) feature switch
@@ -940,9 +946,15 @@ export interface UpdateSettingsRequest {
   // Available Channels feature switch
   available_channels_enabled?: boolean;
 
-  // Model Plaza feature switches + description
+  // Public model market feature switch and display rates
+  public_model_market_enabled?: boolean;
+  public_model_market_reference_usd_cny_rate?: number;
+  public_model_market_settlement_usd_cny_rate?: number;
+  /** @deprecated Use public_model_market_enabled. */
   model_plaza_enabled?: boolean;
+  /** @deprecated The canonical public model market is anonymous. */
   model_plaza_require_auth?: boolean;
+  /** @deprecated The canonical public model market does not use this field. */
   model_plaza_description?: string;
 
   // Affiliate (邀请返利) feature switch

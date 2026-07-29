@@ -64,6 +64,15 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5')
   })
 
+  it('Bedrock Opus 5 预设与后端默认映射一致', () => {
+    expect(getPresetMappingsByPlatform('bedrock')).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'claude-opus-5',
+        to: 'us.anthropic.claude-opus-5-v1'
+      })
+    ]))
+  })
+
   it('xAI 模型列表包含 Grok 4.5 官方模型和别名', () => {
     const models = getModelsByPlatform('grok')
 
