@@ -1087,6 +1087,59 @@ func TestOpenKiroAnthropicStreamResponseOpus5PreludeRetriesPrivately(t *testing.
 		"the private retry must use a fresh conversation nonce")
 }
 
+func TestOpenKiroAnthropicStreamResponseToolUseStopWithoutToolRetriesPrivately(t *testing.T) {
+	firstBody := bytes.NewBuffer(nil)
+	_, _ = firstBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageMetadataEvent",
+	}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":20,"outputTokens":8}}}`)))
+	_, _ = firstBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stop_reason":"tool_use"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{
+		newKiroEventStreamResponse(http.StatusOK, firstBody.Bytes()),
+		kiroCustomToolEventStreamResponse(t, "toolu_protocol_retry", "read_db", `{"scope":"mounts"}`),
+	}}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &kiroStreamFailoverCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID: 2000, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"api_region":   "us-east-1",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/OPUS5-TOOL-STOP",
+		},
+	}
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"stream":true,
+		"max_tokens":4096,
+		"tools":[{"name":"read_db","description":"read database metadata","input_schema":{"type":"object","properties":{"scope":{"type":"string"}}}}],
+		"messages":[{"role":"user","content":"inspect the database"}]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	configureKiroNativeToolProgressGuard(parsed, parsed.Model, true, false)
+
+	resp, _, err := svc.openKiroAnthropicStreamResponse(
+		context.Background(), account, parsed, body, parsed.Model, parsed.Model, http.Header{}, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	wire := string(streamBytes)
+	require.Contains(t, wire, `"type":"tool_use"`)
+	require.Contains(t, wire, `"name":"read_db"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+	require.Len(t, upstream.requests, 2)
+}
+
 func TestForwardKiroMessagesStreamMetadataOnlyDoesNotWriteSuccessfulEmptyAnswer(t *testing.T) {
 	t.Setenv(kiroStreamBodyRetryEnvVariable, "0")
 	gin.SetMode(gin.TestMode)

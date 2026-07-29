@@ -5165,6 +5165,94 @@ func TestStreamKiroForcedToolChoiceRejectsTextOnlyCompletion(t *testing.T) {
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
+func TestStreamKiroToolUseStopWithoutStructuredToolReturnsPrivateStall(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 8},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroMalformedToolEventCannotBecomeEndTurn(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_invalid_input",
+			"name":      "read",
+			"input":     `{"path":`,
+			"stop":      true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 8},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.NotContains(t, out.String(), "event: message_start")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
+func TestStreamKiroReleasedTextThenMalformedToolEventReturnsIncompleteError(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "这里是完整答案，不需要调用工具。"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_invalid_after_text",
+			"name":      "read",
+			"input":     `{"path":`,
+			"stop":      true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
+		NativeToolProgressRequired:   true,
+		NativeToolCallMarkerRequired: true,
+		RequireTerminalEvent:         true,
+	})
+
+	require.Nil(t, result)
+	var incompleteErr *IncompleteStreamError
+	require.ErrorAs(t, err, &incompleteErr)
+	require.Contains(t, err.Error(), "upstream tool signal")
+	require.Contains(t, out.String(), "这里是完整答案")
+	require.NotContains(t, out.String(), "event: message_stop")
+}
+
 func TestStreamKiroForcedToolChoiceDoesNotReleaseAtProgressBufferLimit(t *testing.T) {
 	stream := buildNativeToolProgressStream(t, strings.Repeat("ordinary text ", nativeToolProgressMaxBufferedBytes/8), false)
 	var out bytes.Buffer

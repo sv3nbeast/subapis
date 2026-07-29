@@ -1142,6 +1142,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	streamOutputReleased := false
 	nativeToolProgressGuard := requestCtx.NativeToolProgressRequired
 	nativeToolEmitted := false
+	// Keep protocol-level tool evidence separate from the text prelude
+	// classifier. Kiro can report a tool turn through stop_reason/toolUseEvent
+	// even when its structured payload is malformed or absent; that is an
+	// incomplete turn, not a successful end_turn response.
+	sawUpstreamToolSignal := false
 	var bufferedStreamOutput bytes.Buffer
 	var visibleTextBuf strings.Builder
 	firstSemanticObserved := false
@@ -1934,6 +1939,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 					sawExplicitCompletionReason = false
 				}
 			}
+			if semanticEvent.Type == kiroSemanticAssistantTU ||
+				semanticEvent.Type == kiroSemanticToolUse ||
+				semanticEvent.Type == kiroSemanticToolInput ||
+				semanticEvent.Type == kiroSemanticToolStop {
+				sawUpstreamToolSignal = true
+			}
 			if kiroSemanticEventIsCompletionMetadata(semanticEvent.SourceEventType) {
 				sawCompletionMetadata = true
 				if kiroEventHasFinalUsageEvidence(semanticEvent.SourceEventType, semanticEvent.RawEvent) {
@@ -1980,6 +1991,19 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
 	}
+	// A terminal tool_use reason or any tool event is authoritative provider
+	// evidence that this turn was supposed to contain a structured call. Never
+	// silently drop that evidence and manufacture end_turn when the translator
+	// could not emit a valid tool block. A guarded turn can be retried privately;
+	// an already-released turn must surface an incomplete-stream error instead.
+	toolSignalObserved := stopReason == "tool_use" ||
+		(requestCtx.NativeToolProgressRequired && sawUpstreamToolSignal)
+	if !nativeToolEmitted && toolSignalObserved {
+		if nativeToolProgressGuard {
+			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+		}
+		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: upstream tool signal without a valid tool call"}
+	}
 	if nativeToolProgressGuard && !nativeToolEmitted && sawDeliverableOutput {
 		// Claude tool turns must either produce a native tool call or a visible
 		// assistant answer. Opus 5 can terminate after reasoning-only output;
@@ -1987,7 +2011,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		// response and makes Claude clients report an interrupted session.
 		thinkingOnlyToolProgress := requestCtx.NativeToolCallMarkerRequired &&
 			stopSequenceMatched == "" && strings.TrimSpace(visibleTextBuf.String()) == ""
-		mandatoryToolMissing := requestCtx.NativeToolCallRequired && !toolBlockEmitted
+		mandatoryToolMissing := requestCtx.NativeToolCallRequired && !nativeToolEmitted
 		if mandatoryToolMissing || thinkingOnlyToolProgress || shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
 			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 		}
@@ -4251,7 +4275,7 @@ func parseEventStream(body io.Reader, onFirstSemantic func()) (string, []KiroToo
 			return "", nil, usage, stopReason, err
 		}
 		notifyFirstSemantic(extractSemanticEvents(msg.EventType, event, &lastObservedContentFragment))
-		stopReason = mergeKiroStopReason(stopReason, readStopReason(event))
+		stopReason = mergeKiroStopReason(stopReason, readKiroEventStopReason(msg.EventType, event))
 		switch msg.EventType {
 		case "assistantResponseEvent":
 			closeReasoning()
@@ -5085,7 +5109,7 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		return nil
 	}
 	var out []kiroSemanticEvent
-	sourceStopReason := readStopReason(event)
+	sourceStopReason := readKiroEventStopReason(eventType, event)
 
 	switch eventType {
 	case "assistantResponseEvent":
@@ -6252,6 +6276,23 @@ func readStopReason(m map[string]any) string {
 		return stop
 	}
 	return getString(m, "stopReason")
+}
+
+func readKiroEventStopReason(eventType string, event map[string]any) string {
+	if stopReason := readStopReason(event); stopReason != "" {
+		return stopReason
+	}
+	if eventType == "" || len(event) == 0 {
+		return ""
+	}
+	for _, key := range []string{eventType, "messageStopEvent", "message_stop"} {
+		if nested, ok := event[key].(map[string]any); ok {
+			if stopReason := readStopReason(nested); stopReason != "" {
+				return stopReason
+			}
+		}
+	}
+	return ""
 }
 
 func mergeKiroStopReason(current, candidate string) string {
