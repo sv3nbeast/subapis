@@ -1,4 +1,5 @@
 import { mergeLocaleMessages } from '../mergeLocaleMessages'
+import upstreamSupplement from './en/upstreamSupplement'
 import adminAuditMessages from './en/admin/audit'
 import adminPromptAuditMessages from './en/admin/promptAudit'
 import adminSettingsMessages from './en/admin/settings'
@@ -883,6 +884,7 @@ const baseMessages = {
     actions: 'Actions',
     status: 'Status',
     name: 'Name',
+    description: 'Description',
     email: 'Email',
     password: 'Password',
     logoAlt: 'Site logo',
@@ -9233,6 +9235,7 @@ const baseMessages = {
 }
 
 export default mergeLocaleMessages(
+  upstreamSupplement,
   baseMessages,
   batchImageMessages,
   {

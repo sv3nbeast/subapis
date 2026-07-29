@@ -1,4 +1,5 @@
 import { mergeLocaleMessages } from '../mergeLocaleMessages'
+import upstreamSupplement from './zh/upstreamSupplement'
 import adminAuditMessages from './zh/admin/audit'
 import adminPromptAuditMessages from './zh/admin/promptAudit'
 import adminSettingsMessages from './zh/admin/settings'
@@ -812,6 +813,7 @@ const baseMessages = {
     actions: '操作',
     status: '状态',
     name: '名称',
+    description: '描述',
     email: '邮箱',
     password: '密码',
     logoAlt: '站点 Logo',
@@ -1667,8 +1669,8 @@ const baseMessages = {
     endpointPing: '端点 PING',
     history60pts: '近 {n} 次记录',
     nextUpdateIn: '{n}s 后刷新',
-    past: 'PAST',
-    now: 'NOW',
+    past: '过去',
+    now: '现在',
     maintenancePaused: '维护中 · 已暂停时间线采集',
     extraModelsCount: '+ {n} 模型',
     pollEvery: '{n}s 轮询',
@@ -1968,10 +1970,10 @@ const baseMessages = {
     exportJson: '导出 JSON',
     advanced: '高级设置',
     systemPrompt: '系统提示词',
-    temperature: 'Temperature',
+    temperature: '温度',
     temperatureDefault: '留空使用模型默认值',
     maxOutputTokens: '最大输出 Token',
-    invalidTemperature: 'Temperature 必须在 0 到 2 之间。',
+    invalidTemperature: '温度必须在 0 到 2 之间。',
     invalidMaxTokens: '最大输出 Token 必须在 1 到 32768 之间。',
     knowledgeLibrary: '项目资料库', dropDocuments: '点击选择或拖拽上传资料', noDocuments: '暂无资料', attach: '添加附件', uploading: '正在上传', documentProcessing: '正在解析', documentReady: '已就绪', documentFailed: '解析失败', documentProcessingTimeout: '文档解析超时，请稍后重试。', deleteDocumentConfirm: '删除这份资料？原件将在后台清理。', useProjectKnowledge: '自动使用项目资料', knowledgeSources: '知识来源', source: '资料', page: '第', body: '正文', maxFileMB: '单文件上限（MB）', maxProjectFiles: '每项目文件数', maxUserMB: '每用户容量（MB）', keepExistingSecret: '留空保留现有密钥', s3TestSuccess: '对象存储连接成功',
     documentStatus: { uploaded: '等待解析', processing: '正在解析', ready: '已就绪', failed: '解析失败', deleting: '正在删除' },
@@ -2589,13 +2591,13 @@ const baseMessages = {
           enabled: '启用 S3 上传',
           profileID: '账号 ID（唯一）',
           profileName: '账号名称',
-          endpoint: 'Endpoint（可选）',
-          region: 'Region',
-          bucket: 'Bucket',
-          accessKeyID: 'Access Key ID',
-          secretAccessKey: 'Secret Access Key',
+          endpoint: '端点（可选）',
+          region: '区域',
+          bucket: '存储桶',
+          accessKeyID: '访问密钥 ID',
+          secretAccessKey: '访问密钥',
           prefix: '对象前缀',
-          forcePathStyle: '强制 path-style',
+          forcePathStyle: '强制路径风格（path-style）',
           useSSL: '使用 SSL',
           setActive: '创建后立即设为激活账号'
         }
@@ -3300,12 +3302,12 @@ const baseMessages = {
         deleteConfirm: '确定删除此组合路由？',
         endpoints: {
           any: '任意',
-          messages: 'Messages',
-          countTokens: 'Count Tokens',
-          responses: 'Responses',
-          chatCompletions: 'Chat Completions',
-          embeddings: 'Embeddings',
-          images: 'Images',
+          messages: '消息（Messages）',
+          countTokens: 'Token 计数（Count Tokens）',
+          responses: '响应（Responses）',
+          chatCompletions: '聊天补全（Chat Completions）',
+          embeddings: '向量嵌入（Embeddings）',
+          images: '图像（Images）',
           gemini: 'Gemini 原生'
         },
         match: {
@@ -3431,8 +3433,8 @@ const baseMessages = {
         title: '支持的模型系列',
         tooltip: '选择此分组支持的模型系列。未勾选的系列将不会被路由到此分组。',
         claude: 'Claude',
-        geminiText: 'Gemini Text',
-        geminiImage: 'Gemini Image',
+        geminiText: 'Gemini 文本',
+        geminiImage: 'Gemini 图像',
         hint: '至少选择一个模型系列'
       }
     },
@@ -3988,10 +3990,10 @@ const baseMessages = {
         headers: '自定义请求头',
         headersPlaceholder:
           'User-Agent: claude-cli/1.0.83 (external, cli)\nx-app: cli\nanthropic-beta: claude-code-20250219',
-        headerNamePlaceholder: 'Header 名',
-        headerValuePlaceholder: 'Value',
-        headerAddRow: '添加 Header',
-        headerNameInvalid: 'Header 名不能包含空格或冒号：{name}',
+        headerNamePlaceholder: '请求头名称',
+        headerValuePlaceholder: '请求头值',
+        headerAddRow: '添加请求头',
+        headerNameInvalid: '请求头名称不能包含空格或冒号：{name}',
         headersHint: '与默认请求头合并，用户值优先。hop-by-hop 类 header（Host/Content-Length/...）会被忽略。',
         headersParseError: '无法解析这一行：{line}',
         bodyMode: '请求体处理',
@@ -4003,7 +4005,7 @@ const baseMessages = {
           '与默认请求体浅合并，用户字段优先；但 model / messages / contents 会被保护不允许覆盖（动这些字段请用「覆盖」模式）。',
         bodyModeHintReplace:
           '完全用下方 JSON 作为请求体。注意：此模式下跳过 challenge 校验，改为 HTTP 2xx + 响应文本非空即视为可用。',
-        bodyJson: 'Body JSON',
+        bodyJson: '请求体 JSON',
         bodyJsonFormat: '格式化',
         bodyJsonHint: '失焦时自动解析校验。留空等价于没有覆盖。',
         bodyJsonError: 'JSON 解析失败',
@@ -4529,8 +4531,8 @@ const baseMessages = {
         grokLastHeadersSeen: '速率响应头 {time}',
         passiveSampled: '被动采样',
         activeQuery: '查询',
-        kiroCredits: 'Credits',
-        kiroBonus: 'Bonus',
+        kiroCredits: '积分',
+        kiroBonus: '奖励积分',
         kiroReset: '重置',
         kiroOverage: '超额',
         kiroDaysLeft: '剩余 {days} 天',
@@ -4717,7 +4719,7 @@ const baseMessages = {
         responsesWebsocketsV2: 'Responses WebSocket v2',
         responsesWebsocketsV2Desc:
           '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
-        wsMode: 'WS mode',
+        wsMode: 'WebSocket 模式',
         wsModeDesc: '仅对当前 OpenAI 账号类型生效。',
         wsModeOff: '关闭（off）',
         wsModeCtxPool: '上下文池（ctx_pool）',
@@ -4731,13 +4733,13 @@ const baseMessages = {
         httpIngressWsOverrideOff: '强制使用 HTTP',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
-        wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
-        wsModePassthroughHint: 'passthrough 模式不使用 WS 连接池。',
-        oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
-        oauthResponsesWebsocketsV2Desc: '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
-        apiKeyResponsesWebsocketsV2: 'API Key WebSocket Mode',
+        wsModeConcurrencyHint: '启用 WebSocket 模式后，该账号并发数将作为该账号 WebSocket 连接池上限。',
+        wsModePassthroughHint: '透传模式不使用 WebSocket 连接池。',
+        oauthResponsesWebsocketsV2: 'OAuth WebSocket 模式',
+        oauthResponsesWebsocketsV2Desc: '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket 模式协议。',
+        apiKeyResponsesWebsocketsV2: 'API 密钥 WebSocket 模式',
         apiKeyResponsesWebsocketsV2Desc:
-          '仅对 OpenAI API Key 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',
+          '仅对 OpenAI API 密钥生效。开启后该账号才允许使用 OpenAI WebSocket 模式协议。',
         responsesWebsocketsV2PassthroughHint: '当前已开启自动透传：仅影响 HTTP 透传链路，不影响 WS mode。',
         responsesMode: 'Responses API 支持',
         responsesModeDesc:
@@ -4793,8 +4795,8 @@ const baseMessages = {
         compactModelMappingDesc: '仅在 /responses/compact 请求中生效。当上游 compact 端点需要特殊 compact 模型时使用。',
         compactSupported: '支持 Compact',
         compactUnsupported: '不支持 Compact',
-        compactAuto: 'Compact Auto',
-        compactUnknown: 'Compact Auto',
+        compactAuto: '自动压缩',
+        compactUnknown: '自动压缩',
         compactLastChecked: '最近探测',
         testMode: '测试模式',
         testModeDefault: '常规请求',
@@ -5533,7 +5535,7 @@ const baseMessages = {
       antigravityProbeLabel: '探测请求："."（max_tokens=1）',
       geminiImagePromptLabel: '生图提示词',
       geminiImagePromptPlaceholder: '例如：生成一只戴宇航员头盔的橘猫，像素插画风格，纯色背景。',
-      geminiImagePromptDefault: 'Generate a cute orange cat astronaut sticker on a clean pastel background.',
+      geminiImagePromptDefault: '在简洁的柔和色背景上生成一张可爱的橙色猫咪宇航员贴纸。',
       geminiImageTestHint: '选择 Gemini 图片模型后，这里会直接发起生图测试，并在下方展示返回图片。',
       geminiImageTestMode: '模式：Gemini 生图测试',
       geminiImagePreview: '生成结果：',
@@ -9160,6 +9162,7 @@ const baseMessages = {
 }
 
 export default mergeLocaleMessages(
+  upstreamSupplement,
   baseMessages,
   batchImageMessages,
   {
