@@ -234,12 +234,20 @@ func (e *OpenAIWSClientCloseError) Reason() string {
 
 // OpenAIWSIngressHooks 定义入站 WS 每个 turn 的生命周期回调。
 type OpenAIWSIngressHooks struct {
-	// InitialRequestModel 是首帧渠道映射前的请求模型，只用于 usage metadata
-	// 的 reasoning effort 后缀推导，禁止用于上游请求或计费模型。
+	// InitialRequestModel is the client-facing model from the first frame,
+	// before channel or account mapping. Ingress modes preserve it for usage
+	// attribution while MapRequestModel determines the upstream model.
 	InitialRequestModel string
-	BeforeTurn          func(turn int) error
-	BeforeRequest       func(turn int, payload []byte, originalModel string) error
-	AfterTurn           func(turn int, result *OpenAIForwardResult, turnErr error)
+	// MapRequestModel maps a client-facing model to the selected upstream model
+	// for the initial frame and each subsequent response.create turn.
+	MapRequestModel func(turn int, originalModel string) (string, error)
+	// MaxReasoningEffort limits explicit reasoning effort values for this WS session.
+	MaxReasoningEffort string
+	// ReasoningEffortMappings rewrites explicit effort values for this WS session.
+	ReasoningEffortMappings []ReasoningEffortMapping
+	BeforeTurn              func(turn int) error
+	BeforeRequest           func(turn int, payload []byte, originalModel string) error
+	AfterTurn               func(turn int, result *OpenAIForwardResult, turnErr error)
 	// BridgeTurn handles one response.create over a provider-specific HTTP
 	// Responses bridge while preserving the client WebSocket session. It is
 	// intentionally injected per selected account; native OpenAI and Grok keep
@@ -1207,8 +1215,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		headers.Set("user-agent", codexCLIUserAgent)
 	}
-	if account != nil && account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(headers.Get("user-agent")) {
-		headers.Set("user-agent", codexCLIUserAgent)
+	if account != nil && account.Type == AccountTypeOAuth {
+		enforceCodexIdentityHeaders(headers)
 	}
 
 	return headers, sessionResolution, nil
@@ -2496,36 +2504,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 // Codex clients advertise it by default. Returns the (possibly unchanged) payload,
 // whether it changed, and any JSON decode error.
 func stripCodexSparkImageGenerationToolFromRawPayload(payload []byte, model string) ([]byte, bool, error) {
-	if !isCodexSparkModel(model) || !openAIRequestBodyHasImageGenerationTool(payload) {
+	if !isCodexSparkModel(model) {
 		return payload, false, nil
 	}
-	payloadMap := make(map[string]any)
-	if err := json.Unmarshal(payload, &payloadMap); err != nil {
-		return payload, false, err
-	}
-	if !stripCodexSparkImageGenerationTools(payloadMap) {
-		return payload, false, nil
-	}
-	rebuilt, err := json.Marshal(payloadMap)
-	if err != nil {
-		return payload, false, err
-	}
-	return rebuilt, true, nil
+	return stripOpenAIImageGenerationToolsFromRawPayload(payload)
 }
 
-func stripOpenAIImageGenerationToolFromRawPayload(payload []byte) ([]byte, bool, error) {
-	payloadMap := make(map[string]any)
-	if err := json.Unmarshal(payload, &payloadMap); err != nil {
-		return payload, false, err
+func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds <= 0 {
+		return 0
 	}
-	if !stripOpenAIImageGenerationTools(payloadMap) {
-		return payload, false, nil
-	}
-	rebuilt, err := json.Marshal(payloadMap)
-	if err != nil {
-		return payload, false, err
-	}
-	return rebuilt, true, nil
+	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
 func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
@@ -2667,7 +2656,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return rebuilt, nil
 	}
 
-	parseClientPayload := func(raw []byte) (openAIWSClientPayload, error) {
+	parseClientPayload := func(raw []byte, turn int) (openAIWSClientPayload, error) {
 		trimmed := bytes.TrimSpace(raw)
 		if len(trimmed) == 0 {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "empty websocket request payload", nil)
@@ -2738,10 +2727,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		apiKey := getAPIKeyFromContext(c)
 		imageGenerationAllowed := GroupAllowsImageGeneration(apiKeyGroup(apiKey))
+		codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
+		if isCodexCLI {
+			codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
+		}
 		codexResponsesLite := usesCodexResponsesLite(isCodexCLI, account)
 		// The ChatGPT OAuth WebSocket endpoint is Responses-Lite, which rejects
 		// hosted image_generation tools. Do not auto-inject one on this path.
-		codexBridgeEnabled := isCodexCLI && !codexResponsesLite && imageGenerationAllowed && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+		codexBridgeEnabled := isCodexCLI && !codexResponsesLite && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
 		if codexBridgeEnabled {
 			payloadMap := make(map[string]any)
 			if err := json.Unmarshal(normalized, &payloadMap); err != nil {
@@ -2771,7 +2764,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				normalized = rebuilt
 			}
 		}
-		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		modelForUpstream := originalModel
+		if hooks != nil && hooks.MapRequestModel != nil {
+			mappedModel, mapErr := hooks.MapRequestModel(turn, originalModel)
+			if mapErr != nil {
+				return openAIWSClientPayload{}, mapErr
+			}
+			if mappedModel = strings.TrimSpace(mappedModel); mappedModel != "" {
+				modelForUpstream = mappedModel
+			}
+		}
+		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(modelForUpstream))
 		if modelMissing || upstreamModel != originalModel {
 			next, setErr := applyPayloadMutation(normalized, "model", upstreamModel)
 			if setErr != nil {
@@ -2779,8 +2782,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
-		if codexResponsesLite {
-			if stripped, changed, stripErr := stripOpenAIImageGenerationToolFromRawPayload(normalized); stripErr != nil {
+		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
+			if stripped, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(normalized); stripErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
+			} else if changed {
+				normalized = stripped
+				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_stripped_by_policy account_id=%d", account.ID)
+			}
+		} else if codexResponsesLite {
+			if stripped, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(normalized); stripErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
 			} else if changed {
 				normalized = stripped
@@ -2871,7 +2881,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	readClientMessage := func() ([]byte, error) {
-		msgType, payload, readErr := clientConn.Read(ctx)
+		idleTimeout := s.openAIWSIngressInterTurnIdleTimeout()
+		msgType, payload, readErr := ReadOpenAIWSClientMessage(
+			ctx, clientConn, idleTimeout, coderws.StatusNormalClosure, "websocket idle timeout",
+		)
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -2885,7 +2898,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return payload, nil
 	}
 
-	firstPayload, err := parseClientPayload(firstClientMessage)
+	firstPayload, err := parseClientPayload(firstClientMessage, 1)
 	if err != nil {
 		return err
 	}
@@ -3068,7 +3081,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				return fmt.Errorf("read client websocket request: %w", readErr)
 			}
-			nextPayload, parseErr := parseClientPayload(nextClientMessage)
+			nextPayload, parseErr := parseClientPayload(nextClientMessage, turn+1)
 			if parseErr != nil {
 				return parseErr
 			}
@@ -3269,14 +3282,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		lastEventType := ""
 		needModelReplace := false
 		clientDisconnected := false
-		mappedModel := ""
+		mappedModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
 		var mappedModelBytes []byte
-		if originalModel != "" {
+		if mappedModel == "" && originalModel != "" {
 			mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		}
+		if originalModel != "" {
 			needModelReplace = mappedModel != "" && mappedModel != originalModel
-			if needModelReplace {
-				mappedModelBytes = []byte(mappedModel)
-			}
+		}
+		if needModelReplace {
+			mappedModelBytes = []byte(mappedModel)
 		}
 		for {
 			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
@@ -4094,7 +4109,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return fmt.Errorf("read client websocket request: %w", readErr)
 		}
 
-		nextPayload, parseErr := parseClientPayload(nextClientMessage)
+		nextPayload, parseErr := parseClientPayload(nextClientMessage, turn+1)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -4345,6 +4360,98 @@ func isOpenAIWSTerminalEvent(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeOpenAIWSTerminalEvent(eventType string) string {
+	switch strings.TrimSpace(eventType) {
+	case "response.completed":
+		return "response.completed"
+	case "response.done":
+		return "response.done"
+	case "response.failed":
+		return "response.failed"
+	case "response.incomplete":
+		return "response.incomplete"
+	case "response.cancelled", "response.canceled":
+		return "response.cancelled"
+	default:
+		return ""
+	}
+}
+
+func openAIWSPayloadTransientStatus(payload []byte) int {
+	if len(payload) == 0 {
+		return 0
+	}
+	status := int(gjson.GetBytes(payload, "response.error.status_code").Int())
+	if status == 0 {
+		status = int(gjson.GetBytes(payload, "response.error.status").Int())
+	}
+	if status == 0 {
+		status = int(gjson.GetBytes(payload, "error.status_code").Int())
+	}
+	if status == 0 {
+		status = int(gjson.GetBytes(payload, "error.status").Int())
+	}
+	if shouldCooldownOpenAITransientUpstreamError(status, payload) {
+		return status
+	}
+	if status != 0 {
+		return 0
+	}
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+	}
+	if errType == "" {
+		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
+	}
+	switch {
+	case code == "server_is_overloaded", code == "slow_down":
+		return http.StatusServiceUnavailable
+	case strings.Contains(code, "server_error"),
+		strings.Contains(code, "internal_error"),
+		strings.Contains(code, "upstream_error"),
+		strings.Contains(errType, "server_error"),
+		strings.Contains(errType, "internal_error"),
+		strings.Contains(errType, "upstream_error"):
+		return http.StatusInternalServerError
+	default:
+		return 0
+	}
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSTerminalTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) string {
+	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+	terminalEvent := normalizeOpenAIWSTerminalEvent(eventType)
+	if terminalEvent != "response.failed" {
+		return terminalEvent
+	}
+	status := openAIWSPayloadTransientStatus(payload)
+	if status != 0 {
+		s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+	}
+	return terminalEvent
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) {
+	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+	if eventType != "error" {
+		return
+	}
+	status := openAIWSPayloadTransientStatus(payload)
+	if status != 0 {
+		s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+	}
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSDialTransientFailure(ctx context.Context, account *Account, canonicalModel string, err error) {
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil || !shouldCooldownOpenAITransientUpstreamError(dialErr.StatusCode, dialErr.ResponseBody) {
+		return
+	}
+	s.handleOpenAIAccountUpstreamError(ctx, account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, canonicalModel)
 }
 
 func isCodexProposedPlanText(text string) bool {

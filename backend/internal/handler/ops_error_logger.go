@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
+	"net/http"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -80,6 +83,8 @@ const (
 	opsErrorLogMinQueueSize       = 256
 	opsErrorLogMaxQueueSize       = 8192
 	opsErrorLogBatchSize          = 32
+	opsErrorLogMaxQueueBytes      = 32 * 1024 * 1024
+	opsErrorLogMaxUserAgentBytes  = 512
 )
 
 // looksLikeSystemKey 粗筛"形似本系统 key"的输入:长度 16-128 且仅含 [a-zA-Z0-9_-]。
@@ -126,23 +131,25 @@ func extractAttemptedKey(c *gin.Context) string {
 }
 
 type opsErrorLogJob struct {
-	ops   *service.OpsService
-	entry *service.OpsInsertErrorLogInput
+	ops         *service.OpsService
+	entry       *service.OpsInsertErrorLogInput
+	queuedBytes int64
 }
 
 var (
 	opsErrorLogOnce  sync.Once
 	opsErrorLogQueue chan opsErrorLogJob
 
-	opsErrorLogStopOnce  sync.Once
-	opsErrorLogWorkersWg sync.WaitGroup
-	opsErrorLogMu        sync.RWMutex
-	opsErrorLogStopping  bool
-	opsErrorLogQueueLen  atomic.Int64
-	opsErrorLogEnqueued  atomic.Int64
-	opsErrorLogDropped   atomic.Int64
-	opsErrorLogProcessed atomic.Int64
-	opsErrorLogSanitized atomic.Int64
+	opsErrorLogStopOnce   sync.Once
+	opsErrorLogWorkersWg  sync.WaitGroup
+	opsErrorLogMu         sync.RWMutex
+	opsErrorLogStopping   bool
+	opsErrorLogQueueLen   atomic.Int64
+	opsErrorLogQueueBytes atomic.Int64
+	opsErrorLogEnqueued   atomic.Int64
+	opsErrorLogDropped    atomic.Int64
+	opsErrorLogProcessed  atomic.Int64
+	opsErrorLogSanitized  atomic.Int64
 
 	opsErrorLogLastDropLogAt atomic.Int64
 
@@ -162,6 +169,7 @@ func startOpsErrorLogWorkers() {
 	workerCount, queueSize := opsErrorLogConfig()
 	opsErrorLogQueue = make(chan opsErrorLogJob, queueSize)
 	opsErrorLogQueueLen.Store(0)
+	opsErrorLogQueueBytes.Store(0)
 
 	opsErrorLogWorkersWg.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
@@ -173,6 +181,7 @@ func startOpsErrorLogWorkers() {
 					return
 				}
 				opsErrorLogQueueLen.Add(-1)
+				opsErrorLogQueueBytes.Add(-job.queuedBytes)
 				batch := make([]opsErrorLogJob, 0, opsErrorLogBatchSize)
 				batch = append(batch, job)
 
@@ -192,6 +201,7 @@ func startOpsErrorLogWorkers() {
 							return
 						}
 						opsErrorLogQueueLen.Add(-1)
+						opsErrorLogQueueBytes.Add(-nextJob.queuedBytes)
 						batch = append(batch, nextJob)
 					case <-timer.C:
 						break batchLoop
@@ -247,6 +257,20 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 	if ops == nil || entry == nil {
 		return
 	}
+	entry.UserAgent = normalizeOpsPersistentUserAgent(entry.UserAgent)
+	if entry.ErrorBody != "" {
+		originalBody := entry.ErrorBody
+		body, truncated := service.SanitizeOpsErrorBodyForQueue(originalBody)
+		entry.ErrorBody = body
+		if truncated || body != originalBody {
+			opsErrorLogSanitized.Add(1)
+		}
+	}
+	if err := service.SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
+		opsErrorLogDropped.Add(1)
+		maybeLogOpsErrorLogDrop()
+		return
+	}
 	select {
 	case <-opsErrorLogShutdownCh:
 		return
@@ -267,16 +291,27 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 	if opsErrorLogStopping || opsErrorLogQueue == nil {
 		return
 	}
+	queuedBytes := estimateOpsErrorLogJobBytes(entry)
+	if !reserveOpsErrorLogQueueBytes(queuedBytes) {
+		opsErrorLogDropped.Add(1)
+		maybeLogOpsErrorLogDrop()
+		return
+	}
 
 	select {
-	case opsErrorLogQueue <- opsErrorLogJob{ops: ops, entry: entry}:
-		opsErrorLogQueueLen.Add(1)
+	case opsErrorLogQueue <- opsErrorLogJob{ops: ops, entry: entry, queuedBytes: queuedBytes}:
 		opsErrorLogEnqueued.Add(1)
 	default:
+		opsErrorLogQueueLen.Add(-1)
+		opsErrorLogQueueBytes.Add(-queuedBytes)
 		// Queue is full; drop to avoid blocking request handling.
 		opsErrorLogDropped.Add(1)
 		maybeLogOpsErrorLogDrop()
 	}
+}
+
+func normalizeOpsPersistentUserAgent(value string) string {
+	return truncateString(strings.TrimSpace(strings.ToValidUTF8(value, "")), opsErrorLogMaxUserAgentBytes)
 }
 
 func StopOpsErrorLogWorkers() bool {
@@ -301,6 +336,7 @@ func stopOpsErrorLogWorkers() bool {
 
 	if ch == nil {
 		opsErrorLogQueueLen.Store(0)
+		opsErrorLogQueueBytes.Store(0)
 		return true
 	}
 
@@ -313,6 +349,7 @@ func stopOpsErrorLogWorkers() bool {
 	select {
 	case <-done:
 		opsErrorLogQueueLen.Store(0)
+		opsErrorLogQueueBytes.Store(0)
 		return true
 	case <-time.After(opsErrorLogDrainTimeout):
 		return false
@@ -321,6 +358,14 @@ func stopOpsErrorLogWorkers() bool {
 
 func OpsErrorLogQueueLength() int64 {
 	return opsErrorLogQueueLen.Load()
+}
+
+func OpsErrorLogQueueBytes() int64 {
+	return opsErrorLogQueueBytes.Load()
+}
+
+func OpsErrorLogQueueBytesCapacity() int64 {
+	return opsErrorLogMaxQueueBytes
 }
 
 func OpsErrorLogQueueCapacity() int {
@@ -363,17 +408,60 @@ func maybeLogOpsErrorLogDrop() {
 	}
 
 	queued := opsErrorLogQueueLen.Load()
+	queuedBytes := opsErrorLogQueueBytes.Load()
 	queueCap := OpsErrorLogQueueCapacity()
 
 	log.Printf(
-		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d enqueued_total=%d dropped_total=%d processed_total=%d sanitized_total=%d)",
+		"[OpsErrorLogger] queue is full; dropping logs (queued=%d cap=%d queued_bytes=%d bytes_cap=%d enqueued_total=%d dropped_total=%d processed_total=%d sanitized_total=%d)",
 		queued,
 		queueCap,
+		queuedBytes,
+		opsErrorLogMaxQueueBytes,
 		opsErrorLogEnqueued.Load(),
 		opsErrorLogDropped.Load(),
 		opsErrorLogProcessed.Load(),
 		opsErrorLogSanitized.Load(),
 	)
+}
+
+func reserveOpsErrorLogQueueBytes(size int64) bool {
+	if size < 1 {
+		size = 1
+	}
+	for {
+		current := opsErrorLogQueueBytes.Load()
+		if current > opsErrorLogMaxQueueBytes-size {
+			return false
+		}
+		if opsErrorLogQueueBytes.CompareAndSwap(current, current+size) {
+			opsErrorLogQueueLen.Add(1)
+			return true
+		}
+	}
+}
+
+func estimateOpsErrorLogJobBytes(entry *service.OpsInsertErrorLogInput) int64 {
+	if entry == nil {
+		return 1
+	}
+	const fixedOverhead = 512
+	size := fixedOverhead + len(entry.RequestID) + len(entry.ClientRequestID) +
+		len(entry.Platform) + len(entry.Model) + len(entry.RequestPath) +
+		len(entry.InboundEndpoint) + len(entry.UpstreamEndpoint) +
+		len(entry.RequestedModel) + len(entry.UpstreamModel) + len(entry.UserAgent) +
+		len(entry.ErrorPhase) + len(entry.ErrorType) + len(entry.Severity) +
+		len(entry.ErrorMessage) + len(entry.ErrorBody) + len(entry.ErrorSource) +
+		len(entry.ErrorOwner) + len(entry.APIKeyPrefix)
+	if entry.UpstreamErrorMessage != nil {
+		size += len(*entry.UpstreamErrorMessage)
+	}
+	if entry.UpstreamErrorDetail != nil {
+		size += len(*entry.UpstreamErrorDetail)
+	}
+	if entry.UpstreamErrorsJSON != nil {
+		size += len(*entry.UpstreamErrorsJSON)
+	}
+	return int64(size)
 }
 
 func opsErrorLogConfig() (workerCount int, queueSize int) {
@@ -541,6 +629,7 @@ type opsCaptureWriter struct {
 	gin.ResponseWriter
 	limit int
 	buf   bytes.Buffer
+	ctx   *gin.Context
 }
 
 const opsCaptureWriterLimit = 64 * 1024
@@ -567,13 +656,89 @@ func releaseOpsCaptureWriter(w *opsCaptureWriter) {
 		return
 	}
 	w.ResponseWriter = nil
+	w.ctx = nil
 	w.limit = opsCaptureWriterLimit
 	w.buf.Reset()
 	opsCaptureWriterPool.Put(w)
 }
 
+func (w *opsCaptureWriter) Status() int {
+	if w.ResponseWriter == nil {
+		return 0
+	}
+	return w.ResponseWriter.Status()
+}
+
+func (w *opsCaptureWriter) Size() int {
+	if w.ResponseWriter == nil {
+		return -1
+	}
+	return w.ResponseWriter.Size()
+}
+
+func (w *opsCaptureWriter) Written() bool {
+	if w.ResponseWriter == nil {
+		return false
+	}
+	return w.ResponseWriter.Written()
+}
+
+func (w *opsCaptureWriter) Header() http.Header {
+	if w.ResponseWriter == nil {
+		return http.Header{}
+	}
+	return w.ResponseWriter.Header()
+}
+
+func (w *opsCaptureWriter) WriteHeader(code int) {
+	if w.ResponseWriter == nil {
+		return
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *opsCaptureWriter) WriteHeaderNow() {
+	if w.ResponseWriter == nil {
+		return
+	}
+	w.ResponseWriter.WriteHeaderNow()
+}
+
+func (w *opsCaptureWriter) Flush() {
+	if w.ResponseWriter == nil {
+		return
+	}
+	w.ResponseWriter.Flush()
+}
+
+func (w *opsCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if w.ResponseWriter == nil {
+		return nil, nil, errors.New("response writer released")
+	}
+	return w.ResponseWriter.Hijack()
+}
+
+func (w *opsCaptureWriter) CloseNotify() <-chan bool {
+	if w.ResponseWriter == nil {
+		ch := make(chan bool)
+		close(ch)
+		return ch
+	}
+	return w.ResponseWriter.CloseNotify()
+}
+
+func (w *opsCaptureWriter) Pusher() http.Pusher {
+	if w.ResponseWriter == nil {
+		return nil
+	}
+	return w.ResponseWriter.Pusher()
+}
+
 func (w *opsCaptureWriter) Write(b []byte) (int, error) {
-	if w.Status() >= 400 && w.limit > 0 && w.buf.Len() < w.limit {
+	if w.ResponseWriter == nil {
+		return 0, nil
+	}
+	if w.shouldCapture() && w.Status() >= 400 && w.limit > 0 && w.buf.Len() < w.limit {
 		remaining := w.limit - w.buf.Len()
 		if len(b) > remaining {
 			_, _ = w.buf.Write(b[:remaining])
@@ -585,7 +750,10 @@ func (w *opsCaptureWriter) Write(b []byte) (int, error) {
 }
 
 func (w *opsCaptureWriter) WriteString(s string) (int, error) {
-	if w.Status() >= 400 && w.limit > 0 && w.buf.Len() < w.limit {
+	if w.ResponseWriter == nil {
+		return 0, nil
+	}
+	if w.shouldCapture() && w.Status() >= 400 && w.limit > 0 && w.buf.Len() < w.limit {
 		remaining := w.limit - w.buf.Len()
 		if len(s) > remaining {
 			_, _ = w.buf.WriteString(s[:remaining])
@@ -594,6 +762,14 @@ func (w *opsCaptureWriter) WriteString(s string) (int, error) {
 		}
 	}
 	return w.ResponseWriter.WriteString(s)
+}
+
+func (w *opsCaptureWriter) shouldCapture() bool {
+	if w.ctx == nil {
+		return true
+	}
+	_, rejected := middleware2.GetIngressRejectReason(w.ctx)
+	return !rejected
 }
 
 // OpsErrorLoggerMiddleware records error responses (status >= 400) into ops_error_logs.
@@ -605,6 +781,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		originalWriter := c.Writer
 		w := acquireOpsCaptureWriter(originalWriter)
+		w.ctx = c
 		defer func() {
 			// Restore the original writer before returning so outer middlewares
 			// don't observe a pooled wrapper that has been released.
@@ -703,7 +880,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			}
 
 			fallbackPlatform := guessPlatformFromPath(c.Request.URL.Path)
-			platform := resolveOpsPlatform(apiKey, fallbackPlatform)
+			platform := resolveOpsPlatform(c.Request.Context(), apiKey, fallbackPlatform)
 
 			requestID := c.Writer.Header().Get("X-Request-Id")
 			if requestID == "" {
@@ -714,10 +891,15 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			var upstreamStatusCode *int
 			var upstreamErrorMessage *string
 			var upstreamErrorDetail *string
+			finalAccountAuth := false
 			if len(events) > 0 {
 				last := events[len(events)-1]
 				if last != nil {
-					if last.UpstreamStatusCode > 0 {
+					finalAccountAuth = last.Stage == string(service.GatewayFailureStageAccountAuth)
+					if finalAccountAuth {
+						code := 0
+						upstreamStatusCode = &code
+					} else if last.UpstreamStatusCode > 0 {
 						code := last.UpstreamStatusCode
 						upstreamStatusCode = &code
 					}
@@ -730,7 +912,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				}
 			}
 
-			if upstreamStatusCode == nil {
+			if !finalAccountAuth && upstreamStatusCode == nil {
 				if v, ok := c.Get(service.OpsUpstreamStatusCodeKey); ok {
 					switch t := v.(type) {
 					case int:
@@ -746,7 +928,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 					}
 				}
 			}
-			if upstreamErrorMessage == nil {
+			if !finalAccountAuth && upstreamErrorMessage == nil {
 				if v, ok := c.Get(service.OpsUpstreamErrorMessageKey); ok {
 					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 						msg := strings.TrimSpace(s)
@@ -754,7 +936,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 					}
 				}
 			}
-			if upstreamErrorDetail == nil {
+			if !finalAccountAuth && upstreamErrorDetail == nil {
 				if v, ok := c.Get(service.OpsUpstreamErrorDetailKey); ok {
 					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 						detail := strings.TrimSpace(s)
@@ -773,27 +955,24 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				effectiveUpstreamStatus = *upstreamStatusCode
 			}
 
-			networkErrorType := service.GetOpsNetworkErrorType(c)
-			errorPhase := "upstream"
-			errorSource := "upstream_http"
-			errorOwner := "provider"
 			recoveredMsg := "Recovered upstream error"
-			if networkErrorType != "" {
-				errorPhase = "network"
-				errorSource = "gateway"
-				errorOwner = classifyOpsNetworkErrorOwner(networkErrorType)
+			if finalAccountAuth {
+				recoveredMsg = "Recovered account authentication failure"
+			} else if networkErrorType := service.GetOpsNetworkErrorType(c); networkErrorType != "" {
 				recoveredMsg = "Recovered network error"
-				if errorOwner == "platform" {
+				if classifyOpsNetworkErrorOwner(networkErrorType) == "platform" {
 					recoveredMsg = "Recovered gateway timeout"
 				}
-			}
-			if effectiveUpstreamStatus > 0 {
+			} else if effectiveUpstreamStatus > 0 {
 				recoveredMsg += " " + strconvItoa(effectiveUpstreamStatus)
 			}
 			if upstreamErrorMessage != nil && strings.TrimSpace(*upstreamErrorMessage) != "" {
 				recoveredMsg += ": " + strings.TrimSpace(*upstreamErrorMessage)
 			}
 			recoveredMsg = truncateString(recoveredMsg, 2048)
+			errorPhase, recoveredBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+				c, "upstream_error", recoveredMsg, "", effectiveUpstreamStatus,
+			)
 
 			entry := &service.OpsInsertErrorLogInput{
 				RequestID:       requestID,
@@ -839,7 +1018,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				// Severity/retryability should reflect the upstream failure, not the final client status (200).
 				Severity:          classifyOpsSeverity("upstream_error", effectiveUpstreamStatus),
 				StatusCode:        status,
-				IsBusinessLimited: false,
+				IsBusinessLimited: recoveredBusinessLimited,
 				IsCountTokens:     isCountTokensRequest(c),
 
 				ErrorMessage: recoveredMsg,
@@ -857,6 +1036,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			}
 			applyOpsLatencyFieldsFromContext(c, entry)
 			applyOpsNetworkFieldsFromContext(c, entry)
+			applyOpsUpstreamFieldsFromContext(c, entry)
 
 			applyOpsIdentityFieldsFromContext(c, entry, apiKey)
 
@@ -917,7 +1097,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 
 		fallbackPlatform := guessPlatformFromPath(c.Request.URL.Path)
-		platform := resolveOpsPlatform(apiKey, fallbackPlatform)
+		platform := resolveOpsPlatform(c.Request.Context(), apiKey, fallbackPlatform)
 
 		requestID := c.Writer.Header().Get("X-Request-Id")
 		if requestID == "" {
@@ -1038,6 +1218,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				}
 			}
 		}
+		applyOpsUpstreamFieldsFromContext(c, entry)
 
 		applyOpsIdentityFieldsFromContext(c, entry, apiKey)
 
@@ -1115,7 +1296,7 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 	}
 
 	fallbackPlatform := guessPlatformFromPath(c.Request.URL.Path)
-	platform := resolveOpsPlatform(apiKey, fallbackPlatform)
+	platform := resolveOpsPlatform(c.Request.Context(), apiKey, fallbackPlatform)
 
 	requestID := c.Writer.Header().Get("X-Request-Id")
 	if requestID == "" {
@@ -1217,6 +1398,77 @@ func applyOpsLatencyFieldsFromContext(c *gin.Context, entry *service.OpsInsertEr
 	entry.UpstreamLatencyMs = getContextLatencyMs(c, service.OpsUpstreamLatencyMsKey)
 	entry.ResponseLatencyMs = getContextLatencyMs(c, service.OpsResponseLatencyMsKey)
 	entry.TimeToFirstTokenMs = getContextLatencyMs(c, service.OpsTimeToFirstTokenMsKey)
+}
+
+// applyOpsUpstreamFieldsFromContext captures attempt-level upstream context.
+// A final account_auth event owns the top-level status and forces it to zero;
+// prior inference statuses remain available in UpstreamErrors.
+func applyOpsUpstreamFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	if c == nil || entry == nil {
+		return
+	}
+	if v, ok := c.Get(service.OpsUpstreamStatusCodeKey); ok {
+		switch t := v.(type) {
+		case int:
+			if t > 0 {
+				code := t
+				entry.UpstreamStatusCode = &code
+			}
+		case int64:
+			if t > 0 {
+				code := int(t)
+				entry.UpstreamStatusCode = &code
+			}
+		}
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorMessageKey); ok {
+		if value, ok := v.(string); ok {
+			if message := strings.TrimSpace(value); message != "" {
+				entry.UpstreamErrorMessage = &message
+			}
+		}
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorDetailKey); ok {
+		if value, ok := v.(string); ok {
+			if detail := strings.TrimSpace(value); detail != "" {
+				entry.UpstreamErrorDetail = &detail
+			}
+		}
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorsKey); ok {
+		if events, ok := v.([]*service.OpsUpstreamErrorEvent); ok && len(events) > 0 {
+			entry.UpstreamErrors = events
+			last := events[len(events)-1]
+			if last == nil {
+				return
+			}
+			if last.Stage == string(service.GatewayFailureStageAccountAuth) {
+				code := 0
+				entry.UpstreamStatusCode = &code
+				entry.UpstreamErrorMessage = nil
+				if message := strings.TrimSpace(last.Message); message != "" {
+					entry.UpstreamErrorMessage = &message
+				}
+				entry.UpstreamErrorDetail = nil
+				if detail := strings.TrimSpace(last.Detail); detail != "" {
+					entry.UpstreamErrorDetail = &detail
+				}
+			} else {
+				if entry.UpstreamStatusCode == nil && last.UpstreamStatusCode > 0 {
+					code := last.UpstreamStatusCode
+					entry.UpstreamStatusCode = &code
+				}
+				if entry.UpstreamErrorMessage == nil && strings.TrimSpace(last.Message) != "" {
+					message := strings.TrimSpace(last.Message)
+					entry.UpstreamErrorMessage = &message
+				}
+				if entry.UpstreamErrorDetail == nil && strings.TrimSpace(last.Detail) != "" {
+					detail := strings.TrimSpace(last.Detail)
+					entry.UpstreamErrorDetail = &detail
+				}
+			}
+		}
+	}
 }
 
 func applyOpsNetworkFieldsFromContext(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
@@ -1321,7 +1573,10 @@ func getOpsAPIKey(c *gin.Context) *service.APIKey {
 	return nil
 }
 
-func resolveOpsPlatform(apiKey *service.APIKey, fallback string) string {
+func resolveOpsPlatform(ctx context.Context, apiKey *service.APIKey, fallback string) string {
+	if platform, ok := service.ResolvedTargetPlatformFromContext(ctx); ok {
+		return platform
+	}
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform != "" {
 		return apiKey.Group.Platform
 	}
@@ -1484,11 +1739,14 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)
 	clientContextLimited := service.HasOpsClientBusinessLimitedReason(c, service.OpsClientBusinessLimitedReasonContextLimit)
 	upstreamError := hasOpsUpstreamErrorContext(c)
-	if upstreamError && !routingCapacityLimited && !clientContextLimited {
+	accountAuthFailure := hasOpsAccountAuthFailure(c)
+	if accountAuthFailure && !routingCapacityLimited && !clientContextLimited {
+		phase = "account_auth"
+	} else if upstreamError && !routingCapacityLimited && !clientContextLimited {
 		phase = "upstream"
 	}
 	networkErrorType := service.GetOpsNetworkErrorType(c)
-	if networkErrorType != "" && !routingCapacityLimited && !clientContextLimited {
+	if networkErrorType != "" && !routingCapacityLimited && !clientContextLimited && !accountAuthFailure {
 		phase = "network"
 	}
 	if clientContextLimited && !routingCapacityLimited {
@@ -1666,10 +1924,26 @@ func hasOpsUpstreamErrorContext(c *gin.Context) bool {
 	return false
 }
 
+func hasOpsAccountAuthFailure(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if v, ok := c.Get(service.OpsUpstreamErrorsKey); ok {
+		if events, ok := v.([]*service.OpsUpstreamErrorEvent); ok {
+			for i := len(events) - 1; i >= 0; i-- {
+				if events[i] != nil {
+					return events[i].Stage == string(service.GatewayFailureStageAccountAuth)
+				}
+			}
+		}
+	}
+	return false
+}
+
 func classifyOpsErrorOwner(phase string, message string) string {
 	// Standardized owners: client|provider|platform
 	switch phase {
-	case "upstream", "network":
+	case "upstream", "network", "account_auth":
 		return "provider"
 	case "request", "auth":
 		return "client"
@@ -1697,7 +1971,7 @@ func classifyOpsErrorSource(phase string, message string) string {
 	switch phase {
 	case "upstream":
 		return "upstream_http"
-	case "network":
+	case "network", "account_auth":
 		return "gateway"
 	case "request", "auth":
 		return "client_request"

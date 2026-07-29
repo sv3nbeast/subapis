@@ -2422,3 +2422,175 @@ dc64d597a 恢复dashboard cache metrics display
 - 增量基线: `0dec1ad2922ff8c9d27b67f8a31dfb35bce1902b`
 - 动作: 吸收官方版本号更新 `0.1.149 -> 0.1.150`，未提升到 `main`
 - 验证: `go test ./cmd/server -count=1` 通过
+
+## 2026-07-24 01:15:57 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `1adcfa85908c38e437d2f5bd3698aaf154b9608f`
+- 官方提交: `e316ebf52838a89d57fc790981cce7520f819ac8`
+- 合并基线: `9a2f11b4e21763cb7003ea29921d9a672ab50b1f`
+- 官方领先数量: `31`
+- 本地领先数量: `588`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+e316ebf52 合并拉取请求 #3989（来源：xlplbo/fix/codex-mcp-tools-bridge）
+07fac3471 合并拉取请求 #3991（来源：fengshao1227/fix/anthropic-usage-cache-creation-tokens）
+151b9265f 合并拉取请求 #3994（来源：fengshao1227/fix/compact-keepalive-nil-pointer）
+6c588bb95 杂项：将VERSION同步到 0.1.151 [skip ci]
+90e9d03de 修复（apicompat）：强制选择 tool_search 的 tool_choice 降级为指向代理的 function 选择
+e2b68d1f9 修复（apicompat）：tool_choice 仅转发实际存在于转换结果中的工具
+a2cdaa641 修复（apicompat）：内置 tool_search 与同名工具撞名时显式拒绝请求
+bc3cb2902 修复（handler）：补齐 opsCaptureWriter 全部委托方法的 nil 守卫
+89a551b96 修复（handler）：opsCaptureWriter 释放后访问 nil panic
+83f169e4f 修复（apicompat）：补齐 Responses→Anthropic 流式路径的 cache_creation_input_tokens
+eb4d00503 Merge remote-tracking branch 'upstream/main'
+0d28f7f90 修复（apicompat）：Responses↔Anthropic 转换补齐 cache_creation_input_tokens
+deff3123d 合并拉取请求 #3984（来源：Wei-Shaw/fix/issue-3901-codex-identity-pairing）
+8a51119e3 修复（openai）：pair originator 与 final User-Agent 针对 codex upstream
+f1082bb78 修复（apicompat）：namespace 摊平名撞名时显式拒绝请求
+794233832 修复（apicompat）：回程还原 namespace 子工具调用，修复 Codex MCP 工具 unsupported call
+5260a42a0 合并拉取请求 #3953（来源：lyon-le/feat/openai-fast-policy-user-scope）
+815516d8d 合并拉取请求 #3969（来源：jinfeijie/fix/grok-responses-reasoning-effort）
+5a0dd510e 修复（grok）：移除obsolete helper
+0fa1eb85e 修复（grok）：保留compatible reasoning effort
+
+### 本地领先
+
+1adcfa859 新增（release）：expose public UI rollout controls
+55c958841 修复（public）：use accurate Gemini 与 Antigravity logos
+85870a232 修复（kiro）：对before client-visible output执行故障切换
+0ae7ca23b 修复（public）：对齐navigation 与 status links
+411574312 修复（kiro）：isolate cli keys from OAuth control plane
+a2fd41d4a 修复（kiro）：route ksk keys through cli runtime
+8df41a663 新增（public）：增加public UI v2 preview rollout
+f57a14ef3 修复（grok）：recover truncated streams 与 quota failover
+859bce7a0 修复（deploy）：保留Kiro diagnostic users
+56aae8c1d 修复（kiro）：propagate user id 到 diagnostics
+ad5ee4039 修复（kiro）：retry transient rate limits safely
+b8c84600f 修复（grok）：对zero RPM accounts执行故障切换
+009d75a22 修复（kiro）：attribute ops errors 到 attempted accounts
+3aa51c7d9 修复（openai）：classify channel model denials
+215305cde 新增（kiro）：allow editing account regions
+d6eec961f 修复（grok）：bound quota failover latency
+2687041d1 修复（kiro）：bridge compact 与 remove GPT timeouts
+fb6fff182 新增（kiro）：增加targeted event diagnostics
+6b30f3eff 性能优化（ui）：streamline dashboard loading
+ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
+## 2026-07-24 01:35:11 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 本地主线基线: `1adcfa85908c38e437d2f5bd3698aaf154b9608f`
+- 官方目标: `e316ebf52838a89d57fc790981cce7520f819ac8`
+- 合并基线: `9a2f11b4e21763cb7003ea29921d9a672ab50b1f`
+- 动作: 完成 31 个官方提交的语义融合与验证，未提升到 `main`
+- 保留策略: 保留本地聚合式 OpenAI 网关、Kiro/Grok 路由、Responses-Lite、流式终态、Kiro credits 与缓存计费语义；将官方 custom/tool_search 桥接、Codex 身份配对、GPT-5.6 用量与定价、setup-token 刷新、Fast/Flex 用户规则和图片工具声明处理移植到本地归属文件
+- 网关回归审查: `PASS`，`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 后端验证: 聚焦包测试通过；`go test ./... -count=1` 通过；聚焦 `-race` 通过；`go build ./...` 通过
+- 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；受影响 34 个测试通过；全量 174/176 suites、1039 tests 通过，剩余 2 个 `vue-i18n` mock suite 在未同步的 `main` 基线同样失败
+- 延迟基准: 用量解析中位数 `1859ns -> 1702ns`；WS hot path 中位数 `74668ns -> 74267ns`；分配次数不变
+
+## 2026-07-24 02:25:00 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 官方目标复核: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 在既有索引融合快照上补齐 Grok 手动探测资格门、OpenAI compact 探测 Codex window id，并同步 CLI 路由测试夹具；未提升到 `main`，未部署生产
+- 验证: `git diff --check`、`go build ./...`、前端 lint/typecheck/build、Kiro translator 聚焦测试、Grok/OpenAI 探测聚焦测试通过
+- 网关回归审查: `INCONCLUSIVE`；完整 service/handler 单测仍有本地历史分支与当前官方拆分布局冲突，`stream/cache-hit/recreate/latency` 不宣称通过
+- 发布结论: 阻止生产发布，待拆分布局回归清理并完成全量网关回归
+
+## 2026-07-24 08:26:00 +0800
+
+- 官方目标复核: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 补正: OAuth Messages → Responses 兼容桥在最终发送前恢复 Codex `User-Agent`、`originator`、`version` 与 `OpenAI-Beta`；同步 Grok OAuth CAS 刷新测试桩
+- 验证: `go build ./...`、`git diff --check`、全部 `TestForwardAsAnthropic_*` 与 Grok 凭据恢复聚焦测试通过
+- 全量 service 测试: 仍有本地历史/融合协议断言失败（旧 flush、WSv2、透传错误包装、图像 usage 等），不归因于本次 OAuth 身份头补正
+- 网关回归审查: `INCONCLUSIVE`；`stream/cache-hit/recreate/latency` 不宣称通过
+- 发布结论: 保持在 `codex/official-sync-review`，未 promote 到 `main`，未部署生产
+
+## 2026-07-24 08:53:02 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 融合工作树基线: `5847635388ca75dbc6f4ecafb0b639e1e161643f`
+- 官方目标: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 完成差分回归、网关四项不变量、race、性能与前端验证；未提升到 `main`，未部署生产
+- 全量差分验证: 当前 `go test ./... -count=1` 的 61 个顶层失败全部存在于同步前快照 `cbec44f63`；相对基线新增失败为 `0`，并修复基线中的 67 个顶层失败
+- 聚焦验证: `openai_ws_v2` 全包、Kiro Responses WebSocket 流生命周期/重放边界、Claude SSE 错误边界、Kiro/Grok 缓存身份与跨实例并发提交测试通过；缓存并发聚焦 `-race` 通过
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 延迟基准: WS hot path 中位数 `72806ns -> 72728ns`，`1583 allocs/op` 不变；终态 usage 解析因新增图片输入 token 字段读取，中位数 `1735ns -> 1902ns`（约 `+9.6%`，绝对增加约 `167ns/请求`），不处于首字节路径且不构成可感知 TTFT/吞吐回退
+- 后端验证: `go build ./...`、`git diff --check` 通过
+- 前端验证: `npm run lint:check`、`npm run typecheck`、`npm run build` 通过；构建仅保留既有 chunk/导入警告
+- 发布结论: 融合内容达到回归门槛；主工作区仍有用户未提交的前端改动，提升流程继续阻止，避免覆盖或混入非本次同步内容
+
+## 2026-07-27 13:35:06 +0800
+
+- 模式: `ai`
+- 融合分支: `codex/official-sync-review`
+- 新增本地提交: `a761203874c695c7dc0b8f689b86f241078f2af2`（`fix(kiro): flatten completed tool history cycles`）已无冲突 cherry-pick 为 `dbb92bfc5`
+- 保留策略: 将主线最新 Kiro tool history 修复纳入官方融合，保留完成周期的文本化结果，仅让最终活动 tool turn 保持结构化
+- 验证: `go test ./internal/pkg/kiro -count=1`、Kiro race、Kiro 缓存并发 race、Responses WebSocket 流 race、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对同步前 `cbec44f63` 新增失败 `0`，基线失败修复 `67`
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`
+- 发布结论: 融合线继续保持可发布；主线仍有未提交前端改动，未 promote、未 push、未部署生产
+
+## 2026-07-27 13:42:00 +0800
+
+- 拓扑整理: 将当前 `main`（含 `a7612038` Kiro 修复）合入融合线，生成合并提交 `13c82fbfd`；合并树相对融合线第一父提交无额外代码变化
+- 结果: `main` 已成为 `codex/official-sync-review` 的祖先，满足后续 `--ff-only` 提升的提交拓扑要求
+- 保护: 主工作区仍有未提交 UI 改动，未执行清理、stash、checkout 或覆盖操作
+
+## 2026-07-27 22:17:20 +0800
+
+- 模式: `ai`
+- fork 目标: `sv3nbeast/main` -> `9c242fa037c1e7452668e946916c5365df299266`（相对本地 `main` 21 个提交）
+- 动作: 将 fork 的 Claude Opus 5、Kiro 1M/tool prelude/payload 上限/超时策略、OpenAI context error、UI v2 和生产重建保护合入 `codex/official-sync-review`
+- 冲突处理: OpenAI Messages 保留“客户端上下文超限不处罚账号”并使用按模型调度统计；Kiro 同时保留超大历史截断后的活动 tool turn 结构化和已完成 tool cycle 文本化测试
+- 后端验证: Kiro、Opus 5、Messages context/account health、迁移、WSv2、网关聚焦测试、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个同步前基线失败；新增失败 `0`，基线失败修复 `67`
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`；Kiro 正常 payload 仅增加长度判断，超过 900 KiB 才裁剪旧历史并重序列化
+- race 验证: Kiro translator、缓存跨实例并发提交和 Responses WebSocket 流 race 通过
+- 前端验证: lint、typecheck、build、6 个受影响测试文件（50 tests）通过；仅保留既有 Vitest/Vite 警告
+- 发布脚本验证: `scripts/rebuild-prod-sub2api_test.sh` 通过，Kiro timeout policy 能被保留并校验
+- 发布结论: fork 与官方融合内容达到回归门槛；主工作区仍有未提交前端改动，未 promote、未 push、未部署生产
+
+## 2026-07-28 21:56:12 +0800
+
+- fork 增量: `cc796b688`、`72720626f`、`d41da732e`、`206d13bd0`，吸收 Kiro Claude prelude/call-marker/thinking-only 重试、Anthropic 首语义超时 failover 与生产 timeout 配置传播
+- 冲突处理: `gateway_service.go` 保留融合线完整 `GatewayFailureStage/Scope/NextAccountAction/SafeToFailoverAfterWrite` 字段，并加入 `PreSemanticTimeout` 与 fork 首语义超时实现
+- 验证: handler/service/Kiro/config 聚焦测试、Kiro/handler/service race、stream/cache 四项不变量、`go build ./...` 通过
+- 全量差分验证: `go test ./... -count=1` 仍为 61 个基线失败；相对 `cbec44f63` 新增失败 `0`，修复基线失败 `67`
+- 发布结论: fork 增量已合并到融合线，主工作区仍有新的未提交 Anthropic/429 网关改动，未 promote、未 push、未部署生产
+
+## 2026-07-28 22:13:55 +0800
+
+- fork 增量: `d62a8b73ae73bd2eb861060cb3263828af354ec9`（`fix(anthropic): retry soft 429 before cooldown`），吸收 Anthropic 无 reset soft-429 的同账号重试、冷却延后与多协议转发分类。
+- 冲突处理: `backend/internal/service/gateway_service.go` 的 `UpstreamFailoverError` 保留融合线已有 failure stage/scope、客户端错误映射、SSE 安全切换与 Kiro 状态字段，并加入 `AnthropicSoftRateLimit` / `AnthropicSoftRateLimitCommitted`。
+- 验证: Anthropic soft-429 handler/service 聚焦测试、429 冷却回归测试、`go build ./...` 与相同范围 `-race` 全部通过；`git diff --check` 通过。
+- 全量回归: `go test ./... -count=1` 仍为 61 个同步前基线失败；相对 `/tmp/baseline-all-fails.txt` 新增失败 `0`，基线失败修复 `67`。
+- 发布结论: fork 最新提交已合入融合线；未触碰主工作区未提交改动，未 promote、未 push、未部署生产。
+
+## 2026-07-29 02:41:47 +0800
+
+- 模式: `ai`
+- 隔离工作树: `/private/tmp/sub2api-official-sync-20260724-011058`
+- 融合分支: `codex/official-sync-review`
+- 本地融合基线: `d47fb3d1a2db3011c35a0b6abb52be74234717c8`
+- 官方目标: `8fd01c2814f42997d79bdb4bafcbcfab2fabeee3`（相对融合基线新增 145 个官方提交）
+- 共同祖先: `cb24522dd53f8f363d008e3afdc8e4baf9788cab`
+- 动作: 完成官方增量的语义融合、冲突消解和差分验证；未提升到 `main`，未 push，未部署生产。
+- 保留策略: 保留本地 Anthropic/Kiro/Grok/OpenAI 的调度、故障切换、流式终态、缓存计费和错误分类语义，同时吸收官方 OpenAI Live、Passkey、模型广场、session id、Responses namespace/item id 清理、Gemini 图片兼容、Antigravity 兼容桥、Ollama 云端用量刷新和面板限流能力。
+- 融合补正: 恢复 Ollama 请求活跃度记录和最终 upstream model；恢复 OpenAI rejected-field/max token 有界重试；保留 Claude system `cache_control`；修正 Opus 4.8/Gemini 3.6 定价、Grok OAuth 测试 token provider、AppHeader store mock，以及 Responses `function_call_output.output` 数组到 Anthropic 文本/图片 block 的结构化转换。
+- 后端聚焦验证: handler/server unit、官方 service contract、`internal/pkg/apicompat`、`internal/service/openai_ws_v2`、OpenAI Live/WS、Antigravity 首事件超时、Kiro/Grok 缓存身份与并发提交、用量/终态/首 token 边界通过；关键并发范围 `-race` 通过；`go build ./...` 通过。
+- 后端全量差分: service 同步前 138 个失败、当前 130 个失败，新增失败 `0`，修复基线失败 `8`；非 service 当前仅保留与同步前完全相同的 2 个 config 失败和 1 个 Antigravity 失败，`apicompat` 新增失败已清零。
+- 前端验证: lint、typecheck、production build 通过；全量测试为 `25 failed files / 91 failed tests`，与同步前基线精确一致，新增失败 `0`。
+- 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`。批量/单独运行仍失败的旧 OpenAI flush 断言均存在于同步前 service 基线，不属于本次增量；受影响的终态、首输出、缓存和 failover 合同测试已独立通过。
+- 工作区保护: 主工作区 17 项 Anthropic/429 未提交改动未被修改、stash、reset 或混入；本次仅提交隔离融合工作树。

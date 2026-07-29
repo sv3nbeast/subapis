@@ -181,6 +181,18 @@ func (s *GrokOAuthService) ValidateRefreshToken(ctx context.Context, refreshToke
 	return s.RefreshToken(ctx, refreshToken, proxyURL, xai.EffectiveClientID())
 }
 
+func (s *GrokOAuthService) ConvertFromSSO(ctx context.Context, ssoToken string, proxyID *int64) (*GrokTokenInfo, error) {
+	proxyURL, err := s.proxyURL(ctx, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	tokenResp, err := s.oauthClient.ConvertSSOToBuild(ctx, ssoToken, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return s.tokenInfoFromResponse(tokenResp, xai.DefaultClientID, nil), nil
+}
+
 func (s *GrokOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*GrokTokenInfo, error) {
 	if account == nil || account.Platform != PlatformGrok {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_INVALID_ACCOUNT", "account is not a Grok account")

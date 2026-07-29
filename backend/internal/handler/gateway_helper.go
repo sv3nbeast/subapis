@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -223,7 +224,11 @@ func releaseAccountSlotAfterForward(releaseFunc func(), forwardErr error) {
 }
 
 func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
-	if c == nil || failoverErr == nil || failoverErr.RetryAfter <= 0 {
+	if c == nil || failoverErr == nil {
+		return
+	}
+	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
+	if failoverErr.RetryAfter <= 0 {
 		return
 	}
 	seconds := int((failoverErr.RetryAfter + time.Second - 1) / time.Second)
@@ -231,6 +236,43 @@ func applyFailoverRetryAfter(c *gin.Context, failoverErr *service.UpstreamFailov
 		seconds = 1
 	}
 	c.Header("Retry-After", fmt.Sprintf("%d", seconds))
+}
+
+func copyFailoverRetryAfter(c *gin.Context, headers http.Header) {
+	if c == nil || headers == nil {
+		return
+	}
+	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
+	if retryAfter == "" || len(retryAfter) > 128 || strings.ContainsAny(retryAfter, "\r\n") || !isSafeRetryAfter(retryAfter) {
+		return
+	}
+	c.Header("Retry-After", retryAfter)
+}
+
+func isSafeRetryAfter(value string) bool {
+	digitsOnly := true
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			digitsOnly = false
+			break
+		}
+	}
+	if digitsOnly {
+		seconds, err := strconv.ParseUint(value, 10, 32)
+		return err == nil && seconds <= uint64((7*24*time.Hour)/time.Second)
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return false
+	}
+	return !retryAt.After(time.Now().Add(7 * 24 * time.Hour))
+}
+
+func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
+	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
+		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
+	}
+	return http.StatusServiceUnavailable, service.GrokCredentialUnavailableClientMessage
 }
 
 const grokQuotaFailoverRetryAfter = 5 * time.Second
@@ -335,6 +377,14 @@ func (h *ConcurrencyHelper) TryAcquireUserSlot(ctx context.Context, userID int64
 		return nil, false, nil
 	}
 	return result.ReleaseFunc, true, nil
+}
+
+// AcquireOpenAIWSIngressLease bounds the whole client WebSocket lifecycle.
+func (h *ConcurrencyHelper) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int) (*service.OpenAIWSIngressLease, bool, error) {
+	if h == nil || h.concurrencyService == nil {
+		return nil, false, fmt.Errorf("concurrency service is unavailable")
+	}
+	return h.concurrencyService.AcquireOpenAIWSIngressLease(ctx, apiKeyID, maxConnections)
 }
 
 func (h *ConcurrencyHelper) TryAcquireUserSlotForAPIKey(ctx context.Context, userID int64, maxConcurrency int, apiKeyID int64) (func(), bool, error) {

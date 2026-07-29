@@ -187,8 +187,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
+		isJSONObjectFormat := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responsesBody, "text.format.type").String()), "json_object")
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
-			SkipDefaultInstructions: !isResponsesShape,
+			SkipDefaultInstructions:             !isResponsesShape,
+			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
 		})
 		if !isResponsesShape {
 			ensureCodexOAuthInstructionsField(reqBody)
@@ -355,6 +357,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if s.isAgentIdentityAccount(ctx, account) && !agentIdentityTaskRecoveryWasTried(ctx) &&
+			isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			expectedTaskID := account.GetCredential("task_id")
+			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
+				return nil, err
+			}
+			ctx = markAgentIdentityTaskRecoveryTried(ctx)
+			return s.ForwardAsChatCompletions(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+		}
 		if useGrokResponses {
 			s.updateGrokUsageSnapshot(ctx, account.ID, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
@@ -377,8 +388,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			)
 			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 		}
-		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
-			return nil, foErr
+		// Grok content-policy refusals are request-scoped and must not enter the
+		// generic failover hook, which would consume another account.
+		if !(useGrokResponses && isGrokContentPolicyRejection(resp.StatusCode, respBody)) {
+			if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
+				return nil, foErr
+			}
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}

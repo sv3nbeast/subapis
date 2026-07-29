@@ -5,7 +5,6 @@
 
 import { apiClient } from "../client";
 import type {
-  APIKeyUsageConfig,
   CustomEndpoint,
   CustomMenuItem,
   LoginAgreementDocument,
@@ -17,6 +16,47 @@ export interface DefaultSubscriptionSetting {
   validity_days: number;
 }
 
+// ── 平台限额类型 ──────────────────────────────────────────────────
+export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok"
+export type QuotaWindowType = "daily" | "weekly" | "monthly"
+
+/** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
+export interface PlatformQuotaLimits {
+  daily:   number | null
+  weekly:  number | null
+  monthly: number | null
+}
+
+/** 全平台默认限额 map（key = PlatformType） */
+export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
+
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "grok"]
+
+/** 归一化为全 4 平台 × 3 窗口（缺失填 null），供模板非空绑定 */
+export function normalizePlatformQuotasMap(input?: DefaultPlatformQuotasMap | null): DefaultPlatformQuotasMap {
+  const result: DefaultPlatformQuotasMap = {}
+  for (const p of PLATFORMS) {
+    const src = input?.[p]
+    result[p] = {
+      daily:   typeof src?.daily === "number" ? src.daily : null,
+      weekly:  typeof src?.weekly === "number" ? src.weekly : null,
+      monthly: typeof src?.monthly === "number" ? src.monthly : null,
+    }
+  }
+  return result
+}
+
+/** 提交前清洗：非有限数/负数/空字符串 → null（保留 0 = 显式禁用），返回全 4 平台嵌套 map */
+export function sanitizePlatformQuotasMap(input?: DefaultPlatformQuotasMap | null): DefaultPlatformQuotasMap {
+  const clean = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null)
+  const result: DefaultPlatformQuotasMap = {}
+  for (const p of PLATFORMS) {
+    const src = input?.[p]
+    result[p] = { daily: clean(src?.daily), weekly: clean(src?.weekly), monthly: clean(src?.monthly) }
+  }
+  return result
+}
+
 export type AuthSourceType =
   | "email"
   | "linuxdo"
@@ -26,31 +66,13 @@ export type AuthSourceType =
   | "google"
   | "dingtalk";
 
-export type DefaultPlatformQuotaPlatform =
-  | "anthropic"
-  | "openai"
-  | "gemini"
-  | "antigravity"
-  | "kiro"
-  | "droid"
-  | "grok";
-export type DefaultPlatformQuotaWindow = "daily" | "weekly" | "monthly";
-export type DefaultPlatformQuotaValue = number | null;
-export type DefaultPlatformQuotaSetting = Record<
-  DefaultPlatformQuotaWindow,
-  DefaultPlatformQuotaValue
->;
-export type DefaultPlatformQuotasMap = Record<
-  DefaultPlatformQuotaPlatform,
-  DefaultPlatformQuotaSetting
->;
-
 export interface AuthSourceDefaultsValue {
   balance: number;
   concurrency: number;
   subscriptions: DefaultSubscriptionSetting[];
   grant_on_signup: boolean;
   grant_on_first_bind: boolean;
+  // ★ 新增：平台限额覆盖（key = PlatformType）
   platform_quotas: DefaultPlatformQuotasMap;
 }
 
@@ -87,20 +109,6 @@ const AUTH_SOURCE_TYPES: AuthSourceType[] = [
   "github",
   "google",
   "dingtalk",
-];
-export const DEFAULT_PLATFORM_QUOTA_PLATFORMS: DefaultPlatformQuotaPlatform[] = [
-  "anthropic",
-  "openai",
-  "gemini",
-  "antigravity",
-  "kiro",
-  "droid",
-  "grok",
-];
-export const DEFAULT_PLATFORM_QUOTA_WINDOWS: DefaultPlatformQuotaWindow[] = [
-  "daily",
-  "weekly",
-  "monthly",
 ];
 const AUTH_SOURCE_DEFAULT_BALANCE = 0;
 const AUTH_SOURCE_DEFAULT_CONCURRENCY = 5;
@@ -200,46 +208,6 @@ export function normalizeDefaultSubscriptionSettings(
     }));
 }
 
-function emptyPlatformQuotaSetting(): DefaultPlatformQuotaSetting {
-  return { daily: null, weekly: null, monthly: null };
-}
-
-function normalizeQuotaValue(value: unknown): DefaultPlatformQuotaValue {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function sanitizeQuotaValue(value: unknown): DefaultPlatformQuotaValue {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : null;
-}
-
-function buildPlatformQuotasMap(
-  source: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null | undefined,
-  valueNormalizer: (value: unknown) => DefaultPlatformQuotaValue,
-): DefaultPlatformQuotasMap {
-  return DEFAULT_PLATFORM_QUOTA_PLATFORMS.reduce((acc, platform) => {
-    const raw = source?.[platform] ?? {};
-    acc[platform] = DEFAULT_PLATFORM_QUOTA_WINDOWS.reduce((windows, key) => {
-      windows[key] = valueNormalizer(raw[key]);
-      return windows;
-    }, emptyPlatformQuotaSetting());
-    return acc;
-  }, {} as DefaultPlatformQuotasMap);
-}
-
-export function normalizePlatformQuotasMap(
-  quotas?: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null,
-): DefaultPlatformQuotasMap {
-  return buildPlatformQuotasMap(quotas, normalizeQuotaValue);
-}
-
-export function sanitizePlatformQuotasMap(
-  quotas?: Partial<Record<DefaultPlatformQuotaPlatform, Partial<DefaultPlatformQuotaSetting>>> | null,
-): DefaultPlatformQuotasMap {
-  return buildPlatformQuotasMap(quotas, sanitizeQuotaValue);
-}
-
 export function buildAuthSourceDefaultsState(
   settings: Partial<SystemSettings>,
 ): AuthSourceDefaultsState {
@@ -268,11 +236,7 @@ export function buildAuthSourceDefaultsState(
         raw[`auth_source_default_${source}_grant_on_signup`] === true,
       grant_on_first_bind:
         raw[`auth_source_default_${source}_grant_on_first_bind`] === true,
-      platform_quotas: normalizePlatformQuotasMap(
-        raw[`auth_source_default_${source}_platform_quotas`] as Partial<
-          DefaultPlatformQuotasMap
-        >,
-      ),
+      platform_quotas: normalizePlatformQuotasMap(raw[`auth_source_default_${source}_platform_quotas`] as DefaultPlatformQuotasMap | undefined),
     };
     return acc;
   }, {} as AuthSourceDefaultsState);
@@ -300,8 +264,7 @@ export function appendAuthSourceDefaultsToUpdateRequest(
       current.grant_on_signup;
     target[`auth_source_default_${source}_grant_on_first_bind`] =
       current.grant_on_first_bind;
-    target[`auth_source_default_${source}_platform_quotas`] =
-      sanitizePlatformQuotasMap(current.platform_quotas);
+    target[`auth_source_default_${source}_platform_quotas`] = sanitizePlatformQuotasMap(current.platform_quotas)
   }
 
   return payload;
@@ -397,13 +360,19 @@ export interface SystemSettings {
   registration_enabled: boolean;
   email_verify_enabled: boolean;
   registration_email_suffix_whitelist: string[];
-  registration_email_suffix_blacklist: string[];
   promo_code_enabled: boolean;
   password_reset_enabled: boolean;
   frontend_url: string;
   invitation_code_enabled: boolean;
   totp_enabled: boolean; // TOTP 双因素认证
   totp_encryption_key_configured: boolean; // TOTP 加密密钥是否已配置
+  passkey_enabled: boolean;
+  passkey_configured: boolean;
+  passkey_rp_id: string;
+  passkey_rp_origins: string[];
+  session_binding_enabled: boolean; // 会话 IP/UA 绑定
+  step_up_enabled: boolean; // 敏感操作 step-up 2FA
+  audit_log_retention_days: number; // 审计日志保留天数
   login_agreement_enabled: boolean;
   login_agreement_mode: "modal" | "checkbox" | string;
   login_agreement_updated_at: string;
@@ -414,10 +383,10 @@ export interface SystemSettings {
   affiliate_rebate_freeze_hours: number;
   affiliate_rebate_duration_days: number;
   affiliate_rebate_per_invitee_cap: number;
+  affiliate_admin_recharge_enabled: boolean;
   default_concurrency: number;
   default_user_rpm_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
-  default_platform_quotas: DefaultPlatformQuotasMap;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -438,6 +407,11 @@ export interface SystemSettings {
   auth_source_default_wechat_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_wechat_grant_on_signup?: boolean;
   auth_source_default_wechat_grant_on_first_bind?: boolean;
+  auth_source_default_dingtalk_balance?: number;
+  auth_source_default_dingtalk_concurrency?: number;
+  auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
+  auth_source_default_dingtalk_grant_on_signup?: boolean;
+  auth_source_default_dingtalk_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
@@ -449,6 +423,15 @@ export interface SystemSettings {
   auth_source_default_google_grant_on_signup?: boolean;
   auth_source_default_google_grant_on_first_bind?: boolean;
   force_email_on_third_party_signup?: boolean;
+  // ── 平台限额（嵌套 JSON，系统层 + 7 auth-source 层）────────────────────────────────
+  default_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_email_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_linuxdo_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_oidc_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_wechat_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_github_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_google_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_dingtalk_platform_quotas?: DefaultPlatformQuotasMap;
   // OEM settings
   site_name: string;
   site_logo: string;
@@ -458,13 +441,16 @@ export interface SystemSettings {
   doc_url: string;
   home_content: string;
   hide_ccs_import_button: boolean;
-  purchase_subscription_enabled: boolean;
-  purchase_subscription_url: string;
   table_default_page_size: number;
   table_page_size_options: number[];
   backend_mode_enabled: boolean;
   custom_menu_items: CustomMenuItem[];
   custom_endpoints: CustomEndpoint[];
+  proxy_auto_select_max_anthropic_accounts_per_proxy: number;
+  proxy_auto_select_max_openai_accounts_per_proxy: number;
+  proxy_auto_select_max_antigravity_accounts_per_proxy: number;
+  proxy_auto_select_max_grok_accounts_per_proxy: number;
+  proxy_auto_select_max_kiro_accounts_per_proxy: number;
   // SMTP settings
   smtp_host: string;
   smtp_port: number;
@@ -477,6 +463,8 @@ export interface SystemSettings {
   turnstile_enabled: boolean;
   turnstile_site_key: string;
   turnstile_secret_key_configured: boolean;
+  api_key_acl_trust_forwarded_ip: boolean;
+  forwarded_client_ip_headers: string[];
 
   // LinuxDo Connect OAuth settings
   linuxdo_connect_enabled: boolean;
@@ -581,6 +569,7 @@ export interface SystemSettings {
   // Gateway forwarding behavior
   enable_fingerprint_unification: boolean;
   enable_metadata_passthrough: boolean;
+  enable_cch_signing: boolean;
   enable_claude_oauth_system_prompt_injection: boolean;
   claude_oauth_system_prompt: string;
   claude_oauth_system_prompt_blocks: string;
@@ -588,12 +577,6 @@ export interface SystemSettings {
   rewrite_message_cache_control: boolean;
   enable_client_dateline_normalization: boolean;
   antigravity_user_agent_version: string;
-  claude_upstream_user_agent: string;
-  proxy_auto_select_max_anthropic_accounts_per_proxy: number;
-  proxy_auto_select_max_openai_accounts_per_proxy: number;
-  proxy_auto_select_max_antigravity_accounts_per_proxy: number;
-  proxy_auto_select_max_grok_accounts_per_proxy: number;
-  proxy_auto_select_max_kiro_accounts_per_proxy: number;
   openai_codex_user_agent: string;
   // codex_cli_only 加固
   min_codex_version: string;
@@ -620,6 +603,7 @@ export interface SystemSettings {
   payment_enabled_types: string[];
   payment_balance_disabled: boolean;
   payment_balance_recharge_multiplier: number;
+  payment_subscription_usd_to_cny_rate: number;
   payment_recharge_fee_rate: number;
   payment_load_balance_strategy: string;
   payment_product_name_prefix: string;
@@ -631,16 +615,45 @@ export interface SystemSettings {
   payment_cancel_rate_limit_window: number;
   payment_cancel_rate_limit_unit: string;
   payment_cancel_rate_limit_window_mode: string;
+  payment_alipay_force_qrcode?: boolean;
+  payment_alipay_mobile_precreate_deep_link?: boolean;
   payment_visible_method_alipay_source?: string;
   payment_visible_method_wxpay_source?: string;
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
+  openai_low_upstream_rate_priority_enabled?: boolean;
+  openai_oauth_scheduling_rate_multiplier?: number;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
+  openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_advanced_scheduler_lb_top_k?: string;
+  openai_advanced_scheduler_weight_priority?: string;
+  openai_advanced_scheduler_weight_load?: string;
+  openai_advanced_scheduler_weight_queue?: string;
+  openai_advanced_scheduler_weight_error_rate?: string;
+  openai_advanced_scheduler_weight_ttft?: string;
+  openai_advanced_scheduler_weight_reset?: string;
+  openai_advanced_scheduler_weight_quota_headroom?: string;
+  openai_advanced_scheduler_weight_upstream_cost?: string;
+  openai_advanced_scheduler_weight_previous_response?: string;
+  openai_advanced_scheduler_weight_session_sticky?: string;
+  openai_advanced_scheduler_effective_lb_top_k?: string;
+  openai_advanced_scheduler_effective_weight_priority?: string;
+  openai_advanced_scheduler_effective_weight_load?: string;
+  openai_advanced_scheduler_effective_weight_queue?: string;
+  openai_advanced_scheduler_effective_weight_error_rate?: string;
+  openai_advanced_scheduler_effective_weight_ttft?: string;
+  openai_advanced_scheduler_effective_weight_reset?: string;
+  openai_advanced_scheduler_effective_weight_quota_headroom?: string;
+  openai_advanced_scheduler_effective_weight_upstream_cost?: string;
+  openai_advanced_scheduler_effective_weight_previous_response?: string;
+  openai_advanced_scheduler_effective_weight_session_sticky?: string;
 
-  // Balance & quota notification
+  // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled: boolean;
   balance_low_notify_threshold: number;
   balance_low_notify_recharge_url: string;
+  subscription_expiry_notify_enabled: boolean;
   account_quota_notify_enabled: boolean;
   account_quota_notify_emails: NotifyEmailEntry[];
 
@@ -651,16 +664,10 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
-  // Public Model Market feature switch
-  public_model_market_enabled: boolean;
-  public_model_market_reference_usd_cny_rate: number;
-  public_model_market_settlement_usd_cny_rate: number;
-
-  // Web Chat feature switch
-  web_chat_enabled: boolean;
-  web_chat_projects_enabled: boolean;
-  web_chat_templates_enabled: boolean;
-  web_chat_history_enabled: boolean;
+  // Model Plaza feature switches + description
+  model_plaza_enabled: boolean;
+  model_plaza_require_auth: boolean;
+  model_plaza_description: string;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -676,12 +683,15 @@ export interface UpdateSettingsRequest {
   registration_enabled?: boolean;
   email_verify_enabled?: boolean;
   registration_email_suffix_whitelist?: string[];
-  registration_email_suffix_blacklist?: string[];
   promo_code_enabled?: boolean;
   password_reset_enabled?: boolean;
   frontend_url?: string;
   invitation_code_enabled?: boolean;
   totp_enabled?: boolean; // TOTP 双因素认证
+  passkey_enabled?: boolean;
+  session_binding_enabled?: boolean; // 会话 IP/UA 绑定
+  step_up_enabled?: boolean; // 敏感操作 step-up 2FA
+  audit_log_retention_days?: number; // 审计日志保留天数
   login_agreement_enabled?: boolean;
   login_agreement_mode?: "modal" | "checkbox" | string;
   login_agreement_updated_at?: string;
@@ -691,10 +701,10 @@ export interface UpdateSettingsRequest {
   affiliate_rebate_freeze_hours?: number;
   affiliate_rebate_duration_days?: number;
   affiliate_rebate_per_invitee_cap?: number;
+  affiliate_admin_recharge_enabled?: boolean;
   default_concurrency?: number;
   default_user_rpm_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
-  default_platform_quotas?: DefaultPlatformQuotasMap;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -715,6 +725,11 @@ export interface UpdateSettingsRequest {
   auth_source_default_wechat_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_wechat_grant_on_signup?: boolean;
   auth_source_default_wechat_grant_on_first_bind?: boolean;
+  auth_source_default_dingtalk_balance?: number;
+  auth_source_default_dingtalk_concurrency?: number;
+  auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
+  auth_source_default_dingtalk_grant_on_signup?: boolean;
+  auth_source_default_dingtalk_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
@@ -726,6 +741,15 @@ export interface UpdateSettingsRequest {
   auth_source_default_google_grant_on_signup?: boolean;
   auth_source_default_google_grant_on_first_bind?: boolean;
   force_email_on_third_party_signup?: boolean;
+  // ── 平台限额（嵌套 JSON，系统层 + 7 auth-source 层）────────────────────────────────
+  default_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_email_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_linuxdo_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_oidc_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_wechat_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_github_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_google_platform_quotas?: DefaultPlatformQuotasMap;
+  auth_source_default_dingtalk_platform_quotas?: DefaultPlatformQuotasMap;
   site_name?: string;
   site_logo?: string;
   site_subtitle?: string;
@@ -734,8 +758,6 @@ export interface UpdateSettingsRequest {
   doc_url?: string;
   home_content?: string;
   hide_ccs_import_button?: boolean;
-  purchase_subscription_enabled?: boolean;
-  purchase_subscription_url?: string;
   table_default_page_size?: number;
   table_page_size_options?: number[];
   backend_mode_enabled?: boolean;
@@ -751,6 +773,8 @@ export interface UpdateSettingsRequest {
   turnstile_enabled?: boolean;
   turnstile_site_key?: string;
   turnstile_secret_key?: string;
+  api_key_acl_trust_forwarded_ip?: boolean;
+  forwarded_client_ip_headers?: string[];
   linuxdo_connect_enabled?: boolean;
   linuxdo_connect_client_id?: string;
   linuxdo_connect_client_secret?: string;
@@ -835,6 +859,7 @@ export interface UpdateSettingsRequest {
   allow_ungrouped_key_scheduling?: boolean;
   enable_fingerprint_unification?: boolean;
   enable_metadata_passthrough?: boolean;
+  enable_cch_signing?: boolean;
   enable_claude_oauth_system_prompt_injection?: boolean;
   claude_oauth_system_prompt?: string;
   claude_oauth_system_prompt_blocks?: string;
@@ -842,12 +867,6 @@ export interface UpdateSettingsRequest {
   rewrite_message_cache_control?: boolean;
   enable_client_dateline_normalization?: boolean;
   antigravity_user_agent_version?: string;
-  claude_upstream_user_agent?: string;
-  proxy_auto_select_max_anthropic_accounts_per_proxy?: number;
-  proxy_auto_select_max_openai_accounts_per_proxy?: number;
-  proxy_auto_select_max_antigravity_accounts_per_proxy?: number;
-  proxy_auto_select_max_grok_accounts_per_proxy?: number;
-  proxy_auto_select_max_kiro_accounts_per_proxy?: number;
   openai_codex_user_agent?: string;
   // codex_cli_only 加固
   min_codex_version?: string;
@@ -872,6 +891,7 @@ export interface UpdateSettingsRequest {
   payment_enabled_types?: string[];
   payment_balance_disabled?: boolean;
   payment_balance_recharge_multiplier?: number;
+  payment_subscription_usd_to_cny_rate?: number;
   payment_recharge_fee_rate?: number;
   payment_load_balance_strategy?: string;
   payment_product_name_prefix?: string;
@@ -883,15 +903,33 @@ export interface UpdateSettingsRequest {
   payment_cancel_rate_limit_window?: number;
   payment_cancel_rate_limit_unit?: string;
   payment_cancel_rate_limit_window_mode?: string;
+  payment_alipay_force_qrcode?: boolean;
+  payment_alipay_mobile_precreate_deep_link?: boolean;
   payment_visible_method_alipay_source?: string;
   payment_visible_method_wxpay_source?: string;
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
+  openai_low_upstream_rate_priority_enabled?: boolean;
+  openai_oauth_scheduling_rate_multiplier?: number;
   openai_advanced_scheduler_enabled?: boolean;
-  // Balance & quota notification
+  openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
+  openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_advanced_scheduler_lb_top_k?: string;
+  openai_advanced_scheduler_weight_priority?: string;
+  openai_advanced_scheduler_weight_load?: string;
+  openai_advanced_scheduler_weight_queue?: string;
+  openai_advanced_scheduler_weight_error_rate?: string;
+  openai_advanced_scheduler_weight_ttft?: string;
+  openai_advanced_scheduler_weight_reset?: string;
+  openai_advanced_scheduler_weight_quota_headroom?: string;
+  openai_advanced_scheduler_weight_upstream_cost?: string;
+  openai_advanced_scheduler_weight_previous_response?: string;
+  openai_advanced_scheduler_weight_session_sticky?: string;
+  // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;
   balance_low_notify_recharge_url?: string;
+  subscription_expiry_notify_enabled?: boolean;
   account_quota_notify_enabled?: boolean;
   account_quota_notify_emails?: NotifyEmailEntry[];
 
@@ -902,16 +940,10 @@ export interface UpdateSettingsRequest {
   // Available Channels feature switch
   available_channels_enabled?: boolean;
 
-  // Public Model Market feature switch
-  public_model_market_enabled?: boolean;
-  public_model_market_reference_usd_cny_rate?: number;
-  public_model_market_settlement_usd_cny_rate?: number;
-
-  // Web Chat feature switch
-  web_chat_enabled?: boolean;
-  web_chat_projects_enabled?: boolean;
-  web_chat_templates_enabled?: boolean;
-  web_chat_history_enabled?: boolean;
+  // Model Plaza feature switches + description
+  model_plaza_enabled?: boolean;
+  model_plaza_require_auth?: boolean;
+  model_plaza_description?: string;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
@@ -922,43 +954,13 @@ export interface UpdateSettingsRequest {
   allow_user_view_error_requests?: boolean;
 }
 
-function normalizeSettingsArray<T>(value: T[] | null | undefined): T[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function normalizeSystemSettings(settings: SystemSettings): SystemSettings {
-  return {
-    ...settings,
-    registration_email_suffix_whitelist: normalizeSettingsArray(
-      settings.registration_email_suffix_whitelist,
-    ),
-    registration_email_suffix_blacklist: normalizeSettingsArray(
-      settings.registration_email_suffix_blacklist,
-    ),
-    table_page_size_options:
-      normalizeSettingsArray(settings.table_page_size_options).length > 0
-        ? normalizeSettingsArray(settings.table_page_size_options)
-        : [10, 20, 50, 100],
-    custom_menu_items: normalizeSettingsArray(settings.custom_menu_items),
-    custom_endpoints: normalizeSettingsArray(settings.custom_endpoints),
-    default_subscriptions: normalizeSettingsArray(settings.default_subscriptions),
-    default_platform_quotas: normalizePlatformQuotasMap(
-      settings.default_platform_quotas,
-    ),
-    payment_enabled_types: normalizeSettingsArray(settings.payment_enabled_types),
-    account_quota_notify_emails: normalizeSettingsArray(
-      settings.account_quota_notify_emails,
-    ),
-  };
-}
-
 /**
  * Get all system settings
  * @returns System settings
  */
 export async function getSettings(): Promise<SystemSettings> {
   const { data } = await apiClient.get<SystemSettings>("/admin/settings");
-  return normalizeSystemSettings(data);
+  return data;
 }
 
 /**
@@ -972,23 +974,6 @@ export async function updateSettings(
   const { data } = await apiClient.put<SystemSettings>(
     "/admin/settings",
     settings,
-  );
-  return normalizeSystemSettings(data);
-}
-
-export async function getAPIKeyUsageConfig(): Promise<APIKeyUsageConfig> {
-  const { data } = await apiClient.get<APIKeyUsageConfig>(
-    "/admin/settings/api-key-usage-config",
-  );
-  return data;
-}
-
-export async function updateAPIKeyUsageConfig(
-  config: APIKeyUsageConfig,
-): Promise<APIKeyUsageConfig> {
-  const { data } = await apiClient.put<APIKeyUsageConfig>(
-    "/admin/settings/api-key-usage-config",
-    config,
   );
   return data;
 }
@@ -1048,7 +1033,7 @@ export async function sendTestEmail(
   return data;
 }
 
-// ==================== Notification Email Templates ====================
+// ==================== Email Template Settings ====================
 
 export interface EmailTemplateOption {
   value: string;
@@ -1090,12 +1075,9 @@ export interface UpdateEmailTemplateRequest {
   html: string;
 }
 
-export interface PreviewEmailTemplateRequest {
+export interface PreviewEmailTemplateRequest extends UpdateEmailTemplateRequest {
   event: string;
   locale: string;
-  subject: string;
-  html: string;
-  variables?: Record<string, string>;
 }
 
 export interface EmailTemplatePreviewResponse {
@@ -1123,11 +1105,11 @@ export async function getEmailTemplate(
 export async function updateEmailTemplate(
   event: string,
   locale: string,
-  payload: UpdateEmailTemplateRequest,
+  request: UpdateEmailTemplateRequest,
 ): Promise<EmailTemplateDetail> {
   const { data } = await apiClient.put<EmailTemplateDetail>(
     `/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`,
-    payload,
+    request,
   );
   return data;
 }
@@ -1143,11 +1125,11 @@ export async function restoreOfficialEmailTemplate(
 }
 
 export async function previewEmailTemplate(
-  payload: PreviewEmailTemplateRequest,
+  request: PreviewEmailTemplateRequest,
 ): Promise<EmailTemplatePreviewResponse> {
   const { data } = await apiClient.post<EmailTemplatePreviewResponse>(
     "/admin/settings/email-template-preview",
-    payload,
+    request,
   );
   return data;
 }
@@ -1244,6 +1226,38 @@ export async function updateRateLimit429CooldownSettings(
   return data;
 }
 
+// ==================== Panel Rate Limit Settings ====================
+
+/**
+ * Panel API rate limit settings.
+ * Authenticated panel endpoints are limited per user account (reverse-proxy
+ * safe); public endpoints are limited per publicly routable client IP.
+ */
+export interface PanelRateLimitSettings {
+  enabled: boolean;
+  user_rpm: number;
+  heavy_rpm: number;
+  exempt_admin: boolean;
+  public_ip_rpm: number;
+}
+
+export async function getPanelRateLimitSettings(): Promise<PanelRateLimitSettings> {
+  const { data } = await apiClient.get<PanelRateLimitSettings>(
+    "/admin/settings/panel-rate-limit",
+  );
+  return data;
+}
+
+export async function updatePanelRateLimitSettings(
+  settings: PanelRateLimitSettings,
+): Promise<PanelRateLimitSettings> {
+  const { data } = await apiClient.put<PanelRateLimitSettings>(
+    "/admin/settings/panel-rate-limit",
+    settings,
+  );
+  return data;
+}
+
 // ==================== Stream Timeout Settings ====================
 
 /**
@@ -1330,11 +1344,12 @@ export async function updateRectifierSettings(
  */
 export interface OpenAIFastPolicyRule {
   service_tier: "all" | "priority" | "flex";
-  action: "pass" | "filter" | "block";
+  action: "pass" | "filter" | "block" | "force_priority";
   scope: "all" | "oauth" | "apikey" | "bedrock";
+  user_ids?: number[];
   error_message?: string;
   model_whitelist?: string[];
-  fallback_action?: "pass" | "filter" | "block";
+  fallback_action?: "pass" | "filter" | "block" | "force_priority";
   fallback_error_message?: string;
 }
 
@@ -1399,10 +1414,8 @@ export interface WebSearchProviderConfig {
   type: "brave" | "tavily";
   api_key: string;
   api_key_configured: boolean;
-  priority?: number;
   quota_limit: number | null;
-  quota_refresh_interval?: "" | "daily" | "weekly" | "monthly";
-  subscribed_at?: number | null;
+  subscribed_at: number | null;
   quota_used?: number;
   proxy_id: number | null;
   expires_at: number | null;
@@ -1455,45 +1468,9 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
-// ==================== Status Probe Settings ====================
-
-export interface StatusProbeModel {
-  model: string;
-  display_name: string;
-  sort_order: number;
-  enabled: boolean;
-  api_key: string;
-  base_url: string;
-}
-
-export interface StatusProbeSettings {
-  enabled: boolean;
-  public_visible: boolean;
-  interval_minutes: number;
-  retention_days: number;
-  models: StatusProbeModel[];
-}
-
-export async function getStatusProbeSettings(): Promise<StatusProbeSettings> {
-  const { data } = await apiClient.get<StatusProbeSettings>("/admin/settings/status-probe");
-  return data;
-}
-
-export async function updateStatusProbeSettings(
-  settings: StatusProbeSettings,
-): Promise<StatusProbeSettings> {
-  const { data } = await apiClient.put<StatusProbeSettings>(
-    "/admin/settings/status-probe",
-    settings,
-  );
-  return data;
-}
-
 export const settingsAPI = {
   getSettings,
   updateSettings,
-  getAPIKeyUsageConfig,
-  updateAPIKeyUsageConfig,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,
@@ -1508,6 +1485,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getPanelRateLimitSettings,
+  updatePanelRateLimitSettings,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,
@@ -1518,8 +1497,6 @@ export const settingsAPI = {
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,
   resetWebSearchUsage,
-  getStatusProbeSettings,
-  updateStatusProbeSettings,
 };
 
 export default settingsAPI;

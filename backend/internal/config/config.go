@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -70,6 +73,7 @@ type Config struct {
 	Ops                     OpsConfig                     `mapstructure:"ops"`
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
 	Totp                    TotpConfig                    `mapstructure:"totp"`
+	WebAuthn                WebAuthnConfig                `mapstructure:"webauthn"`
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
 	OIDC                    OIDCConnectConfig             `mapstructure:"oidc_connect"`
@@ -94,6 +98,7 @@ type Config struct {
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
+	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 }
 
 type LogConfig struct {
@@ -224,6 +229,43 @@ type BatchImageConfig struct {
 	VertexOutputRetentionHours   int    `mapstructure:"vertex_output_retention_hours"`
 	VertexBatchPredictionBaseURL string `mapstructure:"vertex_batch_prediction_base_url"`
 	VertexGCSBaseURL             string `mapstructure:"vertex_gcs_base_url"`
+}
+
+// ImageStorageConfig configures the S3-compatible store used by async image jobs.
+type ImageStorageConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	Endpoint        string `mapstructure:"endpoint"`
+	Region          string `mapstructure:"region"`
+	Bucket          string `mapstructure:"bucket"`
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	SecretAccessKey string `mapstructure:"secret_access_key"`
+	Prefix          string `mapstructure:"prefix"`
+	ForcePathStyle  bool   `mapstructure:"force_path_style"`
+	PublicBaseURL   string `mapstructure:"public_base_url"`
+	PresignExpiry   int    `mapstructure:"presign_expiry_hours"`
+	MaxDownloadByte int64  `mapstructure:"max_download_bytes"`
+}
+
+func (c *ImageStorageConfig) IsConfigured() bool {
+	return c.Bucket != "" && c.AccessKeyID != "" && c.SecretAccessKey != ""
+}
+
+func (c *ImageStorageConfig) Active() bool {
+	return c.Enabled && c.IsConfigured()
+}
+
+func (c *ImageStorageConfig) MissingCredentialKeys() []string {
+	var missing []string
+	if c.Bucket == "" {
+		missing = append(missing, "image_storage.bucket")
+	}
+	if c.AccessKeyID == "" {
+		missing = append(missing, "image_storage.access_key_id")
+	}
+	if c.SecretAccessKey == "" {
+		missing = append(missing, "image_storage.secret_access_key")
+	}
+	return missing
 }
 
 type LinuxDoConnectConfig struct {
@@ -579,7 +621,13 @@ type TokenRefreshConfig struct {
 	// 最大重试次数
 	MaxRetries int `mapstructure:"max_retries"`
 	// 重试退避基础时间（秒）
-	RetryBackoffSeconds int `mapstructure:"retry_backoff_seconds"`
+	RetryBackoffSeconds      int `mapstructure:"retry_backoff_seconds"`
+	CandidatePageSize        int `mapstructure:"candidate_page_size"`
+	ProviderConcurrency      int `mapstructure:"provider_concurrency"`
+	ProviderQPS              int `mapstructure:"provider_qps"`
+	ProviderFailureThreshold int `mapstructure:"provider_failure_threshold"`
+	AttemptTimeoutSeconds    int `mapstructure:"attempt_timeout_seconds"`
+	CycleTimeoutSeconds      int `mapstructure:"cycle_timeout_seconds"`
 }
 
 type PricingConfig struct {
@@ -598,15 +646,18 @@ type PricingConfig struct {
 }
 
 type ServerConfig struct {
-	Host               string    `mapstructure:"host"`
-	Port               int       `mapstructure:"port"`
-	Mode               string    `mapstructure:"mode"`                  // debug/release
-	FrontendURL        string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
-	ReadHeaderTimeout  int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
-	IdleTimeout        int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
-	TrustedProxies     []string  `mapstructure:"trusted_proxies"`       // 可信代理列表（CIDR/IP）
-	MaxRequestBodySize int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
-	H2C                H2CConfig `mapstructure:"h2c"`                   // HTTP/2 Cleartext 配置
+	Host                     string    `mapstructure:"host"`
+	Port                     int       `mapstructure:"port"`
+	Mode                     string    `mapstructure:"mode"`
+	EnableServerTiming       bool      `mapstructure:"enable_server_timing"`
+	FrontendURL              string    `mapstructure:"frontend_url"`
+	ReadHeaderTimeout        int       `mapstructure:"read_header_timeout"`
+	MaxHeaderBytes           int       `mapstructure:"max_header_bytes"`
+	IdleTimeout              int       `mapstructure:"idle_timeout"`
+	TrustedProxies           []string  `mapstructure:"trusted_proxies"`
+	TrustedProxiesConfigured bool      `mapstructure:"-" json:"-" yaml:"-"`
+	MaxRequestBodySize       int64     `mapstructure:"max_request_body_size"`
+	H2C                      H2CConfig `mapstructure:"h2c"`
 }
 
 // H2CConfig HTTP/2 Cleartext 配置
@@ -624,36 +675,98 @@ type CORSConfig struct {
 	AllowCredentials bool     `mapstructure:"allow_credentials"`
 }
 
+// WebAuthnConfig configures this deployment as a WebAuthn relying party.
+// RPID and RPOrigins are security boundaries and must never be inferred from
+// untrusted request Host or Origin headers.
+type WebAuthnConfig struct {
+	Enabled       bool     `mapstructure:"enabled"`
+	RPDisplayName string   `mapstructure:"rp_display_name"`
+	RPID          string   `mapstructure:"rp_id"`
+	RPOrigins     []string `mapstructure:"rp_origins"`
+}
+
+const MaxForwardedClientIPHeaders = 16
+
+type ForwardedClientIPSettings struct {
+	TrustForwardedIP bool
+	Headers          []string
+}
+
 type SecurityConfig struct {
-	URLAllowlist                     URLAllowlistConfig   `mapstructure:"url_allowlist"`
-	ResponseHeaders                  ResponseHeaderConfig `mapstructure:"response_headers"`
-	CSP                              CSPConfig            `mapstructure:"csp"`
-	ProxyFallback                    ProxyFallbackConfig  `mapstructure:"proxy_fallback"`
-	ProxyProbe                       ProxyProbeConfig     `mapstructure:"proxy_probe"`
-	TrustForwardedIPForAPIKeyACL     bool                 `mapstructure:"trust_forwarded_ip_for_api_key_acl"`
-	trustForwardedIPForAPIKeyACLLive *atomic.Bool         `mapstructure:"-"`
+	URLAllowlist                  URLAllowlistConfig                         `mapstructure:"url_allowlist"`
+	ResponseHeaders               ResponseHeaderConfig                       `mapstructure:"response_headers"`
+	CSP                           CSPConfig                                  `mapstructure:"csp"`
+	ProxyFallback                 ProxyFallbackConfig                        `mapstructure:"proxy_fallback"`
+	ProxyProbe                    ProxyProbeConfig                           `mapstructure:"proxy_probe"`
+	TrustForwardedIPForAPIKeyACL  bool                                       `mapstructure:"trust_forwarded_ip_for_api_key_acl"`
+	ForwardedClientIPHeaders      []string                                   `mapstructure:"forwarded_client_ip_headers" json:"forwarded_client_ip_headers" yaml:"forwarded_client_ip_headers"`
+	forwardedClientIPSettingsLive *atomic.Pointer[ForwardedClientIPSettings] `mapstructure:"-" json:"-" yaml:"-"`
+}
+
+func NormalizeForwardedClientIPHeaders(headers []string) ([]string, error) {
+	normalized := make([]string, 0, len(headers))
+	seen := make(map[string]struct{}, len(headers))
+	for _, header := range headers {
+		header = strings.TrimSpace(header)
+		if !httpguts.ValidHeaderFieldName(header) {
+			return nil, fmt.Errorf("invalid HTTP header field name %q", header)
+		}
+		canonical := textproto.CanonicalMIMEHeaderKey(header)
+		key := strings.ToLower(canonical)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if len(normalized) == MaxForwardedClientIPHeaders {
+			return nil, fmt.Errorf("forwarded client IP headers must contain at most %d unique names", MaxForwardedClientIPHeaders)
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+	return normalized, nil
+}
+
+func cloneForwardedClientIPHeaders(headers []string) []string {
+	if len(headers) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), headers...)
+}
+
+func (c *Config) ForwardedClientIPSettings() ForwardedClientIPSettings {
+	if c == nil {
+		return ForwardedClientIPSettings{Headers: []string{}}
+	}
+	if live := c.Security.forwardedClientIPSettingsLive; live != nil {
+		if snapshot := live.Load(); snapshot != nil {
+			return ForwardedClientIPSettings{TrustForwardedIP: snapshot.TrustForwardedIP, Headers: cloneForwardedClientIPHeaders(snapshot.Headers)}
+		}
+	}
+	return ForwardedClientIPSettings{TrustForwardedIP: c.Security.TrustForwardedIPForAPIKeyACL, Headers: cloneForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)}
 }
 
 func (c *Config) TrustForwardedIPForAPIKeyACL() bool {
+	return c.ForwardedClientIPSettings().TrustForwardedIP
+}
+
+func (c *Config) ForwardedClientIPTrustEnabled() bool {
+	return c != nil && c.TrustForwardedIPForAPIKeyACL()
+}
+
+func (c *Config) SetForwardedClientIPSettings(enabled bool, headers []string) {
 	if c == nil {
-		return false
+		return
 	}
-	live := c.Security.trustForwardedIPForAPIKeyACLLive
-	if live == nil {
-		return c.Security.TrustForwardedIPForAPIKeyACL
+	if c.Security.forwardedClientIPSettingsLive == nil {
+		c.Security.forwardedClientIPSettingsLive = &atomic.Pointer[ForwardedClientIPSettings]{}
 	}
-	return live.Load()
+	c.Security.forwardedClientIPSettingsLive.Store(&ForwardedClientIPSettings{TrustForwardedIP: enabled, Headers: cloneForwardedClientIPHeaders(headers)})
 }
 
 func (c *Config) SetTrustForwardedIPForAPIKeyACL(enabled bool) {
 	if c == nil {
 		return
 	}
-	c.Security.TrustForwardedIPForAPIKeyACL = enabled
-	if c.Security.trustForwardedIPForAPIKeyACLLive == nil {
-		c.Security.trustForwardedIPForAPIKeyACLLive = &atomic.Bool{}
-	}
-	c.Security.trustForwardedIPForAPIKeyACLLive.Store(enabled)
+	c.SetForwardedClientIPSettings(enabled, c.ForwardedClientIPSettings().Headers)
 }
 
 type URLAllowlistConfig struct {
@@ -758,6 +871,11 @@ type GatewayConfig struct {
 	// OpenAIResponseHeaderTimeout: OpenAI/Codex 上游等待响应头的超时时间（秒），0表示无超时
 	// OpenAI/Codex 请求可能在上游排队较久；默认不使用通用响应头超时截断。
 	OpenAIResponseHeaderTimeout int `mapstructure:"openai_response_header_timeout"`
+	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
+	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
+	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
+	// 0 表示回退到 OpenAIFirstOutputTimeoutSeconds。
+	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
@@ -791,10 +909,14 @@ type GatewayConfig struct {
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
+	// Live: ChatGPT Frameless Live 会话配置。
+	Live GatewayLiveConfig `mapstructure:"live"`
 	// OpenAIScheduler: OpenAI 高级调度器粘性逃逸配置
 	OpenAIScheduler GatewayOpenAISchedulerConfig `mapstructure:"openai_scheduler"`
 	// OpenAIHTTP2: OpenAI HTTP 上游协议策略（默认启用 HTTP/2，可按代理能力回退 HTTP/1.1）
 	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
+	// OpenAIProxyStreamCircuit: Responses SSE 代理断流熔断策略。
+	OpenAIProxyStreamCircuit GatewayOpenAIProxyStreamCircuitConfig `mapstructure:"openai_proxy_stream_circuit"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
 	// ClaudeCodeAuxCompat: Claude Code 辅助端点兼容层配置。
@@ -837,6 +959,8 @@ type GatewayConfig struct {
 	FirstSemanticTimeout int `mapstructure:"first_semantic_timeout"`
 	// StreamKeepaliveInterval: 流式 keepalive 间隔（秒），0表示禁用
 	StreamKeepaliveInterval int `mapstructure:"stream_keepalive_interval"`
+	// KiroStreamKeepaliveInterval: Kiro 流式 keepalive 间隔（秒），0 使用 25 秒默认值
+	KiroStreamKeepaliveInterval int `mapstructure:"kiro_stream_keepalive_interval"`
 	// ImageStreamDataIntervalTimeout: 图片流数据间隔超时（秒），0表示禁用
 	ImageStreamDataIntervalTimeout int `mapstructure:"image_stream_data_interval_timeout"`
 	// ImageStreamKeepaliveInterval: 图片流式 keepalive 间隔（秒），0表示禁用
@@ -926,6 +1050,14 @@ type GatewayOpenAIHTTP2Config struct {
 	FallbackTTLSeconds int `mapstructure:"fallback_ttl_seconds"`
 }
 
+// GatewayOpenAIProxyStreamCircuitConfig controls the bounded, in-process
+// proxy-ID circuit used for incomplete OpenAI Responses SSE streams.
+type GatewayOpenAIProxyStreamCircuitConfig struct {
+	FailureThreshold int `mapstructure:"failure_threshold"`
+	WindowSeconds    int `mapstructure:"window_seconds"`
+	TTLSeconds       int `mapstructure:"ttl_seconds"`
+}
+
 // UserMessageQueueConfig 用户消息串行队列配置
 // 用于 Anthropic OAuth/SetupToken 账号的用户消息串行化发送
 type UserMessageQueueConfig struct {
@@ -968,6 +1100,15 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 	return ""
 }
 
+// GatewayLiveConfig controls ChatGPT Frameless Live session limits.
+type GatewayLiveConfig struct {
+	// MaxSessionDurationSeconds is the hard upper bound for a Live session.
+	MaxSessionDurationSeconds int `mapstructure:"max_session_duration_seconds"`
+}
+
+// DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
+const DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 30
+
 // GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。
 // 注意：默认全局开启；如需回滚可使用 force_http 或关闭 enabled。
 type GatewayOpenAIWSConfig struct {
@@ -975,6 +1116,12 @@ type GatewayOpenAIWSConfig struct {
 	ModeRouterV2Enabled bool `mapstructure:"mode_router_v2_enabled"`
 	// IngressModeDefault: ingress 默认模式（off/ctx_pool/passthrough/http_bridge）
 	IngressModeDefault string `mapstructure:"ingress_mode_default"`
+	// ClientFirstMessageTimeoutSeconds bounds reading and decompressing the first client message.
+	ClientFirstMessageTimeoutSeconds int `mapstructure:"client_first_message_timeout_seconds"`
+	// IngressInterTurnIdleTimeoutSeconds bounds client idle time between completed turns. Zero disables it.
+	IngressInterTurnIdleTimeoutSeconds int `mapstructure:"ingress_inter_turn_idle_timeout_seconds"`
+	// MaxIngressConnectionsPerAPIKey bounds live ingress sessions per API key. Zero disables it.
+	MaxIngressConnectionsPerAPIKey int `mapstructure:"max_ingress_connections_per_api_key"`
 	// Enabled: 全局总开关（默认 true）
 	Enabled bool `mapstructure:"enabled"`
 	// OAuthEnabled: 是否允许 OpenAI OAuth 账号使用 WS
@@ -1076,9 +1223,33 @@ type GatewayOpenAIWSSchedulerScoreWeights struct {
 	Reset float64 `mapstructure:"reset"`
 	// QuotaHeadroom 倾向 7d 剩余额度更健康的账号；默认 0（关闭，不改变原有行为）。
 	QuotaHeadroom float64 `mapstructure:"quota_headroom"`
+	// UpstreamCost 倾向上游声明倍率更低的账号；默认 0（关闭，不改变原有行为）。
+	UpstreamCost float64 `mapstructure:"upstream_cost"`
 	// PreviousResponse/SessionSticky 仅在开启 OpenAI 高级调度的粘性加权时生效。
 	PreviousResponse float64 `mapstructure:"previous_response"`
 	SessionSticky    float64 `mapstructure:"session_sticky"`
+}
+
+func (w GatewayOpenAIWSSchedulerScoreWeights) BaseWeightSum() float64 {
+	return w.Priority + w.Load + w.Queue + w.ErrorRate + w.TTFT + w.Reset + w.QuotaHeadroom + w.UpstreamCost
+}
+
+func (w GatewayOpenAIWSSchedulerScoreWeights) TotalWeightSum() float64 {
+	return w.BaseWeightSum() + w.PreviousResponse + w.SessionSticky
+}
+
+func (w GatewayOpenAIWSSchedulerScoreWeights) IsValid() bool {
+	for _, weight := range []float64{
+		w.Priority, w.Load, w.Queue, w.ErrorRate, w.TTFT, w.Reset,
+		w.QuotaHeadroom, w.UpstreamCost, w.PreviousResponse, w.SessionSticky,
+	} {
+		if weight < 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+			return false
+		}
+	}
+	baseSum := w.BaseWeightSum()
+	return baseSum > 0 && !math.IsNaN(baseSum) && !math.IsInf(baseSum, 0) &&
+		!math.IsNaN(w.TotalWeightSum()) && !math.IsInf(w.TotalWeightSum(), 0)
 }
 
 // GatewayOpenAISchedulerConfig OpenAI 高级调度器配置。
@@ -1310,6 +1481,7 @@ func (d *DatabaseConfig) DSNWithTimezone(tz string) string {
 type RedisConfig struct {
 	Host     string `mapstructure:"host"`
 	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
 	// 连接池与超时配置（性能优化：可配置化连接池参数）
@@ -1415,12 +1587,22 @@ type RateLimitConfig struct {
 
 // APIKeyAuthCacheConfig API Key 认证缓存配置
 type APIKeyAuthCacheConfig struct {
-	L1Size             int  `mapstructure:"l1_size"`
-	L1TTLSeconds       int  `mapstructure:"l1_ttl_seconds"`
-	L2TTLSeconds       int  `mapstructure:"l2_ttl_seconds"`
-	NegativeTTLSeconds int  `mapstructure:"negative_ttl_seconds"`
-	JitterPercent      int  `mapstructure:"jitter_percent"`
-	Singleflight       bool `mapstructure:"singleflight"`
+	L1Size             int                    `mapstructure:"l1_size"`
+	L1TTLSeconds       int                    `mapstructure:"l1_ttl_seconds"`
+	L2TTLSeconds       int                    `mapstructure:"l2_ttl_seconds"`
+	NegativeTTLSeconds int                    `mapstructure:"negative_ttl_seconds"`
+	JitterPercent      int                    `mapstructure:"jitter_percent"`
+	Singleflight       bool                   `mapstructure:"singleflight"`
+	LookupConcurrency  int                    `mapstructure:"lookup_concurrency"`
+	InvalidAbuse       InvalidAuthAbuseConfig `mapstructure:"invalid_abuse"`
+}
+
+type InvalidAuthAbuseConfig struct {
+	Enabled       bool `mapstructure:"enabled"`
+	Threshold     int  `mapstructure:"threshold"`
+	WindowSeconds int  `mapstructure:"window_seconds"`
+	BlockSeconds  int  `mapstructure:"block_seconds"`
+	Capacity      int  `mapstructure:"capacity"`
 }
 
 // SubscriptionCacheConfig 订阅认证 L1 缓存配置
@@ -1516,24 +1698,14 @@ func LoadForBootstrap() (*Config, error) {
 func load(allowMissingJWTSecret bool) (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-
-	// Add config paths in priority order
-	// 1. DATA_DIR environment variable (highest priority)
-	if dataDir := os.Getenv("DATA_DIR"); dataDir != "" {
-		viper.AddConfigPath(dataDir)
-	}
-	// 2. Docker data directory
-	viper.AddConfigPath("/app/data")
-	// 3. Current directory
-	viper.AddConfigPath(".")
-	// 4. Config subdirectory
-	viper.AddConfigPath("./config")
-	// 5. System config directory
-	viper.AddConfigPath("/etc/sub2api")
+	configureConfigSource(viper.SetConfigFile, viper.AddConfigPath)
 
 	// 环境变量支持
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
+		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -1544,11 +1716,21 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
+	trustedProxiesEnv, trustedProxiesEnvConfigured := os.LookupEnv("SERVER_TRUSTED_PROXIES")
+	forwardedHeadersEnv, forwardedHeadersEnvConfigured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS")
+	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") || trustedProxiesEnvConfigured
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
+	if trustedProxiesEnvConfigured {
+		cfg.Server.TrustedProxies = normalizeStringSlice(strings.Split(trustedProxiesEnv, ","))
+	}
+	if forwardedHeadersEnvConfigured {
+		cfg.Security.ForwardedClientIPHeaders = normalizeStringSlice(strings.Split(forwardedHeadersEnv, ","))
+	}
+	cfg.Server.TrustedProxiesConfigured = trustedProxiesConfigured
 	if cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs == 0 {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 15000
 	}
@@ -1604,7 +1786,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
 	cfg.Security.CSP.Policy = strings.TrimSpace(cfg.Security.CSP.Policy)
-	cfg.SetTrustForwardedIPForAPIKeyACL(cfg.Security.TrustForwardedIPForAPIKeyACL)
+	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(cfg.Security.ForwardedClientIPHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
+	}
+	cfg.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
+	cfg.SetForwardedClientIPSettings(cfg.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
 	cfg.Log.Level = strings.ToLower(strings.TrimSpace(cfg.Log.Level))
 	cfg.Log.Format = strings.ToLower(strings.TrimSpace(cfg.Log.Format))
 	cfg.Log.ServiceName = strings.TrimSpace(cfg.Log.ServiceName)
@@ -1684,6 +1871,22 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	return &cfg, nil
 }
 
+func configureConfigSource(setConfigFile, addConfigPath func(string)) {
+	if configFile := strings.TrimSpace(os.Getenv("CONFIG_FILE")); configFile != "" {
+		setConfigFile(configFile)
+		return
+	}
+
+	// Add config paths in priority order.
+	if dataDir := strings.TrimSpace(os.Getenv("DATA_DIR")); dataDir != "" {
+		addConfigPath(dataDir)
+	}
+	addConfigPath("/app/data")
+	addConfigPath(".")
+	addConfigPath("./config")
+	addConfigPath("/etc/sub2api")
+}
+
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
 
@@ -1691,11 +1894,15 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
+	viper.SetDefault("server.enable_server_timing", false)
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
-	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
+	viper.SetDefault("server.max_header_bytes", 64*1024)
+	viper.SetDefault("server.idle_timeout", 120) // 120秒空闲超时
 	viper.SetDefault("server.trusted_proxies", []string{})
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
+	_ = viper.BindEnv("server.trusted_proxies", "SERVER_TRUSTED_PROXIES")
+	_ = viper.BindEnv("security.forwarded_client_ip_headers", "SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	// H2C 默认配置
 	viper.SetDefault("server.h2c.enabled", false)
 	viper.SetDefault("server.h2c.max_concurrent_streams", uint32(50))      // 50 个并发流
@@ -1727,12 +1934,21 @@ func setDefaults() {
 	viper.SetDefault("cors.allowed_origins", []string{})
 	viper.SetDefault("cors.allow_credentials", true)
 
+	// WebAuthn / Passkeys are opt-in because every deployment must explicitly
+	// declare its relying-party domain and trusted browser origins.
+	viper.SetDefault("webauthn.enabled", false)
+	viper.SetDefault("webauthn.rp_display_name", "Sub2API")
+	viper.SetDefault("webauthn.rp_id", "")
+	viper.SetDefault("webauthn.rp_origins", []string{})
+
 	// Security
 	viper.SetDefault("security.url_allowlist.enabled", false)
 	viper.SetDefault("security.url_allowlist.upstream_hosts", []string{
 		"api.openai.com",
 		"api.anthropic.com",
 		"api.kimi.com",
+		"api.moonshot.ai",
+		"api.moonshot.cn",
 		"open.bigmodel.cn",
 		"api.minimaxi.com",
 		"generativelanguage.googleapis.com",
@@ -2048,6 +2264,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
 	viper.SetDefault("gateway.openai_ws.ingress_mode_default", "ctx_pool")
+	viper.SetDefault("gateway.openai_ws.client_first_message_timeout_seconds", DefaultOpenAIWSClientFirstMessageTimeoutSeconds)
+	viper.SetDefault("gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds", 300)
+	viper.SetDefault("gateway.openai_ws.max_ingress_connections_per_api_key", 64)
 	viper.SetDefault("gateway.openai_ws.oauth_enabled", true)
 	viper.SetDefault("gateway.openai_ws.apikey_enabled", true)
 	viper.SetDefault("gateway.openai_ws.force_http", false)
@@ -2105,6 +2324,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_http2.fallback_error_threshold", 2)
 	viper.SetDefault("gateway.openai_http2.fallback_window_seconds", 60)
 	viper.SetDefault("gateway.openai_http2.fallback_ttl_seconds", 600)
+	viper.SetDefault("gateway.openai_proxy_stream_circuit.failure_threshold", 2)
+	viper.SetDefault("gateway.openai_proxy_stream_circuit.window_seconds", 60)
+	viper.SetDefault("gateway.openai_proxy_stream_circuit.ttl_seconds", 600)
 	viper.SetDefault("gateway.image_concurrency.enabled", false)
 	viper.SetDefault("gateway.image_concurrency.max_concurrent_requests", 0)
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)
@@ -2204,6 +2426,21 @@ func setDefaults() {
 }
 
 func (c *Config) Validate() error {
+	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
+	if err != nil {
+		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
+	}
+	c.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
+	c.SetForwardedClientIPSettings(c.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
+	if c.Server.ReadHeaderTimeout < 1 || c.Server.ReadHeaderTimeout > 60 {
+		return fmt.Errorf("server.read_header_timeout must be between 1 and 60 seconds")
+	}
+	if c.Server.MaxHeaderBytes < 8*1024 || c.Server.MaxHeaderBytes > 1024*1024 {
+		return fmt.Errorf("server.max_header_bytes must be between 8192 and 1048576 bytes")
+	}
+	if c.Server.IdleTimeout <= 0 {
+		return fmt.Errorf("server.idle_timeout must be positive")
+	}
 	jwtSecret := strings.TrimSpace(c.JWT.Secret)
 	if jwtSecret == "" {
 		return fmt.Errorf("jwt.secret is required")
@@ -2292,6 +2529,43 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("server.frontend_url invalid: must not include userinfo")
 		}
 		warnIfInsecureURL("server.frontend_url", c.Server.FrontendURL)
+	}
+	if c.WebAuthn.Enabled {
+		c.WebAuthn.RPDisplayName = strings.TrimSpace(c.WebAuthn.RPDisplayName)
+		c.WebAuthn.RPID = strings.ToLower(strings.TrimSpace(c.WebAuthn.RPID))
+		c.WebAuthn.RPOrigins = normalizeStringSlice(c.WebAuthn.RPOrigins)
+		if c.WebAuthn.RPDisplayName == "" {
+			return fmt.Errorf("webauthn.rp_display_name is required when passkeys are enabled")
+		}
+		if c.WebAuthn.RPID == "" {
+			return fmt.Errorf("webauthn.rp_id is required when passkeys are enabled")
+		}
+		if strings.Contains(c.WebAuthn.RPID, "://") || strings.ContainsAny(c.WebAuthn.RPID, "/:") {
+			return fmt.Errorf("webauthn.rp_id must be a domain without scheme, port, or path")
+		}
+		if len(c.WebAuthn.RPOrigins) == 0 {
+			return fmt.Errorf("webauthn.rp_origins must contain at least one origin when passkeys are enabled")
+		}
+		for i, origin := range c.WebAuthn.RPOrigins {
+			u, err := url.Parse(origin)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf("webauthn.rp_origins contains invalid origin %q", origin)
+			}
+			if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+				return fmt.Errorf("webauthn.rp_origins entry %q must not include userinfo, path, query, or fragment", origin)
+			}
+			u.Scheme = strings.ToLower(u.Scheme)
+			u.Host = strings.ToLower(u.Host)
+			host := strings.ToLower(u.Hostname())
+			localDevelopment := host == "localhost" || host == "127.0.0.1" || host == "::1"
+			if u.Scheme != "https" && (u.Scheme != "http" || !localDevelopment) {
+				return fmt.Errorf("webauthn.rp_origins entry %q must use HTTPS (HTTP is allowed only for localhost)", origin)
+			}
+			if host != c.WebAuthn.RPID && !strings.HasSuffix(host, "."+c.WebAuthn.RPID) {
+				return fmt.Errorf("webauthn.rp_origins entry %q is not within relying party ID %q", origin, c.WebAuthn.RPID)
+			}
+			c.WebAuthn.RPOrigins[i] = u.Scheme + "://" + u.Host
+		}
 	}
 	if c.JWT.ExpireHour <= 0 {
 		return fmt.Errorf("jwt.expire_hour must be positive")
@@ -2853,6 +3127,13 @@ func (c *Config) Validate() error {
 		(c.Gateway.StreamKeepaliveInterval < 5 || c.Gateway.StreamKeepaliveInterval > 30) {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be 0 or between 5-30 seconds")
 	}
+	if c.Gateway.KiroStreamKeepaliveInterval < 0 {
+		return fmt.Errorf("gateway.kiro_stream_keepalive_interval must be non-negative")
+	}
+	if c.Gateway.KiroStreamKeepaliveInterval != 0 &&
+		(c.Gateway.KiroStreamKeepaliveInterval < 5 || c.Gateway.KiroStreamKeepaliveInterval > 60) {
+		return fmt.Errorf("gateway.kiro_stream_keepalive_interval must be 0 or between 5-60 seconds")
+	}
 	if c.Gateway.ImageStreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.image_stream_data_interval_timeout must be non-negative")
 	}
@@ -2873,6 +3154,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.MaxConnsPerAccount <= 0 {
 		return fmt.Errorf("gateway.openai_ws.max_conns_per_account must be positive")
+	}
+	if c.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds <= 0 {
+		return fmt.Errorf("gateway.openai_ws.client_first_message_timeout_seconds must be positive")
+	}
+	if c.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds < 0 {
+		return fmt.Errorf("gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey < 0 {
+		return fmt.Errorf("gateway.openai_ws.max_ingress_connections_per_api_key must be non-negative")
 	}
 	if c.Gateway.OpenAIWS.MinIdlePerAccount < 0 {
 		return fmt.Errorf("gateway.openai_ws.min_idle_per_account must be non-negative")
@@ -2983,30 +3273,48 @@ func (c *Config) Validate() error {
 	if c.Gateway.OpenAIWS.StickyPreviousResponseTTLSeconds < 0 {
 		return fmt.Errorf("gateway.openai_ws.sticky_previous_response_ttl_seconds must be non-negative")
 	}
-	if c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.Load < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.PreviousResponse < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.SessionSticky < 0 {
-		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights.* must be non-negative")
+	weights := c.Gateway.OpenAIWS.SchedulerScoreWeights
+	for _, weight := range []float64{
+		weights.Priority, weights.Load, weights.Queue, weights.ErrorRate, weights.TTFT,
+		weights.Reset, weights.QuotaHeadroom, weights.UpstreamCost,
+		weights.PreviousResponse, weights.SessionSticky,
+	} {
+		if weight < 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+			return fmt.Errorf("gateway.openai_ws.scheduler_score_weights.* must be non-negative and finite")
+		}
 	}
-	weightSum := c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.Load +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT +
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom
+	weightSum := weights.BaseWeightSum()
 	if weightSum <= 0 {
 		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights must not all be zero")
+	}
+	if math.IsNaN(weightSum) || math.IsInf(weightSum, 0) {
+		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights base-weight sum must be finite")
+	}
+	if totalWeightSum := weights.TotalWeightSum(); math.IsNaN(totalWeightSum) || math.IsInf(totalWeightSum, 0) {
+		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights total-weight sum must be finite")
 	}
 	if c.Gateway.OpenAIScheduler.StickyEscapeTTFTMs <= 0 {
 		return fmt.Errorf("gateway.openai_scheduler.sticky_escape_ttft_ms must be positive")
 	}
 	if c.Gateway.OpenAIScheduler.StickyEscapeErrorRate < 0 || c.Gateway.OpenAIScheduler.StickyEscapeErrorRate > 1 {
 		return fmt.Errorf("gateway.openai_scheduler.sticky_escape_error_rate must be between 0 and 1")
+	}
+	if c.Gateway.OpenAIProxyStreamCircuit.FailureThreshold < 0 {
+		return fmt.Errorf("gateway.openai_proxy_stream_circuit.failure_threshold must be non-negative")
+	}
+	if c.Gateway.OpenAIProxyStreamCircuit.WindowSeconds < 0 {
+		return fmt.Errorf("gateway.openai_proxy_stream_circuit.window_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIProxyStreamCircuit.TTLSeconds < 0 {
+		return fmt.Errorf("gateway.openai_proxy_stream_circuit.ttl_seconds must be non-negative")
+	}
+	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
+		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
+		return fmt.Errorf("gateway.openai_first_output_timeout_seconds must be 0 or between 30-600 seconds")
+	}
+	if c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 1800 ||
+		(c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 30) {
+		return fmt.Errorf("gateway.openai_high_effort_first_output_timeout_seconds must be 0 or between 30-1800 seconds")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")
@@ -3197,14 +3505,12 @@ func generateJWTSecret(byteLength int) (string, error) {
 // GetServerAddress returns the server address (host:port) from config file or environment variable.
 // This is a lightweight function that can be used before full config validation,
 // such as during setup wizard startup.
-// Priority: config.yaml > environment variables > defaults
+// Priority: environment variables > config file > defaults.
 func GetServerAddress() string {
 	v := viper.New()
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
-	v.AddConfigPath("./config")
-	v.AddConfigPath("/etc/sub2api")
+	configureConfigSource(v.SetConfigFile, v.AddConfigPath)
 
 	// Support SERVER_HOST and SERVER_PORT environment variables
 	v.AutomaticEnv()

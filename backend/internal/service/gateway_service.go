@@ -77,9 +77,9 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 	defaultUserGroupRateCacheTTL           = 30 * time.Second
 	defaultModelsListCacheTTL              = 15 * time.Second
 	postUsageBillingTimeout                = 15 * time.Second
+	defaultKiroStreamKeepalive             = 25 * time.Second
 	claudeCodeNoopDeltaKeepaliveMinVersion = "2.1.193"
 	debugGatewayBodyEnv                    = "SUB2API_DEBUG_GATEWAY_BODY"
-	defaultKiroStreamKeepalive             = 25 * time.Second
 	// 上游错误体只需要提取错误 JSON/日志摘要，默认 512KiB 避免错误风暴叠加大请求体。
 	gatewayUpstreamErrorBodyReadLimit int64 = 512 << 10
 )
@@ -246,7 +246,24 @@ func openAIStreamEventIsTerminal(data string) bool {
 	if trimmed == "[DONE]" {
 		return true
 	}
-	switch gjson.Get(trimmed, "type").String() {
+	return openAIStreamEventTypeIsTerminal(gjson.Get(trimmed, "type").String())
+}
+
+// openAIStreamEventIsTerminalWithType reuses an already extracted event type
+// so the SSE hot path does not scan the same JSON payload twice.
+func openAIStreamEventIsTerminalWithType(data, eventType string) bool {
+	trimmed := strings.TrimSpace(data)
+	if trimmed == "" {
+		return false
+	}
+	if trimmed == "[DONE]" {
+		return true
+	}
+	return openAIStreamEventTypeIsTerminal(eventType)
+}
+
+func openAIStreamEventTypeIsTerminal(eventType string) bool {
+	switch eventType {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
@@ -566,6 +583,19 @@ func resolveModelsListCacheTTL(cfg *config.Config) time.Duration {
 	return time.Duration(cfg.Gateway.ModelsListCacheTTLSeconds) * time.Second
 }
 
+func (s *GatewayService) streamKeepaliveIntervalForAccount(account *Account) time.Duration {
+	if account != nil && account.Platform == PlatformKiro {
+		if s != nil && s.cfg != nil && s.cfg.Gateway.KiroStreamKeepaliveInterval > 0 {
+			return time.Duration(s.cfg.Gateway.KiroStreamKeepaliveInterval) * time.Second
+		}
+		return defaultKiroStreamKeepalive
+	}
+	if s != nil && s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		return time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	}
+	return 0
+}
+
 func modelsListCacheKey(groupID *int64, platform string) string {
 	return fmt.Sprintf("%d|%s", derefGroupID(groupID), strings.TrimSpace(platform))
 }
@@ -685,14 +715,46 @@ const (
 	UpstreamFailureIncompleteStream      UpstreamFailureKind = "incomplete_stream"
 )
 
+type GatewayFailureStage string
+
+const (
+	GatewayFailureStageInference   GatewayFailureStage = "inference"
+	GatewayFailureStageAccountAuth GatewayFailureStage = "account_auth"
+)
+
+type GatewayFailureScope string
+
+const (
+	GatewayFailureScopeAccount  GatewayFailureScope = "account"
+	GatewayFailureScopeProvider GatewayFailureScope = "provider"
+	GatewayFailureScopeRequest  GatewayFailureScope = "request"
+)
+
+type NextAccountAction uint8
+
+const (
+	NextAccountLegacyRetry NextAccountAction = iota
+	NextAccountRetry
+	NextAccountStop
+)
+
+type GatewayFailureReason string
+
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
-	StatusCode             int
-	ResponseBody           []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	SuppressTempUnschedule bool        // 可同账号重试但不应写入账号临时禁调（如 Kiro 流协议尾帧缺失/空解析）
+	StatusCode               int
+	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                    GatewayFailureStage
+	Scope                    GatewayFailureScope
+	Reason                   GatewayFailureReason
+	NextAccountAction        NextAccountAction
+	ClientStatusCode         int
+	ClientMessage            string
+	SuppressTempUnschedule   bool // 可同账号重试但不应写入账号临时禁调（如 Kiro 流协议尾帧缺失/空解析）
 	// AnthropicSoftRateLimit indicates a reset-less Anthropic rate_limit_error.
 	// The handler retries the same account once, and persists cooldown only if
 	// that retry also fails.
@@ -740,7 +802,25 @@ func newAnthropicFirstSemanticTimeoutFailover(account *Account, model string) *U
 }
 
 func (e *UpstreamFailoverError) Error() string {
+	if e != nil && e.Stage == GatewayFailureStageAccountAuth {
+		return fmt.Sprintf("credential failure: %s (failover)", e.Reason)
+	}
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
+}
+
+func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
+	return e != nil && e.NextAccountAction != NextAccountStop
+}
+
+func (e *UpstreamFailoverError) IsCredentialFailure() bool {
+	return e != nil && e.Stage == GatewayFailureStageAccountAuth
+}
+
+func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
+	if e == nil {
+		return false
+	}
+	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
 func (e *UpstreamFailoverError) Unwrap() error {
@@ -854,12 +934,19 @@ type GatewayService struct {
 	debugClaudeMimic           atomic.Bool
 	channelService             *ChannelService
 	resolver                   *ModelPricingResolver
+	compositeResolver          *CompositeRouteResolver
 	debugGatewayBodyFile       atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	debugGatewayBodyUserID     atomic.Int64            // >0 scopes SUB2API_DEBUG_GATEWAY_BODY capture to one user
 	tlsFPProfileService        *TLSFingerprintProfileService
 	balanceNotifyService       *BalanceNotifyService
 	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
 	userPlatformQuotaRepo      UserPlatformQuotaRepository
+}
+
+func (s *GatewayService) SetCompositeResolver(resolver *CompositeRouteResolver) {
+	if s != nil {
+		s.compositeResolver = resolver
+	}
 }
 
 // NewGatewayService creates a new GatewayService
@@ -892,10 +979,20 @@ func NewGatewayService(
 	settingService *SettingService,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	channelService *ChannelService,
-	resolver *ModelPricingResolver,
-	balanceNotifyService *BalanceNotifyService,
-	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	optional ...any,
 ) *GatewayService {
+	var resolver *ModelPricingResolver
+	var balanceNotifyService *BalanceNotifyService
+	var userPlatformQuotaRepo UserPlatformQuotaRepository
+	if len(optional) > 0 {
+		resolver, _ = optional[0].(*ModelPricingResolver)
+	}
+	if len(optional) > 1 {
+		balanceNotifyService, _ = optional[1].(*BalanceNotifyService)
+	}
+	if len(optional) > 2 {
+		userPlatformQuotaRepo, _ = optional[2].(UserPlatformQuotaRepository)
+	}
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
 
@@ -2126,7 +2223,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
-	if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(model), "haiku") {
+	if systemPromptInjectionEnabled {
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
@@ -5996,26 +6093,39 @@ func ValidateClaudeOAuthSystemPromptBlocksConfig(raw string) error {
 	return nil
 }
 
+func extractSystemTextAndCacheControl(system any) (string, any) {
+	switch v := system.(type) {
+	case string:
+		return strings.TrimSpace(v), nil
+	case []any:
+		parts := make([]string, 0, len(v))
+		var cacheControl any
+		for _, item := range v {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			text, ok := block["text"].(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				continue
+			}
+			parts = append(parts, text)
+			if value, exists := block["cache_control"]; exists && value != nil {
+				cacheControl = value
+			}
+		}
+		return strings.Join(parts, "\n\n"), cacheControl
+	default:
+		return "", nil
+	}
+}
+
 func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expansionPrompt string, blocksConfig string) []byte {
 	system = normalizeSystemParam(system)
 	expansionPrompt = defaultClaudeOAuthExpansionPrompt(expansionPrompt)
 
-	// 1. 提取原始 system prompt 文本
-	var originalSystemText string
-	switch v := system.(type) {
-	case string:
-		originalSystemText = strings.TrimSpace(v)
-	case []any:
-		var parts []string
-		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				if text, ok := m["text"].(string); ok && strings.TrimSpace(text) != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		originalSystemText = strings.Join(parts, "\n\n")
-	}
+	// 1. 提取原始 system prompt 文本及其最后一个缓存断点。
+	originalSystemText, originalSystemCacheControl := extractSystemTextAndCacheControl(system)
 
 	// 2. 构造 system 数组，对齐真实 Claude Code CLI 的 3-block 形态：
 	//    [0] billing attribution block（cc_version={cliVer}.{fp}; cc_entrypoint=cli;）
@@ -6048,10 +6158,17 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	//    模型仍通过 messages 接收完整指令，保留客户端功能
 	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
 	if originalSystemText != "" && originalSystemText != ccPromptTrimmed && !hasClaudeCodePrefix(originalSystemText) {
+		instructionBlock := map[string]any{
+			"type": "text",
+			"text": "[System Instructions]\n" + originalSystemText,
+		}
+		if originalSystemCacheControl != nil {
+			instructionBlock["cache_control"] = originalSystemCacheControl
+		}
 		instrMsg, err1 := json.Marshal(map[string]any{
 			"role": "user",
 			"content": []map[string]any{
-				{"type": "text", "text": "[System Instructions]\n" + originalSystemText},
+				instructionBlock,
 			},
 		})
 		ackMsg, err2 := json.Marshal(map[string]any{
@@ -6979,6 +7096,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
+			if !errors.Is(err, context.Canceled) {
+				scheduleOllamaCloudUsageActivity(s.deferredService, account)
+			}
 			if isRetryablePreResponseNetworkError(err) {
 				safeErr := sanitizeUpstreamErrorMessage(err.Error())
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -7616,6 +7736,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
+			if !errors.Is(err, context.Canceled) {
+				scheduleOllamaCloudUsageActivity(s.deferredService, account)
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -7861,6 +7984,11 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
 	s.applyClaudeUpstreamUserAgent(ctx, req)
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, getHeaderRaw(req.Header, "anthropic-beta")); changed {
+		body = sanitized
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 
 	return req, body, nil
 }
@@ -7969,10 +8097,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		intervalCh = intervalTicker.C
 	}
 
-	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
-	}
+	keepaliveInterval := s.streamKeepaliveIntervalForAccount(account)
 	var keepaliveTimer *time.Timer
 	if keepaliveInterval > 0 {
 		keepaliveTimer = time.NewTimer(keepaliveInterval)
@@ -8445,6 +8570,15 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	}
 
 	usage := parseClaudeUsageFromResponseBody(body)
+	if IsForceCacheBilling(ctx) && usage != nil && usage.InputTokens > 0 {
+		cacheRead := usage.CacheReadInputTokens + usage.InputTokens
+		if next, ok := setJSONValueBytes(body, "usage.input_tokens", 0); ok {
+			body = next
+			if next, ok := setJSONValueBytes(body, "usage.cache_read_input_tokens", cacheRead); ok {
+				body = next
+			}
+		}
+	}
 
 	writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -9014,11 +9148,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// Non-haiku models MUST include claude-code beta for Anthropic to recognize
 			// this as a legitimate Claude Code request; without it, the request is
 			// rejected as third-party ("out of extra usage").
-			// Haiku models are exempt from third-party detection and don't need it.
-			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			if !strings.Contains(strings.ToLower(modelID), "haiku") {
-				requiredBetas = claude.FullClaudeCodeMimicryBetas()
-			}
+			requiredBetas := claude.FullClaudeCodeMimicryBetas()
 			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
@@ -9037,6 +9167,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 				}
 			}
 		}
+	}
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, getHeaderRaw(req.Header, "anthropic-beta")); changed {
+		body = sanitized
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
 	}
 
 	s.applyClaudeUpstreamUserAgent(ctx, req)
@@ -9907,6 +10042,7 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 }
 
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
+	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	body, _ := s.readUpstreamErrorBody(resp)
 
 	// 调试日志：打印上游错误响应
@@ -10319,10 +10455,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 
 	// 下游 keepalive：防止代理/Cloudflare Tunnel 因连接空闲而断开
-	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
-	}
+	keepaliveInterval := s.streamKeepaliveIntervalForAccount(account)
 	var keepaliveTimer *time.Timer
 	if keepaliveInterval > 0 {
 		keepaliveTimer = time.NewTimer(keepaliveInterval)
@@ -11211,6 +11344,11 @@ func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID,
 	return resolver.Resolve(ctx, userID, groupID, groupDefaultMultiplier)
 }
 
+// ResolveUserGroupRateMultiplier exposes the same cached resolver used by usage billing.
+func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
+	return s.getUserGroupRateMultiplier(ctx, userID, groupID, groupDefaultMultiplier)
+}
+
 // RecordUsageInput 记录使用量的输入参数。
 // 异步 worker 只接收计费所需快照，不能持有 ParsedRequest/RequestBodyRef 这类大请求体引用。
 type RecordUsageInput struct {
@@ -11223,6 +11361,7 @@ type RecordUsageInput struct {
 	UpstreamEndpoint   string             // 上游端点（标准化后的上游路径）
 	UserAgent          string             // 请求的 User-Agent
 	IPAddress          string             // 请求的客户端 IP 地址
+	SessionID          string             // 客户端显式会话标识，仅用于用量行关联
 	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
 	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
@@ -11289,7 +11428,14 @@ func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
 	if fp, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && fp != "" {
 		return fp
 	}
-	return PlatformFromAPIKey(apiKey)
+	platform := PlatformFromAPIKey(apiKey)
+	if platform == PlatformComposite {
+		if resolved, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+			return resolved
+		}
+		return ""
+	}
+	return platform
 }
 
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
@@ -11767,6 +11913,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		UpstreamEndpoint:   input.UpstreamEndpoint,
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
+		SessionID:          input.SessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
@@ -11786,6 +11933,7 @@ type RecordUsageLongContextInput struct {
 	UpstreamEndpoint      string             // 上游端点（标准化后的上游路径）
 	UserAgent             string             // 请求的 User-Agent
 	IPAddress             string             // 请求的客户端 IP 地址
+	SessionID             string             // 客户端显式会话标识，仅用于用量行关联
 	RequestPayloadHash    string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	LongContextThreshold  int                // 长上下文阈值（如 200000）
 	LongContextMultiplier float64            // 超出阈值部分的倍率（如 2.0）
@@ -11808,6 +11956,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		UpstreamEndpoint:   input.UpstreamEndpoint,
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
+		SessionID:          input.SessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
@@ -11830,6 +11979,7 @@ type recordUsageCoreInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string
 	IPAddress          string
+	SessionID          string
 	RequestPayloadHash string
 	ForceCacheBilling  bool
 	APIKeyService      APIKeyQuotaUpdater
@@ -11877,13 +12027,18 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, timezone.Now())
 
 	// 确定计费模型
-	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
+	concreteBillingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
+	billingModel := concreteBillingModel
 	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" {
 		billingModel = input.ChannelMappedModel
 	}
 	if input.BillingModelSource == BillingModelSourceRequested && input.OriginalModel != "" {
 		billingModel = input.OriginalModel
 	}
+	if apiKey.Group != nil && apiKey.Group.Platform == PlatformComposite {
+		billingModel = s.compositeBillableModel(ctx, apiKey, billingModel, concreteBillingModel)
+	}
+	billingModel = s.billableModelWithFallback(ctx, apiKey, billingModel, result.UpstreamModel, result.Model)
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
 	requestedModel := result.Model
@@ -11975,6 +12130,52 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 
 	return nil
+}
+
+// compositeBillableModel prevents public composite aliases from falling into
+// fuzzy global pricing unless the alias has explicit channel pricing.
+func (s *GatewayService) compositeBillableModel(ctx context.Context, apiKey *APIKey, billingModel, concreteBillingModel string) string {
+	if concreteBillingModel == "" || billingModel == concreteBillingModel {
+		return billingModel
+	}
+	if s.resolveChannelPricing(ctx, billingModel, apiKey) != nil {
+		return billingModel
+	}
+	logger.LegacyPrintf("service.gateway", "[Billing] composite billing model %q has no explicit channel pricing, billing by concrete model %q", billingModel, concreteBillingModel)
+	return concreteBillingModel
+}
+
+// billableModelWithFallback falls back to the concrete upstream model when the
+// selected alias or mapping has neither channel nor global token pricing.
+func (s *GatewayService) billableModelWithFallback(ctx context.Context, apiKey *APIKey, billingModel string, fallbacks ...string) string {
+	if s.hasResolvableTokenPricing(ctx, billingModel, apiKey) {
+		return billingModel
+	}
+	for _, fallback := range fallbacks {
+		fallback = strings.TrimSpace(fallback)
+		if fallback == "" || fallback == billingModel {
+			continue
+		}
+		if s.hasResolvableTokenPricing(ctx, fallback, apiKey) {
+			logger.LegacyPrintf("service.gateway", "[Billing] billing model %q has no pricing, falling back to concrete model %q", billingModel, fallback)
+			return fallback
+		}
+	}
+	return billingModel
+}
+
+func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model string, apiKey *APIKey) bool {
+	if strings.TrimSpace(model) == "" {
+		return false
+	}
+	if s.resolveChannelPricing(ctx, model, apiKey) != nil {
+		return true
+	}
+	if s.billingService == nil {
+		return false
+	}
+	_, err := s.billingService.GetModelPricing(model)
+	return err == nil
 }
 
 // calculateRecordUsageCost 根据请求类型和选项计算费用。
@@ -12175,7 +12376,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		RequestID:             requestID,
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
-		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
@@ -12200,6 +12401,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
 		UserAgent:             optionalTrimmedStringPtr(input.UserAgent),
 		IPAddress:             optionalTrimmedStringPtr(input.IPAddress),
+		SessionID:             optionalTrimmedStringPtr(input.SessionID),
 		GroupID:               apiKey.GroupID,
 		SubscriptionID:        optionalSubscriptionID(subscription),
 		CreatedAt:             time.Now(),
@@ -12803,6 +13005,11 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, getHeaderRaw(req.Header, "anthropic-beta")); changed {
+		body = sanitized
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 
 	return req, nil
 }
@@ -12943,6 +13150,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 				}
 			}
 		}
+	}
+	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, getHeaderRaw(req.Header, "anthropic-beta")); changed {
+		body = sanitized
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
 	}
 
 	s.applyClaudeUpstreamUserAgent(ctx, req)
@@ -13292,10 +13504,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 		if mimicClaudeCode {
 			// mimic 路径：原代码跳过白名单透传，incomingBeta 总是空字符串。
 			// 这里传空 string 以严格对齐原行为。
-			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			if !strings.Contains(strings.ToLower(modelID), "haiku") {
-				requiredBetas = claude.FullClaudeCodeMimicryBetas()
-			}
+			requiredBetas := claude.FullClaudeCodeMimicryBetas()
 			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
@@ -13311,6 +13520,45 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
 				return beta, true
 			}
+		}
+	}
+	return "", false
+}
+
+func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
+	tokenType string,
+	mimicClaudeCode bool,
+	modelID string,
+	clientHeaders http.Header,
+	body []byte,
+	effectiveDropSet map[string]struct{},
+) (string, bool) {
+	clientBeta := ""
+	if clientHeaders != nil {
+		clientBeta = getHeaderRaw(clientHeaders, "anthropic-beta")
+	}
+
+	if tokenType == "oauth" {
+		if mimicClaudeCode {
+			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
+			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
+		}
+		if clientBeta == "" {
+			return claude.CountTokensBetaHeader, true
+		}
+		beta := s.getBetaHeader(modelID, clientBeta)
+		if !strings.Contains(beta, claude.BetaTokenCounting) {
+			beta += "," + claude.BetaTokenCounting
+		}
+		return stripBetaTokensWithSet(beta, effectiveDropSet), true
+	}
+
+	if clientBeta != "" {
+		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
+	}
+	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey && requestNeedsBetaFeatures(body) {
+		if beta := defaultAPIKeyBetaHeader(body); beta != "" {
+			return beta, true
 		}
 	}
 	return "", false

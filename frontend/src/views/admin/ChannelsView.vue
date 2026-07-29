@@ -873,6 +873,7 @@ function addPricingEntry(sectionIdx: number) {
     cache_write_5m_price: null,
     cache_write_1h_price: null,
     cache_read_price: null,
+    image_input_price: null,
     image_output_price: null,
     per_request_price: null,
     intervals: []
@@ -898,6 +899,7 @@ function createEmptyPricingEntry(): PricingFormEntry {
     cache_write_5m_price: null,
     cache_write_1h_price: null,
     cache_read_price: null,
+    image_input_price: null,
     image_output_price: null,
     per_request_price: null,
     intervals: []
@@ -990,6 +992,7 @@ function pricingEntryToAPI(entry: PricingFormEntry, platform: GroupPlatform): Ch
     cache_write_5m_price: mTokToPerToken(entry.cache_write_5m_price),
     cache_write_1h_price: mTokToPerToken(entry.cache_write_1h_price),
     cache_read_price: mTokToPerToken(entry.cache_read_price),
+    image_input_price: mTokToPerToken(entry.image_input_price),
     image_output_price: mTokToPerToken(entry.image_output_price),
     per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
     intervals: formIntervalsToAPI(entry.intervals || [])
@@ -1007,6 +1010,7 @@ function pricingAPIToForm(pricing: ChannelModelPricing): PricingFormEntry {
     cache_write_5m_price: perTokenToMTok(pricing.cache_write_5m_price),
     cache_write_1h_price: perTokenToMTok(pricing.cache_write_1h_price),
     cache_read_price: perTokenToMTok(pricing.cache_read_price),
+    image_input_price: perTokenToMTok(pricing.image_input_price),
     image_output_price: perTokenToMTok(pricing.image_output_price),
     per_request_price: pricing.per_request_price,
     intervals: apiIntervalsToForm(pricing.intervals || [])

@@ -106,6 +106,7 @@ func sanitizeGroupMessagesDispatchFields(g *Group) {
 		return
 	}
 	g.AllowMessagesDispatch = false
+	g.AllowLive = false
 	g.DefaultMappedModel = ""
 	g.MessagesDispatchModelConfig = OpenAIMessagesDispatchModelConfig{}
 }

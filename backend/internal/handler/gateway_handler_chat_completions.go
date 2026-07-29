@@ -80,6 +80,10 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
 		return
 	}
+	if service.IsGPTImageGenerationModel(reqModel) {
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "This model is not supported on the Chat Completions endpoint")
+		return
+	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
 	setOpsRequestContext(c, reqModel, reqStream, body)
@@ -95,8 +99,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && decision.Blocked {
-		h.chatCompletionsErrorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && !decision.AllowNextStage {
+		h.openAISecurityAuditError(c, decision)
 		return
 	}
 
@@ -154,6 +158,9 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 
 	for {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())
 		selectionCtx = fs.SelectionContext(selectionCtx, apiKey.GroupID, h.metadataBridgeEnabled())
 		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
@@ -164,7 +171,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 					h.chatCompletionsErrorResponse(c, cls.StatusCode, cls.ErrorType, cls.Message)
 					return
 				}
-				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, openAICompatibleRequestPlatform(apiKey))
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, openAICompatibleRequestPlatform(c.Request.Context(), apiKey))
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}

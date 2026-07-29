@@ -11,6 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -144,7 +145,13 @@ func (s *FailoverState) HandleFailoverError(
 	failoverErr *service.UpstreamFailoverError,
 	selectedAccount ...*service.Account,
 ) FailoverAction {
+	if ctx != nil && ctx.Err() != nil {
+		return FailoverCanceled
+	}
 	s.LastFailoverErr = failoverErr
+	if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() {
+		return FailoverExhausted
+	}
 	s.ForceAccountID = 0
 	if s.KiroResilienceEnforced {
 		if platform == service.PlatformKiro {
@@ -603,6 +610,20 @@ func requestIDFromContext(ctx context.Context) string {
 		return strings.TrimSpace(requestID)
 	}
 	return ""
+}
+
+// failoverClientGone stops account rotation once the downstream request is canceled.
+func failoverClientGone(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.Context().Err() == nil {
+		return false
+	}
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		return true
+	}
+	if !c.Writer.Written() {
+		c.Status(statusClientClosedRequest)
+	}
+	return true
 }
 
 // sleepWithContext 等待指定时长，返回 false 表示 context 已取消。

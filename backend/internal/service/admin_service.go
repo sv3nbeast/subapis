@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ type AdminService interface {
 	DeleteUser(ctx context.Context, id int64) error
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
 	BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error)
+	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
 	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
 	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
@@ -62,6 +64,8 @@ type AdminService interface {
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error)
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
+	DuplicateGroup(ctx context.Context, id int64, actorScope, operationKey string) (*Group, error)
+	RecoverDuplicateGroup(ctx context.Context, id int64, actorScope, operationKey string) (*Group, error)
 	UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error)
 	DeleteGroup(ctx context.Context, id int64) error
 	GetGroupAPIKeys(ctx context.Context, groupID int64, page, pageSize int) ([]APIKey, int64, error)
@@ -71,6 +75,11 @@ type AdminService interface {
 	ClearGroupRPMOverrides(ctx context.Context, groupID int64) error
 	BatchSetGroupRPMOverrides(ctx context.Context, groupID int64, entries []GroupRPMOverrideInput) error
 	UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
+	ListCompositeRoutes(ctx context.Context, groupID int64) ([]CompositeModelRoute, error)
+	CreateCompositeRoute(ctx context.Context, groupID int64, input CompositeRouteInput) (*CompositeModelRoute, error)
+	UpdateCompositeRoute(ctx context.Context, groupID, routeID int64, input CompositeRouteInput) (*CompositeModelRoute, error)
+	DeleteCompositeRoute(ctx context.Context, groupID, routeID int64) error
+	PreviewCompositeRoute(ctx context.Context, groupID int64, input CompositeRoutePreviewRequest) (*CompositeRouteDecision, error)
 
 	// API Key management (admin)
 	AdminUpdateAPIKeyGroupID(ctx context.Context, keyID int64, groupID *int64) (*AdminUpdateAPIKeyGroupIDResult, error)
@@ -86,6 +95,8 @@ type AdminService interface {
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error)
+	DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
+	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 	// UpdateAccountExtra 仅对 Extra 做 JSONB 增量合并（key 级覆盖），不会影响其它字段或运行态键。
 	UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error
@@ -254,6 +265,7 @@ type CreateGroupInput struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool
+	AllowLive                    bool
 	DefaultMappedModel           string
 	RequireOAuthOnly             bool
 	RequirePrivacySet            bool
@@ -262,7 +274,9 @@ type CreateGroupInput struct {
 	GrokChatUpstreamMode         string
 	GrokChatResponsesGrayPercent int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
-	RPMLimit int
+	RPMLimit                int
+	MaxReasoningEffort      string
+	ReasoningEffortMappings []ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
 	KiroCacheEmulationEnabled   bool
 	KiroAutoStickyEnabled       *bool
@@ -318,6 +332,7 @@ type UpdateGroupInput struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        *bool
 	AllowNonStreamMessages       *bool
+	AllowLive                    *bool
 	DefaultMappedModel           *string
 	RequireOAuthOnly             *bool
 	RequirePrivacySet            *bool
@@ -326,7 +341,9 @@ type UpdateGroupInput struct {
 	GrokChatUpstreamMode         *string
 	GrokChatResponsesGrayPercent *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
-	RPMLimit *int
+	RPMLimit                *int
+	MaxReasoningEffort      *string
+	ReasoningEffortMappings *[]ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效），nil 表示未提供不改动。
 	KiroCacheEmulationEnabled   *bool
 	KiroAutoStickyEnabled       *bool
@@ -352,6 +369,7 @@ type CreateAccountInput struct {
 	GroupIDs           []int64
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
+	ProbeEnabled       *bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
@@ -401,6 +419,7 @@ type BulkUpdateAccountsInput struct {
 	GroupIDs       *[]int64
 	Credentials    map[string]any
 	Extra          map[string]any
+	ProbeEnabled   *bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
@@ -597,6 +616,14 @@ var proxyQualityTargets = []proxyQualityTarget{
 			http.StatusOK: {},
 		},
 	},
+	{
+		Target: "grok",
+		URL:    "https://api.x.ai/v1/models",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
 }
 
 const (
@@ -612,7 +639,9 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 type adminServiceImpl struct {
 	userRepo                       UserRepository
 	groupRepo                      GroupRepository
+	groupDuplicateRepo             GroupDuplicateRepository
 	accountRepo                    AccountRepository
+	accountDuplicateRepo           AccountDuplicateRepository
 	proxyRepo                      ProxyRepository
 	apiKeyRepo                     APIKeyRepository
 	redeemCodeRepo                 RedeemCodeRepository
@@ -630,6 +659,13 @@ type adminServiceImpl struct {
 	kiroProfileHTTPUpstream        HTTPUpstream
 	kiroProfileTLSFPProfileService *TLSFingerprintProfileService
 	runtimeBlocker                 AccountRuntimeBlocker
+	affiliateService               adminRechargeAffiliateAccruer
+	compositeRouteRepo             CompositeModelRouteRepository
+	compositeResolver              *CompositeRouteResolver
+}
+
+type adminRechargeAffiliateAccruer interface {
+	AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error)
 }
 
 type userGroupRateBatchReader interface {
@@ -656,10 +692,14 @@ func NewAdminService(
 	userSubRepo UserSubscriptionRepository,
 	privacyClientFactory PrivacyClientFactory,
 ) AdminService {
+	groupDuplicateRepo, _ := groupRepo.(GroupDuplicateRepository)
+	accountDuplicateRepo, _ := accountRepo.(AccountDuplicateRepository)
 	return &adminServiceImpl{
 		userRepo:             userRepo,
 		groupRepo:            groupRepo,
+		groupDuplicateRepo:   groupDuplicateRepo,
 		accountRepo:          accountRepo,
+		accountDuplicateRepo: accountDuplicateRepo,
 		proxyRepo:            proxyRepo,
 		apiKeyRepo:           apiKeyRepo,
 		redeemCodeRepo:       redeemCodeRepo,
@@ -778,6 +818,10 @@ func (s *adminServiceImpl) GetUserIncludeDeleted(ctx context.Context, id int64) 
 }
 
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
+	role, err := normalizeAdminManagedUserRole(input.Role)
+	if err != nil {
+		return nil, err
+	}
 	balance := 0.0
 	if input.Balance != nil {
 		balance = *input.Balance
@@ -789,7 +833,7 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 		Email:         input.Email,
 		Username:      input.Username,
 		Notes:         input.Notes,
-		Role:          RoleUser, // Always create as regular user, never admin
+		Role:          role,
 		Balance:       balance,
 		Concurrency:   input.Concurrency,
 		RPMLimit:      input.RPMLimit,
@@ -837,14 +881,30 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if err != nil {
 		return nil, err
 	}
+	oldRole := user.Role
 	// Protect admin users: cannot disable admin accounts
 	if user.Role == "admin" && input.Status == "disabled" {
 		return nil, errors.New("cannot disable admin user")
 	}
+	if input.Role != "" {
+		role, roleErr := normalizeAdminManagedUserRole(input.Role)
+		if roleErr != nil {
+			return nil, roleErr
+		}
+		if user.Role == RoleAdmin && role != RoleAdmin {
+			_, result, listErr := s.userRepo.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 1}, UserListFilters{Role: RoleAdmin})
+			if listErr != nil {
+				return nil, fmt.Errorf("count admins before role change: %w", listErr)
+			}
+			if result == nil || result.Total <= 1 {
+				return nil, errors.New("cannot demote the last admin")
+			}
+		}
+		user.Role = role
+	}
 
 	oldConcurrency := user.Concurrency
 	oldStatus := user.Status
-	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
 	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
 
@@ -880,7 +940,35 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		user.AllowedGroups = *input.AllowedGroups
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	fields := UserUpdateFields{}
+	if input.Email != "" {
+		fields.Email = true
+	}
+	if input.Password != "" {
+		fields.PasswordHash = true
+	}
+	if input.Username != nil {
+		fields.Username = true
+	}
+	if input.Notes != nil {
+		fields.Notes = true
+	}
+	if input.Role != "" {
+		fields.Role = true
+	}
+	if input.Status != "" {
+		fields.Status = true
+	}
+	if input.Concurrency != nil {
+		fields.Concurrency = true
+	}
+	if input.RPMLimit != nil {
+		fields.RPMLimit = true
+	}
+	if input.AllowedGroups != nil {
+		fields.AllowedGroups = true
+	}
+	if err := s.userRepo.Update(ctx, user, fields); err != nil {
 		return nil, err
 	}
 
@@ -921,6 +1009,17 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	return user, nil
+}
+
+func normalizeAdminManagedUserRole(role string) (string, error) {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" {
+		return RoleUser, nil
+	}
+	if role != RoleUser && role != RoleAdmin {
+		return "", fmt.Errorf("invalid user role %q", role)
+	}
+	return role, nil
 }
 
 func sameInt64Set(a, b []int64) bool {
@@ -1067,31 +1166,59 @@ func (s *adminServiceImpl) BatchUpdateConcurrency(ctx context.Context, userIDs [
 	return affected, nil
 }
 
+func (s *adminServiceImpl) BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error) {
+	if concurrency == nil && rpmLimit == nil {
+		return 0, fmt.Errorf("at least one of concurrency or rpm_limit is required")
+	}
+	cleaned := make([]int64, 0, len(userIDs))
+	seen := make(map[int64]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		cleaned = append(cleaned, userID)
+	}
+	if len(cleaned) == 0 {
+		return 0, nil
+	}
+	affected, err := s.userRepo.BatchUpdateLimits(ctx, cleaned, concurrency, rpmLimit)
+	if err != nil {
+		return 0, err
+	}
+	if s.authCacheInvalidator != nil {
+		for _, userID := range cleaned {
+			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+		}
+	}
+	return affected, nil
+}
+
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {
+	var change BalanceChange
+	var err error
+	switch operation {
+	case "set":
+		change, err = s.userRepo.SetBalance(ctx, userID, balance)
+	case "add":
+		change, err = s.userRepo.AdjustBalance(ctx, userID, balance)
+	case "subtract":
+		change, err = s.userRepo.AdjustBalance(ctx, userID, -balance)
+	default:
+		return nil, fmt.Errorf("invalid balance operation: %s", operation)
+	}
+	if err != nil {
+		return nil, err
+	}
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	oldBalance := user.Balance
-
-	switch operation {
-	case "set":
-		user.Balance = balance
-	case "add":
-		user.Balance += balance
-	case "subtract":
-		user.Balance -= balance
-	}
-
-	if user.Balance < 0 {
-		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", oldBalance, user.Balance)
-	}
-
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return nil, err
-	}
-	balanceDiff := user.Balance - oldBalance
+	user.Balance = change.New
+	balanceDiff := change.New - change.Old
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
@@ -1126,6 +1253,13 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 
 		if err := s.redeemCodeRepo.Create(ctx, adjustmentRecord); err != nil {
 			logger.LegacyPrintf("service.admin", "failed to create balance adjustment redeem code: %v", err)
+		}
+	}
+	if operation == "add" && balanceDiff > 0 && s.affiliateService != nil && s.settingService != nil && s.settingService.IsAffiliateAdminRechargeEnabled(ctx) {
+		if rebate, affiliateErr := s.affiliateService.AccrueInviteRebate(ctx, userID, balance); affiliateErr != nil {
+			logger.LegacyPrintf("service.admin", "admin recharge affiliate rebate failed: user_id=%d amount=%.8f err=%v", userID, balance, affiliateErr)
+		} else if rebate > 0 {
+			logger.LegacyPrintf("service.admin", "admin recharge affiliate rebate accrued: user_id=%d amount=%.8f rebate=%.8f", userID, balance, rebate)
 		}
 	}
 
@@ -1518,15 +1652,18 @@ func (s *adminServiceImpl) listAffiliateBalanceHistory(ctx context.Context, user
 
 	rows, err := s.entClient.QueryContext(ctx, `
 SELECT id,
-       amount::double precision,
+	       CAST(amount AS DOUBLE PRECISION),
        created_at
 FROM user_affiliate_ledger
 WHERE user_id = $1
   AND action = 'transfer'
 ORDER BY created_at DESC, id DESC
-OFFSET $2
-LIMIT $3`, userID, params.Offset(), params.Limit())
+LIMIT $3
+OFFSET $2`, userID, params.Offset(), params.Limit())
 	if err != nil {
+		if isMissingRelationError(err) {
+			return []RedeemCode{}, 0, nil
+		}
 		return nil, 0, err
 	}
 	defer func() { _ = rows.Close() }()
@@ -2007,7 +2144,7 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 		seen[model] = struct{}{}
 	}
 	for _, acc := range accounts {
-		if acc.Platform != platform {
+		if platform != PlatformComposite && acc.Platform != platform {
 			continue
 		}
 		for model := range acc.GetModelMapping() {
@@ -2027,6 +2164,20 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 
 func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
+	case PlatformComposite:
+		platforms := []string{PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformDroid, PlatformGrok, PlatformAnthropic}
+		seen := make(map[string]struct{})
+		var ids []string
+		for _, concrete := range platforms {
+			for _, model := range defaultModelsListCandidateIDs(concrete) {
+				if _, ok := seen[model]; ok {
+					continue
+				}
+				seen[model] = struct{}{}
+				ids = append(ids, model)
+			}
+		}
+		return ids
 	case PlatformOpenAI:
 		return openai.DefaultModelIDs()
 	case PlatformGemini:
@@ -2098,6 +2249,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			return nil, errors.New("image_rate_multiplier must be >= 0")
 		}
 		imageRateMultiplier = *input.ImageRateMultiplier
+	}
+	videoRateMultiplier := 1.0
+	if input.VideoRateMultiplier != nil {
+		if *input.VideoRateMultiplier < 0 {
+			return nil, errors.New("video_rate_multiplier must be >= 0")
+		}
+		videoRateMultiplier = *input.VideoRateMultiplier
 	}
 	batchImageDiscountMultiplier := defaultBatchImageDiscountMultiplier
 	if input.BatchImageDiscountMultiplier != nil {
@@ -2180,7 +2338,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			if err != nil {
 				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
 			}
-			if srcGroup.Platform != platform {
+			if platform != PlatformComposite && srcGroup.Platform != platform {
 				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, platform, srcGroup.Platform)
 			}
 		}
@@ -2218,6 +2376,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		ImagePrice1K:                    imagePrice1K,
 		ImagePrice2K:                    imagePrice2K,
 		ImagePrice4K:                    imagePrice4K,
+		VideoRateIndependent:            input.VideoRateIndependent,
+		VideoRateMultiplier:             videoRateMultiplier,
+		VideoPrice480P:                  normalizePrice(input.VideoPrice480P),
+		VideoPrice720P:                  normalizePrice(input.VideoPrice720P),
+		VideoPrice1080P:                 normalizePrice(input.VideoPrice1080P),
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
@@ -2226,6 +2389,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		SupportedModelScopes:            input.SupportedModelScopes,
 		AllowMessagesDispatch:           input.AllowMessagesDispatch,
 		AllowNonStreamMessages:          input.AllowNonStreamMessages,
+		AllowLive:                       input.AllowLive,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
 		DefaultMappedModel:              input.DefaultMappedModel,
@@ -2234,11 +2398,16 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		GrokChatUpstreamMode:            input.GrokChatUpstreamMode,
 		GrokChatResponsesGrayPercent:    input.GrokChatResponsesGrayPercent,
 		RPMLimit:                        input.RPMLimit,
+		MaxReasoningEffort:              input.MaxReasoningEffort,
+		ReasoningEffortMappings:         input.ReasoningEffortMappings,
 		KiroCacheEmulationEnabled:       input.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           kiroAutoStickyEnabled,
 		KiroStickySessionTTLSeconds:     kiroStickySessionTTLSeconds,
 		KiroCacheEmulationRatio:         input.KiroCacheEmulationRatio,
 		KiroEndpointMode:                input.KiroEndpointMode,
+	}
+	if err := normalizeAdminGroupReasoningPolicy(group); err != nil {
+		return nil, err
 	}
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
@@ -2429,6 +2598,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.ImageRateMultiplier = *input.ImageRateMultiplier
 	}
+	if input.VideoRateIndependent != nil {
+		group.VideoRateIndependent = *input.VideoRateIndependent
+	}
+	if input.VideoRateMultiplier != nil {
+		if *input.VideoRateMultiplier < 0 {
+			return nil, errors.New("video_rate_multiplier must be >= 0")
+		}
+		group.VideoRateMultiplier = *input.VideoRateMultiplier
+	}
 	if input.BatchImageDiscountMultiplier != nil {
 		if *input.BatchImageDiscountMultiplier < 0 {
 			return nil, errors.New("batch_image_discount_multiplier must be >= 0")
@@ -2471,6 +2649,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.ImagePrice4K != nil {
 		group.ImagePrice4K = normalizePrice(input.ImagePrice4K)
+	}
+	if input.VideoPrice480P != nil {
+		group.VideoPrice480P = normalizePrice(input.VideoPrice480P)
+	}
+	if input.VideoPrice720P != nil {
+		group.VideoPrice720P = normalizePrice(input.VideoPrice720P)
+	}
+	if input.VideoPrice1080P != nil {
+		group.VideoPrice1080P = normalizePrice(input.VideoPrice1080P)
 	}
 
 	// Claude Code 客户端限制
@@ -2527,6 +2714,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.AllowNonStreamMessages != nil {
 		group.AllowNonStreamMessages = *input.AllowNonStreamMessages
 	}
+	if input.AllowLive != nil {
+		group.AllowLive = *input.AllowLive
+	}
 	if input.RequireOAuthOnly != nil {
 		group.RequireOAuthOnly = *input.RequireOAuthOnly
 	}
@@ -2551,6 +2741,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
 	}
+	if input.MaxReasoningEffort != nil {
+		group.MaxReasoningEffort = *input.MaxReasoningEffort
+	}
+	if input.ReasoningEffortMappings != nil {
+		group.ReasoningEffortMappings = append([]ReasoningEffortMapping{}, (*input.ReasoningEffortMappings)...)
+	}
 	if input.KiroCacheEmulationEnabled != nil {
 		group.KiroCacheEmulationEnabled = *input.KiroCacheEmulationEnabled
 	}
@@ -2565,6 +2761,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.KiroEndpointMode != nil {
 		group.KiroEndpointMode = *input.KiroEndpointMode
+	}
+	if err := normalizeAdminGroupReasoningPolicy(group); err != nil {
+		return nil, err
 	}
 	NormalizeGroupRuntimeFields(group)
 	sanitizeGroupMessagesDispatchFields(group)
@@ -2600,7 +2799,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			if err != nil {
 				return nil, fmt.Errorf("source group %d not found: %w", srcGroupID, err)
 			}
-			if srcGroup.Platform != group.Platform {
+			if group.Platform != PlatformComposite && srcGroup.Platform != group.Platform {
 				return nil, fmt.Errorf("source group %d platform mismatch: expected %s, got %s", srcGroupID, group.Platform, srcGroup.Platform)
 			}
 		}
@@ -2825,7 +3024,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 			if addErr := s.userRepo.AddGroupToAllowedGroups(opCtx, apiKey.UserID, gid); addErr != nil {
 				return nil, fmt.Errorf("add group to user allowed groups: %w", addErr)
 			}
-			if err := s.apiKeyRepo.Update(opCtx, apiKey); err != nil {
+			if err := s.apiKeyRepo.Update(opCtx, apiKey, APIKeyUpdateFields{GroupID: true}); err != nil {
 				return nil, fmt.Errorf("update api key: %w", err)
 			}
 			if tx != nil {
@@ -2849,7 +3048,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 	}
 
 	// 非专属分组 / 解绑：无需事务，单步更新即可
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{GroupID: true}); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
 
@@ -2874,7 +3073,7 @@ func (s *adminServiceImpl) AdminResetAPIKeyRateLimitUsage(ctx context.Context, k
 	apiKey.Window5hStart = nil
 	apiKey.Window1dStart = nil
 	apiKey.Window7dStart = nil
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{RateLimitUsage: true}); err != nil {
 		return nil, fmt.Errorf("reset api key rate limit usage: %w", err)
 	}
 	if s.authCacheInvalidator != nil {
@@ -3006,7 +3205,16 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if input == nil {
 		return nil, ErrAccountNilInput
 	}
+	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
+	if err != nil {
+		return nil, err
+	}
+	accountExtra, err = normalizeGrokMediaEligibilityExtra(input.Platform, accountExtra)
+	if err != nil {
+		return nil, err
+	}
 	if input.Platform == PlatformGrok && input.Type == AccountTypeOAuth {
+		input.Extra = accountExtra
 		input.Credentials = EnrichGrokOAuthCredentials(input.Credentials)
 		if existing, err := s.upsertExistingGrokOAuthAccount(ctx, input); err != nil {
 			return nil, err
@@ -3038,52 +3246,12 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	account := &Account{
-		Name:        input.Name,
-		Notes:       normalizeAccountNotes(input.Notes),
-		Platform:    input.Platform,
-		Type:        input.Type,
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
-		ProxyID:     input.ProxyID,
-		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
-		Priority:    input.Priority,
-		Status:      StatusActive,
-		Schedulable: true,
+	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
+		return nil, err
 	}
-	// 预计算固定时间重置的下次重置时间
-	if account.Extra != nil {
-		if err := ValidateQuotaResetConfig(account.Extra); err != nil {
-			return nil, err
-		}
-		ComputeQuotaResetAt(account.Extra)
-		if account.IsKiroDirect() {
-			if err := ValidateKiroCreditUnitPriceFromExtra(account.Extra); err != nil {
-				return nil, err
-			}
-		}
-		NormalizeFixedQuotaWindows(account.Extra)
-	}
-	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
-		expiresAt := time.Unix(*input.ExpiresAt, 0)
-		account.ExpiresAt = &expiresAt
-	}
-	if input.AutoPauseOnExpired != nil {
-		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
-	} else {
-		account.AutoPauseOnExpired = true
-	}
-	if input.RateMultiplier != nil {
-		if *input.RateMultiplier < 0 {
-			return nil, errors.New("rate_multiplier must be >= 0")
-		}
-		account.RateMultiplier = input.RateMultiplier
-	}
-	if input.LoadFactor != nil && *input.LoadFactor > 0 {
-		if *input.LoadFactor > 10000 {
-			return nil, errors.New("load_factor must be <= 10000")
-		}
-		account.LoadFactor = input.LoadFactor
+	account, err := buildAccountForCreate(input, accountExtra)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
@@ -3199,6 +3367,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	var normalizedExtra map[string]any
+	if input.Extra != nil {
+		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
+		if err != nil {
+			return nil, err
+		}
+		normalizedExtra, err = normalizeGrokMediaEligibilityUpdateExtra(account, input, normalizedExtra)
+		if err != nil {
+			return nil, err
+		}
+	}
+	previousProbeIdentity := upstreamBillingProbeIdentity(account)
+	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
 	// 安全/身份不变量(影子账号):通用更新路径被 edit/re-auth/refresh/batch 共用,
 	// 必须在此守住,否则仅在创建时的保证可被这些路径绕过。
 	if account.IsCredentialShadow() {
@@ -3243,17 +3424,52 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
 	}
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
+	var requestedProbeEnabledUpdate *bool
 	if input.Extra != nil {
-		// 保留配额用量字段，防止编辑账号时意外重置
-		for _, key := range []string{"quota_used", "quota_daily_used", "quota_daily_start", "quota_weekly_used", "quota_weekly_start"} {
+		requestedProbeEnabled, hasRequestedProbeEnabled := normalizedExtra[UpstreamBillingProbeEnabledExtraKey]
+		if hasRequestedProbeEnabled {
+			enabled, ok := requestedProbeEnabled.(bool)
+			if !ok {
+				return nil, infraerrors.BadRequest("INVALID_UPSTREAM_BILLING_PROBE_ENABLED", "upstream_billing_probe_enabled must be a boolean")
+			}
+			requestedProbeEnabledUpdate = &enabled
+		}
+		delete(normalizedExtra, UpstreamBillingProbeEnabledExtraKey)
+		delete(normalizedExtra, UpstreamBillingProbeExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageSessionExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
+		for _, key := range []string{
+			"quota_used",
+			"quota_daily_used",
+			"quota_daily_start",
+			"quota_weekly_used",
+			"quota_weekly_start",
+			grokBillingExtraKey,
+			UpstreamBillingProbeEnabledExtraKey,
+			UpstreamBillingProbeExtraKey,
+			OllamaCloudUsageSessionExtraKey,
+			OllamaCloudUsageAutoRefreshExtraKey,
+			OllamaCloudUsageSnapshotExtraKey,
+		} {
 			if v, ok := account.Extra[key]; ok {
-				input.Extra[key] = v
+				normalizedExtra[key] = v
 			}
 		}
-		account.Extra = input.Extra
+		if hasRequestedProbeEnabled {
+			if isUpstreamBillingProbeAccount(account) {
+				normalizedExtra[UpstreamBillingProbeEnabledExtraKey] = requestedProbeEnabled
+			} else {
+				delete(normalizedExtra, UpstreamBillingProbeEnabledExtraKey)
+			}
+		}
+		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
 			// 清除 AICredits 限流 key
@@ -3287,6 +3503,23 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.ProxyID = input.ProxyID
 		}
 		account.Proxy = nil // 清除关联对象，防止 GORM Save 时根据 Proxy.ID 覆盖 ProxyID
+	}
+	if !reflect.DeepEqual(previousProbeIdentity, upstreamBillingProbeIdentity(account)) && account.Extra != nil {
+		delete(account.Extra, UpstreamBillingProbeExtraKey)
+		if !isUpstreamBillingProbeAccount(account) {
+			delete(account.Extra, UpstreamBillingProbeEnabledExtraKey)
+		}
+	}
+	if account.Extra != nil {
+		if !IsOllamaCloudUsageAccount(account) {
+			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
+			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+		} else if !reflect.DeepEqual(previousOllamaUsageIdentity, ollamaCloudUsageIdentity(account)) {
+			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
+			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+		}
 	}
 	// 只在指针非 nil 时更新 Concurrency（支持设置为 0）
 	if input.Concurrency != nil {
@@ -3340,8 +3573,26 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, err
+	probeEnabledAppliedAtomically := false
+	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
+		if updater, ok := s.accountRepo.(accountProbeEnabledAtomicUpdater); ok {
+			if err := updater.UpdateWithUpstreamBillingProbeEnabled(ctx, account, *requestedProbeEnabledUpdate); err != nil {
+				return nil, err
+			}
+			probeEnabledAppliedAtomically = true
+		}
+	}
+	if !probeEnabledAppliedAtomically {
+		if err := s.accountRepo.Update(ctx, account); err != nil {
+			return nil, err
+		}
+		if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
+			if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+				UpstreamBillingProbeEnabledExtraKey: *requestedProbeEnabledUpdate,
+			}); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// 将 proxy 变更传播到 spark 影子账号（同步；Update 内部已触发调度快照）。
@@ -3369,6 +3620,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	delete(updates, OllamaCloudUsageSessionExtraKey)
+	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(updates, OllamaCloudUsageSnapshotExtraKey)
+	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
+			return err
+		}
+	}
 	if len(updates) == 0 {
 		return nil
 	}
@@ -3378,6 +3641,14 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if input == nil {
+		return nil, infraerrors.BadRequest("INVALID_BULK_ACCOUNT_UPDATE", "bulk account update input is required")
+	}
+	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
+	delete(input.Extra, UpstreamBillingProbeExtraKey)
+	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
+	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
 		if err != nil {
@@ -3406,12 +3677,43 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate {
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if raw, ok := input.Extra[openAILongContextBillingEnabledKey]; ok {
+		for _, account := range cachedTargets {
+			if account == nil || account.Platform != PlatformOpenAI {
+				continue
+			}
+			if _, valid := raw.(bool); !valid {
+				return nil, infraerrors.BadRequest(
+					"OPENAI_LONG_CONTEXT_BILLING_INVALID",
+					"openai_long_context_billing_enabled must be a boolean",
+				)
+			}
+			break
+		}
+	}
+	if input.ProbeEnabled != nil {
+		targetsByID := make(map[int64]*Account, len(cachedTargets))
+		for _, account := range cachedTargets {
+			if account != nil {
+				targetsByID[account.ID] = account
+			}
+		}
+		for _, accountID := range input.AccountIDs {
+			account, ok := targetsByID[accountID]
+			if !ok {
+				return nil, ErrAccountNotFound
+			}
+			if !isUpstreamBillingProbeAccount(account) {
+				return nil, ErrUpstreamBillingProbeAccountInvalid
+			}
+		}
 	}
 
 	// 影子账号绝不持有凭据:批量更新携带凭据时,目标中不得含影子(外审 G5,与单账号
@@ -3473,8 +3775,21 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// Prepare bulk updates for columns and JSONB fields.
 	repoUpdates := AccountBulkUpdate{
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
+		Credentials:  input.Credentials,
+		Extra:        input.Extra,
+		ProbeEnabled: input.ProbeEnabled,
+	}
+	if bulkCredentialsChangeInvalidatesProbe(input.Credentials) || input.ProxyID != nil {
+		if repoUpdates.Extra == nil {
+			repoUpdates.Extra = make(map[string]any)
+		}
+		repoUpdates.Extra[UpstreamBillingProbeExtraKey] = nil
+	}
+	if input.ProbeEnabled != nil {
+		if repoUpdates.Extra == nil {
+			repoUpdates.Extra = make(map[string]any)
+		}
+		repoUpdates.Extra[UpstreamBillingProbeEnabledExtraKey] = *input.ProbeEnabled
 	}
 	if input.Name != "" {
 		repoUpdates.Name = &input.Name
@@ -3555,6 +3870,18 @@ func accountBulkCredentialsHasModelMapping(credentials map[string]any) bool {
 	}
 	_, ok := credentials["model_mapping"]
 	return ok
+}
+
+func bulkCredentialsChangeInvalidatesProbe(credentials map[string]any) bool {
+	if len(credentials) == 0 {
+		return false
+	}
+	for _, key := range []string{"api_key", "base_url", credKeyHeaderOverrideEnabled, credKeyHeaderOverrides} {
+		if _, ok := credentials[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func validateBulkModelMappingSinglePlatform(platformByID map[int64]string) error {
@@ -3786,6 +4113,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		Priority:        priority,
 		Concurrency:     concurrency,
 		Schedulable:     true,
+		Extra:           map[string]any{openAILongContextBillingEnabledKey: parent.IsOpenAILongContextBillingEnabled()},
 	}
 
 	// 5. 持久化（Create 填充 shadow.ID）。并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞

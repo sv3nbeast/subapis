@@ -90,6 +90,9 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	upstreamMsg string,
 	upstreamModel string,
 ) *UpstreamFailoverError {
+	if account != nil && account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, respBody) {
+		return nil
+	}
 	if !s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
 		return nil
 	}
@@ -161,6 +164,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	stream bool,
 	bearerToken string,
 	userAgent string,
+	grokCacheIdentities ...string,
 ) (*http.Response, error) {
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
@@ -196,6 +200,9 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// Official api.x.ai accounts are unaffected (helper is a no-op).
 	if account != nil && account.Platform == PlatformGrok {
 		xai.ApplyCLIChatProxyHeaders(upstreamReq, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, gjson.GetBytes(body, "model").String()))
+		if len(grokCacheIdentities) > 0 {
+			applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentities[0])
+		}
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效）

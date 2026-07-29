@@ -114,7 +114,7 @@ type cachedAntigravityUserAgentVersion struct {
 }
 
 // DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）
-const DefaultOpenAICodexUserAgent = "codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)"
+const DefaultOpenAICodexUserAgent = "codex-tui/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)"
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {
@@ -204,6 +204,11 @@ type SettingService struct {
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
 
+	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。
+	// 面板每个认证请求都会读取，禁止在热路径上直接访问 DB。
+	panelRateLimitCache atomic.Value
+	panelRateLimitSF    singleflight.Group
+
 	// openAIQuotaAutoPauseSettingsCache holds the most recently observed quota auto-pause
 	// settings. GetOpenAIQuotaAutoPauseSettings reads this atomic.Value on the request hot
 	// path without ever blocking on the DB; when the cached entry expires, a background
@@ -232,6 +237,15 @@ type AuthSourceDefaultSettings struct {
 	Google                       ProviderDefaultGrantSettings
 	DingTalk                     ProviderDefaultGrantSettings
 	ForceEmailOnThirdPartySignup bool
+}
+
+// OmittedSettingKeys marks settings absent from a partial update payload.
+type OmittedSettingKeys map[string]struct{}
+
+func (o OmittedSettingKeys) dropFrom(updates map[string]string) {
+	for key := range o {
+		delete(updates, key)
+	}
 }
 
 type authSourceDefaultKeySet struct {
@@ -943,6 +957,66 @@ func NewSettingService(settingRepo SettingRepository, cfg *config.Config) *Setti
 	}
 }
 
+func (s *SettingService) LoadForwardedClientIPSettings(ctx context.Context) error {
+	if s == nil || s.cfg == nil || s.settingRepo == nil {
+		return nil
+	}
+
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyAPIKeyACLTrustForwardedIP,
+		SettingKeyForwardedClientIPHeaders,
+		settingKeyForwardedClientIPModeV2,
+	})
+	if err != nil {
+		s.cfg.SetForwardedClientIPSettings(false, nil)
+		return fmt.Errorf("get forwarded client ip settings: %w", err)
+	}
+
+	enabled := s.cfg.Security.TrustForwardedIPForAPIKeyACL
+	headers := s.cfg.ForwardedClientIPSettings().Headers
+	storedValue, hasStoredValue := values[SettingKeyAPIKeyACLTrustForwardedIP]
+	if hasStoredValue {
+		enabled = storedValue == "true"
+	}
+
+	var headersErr error
+	if storedHeaders, ok := values[SettingKeyForwardedClientIPHeaders]; ok {
+		headers, headersErr = parseForwardedClientIPHeadersSetting(storedHeaders)
+		if headersErr != nil {
+			enabled = false
+			headers = []string{}
+			headersErr = fmt.Errorf("load forwarded client ip headers: %w", headersErr)
+		}
+	}
+
+	updates := make(map[string]string)
+	if _, hasStoredHeaders := values[SettingKeyForwardedClientIPHeaders]; !hasStoredHeaders {
+		headersJSON, marshalErr := json.Marshal(headers)
+		if marshalErr != nil {
+			headers = []string{}
+			headersErr = errors.Join(headersErr, fmt.Errorf("marshal forwarded client ip headers: %w", marshalErr))
+			headersJSON = []byte("[]")
+		}
+		updates[SettingKeyForwardedClientIPHeaders] = string(headersJSON)
+	}
+	if values[settingKeyForwardedClientIPModeV2] != "true" {
+		updates[settingKeyForwardedClientIPModeV2] = "true"
+		if headersErr == nil && hasStoredValue && !enabled && !s.cfg.Server.TrustedProxiesConfigured {
+			enabled = true
+			updates[SettingKeyAPIKeyACLTrustForwardedIP] = "true"
+		}
+	}
+	if len(updates) > 0 {
+		if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+			s.cfg.SetForwardedClientIPSettings(enabled, headers)
+			return errors.Join(headersErr, fmt.Errorf("migrate forwarded client ip setting: %w", err))
+		}
+	}
+
+	s.cfg.SetForwardedClientIPSettings(enabled, headers)
+	return headersErr
+}
+
 func (s *SettingService) SetWebSearchProxyReader(reader webSearchProxyReader) {
 	s.webSearchProxyReader = reader
 }
@@ -1099,6 +1173,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyModelPlazaEnabled,
+		SettingKeyModelPlazaRequireAuth,
 		SettingKeyPublicModelMarketEnabled,
 		SettingKeyPublicModelMarketReferenceUSDCNYRate,
 		SettingKeyPublicModelMarketSettlementUSDCNYRate,
@@ -1218,6 +1294,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled:              settings[SettingKeyAvailableChannelsEnabled] == "true",
+		ModelPlazaEnabled:                     settings[SettingKeyModelPlazaEnabled] == "true",
+		ModelPlazaRequireAuth:                 settings[SettingKeyModelPlazaRequireAuth] != "false",
 		PublicModelMarketEnabled:              settings[SettingKeyPublicModelMarketEnabled] == "true",
 		PublicModelMarketReferenceUSDCNYRate:  parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketReferenceUSDCNYRate], publicModelMarketReferenceUSDCNYRateDefault),
 		PublicModelMarketSettlementUSDCNYRate: parsePublicModelMarketRate(settings[SettingKeyPublicModelMarketSettlementUSDCNYRate], publicModelMarketSettlementUSDCNYRateDefault),
@@ -1937,6 +2015,7 @@ type PublicSettingsInjectionPayload struct {
 	PasswordResetEnabled             bool                     `json:"password_reset_enabled"`
 	InvitationCodeEnabled            bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                     `json:"totp_enabled"`
+	PasskeyEnabled                   bool                     `json:"passkey_enabled"`
 	LoginAgreementEnabled            bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
@@ -1986,6 +2065,8 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                 bool    `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds  int     `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
+	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
 	PublicModelMarketEnabled              bool    `json:"public_model_market_enabled"`
 	PublicModelMarketReferenceUSDCNYRate  float64 `json:"public_model_market_reference_usd_cny_rate"`
 	PublicModelMarketSettlementUSDCNYRate float64 `json:"public_model_market_settlement_usd_cny_rate"`
@@ -2014,6 +2095,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		PasswordResetEnabled:             settings.PasswordResetEnabled,
 		InvitationCodeEnabled:            settings.InvitationCodeEnabled,
 		TotpEnabled:                      settings.TotpEnabled,
+		PasskeyEnabled:                   settings.PasskeyEnabled,
 		LoginAgreementEnabled:            settings.LoginAgreementEnabled,
 		LoginAgreementMode:               settings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:          settings.LoginAgreementUpdatedAt,
@@ -2059,6 +2141,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                 settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
+		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
 		PublicModelMarketEnabled:              settings.PublicModelMarketEnabled,
 		PublicModelMarketReferenceUSDCNYRate:  settings.PublicModelMarketReferenceUSDCNYRate,
 		PublicModelMarketSettlementUSDCNYRate: settings.PublicModelMarketSettlementUSDCNYRate,
@@ -2370,16 +2454,20 @@ func oidcCompatibilityWriteDefault(base config.OIDCConnectConfig, configured boo
 
 // UpdateSettings 更新系统设置
 func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSettings) error {
+	return s.UpdateSettingsOmitting(ctx, settings, nil)
+}
+
+func (s *SettingService) UpdateSettingsOmitting(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) error {
 	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
 	if err != nil {
 		return err
 	}
-
-	err = s.settingRepo.SetMultiple(ctx, updates)
-	if err == nil {
-		s.refreshCachedSettings(settings)
+	omitted.dropFrom(updates)
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
 	}
-	return err
+	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	return nil
 }
 
 func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, bool, error) {
@@ -2406,6 +2494,10 @@ func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, b
 
 // UpdateSettingsWithAuthSourceDefaults persists system settings and auth-source defaults in a single write.
 func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Context, settings *SystemSettings, authDefaults *AuthSourceDefaultSettings) error {
+	return s.UpdateSettingsWithAuthSourceDefaultsOmitting(ctx, settings, authDefaults, nil)
+}
+
+func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx context.Context, settings *SystemSettings, authDefaults *AuthSourceDefaultSettings, omitted OmittedSettingKeys) error {
 	updates, err := s.buildSystemSettingsUpdates(ctx, settings)
 	if err != nil {
 		return err
@@ -2418,12 +2510,25 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaults(ctx context.Contex
 	for key, value := range authSourceUpdates {
 		updates[key] = value
 	}
-
-	err = s.settingRepo.SetMultiple(ctx, updates)
-	if err == nil {
-		s.refreshCachedSettings(settings)
+	omitted.dropFrom(updates)
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
 	}
-	return err
+	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	return nil
+}
+
+func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) {
+	if len(omitted) == 0 {
+		s.refreshCachedSettings(settings)
+		return
+	}
+	stored, err := s.GetAllSettings(ctx)
+	if err != nil {
+		slog.Warn("refresh cached settings after partial update failed", "error", err)
+		return
+	}
+	s.refreshCachedSettings(stored)
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
@@ -2454,6 +2559,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 			"conflicting_suffix": conflictingSuffix,
 		})
 	}
+	normalizedForwardedClientIPHeaders, err := config.NormalizeForwardedClientIPHeaders(settings.ForwardedClientIPHeaders)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_FORWARDED_CLIENT_IP_HEADERS", err.Error())
+	}
+	settings.ForwardedClientIPHeaders = normalizedForwardedClientIPHeaders
 	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
 	if err != nil {
 		return nil, err
@@ -2518,6 +2628,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
 	updates[SettingKeyInvitationCodeEnabled] = strconv.FormatBool(settings.InvitationCodeEnabled)
 	updates[SettingKeyTotpEnabled] = strconv.FormatBool(settings.TotpEnabled)
+	updates[SettingKeyPasskeyEnabled] = strconv.FormatBool(settings.PasskeyEnabled)
+	updates[SettingKeySessionBindingEnabled] = strconv.FormatBool(settings.SessionBindingEnabled)
+	updates[SettingKeyStepUpEnabled] = strconv.FormatBool(settings.StepUpEnabled)
+	updates[SettingKeyAuditLogRetentionDays] = strconv.Itoa(settings.AuditLogRetentionDays)
 	settings.LoginAgreementMode = normalizeLoginAgreementMode(settings.LoginAgreementMode)
 	settings.LoginAgreementUpdatedAt = strings.TrimSpace(settings.LoginAgreementUpdatedAt)
 	if settings.LoginAgreementUpdatedAt == "" {
@@ -2550,6 +2664,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		updates[SettingKeyTurnstileSecretKey] = settings.TurnstileSecretKey
 	}
 	updates[SettingKeyAPIKeyACLTrustForwardedIP] = strconv.FormatBool(settings.APIKeyACLTrustForwardedIP)
+	forwardedClientIPHeadersJSON, err := json.Marshal(settings.ForwardedClientIPHeaders)
+	if err != nil {
+		return nil, fmt.Errorf("marshal forwarded client IP headers: %w", err)
+	}
+	updates[SettingKeyForwardedClientIPHeaders] = string(forwardedClientIPHeadersJSON)
 
 	// LinuxDo Connect OAuth 登录
 	updates[SettingKeyLinuxDoConnectEnabled] = strconv.FormatBool(settings.LinuxDoConnectEnabled)
@@ -2694,6 +2813,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		settings.AffiliateRebatePerInviteeCap = AffiliateRebatePerInviteeCapDefault
 	}
 	updates[SettingKeyAffiliateRebatePerInviteeCap] = strconv.FormatFloat(settings.AffiliateRebatePerInviteeCap, 'f', 8, 64)
+	updates[SettingKeyAffiliateAdminRechargeEnabled] = strconv.FormatBool(settings.AdminRechargeRebateEnabled)
 	updates[SettingKeyDefaultUserRPMLimit] = strconv.Itoa(settings.DefaultUserRPMLimit)
 	defaultSubsJSON, err := json.Marshal(settings.DefaultSubscriptions)
 	if err != nil {
@@ -2728,6 +2848,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
+	updates[SettingKeyModelPlazaEnabled] = strconv.FormatBool(settings.ModelPlazaEnabled)
+	updates[SettingKeyModelPlazaRequireAuth] = strconv.FormatBool(settings.ModelPlazaRequireAuth)
+	updates[SettingKeyModelPlazaDescription] = strings.TrimSpace(settings.ModelPlazaDescription)
 
 	// Public model market feature switch
 	updates[SettingKeyPublicModelMarketEnabled] = strconv.FormatBool(settings.PublicModelMarketEnabled)
@@ -2798,6 +2921,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingPaymentVisibleMethodWxpaySource] = settings.PaymentVisibleMethodWxpaySource
 	updates[SettingPaymentVisibleMethodAlipayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodAlipayEnabled)
 	updates[SettingPaymentVisibleMethodWxpayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodWxpayEnabled)
+	updates[SettingKeyOpenAILowUpstreamRatePriorityEnabled] = strconv.FormatBool(settings.OpenAILowUpstreamRatePriorityEnabled)
+	updates[SettingKeyOpenAIOAuthSchedulingRateMultiplier] = strconv.FormatFloat(settings.OpenAIOAuthSchedulingRateMultiplier, 'f', -1, 64)
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
@@ -2809,6 +2934,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightTTFT] = settings.OpenAIAdvancedSchedulerWeightTTFT
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightReset] = settings.OpenAIAdvancedSchedulerWeightReset
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom] = settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom
+	updates[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost] = settings.OpenAIAdvancedSchedulerWeightUpstreamCost
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse] = settings.OpenAIAdvancedSchedulerWeightPreviousResponse
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky] = settings.OpenAIAdvancedSchedulerWeightSessionSticky
 
@@ -2908,7 +3034,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		return
 	}
 	if s != nil && s.cfg != nil {
-		s.cfg.SetTrustForwardedIPForAPIKeyACL(settings.APIKeyACLTrustForwardedIP)
+		s.cfg.SetForwardedClientIPSettings(settings.APIKeyACLTrustForwardedIP, settings.ForwardedClientIPHeaders)
 	}
 
 	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
@@ -2965,10 +3091,12 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
-		enabled:                     settings.OpenAIAdvancedSchedulerEnabled,
-		stickyWeightedEnabled:       settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
-		subscriptionPriorityEnabled: settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
-		lbTopKOverride:              parsePositiveIntOverride(settings.OpenAIAdvancedSchedulerLBTopK),
+		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
+		oauthSchedulingRateMultiplier:  settings.OpenAIOAuthSchedulingRateMultiplier,
+		enabled:                        settings.OpenAIAdvancedSchedulerEnabled,
+		stickyWeightedEnabled:          settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
+		subscriptionPriorityEnabled:    settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		lbTopKOverride:                 parsePositiveIntOverride(settings.OpenAIAdvancedSchedulerLBTopK),
 		weightOverrides: parseOpenAIAdvancedSchedulerWeightOverrides(map[string]string{
 			SettingKeyOpenAIAdvancedSchedulerWeightPriority:         settings.OpenAIAdvancedSchedulerWeightPriority,
 			SettingKeyOpenAIAdvancedSchedulerWeightLoad:             settings.OpenAIAdvancedSchedulerWeightLoad,
@@ -2977,6 +3105,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 			SettingKeyOpenAIAdvancedSchedulerWeightTTFT:             settings.OpenAIAdvancedSchedulerWeightTTFT,
 			SettingKeyOpenAIAdvancedSchedulerWeightReset:            settings.OpenAIAdvancedSchedulerWeightReset,
 			SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom:    settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom,
+			SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost:     settings.OpenAIAdvancedSchedulerWeightUpstreamCost,
 			SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse: settings.OpenAIAdvancedSchedulerWeightPreviousResponse,
 			SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:    settings.OpenAIAdvancedSchedulerWeightSessionSticky,
 		}),
@@ -2992,9 +3121,6 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 			settings:  cached.settings,
 			expiresAt: 0,
 		})
-	}
-	if s.cfg != nil {
-		s.cfg.SetTrustForwardedIPForAPIKeyACL(settings.APIKeyACLTrustForwardedIP)
 	}
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
@@ -3369,6 +3495,16 @@ func (s *SettingService) IsAffiliateEnabled(ctx context.Context) bool {
 	return value == "true"
 }
 
+// IsAffiliateAdminRechargeEnabled reports whether admin balance deposits
+// should participate in the affiliate rebate program.
+func (s *SettingService) IsAffiliateAdminRechargeEnabled(ctx context.Context) bool {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyAffiliateAdminRechargeEnabled)
+	if err != nil {
+		return AdminRechargeRebateEnabledDefault
+	}
+	return value == "true"
+}
+
 // GetAffiliateRebateRatePercent 读取并 clamp 全局返利比例。
 // 解析失败、缺失或越界都回退到 AffiliateRebateRateDefault — 该比例从不抛错，
 // 调用方只关心一个可用的数值。
@@ -3652,6 +3788,14 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marshal default api key usage config: %w", err)
 	}
+	forwardedClientIPHeaders := []string{}
+	if s != nil && s.cfg != nil {
+		forwardedClientIPHeaders = s.cfg.ForwardedClientIPSettings().Headers
+	}
+	forwardedClientIPHeadersJSON, err := json.Marshal(forwardedClientIPHeaders)
+	if err != nil {
+		return fmt.Errorf("marshal default forwarded client IP headers: %w", err)
+	}
 
 	// 初始化默认设置
 	defaults := map[string]string{
@@ -3674,6 +3818,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyCustomEndpoints:                           "[]",
 		SettingKeyAPIKeyUsageConfig:                         string(apiKeyUsageConfigJSON),
 		SettingKeyAPIKeyACLTrustForwardedIP:                 strconv.FormatBool(s.cfg.Security.TrustForwardedIPForAPIKeyACL),
+		SettingKeyForwardedClientIPHeaders:                  string(forwardedClientIPHeadersJSON),
+		settingKeyForwardedClientIPModeV2:                   "true",
+		SettingKeySessionBindingEnabled:                     "false",
+		SettingKeyStepUpEnabled:                             "false",
+		SettingKeyAuditLogRetentionDays:                     strconv.Itoa(defaultAuditLogRetentionDays),
 		SettingKeyDingTalkConnectEnabled:                    "false",
 		SettingKeyDingTalkConnectClientID:                   "",
 		SettingKeyDingTalkConnectClientSecret:               "",
@@ -3744,6 +3893,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAffiliateRebateFreezeHours:                strconv.Itoa(AffiliateRebateFreezeHoursDefault),
 		SettingKeyAffiliateRebateDurationDays:               strconv.Itoa(AffiliateRebateDurationDaysDefault),
 		SettingKeyAffiliateRebatePerInviteeCap:              strconv.FormatFloat(AffiliateRebatePerInviteeCapDefault, 'f', 2, 64),
+		SettingKeyAffiliateAdminRechargeEnabled:             strconv.FormatBool(AdminRechargeRebateEnabledDefault),
 		SettingKeyDefaultUserRPMLimit:                       "0",
 		SettingKeyDefaultSubscriptions:                      "[]",
 		SettingKeyAuthSourceDefaultEmailBalance:             "0",
@@ -3807,6 +3957,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
+		SettingKeyModelPlazaEnabled:        "false",
+		SettingKeyModelPlazaRequireAuth:    "true",
+		SettingKeyModelPlazaDescription:    "",
 
 		// Public model market feature (default disabled; opt-in)
 		SettingKeyPublicModelMarketEnabled:              "false",
@@ -3864,6 +4017,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
 		SettingPaymentVisibleMethodWxpayEnabled:                      "false",
+		SettingKeyOpenAILowUpstreamRatePriorityEnabled:               "false",
+		SettingKeyOpenAIOAuthSchedulingRateMultiplier:                "1",
 		openAIAdvancedSchedulerSettingKey:                            "false",
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled:       "false",
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled: "false",
@@ -3875,6 +4030,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightTTFT:                  "",
 		SettingKeyOpenAIAdvancedSchedulerWeightReset:                 "",
 		SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom:         "",
+		SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost:          "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
 		SettingKeySubscriptionExpiryNotifyEnabled:                    "true",
@@ -3884,6 +4040,21 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	return s.settingRepo.SetMultiple(ctx, defaults)
 }
 
+func parseForwardedClientIPHeadersSetting(value string) ([]string, error) {
+	var headers []string
+	if err := json.Unmarshal([]byte(value), &headers); err != nil {
+		return nil, fmt.Errorf("parse forwarded_client_ip_headers: %w", err)
+	}
+	if headers == nil {
+		return nil, fmt.Errorf("parse forwarded_client_ip_headers: value must be a JSON array")
+	}
+	normalized, err := config.NormalizeForwardedClientIPHeaders(headers)
+	if err != nil {
+		return nil, fmt.Errorf("parse forwarded_client_ip_headers: %w", err)
+	}
+	return normalized, nil
+}
+
 // parseSettings 解析设置到结构体
 func (s *SettingService) parseSettings(settings map[string]string) *SystemSettings {
 	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
@@ -3891,6 +4062,26 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	loginAgreementUpdatedAt := strings.TrimSpace(settings[SettingKeyLoginAgreementUpdatedAt])
 	if loginAgreementUpdatedAt == "" {
 		loginAgreementUpdatedAt = defaultLoginAgreementDate
+	}
+	apiKeyACLTrustForwardedIP := false
+	forwardedClientIPHeaders := []string{}
+	if s != nil && s.cfg != nil {
+		runtimeSettings := s.cfg.ForwardedClientIPSettings()
+		apiKeyACLTrustForwardedIP = runtimeSettings.TrustForwardedIP
+		forwardedClientIPHeaders = runtimeSettings.Headers
+	}
+	if value, ok := settings[SettingKeyAPIKeyACLTrustForwardedIP]; ok {
+		apiKeyACLTrustForwardedIP = value == "true"
+	}
+	if value, ok := settings[SettingKeyForwardedClientIPHeaders]; ok {
+		parsed, err := parseForwardedClientIPHeadersSetting(value)
+		if err != nil {
+			slog.Error("invalid persisted forwarded client IP headers; forwarded trust disabled", "error", err)
+			apiKeyACLTrustForwardedIP = false
+			forwardedClientIPHeaders = []string{}
+		} else {
+			forwardedClientIPHeaders = parsed
+		}
 	}
 	result := &SystemSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
@@ -3902,6 +4093,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		FrontendURL:                      settings[SettingKeyFrontendURL],
 		InvitationCodeEnabled:            settings[SettingKeyInvitationCodeEnabled] == "true",
 		TotpEnabled:                      settings[SettingKeyTotpEnabled] == "true",
+		SessionBindingEnabled:            settings[SettingKeySessionBindingEnabled] == "true",
+		StepUpEnabled:                    settings[SettingKeyStepUpEnabled] == "true",
+		AuditLogRetentionDays:            parseAuditLogRetentionDays(settings[SettingKeyAuditLogRetentionDays]),
 		LoginAgreementEnabled:            settings[SettingKeyLoginAgreementEnabled] == "true",
 		LoginAgreementMode:               normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
 		LoginAgreementUpdatedAt:          loginAgreementUpdatedAt,
@@ -3915,25 +4109,21 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
 		TurnstileSecretKeyConfigured:     settings[SettingKeyTurnstileSecretKey] != "",
-		APIKeyACLTrustForwardedIP: func() bool {
-			if raw, ok := settings[SettingKeyAPIKeyACLTrustForwardedIP]; ok {
-				return raw == "true"
-			}
-			return s != nil && s.cfg != nil && s.cfg.TrustForwardedIPForAPIKeyACL()
-		}(),
-		SiteName:                    s.getStringOrDefault(settings, SettingKeySiteName, "subapis"),
-		SiteLogo:                    settings[SettingKeySiteLogo],
-		SiteSubtitle:                s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
-		APIBaseURL:                  settings[SettingKeyAPIBaseURL],
-		ContactInfo:                 settings[SettingKeyContactInfo],
-		DocURL:                      settings[SettingKeyDocURL],
-		HomeContent:                 settings[SettingKeyHomeContent],
-		HideCcsImportButton:         settings[SettingKeyHideCcsImportButton] == "true",
-		PurchaseSubscriptionEnabled: settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
-		PurchaseSubscriptionURL:     strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
-		CustomMenuItems:             settings[SettingKeyCustomMenuItems],
-		CustomEndpoints:             settings[SettingKeyCustomEndpoints],
-		BackendModeEnabled:          settings[SettingKeyBackendModeEnabled] == "true",
+		APIKeyACLTrustForwardedIP:        apiKeyACLTrustForwardedIP,
+		ForwardedClientIPHeaders:         forwardedClientIPHeaders,
+		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "subapis"),
+		SiteLogo:                         settings[SettingKeySiteLogo],
+		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
+		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
+		ContactInfo:                      settings[SettingKeyContactInfo],
+		DocURL:                           settings[SettingKeyDocURL],
+		HomeContent:                      settings[SettingKeyHomeContent],
+		HideCcsImportButton:              settings[SettingKeyHideCcsImportButton] == "true",
+		PurchaseSubscriptionEnabled:      settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
+		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
+		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
+		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
@@ -3983,6 +4173,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	if perInviteeCap, err := strconv.ParseFloat(settings[SettingKeyAffiliateRebatePerInviteeCap], 64); err == nil && perInviteeCap >= 0 {
 		result.AffiliateRebatePerInviteeCap = perInviteeCap
 	}
+	result.AdminRechargeRebateEnabled = settings[SettingKeyAffiliateAdminRechargeEnabled] == "true"
 	result.DefaultSubscriptions = parseDefaultSubscriptions(settings[SettingKeyDefaultSubscriptions])
 
 	// 敏感信息直接返回，方便测试连接时使用
@@ -4279,6 +4470,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
+	result.ModelPlazaEnabled = settings[SettingKeyModelPlazaEnabled] == "true"
+	result.ModelPlazaRequireAuth = settings[SettingKeyModelPlazaRequireAuth] != "false"
+	result.ModelPlazaDescription = strings.TrimSpace(settings[SettingKeyModelPlazaDescription])
 
 	// Public model market feature (default: disabled; strict true)
 	result.PublicModelMarketEnabled = settings[SettingKeyPublicModelMarketEnabled] == "true"
@@ -4389,6 +4583,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.PaymentVisibleMethodWxpaySource = NormalizeVisibleMethodSource("wxpay", settings[SettingPaymentVisibleMethodWxpaySource])
 	result.PaymentVisibleMethodAlipayEnabled = settings[SettingPaymentVisibleMethodAlipayEnabled] == "true"
 	result.PaymentVisibleMethodWxpayEnabled = settings[SettingPaymentVisibleMethodWxpayEnabled] == "true"
+	result.OpenAILowUpstreamRatePriorityEnabled = settings[SettingKeyOpenAILowUpstreamRatePriorityEnabled] == "true"
+	result.OpenAIOAuthSchedulingRateMultiplier = parseOpenAIOAuthSchedulingRateMultiplier(settings[SettingKeyOpenAIOAuthSchedulingRateMultiplier])
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"
@@ -4400,6 +4596,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerWeightTTFT = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightTTFT])
 	result.OpenAIAdvancedSchedulerWeightReset = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightReset])
 	result.OpenAIAdvancedSchedulerWeightQuotaHeadroom = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom])
+	result.OpenAIAdvancedSchedulerWeightUpstreamCost = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost])
 	result.OpenAIAdvancedSchedulerWeightPreviousResponse = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse])
 	result.OpenAIAdvancedSchedulerWeightSessionSticky = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky])
 	result.OpenAIAdvancedSchedulerEffectiveLBTopK = s.openAIAdvancedSchedulerEffectiveLBTopK()
@@ -4411,6 +4608,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerEffectiveWeightTTFT = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.TTFT)
 	result.OpenAIAdvancedSchedulerEffectiveWeightReset = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.Reset)
 	result.OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.QuotaHeadroom)
+	result.OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.UpstreamCost)
 	result.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.PreviousResponse)
 	result.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.SessionSticky)
 
@@ -4507,8 +4705,7 @@ func (s *SettingService) openAIAdvancedSchedulerEffectiveWeights() config.Gatewa
 		return defaults
 	}
 	weights := s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights
-	baseSum := weights.Priority + weights.Load + weights.Queue + weights.ErrorRate + weights.TTFT + weights.QuotaHeadroom
-	if baseSum <= 0 {
+	if !weights.IsValid() {
 		return defaults
 	}
 	return weights
@@ -4519,6 +4716,10 @@ func formatOpenAIAdvancedSchedulerFloat(value float64) string {
 }
 
 func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *SystemSettings) error {
+	if rate := settings.OpenAIOAuthSchedulingRateMultiplier; rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return infraerrors.BadRequest("INVALID_OPENAI_OAUTH_SCHEDULING_RATE_MULTIPLIER", "OpenAI OAuth scheduling rate multiplier must be a finite non-negative number")
+	}
+
 	lbTopK, err := normalizeOptionalPositiveIntString(settings.OpenAIAdvancedSchedulerLBTopK)
 	if err != nil {
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_LB_TOP_K", "openai advanced scheduler TopK must be a positive integer or empty")
@@ -4533,6 +4734,7 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 		&settings.OpenAIAdvancedSchedulerWeightTTFT,
 		&settings.OpenAIAdvancedSchedulerWeightReset,
 		&settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom,
+		&settings.OpenAIAdvancedSchedulerWeightUpstreamCost,
 		&settings.OpenAIAdvancedSchedulerWeightPreviousResponse,
 		&settings.OpenAIAdvancedSchedulerWeightSessionSticky,
 	}
@@ -4545,14 +4747,20 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 	}
 
 	effective := s.openAIAdvancedSchedulerEffectiveWeights()
-	baseSum := resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightPriority, effective.Priority) +
-		resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightLoad, effective.Load) +
-		resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightQueue, effective.Queue) +
-		resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightErrorRate, effective.ErrorRate) +
-		resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightTTFT, effective.TTFT) +
-		resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom, effective.QuotaHeadroom)
-	if baseSum <= 0 {
-		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_WEIGHT", "openai advanced scheduler base weights must not all be zero")
+	resolved := config.GatewayOpenAIWSSchedulerScoreWeights{
+		Priority:         resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightPriority, effective.Priority),
+		Load:             resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightLoad, effective.Load),
+		Queue:            resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightQueue, effective.Queue),
+		ErrorRate:        resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightErrorRate, effective.ErrorRate),
+		TTFT:             resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightTTFT, effective.TTFT),
+		Reset:            resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightReset, effective.Reset),
+		QuotaHeadroom:    resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom, effective.QuotaHeadroom),
+		UpstreamCost:     resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightUpstreamCost, effective.UpstreamCost),
+		PreviousResponse: resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightPreviousResponse, effective.PreviousResponse),
+		SessionSticky:    resolveOpenAIAdvancedSchedulerWeight(settings.OpenAIAdvancedSchedulerWeightSessionSticky, effective.SessionSticky),
+	}
+	if !resolved.IsValid() {
+		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_WEIGHT", "openai advanced scheduler weights must have finite non-zero base and total sums")
 	}
 	return nil
 }
@@ -4701,11 +4909,9 @@ func mergeProviderDefaultGrantSettings(globalDefaults ProviderDefaultGrantSettin
 }
 
 func (s *SettingService) GetDefaultPlatformQuotas(ctx context.Context) (map[string]*DefaultPlatformQuotaSetting, error) {
-	out := map[string]*DefaultPlatformQuotaSetting{
-		PlatformAnthropic:   {},
-		PlatformOpenAI:      {},
-		PlatformGemini:      {},
-		PlatformAntigravity: {},
+	out := make(map[string]*DefaultPlatformQuotaSetting, len(AllowedQuotaPlatforms))
+	for _, platform := range AllowedQuotaPlatforms {
+		out[platform] = &DefaultPlatformQuotaSetting{}
 	}
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyDefaultPlatformQuotas)
 	if err != nil || strings.TrimSpace(raw) == "" {
@@ -5873,6 +6079,16 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		}
 		if !validScopes[rule.Scope] {
 			return fmt.Errorf("rule[%d]: invalid scope %q", i, rule.Scope)
+		}
+		seenUserIDs := make(map[int64]struct{}, len(rule.UserIDs))
+		for j, userID := range rule.UserIDs {
+			if userID <= 0 {
+				return fmt.Errorf("rule[%d]: user_ids[%d] must be positive", i, j)
+			}
+			if _, exists := seenUserIDs[userID]; exists {
+				return fmt.Errorf("rule[%d]: user_ids[%d] duplicates user_id %d", i, j, userID)
+			}
+			seenUserIDs[userID] = struct{}{}
 		}
 		for j, pattern := range rule.ModelWhitelist {
 			trimmed := strings.TrimSpace(pattern)

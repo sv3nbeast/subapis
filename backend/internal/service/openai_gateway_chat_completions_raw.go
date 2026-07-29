@@ -105,7 +105,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 
 	// Grok Composer does not accept image_url parts directly, but Grok Build
 	// can describe the images first. Bridge only this exact failure mode.
-	token, tokenKind, err := s.GetAccessToken(ctx, account)
+	token, tokenKind, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				Message:            upstreamMsg,
 			})
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-			if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
@@ -430,21 +430,16 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
 
-	var ccResp apicompat.ChatCompletionsResponse
 	var usage OpenAIUsage
-	parseErr := json.Unmarshal(respBody, &ccResp)
-	if parseErr != nil && account != nil && account.Platform == PlatformGrok {
-		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Invalid upstream response")
-		return nil, fmt.Errorf("parse grok chat_completions response: %w", parseErr)
+	if account != nil && account.Platform == PlatformGrok {
+		var ccResp apicompat.ChatCompletionsResponse
+		if parseErr := json.Unmarshal(respBody, &ccResp); parseErr != nil {
+			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Invalid upstream response")
+			return nil, fmt.Errorf("parse grok chat_completions response: %w", parseErr)
+		}
 	}
-	if parseErr == nil && ccResp.Usage != nil {
-		usage = OpenAIUsage{
-			InputTokens:  ccResp.Usage.PromptTokens,
-			OutputTokens: ccResp.Usage.CompletionTokens,
-		}
-		if ccResp.Usage.PromptTokensDetails != nil {
-			usage.CacheReadInputTokens = ccResp.Usage.PromptTokensDetails.CachedTokens
-		}
+	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+		usage = parsedUsage
 	}
 
 	if s.responseHeaderFilter != nil {

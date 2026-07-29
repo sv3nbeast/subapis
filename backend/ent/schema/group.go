@@ -66,6 +66,12 @@ func (Group) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		field.String("duplicate_operation_id").
+			MaxLen(64).
+			Optional().
+			Nillable().
+			Immutable().
+			Comment("内部幂等恢复标识，不对 API 暴露"),
 
 		// Subscription-related fields (added by migration 003)
 		field.String("platform").
@@ -146,6 +152,11 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
+		field.Float("web_search_price_per_call").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示使用默认价 0.01（官方 $10/1000 次）"),
 
 		// Claude Code 客户端限制 (added by migration 029)
 		field.Bool("claude_code_only").
@@ -191,6 +202,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("allow_messages_dispatch").
 			Default(false).
 			Comment("是否允许 /v1/messages 调度到此 OpenAI 分组"),
+		field.Bool("allow_live").
+			Default(false).
+			Comment("是否允许此 OpenAI 分组访问 Live 接口"),
 		field.Bool("allow_non_stream_messages").
 			Default(false).
 			Comment("是否允许 /v1/messages 非流式请求（内部转流式聚合）"),
@@ -245,6 +259,16 @@ func (Group) Fields() []ent.Field {
 			MaxLen(16).
 			Default("q").
 			Comment("Kiro endpoint 模式：q、krs、auto（仅 kiro 分组生效）"),
+
+		// OpenAI/Codex 请求的推理强度上限（空字符串表示不限制）。
+		field.String("max_reasoning_effort").
+			MaxLen(20).
+			Default("").
+			Comment("OpenAI reasoning effort 上限；可选 minimal/low/medium/high/xhigh/max"),
+		field.JSON("reasoning_effort_mappings", []domain.ReasoningEffortMapping{}).
+			Default([]domain.ReasoningEffortMapping{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("OpenAI reasoning effort 自定义精确映射；先映射再应用上限"),
 	}
 }
 
@@ -274,5 +298,9 @@ func (Group) Indexes() []ent.Index {
 		index.Fields("is_exclusive"),
 		index.Fields("deleted_at"),
 		index.Fields("sort_order"),
+		index.Fields("duplicate_operation_id").
+			Unique().
+			StorageKey("idx_groups_duplicate_operation_id_active").
+			Annotations(entsql.IndexWhere("duplicate_operation_id IS NOT NULL AND deleted_at IS NULL")),
 	}
 }

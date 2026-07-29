@@ -21,13 +21,14 @@ func TestMergeAnthropicUsageCapturesKiroCredits(t *testing.T) {
 }
 
 func TestOpenAICompatResponseOmitsInternalKiroCredits(t *testing.T) {
+	stopReason := "end_turn"
 	resp := &apicompat.AnthropicResponse{
 		ID:         "msg_kiro_credits",
 		Type:       "message",
 		Role:       "assistant",
 		Model:      "claude-sonnet-4.5",
 		Content:    []apicompat.AnthropicContentBlock{{Type: "text", Text: "ok"}},
-		StopReason: "end_turn",
+		StopReason: &stopReason,
 		Usage: apicompat.AnthropicUsage{
 			InputTokens:  3,
 			OutputTokens: 5,

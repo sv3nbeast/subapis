@@ -12,6 +12,7 @@ import (
 
 type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfig
 type GroupModelsListConfig = domain.GroupModelsListConfig
+type ReasoningEffortMapping = domain.ReasoningEffortMapping
 
 type Group struct {
 	ID             int64
@@ -21,13 +22,14 @@ type Group struct {
 	RateMultiplier float64
 	// 高峰时段倍率：peak_rate_enabled 为 true 且当前时刻处于 [PeakStart, PeakEnd) 时，
 	// token 计费倍率额外乘以 PeakRateMultiplier。详见 PeakMultiplierAt。
-	PeakRateEnabled    bool
-	PeakStart          string
-	PeakEnd            string
-	PeakRateMultiplier float64
-	IsExclusive        bool
-	Status             string
-	Hydrated           bool // indicates the group was loaded from a trusted repository source
+	PeakRateEnabled      bool
+	PeakStart            string
+	PeakEnd              string
+	PeakRateMultiplier   float64
+	IsExclusive          bool
+	Status               string
+	Hydrated             bool // indicates the group was loaded from a trusted repository source
+	DuplicateOperationID string
 
 	SubscriptionType    string
 	DailyLimitUSD       *float64
@@ -51,6 +53,7 @@ type Group struct {
 	VideoPrice480P               *float64
 	VideoPrice720P               *float64
 	VideoPrice1080P              *float64
+	WebSearchPricePerCall        *float64
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
@@ -77,6 +80,7 @@ type Group struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool
 	AllowNonStreamMessages       bool // 是否允许 /v1/messages 非流式请求（内部转流式聚合）
+	AllowLive                    bool // 是否允许 OpenAI Live 接口
 	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	DefaultMappedModel           string
@@ -88,6 +92,9 @@ type Group struct {
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）。
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
 	RPMLimit int
+
+	MaxReasoningEffort      string
+	ReasoningEffortMappings []ReasoningEffortMapping
 
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）。
 	KiroCacheEmulationEnabled   bool

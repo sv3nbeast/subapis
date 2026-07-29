@@ -5,6 +5,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -54,6 +55,7 @@ func TestAPIContracts(t *testing.T) {
 					"username": "alice",
 					"role": "user",
 					"balance": 12.5,
+					"frozen_balance": 0,
 					"concurrency": 5,
 					"rpm_limit": 0,
 					"status": "active",
@@ -365,13 +367,29 @@ func TestAPIContracts(t *testing.T) {
 						"video_price_480p": null,
 						"video_price_720p": null,
 						"video_price_1080p": null,
+						"web_search_price_per_call": null,
 						"allow_image_generation": false,
+						"allow_batch_image_generation": false,
+						"allow_non_stream_messages": false,
+						"batch_image_discount_multiplier": 0,
+						"batch_image_hold_multiplier": 0,
 						"image_rate_independent": false,
 						"image_rate_multiplier": 0,
 						"video_rate_independent": false,
 						"video_rate_multiplier": 0,
 						"claude_code_only": false,
 						"allow_messages_dispatch": false,
+						"allow_live": false,
+						"grok_chat_responses_gray_percent": 0,
+						"grok_chat_upstream_mode": "raw",
+						"kiro_auto_sticky_enabled": false,
+						"kiro_cache_emulation_enabled": false,
+						"kiro_cache_emulation_ratio": 0,
+						"kiro_endpoint_mode": "q",
+						"kiro_sticky_session_ttl_seconds": 0,
+						"max_reasoning_effort": "",
+						"model_quota_ratios": null,
+						"reasoning_effort_mappings": null,
 						"fallback_group_id": null,
 						"fallback_group_id_on_invalid_request": null,
 						"require_oauth_only": false,
@@ -427,6 +445,10 @@ func TestAPIContracts(t *testing.T) {
 						"daily_usage_usd": 1.23,
 						"weekly_usage_usd": 2.34,
 						"monthly_usage_usd": 3.45,
+						"model_usage": null,
+						"quota_cycle_days": 0,
+						"quota_cycle_start_at": null,
+						"quota_cycle_end_at": null,
 						"created_at": "2025-01-02T03:04:05Z",
 						"updated_at": "2025-01-02T03:04:05Z"
 					}
@@ -591,6 +613,7 @@ func TestAPIContracts(t *testing.T) {
 						"total_cost": 0.5,
 						"actual_cost": 0.5,
 						"rate_multiplier": 1,
+						"long_context_billing_applied": false,
 						"billing_type": 0,
 							"stream": true,
 							"duration_ms": 100,
@@ -599,6 +622,8 @@ func TestAPIContracts(t *testing.T) {
 							"image_size": null,
 							"image_input_size": null,
 							"image_output_size": null,
+							"image_input_tokens": 0,
+							"image_input_cost": 0,
 							"image_output_tokens": 0,
 							"image_output_cost": 0,
 							"image_size_source": null,
@@ -625,6 +650,8 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyEmailVerifyEnabled:               "false",
 					service.SettingKeyRegistrationEmailSuffixWhitelist: "[]",
 					service.SettingKeyPromoCodeEnabled:                 "true",
+					service.SettingKeyLoginAgreementUpdatedAt:          "2026-03-31",
+					service.SettingKeyLoginAgreementDocuments:          `[{"id":"terms","title":"服务条款","content_md":"contract-fixture"},{"id":"usage-policy","title":"使用政策","content_md":"policy-fixture"},{"id":"supported-regions","title":"支持的国家和地区","content_md":"regions-fixture"},{"id":"service-specific-terms","title":"服务特定条款","content_md":"service-fixture"}]`,
 
 					service.SettingKeySMTPHost:     "smtp.example.com",
 					service.SettingKeySMTPPort:     "587",
@@ -703,10 +730,10 @@ func TestAPIContracts(t *testing.T) {
 						"login_agreement_mode": "modal",
 						"login_agreement_updated_at": "2026-03-31",
 						"login_agreement_documents": [
-							{"id": "terms", "title": "服务条款", "content_md": ""},
-							{"id": "usage-policy", "title": "使用政策", "content_md": ""},
-							{"id": "supported-regions", "title": "支持的国家和地区", "content_md": ""},
-							{"id": "service-specific-terms", "title": "服务特定条款", "content_md": ""}
+							{"id": "terms", "title": "服务条款", "content_md": "contract-fixture"},
+							{"id": "usage-policy", "title": "使用政策", "content_md": "policy-fixture"},
+							{"id": "supported-regions", "title": "支持的国家和地区", "content_md": "regions-fixture"},
+							{"id": "service-specific-terms", "title": "服务特定条款", "content_md": "service-fixture"}
 						],
 						"smtp_host": "smtp.example.com",
 						"smtp_port": 587,
@@ -908,6 +935,9 @@ func TestAPIContracts(t *testing.T) {
 					"channel_monitor_enabled": true,
 					"channel_monitor_default_interval_seconds": 60,
 					"available_channels_enabled": false,
+					"model_plaza_enabled": false,
+					"model_plaza_require_auth": false,
+					"model_plaza_description": "",
 					"risk_control_enabled": false,
 					"cyber_session_block_enabled": false,
 					"cyber_session_block_ttl_seconds": 3600,
@@ -964,6 +994,8 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyRegistrationEnabled:              "true",
 					service.SettingKeyEmailVerifyEnabled:               "false",
 					service.SettingKeyRegistrationEmailSuffixWhitelist: "[]",
+					service.SettingKeyLoginAgreementUpdatedAt:          "2026-03-31",
+					service.SettingKeyLoginAgreementDocuments:          `[{"id":"terms","title":"服务条款","content_md":"contract-fixture"},{"id":"usage-policy","title":"使用政策","content_md":"policy-fixture"},{"id":"supported-regions","title":"支持的国家和地区","content_md":"regions-fixture"},{"id":"service-specific-terms","title":"服务特定条款","content_md":"service-fixture"}]`,
 				})
 			},
 			method:     http.MethodGet,
@@ -987,10 +1019,10 @@ func TestAPIContracts(t *testing.T) {
 						"login_agreement_mode": "modal",
 						"login_agreement_updated_at": "2026-03-31",
 						"login_agreement_documents": [
-							{"id": "terms", "title": "服务条款", "content_md": ""},
-							{"id": "usage-policy", "title": "使用政策", "content_md": ""},
-							{"id": "supported-regions", "title": "支持的国家和地区", "content_md": ""},
-							{"id": "service-specific-terms", "title": "服务特定条款", "content_md": ""}
+							{"id": "terms", "title": "服务条款", "content_md": "contract-fixture"},
+							{"id": "usage-policy", "title": "使用政策", "content_md": "policy-fixture"},
+							{"id": "supported-regions", "title": "支持的国家和地区", "content_md": "regions-fixture"},
+							{"id": "service-specific-terms", "title": "服务特定条款", "content_md": "service-fixture"}
 						],
 						"smtp_host": "",
 						"smtp_port": 587,
@@ -1155,6 +1187,9 @@ func TestAPIContracts(t *testing.T) {
 					"channel_monitor_enabled": true,
 					"channel_monitor_default_interval_seconds": 60,
 					"available_channels_enabled": false,
+					"model_plaza_enabled": false,
+					"model_plaza_require_auth": false,
+					"model_plaza_description": "",
 					"risk_control_enabled": false,
 					"cyber_session_block_enabled": false,
 					"cyber_session_block_ttl_seconds": 3600,
@@ -1250,9 +1285,99 @@ func TestAPIContracts(t *testing.T) {
 
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
 			require.Equal(t, tt.wantStatus, status)
-			require.JSONEq(t, tt.wantJSON, body)
+			wantJSON := tt.wantJSON
+			if tt.path == "/api/v1/admin/settings" {
+				wantJSON = currentSystemSettingsContractJSON(t, wantJSON)
+			}
+			require.JSONEq(t, wantJSON, body)
 		})
 	}
+}
+
+func currentSystemSettingsContractJSON(t *testing.T, base string) string {
+	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(base), &payload))
+	data, ok := payload["data"].(map[string]any)
+	require.True(t, ok)
+
+	emptyQuota := func() map[string]any {
+		return map[string]any{"daily": nil, "weekly": nil, "monthly": nil}
+	}
+	data["default_platform_quotas"] = map[string]any{
+		"anthropic":   emptyQuota(),
+		"openai":      emptyQuota(),
+		"gemini":      emptyQuota(),
+		"antigravity": emptyQuota(),
+		"kiro":        emptyQuota(),
+		"droid":       emptyQuota(),
+		"grok":        emptyQuota(),
+	}
+
+	for key, value := range map[string]any{
+		"affiliate_admin_recharge_enabled":                             false,
+		"audit_log_retention_days":                                     float64(180),
+		"claude_upstream_user_agent":                                   "",
+		"dingtalk_connect_corp_restriction_policy":                     "none",
+		"dingtalk_connect_sync_corp_email_attr_name":                   "DingTalk Email",
+		"dingtalk_connect_sync_dept_attr_name":                         "DingTalk Department",
+		"dingtalk_connect_sync_display_name_attr_name":                 "DingTalk Name",
+		"enable_cch_signing":                                           false,
+		"forwarded_client_ip_headers":                                  []any{},
+		"model_plaza_require_auth":                                     true,
+		"openai_advanced_scheduler_effective_lb_top_k":                 "7",
+		"openai_advanced_scheduler_effective_weight_error_rate":        "0.8",
+		"openai_advanced_scheduler_effective_weight_load":              "1",
+		"openai_advanced_scheduler_effective_weight_previous_response": "5",
+		"openai_advanced_scheduler_effective_weight_priority":          "1",
+		"openai_advanced_scheduler_effective_weight_queue":             "0.7",
+		"openai_advanced_scheduler_effective_weight_quota_headroom":    "0",
+		"openai_advanced_scheduler_effective_weight_reset":             "0",
+		"openai_advanced_scheduler_effective_weight_session_sticky":    "3",
+		"openai_advanced_scheduler_effective_weight_ttft":              "0.5",
+		"openai_advanced_scheduler_effective_weight_upstream_cost":     "0",
+		"openai_advanced_scheduler_lb_top_k":                           "",
+		"openai_advanced_scheduler_sticky_weighted_enabled":            false,
+		"openai_advanced_scheduler_subscription_priority_enabled":      false,
+		"openai_advanced_scheduler_weight_error_rate":                  "",
+		"openai_advanced_scheduler_weight_load":                        "",
+		"openai_advanced_scheduler_weight_previous_response":           "",
+		"openai_advanced_scheduler_weight_priority":                    "",
+		"openai_advanced_scheduler_weight_queue":                       "",
+		"openai_advanced_scheduler_weight_quota_headroom":              "",
+		"openai_advanced_scheduler_weight_reset":                       "",
+		"openai_advanced_scheduler_weight_session_sticky":              "",
+		"openai_advanced_scheduler_weight_ttft":                        "",
+		"openai_advanced_scheduler_weight_upstream_cost":               "",
+		"openai_low_upstream_rate_priority_enabled":                    false,
+		"openai_oauth_scheduling_rate_multiplier":                      float64(1),
+		"passkey_configured":                                           false,
+		"passkey_enabled":                                              false,
+		"passkey_rp_id":                                                "",
+		"passkey_rp_origins":                                           []any{},
+		"payment_alipay_mobile_precreate_deep_link":                    false,
+		"payment_subscription_usd_to_cny_rate":                         float64(0),
+		"proxy_auto_select_max_anthropic_accounts_per_proxy":           float64(1),
+		"proxy_auto_select_max_antigravity_accounts_per_proxy":         float64(5),
+		"proxy_auto_select_max_grok_accounts_per_proxy":                float64(1),
+		"proxy_auto_select_max_kiro_accounts_per_proxy":                float64(1),
+		"proxy_auto_select_max_openai_accounts_per_proxy":              float64(1),
+		"public_model_market_enabled":                                  false,
+		"public_model_market_reference_usd_cny_rate":                   float64(7.2),
+		"public_model_market_settlement_usd_cny_rate":                  float64(1),
+		"session_binding_enabled":                                      false,
+		"step_up_enabled":                                              false,
+		"web_chat_enabled":                                             false,
+		"web_chat_history_enabled":                                     false,
+		"web_chat_projects_enabled":                                    false,
+		"web_chat_templates_enabled":                                   false,
+	} {
+		data[key] = value
+	}
+
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return string(encoded)
 }
 
 type contractDeps struct {
@@ -1320,12 +1445,12 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)
-	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
@@ -1416,6 +1541,10 @@ func (r *stubUserRepo) Create(ctx context.Context, user *service.User) error {
 	return errors.New("not implemented")
 }
 
+func (r *stubUserRepo) CreateWithEmailAliasGuard(ctx context.Context, user *service.User) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubUserRepo) GetByID(ctx context.Context, id int64) (*service.User, error) {
 	user, ok := r.users[id]
 	if !ok {
@@ -1445,7 +1574,7 @@ func (r *stubUserRepo) GetFirstAdmin(ctx context.Context) (*service.User, error)
 	return nil, service.ErrUserNotFound
 }
 
-func (r *stubUserRepo) Update(ctx context.Context, user *service.User) error {
+func (r *stubUserRepo) Update(ctx context.Context, user *service.User, fields service.UserUpdateFields) error {
 	return errors.New("not implemented")
 }
 
@@ -1481,14 +1610,29 @@ func (r *stubUserRepo) DeductBalance(ctx context.Context, id int64, amount float
 	return errors.New("not implemented")
 }
 
+func (r *stubUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (service.BalanceChange, error) {
+	return service.BalanceChange{}, errors.New("not implemented")
+}
+
+func (r *stubUserRepo) SetBalance(ctx context.Context, id int64, value float64) (service.BalanceChange, error) {
+	return service.BalanceChange{}, errors.New("not implemented")
+}
+
 func (r *stubUserRepo) UpdateConcurrency(ctx context.Context, id int64, amount int) error {
 	return errors.New("not implemented")
 }
 
 func (r *stubUserRepo) BatchSetConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
 func (r *stubUserRepo) BatchAddConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
+func (r *stubUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
 
 func (r *stubUserRepo) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	return false, errors.New("not implemented")
+}
+
+func (r *stubUserRepo) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
 	return false, errors.New("not implemented")
 }
 
@@ -1705,6 +1849,10 @@ func (s *stubAccountRepo) ListWithFilters(ctx context.Context, params pagination
 	return nil, nil, errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ListAllWithFilters(context.Context, string, string, string, string, int64, string) ([]service.Account, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *stubAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }
@@ -1782,6 +1930,10 @@ func (s *stubAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context
 }
 
 func (s *stubAccountRepo) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -2170,7 +2322,7 @@ func (r *stubApiKeyRepo) GetByKeyForAuth(ctx context.Context, key string) (*serv
 	return r.GetByKey(ctx, key)
 }
 
-func (r *stubApiKeyRepo) Update(ctx context.Context, key *service.APIKey) error {
+func (r *stubApiKeyRepo) Update(ctx context.Context, key *service.APIKey, _ service.APIKeyUpdateFields) error {
 	if key == nil {
 		return errors.New("nil key")
 	}

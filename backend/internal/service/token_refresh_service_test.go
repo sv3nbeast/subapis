@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +19,37 @@ import (
 
 type tokenRefreshAccountRepo struct {
 	mockAccountRepoForGemini
-	updateCalls            int
-	fullUpdateCalls        int
-	updateCredentialsCalls int
-	setErrorCalls          int
-	clearTempCalls         int
-	setTempUnschedCalls    int
-	updateExtraCalls       int
-	lastErrorMessage       string
-	lastTempUnschedReason  string
-	lastExtraUpdates       map[string]any
-	lastAccount            *Account
-	updateErr              error
+	updateCalls                  int
+	fullUpdateCalls              int
+	updateCredentialsCalls       int
+	setErrorCalls                int
+	clearTempCalls               int
+	setTempUnschedCalls          int
+	updateExtraCalls             int
+	lastErrorMessage             string
+	lastTempUnschedReason        string
+	lastExtraUpdates             map[string]any
+	lastAccount                  *Account
+	updateErr                    error
+	cancelOnUpdate               context.CancelFunc
+	conditionalErrorCalls        int
+	conditionalTempCalls         int
+	conditionalSuccessCalls      int
+	conditionalErrorErr          error
+	conditionalTempErr           error
+	conditionalSuccessErr        error
+	snapshotReads                bool
+	respectReadContext           bool
+	getByIDCalls                 int
+	durableReadDelay             time.Duration
+	mutateSchedulingOnSuccessCAS bool
+	reauthorizeOnErrorCAS        bool
+	reauthorizeOnTempCAS         bool
+	repairProxyOnErrorCAS        bool
+	repairProxyOnTempCAS         bool
+	setErrorErr                  error
+	setTempUnschedErr            error
+	beforeConditionalState       func()
 }
 
 func (r *tokenRefreshAccountRepo) Update(ctx context.Context, account *Account) error {
@@ -50,17 +70,44 @@ func (r *tokenRefreshAccountRepo) UpdateCredentials(ctx context.Context, id int6
 		if acc, ok := r.accountsByID[id]; ok && acc != nil {
 			acc.Credentials = cloned
 			r.lastAccount = acc
+			if r.cancelOnUpdate != nil {
+				r.cancelOnUpdate()
+			}
 			return nil
 		}
 	}
 	r.lastAccount = &Account{ID: id, Credentials: cloned}
+	if r.cancelOnUpdate != nil {
+		r.cancelOnUpdate()
+	}
 	return nil
+}
+
+func (r *tokenRefreshAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
+	if r.respectReadContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	r.getByIDCalls++
+	if r.getByIDCalls > 1 && r.durableReadDelay > 0 {
+		timer := time.NewTimer(r.durableReadDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	account, err := r.mockAccountRepoForGemini.GetByID(ctx, id)
+	if err != nil || !r.snapshotReads {
+		return account, err
+	}
+	return snapshotOAuthRefreshAccount(account), nil
 }
 
 func (r *tokenRefreshAccountRepo) SetError(ctx context.Context, id int64, errorMsg string) error {
 	r.setErrorCalls++
 	r.lastErrorMessage = errorMsg
-	return nil
+	return r.setErrorErr
 }
 
 func (r *tokenRefreshAccountRepo) ClearTempUnschedulable(ctx context.Context, id int64) error {
@@ -71,7 +118,82 @@ func (r *tokenRefreshAccountRepo) ClearTempUnschedulable(ctx context.Context, id
 func (r *tokenRefreshAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
 	r.setTempUnschedCalls++
 	r.lastTempUnschedReason = reason
-	return nil
+	return r.setTempUnschedErr
+}
+
+func (r *tokenRefreshAccountRepo) SetGrokCredentialErrorIfMatch(_ context.Context, id int64, snapshot GrokCredentialMutationSnapshot, errorMsg string) (bool, error) {
+	if r.beforeConditionalState != nil {
+		hook := r.beforeConditionalState
+		r.beforeConditionalState = nil
+		hook()
+	}
+	account := r.accountsByID[id]
+	if !grokCredentialSnapshotMatchesAccount(account, snapshot) ||
+		(errorMsg == string(GrokCredentialReasonProxyInvalid) && account.Proxy != nil) {
+		return false, nil
+	}
+	r.setErrorCalls++
+	r.lastErrorMessage = errorMsg
+	if r.setErrorErr != nil {
+		return false, r.setErrorErr
+	}
+	account.Status = StatusError
+	account.Schedulable = false
+	account.ErrorMessage = errorMsg
+	return true, nil
+}
+
+func (r *tokenRefreshAccountRepo) SetGrokCredentialTempUnschedulableIfMatch(_ context.Context, id int64, snapshot GrokCredentialMutationSnapshot, until time.Time, reason string) (bool, error) {
+	if r.beforeConditionalState != nil {
+		hook := r.beforeConditionalState
+		r.beforeConditionalState = nil
+		hook()
+	}
+	account := r.accountsByID[id]
+	if !grokCredentialSnapshotMatchesAccount(account, snapshot) {
+		return false, nil
+	}
+	r.setTempUnschedCalls++
+	r.lastTempUnschedReason = reason
+	if r.setTempUnschedErr != nil {
+		return false, r.setTempUnschedErr
+	}
+	value := until
+	account.TempUnschedulableUntil = &value
+	return true, nil
+}
+
+func grokCredentialSnapshotMatchesAccount(account *Account, snapshot GrokCredentialMutationSnapshot) bool {
+	return account != nil && account.IsGrokOAuth() && account.IsSchedulable() &&
+		grokCredentialMutationSnapshot(account).CredentialsJSON == snapshot.CredentialsJSON &&
+		grokCredentialProxyIDsEqual(account.ProxyID, snapshot.ProxyID)
+}
+
+func (r *tokenRefreshAccountRepo) UpdateGrokOAuthCredentialsIfUnchanged(_ context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, credentials map[string]any) (bool, error) {
+	r.conditionalSuccessCalls++
+	if r.conditionalSuccessErr != nil {
+		return false, r.conditionalSuccessErr
+	}
+	account := r.accountsByID[id]
+	if account != nil && r.mutateSchedulingOnSuccessCAS {
+		r.mutateSchedulingOnSuccessCAS = false
+		account.Status = StatusDisabled
+		account.Schedulable = false
+		resetAt := time.Now().Add(30 * time.Minute)
+		account.RateLimitResetAt = &resetAt
+	}
+	if account == nil || account.Platform != PlatformGrok || account.Type != AccountTypeOAuth ||
+		!reflect.DeepEqual(account.Credentials, expectedCredentials) || !reflect.DeepEqual(account.ProxyID, expectedProxyID) {
+		return false, nil
+	}
+	r.updateCalls++
+	r.updateCredentialsCalls++
+	account.Credentials = shallowCopyMap(credentials)
+	r.lastAccount = account
+	if r.cancelOnUpdate != nil {
+		r.cancelOnUpdate()
+	}
+	return true, nil
 }
 
 func (r *tokenRefreshAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
@@ -154,7 +276,7 @@ func TestTokenRefreshService_RefreshWithRetry_InvalidatesCache(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       5,
 		Platform: PlatformGemini,
@@ -184,7 +306,7 @@ func TestTokenRefreshService_RefreshWithRetry_InvalidatorErrorIgnored(t *testing
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       6,
 		Platform: PlatformGemini,
@@ -210,7 +332,7 @@ func TestTokenRefreshService_RefreshWithRetry_NilInvalidator(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	account := &Account{
 		ID:       7,
 		Platform: PlatformGemini,
@@ -237,7 +359,7 @@ func TestTokenRefreshService_RefreshWithRetry_Antigravity(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       8,
 		Platform: PlatformAntigravity,
@@ -310,7 +432,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityClearsForceRefreshOnSuc
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
 		ID:                     3709,
@@ -347,7 +469,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityForceRefreshInvalidGran
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	account := &Account{
 		ID:       3710,
 		Platform: PlatformAntigravity,
@@ -380,7 +502,7 @@ func TestTokenRefreshService_RefreshWithRetry_NonOAuthAccount(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       9,
 		Platform: PlatformGemini,
@@ -408,7 +530,7 @@ func TestTokenRefreshService_RefreshWithRetry_OtherPlatformOAuth(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       10,
 		Platform: PlatformOpenAI, // OpenAI OAuth 账户
@@ -435,7 +557,7 @@ func TestTokenRefreshService_RefreshWithRetry_UsesCredentialsUpdater(t *testing.
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	resetAt := time.Now().Add(30 * time.Minute)
 	account := &Account{
 		ID:               17,
@@ -489,7 +611,7 @@ func TestTokenRefreshService_RefreshWithRetry_PrefillsKiroProfileArn(t *testing.
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	service.SetKiroProfileResolverDeps(upstream, &TLSFingerprintProfileService{})
 	refresher := &tokenRefresherStub{credentials: map[string]any{
 		"access_token":  "fresh-token",
@@ -537,7 +659,7 @@ func TestTokenRefreshService_RefreshWithRetry_UpdateFailed(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       11,
 		Platform: PlatformGemini,
@@ -566,7 +688,7 @@ func TestTokenRefreshService_RefreshWithRetry_RefreshFailed(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       12,
 		Platform: PlatformGemini,
@@ -593,7 +715,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityRefreshFailed(t *testin
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       13,
 		Platform: PlatformAntigravity,
@@ -620,7 +742,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError(t *te
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	account := &Account{
 		ID:       14,
 		Platform: PlatformAntigravity,
@@ -648,7 +770,7 @@ func TestTokenRefreshService_RefreshWithRetry_ClearsTempUnschedulable(t *testing
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, tempCache)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, tempCache)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
 		ID:                      15,
@@ -679,7 +801,7 @@ func TestTokenRefreshService_RefreshWithRetry_PreservesQuotaTempUnschedulable(t 
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, tempCache)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, tempCache)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
 		ID:                     16,
@@ -711,7 +833,7 @@ func TestTokenRefreshService_RefreshWithRetry_PreservesManualTempUnschedulable(t
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, tempCache)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, tempCache)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
 		ID:                      17,
@@ -755,7 +877,7 @@ func TestTokenRefreshService_RefreshWithRetry_NonRetryableErrorAllPlatforms(t *t
 					RetryBackoffSeconds: 0,
 				},
 			}
-			service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+			service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 			account := &Account{
 				ID:       16,
 				Platform: tt.platform,
@@ -780,7 +902,7 @@ func TestTokenRefreshService_RefreshWithRetry_NoRefreshTokenDoesNotTempUnschedul
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	account := &Account{
 		ID:       18,
 		Platform: PlatformOpenAI,
@@ -868,7 +990,7 @@ func buildPathAService(repo *tokenRefreshAccountRepo, cache GeminiTokenCache, in
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	refreshAPI := NewOAuthRefreshAPI(repo, cache)
 	service.SetRefreshAPI(refreshAPI)
 
@@ -1003,7 +1125,7 @@ func TestPathA_RetryableErrorExhausted(t *testing.T) {
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	service := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, invalidator, nil, cfg, nil)
 	refreshAPI := NewOAuthRefreshAPI(repo, cache)
 	service.SetRefreshAPI(refreshAPI)
 

@@ -224,16 +224,11 @@ func convertResponsesInputToAnthropicWithPairing(instructions string, inputRaw j
 		case item.Type == "function_call_output" || item.Type == "tool_result":
 			flushPendingUser()
 			// function_call_output → user message with tool_result block
-			outputContent := responsesToolOutputText(item)
-			if outputContent == "" {
-				outputContent = "(empty)"
-			}
-			contentJSON, _ := json.Marshal(outputContent)
 			callID := firstNonEmpty(item.CallID, item.ToolCallID, item.ID)
 			block := AnthropicContentBlock{
 				Type:      "tool_result",
 				ToolUseID: fromResponsesCallIDToAnthropic(callID),
-				Content:   contentJSON,
+				Content:   responsesFunctionOutputToAnthropicContent(item),
 			}
 			blockJSON, _ := json.Marshal([]AnthropicContentBlock{block})
 			messages = append(messages, AnthropicMessage{
@@ -352,6 +347,45 @@ func firstNonEmpty(values ...string) string {
 func isEmptyJSONContent(raw json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(raw))
 	return trimmed == "" || trimmed == `""` || trimmed == "null" || trimmed == "[]"
+}
+
+func responsesFunctionOutputToAnthropicContent(item ResponsesInputItem) json.RawMessage {
+	if len(item.outputRaw) == 0 {
+		output := responsesToolOutputText(item)
+		if output == "" {
+			output = "(empty)"
+		}
+		content, _ := json.Marshal(output)
+		return content
+	}
+
+	var parts []ResponsesContentPart
+	if err := json.Unmarshal(item.outputRaw, &parts); err == nil {
+		blocks := make([]AnthropicContentBlock, 0, len(parts))
+		for _, part := range parts {
+			switch part.Type {
+			case "input_text", "output_text", "text":
+				if part.Text != "" {
+					blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: part.Text})
+				}
+			case "input_image":
+				if source := dataURIToAnthropicImageSource(part.ImageURL); source != nil {
+					blocks = append(blocks, AnthropicContentBlock{Type: "image", Source: source})
+				}
+			}
+		}
+		if len(blocks) > 0 {
+			content, _ := json.Marshal(blocks)
+			return content
+		}
+		if len(parts) == 0 {
+			content, _ := json.Marshal("(empty)")
+			return content
+		}
+	}
+
+	content, _ := json.Marshal(item.Output)
+	return content
 }
 
 func responsesToolOutputText(item ResponsesInputItem) string {

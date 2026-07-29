@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -23,7 +24,26 @@ import (
 const (
 	grokComposerImageBridgeVisionModel     = "grok-build-0.1"
 	grokComposerImageBridgeMaxOutputTokens = 512
+	grokUpstreamUserAgent                  = "sub2api-grok/1.0"
+	// Keep the legacy service-level alias in lockstep with the shared xAI CLI
+	// transport headers used by OAuth probes and Grok forwarding.
+	grokCLIVersion                   = xai.CLIClientVersion
+	grokDefaultResponsesModel        = "grok-4.5"
+	grokRateLimitFallbackCooldown    = 2 * time.Minute
+	grokRateLimitRepeatCooldown      = 10 * time.Minute
+	grokRateLimitSustainedCooldown   = 30 * time.Minute
+	grokRateLimitMaxAdaptiveCooldown = time.Hour
+	grokRateLimitBackoffQuietPeriod  = time.Hour
 )
+
+func applyGrokCLIHeaders(headers http.Header) {
+	if headers == nil {
+		return
+	}
+	headers.Set("User-Agent", grokUpstreamUserAgent)
+	headers.Set("X-Grok-Client-Version", grokCLIVersion)
+	headers.Set("X-Grok-Client-Mode", "interactive")
+}
 
 func (s *OpenAIGatewayService) forwardGrokResponses(
 	ctx context.Context,
@@ -34,8 +54,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	reqStream bool,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
-	if account.Type != AccountTypeOAuth {
-		return nil, fmt.Errorf("grok account type %s is not supported by subscription forwarding", account.Type)
+	clearGrokResponsesClientToolMapping(c)
+	if account.Type != AccountTypeOAuth && account.Type != AccountTypeAPIKey {
+		return nil, fmt.Errorf("grok account type %s is not supported by forwarding", account.Type)
 	}
 
 	upstreamModel := account.GetMappedModel(originalModel)
@@ -46,12 +67,18 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if err != nil {
 		return nil, fmt.Errorf("inject Grok prompt cache identity: %w", err)
 	}
-	patchedBody, err := patchGrokResponsesBody(body, upstreamModel)
+	patchedBody, clientToolMapping, err := patchGrokResponsesBodyWithClientTools(body, upstreamModel)
 	if err != nil {
+		if c != nil && !IsResponseCommitted(c) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": err.Error(), "param": "tools",
+			}})
+		}
 		return nil, err
 	}
+	setGrokResponsesClientToolMapping(c, clientToolMapping)
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	token, _, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +174,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -161,6 +188,13 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	var firstTokenMs *int
 	responseID := ""
 	if reqStream {
+		if hasGrokResponsesClientToolMapping(clientToolMapping) {
+			maxLineSize := defaultMaxLineSize
+			if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+				maxLineSize = s.cfg.Gateway.MaxLineSize
+			}
+			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize)
+		}
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 		if err != nil {
 			return nil, err
@@ -181,6 +215,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if usage == nil {
 		usage = &OpenAIUsage{}
 	}
+	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	return &OpenAIForwardResult{
 		RequestID:        firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
 		UpstreamEndpoint: OpenAIUpstreamEndpointResponses,
@@ -188,7 +223,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		Usage:            *usage,
 		Model:            originalModel,
 		UpstreamModel:    upstreamModel,
-		ReasoningEffort:  ptrStringOrNil(normalizeOpenAIReasoningEffort(gjson.GetBytes(patchedBody, "reasoning.effort").String())),
+		ReasoningEffort:  reasoningEffort,
 		Stream:           reqStream,
 		OpenAIWSMode:     false,
 		ResponseHeaders:  resp.Header.Clone(),
@@ -566,7 +601,13 @@ var grokResponsesSupportedToolTypes = map[string]struct{}{
 
 func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 	tools := gjson.GetBytes(body, "tools")
-	if !tools.Exists() || !tools.IsArray() {
+	if !tools.Exists() {
+		if gjson.GetBytes(body, "tool_choice").Exists() {
+			return sjson.DeleteBytes(body, "tool_choice")
+		}
+		return body, nil
+	}
+	if !tools.IsArray() {
 		return body, nil
 	}
 
@@ -820,7 +861,7 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, grokComposerImageBridgeVisionModel)
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
@@ -951,8 +992,18 @@ func addOpenAIUsage(dst *OpenAIUsage, usage OpenAIUsage) {
 	dst.ImageOutputTokens += usage.ImageOutputTokens
 }
 
-func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string) (*http.Request, error) {
-	targetURL, err := xai.BuildResponsesURL(account.GetGrokBaseURL())
+func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, options ...any) (*http.Request, error) {
+	cacheIdentity := ""
+	var cfg *config.Config
+	for _, option := range options {
+		switch value := option.(type) {
+		case string:
+			cacheIdentity = value
+		case *config.Config:
+			cfg = value
+		}
+	}
+	targetURL, err := buildGrokResponsesURL(account, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -967,13 +1018,24 @@ func buildGrokResponsesRequest(ctx context.Context, c *gin.Context, account *Acc
 	// Free Build (cli-chat-proxy) requires Grok CLI client headers; api.x.ai does not.
 	if account != nil {
 		xai.ApplyCLIChatProxyHeaders(req, account.GetGrokBaseURL(), grokCLIRequestMetadata(c, account, body, gjson.GetBytes(body, "model").String()))
+		applyGrokCacheHeaders(req.Header, cacheIdentity)
 	}
 	if c != nil {
 		if v := c.GetHeader("OpenAI-Beta"); strings.TrimSpace(v) != "" {
 			req.Header.Set("OpenAI-Beta", v)
 		}
 	}
+	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
+}
+
+func (s *OpenAIGatewayService) updateGrokUsageFromResponse(ctx context.Context, account *Account, headers http.Header, statusCode int) {
+	if account == nil {
+		return
+	}
+	if snapshot := xai.ParseQuotaHeaders(headers, statusCode); snapshot != nil {
+		s.updateGrokUsageSnapshot(ctx, account.ID, snapshot)
+	}
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, accountID int64, snapshot *xai.QuotaSnapshot) {
@@ -990,6 +1052,11 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 
 func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) {
 	if s == nil || account == nil {
+		return
+	}
+	// Content-policy refusals are scoped to this request, not to the OAuth
+	// credential. Do not cool down, mark, or fail over the account for them.
+	if isGrokContentPolicyRejection(statusCode, responseBody) {
 		return
 	}
 	if statusCode == http.StatusTooManyRequests && len(requestedModel) > 0 &&
@@ -1028,6 +1095,9 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		if s.markGrokQuotaExhaustedIfDetected(ctx, account, responseBody) {
 			return
 		}
+		if s.applyGrokForbiddenPolicy(ctx, account, responseBody) {
+			return
+		}
 		if s.rateLimitService != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
 			defer cancel()
@@ -1035,7 +1105,7 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.rateLimitService.handleGrok403(stateCtx, account, upstreamMsg, responseBody)
 			return
 		}
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok entitlement or subscription tier denied")
+		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
 	case http.StatusTooManyRequests:
 		// Free Build reports its rolling 24-hour token allowance exhaustion as
 		// 429 subscription:free-usage-exhausted. This is not a short burst limit.
@@ -1048,7 +1118,7 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		}
 		s.tempUnscheduleGrok(ctx, account, cooldown, "grok rate limited")
 	default:
-		if statusCode >= 500 {
+		if statusCode >= 500 && !account.IsPoolMode() {
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
@@ -1162,11 +1232,4 @@ func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *
 		defer cancel()
 		_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
 	}
-}
-
-func ptrStringOrNil(value string) *string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return &value
 }

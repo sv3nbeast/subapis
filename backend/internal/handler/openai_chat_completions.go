@@ -81,14 +81,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
 		return
 	}
+	if service.IsGPTImageGenerationModel(reqModel) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This model is not supported on the Chat Completions endpoint")
+		return
+	}
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && decision.Blocked {
-		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, reqModel, body); decision != nil && !decision.AllowNextStage {
+		h.openAISecurityAuditError(c, decision)
 		return
 	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatChat) {
@@ -98,7 +102,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	kiroBridgeModel := openAIKiroBridgeModel(reqModel, channelMapping)
-	kiroBridgeRequested := isOpenAIKiroBridgeChatRequest(c, openAICompatibleRequestPlatform(apiKey), kiroBridgeModel)
+	kiroBridgeRequested := isOpenAIKiroBridgeChatRequest(c, openAICompatibleRequestPlatform(c.Request.Context(), apiKey), kiroBridgeModel)
 	if kiroBridgeRequested {
 		c.Request = c.Request.WithContext(service.WithKiroGPTTimeoutsDisabled(c.Request.Context(), kiroBridgeModel))
 	}
@@ -120,7 +124,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
-	requestPlatform := openAICompatibleRequestPlatform(apiKey)
+	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
@@ -152,6 +156,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	grokQuotaFailoverCtx := service.WithGrokQuotaFailoverBudget(c.Request.Context())
 	var lastFailoverErr *service.UpstreamFailoverError
+	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	kiroFailoverState := NewFailoverState(maxAccountSwitches, false)
 	kiroFailoverState.FailedAccountIDs = failedAccountIDs
 	if h.kiroBridgeService != nil {
@@ -159,6 +164,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	for {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		var selection *service.AccountSelectionResult
 		var scheduleDecision service.OpenAIAccountScheduleDecision
@@ -180,6 +188,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
 				false,
+				true,
 				requestPlatform,
 			)
 		}
@@ -301,7 +310,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
-					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 					if account.Platform == service.PlatformKiro {
 						kiroFailoverState.SwitchCount = switchCount
 						action := kiroFailoverState.HandleFailoverError(c.Request.Context(), h.kiroBridgeService, account.ID, account.Platform, failoverErr, account)
@@ -346,7 +355,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIFailoverWithContext(grokQuotaFailoverCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount) {
+					if h.gatewayService.ShouldStopOpenAIFailoverWithContext(grokQuotaFailoverCtx, account, failoverErr.StatusCode, failoverErr.ResponseBody, switchCount, &oauth429FailoverState) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -358,7 +367,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					)
 					continue
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -374,9 +383,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), true, result.FirstTokenMs)
 		} else {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), true, nil)
 		}
 		if kiroBridgeRequested && kiroFailoverState.KiroResilienceEnforced && sessionHash != "" &&
 			(len(failedAccountIDs) > 0 || selection.DeferStickyMigration ||
@@ -393,6 +402,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+		sessionID := service.ExtractClientSessionID(c)
 
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 		h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
@@ -406,6 +416,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
+				SessionID:          sessionID,
 				APIKeyService:      h.apiKeyService,
 				QuotaPlatform:      quotaPlatform,
 				RequestType:        service.RequestTypeFromLegacy(reqStream, false),
@@ -441,9 +452,15 @@ func resolveOpenAIUpstreamEndpoint(c *gin.Context, account *service.Account, res
 			return strings.TrimSpace(result.UpstreamEndpoint)
 		}
 	}
+	if runtimeEndpoint := service.GetActualOpenAIUpstreamEndpoint(c); runtimeEndpoint != "" {
+		return runtimeEndpoint
+	}
 	if account != nil && account.Type == service.AccountTypeAPIKey &&
 		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return "/v1/chat/completions"
+	}
+	if account == nil {
+		return GetUpstreamEndpoint(c, service.PlatformOpenAI)
 	}
 	return GetUpstreamEndpoint(c, account.Platform)
 }

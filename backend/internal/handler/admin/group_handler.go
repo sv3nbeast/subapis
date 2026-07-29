@@ -2,14 +2,18 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -20,6 +24,16 @@ type GroupHandler struct {
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
+}
+
+// GetLiveCapability 返回当前服务端是否具备生成 Live attestation 的运行环境。
+func (h *GroupHandler) GetLiveCapability(c *gin.Context) {
+	err := liveattestation.NewProvider().Check(c.Request.Context())
+	result := gin.H{"supported": err == nil}
+	if err != nil {
+		result["reason"] = err.Error()
+	}
+	response.Success(c, result)
 }
 
 type optionalLimitField struct {
@@ -123,6 +137,7 @@ type CreateGroupRequest struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       bool                                      `json:"allow_non_stream_messages"`
+	AllowLive                    bool                                      `json:"allow_live"`
 	RequireOAuthOnly             bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           string                                    `json:"default_mapped_model"`
@@ -131,7 +146,9 @@ type CreateGroupRequest struct {
 	GrokChatUpstreamMode         string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
 	GrokChatResponsesGrayPercent int                                       `json:"grok_chat_responses_gray_percent" binding:"min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）
-	RPMLimit int `json:"rpm_limit"`
+	RPMLimit                int                              `json:"rpm_limit"`
+	MaxReasoningEffort      string                           `json:"max_reasoning_effort"`
+	ReasoningEffortMappings []service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）
 	KiroCacheEmulationEnabled   bool    `json:"kiro_cache_emulation_enabled"`
 	KiroAutoStickyEnabled       *bool   `json:"kiro_auto_sticky_enabled"`
@@ -186,6 +203,7 @@ type UpdateGroupRequest struct {
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch        *bool                                      `json:"allow_messages_dispatch"`
 	AllowNonStreamMessages       *bool                                      `json:"allow_non_stream_messages"`
+	AllowLive                    *bool                                      `json:"allow_live"`
 	RequireOAuthOnly             *bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet            *bool                                      `json:"require_privacy_set"`
 	DefaultMappedModel           *string                                    `json:"default_mapped_model"`
@@ -194,7 +212,9 @@ type UpdateGroupRequest struct {
 	GrokChatUpstreamMode         *string                                    `json:"grok_chat_upstream_mode" binding:"omitempty,oneof=raw responses gray"`
 	GrokChatResponsesGrayPercent *int                                       `json:"grok_chat_responses_gray_percent" binding:"omitempty,min=0,max=100"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
-	RPMLimit *int `json:"rpm_limit"`
+	RPMLimit                *int                              `json:"rpm_limit"`
+	MaxReasoningEffort      *string                           `json:"max_reasoning_effort"`
+	ReasoningEffortMappings *[]service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）；nil 表示未提供不改动
 	KiroCacheEmulationEnabled   *bool    `json:"kiro_cache_emulation_enabled"`
 	KiroAutoStickyEnabled       *bool    `json:"kiro_auto_sticky_enabled"`
@@ -203,6 +223,22 @@ type UpdateGroupRequest struct {
 	KiroEndpointMode            *string  `json:"kiro_endpoint_mode"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
+}
+
+type CompositeRouteRequest struct {
+	PublicModel    string `json:"public_model" binding:"required"`
+	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	UpstreamModel  string `json:"upstream_model"`
+	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
+	Priority       int    `json:"priority"`
+	Enabled        *bool  `json:"enabled"`
+	Notes          string `json:"notes"`
+}
+
+type CompositeRoutePreviewRequest struct {
+	Model    string `json:"model" binding:"required"`
+	Endpoint string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
 }
 
 // List handles listing all groups with pagination
@@ -238,6 +274,114 @@ func (h *GroupHandler) List(c *gin.Context) {
 		outGroups = append(outGroups, *dto.GroupFromServiceAdmin(&groups[i]))
 	}
 	response.Paginated(c, outGroups, total, page, pageSize)
+}
+
+func (h *GroupHandler) ListCompositeRoutes(c *gin.Context) {
+	groupID, ok := parsePositiveIDParam(c, "id")
+	if !ok {
+		return
+	}
+	routes, err := h.adminService.ListCompositeRoutes(c.Request.Context(), groupID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, routes)
+}
+
+func (h *GroupHandler) CreateCompositeRoute(c *gin.Context) {
+	groupID, ok := parsePositiveIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req CompositeRouteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request body: "+err.Error())
+		return
+	}
+	route, err := h.adminService.CreateCompositeRoute(c.Request.Context(), groupID, compositeRouteRequestToInput(req, true))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Created(c, route)
+}
+
+func (h *GroupHandler) UpdateCompositeRoute(c *gin.Context) {
+	groupID, ok := parsePositiveIDParam(c, "id")
+	if !ok {
+		return
+	}
+	routeID, ok := parsePositiveIDParam(c, "route_id")
+	if !ok {
+		return
+	}
+	var req CompositeRouteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request body: "+err.Error())
+		return
+	}
+	route, err := h.adminService.UpdateCompositeRoute(c.Request.Context(), groupID, routeID, compositeRouteRequestToInput(req, true))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, route)
+}
+
+func (h *GroupHandler) DeleteCompositeRoute(c *gin.Context) {
+	groupID, ok := parsePositiveIDParam(c, "id")
+	if !ok {
+		return
+	}
+	routeID, ok := parsePositiveIDParam(c, "route_id")
+	if !ok {
+		return
+	}
+	if err := h.adminService.DeleteCompositeRoute(c.Request.Context(), groupID, routeID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Composite route deleted"})
+}
+
+func (h *GroupHandler) PreviewCompositeRoute(c *gin.Context) {
+	groupID, ok := parsePositiveIDParam(c, "id")
+	if !ok {
+		return
+	}
+	var req CompositeRoutePreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request body: "+err.Error())
+		return
+	}
+	decision, err := h.adminService.PreviewCompositeRoute(c.Request.Context(), groupID, service.CompositeRoutePreviewRequest{Model: req.Model, Endpoint: req.Endpoint})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, decision)
+}
+
+func compositeRouteRequestToInput(req CompositeRouteRequest, defaultEnabled bool) service.CompositeRouteInput {
+	enabled := defaultEnabled
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	return service.CompositeRouteInput{
+		PublicModel: req.PublicModel, MatchType: req.MatchType, TargetPlatform: req.TargetPlatform,
+		UpstreamModel: req.UpstreamModel, Endpoint: req.Endpoint, Priority: req.Priority,
+		Enabled: enabled, Notes: req.Notes,
+	}
+}
+
+func parsePositiveIDParam(c *gin.Context, name string) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param(name), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid "+name)
+		return 0, false
+	}
+	return id, true
 }
 
 // GetAll handles getting all active groups without pagination.
@@ -364,6 +508,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		SupportedModelScopes:            req.SupportedModelScopes,
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
+		AllowLive:                       req.AllowLive,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,
@@ -372,6 +517,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		GrokChatUpstreamMode:            req.GrokChatUpstreamMode,
 		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
+		MaxReasoningEffort:              req.MaxReasoningEffort,
+		ReasoningEffortMappings:         req.ReasoningEffortMappings,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,
 		KiroStickySessionTTLSeconds:     req.KiroStickySessionTTLSeconds,
@@ -385,6 +532,50 @@ func (h *GroupHandler) Create(c *gin.Context) {
 	}
 
 	response.Success(c, dto.GroupFromServiceAdmin(group))
+}
+
+// Duplicate creates an inactive group copy with the source account bindings.
+func (h *GroupHandler) Duplicate(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+	actorScope := adminActorScope(c)
+	result, err := executeAdminIdempotent(
+		c,
+		"admin.groups.duplicate",
+		struct {
+			GroupID int64 `json:"group_id"`
+		}{GroupID: groupID},
+		service.DefaultWriteIdempotencyTTL(),
+		func(ctx context.Context) (any, error) {
+			group, execErr := h.adminService.DuplicateGroup(ctx, groupID, actorScope, c.GetHeader("Idempotency-Key"))
+			if execErr != nil {
+				return nil, execErr
+			}
+			return dto.GroupFromServiceAdmin(group), nil
+		},
+	)
+	if err != nil {
+		reason := infraerrors.Reason(err)
+		if reason == infraerrors.Reason(service.ErrIdempotencyInProgress) || reason == infraerrors.Reason(service.ErrIdempotencyStoreUnavail) {
+			recovered, recoverErr := h.adminService.RecoverDuplicateGroup(c.Request.Context(), groupID, actorScope, c.GetHeader("Idempotency-Key"))
+			if recoverErr != nil {
+				slog.Warn("group_duplicate_recovery_failed", "group_id", groupID, "actor_scope", actorScope, "reason", reason, "error", recoverErr)
+			} else if recovered != nil {
+				c.Header("X-Idempotency-Recovered", "true")
+				response.Success(c, dto.GroupFromServiceAdmin(recovered))
+				return
+			}
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
+	if result != nil && result.Replayed {
+		c.Header("X-Idempotency-Replayed", "true")
+	}
+	response.Success(c, result.Data)
 }
 
 // Update handles updating a group
@@ -441,6 +632,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		SupportedModelScopes:            req.SupportedModelScopes,
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowNonStreamMessages:          req.AllowNonStreamMessages,
+		AllowLive:                       req.AllowLive,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		DefaultMappedModel:              req.DefaultMappedModel,
@@ -449,6 +641,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		GrokChatUpstreamMode:            req.GrokChatUpstreamMode,
 		GrokChatResponsesGrayPercent:    req.GrokChatResponsesGrayPercent,
 		RPMLimit:                        req.RPMLimit,
+		MaxReasoningEffort:              req.MaxReasoningEffort,
+		ReasoningEffortMappings:         req.ReasoningEffortMappings,
 		KiroCacheEmulationEnabled:       req.KiroCacheEmulationEnabled,
 		KiroAutoStickyEnabled:           req.KiroAutoStickyEnabled,
 		KiroStickySessionTTLSeconds:     req.KiroStickySessionTTLSeconds,

@@ -120,6 +120,7 @@ type ChannelModelPricing struct {
 	CacheWrite5mPrice *float64          // 5分钟缓存写入价格
 	CacheWrite1hPrice *float64          // 1小时缓存写入价格
 	CacheReadPrice    *float64          // 缓存读取价格
+	ImageInputPrice   *float64          // 图片输入 token 价格；未配置时回退文本输入价
 	ImageOutputPrice  *float64          // 图片输出价格（向后兼容）
 	PerRequestPrice   *float64          // 默认按次计费价格（USD）
 	Intervals         []PricingInterval // 区间定价列表

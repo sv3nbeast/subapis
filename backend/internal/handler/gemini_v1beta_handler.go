@@ -187,8 +187,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	setOpsRequestContext(c, modelName, stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(stream, false)))
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, authSubject, service.ContentModerationProtocolGemini, modelName, body); decision != nil && decision.Blocked {
-		googleError(c, contentModerationStatus(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, authSubject, service.ContentModerationProtocolGemini, modelName, body); decision != nil && !decision.AllowNextStage {
+		googleSecurityAuditError(c, decision)
 		return
 	}
 
@@ -529,6 +529,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 		forceCacheBilling := fs.ForceCacheBilling
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+		sessionID := service.ExtractClientSessionID(c)
 		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
 				Result:                result,
@@ -541,6 +542,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				UpstreamEndpoint:      upstreamEndpoint,
 				UserAgent:             userAgent,
 				IPAddress:             clientIP,
+				SessionID:             sessionID,
 				RequestPayloadHash:    requestPayloadHash,
 				LongContextThreshold:  200000, // Gemini 200K 阈值
 				LongContextMultiplier: 2.0,    // 超出部分双倍计费

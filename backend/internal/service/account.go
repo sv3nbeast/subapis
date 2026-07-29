@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -92,11 +94,61 @@ type Account struct {
 type OpenAIEndpointCapability string
 
 const (
-	OpenAIEndpointCapabilityChatCompletions OpenAIEndpointCapability = "chat_completions"
-	OpenAIEndpointCapabilityEmbeddings      OpenAIEndpointCapability = "embeddings"
+	OpenAIEndpointCapabilityChatCompletions     OpenAIEndpointCapability = "chat_completions"
+	OpenAIEndpointCapabilityEmbeddings          OpenAIEndpointCapability = "embeddings"
+	OpenAIEndpointCapabilityAlphaSearch         OpenAIEndpointCapability = "alpha_search"
+	OpenAIEndpointCapabilityLive                OpenAIEndpointCapability = "live"
+	OpenAIEndpointCapabilityGrokMediaGeneration OpenAIEndpointCapability = "grok_media_generation"
+	OpenAIEndpointCapabilityResponses           OpenAIEndpointCapability = "responses"
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+
+// GrokMediaEligibleExtraKey is an optional per-account media eligibility override.
+const GrokMediaEligibleExtraKey = "grok_media_eligible"
+
+// GrokMediaGenerationEligibility reports whether a Grok account may receive
+// image/video generation requests. OAuth media requires positive paid evidence.
+func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
+	if a == nil || !a.IsGrok() {
+		return false, "not_grok"
+	}
+	if override, ok := grokMediaEligibilityOverride(a.Extra); ok {
+		if override {
+			return true, "override_enabled"
+		}
+		return false, "override_disabled"
+	}
+	if a.Type != AccountTypeOAuth {
+		return true, "non_oauth"
+	}
+	billing, err := grokBillingSnapshotFromExtra(a.Extra)
+	if err != nil || billing == nil {
+		return false, "billing_unobserved"
+	}
+	if billing.StatusCode == http.StatusForbidden || billing.WeeklyStatusCode == http.StatusForbidden || billing.MonthlyStatusCode == http.StatusForbidden {
+		return false, "billing_forbidden"
+	}
+	if isKnownGrokFreeAccount(a) {
+		return false, "billing_free_tier"
+	}
+	if !grokBillingHasAuthoritativeQuota(billing) {
+		return false, "billing_inconclusive"
+	}
+	return true, "eligible"
+}
+
+func grokMediaEligibilityOverride(extra map[string]any) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	raw, exists := extra[GrokMediaEligibleExtraKey]
+	if !exists || raw == nil {
+		return false, false
+	}
+	value, ok := raw.(bool)
+	return value, ok
+}
 
 const (
 	OpenAIAuthModePersonalAccessToken = "personalAccessToken"
@@ -122,6 +174,18 @@ type TempUnschedulableRule struct {
 
 func (a *Account) IsActive() bool {
 	return a.Status == StatusActive
+}
+
+// IsSyntheticUITest reports whether the account belongs to an isolated UI load-test
+// dataset. Production accounts never receive this marker. It lets the dedicated
+// test instance exercise interactive quota and connection-test controls without
+// sending fake credentials to an upstream provider.
+func (a *Account) IsSyntheticUITest() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["synthetic_ui_test"].(bool)
+	return ok && enabled
 }
 
 // BillingRateMultiplier 返回账号计费倍率。
@@ -740,11 +804,28 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity {
+			// The agent route is an explicit operator opt-in. Legacy mappings that
+			// only mention the public high/preview aliases must keep their target;
+			// otherwise old account configurations would silently change upstream
+			// model. When the canonical agent key is present, normalize only the
+			// stock alias targets while preserving custom overrides.
+			_, agentRouteConfigured := result[domain.AntigravityGemini31ProAgentModel]
+			for alias, value := range result {
+				if agentRouteConfigured && (alias == "gemini-3.1-pro" || alias == "gemini-3.1-pro-high" || alias == "gemini-3.1-pro-low" || alias == "gemini-3.1-pro-preview") &&
+					(value == "gemini-3.1-pro" || value == "gemini-3.1-pro-high" || value == "gemini-3.1-pro-low" || value == "gemini-3.1-pro-preview") {
+					result[alias] = domain.AntigravityGemini31ProAgentModel
+				}
+			}
 			ensureAntigravityDefaultPassthroughs(result, []string{
 				"gemini-3-flash",
 				"gemini-3.1-pro-high",
 				"gemini-3.1-pro-low",
 			})
+			if agentRouteConfigured {
+				for _, alias := range []string{"gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.1-pro-preview"} {
+					ensureAntigravityDefaultAlias(result, alias, domain.AntigravityGemini31ProAgentModel)
+				}
+			}
 			ensureAntigravityDefaultAlias(result, "claude-haiku-4-6", "claude-sonnet-4-6")
 		}
 		if a.Platform == domain.PlatformKiro {
@@ -944,9 +1025,16 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // 请求卡死在该账号上、无法 failover 到真正支持该模型的 API Key 账号（#3662）。
 // 未知/自定义别名仍保持允许（兼容渠道级映射），见 isOpenAIOAuthServableModel。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
+	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
+	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被
+	// model_mapping 白名单错误排除出候选集，导致 no available accounts / 404（issue #4936）。
+	if a.IsOpenAIPassthroughEnabled() {
+		return true
+	}
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
-		if a.IsOpenAIOAuth() && !a.IsOpenAIPassthroughEnabled() {
+		if a.IsOpenAIOAuth() {
 			return isOpenAIOAuthServableModel(requestedModel)
 		}
 		return true // 无映射 = 允许所有
@@ -1446,11 +1534,28 @@ func (a *Account) GetGrokBaseURL() string {
 	if !a.IsGrok() {
 		return ""
 	}
-	baseURL := a.GetCredential("base_url")
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
+	if a.IsGrokOAuth() {
+		if baseURL == "" || !xai.IsParseableBaseURL(baseURL) {
+			return xai.DefaultCLIBaseURL
+		}
+		return baseURL
+	}
 	if baseURL != "" {
 		return baseURL
 	}
 	return xai.DefaultBaseURL
+}
+
+func (a *Account) GetGrokMediaBaseURL() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	baseURL := a.GetGrokBaseURL()
+	if a.IsGrokOAuth() && isGrokCLIProxyTarget(baseURL) {
+		return xai.DefaultBaseURL
+	}
+	return baseURL
 }
 
 func (a *Account) GetGrokAccessToken() string {
@@ -1548,10 +1653,32 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return false
 	}
 	if a.IsGrok() {
-		return capability == OpenAIEndpointCapabilityChatCompletions
+		switch capability {
+		case OpenAIEndpointCapabilityChatCompletions:
+			return true
+		case OpenAIEndpointCapabilityGrokMediaGeneration:
+			eligible, reason := a.GrokMediaGenerationEligibility()
+			return eligible || reason == "billing_unobserved"
+		default:
+			return false
+		}
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
+	case OpenAIEndpointCapabilityLive:
+		return a.Platform == PlatformOpenAI &&
+			a.Type == AccountTypeOAuth &&
+			!a.IsOpenAIPersonalAccessToken() &&
+			!a.IsOpenAIAgentIdentity()
+	case OpenAIEndpointCapabilityResponses:
+		if a.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(a.Extra) {
+			return false
+		}
+		capability = OpenAIEndpointCapabilityChatCompletions
+	case OpenAIEndpointCapabilityAlphaSearch:
+		if a.Type != AccountTypeOAuth && a.Type != AccountTypeAPIKey {
+			return false
+		}
 	case OpenAIEndpointCapabilityEmbeddings:
 		if a.Type != AccountTypeAPIKey {
 			return false
@@ -1562,6 +1689,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 
 	configured, found := a.openAIEndpointCapabilitySet()
 	if !found {
+		return true
+	}
+	if capability == OpenAIEndpointCapabilityAlphaSearch && configured[string(OpenAIEndpointCapabilityChatCompletions)] {
 		return true
 	}
 	return configured[string(capability)]

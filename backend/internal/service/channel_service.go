@@ -224,11 +224,11 @@ func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 			if strings.HasSuffix(model, "*") {
 				prefix := strings.ToLower(strings.TrimSuffix(model, "*"))
 				cache.wildcardByGroupPlatform[gpKey] = append(cache.wildcardByGroupPlatform[gpKey], &wildcardPricingEntry{
-					prefix:  prefix,
+					prefix:  normalizeChannelModelName(prefix),
 					pricing: pricing,
 				})
 			} else {
-				key := channelModelKey{groupID: gid, platform: pricingPlatform, model: strings.ToLower(model)}
+				key := channelModelKey{groupID: gid, platform: pricingPlatform, model: normalizeChannelModelName(model)}
 				cache.pricingByGroupModel[key] = pricing
 			}
 		}
@@ -249,11 +249,11 @@ func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 			if strings.HasSuffix(src, "*") {
 				prefix := strings.ToLower(strings.TrimSuffix(src, "*"))
 				cache.wildcardMappingByGP[gpKey] = append(cache.wildcardMappingByGP[gpKey], &wildcardMappingEntry{
-					prefix: prefix,
+					prefix: normalizeChannelModelName(prefix),
 					target: dst,
 				})
 			} else {
-				key := channelModelKey{groupID: gid, platform: mappingPlatform, model: strings.ToLower(src)}
+				key := channelModelKey{groupID: gid, platform: mappingPlatform, model: normalizeChannelModelName(src)}
 				cache.mappingByGroupModel[key] = dst
 			}
 		}
@@ -343,13 +343,23 @@ func populateChannelCache(channels []Channel, groupPlatforms map[int64]string) *
 // isPlatformPricingMatch 判断定价条目的平台是否匹配分组平台。
 // 各平台（antigravity / anthropic / gemini / openai）严格独立，不跨平台匹配。
 func isPlatformPricingMatch(groupPlatform, pricingPlatform string) bool {
+	if groupPlatform == PlatformComposite {
+		return pricingPlatform == PlatformAnthropic || pricingPlatform == PlatformGemini || pricingPlatform == PlatformOpenAI || pricingPlatform == PlatformAntigravity || pricingPlatform == PlatformGrok
+	}
 	return groupPlatform == pricingPlatform
 }
 
 // matchingPlatforms 返回分组平台对应的可匹配平台列表。
 // 各平台严格独立，只返回自身。
 func matchingPlatforms(groupPlatform string) []string {
+	if groupPlatform == PlatformComposite {
+		return []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok}
+	}
 	return []string{groupPlatform}
+}
+
+func normalizeChannelModelName(model string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(model)), ".", "-")
 }
 
 // expandSupportedModelsToCache 将渠道的用户侧支持模型按分组平台展开。
@@ -488,10 +498,16 @@ func (s *ChannelService) lookupGroupChannel(ctx context.Context, groupID int64) 
 	if !ok || !ch.IsActive() {
 		return nil, nil
 	}
+	platform := cache.groupPlatform[groupID]
+	if platform == PlatformComposite {
+		if resolved, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+			platform = resolved
+		}
+	}
 	return &channelLookup{
 		cache:    cache,
 		channel:  ch,
-		platform: cache.groupPlatform[groupID],
+		platform: platform,
 	}, nil
 }
 
@@ -507,7 +523,7 @@ func (s *ChannelService) GetChannelModelPricing(ctx context.Context, groupID int
 		return nil
 	}
 
-	modelLower := strings.ToLower(model)
+	modelLower := normalizeChannelModelName(model)
 	pricing := lookupPricingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower)
 	if pricing == nil {
 		return nil
@@ -646,7 +662,7 @@ func resolveMapping(lk *channelLookup, groupID int64, model string) ChannelMappi
 		BillingModelSource: lk.channel.BillingModelSource,
 	}
 
-	modelLower := strings.ToLower(model)
+	modelLower := normalizeChannelModelName(model)
 	if mapped := lookupMappingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower); mapped != "" {
 		result.MappedModel = mapped
 		result.Mapped = true
@@ -661,7 +677,7 @@ func checkRestricted(lk *channelLookup, groupID int64, model string) bool {
 	if !lk.channel.RestrictModels {
 		return false
 	}
-	modelLower := strings.ToLower(model)
+	modelLower := normalizeChannelModelName(model)
 	// 使用与查找定价相同的跨平台逻辑
 	if lookupPricingAcrossPlatforms(lk.cache, groupID, lk.platform, modelLower) != nil {
 		return false

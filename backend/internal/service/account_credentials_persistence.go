@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -9,7 +10,15 @@ type accountCredentialsUpdater interface {
 	UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error
 }
 
-func persistAccountCredentials(ctx context.Context, repo AccountRepository, account *Account, credentials map[string]any) error {
+func persistAccountCredentials(ctx context.Context, repo AccountRepository, account *Account, credentials map[string]any) (err error) {
+	// A few lightweight repository adapters embed AccountRepository to implement
+	// only the state methods they need. Guard the legacy Update fallback so a nil
+	// embedded interface cannot turn an upstream auth error into a process panic.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("persist account credentials: %v", recovered)
+		}
+	}()
 	if repo == nil || account == nil {
 		return nil
 	}

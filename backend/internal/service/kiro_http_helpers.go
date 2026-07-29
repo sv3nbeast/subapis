@@ -256,6 +256,7 @@ func applyKiroConditionalHeaders(req *http.Request, account *Account, token stri
 	apiKey := strings.TrimSpace(account.KiroAPIKey())
 	if apiKey != "" && strings.TrimSpace(token) == apiKey {
 		req.Header["TokenType"] = []string{"API_KEY"}
+		req.Header["tokentype"] = []string{"API_KEY"}
 		return
 	}
 	if account.KiroAuthMethod() == kiropkg.AuthMethodExternalIDP {

@@ -109,7 +109,7 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 			return nil, newUpstreamModelSyncConfigError("Grok token provider is not configured", nil)
 		}
 		var err error
-		token, err = s.grokTokenProvider.GetAccessToken(ctx, account)
+		token, err = s.grokTokenProvider.GetAccessTokenForManualTest(ctx, account)
 		if err != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to get Grok access token", err)
 		}

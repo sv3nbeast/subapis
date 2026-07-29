@@ -25,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -94,6 +95,7 @@ func gatewayPostForwardStateContext(ctx context.Context) (context.Context, conte
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	gatewayService            *service.GatewayService
+	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
@@ -103,6 +105,7 @@ type GatewayHandler struct {
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
+	securityAuditCoordinator  *securityaudit.Coordinator
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
 	maxAccountSwitches        int
@@ -114,20 +117,66 @@ type GatewayHandler struct {
 // NewGatewayHandler creates a new GatewayHandler
 func NewGatewayHandler(
 	gatewayService *service.GatewayService,
-	geminiCompatService *service.GeminiMessagesCompatService,
-	antigravityGatewayService *service.AntigravityGatewayService,
-	userService *service.UserService,
-	concurrencyService *service.ConcurrencyService,
-	billingCacheService *service.BillingCacheService,
-	usageService *service.UsageService,
-	apiKeyService *service.APIKeyService,
-	usageRecordWorkerPool *service.UsageRecordWorkerPool,
-	errorPassthroughService *service.ErrorPassthroughService,
-	contentModerationService *service.ContentModerationService,
-	userMsgQueueService *service.UserMessageQueueService,
-	cfg *config.Config,
-	settingService *service.SettingService,
+	args ...any,
 ) *GatewayHandler {
+	var openAIGatewayService *service.OpenAIGatewayService
+	var geminiCompatService *service.GeminiMessagesCompatService
+	var antigravityGatewayService *service.AntigravityGatewayService
+	var userService *service.UserService
+	var concurrencyService *service.ConcurrencyService
+	var billingCacheService *service.BillingCacheService
+	var usageService *service.UsageService
+	var apiKeyService *service.APIKeyService
+	var usageRecordWorkerPool *service.UsageRecordWorkerPool
+	var errorPassthroughService *service.ErrorPassthroughService
+	var contentModerationService *service.ContentModerationService
+	var userMsgQueueService *service.UserMessageQueueService
+	var cfg *config.Config
+	var settingService *service.SettingService
+	offset := 0
+	if len(args) >= 14 {
+		openAIGatewayService, _ = args[0].(*service.OpenAIGatewayService)
+		offset = 1
+	}
+	if len(args) > offset {
+		geminiCompatService, _ = args[offset].(*service.GeminiMessagesCompatService)
+	}
+	if len(args) > offset+1 {
+		antigravityGatewayService, _ = args[offset+1].(*service.AntigravityGatewayService)
+	}
+	if len(args) > offset+2 {
+		userService, _ = args[offset+2].(*service.UserService)
+	}
+	if len(args) > offset+3 {
+		concurrencyService, _ = args[offset+3].(*service.ConcurrencyService)
+	}
+	if len(args) > offset+4 {
+		billingCacheService, _ = args[offset+4].(*service.BillingCacheService)
+	}
+	if len(args) > offset+5 {
+		usageService, _ = args[offset+5].(*service.UsageService)
+	}
+	if len(args) > offset+6 {
+		apiKeyService, _ = args[offset+6].(*service.APIKeyService)
+	}
+	if len(args) > offset+7 {
+		usageRecordWorkerPool, _ = args[offset+7].(*service.UsageRecordWorkerPool)
+	}
+	if len(args) > offset+8 {
+		errorPassthroughService, _ = args[offset+8].(*service.ErrorPassthroughService)
+	}
+	if len(args) > offset+9 {
+		contentModerationService, _ = args[offset+9].(*service.ContentModerationService)
+	}
+	if len(args) > offset+10 {
+		userMsgQueueService, _ = args[offset+10].(*service.UserMessageQueueService)
+	}
+	if len(args) > offset+11 {
+		cfg, _ = args[offset+11].(*config.Config)
+	}
+	if len(args) > offset+12 {
+		settingService, _ = args[offset+12].(*service.SettingService)
+	}
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 10
 	maxAccountSwitchesGemini := 3
@@ -149,6 +198,7 @@ func NewGatewayHandler(
 
 	return &GatewayHandler{
 		gatewayService:            gatewayService,
+		openAIGatewayService:      openAIGatewayService,
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
 		userService:               userService,
@@ -277,8 +327,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && decision.Blocked {
-		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, reqModel, body); decision != nil && !decision.AllowNextStage {
+		h.anthropicSecurityAuditError(c, decision)
 		return
 	}
 
@@ -675,6 +725,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 			forceCacheBilling := fs.ForceCacheBilling
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -687,6 +738,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					SessionID:          sessionID,
 					RequestPayloadHash: requestPayloadHash,
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
@@ -1246,6 +1298,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 			forceCacheBilling := fs.ForceCacheBilling
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
+			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -1258,6 +1311,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					SessionID:          sessionID,
 					RequestPayloadHash: requestPayloadHash,
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
@@ -1547,9 +1601,15 @@ func (h *GatewayHandler) Usage(c *gin.Context) {
 
 	// 解析可选的日期范围参数（用于 model_stats 查询）
 	startTime, endTime := h.parseUsageDateRange(c)
+	days, ok := parseAPIKeyDailyUsageDays(c.DefaultQuery("days", ""))
+	if !ok {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Invalid days, allowed range is 1-90")
+		return
+	}
 
 	// Best-effort: 获取用量统计（按当前 API Key 过滤），失败不影响基础响应
 	usageData := h.buildUsageData(ctx, apiKey.ID)
+	dailyUsage := h.buildAPIKeyDailyUsage(c, subject.UserID, apiKey.ID, days)
 
 	// Best-effort: 获取模型统计
 	var modelStats any
@@ -1563,11 +1623,11 @@ func (h *GatewayHandler) Usage(c *gin.Context) {
 	isQuotaLimited := apiKey.Quota > 0 || apiKey.HasRateLimits()
 
 	if isQuotaLimited {
-		h.usageQuotaLimited(c, ctx, apiKey, usageData, modelStats)
+		h.usageQuotaLimited(c, ctx, apiKey, usageData, dailyUsage, modelStats)
 		return
 	}
 
-	h.usageUnrestricted(c, ctx, apiKey, subject, usageData, modelStats)
+	h.usageUnrestricted(c, ctx, apiKey, subject, usageData, dailyUsage, modelStats)
 }
 
 // parseUsageDateRange 解析 start_date / end_date query params，默认返回近 30 天范围
@@ -1625,8 +1685,20 @@ func (h *GatewayHandler) buildUsageData(ctx context.Context, apiKeyID int64) gin
 	}
 }
 
+func (h *GatewayHandler) buildAPIKeyDailyUsage(c *gin.Context, userID, apiKeyID int64, days int) any {
+	if h.usageService == nil {
+		return nil
+	}
+	startTime, endTime := apiKeyDailyUsageRange(days, c.Query("timezone"))
+	stats, err := h.usageService.GetAPIKeyDailyUsage(c.Request.Context(), userID, apiKeyID, startTime, endTime)
+	if err != nil {
+		return nil
+	}
+	return stats
+}
+
 // usageQuotaLimited 处理 quota_limited 模式的响应
-func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, apiKey *service.APIKey, usageData gin.H, modelStats any) {
+func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, apiKey *service.APIKey, usageData gin.H, dailyUsage any, modelStats any) {
 	resp := gin.H{
 		"mode":    "quota_limited",
 		"isValid": apiKey.Status == service.StatusAPIKeyActive || apiKey.Status == service.StatusAPIKeyQuotaExhausted || apiKey.Status == service.StatusAPIKeyExpired,
@@ -1708,6 +1780,9 @@ func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, 
 	if usageData != nil {
 		resp["usage"] = usageData
 	}
+	if dailyUsage != nil {
+		resp["daily_usage"] = dailyUsage
+	}
 	if modelStats != nil {
 		resp["model_stats"] = modelStats
 	}
@@ -1716,7 +1791,7 @@ func (h *GatewayHandler) usageQuotaLimited(c *gin.Context, ctx context.Context, 
 }
 
 // usageUnrestricted 处理 unrestricted 模式的响应（向后兼容）
-func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, apiKey *service.APIKey, subject middleware2.AuthSubject, usageData gin.H, modelStats any) {
+func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, apiKey *service.APIKey, subject middleware2.AuthSubject, usageData gin.H, dailyUsage any, modelStats any) {
 	// 订阅模式
 	if apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
 		resp := gin.H{
@@ -1732,18 +1807,22 @@ func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, 
 			remaining := h.calculateSubscriptionRemaining(apiKey.Group, subscription)
 			resp["remaining"] = remaining
 			resp["subscription"] = gin.H{
-				"daily_usage_usd":   subscription.DailyUsageUSD,
-				"weekly_usage_usd":  subscription.WeeklyUsageUSD,
-				"monthly_usage_usd": subscription.MonthlyUsageUSD,
-				"daily_limit_usd":   apiKey.Group.DailyLimitUSD,
-				"weekly_limit_usd":  apiKey.Group.WeeklyLimitUSD,
-				"monthly_limit_usd": apiKey.Group.MonthlyLimitUSD,
-				"expires_at":        subscription.ExpiresAt,
+				"daily_usage_usd":     subscription.DailyUsageUSD,
+				"weekly_usage_usd":    subscription.WeeklyUsageUSD,
+				"monthly_usage_usd":   subscription.MonthlyUsageUSD,
+				"daily_limit_usd":     apiKey.Group.DailyLimitUSD,
+				"weekly_limit_usd":    apiKey.Group.WeeklyLimitUSD,
+				"monthly_limit_usd":   apiKey.Group.MonthlyLimitUSD,
+				"weekly_window_start": subscription.WeeklyWindowStart,
+				"expires_at":          subscription.ExpiresAt,
 			}
 		}
 
 		if usageData != nil {
 			resp["usage"] = usageData
+		}
+		if dailyUsage != nil {
+			resp["daily_usage"] = dailyUsage
 		}
 		if modelStats != nil {
 			resp["model_stats"] = modelStats
@@ -1769,6 +1848,9 @@ func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, 
 	}
 	if usageData != nil {
 		resp["usage"] = usageData
+	}
+	if dailyUsage != nil {
+		resp["daily_usage"] = dailyUsage
 	}
 	if modelStats != nil {
 		resp["model_stats"] = modelStats
@@ -1898,6 +1980,10 @@ func recordKiroGatewayTimeoutOps(c *gin.Context, failoverErr *service.UpstreamFa
 func (h *GatewayHandler) resolveFailoverExhaustedError(c *gin.Context, failoverErr *service.UpstreamFailoverError, fallbackPlatform string) (int, string, string) {
 	if failoverErr == nil {
 		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
+	}
+	if failoverErr.IsCredentialFailure() {
+		status, message := credentialFailoverClientResponse(failoverErr)
+		return status, "server_error", message
 	}
 
 	statusCode := failoverErr.StatusCode
@@ -2341,22 +2427,22 @@ func sendMockInterceptStream(c *gin.Context, model string, interceptType Interce
 
 	switch interceptType {
 	case InterceptTypeSuggestionMode:
-		msgID = "msg_mock_suggestion"
+		msgID = generateRealisticMsgID()
 		outputTokens = 1
 		textDeltas = []string{""} // 空内容
 	default: // InterceptTypeWarmup
-		msgID = "msg_mock_warmup"
+		msgID = generateRealisticMsgID()
 		outputTokens = 2
 		textDeltas = []string{"New", " Conversation"}
 	}
 
-	// Build message_start event with fixed schema.
-	messageStartJSON := `{"type":"message_start","message":{"id":` + strconv.Quote(msgID) + `,"type":"message","role":"assistant","model":` + strconv.Quote(model) + `,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}`
+	// Build message_start event — field order matches real Anthropic API response.
+	messageStartJSON := `{"type":"message_start","message":{"model":` + strconv.Quote(model) + `,"id":` + strconv.Quote(msgID) + `,"type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}`
 
 	// Build events
 	events := []string{
 		`event: message_start` + "\n" + `data: ` + string(messageStartJSON),
-		`event: content_block_start` + "\n" + `data: {"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"}`,
+		`event: content_block_start` + "\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 	}
 
 	// Add text deltas
@@ -2366,7 +2452,7 @@ func sendMockInterceptStream(c *gin.Context, model string, interceptType Interce
 	}
 
 	// Add final events
-	messageDeltaJSON := `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":` + strconv.Itoa(outputTokens) + `}}`
+	messageDeltaJSON := `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null},"usage":{"output_tokens":` + strconv.Itoa(outputTokens) + `}}`
 
 	events = append(events,
 		`event: content_block_stop`+"\n"+`data: {"index":0,"type":"content_block_stop"}`,
@@ -2381,20 +2467,20 @@ func sendMockInterceptStream(c *gin.Context, model string, interceptType Interce
 	}
 }
 
-// generateRealisticMsgID 生成仿真的消息 ID（msg_bdrk_XXXXXXX 格式）
-// 格式与 Claude API 真实响应一致，24 位随机字母数字
+// generateRealisticMsgID 生成仿真的消息 ID（msg_01XXXXXXX 格式）
+// 格式与 Anthropic API 官方响应一致：msg_01 + 22 位 Base62 随机字符
 func generateRealisticMsgID() string {
 	const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	const idLen = 24
+	const idLen = 22
 	randomBytes := make([]byte, idLen)
 	if _, err := rand.Read(randomBytes); err != nil {
-		return fmt.Sprintf("msg_bdrk_%d", time.Now().UnixNano())
+		return fmt.Sprintf("msg_01%d", time.Now().UnixNano())
 	}
 	b := make([]byte, idLen)
 	for i := range b {
 		b[i] = charset[int(randomBytes[i])%len(charset)]
 	}
-	return "msg_bdrk_" + string(b)
+	return "msg_01" + string(b)
 }
 
 // sendMockInterceptResponse 发送非流式 mock 响应（用于请求拦截）
@@ -2404,7 +2490,7 @@ func sendMockInterceptResponse(c *gin.Context, model string, interceptType Inter
 
 	switch interceptType {
 	case InterceptTypeSuggestionMode:
-		msgID = "msg_mock_suggestion"
+		msgID = generateRealisticMsgID()
 		text = ""
 		outputTokens = 1
 		stopReason = "end_turn"
@@ -2414,13 +2500,13 @@ func sendMockInterceptResponse(c *gin.Context, model string, interceptType Inter
 		outputTokens = 1
 		stopReason = "max_tokens" // max_tokens=1 探测请求的 stop_reason 应为 max_tokens
 	default: // InterceptTypeWarmup
-		msgID = "msg_mock_warmup"
+		msgID = generateRealisticMsgID()
 		text = "New Conversation"
 		outputTokens = 2
 		stopReason = "end_turn"
 	}
 
-	// 构建完整的响应格式（与 Claude API 响应格式一致）
+	// 构建完整的响应格式（与 Anthropic API 官方响应格式一致）
 	response := gin.H{
 		"model":         model,
 		"id":            msgID,
@@ -2429,6 +2515,7 @@ func sendMockInterceptResponse(c *gin.Context, model string, interceptType Inter
 		"content":       []gin.H{{"type": "text", "text": text}},
 		"stop_reason":   stopReason,
 		"stop_sequence": nil,
+		"stop_details":  nil,
 		"usage": gin.H{
 			"input_tokens":                10,
 			"cache_creation_input_tokens": 0,
@@ -2438,7 +2525,6 @@ func sendMockInterceptResponse(c *gin.Context, model string, interceptType Inter
 				"ephemeral_1h_input_tokens": 0,
 			},
 			"output_tokens": outputTokens,
-			"total_tokens":  10 + outputTokens,
 		},
 	}
 

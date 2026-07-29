@@ -272,6 +272,47 @@ func TestBuildKiroPayloadTruncationKeepsActiveToolTurnStructured(t *testing.T) {
 	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 }
 
+func TestBuildKiroPayloadTruncationFlattensCompletedToolHistory(t *testing.T) {
+	messages := []map[string]any{
+		{"role": "user", "content": "inspect the workspace"},
+	}
+	big := strings.Repeat("preserved context block ", 80)
+	for i := 0; i < 320; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("history-assistant-%03d %s", i, big)},
+			map[string]any{"role": "user", "content": fmt.Sprintf("history-user-%03d %s", i, big)},
+		)
+	}
+	messages = append(messages,
+		map[string]any{"role": "assistant", "content": []map[string]any{
+			{"type": "tool_use", "id": "toolu_completed", "name": "exec_command", "input": map[string]any{"cmd": "pwd"}},
+		}},
+		map[string]any{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_completed", "content": "/workspace"},
+		}},
+		map[string]any{"role": "assistant", "content": "workspace located"},
+		map[string]any{"role": "user", "content": "finish the task"},
+	)
+	body, err := json.Marshal(map[string]any{
+		"model":    "claude-opus-4-8",
+		"messages": messages,
+		"tools": []map[string]any{
+			{"name": "exec_command", "description": "run a command", "input_schema": map[string]any{"type": "object"}},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(result.Payload), kiroMaxPayloadBytes)
+	require.Contains(t, string(result.Payload), kiroHistoryTruncationPlaceholder)
+	require.NotContains(t, string(result.Payload), `"toolUseId":"toolu_completed"`)
+	require.Equal(t, "finish the task", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.content").String())
+	require.Equal(t, "execCommand", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.Contains(t, string(result.Payload), "Tool results:")
+	require.Contains(t, string(result.Payload), "[exec_command] /workspace")
+}
+
 func TestBuildKiroPayloadSmallPayloadDoesNotInsertTruncationPlaceholder(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-4-8",

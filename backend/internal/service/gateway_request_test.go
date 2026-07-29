@@ -85,10 +85,10 @@ func TestParseGatewayRequest_StripsAnthropicBillingHeaderBlocks(t *testing.T) {
 
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
 	require.NoError(t, err)
-	require.NotContains(t, string(parsed.Body), "x-anthropic-billing-header:")
+	require.NotContains(t, string(parsed.Body.Bytes()), "x-anthropic-billing-header:")
 
-	system, ok := parsed.System.([]any)
-	require.True(t, ok)
+	var system []any
+	require.NoError(t, json.Unmarshal(parsed.SystemRaw(), &system))
 	require.Len(t, system, 1)
 	block, ok := system[0].(map[string]any)
 	require.True(t, ok)
@@ -105,6 +105,40 @@ func TestParseGatewayRequest_InvalidStreamType(t *testing.T) {
 	body := []byte(`{"stream":"true"}`)
 	_, err := ParseGatewayRequest(NewRequestBodyRef(body), "")
 	require.Error(t, err)
+}
+
+func TestParseGatewayRequest_AnthropicNormalizesClaudeCodeLongContextModelSuffix(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "lowercase suffix", model: "claude-opus-4-8[1m]", want: "claude-opus-4-8"},
+		{name: "uppercase suffix", model: "claude-opus-4-8[1M]", want: "claude-opus-4-8"},
+		{name: "duplicated suffix", model: "claude-opus-4-8[1M][1m]", want: "claude-opus-4-8"},
+		{name: "suffix in middle", model: "claude-opus-4-8[1m]-preview", want: "claude-opus-4-8[1m]-preview"},
+		{name: "suffix only", model: "[1m]", want: "[1m]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":%q,"system":"test","messages":[{"role":"user","content":"hi"}]}`, tt.model))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, parsed.Model)
+			require.Equal(t, tt.want, gjson.GetBytes(parsed.Body.Bytes(), "model").String())
+			require.Equal(t, `"test"`, string(parsed.SystemRaw()))
+			require.NotEmpty(t, parsed.MessagesRaw())
+		})
+	}
+}
+
+func TestParseGatewayRequest_NonAnthropicPreservesClaudeCodeLongContextModelSuffix(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8[1m]","input":"hi"}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), "responses")
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-8[1m]", parsed.Model)
+	require.Equal(t, "claude-opus-4-8[1m]", gjson.GetBytes(parsed.Body.Bytes(), "model").String())
 }
 
 func TestParseGatewayRequest_ResponsesInput(t *testing.T) {

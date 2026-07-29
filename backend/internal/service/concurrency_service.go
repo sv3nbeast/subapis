@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strconv"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -61,6 +63,105 @@ type APIKeyConcurrencyCache interface {
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
 }
 
+type OpenAIWSIngressLeaseCache interface {
+	AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error)
+	RefreshOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) (bool, error)
+	ReleaseOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) error
+}
+
+const (
+	openAIWSIngressLeaseTTL             = 60 * time.Second
+	openAIWSIngressLeaseRefreshInterval = 20 * time.Second
+	openAIWSIngressLeaseOperationTO     = 2 * time.Second
+)
+
+type OpenAIWSIngressLease struct {
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+	cache    OpenAIWSIngressLeaseCache
+	apiKeyID int64
+	leaseID  string
+
+	stopOnce    sync.Once
+	stopCh      chan struct{}
+	refreshDone chan struct{}
+}
+
+func (l *OpenAIWSIngressLease) Context() context.Context {
+	if l == nil || l.ctx == nil {
+		return context.Background()
+	}
+	return l.ctx
+}
+
+func (l *OpenAIWSIngressLease) Release() {
+	if l == nil {
+		return
+	}
+	l.stopOnce.Do(func() {
+		if l.stopCh != nil {
+			close(l.stopCh)
+		}
+		if l.cancel != nil {
+			l.cancel(nil)
+		}
+		if l.refreshDone != nil {
+			<-l.refreshDone
+		}
+		if l.cache == nil || l.apiKeyID <= 0 || l.leaseID == "" {
+			return
+		}
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+		defer releaseCancel()
+		if err := l.cache.ReleaseOpenAIWSIngressLease(releaseCtx, l.apiKeyID, l.leaseID); err != nil {
+			logger.L().Warn("openai_ws_ingress_lease_release_failed", zap.Int64("api_key_id", l.apiKeyID), zap.Error(err))
+		}
+	})
+}
+
+func (l *OpenAIWSIngressLease) refreshLoop() {
+	defer close(l.refreshDone)
+	if l == nil || l.cache == nil {
+		return
+	}
+	ticker := time.NewTicker(openAIWSIngressLeaseRefreshInterval)
+	defer ticker.Stop()
+	lastConfirmedAt := time.Now()
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-l.stopCh:
+			return
+		case <-ticker.C:
+			var lost bool
+			lastConfirmedAt, lost = l.refresh(lastConfirmedAt)
+			if lost {
+				l.cancel(ErrOpenAIWSIngressLeaseLost)
+				return
+			}
+		}
+	}
+}
+
+func (l *OpenAIWSIngressLease) refresh(lastConfirmedAt time.Time) (time.Time, bool) {
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+	owned, err := l.cache.RefreshOpenAIWSIngressLease(refreshCtx, l.apiKeyID, l.leaseID)
+	refreshCancel()
+	if err == nil && owned {
+		return time.Now(), false
+	}
+	if err == nil {
+		err = ErrOpenAIWSIngressLeaseLost
+	}
+	elapsed := time.Since(lastConfirmedAt)
+	logger.L().Warn("openai_ws_ingress_lease_refresh_failed", zap.Int64("api_key_id", l.apiKeyID), zap.Duration("unconfirmed_for", elapsed), zap.Error(err))
+	if errors.Is(err, ErrOpenAIWSIngressLeaseLost) || elapsed >= openAIWSIngressLeaseTTL {
+		return lastConfirmedAt, true
+	}
+	return lastConfirmedAt, false
+}
+
 type accountSlotKeyCleanupCache interface {
 	CleanupExpiredAccountSlotKeys(ctx context.Context) error
 }
@@ -68,6 +169,8 @@ type accountSlotKeyCleanupCache interface {
 var (
 	requestIDPrefix  = initRequestIDPrefix()
 	requestIDCounter atomic.Uint64
+	// ErrOpenAIWSIngressLeaseLost identifies loss of the distributed ingress lease.
+	ErrOpenAIWSIngressLeaseLost = errors.New("openai websocket ingress lease lost")
 )
 
 func initRequestIDPrefix() string {
@@ -132,6 +235,40 @@ func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
 	}
 	svc.SetAccountLoadBatchCacheTTL(defaultAccountLoadBatchCacheTTL)
 	return svc
+}
+
+func (s *ConcurrencyService) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int) (*OpenAIWSIngressLease, bool, error) {
+	if maxConnections <= 0 {
+		return nil, true, nil
+	}
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return nil, false, errors.New("openai websocket ingress lease cache is unavailable")
+	}
+	cache, ok := s.cache.(OpenAIWSIngressLeaseCache)
+	if !ok {
+		return nil, false, errors.New("openai websocket ingress lease cache is unsupported")
+	}
+	leaseID := generateRequestID()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	acquireCtx, acquireCancel := context.WithTimeout(baseCtx, openAIWSIngressLeaseOperationTO)
+	acquired, err := cache.AcquireOpenAIWSIngressLease(acquireCtx, apiKeyID, maxConnections, leaseID)
+	acquireCancel()
+	if err != nil || !acquired {
+		return nil, acquired, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	leaseCtx, leaseCancel := context.WithCancelCause(ctx)
+	lease := &OpenAIWSIngressLease{
+		ctx: leaseCtx, cancel: leaseCancel, cache: cache, apiKeyID: apiKeyID, leaseID: leaseID,
+		stopCh: make(chan struct{}), refreshDone: make(chan struct{}),
+	}
+	go lease.refreshLoop()
+	return lease, true, nil
 }
 
 // SetAccountLoadBatchCacheTTL 设置账号负载批量读取的极短 TTL 缓存；非正数表示禁用缓存。

@@ -105,8 +105,8 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && decision.Blocked {
-		h.responsesErrorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
+		h.responsesSecurityAuditError(c, decision)
 		return
 	}
 
@@ -164,6 +164,9 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 
 	for {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		selectionCtx := service.WithAvoidEmailDomainSuffixes(c.Request.Context(), fs.AvoidEmailDomainSuffixesList(), h.metadataBridgeEnabled())
 		selectionCtx = fs.SelectionContext(selectionCtx, apiKey.GroupID, h.metadataBridgeEnabled())
 		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))

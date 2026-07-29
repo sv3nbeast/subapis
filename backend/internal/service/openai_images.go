@@ -459,6 +459,14 @@ func isOpenAIImageGenerationModel(model string) bool {
 	return strings.HasPrefix(model, "gpt-image-") || isGrokImageGenerationModel(model)
 }
 
+// IsGPTImageGenerationModel identifies the native GPT image model family.
+// Chat Completions must reject these before account selection; the images and
+// Responses endpoints handle them through their dedicated image pipeline.
+func IsGPTImageGenerationModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-image-")
+}
+
 func isGrokImageGenerationModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
 	return model == "grok-imagine" ||

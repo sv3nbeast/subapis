@@ -163,6 +163,18 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 	}
 }
 
+const claudeCodeLongContextModelSuffix = "[1m]"
+
+// Claude Code treats [1m] as a client-side context selector and normally removes it
+// before provider requests. Normalize leaked suffixes, including its duplicated form.
+func normalizeClaudeCodeLongContextModel(model string) string {
+	for len(model) > len(claudeCodeLongContextModelSuffix) &&
+		strings.EqualFold(model[len(model)-len(claudeCodeLongContextModelSuffix):], claudeCodeLongContextModelSuffix) {
+		model = model[:len(model)-len(claudeCodeLongContextModelSuffix)]
+	}
+	return model
+}
+
 // parseGatewayRequestCurrentBody 只做标量和 raw range 轻量解析，不恢复 system/messages 对象图。
 func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) error {
 	if parsed == nil || parsed.Body == nil {
@@ -185,6 +197,19 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 			return fmt.Errorf("invalid model field type")
 		}
 		parsed.Model = modelResult.String()
+		if protocol == domain.PlatformAnthropic {
+			normalizedModel := normalizeClaudeCodeLongContextModel(parsed.Model)
+			if normalizedModel != parsed.Model {
+				normalizedBody, err := sjson.SetBytes(bodyBytes, "model", normalizedModel)
+				if err != nil {
+					return fmt.Errorf("normalize model field: %w", err)
+				}
+				parsed.Body.Replace(normalizedBody)
+				bodyBytes = normalizedBody
+				jsonStr = *(*string)(unsafe.Pointer(&bodyBytes))
+				parsed.Model = normalizedModel
+			}
+		}
 	}
 
 	streamResult := gjson.Get(jsonStr, "stream")
@@ -199,7 +224,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 	parsed.BodySessionID = extractBodySessionID(jsonStr)
 
 	thinkingType := gjson.Get(jsonStr, "thinking.type").String()
-	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive"
+	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive" || strings.HasSuffix(strings.ToLower(parsed.Model), "-thinking")
 
 	parsed.OutputEffort = strings.TrimSpace(gjson.Get(jsonStr, "output_config.effort").String())
 
@@ -366,6 +391,9 @@ func normalizeSessionUserAgentFallback(raw string) string {
 // protocol 指定请求协议格式（domain.PlatformAnthropic / domain.PlatformGemini），
 // 不同协议使用不同的 system/messages 字段名。
 func ParseGatewayRequest(body *RequestBodyRef, protocol string) (*ParsedRequest, error) {
+	if body != nil && protocol == domain.PlatformAnthropic {
+		body.Replace(StripAnthropicBillingHeaderBlocks(body.Bytes()))
+	}
 	parsed := &ParsedRequest{Body: body}
 	if err := parseGatewayRequestCurrentBody(parsed, protocol); err != nil {
 		return nil, err

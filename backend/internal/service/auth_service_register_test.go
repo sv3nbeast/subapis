@@ -365,6 +365,30 @@ func TestAuthService_Register_EmailExists(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmailExists)
 }
 
+func TestAuthService_Register_AliasDuplicateRejected(t *testing.T) {
+	repo := &userRepoStub{aliasExists: true}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, nil)
+
+	_, _, err := service.Register(context.Background(), "some.one+bulk294@gmail.com", "password")
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Empty(t, repo.created)
+}
+
+func TestAuthService_Register_UsesAliasGuardedCreate(t *testing.T) {
+	// 注册必须走带别名兜底的创建路径：服务层前置查重与写入之间存在竞态窗口。
+	repo := &userRepoStub{nextID: 91}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, nil)
+
+	_, user, err := service.Register(context.Background(), "newuser@gmail.com", "password")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, 1, repo.guardedCreates)
+}
+
 func TestAuthService_Register_CheckEmailError(t *testing.T) {
 	repo := &userRepoStub{existsErr: errors.New("db down")}
 	service := newAuthService(repo, map[string]string{
@@ -531,7 +555,7 @@ func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
 		Status:       StatusActive,
 		TokenVersion: 1,
 	}
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	// 验证有效 token
@@ -542,7 +566,7 @@ func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
 
 	// 模拟过期 token（通过创建一个过期很久的 token）
 	service.cfg.JWT.ExpireHour = -1 // 设置为负数使 token 立即过期
-	expiredToken, err := service.GenerateToken(user)
+	expiredToken, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 	service.cfg.JWT.ExpireHour = 1 // 恢复
 
@@ -567,7 +591,7 @@ func TestAuthService_RefreshToken_ExpiredTokenNoPanic(t *testing.T) {
 
 	// 创建过期 token
 	service.cfg.JWT.ExpireHour = -1
-	expiredToken, err := service.GenerateToken(user)
+	expiredToken, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 	service.cfg.JWT.ExpireHour = 1
 
@@ -608,7 +632,7 @@ func TestAuthService_GenerateToken_UsesExpireHourWhenMinutesZero(t *testing.T) {
 		TokenVersion: 1,
 	}
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := service.ValidateToken(token)
@@ -633,7 +657,7 @@ func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
 		TokenVersion: 1,
 	}
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := service.ValidateToken(token)
@@ -656,7 +680,7 @@ func TestAuthService_GenerateToken_UsesResolvedTokenVersion(t *testing.T) {
 		TokenVersion: 1,
 	}
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	claims, err := service.ValidateToken(token)
@@ -677,7 +701,7 @@ func TestAuthService_RefreshToken_UsesResolvedTokenVersionComparison(t *testing.
 	repo := &userRepoStub{user: user}
 	service := newAuthService(repo, nil, nil, nil)
 
-	token, err := service.GenerateToken(user)
+	token, err := service.GenerateToken(context.Background(), user)
 	require.NoError(t, err)
 
 	newToken, err := service.RefreshToken(context.Background(), token)

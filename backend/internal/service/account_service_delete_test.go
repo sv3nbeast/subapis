@@ -83,6 +83,10 @@ func (s *accountRepoStub) ListWithFilters(ctx context.Context, params pagination
 	panic("unexpected ListWithFilters call")
 }
 
+func (s *accountRepoStub) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
+	panic("unexpected ListAllWithFilters call")
+}
+
 func (s *accountRepoStub) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
 	panic("unexpected ListByGroup call")
 }
@@ -153,6 +157,10 @@ func (s *accountRepoStub) ListSchedulableUngroupedByPlatform(ctx context.Context
 
 func (s *accountRepoStub) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
 	panic("unexpected ListSchedulableUngroupedByPlatforms call")
+}
+
+func (s *accountRepoStub) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error) {
+	panic("unexpected ListModelAvailabilityCandidates call")
 }
 
 func (s *accountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {

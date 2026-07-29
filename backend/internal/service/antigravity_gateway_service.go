@@ -1156,17 +1156,18 @@ func (s *AntigravityGatewayService) getUpstreamErrorDetail(body []byte) string {
 }
 
 // checkErrorPolicy nil 安全的包装
-func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, account *Account, statusCode int, body []byte) ErrorPolicyResult {
+func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, account *Account, statusCode int, body []byte, requestedModel ...string) ErrorPolicyResult {
 	if s.rateLimitService == nil {
 		return ErrorPolicyNone
 	}
-	return s.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, body)
+	return s.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, body, firstRequestedModel(requestedModel))
 }
 
 // applyErrorPolicy 应用错误策略结果，返回是否应终止当前循环及应返回的状态码。
 // ErrorPolicySkipped 时 outStatus 为 500（前端约定：未命中的错误返回 500）。
 func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParams, statusCode int, headers http.Header, respBody []byte) (handled bool, outStatus int, retErr error) {
-	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody) {
+	modelKey := resolveFinalAntigravityModelKey(p.ctx, p.account, p.requestedModel)
+	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody, modelKey) {
 	case ErrorPolicySkipped:
 		if s.handleAntigravityModelRateLimitBeforePolicy(p, statusCode, headers, respBody) {
 			return true, statusCode, nil
@@ -3838,10 +3839,11 @@ type antigravityStreamResult struct {
 // antigravityClientWriter 封装流式响应的客户端写入，自动检测断开并标记。
 // 断开后所有写入操作变为 no-op，调用方通过 Disconnected() 判断是否继续 drain 上游。
 type antigravityClientWriter struct {
-	w            gin.ResponseWriter
-	flusher      http.Flusher
-	disconnected bool
-	prefix       string // 日志前缀，标识来源方法
+	w                gin.ResponseWriter
+	flusher          http.Flusher
+	disconnected     bool
+	prefix           string // 日志前缀，标识来源方法
+	beforeFirstWrite func()
 }
 
 func newAntigravityClientWriter(w gin.ResponseWriter, flusher http.Flusher, prefix string) *antigravityClientWriter {
@@ -3853,6 +3855,7 @@ func (cw *antigravityClientWriter) Write(p []byte) bool {
 	if cw.disconnected {
 		return false
 	}
+	cw.prepareFirstWrite()
 	if _, err := cw.w.Write(p); err != nil {
 		cw.markDisconnected()
 		return false
@@ -3866,12 +3869,22 @@ func (cw *antigravityClientWriter) Fprintf(format string, args ...any) bool {
 	if cw.disconnected {
 		return false
 	}
+	cw.prepareFirstWrite()
 	if _, err := fmt.Fprintf(cw.w, format, args...); err != nil {
 		cw.markDisconnected()
 		return false
 	}
 	cw.flusher.Flush()
 	return true
+}
+
+func (cw *antigravityClientWriter) prepareFirstWrite() {
+	if cw.beforeFirstWrite == nil {
+		return
+	}
+	prepare := cw.beforeFirstWrite
+	cw.beforeFirstWrite = nil
+	prepare()
 }
 
 func (cw *antigravityClientWriter) Disconnected() bool { return cw.disconnected }
