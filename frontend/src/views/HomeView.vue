@@ -33,7 +33,7 @@
         <div class="flex items-center gap-3">
           <router-link
             v-if="publicModelMarketEnabled"
-            to="/models"
+            to="/model-plaza"
             class="home-nav-text-link hidden sm:inline-flex"
           >
             {{ t('modelMarket.navLabel') }}
@@ -335,7 +335,7 @@
               </router-link>
               <router-link
                 v-if="publicModelMarketEnabled"
-                to="/models"
+                to="/model-plaza"
                 class="btn btn-secondary min-w-[8rem] px-5 py-2.5 text-sm"
               >
                 <Icon name="sparkles" size="md" />

@@ -182,7 +182,7 @@
           </p>
           <h2 id="home-v2-models-title">{{ t('home.channels.title') }}</h2>
           <p>{{ t('home.channels.description') }}</p>
-          <RouterLink v-if="publicModelMarketEnabled" to="/models" class="home-v2-text-link">
+          <RouterLink v-if="publicModelMarketEnabled" to="/model-plaza" class="home-v2-text-link">
             {{ t('modelMarket.viewModelsAndPricing') }}
             <Icon name="arrowRight" size="sm" />
           </RouterLink>
@@ -289,7 +289,7 @@
             <span><strong>{{ t('home.guide') }}</strong><small>{{ t('home.experience.resources.docs') }}</small></span>
             <Icon name="chevronRight" size="sm" />
           </RouterLink>
-          <RouterLink v-if="publicModelMarketEnabled" to="/models">
+          <RouterLink v-if="publicModelMarketEnabled" to="/model-plaza">
             <Icon name="cube" size="md" />
             <span><strong>{{ t('modelMarket.navLabel') }}</strong><small>{{ t('home.experience.resources.models') }}</small></span>
             <Icon name="chevronRight" size="sm" />

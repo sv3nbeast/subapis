@@ -183,7 +183,7 @@ describe('feature route guard', () => {
 
     const { navigation, next } = runGuard(
       { requiresAuth: false, requiresPublicModelMarket: true },
-      '/models'
+      '/model-plaza'
     )
     await navigation
 
@@ -198,7 +198,7 @@ describe('feature route guard', () => {
 
     const { navigation, next } = runGuard(
       { requiresAuth: false, requiresPublicModelMarket: true },
-      '/models'
+      '/model-plaza'
     )
     await navigation
 

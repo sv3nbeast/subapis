@@ -184,7 +184,7 @@ const userInitial = computed(() => authStore.user?.email?.charAt(0).toUpperCase(
 const visibleNavigation = computed<PublicNavigationItem[]>(() => {
   const items: PublicNavigationItem[] = [
     {
-      to: '/models',
+      to: '/model-plaza',
       label: t('modelMarket.navLabel'),
       icon: 'cube',
       enabled: isFeatureFlagEnabled(FeatureFlags.publicModelMarket),

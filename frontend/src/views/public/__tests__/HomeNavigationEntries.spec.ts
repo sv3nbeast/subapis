@@ -7,7 +7,7 @@ const source = readFileSync(resolve(__dirname, '../../HomeView.vue'), 'utf8')
 describe('HomeView public navigation entries', () => {
   it('orders pricing, model status, and documentation in the desktop navigation', () => {
     const header = source.slice(source.indexOf('<!-- Header -->'), source.indexOf('<Teleport'))
-    const pricingIndex = header.indexOf('to="/models"')
+    const pricingIndex = header.indexOf('to="/model-plaza"')
     const statusIndex = header.indexOf('to="/monitor"')
     const docsIndex = header.indexOf('to="/docs"')
 

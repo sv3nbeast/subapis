@@ -44,14 +44,8 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/models',
-    name: 'PublicModels',
-    component: () => import('@/views/public/ModelsView.vue'),
-    meta: {
-      requiresAuth: false,
-      requiresPublicModelMarket: true,
-      title: 'Model Market',
-      titleKey: 'modelMarket.title'
-    }
+    name: 'LegacyPublicModels',
+    redirect: (to) => ({ path: '/model-plaza', query: to.query })
   },
   {
     path: '/login',
@@ -216,8 +210,14 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/model-plaza',
-    name: 'LegacyModelPlaza',
-    redirect: (to) => ({ path: '/models', query: to.query })
+    name: 'PublicModels',
+    component: () => import('@/views/public/ModelsView.vue'),
+    meta: {
+      requiresAuth: false,
+      requiresPublicModelMarket: true,
+      title: 'Model Market',
+      titleKey: 'modelMarket.title'
+    }
   },
 
   // ==================== User Routes ====================

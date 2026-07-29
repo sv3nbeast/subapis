@@ -19,13 +19,21 @@ const settingsAPISource = readFileSync(
   resolve(src, "api/admin/settings.ts"),
   "utf8",
 );
+const gatewayRoutesSource = readFileSync(
+  resolve(src, "../../backend/internal/server/routes/gateway.go"),
+  "utf8",
+);
 
 describe("model market consolidation", () => {
-  it("keeps /models canonical and redirects the legacy model plaza path", () => {
+  it("keeps /model-plaza canonical and redirects the colliding /models SPA path", () => {
+    expect(gatewayRoutesSource).toContain('r.GET("/models"');
     expect(routerSource).toMatch(/path: ["']\/models["']/);
     expect(routerSource).toMatch(/path: ["']\/model-plaza["']/);
     expect(routerSource).toMatch(
-      /redirect: \(to\) => \(\{ path: ["']\/models["'], query: to\.query \}\)/,
+      /redirect: \(to\) => \(\{ path: ["']\/model-plaza["'], query: to\.query \}\)/,
+    );
+    expect(routerSource).toMatch(
+      /path: ["']\/model-plaza["'][\s\S]*?import\(["']@\/views\/public\/ModelsView\.vue["']\)/,
     );
     expect(routerSource).not.toMatch(
       /import\(["']@\/views\/ModelPlazaView\.vue["']\)/,
@@ -34,7 +42,7 @@ describe("model market consolidation", () => {
 
   it("uses the same route, label and feature flag in the authenticated header", () => {
     expect(appHeaderSource).toContain('v-if="user && modelMarketEnabled"');
-    expect(appHeaderSource).toContain('to="/models"');
+    expect(appHeaderSource).toContain('to="/model-plaza"');
     expect(appHeaderSource).toMatch(/t\(["']modelMarket\.navLabel["']\)/);
     expect(appHeaderSource).toContain("FeatureFlags.publicModelMarket");
     expect(appHeaderSource).not.toContain("FeatureFlags.modelPlaza");
