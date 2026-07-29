@@ -770,21 +770,56 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 }
 
 // configureKiroNativeToolProgressGuard scopes provider-specific recovery to
-// Kiro requests. Claude tool turns use the exact standalone "call" marker,
-// while existing native-GPT bridge callers may opt into the broader prelude
-// recovery mode. Matching the mapped upstream family keeps future Claude
-// models covered without affecting direct Anthropic traffic.
+// Kiro requests. Legacy Claude and native-GPT bridge paths may opt into the
+// bounded text compatibility fallback; protocol-driven Claude 5 auto turns
+// rely on structured tool/terminal events instead. Matching the mapped
+// upstream family keeps future Claude models covered without affecting direct
+// Anthropic traffic.
 func configureKiroNativeToolProgressGuard(parsed *ParsedRequest, mappedModel string, toolBacked, requireBroadPrelude bool) {
 	if parsed == nil || !toolBacked {
 		return
 	}
 	if requireBroadPrelude {
 		parsed.KiroNativeToolProgressRequired = true
+		parsed.KiroNativeToolTextPreludeGuard = true
 	}
 	modelID := strings.ToLower(strings.TrimSpace(kiropkg.MapModel(mappedModel)))
 	if strings.HasPrefix(modelID, "claude-") {
 		parsed.KiroNativeToolProgressRequired = true
-		parsed.KiroNativeToolCallMarkerRequired = true
+		forced := parsed.Body != nil && hasForcedKiroToolChoice(parsed.Body.Bytes())
+		protocolOnly := isKiroProtocolDrivenClaudeModel(modelID)
+		parsed.KiroNativeToolCallMarkerRequired = forced || !protocolOnly
+		parsed.KiroNativeToolTextPreludeGuard = requireBroadPrelude || forced || !protocolOnly
+	}
+}
+
+func isKiroProtocolDrivenClaudeModel(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(kiropkg.MapModel(model))) {
+	case "claude-opus-5", "claude-sonnet-5":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasForcedKiroToolChoice(body []byte) bool {
+	choice := gjson.GetBytes(body, "tool_choice")
+	if !choice.Exists() {
+		return false
+	}
+	if choice.Type == gjson.String {
+		switch strings.ToLower(strings.TrimSpace(choice.String())) {
+		case "any", "required":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(choice.Get("type").String())) {
+	case "any", "tool":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2188,15 +2223,17 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 	}
 	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
 	requireNativeToolCallMarker := parsed != nil && parsed.KiroNativeToolCallMarkerRequired
+	requireNativeToolTextPrelude := parsed != nil && parsed.KiroNativeToolTextPreludeGuard
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
 	if isKiroCLIWireMode(account) {
 		buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
-			Origin:                      "KIRO_CLI",
-			UseNativeEffort:             true,
-			AttachEnvState:              true,
-			InjectThinkingSystemPrompt:  false,
-			RequireNativeToolProgress:   requireNativeToolProgress,
-			RequireNativeToolCallMarker: requireNativeToolCallMarker,
+			Origin:                       "KIRO_CLI",
+			UseNativeEffort:              true,
+			AttachEnvState:               true,
+			InjectThinkingSystemPrompt:   false,
+			RequireNativeToolProgress:    requireNativeToolProgress,
+			RequireNativeToolCallMarker:  requireNativeToolCallMarker,
+			RequireNativeToolTextPrelude: requireNativeToolTextPrelude,
 		})
 		if err != nil {
 			return nil, err
@@ -2208,12 +2245,13 @@ func (s *GatewayService) buildKiroPayloadForParsedAccountEndpoint(ctx context.Co
 		origin = "AI_EDITOR"
 	}
 	buildResult, err := kiropkg.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, kiropkg.KiroPayloadOptions{
-		Origin:                      origin,
-		UseNativeEffort:             false,
-		AttachEnvState:              false,
-		InjectThinkingSystemPrompt:  true,
-		RequireNativeToolProgress:   requireNativeToolProgress,
-		RequireNativeToolCallMarker: requireNativeToolCallMarker,
+		Origin:                       origin,
+		UseNativeEffort:              false,
+		AttachEnvState:               false,
+		InjectThinkingSystemPrompt:   true,
+		RequireNativeToolProgress:    requireNativeToolProgress,
+		RequireNativeToolCallMarker:  requireNativeToolCallMarker,
+		RequireNativeToolTextPrelude: requireNativeToolTextPrelude,
 	})
 	if err != nil {
 		return nil, err

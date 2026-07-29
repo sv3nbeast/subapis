@@ -958,6 +958,7 @@ func TestKiroNativeGPTPreludeRetryCommitsCacheOnlyAfterSuccessfulTerminal(t *tes
 	parsed.Group = group
 	parsed.GroupID = &group.ID
 	parsed.KiroNativeToolProgressRequired = true
+	parsed.KiroNativeToolTextPreludeGuard = true
 
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
 	enableKiroNativeGPTEnforceMode(svc)
@@ -1067,25 +1068,31 @@ func TestConfigureKiroNativeToolProgressGuardScope(t *testing.T) {
 	tests := []struct {
 		name                string
 		mappedModel         string
+		body                string
 		toolBacked          bool
 		requireBroadPrelude bool
 		wantProgress        bool
 		wantCallMarker      bool
+		wantTextPrelude     bool
 	}{
-		{name: "current claude", mappedModel: "claude-opus-4.6", toolBacked: true, wantProgress: true, wantCallMarker: true},
-		{name: "future claude", mappedModel: "claude-opus-6", toolBacked: true, wantProgress: true, wantCallMarker: true},
-		{name: "future sonnet", mappedModel: "claude-sonnet-7-thinking", toolBacked: true, wantProgress: true, wantCallMarker: true},
-		{name: "native gpt broad guard", mappedModel: "gpt-5.6-sol", toolBacked: true, requireBroadPrelude: true, wantProgress: true},
+		{name: "current claude", mappedModel: "claude-opus-4.6", toolBacked: true, wantProgress: true, wantCallMarker: true, wantTextPrelude: true},
+		{name: "future claude", mappedModel: "claude-opus-6", toolBacked: true, wantProgress: true, wantCallMarker: true, wantTextPrelude: true},
+		{name: "future sonnet", mappedModel: "claude-sonnet-7-thinking", toolBacked: true, wantProgress: true, wantCallMarker: true, wantTextPrelude: true},
+		{name: "opus 5 auto", mappedModel: "claude-opus-5", body: `{"tool_choice":{"type":"auto"}}`, toolBacked: true, wantProgress: true},
+		{name: "sonnet 5 auto", mappedModel: "claude-sonnet-5", toolBacked: true, wantProgress: true},
+		{name: "opus 5 forced", mappedModel: "claude-opus-5", body: `{"tool_choice":{"type":"any"}}`, toolBacked: true, wantProgress: true, wantCallMarker: true, wantTextPrelude: true},
+		{name: "native gpt broad guard", mappedModel: "gpt-5.6-sol", toolBacked: true, requireBroadPrelude: true, wantProgress: true, wantTextPrelude: true},
 		{name: "gpt without bridge opt in", mappedModel: "gpt-5.6-sol", toolBacked: true},
 		{name: "claude without tools", mappedModel: "claude-opus-6", toolBacked: false, requireBroadPrelude: true},
 		{name: "unsupported family", mappedModel: "gemini-4-pro", toolBacked: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parsed := &ParsedRequest{}
+			parsed := &ParsedRequest{Body: NewRequestBodyRef([]byte(tt.body))}
 			configureKiroNativeToolProgressGuard(parsed, tt.mappedModel, tt.toolBacked, tt.requireBroadPrelude)
 			require.Equal(t, tt.wantProgress, parsed.KiroNativeToolProgressRequired)
 			require.Equal(t, tt.wantCallMarker, parsed.KiroNativeToolCallMarkerRequired)
+			require.Equal(t, tt.wantTextPrelude, parsed.KiroNativeToolTextPreludeGuard)
 		})
 	}
 }
@@ -1132,8 +1139,8 @@ func TestForwardMessagesKiroClaude1MCallMarkerRetriesOnceThenEmitsTool(t *testin
 	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
 }
 
-func TestForwardMessagesKiroClaudeFamilyCallMarkerRetriesWithoutModelAllowlist(t *testing.T) {
-	for _, model := range []string{"claude-opus-5", "claude-opus-6"} {
+func TestForwardMessagesKiroFutureClaudeCallMarkerRetriesWithoutModelAllowlist(t *testing.T) {
+	for _, model := range []string{"claude-opus-6"} {
 		t.Run(model, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			body := []byte(fmt.Sprintf(`{
@@ -1172,8 +1179,45 @@ func TestForwardMessagesKiroClaudeFamilyCallMarkerRetriesWithoutModelAllowlist(t
 	}
 }
 
-func TestForwardMessagesKiroClaudePreludeWithoutCallMarkerRetriesOnceThenEmitsTool(t *testing.T) {
-	for _, model := range []string{"claude-opus-5", "claude-opus-6"} {
+func TestForwardMessagesKiroOpus5AutoCallMarkerCompletesWithoutRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":256,
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"name":"read","description":"read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+		"stream":true
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
+	upstream.resp = nil
+	upstream.responses = []*http.Response{
+		kiroNativeGPTPreludeResponse(t, "我先查看工作区，再定位相关实现。\n\ncall"),
+		kiroCustomToolEventStreamResponse(t, "toolu_must_not_run", "read", `{"path":"README.md"}`),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Contains(t, rec.Body.String(), "我先查看工作区")
+	require.Contains(t, rec.Body.String(), "call")
+	require.NotContains(t, rec.Body.String(), `"type":"tool_use"`)
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+	firstSystem := gjson.GetBytes(upstream.bodies[0], "conversationState.history.0.userInputMessage.content").String()
+	require.NotContains(t, firstSystem, "[NATIVE TOOL PROGRESS:")
+}
+
+func TestForwardMessagesKiroFutureClaudePreludeWithoutCallMarkerRetriesOnceThenEmitsTool(t *testing.T) {
+	for _, model := range []string{"claude-opus-6"} {
 		t.Run(model, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			body := []byte(fmt.Sprintf(`{

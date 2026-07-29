@@ -5013,22 +5013,36 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testi
 	}`)
 
 	gptResult, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
-		Origin:                    "AI_EDITOR",
-		RequireNativeToolProgress: true,
+		Origin:                       "AI_EDITOR",
+		RequireNativeToolProgress:    true,
+		RequireNativeToolTextPrelude: true,
 	})
 	require.NoError(t, err)
 	require.True(t, gptResult.Context.NativeToolProgressRequired)
+	require.True(t, gptResult.Context.NativeToolTextPreludeGuard)
 	require.Contains(t, gjson.GetBytes(gptResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
 
 	claudeResult, err := BuildKiroPayloadWithOptions(body, "claude-sonnet-4-6", "", nil, KiroPayloadOptions{
-		Origin:                      "AI_EDITOR",
-		RequireNativeToolProgress:   true,
-		RequireNativeToolCallMarker: true,
+		Origin:                       "AI_EDITOR",
+		RequireNativeToolProgress:    true,
+		RequireNativeToolCallMarker:  true,
+		RequireNativeToolTextPrelude: true,
 	})
 	require.NoError(t, err)
 	require.True(t, claudeResult.Context.NativeToolProgressRequired)
 	require.True(t, claudeResult.Context.NativeToolCallMarkerRequired)
+	require.True(t, claudeResult.Context.NativeToolTextPreludeGuard)
 	require.Contains(t, gjson.GetBytes(claudeResult.Payload, "conversationState.history.0.userInputMessage.content").String(), systemNativeToolProgressPolicy)
+
+	opus5AutoResult, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                    "AI_EDITOR",
+		RequireNativeToolProgress: true,
+	})
+	require.NoError(t, err)
+	require.True(t, opus5AutoResult.Context.NativeToolProgressRequired)
+	require.False(t, opus5AutoResult.Context.NativeToolCallMarkerRequired)
+	require.False(t, opus5AutoResult.Context.NativeToolTextPreludeGuard)
+	require.NotContains(t, string(opus5AutoResult.Payload), systemNativeToolProgressPolicy)
 
 	forcedBody := []byte(`{
 		"model":"claude-opus-5",
@@ -5037,9 +5051,10 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testi
 		"tool_choice":{"type":"any"}
 	}`)
 	forcedResult, err := BuildKiroPayloadWithOptions(forcedBody, "claude-opus-5", "", nil, KiroPayloadOptions{
-		Origin:                      "AI_EDITOR",
-		RequireNativeToolProgress:   true,
-		RequireNativeToolCallMarker: true,
+		Origin:                       "AI_EDITOR",
+		RequireNativeToolProgress:    true,
+		RequireNativeToolCallMarker:  true,
+		RequireNativeToolTextPrelude: true,
 	})
 	require.NoError(t, err)
 	require.True(t, forcedResult.Context.NativeToolProgressRequired)
@@ -5062,8 +5077,9 @@ func TestBuildKiroPayloadNativeToolProgressGuardIsExplicitAndToolScoped(t *testi
 		]
 	}`)
 	historyToolResult, err := BuildKiroPayloadWithOptions(historyToolBody, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
-		Origin:                    "AI_EDITOR",
-		RequireNativeToolProgress: true,
+		Origin:                       "AI_EDITOR",
+		RequireNativeToolProgress:    true,
+		RequireNativeToolTextPrelude: true,
 	})
 	require.NoError(t, err)
 	require.True(t, historyToolResult.Context.NativeToolProgressRequired)
@@ -5076,6 +5092,7 @@ func TestStreamKiroNativeToolProgressPreludeWithoutToolReturnsPrivateStall(t *te
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
 		NativeToolProgressRequired: true,
+		NativeToolTextPreludeGuard: true,
 		RequireTerminalEvent:       true,
 	})
 
@@ -5093,6 +5110,7 @@ func TestStreamKiroClaudeCallMarkerWithoutToolReturnsPrivateStall(t *testing.T) 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
 		NativeToolProgressRequired:   true,
 		NativeToolCallMarkerRequired: true,
+		NativeToolTextPreludeGuard:   true,
 		RequireTerminalEvent:         true,
 	})
 
@@ -5119,10 +5137,9 @@ func TestStreamKiroClaudeThinkingOnlyWithoutToolReturnsPrivateStall(t *testing.T
 	var out bytes.Buffer
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
-		ThinkingEnabled:              true,
-		NativeToolProgressRequired:   true,
-		NativeToolCallMarkerRequired: true,
-		RequireTerminalEvent:         true,
+		ThinkingEnabled:            true,
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
 	})
 
 	require.Nil(t, result)
@@ -5132,21 +5149,19 @@ func TestStreamKiroClaudeThinkingOnlyWithoutToolReturnsPrivateStall(t *testing.T
 	require.NotContains(t, out.String(), "event: message_stop")
 }
 
-func TestStreamKiroClaudeOpus5ConfirmationPreludeWithoutToolReturnsPrivateStall(t *testing.T) {
+func TestStreamKiroClaudeOpus5AutoTextDoesNotUsePhraseClassifier(t *testing.T) {
 	stream := buildNativeToolProgressStream(t, "我需要先确认远程数据库的实际路径和容器内的挂载位置。", false)
 	var out bytes.Buffer
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
-		NativeToolProgressRequired:   true,
-		NativeToolCallMarkerRequired: true,
-		RequireTerminalEvent:         true,
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
 	})
 
-	require.Nil(t, result)
-	require.True(t, IsNativeToolProgressStalled(err))
-	require.NotContains(t, out.String(), "我需要先确认远程数据库")
-	require.NotContains(t, out.String(), "event: message_start")
-	require.NotContains(t, out.String(), "event: message_stop")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), "我需要先确认远程数据库")
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
 }
 
 func TestStreamKiroForcedToolChoiceRejectsTextOnlyCompletion(t *testing.T) {
@@ -5178,9 +5193,8 @@ func TestStreamKiroToolUseStopWithoutStructuredToolReturnsPrivateStall(t *testin
 	var out bytes.Buffer
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
-		NativeToolProgressRequired:   true,
-		NativeToolCallMarkerRequired: true,
-		RequireTerminalEvent:         true,
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
 	})
 
 	require.Nil(t, result)
@@ -5210,9 +5224,8 @@ func TestStreamKiroMalformedToolEventCannotBecomeEndTurn(t *testing.T) {
 	var out bytes.Buffer
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
-		NativeToolProgressRequired:   true,
-		NativeToolCallMarkerRequired: true,
-		RequireTerminalEvent:         true,
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
 	})
 
 	require.Nil(t, result)
@@ -5240,9 +5253,8 @@ func TestStreamKiroReleasedTextThenMalformedToolEventReturnsIncompleteError(t *t
 	var out bytes.Buffer
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
-		NativeToolProgressRequired:   true,
-		NativeToolCallMarkerRequired: true,
-		RequireTerminalEvent:         true,
+		NativeToolProgressRequired: true,
+		RequireTerminalEvent:       true,
 	})
 
 	require.Nil(t, result)
@@ -5287,6 +5299,7 @@ func TestStreamKiroClaudeFragmentedCallMarkerWithoutToolReturnsPrivateStall(t *t
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
 		NativeToolProgressRequired:   true,
 		NativeToolCallMarkerRequired: true,
+		NativeToolTextPreludeGuard:   true,
 		RequireTerminalEvent:         true,
 	})
 
@@ -5316,6 +5329,7 @@ func TestStreamKiroClaudeGeneralToolPreludeThenCallMarkerReturnsPrivateStall(t *
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 20, KiroRequestContext{
 		NativeToolProgressRequired:   true,
 		NativeToolCallMarkerRequired: true,
+		NativeToolTextPreludeGuard:   true,
 		RequireTerminalEvent:         true,
 	})
 
@@ -5333,6 +5347,7 @@ func TestStreamKiroClaudePreludeWithoutCallMarkerReturnsPrivateStall(t *testing.
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4.6", 20, KiroRequestContext{
 		NativeToolProgressRequired:   true,
 		NativeToolCallMarkerRequired: true,
+		NativeToolTextPreludeGuard:   true,
 		RequireTerminalEvent:         true,
 	})
 
@@ -5351,6 +5366,7 @@ func TestStreamKiroClaudeNormalTextReleasesBeforeTerminal(t *testing.T) {
 		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), inputReader, out, "claude-opus-6", 20, KiroRequestContext{
 			NativeToolProgressRequired:   true,
 			NativeToolCallMarkerRequired: true,
+			NativeToolTextPreludeGuard:   true,
 			RequireTerminalEvent:         true,
 		})
 		resultCh <- err
@@ -5396,6 +5412,7 @@ func TestStreamKiroNativeToolProgressPreludeThenUpstreamFailureIsNonReplayable(t
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
 		NativeToolProgressRequired: true,
+		NativeToolTextPreludeGuard: true,
 		RequireTerminalEvent:       true,
 	})
 
@@ -5412,6 +5429,7 @@ func TestStreamKiroNativeToolProgressPreludeThenToolReleasesCompleteStream(t *te
 
 	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 20, KiroRequestContext{
 		NativeToolProgressRequired: true,
+		NativeToolTextPreludeGuard: true,
 		RequireTerminalEvent:       true,
 	})
 
@@ -5430,6 +5448,7 @@ func TestStreamKiroNativeToolProgressNormalTextReleasesBeforeTerminal(t *testing
 	go func() {
 		_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), inputReader, out, "gpt-5.6-sol", 20, KiroRequestContext{
 			NativeToolProgressRequired: true,
+			NativeToolTextPreludeGuard: true,
 			RequireTerminalEvent:       true,
 		})
 		resultCh <- err

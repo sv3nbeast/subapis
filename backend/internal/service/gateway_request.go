@@ -323,8 +323,15 @@ type ParsedRequest struct {
 	// until the upstream either emits a native tool call or completes normally.
 	KiroNativeToolProgressRequired bool
 	// KiroNativeToolCallMarkerRequired limits Kiro Claude recovery to the
-	// standalone "call" marker emitted by malformed provider tool turns.
+	// standalone "call" marker emitted by malformed provider tool turns. It is
+	// reserved for an explicit tool_choice contract; auto tool choice is not a
+	// protocol guarantee and must be finalized from upstream events instead.
 	KiroNativeToolCallMarkerRequired bool
+	// KiroNativeToolTextPreludeGuard enables the bounded text compatibility
+	// guard used by native GPT bridges and forced Claude tool calls. Claude
+	// tool_choice=auto deliberately leaves this disabled: natural-language
+	// prefixes are not authoritative evidence that a tool call is required.
+	KiroNativeToolTextPreludeGuard bool
 
 	// ExplicitSessionID 是客户端通过 HTTP 请求头显式传递的会话标识。
 	// 由 Handler 层设置，不从请求体解析，因此 ReplaceBody 后保留。

@@ -217,7 +217,8 @@ type KiroRequestContext struct {
 	EmptyInputToolNames map[string]bool
 	ThinkingEnabled     bool
 	// NativeToolProgressRequired is an explicit caller opt-in for tool-backed
-	// turns where a narration-only prelude must remain private until completion.
+	// turns where structured tool signals must be validated. It does not by
+	// itself authorize natural-language intent classification.
 	NativeToolProgressRequired bool
 	// NativeToolCallMarkerRequired narrows a stalled turn to a standalone "call"
 	// line. Guarded Claude tool requests use this to avoid retrying legitimate
@@ -227,6 +228,11 @@ type KiroRequestContext struct {
 	// tool_choice=any/tool. A successful turn must contain a structured native
 	// tool call; text-only completion is never accepted for this request shape.
 	NativeToolCallRequired bool
+	// NativeToolTextPreludeGuard enables the bounded phrase compatibility
+	// fallback. It is intentionally separate from NativeToolProgressRequired:
+	// Claude tool_choice=auto has no protocol-level promise that a tool must be
+	// called, so its ordinary text must not be held or retried by a classifier.
+	NativeToolTextPreludeGuard bool
 	// PriorAttemptKiroCredits accounts for a discarded corrective attempt as
 	// provider cost without adding its hidden text tokens to client billing.
 	PriorAttemptKiroCredits float64
@@ -300,12 +306,13 @@ type KiroBuildResult struct {
 }
 
 type KiroPayloadOptions struct {
-	Origin                      string
-	UseNativeEffort             bool
-	AttachEnvState              bool
-	InjectThinkingSystemPrompt  bool
-	RequireNativeToolProgress   bool
-	RequireNativeToolCallMarker bool
+	Origin                       string
+	UseNativeEffort              bool
+	AttachEnvState               bool
+	InjectThinkingSystemPrompt   bool
+	RequireNativeToolProgress    bool
+	RequireNativeToolCallMarker  bool
+	RequireNativeToolTextPrelude bool
 }
 
 type KiroPayload struct {
@@ -766,7 +773,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	structuredOutputTool, structuredOutputHint := buildStructuredOutputTool(claudeBody, &requestCtx)
 	toolChoiceHint := joinPromptHints(
 		extractClaudeToolChoiceHint(claudeBody, &requestCtx),
-		buildKiroNativeToolProgressHint(claudeBody, structuredOutputTool != nil, modelID, options.RequireNativeToolProgress),
+		buildKiroNativeToolProgressHint(claudeBody, structuredOutputTool != nil, modelID, options.RequireNativeToolTextPrelude),
 		structuredOutputHint,
 	)
 	baseSystem := extractSystemPrompt(claudeBody)
@@ -802,6 +809,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress && len(kiroTools) > 0
 	requestCtx.NativeToolCallMarkerRequired = requestCtx.NativeToolProgressRequired && options.RequireNativeToolCallMarker
 	requestCtx.NativeToolCallRequired = requestCtx.NativeToolProgressRequired && hasForcedClaudeToolChoice(claudeBody)
+	requestCtx.NativeToolTextPreludeGuard = requestCtx.NativeToolProgressRequired && options.RequireNativeToolTextPrelude
 	if currentUserMsg != nil {
 		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
 			currentUserMsg.Content = " "
@@ -1140,6 +1148,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	sawFinalUsageEvidence := false
 	sawExplicitCompletionReason := false
 	streamOutputReleased := false
+	// Protocol-driven Claude auto turns only hold output until the first visible
+	// text or structured tool event. The bounded phrase classifier remains an
+	// explicit compatibility fallback for forced calls and native GPT bridges.
 	nativeToolProgressGuard := requestCtx.NativeToolProgressRequired
 	nativeToolEmitted := false
 	// Keep protocol-level tool evidence separate from the text prelude
@@ -1229,6 +1240,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		text := visibleTextBuf.String()
+		if !requestCtx.NativeToolTextPreludeGuard {
+			if strings.TrimSpace(text) == "" {
+				return nil
+			}
+			nativeToolProgressGuard = false
+			return releaseStreamOutput()
+		}
 		if shouldHoldKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, text) {
 			return nil
 		}
@@ -1999,20 +2017,22 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	toolSignalObserved := stopReason == "tool_use" ||
 		(requestCtx.NativeToolProgressRequired && sawUpstreamToolSignal)
 	if !nativeToolEmitted && toolSignalObserved {
-		if nativeToolProgressGuard {
+		if requestCtx.NativeToolProgressRequired && !streamOutputReleased {
 			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 		}
 		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: upstream tool signal without a valid tool call"}
 	}
-	if nativeToolProgressGuard && !nativeToolEmitted && sawDeliverableOutput {
+	if !nativeToolEmitted && sawDeliverableOutput {
 		// Claude tool turns must either produce a native tool call or a visible
 		// assistant answer. Opus 5 can terminate after reasoning-only output;
 		// treating that as end_turn exposes a thinking block with no actionable
 		// response and makes Claude clients report an interrupted session.
-		thinkingOnlyToolProgress := requestCtx.NativeToolCallMarkerRequired &&
+		thinkingOnlyToolProgress := requestCtx.NativeToolProgressRequired &&
 			stopSequenceMatched == "" && strings.TrimSpace(visibleTextBuf.String()) == ""
 		mandatoryToolMissing := requestCtx.NativeToolCallRequired && !nativeToolEmitted
-		if mandatoryToolMissing || thinkingOnlyToolProgress || shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
+		textPreludeStalled := nativeToolProgressGuard &&
+			shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String())
+		if mandatoryToolMissing || thinkingOnlyToolProgress || textPreludeStalled {
 			return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
 		}
 	}
