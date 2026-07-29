@@ -1616,13 +1616,16 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 			return nil, requestCtx, err
 		}
 		applyKiroContextWindowResolution(&buildResult.Context, contextWindowTokens, contextWindowSource)
+		historyCountBeforeFallback := len(gjson.GetBytes(buildResult.Payload, "conversationState.history").Array())
 		metadataFallbackApplied := applyKiroUpstreamRequestOptions(buildResult, options)
 		if options.MetadataOnlyHistoryFallback {
 			logger.L().Warn("kiro.metadata_only_history_fallback",
 				zap.Int64("account_id", account.ID),
 				zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
-				zap.Int("history_count", len(gjson.GetBytes(buildResult.Payload, "conversationState.history").Array())),
-				zap.Bool("compacted", metadataFallbackApplied),
+				zap.Int("history_count_before", historyCountBeforeFallback),
+				zap.Int("history_count_after", len(gjson.GetBytes(buildResult.Payload, "conversationState.history").Array())),
+				zap.Bool("fallback_applied", metadataFallbackApplied),
+				zap.Bool("continuation_present_after", gjson.GetBytes(buildResult.Payload, "conversationState.agentContinuationId").Exists()),
 			)
 		}
 		payload := buildResult.Payload
@@ -2255,8 +2258,19 @@ func applyKiroMetadataOnlyHistoryFallback(payload []byte) ([]byte, bool) {
 	}
 
 	history := request.ConversationState.History
-	if len(history) <= 2 || history[0].UserInputMessage == nil {
+	if len(history) == 0 || history[0].UserInputMessage == nil {
 		return payload, false
+	}
+	if len(history) <= 2 {
+		if strings.TrimSpace(request.ConversationState.AgentContinuationID) == "" {
+			return payload, false
+		}
+		request.ConversationState.AgentContinuationID = ""
+		next, err := json.Marshal(request)
+		if err != nil {
+			return payload, false
+		}
+		return next, true
 	}
 
 	trimmed := make([]kiropkg.KiroHistoryMessage, 0, 2)

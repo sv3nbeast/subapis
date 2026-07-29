@@ -1283,6 +1283,38 @@ func TestApplyKiroMetadataOnlyHistoryFallbackKeepsSystemAndActiveToolTurn(t *tes
 	require.NotContains(t, string(result), "old-tool")
 }
 
+func TestApplyKiroMetadataOnlyHistoryFallbackClearsContinuationForMinimalToolTurn(t *testing.T) {
+	payload := []byte(`{
+		"conversationState": {
+			"agentContinuationId": "continuation-1",
+			"chatTriggerType": "MANUAL",
+			"conversationId": "conversation-1",
+			"history": [
+				{"userInputMessage":{"content":"SYSTEM_PROMPT","modelId":"claude-opus-4.8","origin":"AI_EDITOR"}},
+				{"assistantResponseMessage":{"content":"running now","toolUses":[{"toolUseId":"active-tool","name":"bash","input":{"command":"pwd"}}]}}
+			],
+			"currentMessage": {"userInputMessage":{
+				"content":"Tool results provided.",
+				"modelId":"claude-opus-4.8",
+				"origin":"AI_EDITOR",
+				"userInputMessageContext":{
+					"tools":[{"toolSpecification":{"name":"bash","description":"run","inputSchema":{"json":{"type":"object"}}}}],
+					"toolResults":[{"content":[{"text":"/workspace"}],"status":"success","toolUseId":"active-tool"}]
+				}
+			}}
+		}
+	}`)
+
+	result, applied := applyKiroMetadataOnlyHistoryFallback(payload)
+	require.True(t, applied)
+	require.Len(t, gjson.GetBytes(result, "conversationState.history").Array(), 2)
+	require.Equal(t, "SYSTEM_PROMPT", gjson.GetBytes(result, "conversationState.history.0.userInputMessage.content").String())
+	require.Equal(t, "active-tool", gjson.GetBytes(result, "conversationState.history.1.assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "active-tool", gjson.GetBytes(result, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "bash", gjson.GetBytes(result, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.False(t, gjson.GetBytes(result, "conversationState.agentContinuationId").Exists())
+}
+
 func TestApplyKiroMetadataOnlyHistoryFallbackKeepsBootstrapForPlainTurn(t *testing.T) {
 	payload := []byte(`{
 		"conversationState": {
@@ -1764,6 +1796,88 @@ func TestOpenKiroAnthropicStreamResponseRetriesMetadataOnlyInResilienceMode(t *t
 		gjson.GetBytes(firstPayload, "conversationState.conversationId").String(),
 		gjson.GetBytes(secondPayload, "conversationState.conversationId").String(),
 		"metadata-only retry must use a fresh conversation id")
+	require.Zero(t, store.markUnresponsiveCalls, "metadata-only output must not enter account unresponsive cooldown")
+}
+
+func TestOpenKiroAnthropicStreamResponseMetadataOnlyFallbackClearsMinimalContinuation(t *testing.T) {
+	t.Setenv(kiroStreamBodyRetryEnvVariable, "0")
+	metadataOnly := func() []byte {
+		body := bytes.NewBuffer(nil)
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "messageMetadataEvent",
+		}, []byte(`{"messageMetadataEvent":{"tokenUsage":{"uncachedInputTokens":10,"outputTokens":0,"totalTokens":10}}}`)))
+		_, _ = body.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+			":event-type": "messageStopEvent",
+		}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+		return body.Bytes()
+	}
+	successBody := bytes.NewBuffer(nil)
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "assistantResponseEvent",
+	}, []byte(`{"assistantResponseEvent":{"content":"recovered after stateless fallback"}}`)))
+	_, _ = successBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":event-type": "messageStopEvent",
+	}, []byte(`{"messageStopEvent":{"stopReason":"end_turn"}}`)))
+
+	upstream := &kiroStreamFailoverQueuedUpstream{responses: []*http.Response{
+		newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
+		newKiroEventStreamResponse(http.StatusOK, metadataOnly()),
+		newKiroEventStreamResponse(http.StatusOK, successBody.Bytes()),
+	}}
+	store := &recordingKiroResilienceCooldownStore{}
+	svc := enforcedKiroResilienceTestService()
+	svc.httpUpstream = upstream
+	svc.kiroCooldownStore = store
+	svc.tlsFPProfileService = &TLSFingerprintProfileService{}
+
+	groupID := int64(29)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeQ}
+	account := &Account{
+		ID:          2048,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "test-token",
+			"api_region":   "us-east-1",
+			"profile_arn":  "arn:aws:codewhisperer:us-east-1:123456789012:profile/MINIMAL-METAONLY",
+		},
+	}
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"stream":true,
+		"max_tokens":128,
+		"tools":[{"name":"bash","description":"run","input_schema":{"type":"object"}}],
+		"messages":[{"role":"user","content":"inspect the workspace"}]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.Group = group
+	parsed.GroupID = &groupID
+
+	ctx, err := svc.StartKiroResilienceBudget(context.Background(), &groupID)
+	require.NoError(t, err)
+	resp, _, err := svc.openKiroAnthropicStreamResponse(ctx, account, parsed, body, parsed.Model, parsed.Model, http.Header{}, group)
+	require.NoError(t, err)
+
+	streamBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Contains(t, string(streamBytes), "recovered after stateles")
+	require.Contains(t, string(streamBytes), "s fallback")
+	require.Equal(t, 1, strings.Count(string(streamBytes), "event: message_stop"))
+	require.Len(t, upstream.requests, 3)
+
+	firstPayload, err := io.ReadAll(upstream.requests[0].Body)
+	require.NoError(t, err)
+	thirdPayload, err := io.ReadAll(upstream.requests[2].Body)
+	require.NoError(t, err)
+	require.NotEmpty(t, gjson.GetBytes(firstPayload, "conversationState.agentContinuationId").String())
+	require.False(t, gjson.GetBytes(thirdPayload, "conversationState.agentContinuationId").Exists())
+	require.Len(t, gjson.GetBytes(thirdPayload, "conversationState.history").Array(), 2)
+	require.Equal(t, "bash", gjson.GetBytes(thirdPayload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
 	require.Zero(t, store.markUnresponsiveCalls, "metadata-only output must not enter account unresponsive cooldown")
 }
 
