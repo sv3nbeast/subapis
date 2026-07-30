@@ -503,67 +503,6 @@ func TestOpenAIGatewayService_Forward_WSv2_RewriteModelPreservesOfficialCodexToo
 	require.Equal(t, "apply_patch", gjson.GetBytes(rec.Body.Bytes(), "tool_calls.0.function.name").String(), "官方 Codex 客户端应保留原生工具名")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_KeepsReaderActiveDuringRequestWrite(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
-
-	cfg := newOpenAIWSV2TestConfig()
-	cfg.Security.URLAllowlist.Enabled = false
-	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
-	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
-	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 1
-	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 1
-	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 2
-	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 1
-	cfg.Gateway.OpenAIWS.RetryTotalBudgetMS = 1
-
-	conn := newOpenAIWSReadDuringWriteConn()
-	pool := newOpenAIWSConnPool(cfg)
-	defer pool.Close()
-	pool.setClientDialerForTest(&openAIWSSingleConnDialer{conn: conn})
-
-	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
-	}
-	account := &Account{
-		ID:          1304,
-		Name:        "openai-read-during-write",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeAPIKey,
-		Status:      StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"api_key":  "sk-test",
-			"base_url": "https://api.openai.com/v1/responses",
-		},
-		Extra: map[string]any{"responses_websockets_v2_enabled": true},
-	}
-
-	result, err := svc.Forward(
-		context.Background(),
-		c,
-		account,
-		[]byte(`{"model":"gpt-5.6-terra","stream":false,"input":"large upload"}`),
-	)
-
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "resp_read_during_write", result.RequestID)
-	require.True(t, conn.readWasActive.Load(), "reader must be active before response.create finishes writing")
-}
-
 func TestOpenAIGatewayService_Forward_WSv2_RewriteOpenCodeToolCallsOnCompletedEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1778,69 +1717,6 @@ type openAIWSCaptureDialer struct {
 	handshake   http.Header
 	dialCount   int
 }
-
-type openAIWSSingleConnDialer struct {
-	conn openAIWSClientConn
-}
-
-func (d *openAIWSSingleConnDialer) Dial(
-	context.Context,
-	string,
-	http.Header,
-	string,
-) (openAIWSClientConn, int, http.Header, error) {
-	return d.conn, 0, nil, nil
-}
-
-type openAIWSReadDuringWriteConn struct {
-	readStarted   chan struct{}
-	writeDone     chan struct{}
-	readStartOnce sync.Once
-	writeDoneOnce sync.Once
-	eventSent     atomic.Bool
-	readWasActive atomic.Bool
-}
-
-func newOpenAIWSReadDuringWriteConn() *openAIWSReadDuringWriteConn {
-	return &openAIWSReadDuringWriteConn{
-		readStarted: make(chan struct{}),
-		writeDone:   make(chan struct{}),
-	}
-}
-
-func (c *openAIWSReadDuringWriteConn) WriteJSON(ctx context.Context, _ any) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-c.readStarted:
-		c.readWasActive.Store(true)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	c.writeDoneOnce.Do(func() { close(c.writeDone) })
-	return nil
-}
-
-func (c *openAIWSReadDuringWriteConn) ReadMessage(ctx context.Context) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	c.readStartOnce.Do(func() { close(c.readStarted) })
-	select {
-	case <-c.writeDone:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	if !c.eventSent.CompareAndSwap(false, true) {
-		return nil, io.EOF
-	}
-	return []byte(`{"type":"response.completed","response":{"id":"resp_read_during_write","model":"gpt-5.6-terra","usage":{"input_tokens":1,"output_tokens":1}}}`), nil
-}
-
-func (c *openAIWSReadDuringWriteConn) Ping(context.Context) error { return nil }
-
-func (c *openAIWSReadDuringWriteConn) Close() error { return nil }
 
 func (d *openAIWSCaptureDialer) Dial(
 	ctx context.Context,

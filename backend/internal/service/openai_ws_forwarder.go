@@ -123,11 +123,6 @@ type openAIWSIngressTurnError struct {
 	wroteDownstream bool
 }
 
-type openAIWSReadResult struct {
-	message []byte
-	err     error
-}
-
 func (e *openAIWSIngressTurnError) Error() string {
 	if e == nil {
 		return ""
@@ -2076,27 +2071,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 
-	// coder/websocket only handles peer ping frames while a reader is active.
-	// Start the first read before writing response.create so a slow, large
-	// upload cannot starve the upstream keepalive and get closed with 1011.
-	firstReadCtx, cancelFirstRead := context.WithCancel(ctx)
-	firstReadCh := make(chan openAIWSReadResult, 1)
-	go func() {
-		message, readErr := lease.ReadMessageContext(firstReadCtx)
-		firstReadCh <- openAIWSReadResult{message: message, err: readErr}
-	}()
-	firstReadPending := true
-	cancelFirstReadAndWait := func() {
-		if !firstReadPending {
-			return
-		}
-		cancelFirstRead()
-		lease.MarkBroken()
-		<-firstReadCh
-		firstReadPending = false
-	}
-	defer cancelFirstReadAndWait()
-
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
@@ -2217,38 +2191,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	readTimeout := s.openAIWSReadTimeout()
-	readNextMessage := func() ([]byte, error) {
-		if firstReadPending {
-			var result openAIWSReadResult
-			if readTimeout <= 0 {
-				result = <-firstReadCh
-			} else {
-				timer := time.NewTimer(readTimeout)
-				select {
-				case result = <-firstReadCh:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-				case <-timer.C:
-					cancelFirstRead()
-					lease.MarkBroken()
-					<-firstReadCh
-					firstReadPending = false
-					return nil, context.DeadlineExceeded
-				}
-			}
-			firstReadPending = false
-			cancelFirstRead()
-			return result.message, result.err
-		}
-		return lease.ReadMessageWithContextTimeout(ctx, readTimeout)
-	}
 
 	for {
-		message, readErr := readNextMessage()
+		message, readErr := lease.ReadMessageWithContextTimeout(ctx, readTimeout)
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
