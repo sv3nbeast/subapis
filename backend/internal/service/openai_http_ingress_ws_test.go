@@ -20,7 +20,8 @@ func TestResolveOpenAIHTTPIngressTransport(t *testing.T) {
 		cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModeCtxPool
 		cfg.Gateway.OpenAIWS.HTTPIngressMode = mode
 		cfg.Gateway.OpenAIWS.HTTPIngressRolloutPercent = rollout
-		cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes = 1024
+		cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes = 1
+		cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = 1024
 		return &OpenAIGatewayService{cfg: cfg}
 	}
 	newOAuth := func(id int64, extra map[string]any) *Account {
@@ -79,13 +80,46 @@ func TestResolveOpenAIHTTPIngressTransport(t *testing.T) {
 		{name: "chat image", req: openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointChat, ImageIntent: true}},
 		{name: "input tokens", req: openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointResponses, InputTokens: true}},
 		{name: "raw chat", req: openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointChat, RawChat: true}},
-		{name: "large payload", req: openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointResponses, Body: make([]byte, 1025)}},
+		{name: "large payload", req: openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointResponses, Body: make([]byte, 1024)}},
 	} {
 		t.Run(tc.name+" stays http", func(t *testing.T) {
 			decision := newService(OpenAIHTTPIngressModeResponsesChat, 100).resolveOpenAIHTTPIngressTransport(newOAuth(1, nil), tc.req)
 			require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
 		})
 	}
+
+	t.Run("dedicated payload limit is inclusive and independent from native ws bridge", func(t *testing.T) {
+		svc := newService(OpenAIHTTPIngressModeResponsesChat, 100)
+		account := newOAuth(1, map[string]any{"openai_http_ingress_ws_override": "on"})
+
+		below := openAIHTTPIngressWSRequest{Endpoint: openAIHTTPIngressEndpointResponses, Body: make([]byte, 1023)}
+		decision := svc.resolveOpenAIHTTPIngressTransport(account, below)
+		require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+
+		atLimit := below
+		atLimit.Body = make([]byte, 1024)
+		decision = svc.resolveOpenAIHTTPIngressTransport(account, atLimit)
+		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+		require.Equal(t, "http_ingress_payload_too_large", decision.Reason)
+
+		chatAtLimit := atLimit
+		chatAtLimit.Endpoint = openAIHTTPIngressEndpointChat
+		decision = svc.resolveOpenAIHTTPIngressTransport(account, chatAtLimit)
+		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+		require.Equal(t, "http_ingress_payload_too_large", decision.Reason)
+	})
+
+	t.Run("captured production payload size stays http with default safety limit", func(t *testing.T) {
+		svc := newService(OpenAIHTTPIngressModeResponses, 100)
+		svc.cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = config.DefaultOpenAIHTTPIngressMaxWSRequestBytes
+		request := openAIHTTPIngressWSRequest{
+			Endpoint: openAIHTTPIngressEndpointResponses,
+			Body:     make([]byte, 14_842_983),
+		}
+		decision := svc.resolveOpenAIHTTPIngressTransport(newOAuth(1990, nil), request)
+		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+		require.Equal(t, "http_ingress_payload_too_large", decision.Reason)
+	})
 
 	t.Run("third party api key requires override", func(t *testing.T) {
 		account := &Account{

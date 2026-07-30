@@ -345,6 +345,7 @@ type OpenAIWSRetryMetricsSnapshot struct {
 	HTTPIngressSelectedTotal      int64 `json:"http_ingress_selected_total"`
 	HTTPIngressSuccessTotal       int64 `json:"http_ingress_success_total"`
 	HTTPIngressPrewriteFallback   int64 `json:"http_ingress_prewrite_fallback_total"`
+	HTTPIngressLargePayloadHTTP   int64 `json:"http_ingress_large_payload_http_total"`
 }
 
 // OpenAIStreamAlreadyFinalizedError means the upstream stream has already sent
@@ -389,6 +390,7 @@ type openAIWSRetryMetrics struct {
 	httpIngressSelected      atomic.Int64
 	httpIngressSuccess       atomic.Int64
 	httpIngressPrewrite      atomic.Int64
+	httpIngressLargePayload  atomic.Int64
 }
 
 type accountWriteThrottle struct {
@@ -714,13 +716,14 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 	}
 	wsCfg := s.cfg.Gateway.OpenAIWS
 	logOpenAIWSModeInfo(
-		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v http_ingress_mode=%s http_ingress_rollout_percent=%d responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
+		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v http_ingress_mode=%s http_ingress_rollout_percent=%d http_ingress_max_ws_request_bytes=%d responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
 		wsCfg.Enabled,
 		wsCfg.OAuthEnabled,
 		wsCfg.APIKeyEnabled,
 		wsCfg.ForceHTTP,
 		strings.ToLower(strings.TrimSpace(wsCfg.HTTPIngressMode)),
 		wsCfg.HTTPIngressRolloutPercent,
+		s.openAIHTTPIngressMaxWSRequestBytes(),
 		wsCfg.ResponsesWebsocketsV2,
 		wsCfg.ResponsesWebsockets,
 		wsCfg.PayloadLogSampleRate,
@@ -1046,6 +1049,12 @@ func (s *OpenAIGatewayService) recordOpenAIHTTPIngressWSPrewriteFallback() {
 	}
 }
 
+func (s *OpenAIGatewayService) recordOpenAIHTTPIngressLargePayloadHTTP() {
+	if s != nil {
+		s.openaiWSRetryMetrics.httpIngressLargePayload.Add(1)
+	}
+}
+
 func (s *OpenAIGatewayService) SnapshotOpenAIWSRetryMetrics() OpenAIWSRetryMetricsSnapshot {
 	if s == nil {
 		return OpenAIWSRetryMetricsSnapshot{}
@@ -1058,6 +1067,7 @@ func (s *OpenAIGatewayService) SnapshotOpenAIWSRetryMetrics() OpenAIWSRetryMetri
 		HTTPIngressSelectedTotal:      s.openaiWSRetryMetrics.httpIngressSelected.Load(),
 		HTTPIngressSuccessTotal:       s.openaiWSRetryMetrics.httpIngressSuccess.Load(),
 		HTTPIngressPrewriteFallback:   s.openaiWSRetryMetrics.httpIngressPrewrite.Load(),
+		HTTPIngressLargePayloadHTTP:   s.openaiWSRetryMetrics.httpIngressLargePayload.Load(),
 	}
 }
 

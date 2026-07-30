@@ -170,6 +170,9 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes != 15*1024*1024 {
 		t.Fatalf("Gateway.OpenAIWS.HTTPBridgeThresholdBytes = %d, want %d", cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes, 15*1024*1024)
 	}
+	if cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes != DefaultOpenAIHTTPIngressMaxWSRequestBytes {
+		t.Fatalf("Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = %d, want %d", cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes, DefaultOpenAIHTTPIngressMaxWSRequestBytes)
+	}
 	if cfg.Gateway.OpenAIWS.RetryBackoffInitialMS != 120 {
 		t.Fatalf("Gateway.OpenAIWS.RetryBackoffInitialMS = %d, want 120", cfg.Gateway.OpenAIWS.RetryBackoffInitialMS)
 	}
@@ -1793,6 +1796,11 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			name:    "http_ingress_rollout_percent 必须在 [0,100]",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.HTTPIngressRolloutPercent = 101 },
 			wantErr: "gateway.openai_ws.http_ingress_rollout_percent",
+		},
+		{
+			name:    "http_ingress_max_ws_request_bytes 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = 0 },
+			wantErr: "gateway.openai_ws.http_ingress_max_ws_request_bytes",
 		},
 		{
 			name:    "store_disabled_conn_mode 必须为 strict|adaptive|off",

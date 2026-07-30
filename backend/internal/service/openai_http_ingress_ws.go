@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -40,7 +41,29 @@ func (s *OpenAIGatewayService) resolveOpenAIUpstreamTransport(
 	if clientTransport != OpenAIClientTransportHTTP {
 		return decision
 	}
-	return s.resolveOpenAIHTTPIngressTransport(account, req)
+	decision = s.resolveOpenAIHTTPIngressTransport(account, req)
+	if decision.Reason == "http_ingress_payload_too_large" {
+		s.recordOpenAIHTTPIngressLargePayloadHTTP()
+		accountID := int64(0)
+		if account != nil {
+			accountID = account.ID
+		}
+		logOpenAIWSModeInfo(
+			"http_ingress_large_payload_route_http account_id=%d endpoint=%s payload_bytes=%d limit_bytes=%d",
+			accountID,
+			req.Endpoint,
+			len(req.Body),
+			s.openAIHTTPIngressMaxWSRequestBytes(),
+		)
+	}
+	return decision
+}
+
+func (s *OpenAIGatewayService) openAIHTTPIngressMaxWSRequestBytes() int64 {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes <= 0 {
+		return config.DefaultOpenAIHTTPIngressMaxWSRequestBytes
+	}
+	return s.cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIHTTPIngressTransport(
@@ -82,7 +105,7 @@ func (s *OpenAIGatewayService) resolveOpenAIHTTPIngressTransport(
 	if req.ImageIntent || gjson.GetBytes(req.Body, "background").Bool() {
 		return httpDecision("payload_unsupported")
 	}
-	if cfg.HTTPBridgeThresholdBytes > 0 && int64(len(req.Body)) > cfg.HTTPBridgeThresholdBytes {
+	if int64(len(req.Body)) >= s.openAIHTTPIngressMaxWSRequestBytes() {
 		return httpDecision("payload_too_large")
 	}
 	if account.ResolveOpenAIResponsesWebSocketV2Mode(cfg.IngressModeDefault) != OpenAIWSIngressModeCtxPool {

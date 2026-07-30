@@ -234,6 +234,7 @@ func TestOpenAIWSRetryMetricsSnapshot(t *testing.T) {
 	svc.recordOpenAIHTTPIngressWSSelected()
 	svc.recordOpenAIHTTPIngressWSSuccess()
 	svc.recordOpenAIHTTPIngressWSPrewriteFallback()
+	svc.recordOpenAIHTTPIngressLargePayloadHTTP()
 
 	snapshot := svc.SnapshotOpenAIWSRetryMetrics()
 	require.Equal(t, int64(2), snapshot.RetryAttemptsTotal)
@@ -243,6 +244,7 @@ func TestOpenAIWSRetryMetricsSnapshot(t *testing.T) {
 	require.Equal(t, int64(1), snapshot.HTTPIngressSelectedTotal)
 	require.Equal(t, int64(1), snapshot.HTTPIngressSuccessTotal)
 	require.Equal(t, int64(1), snapshot.HTTPIngressPrewriteFallback)
+	require.Equal(t, int64(1), snapshot.HTTPIngressLargePayloadHTTP)
 }
 
 func TestShouldLogOpenAIWSPayloadSchema(t *testing.T) {

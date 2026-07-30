@@ -1106,8 +1106,14 @@ type GatewayLiveConfig struct {
 	MaxSessionDurationSeconds int `mapstructure:"max_session_duration_seconds"`
 }
 
-// DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
-const DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 30
+const (
+	// DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
+	DefaultOpenAIWSClientFirstMessageTimeoutSeconds = 30
+	// DefaultOpenAIHTTPIngressMaxWSRequestBytes keeps large HTTP requests off the
+	// upstream WebSocket path. Large single-frame writes can starve WebSocket
+	// control frames on slow proxy routes, so HTTP streaming is the safer transport.
+	DefaultOpenAIHTTPIngressMaxWSRequestBytes int64 = 4 * 1024 * 1024
+)
 
 // GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。
 // 注意：默认全局开启；如需回滚可使用 force_http 或关闭 enabled。
@@ -1134,6 +1140,9 @@ type GatewayOpenAIWSConfig struct {
 	HTTPIngressMode string `mapstructure:"http_ingress_mode"`
 	// HTTPIngressRolloutPercent: HTTP 入站 WSv2 上游按账号确定性灰度比例（0-100）。
 	HTTPIngressRolloutPercent int `mapstructure:"http_ingress_rollout_percent"`
+	// HTTPIngressMaxWSRequestBytes: HTTP 入站允许提升到 WSv2 的最大请求体。
+	// 达到该阈值时在发送前确定性保留 HTTP Responses 流式传输，避免大帧写入阻塞控制帧。
+	HTTPIngressMaxWSRequestBytes int64 `mapstructure:"http_ingress_max_ws_request_bytes"`
 	// AllowStoreRecovery: 允许在 WSv2 下按策略恢复 store=true（默认 false）
 	AllowStoreRecovery bool `mapstructure:"allow_store_recovery"`
 	// IngressPreviousResponseRecoveryEnabled: ingress 模式收到 previous_response_not_found 时，是否允许自动去掉 previous_response_id 重试一次（默认 true）
@@ -2297,6 +2306,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.fallback_cooldown_seconds", 30)
 	viper.SetDefault("gateway.openai_ws.http_ingress_mode", "off")
 	viper.SetDefault("gateway.openai_ws.http_ingress_rollout_percent", 0)
+	viper.SetDefault("gateway.openai_ws.http_ingress_max_ws_request_bytes", DefaultOpenAIHTTPIngressMaxWSRequestBytes)
 	viper.SetDefault("gateway.openai_ws.retry_backoff_initial_ms", 120)
 	viper.SetDefault("gateway.openai_ws.retry_backoff_max_ms", 2000)
 	viper.SetDefault("gateway.openai_ws.retry_jitter_ratio", 0.2)
@@ -3220,6 +3230,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.HTTPIngressRolloutPercent < 0 || c.Gateway.OpenAIWS.HTTPIngressRolloutPercent > 100 {
 		return fmt.Errorf("gateway.openai_ws.http_ingress_rollout_percent must be within [0,100]")
+	}
+	if c.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes <= 0 {
+		return fmt.Errorf("gateway.openai_ws.http_ingress_max_ws_request_bytes must be positive")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Gateway.OpenAIWS.HTTPIngressMode)) {
 	case "", "off", "responses", "responses_chat":

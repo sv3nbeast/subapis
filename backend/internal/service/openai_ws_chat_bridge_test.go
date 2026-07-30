@@ -102,6 +102,63 @@ func TestOpenAIGatewayService_ForwardAsChatCompletions_HTTPIngressUsesWS(t *test
 	}
 }
 
+func TestOpenAIGatewayService_ForwardAsChatCompletions_LargeHTTPIngressStaysHTTP(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "buffered", true: "streaming"}[stream], func(t *testing.T) {
+			completed := `{"type":"response.completed","response":{"id":"resp_chat_large_http","object":"response","status":"completed","model":"gpt-5.6-sol","output":[{"id":"msg_http","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"large request over http"}]}],"usage":{"input_tokens":101,"output_tokens":5,"input_tokens_details":{"cached_tokens":81}}}}`
+			upstreamEvents := strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_chat_large_http","model":"gpt-5.6-sol","status":"in_progress"}}`,
+				`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_http","type":"message","role":"assistant","status":"in_progress","content":[]}}`,
+				`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"large request over http"}`,
+				"data: " + completed,
+				"data: [DONE]",
+			}, "\n\n") + "\n\n"
+			httpUpstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(upstreamEvents)),
+			}}
+			cfg := openAIHTTPIngressWSTestConfig(OpenAIHTTPIngressModeResponsesChat)
+			cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = 1024
+			svc := &OpenAIGatewayService{
+				cfg: cfg, httpUpstream: httpUpstream,
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:    NewCodexToolCorrector(),
+			}
+			account := openAIHTTPIngressWSTestAccount(308, "https://api.openai.com/v1")
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+			body := []byte(`{"model":"gpt-5.6-sol","stream":` + map[bool]string{false: "false", true: "true"}[stream] + `,"messages":[{"role":"user","content":"` + strings.Repeat("x", 2048) + `"}]}`)
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "large-chat-cache", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.False(t, result.OpenAIWSMode)
+			require.Equal(t, 101, result.Usage.InputTokens)
+			require.Equal(t, 5, result.Usage.OutputTokens)
+			require.Equal(t, 81, result.Usage.CacheReadInputTokens)
+			require.NotNil(t, httpUpstream.lastReq)
+			require.GreaterOrEqual(t, len(httpUpstream.lastBody), 1024)
+			require.Equal(t, "large-chat-cache", gjson.GetBytes(httpUpstream.lastBody, "prompt_cache_key").String())
+			decision, _ := c.Get("openai_ws_transport_decision")
+			reason, _ := c.Get("openai_ws_transport_reason")
+			require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
+			require.Equal(t, "http_ingress_payload_too_large", reason)
+			metrics := svc.SnapshotOpenAIWSRetryMetrics()
+			require.Zero(t, metrics.HTTPIngressSelectedTotal)
+			require.Equal(t, int64(1), metrics.HTTPIngressLargePayloadHTTP)
+			if stream {
+				require.Contains(t, rec.Body.String(), "large request over http")
+				require.Contains(t, rec.Body.String(), "data: [DONE]")
+			} else {
+				require.Equal(t, "large request over http", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+			}
+		})
+	}
+}
+
 func TestOpenAIGatewayService_ForwardAsChatCompletions_WSPrewriteFailureFallsBackHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -194,6 +251,56 @@ func TestOpenAIGatewayService_Forward_HTTPIngressUsesWS(t *testing.T) {
 	require.Equal(t, int64(1), metrics.HTTPIngressSelectedTotal)
 	require.Equal(t, int64(1), metrics.HTTPIngressSuccessTotal)
 	require.Zero(t, metrics.HTTPIngressPrewriteFallback)
+}
+
+func TestOpenAIGatewayService_Forward_LargeHTTPIngressStaysHTTPBeforeWSWrite(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "buffered", true: "streaming"}[stream], func(t *testing.T) {
+			responseBody := `{"id":"resp_large_http","object":"response","status":"completed","model":"gpt-5.6-sol","output":[{"id":"msg_http","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"stable over http"}]}],"usage":{"input_tokens":100,"output_tokens":4,"input_tokens_details":{"cached_tokens":80}}}`
+			contentType := "application/json"
+			if stream {
+				contentType = "text/event-stream"
+				responseBody = "data: " + `{"type":"response.completed","response":` + responseBody + "}\n\ndata: [DONE]\n\n"
+			}
+			httpUpstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{contentType}},
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+			}}
+			cfg := openAIHTTPIngressWSTestConfig(OpenAIHTTPIngressModeResponses)
+			cfg.Gateway.OpenAIWS.HTTPIngressMaxWSRequestBytes = 1024
+			svc := &OpenAIGatewayService{
+				cfg: cfg, httpUpstream: httpUpstream,
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:    NewCodexToolCorrector(),
+			}
+			account := openAIHTTPIngressWSTestAccount(309, "https://api.openai.com/v1")
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+			body := []byte(`{"model":"gpt-5.6-sol","stream":` + map[bool]string{false: "false", true: "true"}[stream] + `,"prompt_cache_key":"large-responses-cache","input":"` + strings.Repeat("x", 2048) + `"}`)
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.False(t, result.OpenAIWSMode)
+			require.Equal(t, 100, result.Usage.InputTokens)
+			require.Equal(t, 4, result.Usage.OutputTokens)
+			require.Equal(t, 80, result.Usage.CacheReadInputTokens)
+			require.NotNil(t, httpUpstream.lastReq)
+			require.GreaterOrEqual(t, len(httpUpstream.lastBody), 1024)
+			require.Equal(t, "large-responses-cache", gjson.GetBytes(httpUpstream.lastBody, "prompt_cache_key").String())
+			decision, _ := c.Get("openai_ws_transport_decision")
+			reason, _ := c.Get("openai_ws_transport_reason")
+			require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
+			require.Equal(t, "http_ingress_payload_too_large", reason)
+			metrics := svc.SnapshotOpenAIWSRetryMetrics()
+			require.Zero(t, metrics.HTTPIngressSelectedTotal)
+			require.Equal(t, int64(1), metrics.HTTPIngressLargePayloadHTTP)
+			require.Contains(t, rec.Body.String(), "stable over http")
+		})
+	}
 }
 
 func TestOpenAIGatewayService_Forward_HTTPIngressWSPrewriteFailureFallsBackHTTP(t *testing.T) {

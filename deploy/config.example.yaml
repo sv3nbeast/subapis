@@ -287,6 +287,10 @@ gateway:
     http_ingress_mode: off
     # 按 account_id 确定性灰度，范围 0-100。
     http_ingress_rollout_percent: 0
+    # HTTP 入站提升到 WSv2 的请求体上限（字节，默认 4 MiB）。
+    # 达到上限的请求在任何 WS 写入前直接使用 HTTP Responses 流式通道，
+    # 避免大帧上传阻塞 WebSocket 控制帧。此项不影响原生 WS 客户端的 HTTP bridge 阈值。
+    http_ingress_max_ws_request_bytes: 4194304
     # 允许在 WSv2 下按策略恢复 store=true（默认 false）
     allow_store_recovery: false
     # ingress 模式收到 previous_response_not_found 时，自动去掉 previous_response_id 重试一次（默认 true）
