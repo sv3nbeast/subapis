@@ -260,8 +260,7 @@ fi
 
 IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
 
-RSYNC_ARGS=(
-  -az
+RSYNC_FILTER_ARGS=(
   --exclude
   .git
   --exclude
@@ -290,6 +289,11 @@ RSYNC_ARGS=(
   deploy/.env
   --exclude
   .DS_Store
+)
+
+RSYNC_ARGS=(
+  -az
+  "${RSYNC_FILTER_ARGS[@]}"
 )
 
 if rsync --info=progress2 --version >/dev/null 2>&1; then
@@ -345,6 +349,37 @@ if [[ "${SKIP_SYNC}" -eq 0 ]]; then
   if ssh "${REMOTE_HOST}" "command -v rsync >/dev/null 2>&1"; then
     require_cmd rsync
     rsync "${RSYNC_ARGS[@]}" "${REPO_ROOT}/" "${REMOTE_HOST}:${REMOTE_SRC_DIR}/"
+
+    if [[ "${DRY_RUN}" -eq 0 ]]; then
+      # A dropped SSH connection can leave the remote build context only
+      # partially updated. Verify content parity before allowing Docker to
+      # mint a production image from that directory.
+      RSYNC_VERIFY_ARGS=(
+        -aznci
+        --omit-dir-times
+        --out-format=%i\ %n%L
+        "${RSYNC_FILTER_ARGS[@]}"
+      )
+      if [[ "${RSYNC_DELETE}" -eq 1 ]]; then
+        RSYNC_VERIFY_ARGS+=(--delete)
+      fi
+
+      echo "Verifying remote source sync..."
+      if ! sync_diff="$(
+        rsync "${RSYNC_VERIFY_ARGS[@]}" \
+          "${REPO_ROOT}/" "${REMOTE_HOST}:${REMOTE_SRC_DIR}/"
+      )"; then
+        echo "Remote source verification failed; production rebuild was skipped." >&2
+        exit 1
+      fi
+      if [[ -n "${sync_diff}" ]]; then
+        echo "Remote source verification found unsynchronized paths:" >&2
+        printf '%s\n' "${sync_diff}" >&2
+        echo "Production rebuild was skipped." >&2
+        exit 1
+      fi
+      echo "Remote source sync verified."
+    fi
   else
     if [[ "${DRY_RUN}" -eq 1 ]]; then
       echo
