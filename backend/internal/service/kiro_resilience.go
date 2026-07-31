@@ -1044,6 +1044,7 @@ func (s *GatewayService) startKiroResponseHeaderObservation(
 	accountRound int,
 	endpointAttempt int,
 	timeout time.Duration,
+	networkTrace *kiroNetworkTrace,
 ) func() {
 	if !s.kiroResilienceObserved(groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return func() {}
@@ -1058,6 +1059,8 @@ func (s *GatewayService) startKiroResponseHeaderObservation(
 	if account != nil {
 		accountID = account.ID
 	}
+	_, proxyID, proxyProtocol := accountProxyLogArgs(account)
+	proxyEnabled := account != nil && account.ProxyID != nil && account.Proxy != nil
 	requestID := resolveUsageBillingRequestID(ctx, "")
 	observation := kiroObservationFromContext(ctx)
 	var stopped atomic.Bool
@@ -1070,16 +1073,23 @@ func (s *GatewayService) startKiroResponseHeaderObservation(
 		if observation != nil {
 			remaining = observation.remaining()
 		}
-		slog.Info("kiro_response_header_timeout_observed",
+		logArgs := []any{
 			"request_id", requestID,
 			"group_id", derefGroupID(groupID),
 			"account_id", accountID,
 			"endpoint", endpoint,
 			"account_round", accountRound,
 			"endpoint_attempt", endpointAttempt,
+			"proxy_enabled", proxyEnabled,
+			"proxy_id", proxyID,
+			"proxy_protocol", proxyProtocol,
 			"timeout_ms", timeout.Milliseconds(),
 			"remaining_budget_ms", remaining.Milliseconds(),
-		)
+		}
+		if networkTrace != nil {
+			logArgs = append(logArgs, networkTrace.snapshot().slogArgs()...)
+		}
+		slog.Info("kiro_response_header_timeout_observed", logArgs...)
 	})
 	if ctx != nil {
 		context.AfterFunc(ctx, func() {

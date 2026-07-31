@@ -550,6 +550,8 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 	accountKey := buildKiroAccountKey(account)
 	cooldownKey := buildKiroCooldownKey(account)
 	proxyURL := kiroProxyURL(account)
+	_, proxyID, proxyProtocol := accountProxyLogArgs(account)
+	proxyEnabled := strings.TrimSpace(proxyURL) != ""
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	resilienceEnforced := s.kiroResilienceEnforced(groupID)
 	maxAttempts := 3
@@ -575,24 +577,47 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 			trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest.Store(true) }}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 		}
+		networkTrace := newKiroNetworkTrace()
+		req = networkTrace.attach(req)
 		accountRound, _ := AccountSwitchCountFromContext(ctx)
 		responseHeaderTimeout := s.kiroResponseHeaderTimeoutForRequest(ctx, groupID, 0)
-		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint, accountRound+1, attempt+1, responseHeaderTimeout)
+		stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, "KiroMCP", accountRound+1, attempt+1, responseHeaderTimeout, networkTrace)
 		resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 			return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		})
 		stopHeaderObservation()
-		logger.L().Debug("kiro mcp response header completed",
-			zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
-			zap.Int64("group_id", derefGroupID(groupID)),
-			zap.Int64("account_id", account.ID),
-			zap.String("endpoint", endpoint),
-			zap.Int("account_round", accountRound+1),
-			zap.Int("endpoint_attempt", attempt+1),
-			zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
-			zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
-			zap.Error(err),
-		)
+		if err == nil && resp != nil {
+			networkTrace.markResponseHeader()
+		}
+		var networkSnapshot kiroNetworkTraceSnapshot
+		networkLogger := logger.L()
+		if err != nil || networkLogger.Core().Enabled(zap.DebugLevel) {
+			networkSnapshot = networkTrace.snapshot()
+			networkOutcome, networkErrorType := kiroNetworkAttemptOutcome(err, proxyEnabled)
+			networkFields := []zap.Field{
+				zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+				zap.Int64("group_id", derefGroupID(groupID)),
+				zap.Int64("account_id", account.ID),
+				zap.String("endpoint", "KiroMCP"),
+				zap.String("endpoint_host", kiroEndpointURLHost(endpoint)),
+				zap.Int("account_round", accountRound+1),
+				zap.Int("endpoint_attempt", attempt+1),
+				zap.Bool("proxy_enabled", proxyEnabled),
+				zap.Int64("proxy_id", proxyID),
+				zap.String("proxy_protocol", proxyProtocol),
+				zap.String("network_outcome", networkOutcome),
+				zap.String("network_error_type", networkErrorType),
+				zap.Int64("response_header_timeout_ms", responseHeaderTimeout.Milliseconds()),
+				zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
+				zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
+			}
+			networkFields = append(networkFields, networkSnapshot.zapFields()...)
+			if err != nil {
+				networkLogger.Warn("kiro mcp network attempt failed", networkFields...)
+			} else {
+				networkLogger.Debug("kiro mcp response header completed", networkFields...)
+			}
+		}
 		if err != nil {
 			if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, "", wroteRequest.Load()); failoverErr != nil {
 				if !kiroUpstreamCleanupDone(physicalDone) {
@@ -614,11 +639,13 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				continue
 			}
 			transportErr := &kiroEndpointTransportError{
-				EndpointName: "KiroMCP",
-				EndpointURL:  endpoint,
-				NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
-				Cause:        err,
-				UpstreamDone: physicalDone,
+				EndpointName:   "KiroMCP",
+				EndpointURL:    endpoint,
+				NetworkType:    classifyKiroEndpointNetworkError(err, proxyURL != ""),
+				NetworkPhase:   networkSnapshot.Phase,
+				NetworkElapsed: networkSnapshot.TotalElapsed,
+				Cause:          err,
+				UpstreamDone:   physicalDone,
 			}
 			failoverErr := newKiroEndpointTransportFailover(transportErr)
 			failoverErr.StatusCode = http.StatusServiceUnavailable
@@ -629,7 +656,7 @@ func (s *GatewayService) doKiroMCPJSONRequest(ctx context.Context, account *Acco
 				observationScope := kiroHeaderUnresponsiveScope(account, kiroEndpointConfig{
 					Name: "KiroMCP",
 					URL:  endpoint,
-				}, proxyURL)
+				})
 				if wroteRequest.Load() || !physicalCleaned {
 					failoverErr.RetryAfter = s.observeKiroAccountUnresponsive(
 						ctx,

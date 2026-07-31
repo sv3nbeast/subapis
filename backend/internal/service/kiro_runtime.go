@@ -53,11 +53,13 @@ const kiroEventDiagnosticsUserIDsEnv = "SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS"
 // Ops classify proxy/DNS/TCP failures as network errors instead of provider
 // HTTP failures.
 type kiroEndpointTransportError struct {
-	EndpointName string
-	EndpointURL  string
-	NetworkType  string
-	Cause        error
-	UpstreamDone <-chan struct{}
+	EndpointName   string
+	EndpointURL    string
+	NetworkType    string
+	NetworkPhase   string
+	NetworkElapsed time.Duration
+	Cause          error
+	UpstreamDone   <-chan struct{}
 }
 
 func (e *kiroEndpointTransportError) Error() string {
@@ -186,6 +188,12 @@ func recordKiroFailoverOps(c *gin.Context, account *Account, failoverErr *Upstre
 	}
 	if networkType != "" {
 		event.Detail = "network_error_type=" + networkType
+		if transportErr != nil && strings.TrimSpace(transportErr.NetworkPhase) != "" {
+			event.Detail += ";network_phase=" + strings.TrimSpace(transportErr.NetworkPhase)
+			if transportErr.NetworkElapsed > 0 {
+				event.Detail += fmt.Sprintf(";network_elapsed_ms=%d", transportErr.NetworkElapsed.Milliseconds())
+			}
+		}
 		if failoverErr.KiroRateLimited {
 			if transportErr != nil {
 				event.Detail += "; fallback_transport_error=" + sanitizeUpstreamErrorMessage(transportErr.Error())
@@ -1566,15 +1574,19 @@ func kiroSemanticUnresponsiveScope(mappedModel string) string {
 	return "first_semantic|model:" + strings.TrimSpace(mappedModel)
 }
 
-func kiroHeaderUnresponsiveScope(account *Account, endpoint kiroEndpointConfig, proxyURL string) string {
+func kiroHeaderUnresponsiveScope(account *Account, endpoint kiroEndpointConfig) string {
 	accountKey := buildKiroCooldownKey(account)
+	_, proxyID, proxyProtocol := accountProxyLogArgs(account)
+	proxyEnabled := account != nil && account.ProxyID != nil && account.Proxy != nil
 	return fmt.Sprintf(
-		"response_header|credential:%s|endpoint:%s|url:%s|target:%s|proxy:%s",
+		"response_header|credential:%s|endpoint:%s|host:%s|target:%s|proxy_enabled:%t|proxy_id:%d|proxy_protocol:%s",
 		accountKey,
 		endpoint.Name,
-		endpoint.URL,
+		kiroEndpointURLHost(endpoint.URL),
 		endpoint.AmzTarget,
-		strings.TrimSpace(proxyURL),
+		proxyEnabled,
+		proxyID,
+		proxyProtocol,
 	)
 }
 
@@ -1617,6 +1629,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 	endpoints := buildKiroEndpointsForMode(account, mode)
 	endpoints = rotateKiroEndpoints(endpoints, options.EndpointStartOffset)
 	proxyURL := kiroProxyURL(account)
+	_, proxyID, proxyProtocol := accountProxyLogArgs(account)
+	proxyEnabled := strings.TrimSpace(proxyURL) != ""
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	maxRetries := 2
 	if resilienceEnforced {
@@ -1682,27 +1696,49 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 				wroteRequest.Store(true)
 			}}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+			networkTrace := newKiroNetworkTrace()
+			req = networkTrace.attach(req)
 			accountRound, _ := AccountSwitchCountFromContext(ctx)
 			responseHeaderTimeout := s.kiroResponseHeaderTimeoutForRequest(ctx, groupID, requestCtx.PayloadInputTokenEstimate)
-			responseHeaderObservationScope := kiroHeaderUnresponsiveScope(account, endpoint, proxyURL)
-			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1, responseHeaderTimeout)
+			responseHeaderObservationScope := kiroHeaderUnresponsiveScope(account, endpoint)
+			stopHeaderObservation := s.startKiroResponseHeaderObservation(ctx, groupID, account, endpoint.Name, accountRound+1, attempt+1, responseHeaderTimeout, networkTrace)
 			resp, responseHeaderElapsed, physicalDone, err := doKiroWithResponseHeaderTimeout(req, responseHeaderTimeout, func(timedReq *http.Request) (*http.Response, error) {
 				return s.httpUpstream.DoWithTLS(timedReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			})
 			stopHeaderObservation()
-			logger.L().Debug("kiro endpoint response header completed",
-				zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
-				zap.Int64("group_id", derefGroupID(groupID)),
-				zap.Int64("account_id", account.ID),
-				zap.String("endpoint", endpoint.Name),
-				zap.Int("account_round", accountRound+1),
-				zap.Int("endpoint_attempt", attempt+1),
-				zap.Int64("response_header_timeout_ms", responseHeaderTimeout.Milliseconds()),
-				zap.Int("payload_input_estimate", requestCtx.PayloadInputTokenEstimate),
-				zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
-				zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
-				zap.Error(err),
-			)
+			if err == nil && resp != nil {
+				networkTrace.markResponseHeader()
+			}
+			var networkSnapshot kiroNetworkTraceSnapshot
+			networkLogger := logger.L()
+			if err != nil || networkLogger.Core().Enabled(zap.DebugLevel) {
+				networkSnapshot = networkTrace.snapshot()
+				networkOutcome, networkErrorType := kiroNetworkAttemptOutcome(err, proxyEnabled)
+				networkFields := []zap.Field{
+					zap.String("request_id", resolveUsageBillingRequestID(ctx, "")),
+					zap.Int64("group_id", derefGroupID(groupID)),
+					zap.Int64("account_id", account.ID),
+					zap.String("endpoint", endpoint.Name),
+					zap.String("endpoint_host", endpointHost),
+					zap.Int("account_round", accountRound+1),
+					zap.Int("endpoint_attempt", attempt+1),
+					zap.Bool("proxy_enabled", proxyEnabled),
+					zap.Int64("proxy_id", proxyID),
+					zap.String("proxy_protocol", proxyProtocol),
+					zap.String("network_outcome", networkOutcome),
+					zap.String("network_error_type", networkErrorType),
+					zap.Int64("response_header_timeout_ms", responseHeaderTimeout.Milliseconds()),
+					zap.Int("payload_input_estimate", requestCtx.PayloadInputTokenEstimate),
+					zap.Int64("response_header_ms", responseHeaderElapsed.Milliseconds()),
+					zap.Int64("remaining_budget_ms", kiroResilienceBudgetRemaining(ctx).Milliseconds()),
+				}
+				networkFields = append(networkFields, networkSnapshot.zapFields()...)
+				if err != nil {
+					networkLogger.Warn("kiro endpoint network attempt failed", networkFields...)
+				} else {
+					networkLogger.Debug("kiro endpoint response header completed", networkFields...)
+				}
+			}
 			if err != nil {
 				if failoverErr := s.kiroContextCauseFailover(ctx, account, groupID, mappedModel, wroteRequest.Load()); failoverErr != nil {
 					if !kiroUpstreamCleanupDone(physicalDone) {
@@ -1721,11 +1757,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					cleaned := kiroUpstreamCleanupDone(physicalDone)
 					if !cleaned {
 						transportErr := &kiroEndpointTransportError{
-							EndpointName: endpoint.Name,
-							EndpointURL:  endpoint.URL,
-							NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
-							Cause:        err,
-							UpstreamDone: physicalDone,
+							EndpointName:   endpoint.Name,
+							EndpointURL:    endpoint.URL,
+							NetworkType:    classifyKiroEndpointNetworkError(err, proxyURL != ""),
+							NetworkPhase:   networkSnapshot.Phase,
+							NetworkElapsed: networkSnapshot.TotalElapsed,
+							Cause:          err,
+							UpstreamDone:   physicalDone,
 						}
 						failoverErr := newKiroEndpointTransportFailover(transportErr)
 						kiroResilienceMetrics.responseHeaderTimeout.Add(1)
@@ -1741,11 +1779,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 				}
 				if resilienceEnforced && wroteRequest.Load() {
 					transportErr := &kiroEndpointTransportError{
-						EndpointName: endpoint.Name,
-						EndpointURL:  endpoint.URL,
-						NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
-						Cause:        err,
-						UpstreamDone: physicalDone,
+						EndpointName:   endpoint.Name,
+						EndpointURL:    endpoint.URL,
+						NetworkType:    classifyKiroEndpointNetworkError(err, proxyURL != ""),
+						NetworkPhase:   networkSnapshot.Phase,
+						NetworkElapsed: networkSnapshot.TotalElapsed,
+						Cause:          err,
+						UpstreamDone:   physicalDone,
 					}
 					failoverErr := newKiroEndpointTransportFailover(transportErr)
 					failoverErr.StatusCode = http.StatusServiceUnavailable
@@ -1779,11 +1819,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptions(ctx context.Contex
 					continue
 				}
 				lastTransportErr = &kiroEndpointTransportError{
-					EndpointName: endpoint.Name,
-					EndpointURL:  endpoint.URL,
-					NetworkType:  classifyKiroEndpointNetworkError(err, proxyURL != ""),
-					Cause:        err,
-					UpstreamDone: physicalDone,
+					EndpointName:   endpoint.Name,
+					EndpointURL:    endpoint.URL,
+					NetworkType:    classifyKiroEndpointNetworkError(err, proxyURL != ""),
+					NetworkPhase:   networkSnapshot.Phase,
+					NetworkElapsed: networkSnapshot.TotalElapsed,
+					Cause:          err,
+					UpstreamDone:   physicalDone,
 				}
 				if !resilienceEnforced && endpointHost != "" {
 					transportFailedHosts[endpointHost] = struct{}{}

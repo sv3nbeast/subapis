@@ -425,7 +425,7 @@ func TestKiroResponseHeaderObservationDoesNotCancelRequest(t *testing.T) {
 	defer cancel()
 	before := SnapshotKiroResilienceMetrics().ResponseHeaderTimeoutObservedTotal
 
-	stop := svc.startKiroResponseHeaderObservation(ctx, &groupID, &Account{ID: 201, Platform: PlatformKiro}, "q", 1, 1, time.Second)
+	stop := svc.startKiroResponseHeaderObservation(ctx, &groupID, &Account{ID: 201, Platform: PlatformKiro}, "q", 1, 1, time.Second, nil)
 	defer stop()
 	require.Eventually(t, func() bool {
 		return SnapshotKiroResilienceMetrics().ResponseHeaderTimeoutObservedTotal == before+1
@@ -1429,6 +1429,10 @@ func TestExecuteKiroUpstreamHeaderTimeoutAfterWriteDoesNotPauseAccount(t *testin
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
+	var transportErr *kiroEndpointTransportError
+	require.ErrorAs(t, failoverErr.Cause, &transportErr)
+	require.Equal(t, kiroNetworkPhaseResponseHeaderWait, transportErr.NetworkPhase)
+	require.GreaterOrEqual(t, transportErr.NetworkElapsed, time.Second)
 	require.False(t, failoverErr.FailoverProhibited, "a response-header timeout before user output must switch accounts")
 	require.Equal(t, int32(1), upstream.calls.Load())
 	require.Zero(t, store.observeUnresponsiveCalls, "timeouts must not write account-level observations")
@@ -1557,6 +1561,10 @@ func TestDoKiroMCPJSONRequestAllowsAccountFailoverWhileTimedOutTransportIsStillR
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, UpstreamFailureResponseHeaderTimeout, failoverErr.FailureKind)
+	var transportErr *kiroEndpointTransportError
+	require.ErrorAs(t, failoverErr.Cause, &transportErr)
+	require.Equal(t, kiroNetworkPhaseClientAcquire, transportErr.NetworkPhase)
+	require.GreaterOrEqual(t, transportErr.NetworkElapsed, time.Second)
 	require.False(t, failoverErr.FailoverProhibited, "a still-running pre-response request must not block another account")
 	require.NotNil(t, failoverErr.UpstreamDone)
 	require.Equal(t, int32(1), upstream.calls.Load(), "a still-running transport must block the one allowed connection retry")
@@ -1707,10 +1715,12 @@ func TestRecordKiroHeaderTimeoutOpsUsesGatewayNetworkSemantics(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	headerTimeout := &kiroResponseHeaderTimeoutError{Timeout: 30 * time.Second, Endpoint: "q.us-east-1.amazonaws.com"}
 	transportErr := &kiroEndpointTransportError{
-		EndpointName: "KiroIDE",
-		EndpointURL:  "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
-		NetworkType:  "transport",
-		Cause:        headerTimeout,
+		EndpointName:   "KiroIDE",
+		EndpointURL:    "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+		NetworkType:    "transport",
+		NetworkPhase:   kiroNetworkPhaseResponseHeaderWait,
+		NetworkElapsed: 30 * time.Second,
+		Cause:          headerTimeout,
 	}
 	failoverErr := newKiroEndpointTransportFailover(transportErr)
 
@@ -1726,7 +1736,7 @@ func TestRecordKiroHeaderTimeoutOpsUsesGatewayNetworkSemantics(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Zero(t, events[0].UpstreamStatusCode)
 	require.Equal(t, "network_failover", events[0].Kind)
-	require.Equal(t, "network_error_type=response_header_timeout", events[0].Detail)
+	require.Equal(t, "network_error_type=response_header_timeout;network_phase=response_header_wait;network_elapsed_ms=30000", events[0].Detail)
 }
 
 func TestHandleKiroHTTPErrorEnforceNormalizesFinal5xxTo503(t *testing.T) {

@@ -54,6 +54,57 @@ type SOCKS5ProxyDialer struct {
 	proxyURL *url.URL
 }
 
+// DialPhase identifies a network phase performed inside a custom TLS dialer.
+// net/http's standard httptrace hooks cannot see these phases because the
+// proxy tunnel and uTLS handshake are both completed inside DialTLSContext.
+type DialPhase string
+
+const (
+	DialPhaseTCPConnect   DialPhase = "tcp_connect"
+	DialPhaseProxyConnect DialPhase = "proxy_connect"
+	DialPhaseTLSHandshake DialPhase = "tls_handshake"
+)
+
+// DialPhaseTrace reports custom-dialer phase boundaries without changing the
+// dial result or adding waits to the request path.
+type DialPhaseTrace struct {
+	Start func(DialPhase)
+	Done  func(DialPhase, error)
+}
+
+type dialPhaseTraceContextKey struct{}
+
+// WithDialPhaseTrace attaches custom-dialer observation callbacks to ctx.
+func WithDialPhaseTrace(ctx context.Context, trace *DialPhaseTrace) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if trace == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, dialPhaseTraceContextKey{}, trace)
+}
+
+func dialPhaseTraceFromContext(ctx context.Context) *DialPhaseTrace {
+	if ctx == nil {
+		return nil
+	}
+	trace, _ := ctx.Value(dialPhaseTraceContextKey{}).(*DialPhaseTrace)
+	return trace
+}
+
+func traceDialPhaseStart(ctx context.Context, phase DialPhase) {
+	if trace := dialPhaseTraceFromContext(ctx); trace != nil && trace.Start != nil {
+		trace.Start(phase)
+	}
+}
+
+func traceDialPhaseDone(ctx context.Context, phase DialPhase, err error) {
+	if trace := dialPhaseTraceFromContext(ctx); trace != nil && trace.Done != nil {
+		trace.Done(phase, err)
+	}
+}
+
 // Default TLS fingerprint values captured from Claude CLI on macOS arm64
 // (Node.js v24.3.0, HTTP proxy path).
 // JA3 Hash: d871d02cecbde59abbf8f4806134addf
@@ -162,6 +213,8 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	}
 	slog.Debug("tls_fingerprint_socks5_connecting", "proxy_enabled", d.proxyURL != nil, "proxy_protocol", proxyProtocol, "target", addr)
 
+	traceDialPhaseStart(ctx, DialPhaseProxyConnect)
+
 	// Step 1: Create SOCKS5 dialer
 	var auth *proxy.Auth
 	if d.proxyURL.User != nil {
@@ -181,6 +234,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 
 	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
 	if err != nil {
+		traceDialPhaseDone(ctx, DialPhaseProxyConnect, err)
 		slog.Debug("tls_fingerprint_socks5_dialer_failed", "error", err)
 		return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
 	}
@@ -189,9 +243,11 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	slog.Debug("tls_fingerprint_socks5_establishing_tunnel", "target", addr)
 	conn, err := socksDialer.Dial("tcp", addr)
 	if err != nil {
+		traceDialPhaseDone(ctx, DialPhaseProxyConnect, err)
 		slog.Debug("tls_fingerprint_socks5_connect_failed", "error", err)
 		return nil, fmt.Errorf("SOCKS5 connect: %w", err)
 	}
+	traceDialPhaseDone(ctx, DialPhaseProxyConnect, nil)
 	slog.Debug("tls_fingerprint_socks5_tunnel_established")
 
 	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint
@@ -221,7 +277,9 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 
 	dialer := &net.Dialer{}
+	traceDialPhaseStart(ctx, DialPhaseTCPConnect)
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	traceDialPhaseDone(ctx, DialPhaseTCPConnect, err)
 	if err != nil {
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed", "error", err)
 		return nil, fmt.Errorf("connect to proxy: %w", err)
@@ -244,8 +302,10 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		req.Header.Set("Proxy-Authorization", "Basic "+auth)
 	}
 
+	traceDialPhaseStart(ctx, DialPhaseProxyConnect)
 	slog.Debug("tls_fingerprint_http_proxy_sending_connect", "target", addr)
 	if err := req.Write(conn); err != nil {
+		traceDialPhaseDone(ctx, DialPhaseProxyConnect, err)
 		_ = conn.Close()
 		slog.Debug("tls_fingerprint_http_proxy_write_failed", "error", err)
 		return nil, fmt.Errorf("write CONNECT request: %w", err)
@@ -255,6 +315,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
+		traceDialPhaseDone(ctx, DialPhaseProxyConnect, err)
 		_ = conn.Close()
 		slog.Debug("tls_fingerprint_http_proxy_read_response_failed", "error", err)
 		return nil, fmt.Errorf("read CONNECT response: %w", err)
@@ -263,10 +324,13 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	// same conn that will be used for the TLS handshake.
 
 	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
+		traceDialPhaseDone(ctx, DialPhaseProxyConnect, err)
 		_ = conn.Close()
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed_status", "status_code", resp.StatusCode, "status", resp.Status)
-		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
+		return nil, err
 	}
+	traceDialPhaseDone(ctx, DialPhaseProxyConnect, nil)
 	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
 
 	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
@@ -278,7 +342,9 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	// Establish TCP connection using base dialer (supports proxy)
 	slog.Debug("tls_fingerprint_dialing_tcp", "addr", addr)
+	traceDialPhaseStart(ctx, DialPhaseTCPConnect)
 	conn, err := d.baseDialer(ctx, network, addr)
+	traceDialPhaseDone(ctx, DialPhaseTCPConnect, err)
 	if err != nil {
 		slog.Debug("tls_fingerprint_tcp_dial_failed", "error", err)
 		return nil, err
@@ -293,6 +359,7 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 // It builds a ClientHello spec from the profile, applies it, and completes the handshake.
 // On failure, conn is closed and an error is returned.
 func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string) (net.Conn, error) {
+	traceDialPhaseStart(ctx, DialPhaseTLSHandshake)
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -302,16 +369,19 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
+		traceDialPhaseDone(ctx, DialPhaseTLSHandshake, err)
 		_ = conn.Close()
 		return nil, fmt.Errorf("apply TLS preset: %w", err)
 	}
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		traceDialPhaseDone(ctx, DialPhaseTLSHandshake, err)
 		_ = conn.Close()
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 
 	state := tlsConn.ConnectionState()
+	traceDialPhaseDone(ctx, DialPhaseTLSHandshake, nil)
 	slog.Debug("tls_fingerprint_handshake_success",
 		"host", host,
 		"version", state.Version,
