@@ -23,7 +23,7 @@ func isOpenAIForwardClientCanceled(c *gin.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func markOpenAIClientClosedRequest(c *gin.Context) {
+func markClientClosedRequest(c *gin.Context) {
 	if c == nil {
 		return
 	}
@@ -32,4 +32,8 @@ func markOpenAIClientClosedRequest(c *gin.Context) {
 		return
 	}
 	c.Status(httpStatusClientClosedRequest)
+}
+
+func markOpenAIClientClosedRequest(c *gin.Context) {
+	markClientClosedRequest(c)
 }

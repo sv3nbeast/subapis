@@ -47,6 +47,10 @@ const (
 	sameAccountRetryDelay = 500 * time.Millisecond
 	// anthropicSoftRateLimitRetryCount 同一请求对 Claude 软 429 只允许一次
 	anthropicSoftRateLimitRetryCount = 1
+	// anthropicSoftRateLimitMaxAccounts limits a request-scoped/reset-less 429
+	// cohort. If two independent credentials reject the same request shape,
+	// scanning the rest of the pool only amplifies latency and false cooldowns.
+	anthropicSoftRateLimitMaxAccounts = 2
 	// singleAccountBackoffDelay 单账号分组 503 退避重试固定延时。
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
@@ -76,6 +80,7 @@ type FailoverState struct {
 	FailedAccountIDs         map[int64]struct{}
 	SameAccountRetryCount    map[int64]int
 	AnthropicSoft429Retries  map[int64]int
+	AnthropicSoft429Accounts map[int64]struct{}
 	Kiro429RetryCount        map[int64]int
 	Kiro429SoftExcludedIDs   map[int64]struct{}
 	Kiro429LastSoftExcluded  int64
@@ -101,6 +106,7 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		FailedAccountIDs:         make(map[int64]struct{}),
 		SameAccountRetryCount:    make(map[int64]int),
 		AnthropicSoft429Retries:  make(map[int64]int),
+		AnthropicSoft429Accounts: make(map[int64]struct{}),
 		Kiro429RetryCount:        make(map[int64]int),
 		Kiro429SoftExcludedIDs:   make(map[int64]struct{}),
 		AvoidEmailDomainSuffixes: make(map[string]struct{}),
@@ -267,6 +273,10 @@ func (s *FailoverState) handleAnthropicSoftRateLimit(
 	if s.AnthropicSoft429Retries == nil {
 		s.AnthropicSoft429Retries = make(map[int64]int)
 	}
+	if s.AnthropicSoft429Accounts == nil {
+		s.AnthropicSoft429Accounts = make(map[int64]struct{})
+	}
+	s.AnthropicSoft429Accounts[accountID] = struct{}{}
 	retryCount := s.AnthropicSoft429Retries[accountID]
 	if retryCount < anthropicSoftRateLimitRetryCount {
 		s.AnthropicSoft429Retries[accountID] = retryCount + 1
@@ -295,7 +305,13 @@ func (s *FailoverState) handleAnthropicSoftRateLimit(
 	failoverErr.RetryableOnSameAccount = false
 	s.FailedAccountIDs[accountID] = struct{}{}
 
-	if s.SwitchCount >= s.MaxSwitches {
+	if len(s.AnthropicSoft429Accounts) >= anthropicSoftRateLimitMaxAccounts || s.SwitchCount >= s.MaxSwitches {
+		logger.FromContext(ctx).Warn("gateway.anthropic_soft_429_cohort_exhausted",
+			zap.Int64("account_id", accountID),
+			zap.Int("attempted_account_count", len(s.AnthropicSoft429Accounts)),
+			zap.Int("max_account_count", anthropicSoftRateLimitMaxAccounts),
+			zap.Int("switch_count", s.SwitchCount),
+		)
 		return FailoverExhausted
 	}
 	s.SwitchCount++

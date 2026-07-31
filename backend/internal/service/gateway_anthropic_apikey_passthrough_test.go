@@ -1304,6 +1304,87 @@ func TestGatewayService_AnthropicOAuth_NonStreamClientAggregatesForcedUpstreamSt
 	require.False(t, result.Stream)
 }
 
+func TestGatewayService_AnthropicOAuth_OfficialCompactionPreservesNativeNonStreamAndHelper(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.220 (external, cli)")
+	c.Request.Header.Set("X-Stainless-Helper", "compaction")
+
+	body := []byte(`{"model":"claude-sonnet-5","stream":false,"metadata":{"user_id":"user_00000000_account__session_00000000"},"system":[{"type":"text","text":"compact safely","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"summarize"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	require.False(t, parsed.Stream)
+
+	upstreamJSON := `{"id":"msg_compact","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"summary"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"cache_read_input_tokens":90,"output_tokens":20}}`
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"x-request-id": []string{"rid-native-compaction"},
+			},
+			Body: io.NopCloser(strings.NewReader(upstreamJSON)),
+		},
+	}
+
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		deferredService:      &DeferredService{},
+	}
+	account := &Account{
+		ID:          304,
+		Name:        "anthropic-oauth-native-compaction",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+	ctx := SetClaudeCodeUserAgent(SetClaudeCodeClient(context.Background(), true), "claude-cli/2.1.220 (external, cli)")
+
+	result, err := svc.Forward(ctx, c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool(), "official compaction must stay native non-stream")
+	require.Equal(t, "compaction", getHeaderRaw(upstream.lastReq.Header, "x-stainless-helper"))
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.lastBody, "system.0.cache_control.type").String(), "cacheable prefix must remain intact")
+	require.Equal(t, "summary", gjson.GetBytes(rec.Body.Bytes(), "content.0.text").String())
+	require.Equal(t, 90, result.Usage.CacheReadInputTokens)
+	require.False(t, result.Stream)
+
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Kind: "test"})
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].ClientStream)
+	require.NotNil(t, events[0].UpstreamStream)
+	require.False(t, *events[0].ClientStream)
+	require.False(t, *events[0].UpstreamStream)
+	require.Equal(t, "compaction", events[0].AnthropicHelperKind)
+	require.True(t, events[0].NativeHelperNonStream)
+}
+
+func TestShouldPreserveAnthropicNativeNonStream_RequiresValidatedClaudeCode(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("X-Stainless-Helper", "compaction")
+	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+
+	require.False(t, shouldPreserveAnthropicNativeNonStream(context.Background(), c, account, false))
+	require.True(t, shouldPreserveAnthropicNativeNonStream(SetClaudeCodeClient(context.Background(), true), c, account, false))
+	require.False(t, shouldPreserveAnthropicNativeNonStream(SetClaudeCodeClient(context.Background(), true), c, account, true))
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

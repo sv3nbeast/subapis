@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"testing"
@@ -8,6 +9,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+type anthropicSoft429ModelRepo struct {
+	AccountRepository
+	accountID int64
+	modelKey  string
+	resetAt   time.Time
+}
+
+func (r *anthropicSoft429ModelRepo) SetModelRateLimit(_ context.Context, accountID int64, modelKey string, resetAt time.Time, _ ...string) error {
+	r.accountID = accountID
+	r.modelKey = modelKey
+	r.resetAt = resetAt
+	return nil
+}
 
 func TestIsAnthropicSoftRateLimitResponse(t *testing.T) {
 	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
@@ -41,4 +56,36 @@ func TestIsAnthropicSoftRateLimitResponse(t *testing.T) {
 
 func TestAnthropicSoftRateLimitRetryDelay(t *testing.T) {
 	require.Equal(t, 5*time.Second, AnthropicSoftRateLimitRetryDelay())
+}
+
+func TestCommitAnthropicSoftRateLimitUsesRequestedModelScope(t *testing.T) {
+	repo := &anthropicSoft429ModelRepo{}
+	rateLimits := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := &GatewayService{accountRepo: repo, rateLimitService: rateLimits}
+	account := &Account{ID: 71, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	failoverErr := &UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		ResponseBody:           []byte(`{"error":{"type":"rate_limit_error","message":"Error"}}`),
+		ResponseHeaders:        http.Header{},
+		AnthropicSoftRateLimit: true,
+		RequestedModel:         "claude-sonnet-5",
+		RetryableOnSameAccount: true,
+	}
+
+	before := time.Now()
+	svc.CommitAnthropicSoftRateLimit(context.Background(), account.ID, failoverErr, account)
+	after := time.Now()
+
+	require.True(t, failoverErr.AnthropicSoftRateLimitCommitted)
+	require.Equal(t, account.ID, repo.accountID)
+	require.Equal(t, "claude-sonnet-5", repo.modelKey)
+	require.True(t, !repo.resetAt.Before(before.Add(10*time.Second)) && !repo.resetAt.After(after.Add(10*time.Second)))
+	require.Nil(t, account.RateLimitResetAt, "soft model rejection must not mutate the account-wide cooldown")
+}
+
+func TestAnthropicStainlessHelperDiagnosticsAreBounded(t *testing.T) {
+	require.Equal(t, anthropicStainlessHelperCompaction, classifyAnthropicStainlessHelper("compaction"))
+	require.Equal(t, anthropicStainlessHelperToolRunner, classifyAnthropicStainlessHelper("BetaToolRunner,CustomTool"))
+	require.Equal(t, anthropicStainlessHelperOther, safeHeaderValueForLog("x-stainless-helper", "private-helper-name"))
+	require.NotContains(t, safeHeaderValueForLog("x-stainless-helper", "private-helper-name"), "private-helper-name")
 }

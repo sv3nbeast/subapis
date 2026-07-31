@@ -60,6 +60,7 @@ CORE_HEADERS = [
     "sec-fetch-mode",
     "accept-encoding",
     "x-stainless-helper-method",
+    "x-stainless-helper",
 ]
 
 STAINLESS_HEADERS = {

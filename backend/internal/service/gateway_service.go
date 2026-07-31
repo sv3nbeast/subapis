@@ -355,9 +355,45 @@ func safeHeaderValueForLog(key string, v string) string {
 	switch key {
 	case "authorization", "x-api-key":
 		return redactAuthHeaderValue(v)
+	case "x-stainless-helper":
+		// The helper header can contain SDK/tool-runner implementation names.
+		// Persist only the request class needed for diagnostics, never arbitrary
+		// client-provided helper values.
+		return classifyAnthropicStainlessHelper(v)
 	default:
 		return strings.TrimSpace(v)
 	}
+}
+
+const (
+	anthropicStainlessHelperHeader     = "x-stainless-helper"
+	anthropicStainlessHelperCompaction = "compaction"
+	anthropicStainlessHelperToolRunner = "tool_runner"
+	anthropicStainlessHelperOther      = "other"
+)
+
+// classifyAnthropicStainlessHelper reduces the SDK header to a bounded,
+// non-sensitive request class. Claude CLI 2.1.197+ uses
+// x-stainless-helper: compaction for its native non-streaming compaction call.
+func classifyAnthropicStainlessHelper(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" {
+		return ""
+	}
+	if strings.Contains(normalized, "compaction") {
+		return anthropicStainlessHelperCompaction
+	}
+	if strings.Contains(normalized, "toolrunner") || strings.Contains(normalized, "tool_runner") {
+		return anthropicStainlessHelperToolRunner
+	}
+	return anthropicStainlessHelperOther
+}
+
+func shouldPreserveAnthropicNativeNonStream(ctx context.Context, c *gin.Context, account *Account, clientStream bool) bool {
+	if clientStream || c == nil || account == nil || !account.IsAnthropicOAuthOrSetupToken() || !IsClaudeCodeClient(ctx) {
+		return false
+	}
+	return classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader)) == anthropicStainlessHelperCompaction
 }
 
 func extractSystemPreviewFromBody(body []byte) string {
@@ -414,6 +450,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		"content-type",
 		"accept",
 		"x-stainless-helper-method",
+		"x-stainless-helper",
 	}
 
 	h := make([]string, 0, len(interesting))
@@ -514,6 +551,7 @@ var allowedHeaders = map[string]bool{
 	"x-stainless-runtime":                       true,
 	"x-stainless-runtime-version":               true,
 	"x-stainless-helper-method":                 true,
+	"x-stainless-helper":                        true,
 	"anthropic-dangerous-direct-browser-access": true,
 	"anthropic-version":                         true,
 	"x-app":                                     true,
@@ -760,14 +798,17 @@ type UpstreamFailoverError struct {
 	// that retry also fails.
 	AnthropicSoftRateLimit          bool
 	AnthropicSoftRateLimitCommitted bool
-	KiroRateLimited                 bool // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
-	FailureKind                     UpstreamFailureKind
-	RetryAfter                      time.Duration
-	FailoverProhibited              bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
-	PreSemanticTimeout              bool            // 首语义阶段超时；仅允许一次备用账号探测，避免边缘代理窗口被串行耗尽
-	KiroCooldownCommitted           bool            // the credential cooldown was already persisted for this failure
-	UpstreamDone                    <-chan struct{} // nil means no detached physical upstream remains
-	Cause                           error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
+	// RequestedModel preserves the client-visible model for model-scoped
+	// cooldown decisions. It is intentionally optional for non-model errors.
+	RequestedModel        string
+	KiroRateLimited       bool // Kiro 企业账号 429，由 handler 层按账号池状态机快速重试/切换
+	FailureKind           UpstreamFailureKind
+	RetryAfter            time.Duration
+	FailoverProhibited    bool            // Kiro 已产生首个语义输出；不得重放到同账号或其他账号
+	PreSemanticTimeout    bool            // 首语义阶段超时；仅允许一次备用账号探测，避免边缘代理窗口被串行耗尽
+	KiroCooldownCommitted bool            // the credential cooldown was already persisted for this failure
+	UpstreamDone          <-chan struct{} // nil means no detached physical upstream remains
+	Cause                 error           // 内部原因，用于 errors.As 分类；不直接暴露给客户端
 }
 
 func (s *GatewayService) firstSemanticTimeout() time.Duration {
@@ -6869,13 +6910,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	reqStream := parsed.Stream
 	originalModel := reqModel
 
-	// 非流式客户端请求一律内部强制转流式上游、再聚合回非流式 JSON 返回（不再透传）。
-	// 实测:用 OAuth/Claude-Code 伪装把非流式请求直接透传到 Anthropic 会被大量 429
-	//（真实 Claude Code 永远流式,非流式属异常流量),进而把有额度的账号误判进限流;
-	// 改为内部强制 stream=true 调上游可避免——流式请求几乎不触发 429。
-	// 复用 handleBufferedAnthropicStreamingResponse 的 SSE 聚合,客户端仍拿到非流式 JSON。
+	// 普通非流式客户端请求内部强制转流式上游、再聚合回非流式 JSON 返回。
+	// 例外：新版官方 Claude SDK/CLI 会发送带 x-stainless-helper: compaction 的
+	// 原生非流式压缩请求。该请求类型本身就是官方协议形状，改写成 stream=true
+	// 反而会让 body 与 SDK helper 指纹不一致，因此必须原样保留非流式语义。
 	clientStream := reqStream
-	forceStreamAggregate := !clientStream
+	nativeHelperNonStream := shouldPreserveAnthropicNativeNonStream(ctx, c, account, clientStream)
+	forceStreamAggregate := !clientStream && !nativeHelperNonStream
 	if forceStreamAggregate {
 		reqStream = true
 		streamBody, setErr := sjson.SetBytes(body, "stream", true)
@@ -6886,15 +6927,30 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, err
 		}
 	}
+	helperKind := ""
+	if c != nil {
+		helperKind = classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader))
+		setOpsAnthropicRequestShape(c, clientStream, reqStream, helperKind, nativeHelperNonStream)
+	}
+	if !clientStream {
+		slog.InfoContext(ctx, "gateway.anthropic_nonstream_shape",
+			"client_stream", clientStream,
+			"upstream_stream", reqStream,
+			"helper_kind", helperKind,
+			"native_helper_nonstream", nativeHelperNonStream,
+		)
+	}
 
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
 	if c != nil && s.debugBodyCaptureEnabled(c) {
 		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
-			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
-			"account_type": string(account.Type),
-			"model":        reqModel,
-			"stream":       strconv.FormatBool(reqStream),
-			"user_id":      strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+			"account":         fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type":    string(account.Type),
+			"model":           reqModel,
+			"client_stream":   strconv.FormatBool(clientStream),
+			"upstream_stream": strconv.FormatBool(reqStream),
+			"helper_kind":     helperKind,
+			"user_id":         strconv.FormatInt(s.ginUserIDForDebug(c), 10),
 		})
 	}
 
@@ -7460,6 +7516,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
 				AnthropicSoftRateLimit: softRateLimit,
+				RequestedModel:         originalModel,
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -7499,6 +7556,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
 			AnthropicSoftRateLimit: softRateLimit,
+			RequestedModel:         originalModel,
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -7856,6 +7914,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
 				AnthropicSoftRateLimit: softRateLimit,
+				RequestedModel:         input.OriginalModel,
 			}
 		}
 		return s.handleRetryExhaustedError(ctx, resp, c, account)
@@ -7895,6 +7954,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: softRateLimit || (account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode)),
 			AnthropicSoftRateLimit: softRateLimit,
+			RequestedModel:         input.OriginalModel,
 		}
 	}
 

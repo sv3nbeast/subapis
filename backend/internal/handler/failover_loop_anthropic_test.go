@@ -85,3 +85,27 @@ func TestFailoverState_AnthropicSoft429UnavailableForcedRetrySwitchesAccount(t *
 	require.Contains(t, state.FailedAccountIDs, int64(101))
 	require.Equal(t, 1, state.SwitchCount)
 }
+
+func TestFailoverState_AnthropicSoft429StopsAfterTwoAccounts(t *testing.T) {
+	originalDelay := anthropicSoftRateLimitRetryDelay
+	anthropicSoftRateLimitRetryDelay = time.Millisecond
+	t.Cleanup(func() { anthropicSoftRateLimitRetryDelay = originalDelay })
+
+	mock := &anthropicSoft429CommitterMock{}
+	state := NewFailoverState(10, false)
+
+	first := newAnthropicSoft429FailoverError()
+	require.Equal(t, FailoverContinue, state.HandleFailoverError(context.Background(), mock, 101, service.PlatformAnthropic, first))
+	require.Equal(t, FailoverContinue, state.HandleFailoverError(context.Background(), mock, 101, service.PlatformAnthropic, first))
+	require.Equal(t, 1, state.SwitchCount)
+
+	second := newAnthropicSoft429FailoverError()
+	require.Equal(t, FailoverContinue, state.HandleFailoverError(context.Background(), mock, 202, service.PlatformAnthropic, second))
+	require.Equal(t, FailoverExhausted, state.HandleFailoverError(context.Background(), mock, 202, service.PlatformAnthropic, second))
+
+	require.Equal(t, 1, state.SwitchCount, "second rejected credential must not rotate to a third account")
+	require.Len(t, state.AnthropicSoft429Accounts, anthropicSoftRateLimitMaxAccounts)
+	require.Contains(t, state.FailedAccountIDs, int64(101))
+	require.Contains(t, state.FailedAccountIDs, int64(202))
+	require.Equal(t, 2, mock.commitCalls)
+}

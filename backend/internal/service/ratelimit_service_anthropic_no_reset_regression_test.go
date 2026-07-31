@@ -37,10 +37,10 @@ func TestAnthropicNoReset429CooldownEscalatesWithinTwoMinutes(t *testing.T) {
 	account := &Account{ID: 1937, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	now := time.Now()
 
-	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now, false))
-	require.Equal(t, 30*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(time.Second), false))
-	require.Equal(t, 60*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(2*time.Second), false))
-	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(account, now.Add(anthropicNoReset429BackoffWindow+2*time.Second), false))
+	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(context.Background(), account, "", now, false))
+	require.Equal(t, 30*time.Second, svc.nextAnthropicNoReset429Cooldown(context.Background(), account, "", now.Add(time.Second), false))
+	require.Equal(t, 60*time.Second, svc.nextAnthropicNoReset429Cooldown(context.Background(), account, "", now.Add(2*time.Second), false))
+	require.Equal(t, 10*time.Second, svc.nextAnthropicNoReset429Cooldown(context.Background(), account, "", now.Add(anthropicNoReset429BackoffWindow+2*time.Second), false))
 }
 
 func TestAnthropicAmbiguous429WithoutResetDoesNotCoolAccount(t *testing.T) {

@@ -180,6 +180,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: softRateLimit,
 				AnthropicSoftRateLimit: softRateLimit,
+				RequestedModel:         originalModel,
 			}
 		}
 

@@ -277,6 +277,7 @@ func (s *GatewayService) ForwardAsResponses(
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: softRateLimit,
 				AnthropicSoftRateLimit: softRateLimit,
+				RequestedModel:         originalModel,
 			}
 		}
 

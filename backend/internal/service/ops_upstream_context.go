@@ -11,11 +11,12 @@ import (
 // Gin context keys used by Ops error logger for capturing upstream error details.
 // These keys are set by gateway services and consumed by handler/ops_error_logger.go.
 const (
-	OpsUpstreamStatusCodeKey   = "ops_upstream_status_code"
-	OpsUpstreamErrorMessageKey = "ops_upstream_error_message"
-	OpsUpstreamErrorDetailKey  = "ops_upstream_error_detail"
-	OpsUpstreamErrorsKey       = "ops_upstream_errors"
-	OpsNetworkErrorTypeKey     = "ops_network_error_type"
+	OpsUpstreamStatusCodeKey    = "ops_upstream_status_code"
+	OpsUpstreamErrorMessageKey  = "ops_upstream_error_message"
+	OpsUpstreamErrorDetailKey   = "ops_upstream_error_detail"
+	OpsUpstreamErrorsKey        = "ops_upstream_errors"
+	OpsNetworkErrorTypeKey      = "ops_network_error_type"
+	OpsAnthropicRequestShapeKey = "ops_anthropic_request_shape"
 
 	// Best-effort capture of the current upstream request body so ops can
 	// retry the specific upstream attempt (not just the client request).
@@ -63,6 +64,27 @@ const (
 	OpsClientBusinessLimitedReasonLocalPolicyDenied      = "local_policy_denied"
 	OpsClientBusinessLimitedReasonContextLimit           = "client_context_limit"
 )
+
+type opsAnthropicRequestShape struct {
+	ClientStream          bool
+	UpstreamStream        bool
+	HelperKind            string
+	NativeHelperNonStream bool
+}
+
+// setOpsAnthropicRequestShape records only bounded protocol-shape metadata.
+// It deliberately excludes prompts and raw helper header values.
+func setOpsAnthropicRequestShape(c *gin.Context, clientStream, upstreamStream bool, helperKind string, nativeHelperNonStream bool) {
+	if c == nil {
+		return
+	}
+	c.Set(OpsAnthropicRequestShapeKey, opsAnthropicRequestShape{
+		ClientStream:          clientStream,
+		UpstreamStream:        upstreamStream,
+		HelperKind:            strings.TrimSpace(helperKind),
+		NativeHelperNonStream: nativeHelperNonStream,
+	})
+}
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	if c == nil || len(body) == 0 {
@@ -276,12 +298,16 @@ type OpsUpstreamErrorEvent struct {
 	Scope  string `json:"scope,omitempty"`
 	Reason string `json:"reason,omitempty"`
 
-	RequestedModel      string `json:"requested_model,omitempty"`
-	MappedModel         string `json:"mapped_model,omitempty"`
-	KiroModelID         string `json:"kiro_model_id,omitempty"`
-	HasTools            bool   `json:"has_tools,omitempty"`
-	HasAdaptiveThinking bool   `json:"has_adaptive_thinking,omitempty"`
-	HasContext1MBeta    bool   `json:"has_context_1m_beta,omitempty"`
+	RequestedModel        string `json:"requested_model,omitempty"`
+	MappedModel           string `json:"mapped_model,omitempty"`
+	KiroModelID           string `json:"kiro_model_id,omitempty"`
+	HasTools              bool   `json:"has_tools,omitempty"`
+	HasAdaptiveThinking   bool   `json:"has_adaptive_thinking,omitempty"`
+	HasContext1MBeta      bool   `json:"has_context_1m_beta,omitempty"`
+	ClientStream          *bool  `json:"client_stream,omitempty"`
+	UpstreamStream        *bool  `json:"upstream_stream,omitempty"`
+	AnthropicHelperKind   string `json:"anthropic_helper_kind,omitempty"`
+	NativeHelperNonStream bool   `json:"native_helper_nonstream,omitempty"`
 
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`
@@ -305,6 +331,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.RequestedModel = strings.TrimSpace(ev.RequestedModel)
 	ev.MappedModel = strings.TrimSpace(ev.MappedModel)
 	ev.KiroModelID = strings.TrimSpace(ev.KiroModelID)
+	ev.AnthropicHelperKind = strings.TrimSpace(ev.AnthropicHelperKind)
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Detail = strings.TrimSpace(ev.Detail)
@@ -321,6 +348,24 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 				ev.UpstreamRequestBody = strings.TrimSpace(raw)
 			case []byte:
 				ev.UpstreamRequestBody = strings.TrimSpace(string(raw))
+			}
+		}
+	}
+	if shapeValue, ok := c.Get(OpsAnthropicRequestShapeKey); ok {
+		if shape, ok := shapeValue.(opsAnthropicRequestShape); ok {
+			if ev.ClientStream == nil {
+				clientStream := shape.ClientStream
+				ev.ClientStream = &clientStream
+			}
+			if ev.UpstreamStream == nil {
+				upstreamStream := shape.UpstreamStream
+				ev.UpstreamStream = &upstreamStream
+			}
+			if ev.AnthropicHelperKind == "" {
+				ev.AnthropicHelperKind = shape.HelperKind
+			}
+			if !ev.NativeHelperNonStream {
+				ev.NativeHelperNonStream = shape.NativeHelperNonStream
 			}
 		}
 	}

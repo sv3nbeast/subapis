@@ -85,6 +85,13 @@ func (s *GatewayService) CommitAnthropicSoftRateLimit(
 	if account == nil {
 		return
 	}
-	s.rateLimitService.HandleUpstreamError(ctx, account, failoverErr.StatusCode, failoverErr.ResponseHeaders, failoverErr.ResponseBody)
+	s.rateLimitService.HandleUpstreamError(
+		ctx,
+		account,
+		failoverErr.StatusCode,
+		failoverErr.ResponseHeaders,
+		failoverErr.ResponseBody,
+		failoverErr.RequestedModel,
+	)
 	failoverErr.AnthropicSoftRateLimitCommitted = true
 }

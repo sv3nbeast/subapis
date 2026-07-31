@@ -260,6 +260,14 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		if fableLimited {
 			return false
 		}
+		// A reset-less explicit rate_limit_error is handled by the dedicated
+		// 10/30/60 model cooldown. Do this before broad temp-unschedulable rules,
+		// otherwise an account-level keyword rule can poison the whole credential
+		// for what is demonstrably a request/model-scoped rejection.
+		if IsAnthropicSoftRateLimitResponse(account, statusCode, headers, responseBody) {
+			s.handle429(ctx, account, headers, responseBody, firstRequestedModel(requestedModel))
+			return false
+		}
 	}
 
 	// 先尝试临时不可调度规则（401除外）
@@ -433,7 +441,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		)
 		shouldDisable = s.handle403(ctx, account, upstreamMsg, responseBody)
 	case 429:
-		s.handle429(ctx, account, headers, responseBody)
+		s.handle429(ctx, account, headers, responseBody, firstRequestedModel(requestedModel))
 		shouldDisable = false
 	case 529:
 		s.handle529(ctx, account)
@@ -1127,7 +1135,7 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 
 // handle429 处理429限流错误
 // 解析响应头获取重置时间，标记账号为限流状态
-func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
+func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte, requestedModel ...string) {
 	// Spark 影子：限流/熔断状态 100% 由 QueryUsage(/wham/usage body 的 codex_bengalfox)驱动。
 	// /responses 的 429 携带的 x-codex-*/usage_limit_reached 是 global codex 道(plan/spec §8),
 	// 套到影子会把 spark 误耦合到 global 窗口——即便 spark 仍有配额也会被冷却到 global reset,
@@ -1213,7 +1221,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					"account_id", account.ID,
 					"platform", account.Platform,
 					"reason", "explicit rate_limit_error without reset time")
-				s.applyAnthropic429NoResetRateLimit(ctx, account)
+				s.applyAnthropic429NoResetRateLimit(ctx, account, firstRequestedModel(requestedModel))
 				return
 			}
 			slog.Warn("rate_limit_429_no_reset_time_skipped",
@@ -1259,7 +1267,7 @@ func isAnthropicRateLimitErrorBody(body []byte) bool {
 	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()), "rate_limit_error")
 }
 
-func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context, account *Account) {
+func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context, account *Account, requestedModel string) {
 	// Anthropic soft-429 backoff is deliberately independent of the legacy
 	// global cooldown_seconds setting. That setting is shared by other
 	// providers and a production value such as 60s must not turn the first
@@ -1268,15 +1276,15 @@ func (s *RateLimitService) applyAnthropic429NoResetRateLimit(ctx context.Context
 	_, enabled := s.get429FallbackCooldown(ctx, account)
 	propagateOrg := s.shouldPropagateOrgPeers(ctx)
 	if enabled {
-		cooldown := s.nextAnthropicNoReset429Cooldown(account, time.Now(), propagateOrg)
-		s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", cooldown, true)
+		cooldown := s.nextAnthropicNoReset429Cooldown(ctx, account, requestedModel, time.Now(), propagateOrg)
+		s.applyAnthropicNoReset429Cooldown(ctx, account, requestedModel, cooldown, true, propagateOrg)
 		return
 	}
-	s.apply429FallbackRateLimitWithCooldown(ctx, account, "anthropic_rate_limit_no_reset_time", 0, false)
+	s.applyAnthropicNoReset429Cooldown(ctx, account, requestedModel, 0, false, propagateOrg)
 }
 
-func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now time.Time, propagateOrg bool) time.Duration {
-	key := anthropicNoReset429BackoffKey(account, propagateOrg)
+func (s *RateLimitService) nextAnthropicNoReset429Cooldown(ctx context.Context, account *Account, requestedModel string, now time.Time, propagateOrg bool) time.Duration {
+	key := anthropicNoReset429BackoffKey(ctx, account, requestedModel, propagateOrg)
 
 	s.anthropicNoReset429Mu.Lock()
 	defer s.anthropicNoReset429Mu.Unlock()
@@ -1310,17 +1318,94 @@ func (s *RateLimitService) nextAnthropicNoReset429Cooldown(account *Account, now
 	}
 }
 
-func anthropicNoReset429BackoffKey(account *Account, propagateOrg bool) string {
+func anthropicNoReset429BackoffKey(ctx context.Context, account *Account, requestedModel string, propagateOrg bool) string {
 	if account == nil {
 		return "account:0"
+	}
+	modelKey := ""
+	if account.IsAnthropicOAuthOrSetupToken() {
+		modelKey = resolveRequestedModelKey(ctx, account, requestedModel)
+		if modelKey == "" {
+			modelKey = strings.TrimSpace(requestedModel)
+		}
+	}
+	suffix := ""
+	if modelKey != "" {
+		suffix = ":model:" + modelKey
 	}
 	// 仅在显式开启 org 连坐时按 org 维度累计退避;默认按账号,避免兄弟账号互相拖累退避时长。
 	if propagateOrg {
 		if orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid")); orgUUID != "" {
-			return "org:" + orgUUID
+			return "org:" + orgUUID + suffix
 		}
 	}
-	return fmt.Sprintf("account:%d", account.ID)
+	return fmt.Sprintf("account:%d%s", account.ID, suffix)
+}
+
+func (s *RateLimitService) applyAnthropicNoReset429Cooldown(
+	ctx context.Context,
+	account *Account,
+	requestedModel string,
+	cooldown time.Duration,
+	enabled bool,
+	propagateOrg bool,
+) {
+	const reason = "anthropic_rate_limit_no_reset_time"
+	if !enabled {
+		slog.Info("rate_limit_429_fallback_ignored", "account_id", account.ID, "platform", account.Platform, "reason", reason)
+		return
+	}
+
+	modelKey := ""
+	if account.IsAnthropicOAuthOrSetupToken() {
+		modelKey = resolveRequestedModelKey(ctx, account, requestedModel)
+		if modelKey == "" {
+			modelKey = strings.TrimSpace(requestedModel)
+		}
+	}
+	if modelKey == "" {
+		// Legacy callers without model context retain the account-scoped fallback.
+		s.apply429FallbackRateLimitWithCooldown(ctx, account, reason, cooldown, true)
+		return
+	}
+
+	resetAt := time.Now().Add(cooldown)
+	slog.Warn("anthropic_model_rate_limit_429_fallback_used",
+		"account_id", account.ID,
+		"model", modelKey,
+		"reason", reason,
+		"using_default", cooldown.String(),
+	)
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
+		slog.Warn("anthropic_model_rate_limit_set_failed", "account_id", account.ID, "model", modelKey, "error", err)
+		return
+	}
+	if propagateOrg {
+		s.rateLimitAnthropicOrgPeersForModel(ctx, account, modelKey, resetAt, reason)
+	}
+}
+
+func (s *RateLimitService) rateLimitAnthropicOrgPeersForModel(ctx context.Context, account *Account, modelKey string, resetAt time.Time, reason string) {
+	if account == nil || account.Platform != PlatformAnthropic || s.accountRepo == nil || strings.TrimSpace(modelKey) == "" {
+		return
+	}
+	orgUUID := strings.TrimSpace(account.GetExtraString("org_uuid"))
+	if orgUUID == "" {
+		return
+	}
+	peers, err := s.accountRepo.FindByExtraField(ctx, "org_uuid", orgUUID)
+	if err != nil {
+		slog.Warn("rate_limit_org_peer_model_lookup_failed", "account_id", account.ID, "model", modelKey, "error", err)
+		return
+	}
+	for _, peer := range peers {
+		if peer.ID == account.ID || peer.Platform != PlatformAnthropic {
+			continue
+		}
+		if err := s.accountRepo.SetModelRateLimit(ctx, peer.ID, modelKey, resetAt, reason); err != nil {
+			slog.Warn("rate_limit_org_peer_model_set_failed", "account_id", account.ID, "peer_account_id", peer.ID, "model", modelKey, "error", err)
+		}
+	}
 }
 
 func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
