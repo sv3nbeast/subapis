@@ -209,12 +209,58 @@ func TestEnsureAnthropicThinkingForModelAlias_Opus5UsesAdaptiveWithoutBudget(t *
 }
 
 func TestNormalizeAnthropicOpus5Thinking_ConvertsEnabledAndDropsBudget(t *testing.T) {
-	body := []byte(`{"model":"claude-opus-5","thinking":{"type":"enabled","budget_tokens":24576},"messages":[]}`)
+	body := []byte(`{"model":"claude-opus-5","thinking":{"type":"enabled","budget_tokens":24576},"output_config":{"effort":"xhigh"},"messages":[]}`)
 
 	result := normalizeAnthropicOpus5Thinking(body, "claude-opus-5")
 
 	require.Equal(t, "adaptive", gjson.GetBytes(result, "thinking.type").String())
 	require.False(t, gjson.GetBytes(result, "thinking.budget_tokens").Exists())
+	require.Equal(t, "xhigh", gjson.GetBytes(result, "output_config.effort").String())
+}
+
+func TestNormalizeAnthropicOpus5Thinking_ClampsXHighWhenThinkingDisabled(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","thinking":{"type":"disabled"},"output_config":{"effort":"xhigh","trace":true},"messages":[]}`)
+
+	result := normalizeAnthropicOpus5Thinking(body, "claude-opus-5")
+
+	require.Equal(t, "disabled", gjson.GetBytes(result, "thinking.type").String())
+	require.Equal(t, "high", gjson.GetBytes(result, "output_config.effort").String())
+	require.True(t, gjson.GetBytes(result, "output_config.trace").Bool())
+}
+
+func TestNormalizeAnthropicOpus5Thinking_ClampsXHighWhenThinkingMissing(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","output_config":{"effort":"xhigh"},"messages":[]}`)
+
+	result := normalizeAnthropicOpus5Thinking(body, "claude-opus-5")
+
+	require.False(t, gjson.GetBytes(result, "thinking").Exists())
+	require.Equal(t, "high", gjson.GetBytes(result, "output_config.effort").String())
+}
+
+func TestNormalizeAnthropicOpus5Thinking_LeavesCompatibleAndOtherModelsUnchanged(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		model string
+	}{
+		{
+			name:  "high without thinking",
+			body:  `{"model":"claude-opus-5","output_config":{"effort":"high"},"messages":[]}`,
+			model: "claude-opus-5",
+		},
+		{
+			name:  "xhigh on another model",
+			body:  `{"model":"claude-opus-4-7","thinking":{"type":"disabled"},"output_config":{"effort":"xhigh"},"messages":[]}`,
+			model: "claude-opus-4-7",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.body)
+			require.Equal(t, body, normalizeAnthropicOpus5Thinking(body, tt.model))
+		})
+	}
 }
 
 func TestSanitizeAnthropicUpstreamRequestBody_DropsTopLevelSpeedOnly(t *testing.T) {
@@ -431,6 +477,31 @@ func TestApplyAnthropicThinkingAliasToRequest_Opus5BaseNormalizesConvertedReason
 
 	require.Equal(t, "adaptive", req.Thinking.Type)
 	require.Zero(t, req.Thinking.BudgetTokens)
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_Opus5ClampsXHighWithoutThinking(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:        "claude-opus-5",
+		OutputConfig: &apicompat.AnthropicOutputConfig{Effort: "xhigh"},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-5")
+
+	require.Nil(t, req.Thinking)
+	require.Equal(t, "high", req.OutputConfig.Effort)
+}
+
+func TestApplyAnthropicThinkingAliasToRequest_Opus5PreservesXHighWithAdaptiveThinking(t *testing.T) {
+	req := &apicompat.AnthropicRequest{
+		Model:        "claude-opus-5",
+		Thinking:     &apicompat.AnthropicThinking{Type: "adaptive"},
+		OutputConfig: &apicompat.AnthropicOutputConfig{Effort: "xhigh"},
+	}
+
+	applyAnthropicThinkingAliasToRequest(req, "claude-opus-5")
+
+	require.Equal(t, "adaptive", req.Thinking.Type)
+	require.Equal(t, "xhigh", req.OutputConfig.Effort)
 }
 
 func TestInjectClaudeCodePrompt_PreservesFieldOrder(t *testing.T) {

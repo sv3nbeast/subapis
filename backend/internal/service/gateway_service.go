@@ -1896,6 +1896,14 @@ func normalizeAnthropicOpus5Thinking(body []byte, model string) []byte {
 	}
 	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
 	if thinkingType != "enabled" && thinkingType != "adaptive" {
+		// Opus 5 only accepts xhigh with thinking enabled. Keep thinking disabled
+		// and use the nearest supported effort instead of changing request semantics.
+		if !strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "output_config.effort").String()), "xhigh") {
+			return body
+		}
+		if next, ok := setJSONValueBytes(body, "output_config.effort", "high"); ok {
+			return next
+		}
 		return body
 	}
 	out := body
@@ -1913,11 +1921,17 @@ func normalizeAnthropicOpus5Thinking(body []byte, model string) []byte {
 }
 
 func normalizeAnthropicOpus5ThinkingRequest(req *apicompat.AnthropicRequest, model string) {
-	if req == nil || req.Thinking == nil || !isAnthropicOpus5Model(model) {
+	if req == nil || !isAnthropicOpus5Model(model) {
 		return
 	}
-	thinkingType := strings.ToLower(strings.TrimSpace(req.Thinking.Type))
+	thinkingType := ""
+	if req.Thinking != nil {
+		thinkingType = strings.ToLower(strings.TrimSpace(req.Thinking.Type))
+	}
 	if thinkingType != "enabled" && thinkingType != "adaptive" {
+		if req.OutputConfig != nil && strings.EqualFold(strings.TrimSpace(req.OutputConfig.Effort), "xhigh") {
+			req.OutputConfig.Effort = "high"
+		}
 		return
 	}
 	req.Thinking.Type = "adaptive"

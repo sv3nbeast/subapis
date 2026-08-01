@@ -1373,6 +1373,79 @@ func TestGatewayService_AnthropicOAuth_OfficialCompactionPreservesNativeNonStrea
 	require.True(t, events[0].NativeHelperNonStream)
 }
 
+func TestGatewayService_AnthropicOpus5_ClampsXHighWhenThinkingDisabledBeforeUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name    string
+		account *Account
+	}{
+		{
+			name: "oauth",
+			account: &Account{
+				ID:          306,
+				Name:        "anthropic-oauth-opus5-disabled-thinking",
+				Platform:    PlatformAnthropic,
+				Type:        AccountTypeOAuth,
+				Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token"},
+				Status:      StatusActive,
+				Schedulable: true,
+			},
+		},
+		{
+			name:    "api key passthrough",
+			account: newAnthropicAPIKeyAccountForTest(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			c.Request.Header.Set("User-Agent", "claude-cli/2.1.220 (external, claude-vscode, agent-sdk/0.3.220)")
+
+			body := []byte(`{"model":"claude-opus-5","stream":true,"metadata":{"user_id":"user_00000000_account__session_00000000"},"thinking":{"type":"disabled"},"output_config":{"effort":"xhigh","trace":true},"messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+			require.NoError(t, err)
+
+			upstream := &anthropicHTTPUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"text/event-stream"},
+						"x-request-id": []string{"rid-opus5-disabled-thinking"},
+					},
+					Body: io.NopCloser(strings.NewReader(anthropicMinimalSSEResponse)),
+				},
+			}
+
+			cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+			svc := &GatewayService{
+				cfg:                  cfg,
+				responseHeaderFilter: compileResponseHeaderFilter(cfg),
+				httpUpstream:         upstream,
+				rateLimitService:     &RateLimitService{},
+				deferredService:      &DeferredService{},
+			}
+			ctx := SetClaudeCodeUserAgent(SetClaudeCodeClient(context.Background(), true), "claude-cli/2.1.220 (external, claude-vscode, agent-sdk/0.3.220)")
+
+			result, err := svc.Forward(ctx, c, tt.account, parsed)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, "claude-opus-5", gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, "disabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
+			require.Equal(t, "high", gjson.GetBytes(upstream.lastBody, "output_config.effort").String())
+			require.True(t, gjson.GetBytes(upstream.lastBody, "output_config.trace").Bool())
+			require.Contains(t, rec.Body.String(), `"type":"message_stop"`)
+			require.True(t, result.Stream)
+		})
+	}
+}
+
 func TestShouldPreserveAnthropicNativeNonStream_RequiresValidatedClaudeCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
