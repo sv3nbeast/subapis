@@ -105,6 +105,8 @@ type GrokTokenInfo struct {
 	Email             string `json:"email,omitempty"`
 	UserID            string `json:"user_id,omitempty"`
 	TeamID            string `json:"team_id,omitempty"`
+	PrincipalType     string `json:"principal_type,omitempty"`
+	PrincipalID       string `json:"principal_id,omitempty"`
 	IdentityKey       string `json:"identity_key,omitempty"`
 	SubscriptionTier  string `json:"subscription_tier,omitempty"`
 	EntitlementStatus string `json:"entitlement_status,omitempty"`
@@ -158,11 +160,15 @@ func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchange
 }
 
 func (s *GrokOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*GrokTokenInfo, error) {
+	return s.refreshTokenForPrincipal(ctx, refreshToken, proxyURL, clientID, "", "")
+}
+
+func (s *GrokOAuthService) refreshTokenForPrincipal(ctx context.Context, refreshToken, proxyURL, clientID, principalType, principalID string) (*GrokTokenInfo, error) {
 	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_NO_REFRESH_TOKEN", "refresh_token is required")
 	}
-	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL, clientID)
+	tokenResp, err := s.oauthClient.RefreshToken(ctx, refreshToken, proxyURL, clientID, principalType, principalID)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +217,10 @@ func (s *GrokOAuthService) RefreshAccountToken(ctx context.Context, account *Acc
 	}
 
 	clientID := account.GetCredential("client_id")
-	tokenInfo, err := s.RefreshToken(ctx, refreshToken, proxyURL, clientID)
+	identity := parseGrokJWTIdentity(account.GetCredential("id_token"), account.GetGrokAccessToken())
+	principalType := strings.TrimSpace(firstNonEmpty(account.GetCredential("principal_type"), identity.PrincipalType))
+	principalID := strings.TrimSpace(firstNonEmpty(account.GetCredential("principal_id"), identity.PrincipalID))
+	tokenInfo, err := s.refreshTokenForPrincipal(ctx, refreshToken, proxyURL, clientID, principalType, principalID)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +261,12 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	}
 	if tokenInfo.TeamID != "" {
 		creds["team_id"] = tokenInfo.TeamID
+	}
+	if tokenInfo.PrincipalType != "" {
+		creds["principal_type"] = tokenInfo.PrincipalType
+	}
+	if tokenInfo.PrincipalID != "" {
+		creds["principal_id"] = tokenInfo.PrincipalID
 	}
 	if tokenInfo.IdentityKey != "" {
 		creds["identity_key"] = tokenInfo.IdentityKey
@@ -301,16 +316,20 @@ func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, c
 	info.Email = claims.Email
 	info.UserID = claims.UserID
 	info.TeamID = claims.TeamID
+	info.PrincipalType = claims.PrincipalType
+	info.PrincipalID = claims.PrincipalID
 	if info.Email == "" && existing != nil {
 		if email, _ := existing["email"].(string); email != "" {
 			info.Email = email
 		}
 	}
 	identityCredentials := map[string]any{
-		"client_id": info.ClientID,
-		"email":     info.Email,
-		"user_id":   info.UserID,
-		"team_id":   info.TeamID,
+		"client_id":      info.ClientID,
+		"email":          info.Email,
+		"user_id":        info.UserID,
+		"team_id":        info.TeamID,
+		"principal_type": info.PrincipalType,
+		"principal_id":   info.PrincipalID,
 	}
 	info.IdentityKey = GrokOAuthIdentityKey(identityCredentials)
 	return info
@@ -334,9 +353,11 @@ func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string
 }
 
 type grokJWTIdentity struct {
-	Email  string
-	UserID string
-	TeamID string
+	Email         string
+	UserID        string
+	TeamID        string
+	PrincipalType string
+	PrincipalID   string
 }
 
 func parseGrokJWTIdentity(tokens ...string) grokJWTIdentity {
@@ -370,6 +391,12 @@ func parseGrokJWTIdentity(tokens ...string) grokJWTIdentity {
 				grokStringClaim(claims, "organization_id"),
 			))
 		}
+		if identity.PrincipalType == "" {
+			identity.PrincipalType = strings.TrimSpace(grokStringClaim(claims, "principal_type"))
+		}
+		if identity.PrincipalID == "" {
+			identity.PrincipalID = strings.TrimSpace(grokStringClaim(claims, "principal_id"))
+		}
 	}
 	return identity
 }
@@ -393,6 +420,7 @@ func EnrichGrokOAuthCredentials(credentials map[string]any) map[string]any {
 	)
 	for key, value := range map[string]string{
 		"email": claims.Email, "user_id": claims.UserID, "team_id": claims.TeamID,
+		"principal_type": claims.PrincipalType, "principal_id": claims.PrincipalID,
 	} {
 		if strings.TrimSpace(grokCredentialString(enriched, key)) == "" && strings.TrimSpace(value) != "" {
 			enriched[key] = strings.TrimSpace(value)

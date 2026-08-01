@@ -7,7 +7,9 @@ import (
 	"time"
 )
 
-const grokTokenRefreshSkew = time.Hour
+// xAI's Grok client treats the final five minutes as a soft-expiry window.
+// The access token remains wire-valid until expires_at.
+const grokTokenRefreshSkew = 5 * time.Minute
 
 type GrokTokenRefresher struct {
 	grokOAuthService GrokOAuthTokenService

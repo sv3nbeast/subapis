@@ -46,6 +46,7 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 	resp, err := client.R().
 		SetContext(ctx).
 		SetHeader("User-Agent", "sub2api-grok-oauth/1.0").
+		SetHeader(xai.CLIClientVersionHdr, xai.CLIClientVersion).
 		SetFormDataFromValues(formData).
 		SetSuccessResult(&tokenResp).
 		Post(c.tokenURL)
@@ -58,7 +59,7 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 	return &tokenResp, nil
 }
 
-func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*xai.TokenResponse, error) {
+func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID, principalType, principalID string) (*xai.TokenResponse, error) {
 	client, err := createGrokReqClient(proxyURL)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
@@ -73,6 +74,12 @@ func (c *grokOAuthClient) RefreshToken(ctx context.Context, refreshToken, proxyU
 	formData.Set("grant_type", "refresh_token")
 	formData.Set("client_id", clientID)
 	formData.Set("refresh_token", refreshToken)
+	if principalType = strings.TrimSpace(principalType); principalType != "" {
+		formData.Set("principal_type", principalType)
+	}
+	if principalID = strings.TrimSpace(principalID); principalID != "" {
+		formData.Set("principal_id", principalID)
+	}
 
 	var tokenResp xai.TokenResponse
 	resp, err := client.R().

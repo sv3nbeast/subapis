@@ -22,6 +22,7 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 
 		switch r.Form.Get("grant_type") {
 		case "authorization_code":
+			require.Equal(t, xai.CLIClientVersion, r.Header.Get(xai.CLIClientVersionHdr))
 			require.Equal(t, "auth-code", r.Form.Get("code"))
 			require.Equal(t, "http://127.0.0.1:56121/callback", r.Form.Get("redirect_uri"))
 			require.Equal(t, "verifier", r.Form.Get("code_verifier"))
@@ -36,6 +37,8 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 			})
 		case "refresh_token":
 			require.Equal(t, "refresh-token", r.Form.Get("refresh_token"))
+			require.Equal(t, "User", r.Form.Get("principal_type"))
+			require.Equal(t, "principal-1", r.Form.Get("principal_id"))
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token":  "refresh-access",
 				"refresh_token": "refresh-rotated",
@@ -57,7 +60,7 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 	require.Equal(t, int64(3600), exchanged.ExpiresIn)
 	require.Equal(t, "openid api:access", exchanged.Scope)
 
-	refreshed, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+	refreshed, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id", "User", "principal-1")
 	require.NoError(t, err)
 	require.Equal(t, "refresh-access", refreshed.AccessToken)
 	require.Equal(t, "refresh-rotated", refreshed.RefreshToken)
@@ -83,7 +86,7 @@ func TestGrokOAuthClientRefreshForbiddenClassifiesOnlyExplicitEntitlement(t *tes
 			t.Setenv(xai.EnvTokenURL, server.URL)
 
 			client := NewGrokOAuthClient()
-			_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id")
+			_, err := client.RefreshToken(context.Background(), "refresh-token", "", "client-id", "", "")
 			require.Error(t, err)
 			require.Contains(t, strings.ToUpper(err.Error()), tt.wantReason)
 		})
@@ -99,7 +102,7 @@ func TestGrokOAuthClientStatusErrorRedactsSensitiveResponseBody(t *testing.T) {
 	t.Setenv(xai.EnvTokenURL, server.URL)
 
 	client := NewGrokOAuthClient()
-	_, err := client.RefreshToken(context.Background(), "refresh-secret", "", "client-id")
+	_, err := client.RefreshToken(context.Background(), "refresh-secret", "", "client-id", "", "")
 	require.Error(t, err)
 
 	errText := err.Error()

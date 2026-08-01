@@ -26,6 +26,8 @@ type grokOAuthClientStub struct {
 	refreshResponse *xai.TokenResponse
 	ssoResponse     *xai.TokenResponse
 	exchangeCalls   int
+	principalType   string
+	principalID     string
 }
 
 func (s *grokOAuthClientStub) ExchangeCode(context.Context, string, string, string, string, string) (*xai.TokenResponse, error) {
@@ -33,7 +35,9 @@ func (s *grokOAuthClientStub) ExchangeCode(context.Context, string, string, stri
 	return &xai.TokenResponse{}, nil
 }
 
-func (s *grokOAuthClientStub) RefreshToken(context.Context, string, string, string) (*xai.TokenResponse, error) {
+func (s *grokOAuthClientStub) RefreshToken(_ context.Context, _, _, _, principalType, principalID string) (*xai.TokenResponse, error) {
+	s.principalType = principalType
+	s.principalID = principalID
 	return s.refreshResponse, nil
 }
 
@@ -56,6 +60,37 @@ func TestGrokOAuthServiceRefreshTokenPreservesOriginalRefreshTokenWhenNotRotated
 	require.Equal(t, "new-access-token", info.AccessToken)
 	require.Equal(t, "original-refresh-token", info.RefreshToken)
 	require.Equal(t, "client-id", info.ClientID)
+}
+
+func TestGrokOAuthServiceRefreshAccountTokenForwardsJWTPrincipal(t *testing.T) {
+	client := &grokOAuthClientStub{
+		refreshResponse: &xai.TokenResponse{
+			AccessToken: "new-access-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+		},
+	}
+	svc := NewGrokOAuthService(nil, client)
+	defer svc.Stop()
+
+	info, err := svc.RefreshAccountToken(context.Background(), &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": grokTestJWT(t, map[string]any{
+				"sub":            "user-1",
+				"principal_type": "User",
+				"principal_id":   "principal-1",
+			}),
+			"refresh_token": "refresh-token",
+			"client_id":     "client-id",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "new-access-token", info.AccessToken)
+	require.Equal(t, "User", client.principalType)
+	require.Equal(t, "principal-1", client.principalID)
 }
 
 func TestGrokOAuthServiceExchangeCodeRequiresStateForCallbackURLAndConsumesSession(t *testing.T) {
@@ -120,7 +155,13 @@ func TestGrokOAuthServiceBuildAccountCredentialsUsesInferredCLIBaseURL(t *testin
 
 func TestEnrichGrokOAuthCredentialsBuildsStablePrincipalIdentity(t *testing.T) {
 	first := EnrichGrokOAuthCredentials(map[string]any{
-		"access_token":  grokTestJWT(t, map[string]any{"sub": "user-1", "email": "User@Example.com", "team_id": "team-1"}),
+		"access_token": grokTestJWT(t, map[string]any{
+			"sub":            "user-1",
+			"email":          "User@Example.com",
+			"team_id":        "team-1",
+			"principal_type": "User",
+			"principal_id":   "principal-1",
+		}),
 		"refresh_token": "refresh-a",
 		"client_id":     xai.DefaultClientID,
 	})
@@ -132,6 +173,8 @@ func TestEnrichGrokOAuthCredentialsBuildsStablePrincipalIdentity(t *testing.T) {
 
 	require.Equal(t, "user-1", first["user_id"])
 	require.Equal(t, "team-1", first["team_id"])
+	require.Equal(t, "User", first["principal_type"])
+	require.Equal(t, "principal-1", first["principal_id"])
 	require.Equal(t, first["identity_key"], second["identity_key"])
 	require.True(t, SameGrokOAuthIdentity(first, second))
 }

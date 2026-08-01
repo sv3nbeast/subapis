@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
 const (
@@ -73,12 +76,13 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	accountAccessToken := strings.TrimSpace(account.GetGrokAccessToken())
+	refreshToken := strings.TrimSpace(account.GetGrokRefreshToken())
 	cacheKey := GrokTokenCacheKey(account)
 	if p.tokenCache != nil {
 		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil {
 			cachedToken := strings.TrimSpace(token)
-			if cachedToken != "" && accountAccessToken != "" && cachedToken == accountAccessToken &&
-				expiresAt != nil && time.Until(*expiresAt) > grokTokenRefreshSkew {
+			if cachedToken != "" && accountAccessToken != "" && refreshToken != "" && cachedToken == accountAccessToken &&
+				grokOAuthAccessTokenHardValidAt(account, time.Now()) {
 				return cachedToken, nil
 			}
 		}
@@ -86,28 +90,18 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 
 	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= grokTokenRefreshSkew
 	if needsRefresh {
-		if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		if refreshToken == "" {
 			return "", withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, account)
 		}
 		if p.refreshAPI == nil || p.executor == nil {
 			return "", errGrokOAuthRefreshNotConfigured
 		}
+	}
+	if needsRefresh {
 		refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
 		defer cancel()
 		result, err := p.refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(refreshCtx), account, p.executor, grokTokenRefreshSkew)
-		if err != nil {
-			if p.refreshPolicy.OnRefreshError == ProviderRefreshErrorReturn {
-				return "", err
-			}
-		} else if result != nil && result.LockHeld {
-			if p.refreshPolicy.OnLockHeld == ProviderLockHeldWaitForCache {
-				token, waitErr := p.waitForRefreshedToken(refreshCtx, account, cacheKey)
-				return token, withGrokCredentialFailureSnapshot(waitErr, account)
-			}
-			if expiresAt == nil || !time.Now().Before(*expiresAt) {
-				return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenExpired, account)
-			}
-		} else if result != nil && result.Account != nil {
+		if result != nil && result.Account != nil {
 			if eligibilityErr := grokOAuthRequestAccountEligibilityError(result.Account); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, result.Account)
 			}
@@ -116,6 +110,31 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 			}
 			account = result.Account
 			expiresAt = account.GetCredentialAsTime("expires_at")
+		}
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			// RefreshIfNeeded only returns the attempted credential snapshot when
+			// the provider refresh call actually ran. State reread, eligibility,
+			// and persistence errors return no snapshot and must remain fail-closed.
+			if result != nil && result.Account != nil && grokOAuthAccessTokenHardValidAt(account, time.Now()) {
+				logGrokWireValidTokenFallback(account, expiresAt, "proactive_refresh_failed", err)
+			} else if p.refreshPolicy.OnRefreshError == ProviderRefreshErrorReturn {
+				return "", err
+			}
+		} else if result != nil && result.LockHeld {
+			latestAccount, latestErr := p.getCurrentGrokWireValidAccount(refreshCtx, account, selectedProxyID)
+			if latestErr == nil {
+				account = latestAccount
+				expiresAt = account.GetCredentialAsTime("expires_at")
+				logGrokWireValidTokenFallback(account, expiresAt, "refresh_lock_held", nil)
+			} else if p.refreshPolicy.OnLockHeld == ProviderLockHeldWaitForCache {
+				token, waitErr := p.waitForRefreshedToken(refreshCtx, account, cacheKey)
+				return token, withGrokCredentialFailureSnapshot(waitErr, account)
+			} else {
+				return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenExpired, account)
+			}
 		}
 	} else if accountAccessToken == "" {
 		return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenMissing, account)
@@ -164,6 +183,48 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	}
 
 	return accessToken, nil
+}
+
+func (p *GrokTokenProvider) getCurrentGrokWireValidAccount(ctx context.Context, selected *Account, selectedProxyID *int64) (*Account, error) {
+	if p == nil || p.accountRepo == nil || selected == nil {
+		return nil, errOAuthRefreshAccountRereadFailed
+	}
+	latest, err := p.accountRepo.GetByID(ctx, selected.ID)
+	if err != nil || latest == nil {
+		return nil, errOAuthRefreshAccountRereadFailed
+	}
+	if eligibilityErr := grokOAuthRequestAccountEligibilityError(latest); eligibilityErr != nil {
+		return nil, eligibilityErr
+	}
+	if !grokCredentialProxyIDsEqual(latest.ProxyID, selectedProxyID) {
+		return nil, errOAuthRefreshAccountStateChanged
+	}
+	if !grokOAuthAccessTokenHardValidAt(latest, time.Now()) {
+		return nil, errGrokOAuthAccessTokenExpired
+	}
+	return latest, nil
+}
+
+func grokOAuthAccessTokenHardValidAt(account *Account, now time.Time) bool {
+	if account == nil || !account.IsGrokOAuth() || strings.TrimSpace(account.GetGrokAccessToken()) == "" {
+		return false
+	}
+	expiresAt := account.GetCredentialAsTime("expires_at")
+	return expiresAt != nil && now.Before(*expiresAt)
+}
+
+func logGrokWireValidTokenFallback(account *Account, expiresAt *time.Time, reason string, refreshErr error) {
+	attrs := []any{
+		"account_id", account.ID,
+		"reason", reason,
+	}
+	if expiresAt != nil {
+		attrs = append(attrs, "expires_at", expiresAt.UTC().Format(time.RFC3339), "remaining_seconds", max(0, int(time.Until(*expiresAt).Seconds())))
+	}
+	if refreshErr != nil {
+		attrs = append(attrs, "error", logredact.RedactText(refreshErr.Error()))
+	}
+	slog.Warn("grok_token_provider.proactive_refresh_failed_using_wire_valid_token", attrs...)
 }
 
 // GetAccessTokenForManualTest returns an access token for an admin-initiated

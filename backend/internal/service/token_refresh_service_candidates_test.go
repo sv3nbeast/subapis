@@ -71,7 +71,7 @@ func (r *tokenRefreshCandidateRepo) ClearTempUnschedulable(context.Context, int6
 
 func isOAuthRefreshPlatform(platform string) bool {
 	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformKiro:
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformKiro, PlatformGrok:
 		return true
 	default:
 		return false
@@ -151,6 +151,13 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 				Status:      StatusActive,
 				Credentials: map[string]any{"refresh_token": "kiro-refresh-token"},
 			},
+			{
+				ID:          8,
+				Platform:    PlatformGrok,
+				Type:        AccountTypeOAuth,
+				Status:      StatusActive,
+				Credentials: map[string]any{"refresh_token": "grok-refresh-token"},
+			},
 		},
 	}
 	svc := &TokenRefreshService{
@@ -163,7 +170,7 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 	svc.processRefresh()
 
 	require.Zero(t, repo.listActiveCalls, "TokenRefreshService should not use the broad active-account query")
-	require.Equal(t, []int64{1, 6, 7}, repo.updatedCredentialIDs)
+	require.Equal(t, []int64{1, 6, 7, 8}, repo.updatedCredentialIDs)
 	require.Equal(t, 1, repo.clearTempCalls, "successful refresh should clear the OAuth 401 temp-unschedulable state")
 }
 

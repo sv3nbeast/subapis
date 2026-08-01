@@ -1124,6 +1124,14 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
+			if !isGrokOAuthReconcileRefresh(ctx) && grokOAuthAccessTokenHardValidAt(account, time.Now()) {
+				slog.Warn("token_refresh.grok_refresh_failed_access_token_still_valid",
+					"account_id", account.ID,
+					"expires_at", account.GetCredentialAsTime("expires_at").UTC().Format(time.RFC3339),
+					"error", logredact.RedactText(err.Error()),
+				)
+				return errRefreshSkipped
+			}
 			if isKiroCLIAPIKeyAccount(account) {
 				slog.Warn("token_refresh.auxiliary_oauth_failed_generation_key_preserved",
 					"account_id", account.ID,
@@ -1218,6 +1226,15 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !isGrokOAuthReconcileRefresh(ctx) && grokOAuthAccessTokenHardValidAt(account, time.Now()) {
+		expiresAt := account.GetCredentialAsTime("expires_at")
+		slog.Warn("token_refresh.grok_refresh_retry_exhausted_access_token_still_valid",
+			"account_id", account.ID,
+			"expires_at", expiresAt.UTC().Format(time.RFC3339),
+			"error", logredact.RedactText(lastErr.Error()),
+		)
+		return errRefreshSkipped
 	}
 
 	// 可重试错误耗尽：临时标记账号不可调度，避免请求路径反复命中已知失败的账号

@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	defaultGrokOAuthReconcilePageSize = 50
-	maxGrokOAuthReconcilePageSize     = 500
-	maxGrokOAuthReconcileWindow       = 24 * time.Hour
+	defaultGrokOAuthReconcilePageSize      = 50
+	maxGrokOAuthReconcilePageSize          = 500
+	defaultGrokOAuthReconcileRefreshWindow = time.Hour
+	maxGrokOAuthReconcileWindow            = 24 * time.Hour
 
 	GrokOAuthReconcileReasonMissingRefreshToken = "missing_refresh_token"
 	GrokOAuthReconcileReasonMissingAccessToken  = "missing_access_token"
@@ -50,6 +51,17 @@ var (
 		"refresh_window_seconds is outside the allowed range",
 	)
 )
+
+type grokOAuthReconcileRefreshContextKey struct{}
+
+func withGrokOAuthReconcileRefresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, grokOAuthReconcileRefreshContextKey{}, true)
+}
+
+func isGrokOAuthReconcileRefresh(ctx context.Context) bool {
+	reconcileRefresh, _ := ctx.Value(grokOAuthReconcileRefreshContextKey{}).(bool)
+	return reconcileRefresh
+}
 
 // GrokOAuthReconciler is the narrow admin-facing reconciliation port.
 type GrokOAuthReconciler interface {
@@ -117,7 +129,7 @@ func (s *TokenRefreshService) ReconcileGrokOAuth(ctx context.Context, input Grok
 	}
 	refreshWindow := input.RefreshWindow
 	if refreshWindow == 0 {
-		refreshWindow = grokTokenRefreshSkew
+		refreshWindow = defaultGrokOAuthReconcileRefreshWindow
 	}
 	if refreshWindow < 0 || refreshWindow > maxGrokOAuthReconcileWindow {
 		return nil, ErrGrokOAuthReconcileWindow
@@ -275,7 +287,7 @@ func (s *TokenRefreshService) ReconcileGrokOAuth(ctx context.Context, input Grok
 				result.Skipped++
 				break
 			}
-			refreshErr := s.refreshWithRetryWithRateGate(ctx, account, registration.refresher, registration.executor, refreshWindow, providerState)
+			refreshErr := s.refreshWithRetryWithRateGate(withGrokOAuthReconcileRefresh(ctx), account, registration.refresher, registration.executor, refreshWindow, providerState)
 			providerState.recordResult(refreshErr)
 			var permanentErr *accountPermanentRefreshError
 			switch {
