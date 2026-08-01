@@ -125,6 +125,9 @@ type APIKeyAuthGroupSnapshot struct {
 	PeakStart          string  `json:"peak_start"`
 	PeakEnd            string  `json:"peak_end"`
 	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
+
+	// ModelQuotaRatios is required by subscription preflight and usage accounting.
+	ModelQuotaRatios map[string]float64 `json:"model_quota_ratios,omitempty"`
 }
 
 // APIKeyAuthCacheEntry 缓存条目，支持负缓存

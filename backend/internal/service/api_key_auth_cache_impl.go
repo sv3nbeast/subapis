@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 18 // v18: include Grok Chat Completions upstream routing fields
+const apiKeyAuthSnapshotVersion = 19 // v19: include subscription model quota ratios
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -387,6 +387,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			DailyLimitUSD:                   groupForSnapshot.DailyLimitUSD,
 			WeeklyLimitUSD:                  groupForSnapshot.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 groupForSnapshot.MonthlyLimitUSD,
+			ModelQuotaRatios:                groupForSnapshot.ModelQuotaRatios,
 			AllowImageGeneration:            groupForSnapshot.AllowImageGeneration,
 			AllowBatchImageGeneration:       groupForSnapshot.AllowBatchImageGeneration,
 			ImageRateIndependent:            groupForSnapshot.ImageRateIndependent,
@@ -481,6 +482,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			DailyLimitUSD:                   snapshot.Group.DailyLimitUSD,
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,
+			ModelQuotaRatios:                snapshot.Group.ModelQuotaRatios,
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
 			AllowBatchImageGeneration:       snapshot.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,

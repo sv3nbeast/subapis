@@ -22,6 +22,7 @@ const (
 	billingCacheTTL           = 5 * time.Minute
 	billingCacheJitter        = 30 * time.Second
 	rateLimitCacheTTL         = 7 * 24 * time.Hour // 7 days matches the longest window
+	subscriptionCacheSchema   = "3"
 
 	// Rate limit window durations — must match service.RateLimitWindow* constants.
 	rateLimitWindow5h = 5 * time.Hour
@@ -108,7 +109,7 @@ var (
 
 	setSubCacheScript = redis.NewScript(`
 		if redis.call('EXISTS', KEYS[1]) == 1 then
-			if redis.call('HGET', KEYS[1], 'schema_version') == '2' then
+			if redis.call('HGET', KEYS[1], 'schema_version') == '3' then
 				return 0
 			end
 			redis.call('DEL', KEYS[1])
@@ -210,7 +211,7 @@ func (c *billingCache) GetSubscriptionCache(ctx context.Context, userID, groupID
 
 func (c *billingCache) parseSubscriptionCache(data map[string]string) (*service.SubscriptionCacheData, error) {
 	result := &service.SubscriptionCacheData{}
-	if data[subFieldSchema] != "2" {
+	if data[subFieldSchema] != subscriptionCacheSchema {
 		return nil, errors.New("invalid cache: unsupported subscription schema")
 	}
 
@@ -262,7 +263,7 @@ func (c *billingCache) SetSubscriptionCache(ctx context.Context, userID, groupID
 		subFieldWeeklyUsage, data.WeeklyUsage,
 		subFieldMonthlyUsage, data.MonthlyUsage,
 		subFieldVersion, data.Version,
-		subFieldSchema, 2,
+		subFieldSchema, subscriptionCacheSchema,
 	}
 	for model, usage := range data.ModelUsage {
 		prefix := subFieldModelPrefix + model + ":"

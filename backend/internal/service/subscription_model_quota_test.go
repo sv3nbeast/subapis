@@ -124,6 +124,57 @@ func TestBuildUsageBillingCommandIncludesSubscriptionQuotaModel(t *testing.T) {
 	require.Equal(t, "claude-fable-5", cmd.SubscriptionModel)
 }
 
+func TestSubscriptionModelQuotaSurvivesAuthSnapshotForPreflightAndBilling(t *testing.T) {
+	now := time.Now()
+	dailyStart := now.Add(-time.Hour)
+	dailyLimit := 10.0
+	groupID := int64(10)
+	subscriptionID := int64(20)
+	svc := &APIKeyService{}
+	apiKey := &APIKey{
+		ID:      2,
+		UserID:  1,
+		GroupID: &groupID,
+		Key:     "k-model-quota",
+		Status:  StatusActive,
+		User:    &User{ID: 1, Status: StatusActive, Role: RoleUser},
+		Group: &Group{
+			ID:               groupID,
+			Status:           StatusActive,
+			SubscriptionType: SubscriptionTypeSubscription,
+			DailyLimitUSD:    &dailyLimit,
+			ModelQuotaRatios: map[string]float64{"claude-fable-5": 0.5},
+		},
+	}
+	restored := svc.snapshotToAPIKey(apiKey.Key, svc.snapshotFromAPIKey(context.Background(), apiKey))
+	require.NotNil(t, restored)
+	require.Equal(t, apiKey.Group.ModelQuotaRatios, restored.Group.ModelQuotaRatios)
+
+	subscription := &UserSubscription{
+		ID:               subscriptionID,
+		StartsAt:         now.Add(-24 * time.Hour),
+		ExpiresAt:        now.Add(30 * 24 * time.Hour),
+		DailyWindowStart: &dailyStart,
+	}
+	ctx := context.WithValue(context.Background(), ctxkey.Model, "claude-fable-5[1m]")
+	err := checkSubscriptionModelQuota(ctx, restored.Group, subscription, map[string]SubscriptionModelUsage{
+		"claude-fable-5": {DailyUsageUSD: 5},
+	})
+	require.ErrorIs(t, err, ErrSubscriptionModelQuotaExhausted)
+
+	cmd := buildUsageBillingCommand("req-auth-snapshot", &UsageLog{Model: "claude-fable-5"}, &postUsageBillingParams{
+		Cost:               &CostBreakdown{ActualCost: 1},
+		User:               restored.User,
+		APIKey:             restored,
+		Account:            &Account{ID: 3},
+		Subscription:       subscription,
+		IsSubscriptionBill: true,
+		RequestedModel:     "claude-fable-5[1m]",
+	})
+	require.NotNil(t, cmd)
+	require.Equal(t, "claude-fable-5", cmd.SubscriptionModel)
+}
+
 func TestUsageBillingFingerprintRemainsCompatibleWithExistingDedupRows(t *testing.T) {
 	cmd := &UsageBillingCommand{
 		UserID:      1,

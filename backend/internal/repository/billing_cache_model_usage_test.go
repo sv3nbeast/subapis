@@ -113,13 +113,22 @@ func TestSetSubscriptionCacheReplacesLegacySchema(t *testing.T) {
 	ctx := context.Background()
 	key := billingSubKey(1, 2)
 
-	require.NoError(t, rdb.HSet(ctx, key, subFieldStatus, "legacy").Err())
+	require.NoError(t, rdb.HSet(ctx, key, map[string]any{
+		subFieldSchema: "2",
+		subFieldStatus: "legacy",
+		subFieldModelPrefix + "claude-fable-5:weekly_usage_usd": "999",
+	}).Err())
 	require.NoError(t, cache.SetSubscriptionCache(ctx, 1, 2, &service.SubscriptionCacheData{
 		Status:    service.SubscriptionStatusActive,
 		ExpiresAt: time.Now().Add(time.Hour),
+		ModelUsage: map[string]service.SubscriptionModelUsage{
+			"claude-fable-5": {WeeklyUsageUSD: 7},
+		},
 	}))
 
 	got, err := cache.GetSubscriptionCache(ctx, 1, 2)
 	require.NoError(t, err)
 	require.Equal(t, service.SubscriptionStatusActive, got.Status)
+	require.Equal(t, subscriptionCacheSchema, mr.HGet(key, subFieldSchema))
+	require.InDelta(t, 7, got.ModelUsage["claude-fable-5"].WeeklyUsageUSD, 1e-9)
 }
