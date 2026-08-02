@@ -47,6 +47,7 @@ func TestAPIKeyRepository_GetByKeyForAuth_PreservesMessagesDispatchModelConfig_S
 		SetRateMultiplier(1).
 		SetAllowMessagesDispatch(true).
 		SetDefaultMappedModel("gpt-5.4").
+		SetModelQuotaRatios(map[string]float64{"claude-fable-5": 0.5}).
 		SetMessagesDispatchModelConfig(service.OpenAIMessagesDispatchModelConfig{
 			OpusMappedModel:   "gpt-5.4-nano",
 			SonnetMappedModel: "gpt-5.3-codex",
@@ -72,4 +73,5 @@ func TestAPIKeyRepository_GetByKeyForAuth_PreservesMessagesDispatchModelConfig_S
 	require.Equal(t, key.Name, got.Name)
 	require.NotNil(t, got.Group)
 	require.Equal(t, group.MessagesDispatchModelConfig, got.Group.MessagesDispatchModelConfig)
+	require.Equal(t, group.ModelQuotaRatios, got.Group.ModelQuotaRatios)
 }
