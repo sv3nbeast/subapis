@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 19 // v19: include subscription model quota ratios
+const apiKeyAuthSnapshotVersion = 20 // v20: hydrate subscription model quota ratios in auth queries
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
