@@ -31,6 +31,19 @@ type grokCredentialRaceRepo struct {
 	mu sync.RWMutex
 }
 
+type grokPermanentFailureTokenService struct {
+	refreshCalls int
+}
+
+func (s *grokPermanentFailureTokenService) RefreshAccountToken(context.Context, *Account) (*GrokTokenInfo, error) {
+	s.refreshCalls++
+	return &GrokTokenInfo{AccessToken: "unexpected"}, nil
+}
+
+func (*grokPermanentFailureTokenService) BuildAccountCredentials(*GrokTokenInfo) map[string]any {
+	return map[string]any{"access_token": "unexpected"}
+}
+
 func (r *grokCredentialRaceRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -286,6 +299,34 @@ func TestGrokTokenRefresherUsesFiveMinuteSoftExpiryWindow(t *testing.T) {
 	require.False(t, refresher.NeedsRefresh(account, 0))
 	account.Credentials["expires_at"] = time.Now().Add(4 * time.Minute).UTC().Format(time.RFC3339)
 	require.True(t, refresher.NeedsRefresh(account, 0))
+}
+
+func TestGrokTokenRefresherStopsRetryingStoredPermanentFailureUntilAccessTokenExpires(t *testing.T) {
+	upstream := &grokPermanentFailureTokenService{}
+	refresher := NewGrokTokenRefresher(upstream)
+	account := &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":                           "wire-valid-access-token",
+			"refresh_token":                          "revoked-refresh-token",
+			"expires_at":                             time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339),
+			GrokOAuthRefreshFailureCodeCredentialKey: "invalid_grant",
+			GrokOAuthRefreshFailureAtCredentialKey:   time.Now().UTC().Format(time.RFC3339Nano),
+		},
+	}
+
+	require.False(t, refresher.NeedsRefresh(account, time.Hour), "stored invalid_grant must suppress background refresh while the access token is wire-valid")
+	_, err := refresher.Refresh(context.Background(), account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid_grant")
+	require.Zero(t, upstream.refreshCalls)
+
+	account.Credentials["expires_at"] = time.Now().Add(-time.Second).UTC().Format(time.RFC3339)
+	require.True(t, refresher.NeedsRefresh(account, 0), "an expired access token must still surface the permanent credential failure")
+	_, err = refresher.Refresh(context.Background(), account)
+	require.Error(t, err)
+	require.Zero(t, upstream.refreshCalls)
 }
 
 func TestGrokTokenProviderLockHeldWaitsForRefreshedCacheAndNeverUsesExpiredToken(t *testing.T) {

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/google/uuid"
 )
 
 // OAuthRefreshExecutor 各平台实现的 OAuth 刷新执行器
@@ -35,9 +38,10 @@ type GrokOAuthRefreshSuccessRepository interface {
 }
 
 const (
-	defaultRefreshLockTTL                   = 60 * time.Second
+	defaultRefreshLockTTL                   = 90 * time.Second
 	defaultRefreshLockReleaseTimeout        = 2 * time.Second
 	defaultRefreshPostPersistCleanupTimeout = 2 * time.Second
+	grokOAuthRefreshCriticalSectionTimeout  = 70 * time.Second
 )
 
 var (
@@ -132,7 +136,7 @@ type OAuthRefreshAPI struct {
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API
-// 可选传入 lockTTL 覆盖默认的 60s 分布式锁 TTL
+// 可选传入 lockTTL 覆盖默认的 90s 分布式锁 TTL
 func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache, lockTTL ...time.Duration) *OAuthRefreshAPI {
 	ttl := defaultRefreshLockTTL
 	if len(lockTTL) > 0 && lockTTL[0] > 0 {
@@ -191,10 +195,23 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	defer localMu.Unlock()
 
 	// 1. 获取分布式锁
+	refreshLeaseOwner := ""
 	if api.tokenCache != nil {
-		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
+		var acquired bool
+		var lockErr error
+		if leaseCache, ok := api.tokenCache.(OAuthRefreshLeaseCache); ok {
+			refreshLeaseOwner = uuid.NewString()
+			acquired, lockErr = leaseCache.AcquireRefreshLease(ctx, cacheKey, refreshLeaseOwner, api.lockTTL)
+		} else {
+			acquired, lockErr = api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
+		}
 		if lockErr != nil {
-			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
+			// A rotating Grok refresh token must never be spent without the
+			// cross-instance lease. Local-only fallback can double-spend it.
+			if account.IsGrokOAuth() {
+				return nil, fmt.Errorf("grok oauth refresh lease unavailable: %w", lockErr)
+			}
+			// Other providers retain the historical local-lock fallback.
 			slog.Warn("oauth_refresh_lock_failed_degraded",
 				"account_id", account.ID,
 				"cache_key", cacheKey,
@@ -204,7 +221,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// 锁被其他 worker 持有
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
-			defer api.releaseRefreshLock(ctx, cacheKey)
+			defer api.releaseRefreshLock(ctx, cacheKey, refreshLeaseOwner)
 		}
 	}
 
@@ -255,17 +272,41 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 
 	// 4. 执行平台特定刷新逻辑
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
-	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
-	if ctxErr := ctx.Err(); ctxErr != nil {
+	operationCtx := ctx
+	cancelOperation := func() {}
+	if freshAccount.IsGrokOAuth() {
+		// xAI rotates refresh tokens. Once the request is sent, abandoning a
+		// successful response loses the only successor token. Keep the critical
+		// section alive after client/cycle cancellation, but bound it below the
+		// distributed lease duration.
+		criticalTimeout := grokOAuthRefreshCriticalSectionTimeout
+		if maxByLease := clampRefreshAttemptToLockLease(criticalTimeout, api.lockTTL); maxByLease > 0 {
+			criticalTimeout = maxByLease
+		}
+		operationCtx, cancelOperation = context.WithTimeout(context.WithoutCancel(ctx), criticalTimeout)
+	}
+	defer cancelOperation()
+	newCredentials, refreshErr := executor.Refresh(operationCtx, freshAccount)
+	if ctxErr := operationCtx.Err(); ctxErr != nil {
 		// A provider implementation may ignore cancellation and return late
 		// credentials. Never persist them after the attempt/cycle boundary.
 		return nil, ctxErr
 	}
+	if !freshAccount.IsGrokOAuth() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+	}
 	if refreshErr != nil {
+		if freshAccount.IsGrokOAuth() && infraerrors.Reason(refreshErr) == "GROK_OAUTH_REQUEST_FAILED" {
+			// The request may have reached xAI before the transport failed. Do not
+			// immediately replay a potentially spent rotating refresh token.
+			return &OAuthRefreshResult{Account: attemptedAccount}, &providerCycleContainmentRefreshError{err: refreshErr}
+		}
 		// 竞争恢复：invalid_grant 可能是另一个 worker 已消费了旧 refresh_token
 		// 重新读取 DB，如果 refresh_token 已更新则说明是竞争，返回成功
 		if isInvalidGrantError(refreshErr) {
-			if recoveredAccount, recovered := api.tryRecoverFromRefreshRace(ctx, freshAccount); recovered {
+			if recoveredAccount, recovered := api.tryRecoverFromRefreshRace(operationCtx, freshAccount); recovered {
 				if requestPath && recoveredAccount.Platform == PlatformGrok {
 					if eligibilityErr := grokOAuthRequestAccountEligibilityError(recoveredAccount); eligibilityErr != nil {
 						return nil, withGrokCredentialFailureSnapshot(eligibilityErr, recoveredAccount)
@@ -301,7 +342,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				}
 			}
 			applied, updateErr := conditionalRepo.UpdateGrokOAuthCredentialsIfUnchanged(
-				ctx,
+				operationCtx,
 				freshAccount.ID,
 				attemptedAccount.Credentials,
 				attemptedAccount.ProxyID,
@@ -321,7 +362,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				}
 			}
 			if !applied {
-				currentAccount, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
+				currentAccount, readErr := api.accountRepo.GetByID(operationCtx, freshAccount.ID)
 				if readErr != nil || currentAccount == nil {
 					if readErr == nil {
 						readErr = fmt.Errorf("account not found after Grok OAuth success CAS miss")
@@ -336,7 +377,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				)
 				return &OAuthRefreshResult{Account: currentAccount}, nil
 			}
-			durableAccount, readErr := api.loadGrokDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
+			durableAccount, readErr := api.loadGrokDurableAccountAfterPersist(operationCtx, cacheKey, freshAccount.ID)
 			if readErr != nil || durableAccount == nil {
 				if readErr == nil {
 					readErr = fmt.Errorf("account not found after Grok OAuth success CAS")
@@ -372,14 +413,22 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}, nil
 }
 
-func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {
+func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey, owner string) {
 	cleanupParent := context.Background()
 	if parent != nil {
 		cleanupParent = context.WithoutCancel(parent)
 	}
 	ctx, cancel := context.WithTimeout(cleanupParent, defaultRefreshLockReleaseTimeout)
 	defer cancel()
-	if err := api.tokenCache.ReleaseRefreshLock(ctx, cacheKey); err != nil {
+	var err error
+	if owner != "" {
+		if leaseCache, ok := api.tokenCache.(OAuthRefreshLeaseCache); ok {
+			err = leaseCache.ReleaseRefreshLease(ctx, cacheKey, owner)
+		}
+	} else {
+		err = api.tokenCache.ReleaseRefreshLock(ctx, cacheKey)
+	}
+	if err != nil {
 		slog.Warn("oauth_refresh_lock_release_failed", "cache_key", cacheKey, "error", err)
 	}
 }

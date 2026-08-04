@@ -21,6 +21,8 @@ type OpenAIOAuthClient interface {
 // GrokOAuthClient interface for xAI/Grok OAuth operations.
 type GrokOAuthClient interface {
 	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*xai.TokenResponse, error)
+	StartDeviceAuthorization(ctx context.Context, proxyURL, clientID, scope string) (*xai.DeviceAuthorizationResponse, error)
+	PollDeviceAuthorization(ctx context.Context, deviceCode, proxyURL, clientID string) (*xai.TokenResponse, error)
 	RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID, principalType, principalID string) (*xai.TokenResponse, error)
 	ConvertSSOToBuild(ctx context.Context, ssoToken, proxyURL string) (*xai.TokenResponse, error)
 }

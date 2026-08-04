@@ -15,3 +15,11 @@ type GeminiTokenCache interface {
 	AcquireRefreshLock(ctx context.Context, cacheKey string, ttl time.Duration) (bool, error)
 	ReleaseRefreshLock(ctx context.Context, cacheKey string) error
 }
+
+// OAuthRefreshLeaseCache adds owner-aware refresh leases. OAuthRefreshAPI
+// prefers this contract so an expired holder cannot delete a successor's lock.
+// GeminiTokenCache remains unchanged for compatibility with existing caches.
+type OAuthRefreshLeaseCache interface {
+	AcquireRefreshLease(ctx context.Context, cacheKey, owner string, ttl time.Duration) (bool, error)
+	ReleaseRefreshLease(ctx context.Context, cacheKey, owner string) error
+}

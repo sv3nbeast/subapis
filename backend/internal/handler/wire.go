@@ -165,7 +165,7 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 	return h
 }
 
-// ProvideAdminAccountHandler wires optional Kiro OAuth refresh support into the account handler.
+// ProvideAdminAccountHandler wires provider-specific account refresh support.
 func ProvideAdminAccountHandler(
 	adminService service.AdminService,
 	oauthService *service.OAuthService,
@@ -174,6 +174,7 @@ func ProvideAdminAccountHandler(
 	antigravityOAuthService *service.AntigravityOAuthService,
 	grokOAuthService service.GrokOAuthTokenService,
 	kiroOAuthService *service.KiroOAuthService,
+	grokTokenProvider *service.GrokTokenProvider,
 	rateLimitService *service.RateLimitService,
 	accountUsageService *service.AccountUsageService,
 	accountTestService *service.AccountTestService,
@@ -202,6 +203,7 @@ func ProvideAdminAccountHandler(
 		grokQuotaService,
 	)
 	h.SetKiroOAuthService(kiroOAuthService)
+	h.SetGrokAccountRefresher(grokTokenProvider)
 	return h
 }
 

@@ -38,6 +38,9 @@ type tokenRefreshAccountRepo struct {
 	conditionalErrorErr          error
 	conditionalTempErr           error
 	conditionalSuccessErr        error
+	permanentFailureCalls        int
+	permanentFailureCode         string
+	permanentFailureErr          error
 	snapshotReads                bool
 	respectReadContext           bool
 	getByIDCalls                 int
@@ -193,6 +196,30 @@ func (r *tokenRefreshAccountRepo) UpdateGrokOAuthCredentialsIfUnchanged(_ contex
 	if r.cancelOnUpdate != nil {
 		r.cancelOnUpdate()
 	}
+	return true, nil
+}
+
+func (r *tokenRefreshAccountRepo) MarkGrokOAuthPermanentRefreshFailureIfCredentialsUnchanged(
+	_ context.Context,
+	id int64,
+	expectedCredentials map[string]any,
+	expectedProxyID *int64,
+	failureCode string,
+	failedAt time.Time,
+) (bool, error) {
+	r.permanentFailureCalls++
+	r.permanentFailureCode = failureCode
+	if r.permanentFailureErr != nil {
+		return false, r.permanentFailureErr
+	}
+	account := r.accountsByID[id]
+	if account == nil || !reflect.DeepEqual(account.Credentials, expectedCredentials) || !reflect.DeepEqual(account.ProxyID, expectedProxyID) {
+		return false, nil
+	}
+	account.Credentials = shallowCopyMap(account.Credentials)
+	account.Credentials[GrokOAuthRefreshFailureCodeCredentialKey] = failureCode
+	account.Credentials[GrokOAuthRefreshFailureAtCredentialKey] = failedAt.UTC().Format(time.RFC3339Nano)
+	account.Credentials["_token_version"] = failedAt.UnixMilli()
 	return true, nil
 }
 
@@ -703,6 +730,34 @@ func TestTokenRefreshService_RefreshWithRetry_RefreshFailed(t *testing.T) {
 	require.Equal(t, 0, repo.updateCalls)   // 刷新失败不应更新
 	require.Equal(t, 0, invalidator.calls)  // 刷新失败不应触发缓存失效
 	require.Equal(t, 0, repo.setErrorCalls) // 可重试错误耗尽不标记 error，下个周期继续重试
+}
+
+func TestTokenRefreshService_GrokInvalidGrantPersistsGenerationFailureWhileAccessTokenValid(t *testing.T) {
+	account := &Account{
+		ID:          121,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{
+			"access_token":  "wire-valid-access-token",
+			"refresh_token": "revoked-refresh-token",
+			"expires_at":    time.Now().Add(20 * time.Minute).UTC().Format(time.RFC3339),
+		},
+	}
+	repo := &tokenRefreshAccountRepo{}
+	repo.accountsByID = map[int64]*Account{account.ID: account}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{MaxRetries: 3}}
+	refreshService := NewTokenRefreshServiceWithKiro(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
+	refresher := &tokenRefresherStub{err: errors.New(`token refresh failed: {"error":"invalid_grant"}`)}
+
+	err := refreshService.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.ErrorIs(t, err, errRefreshSkipped)
+	require.Equal(t, 1, repo.permanentFailureCalls)
+	require.Equal(t, "invalid_grant", repo.permanentFailureCode)
+	require.Equal(t, "invalid_grant", account.GetCredential(GrokOAuthRefreshFailureCodeCredentialKey))
+	require.Zero(t, repo.setErrorCalls)
+	require.True(t, account.IsSchedulable(), "the still-valid access token must remain usable")
 }
 
 // TestTokenRefreshService_RefreshWithRetry_AntigravityRefreshFailed 测试 Antigravity 刷新失败不设置错误状态

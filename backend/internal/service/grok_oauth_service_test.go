@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
@@ -23,11 +24,33 @@ func grokTestJWT(t *testing.T, claims map[string]any) string {
 }
 
 type grokOAuthClientStub struct {
-	refreshResponse *xai.TokenResponse
-	ssoResponse     *xai.TokenResponse
-	exchangeCalls   int
-	principalType   string
-	principalID     string
+	refreshResponse  *xai.TokenResponse
+	ssoResponse      *xai.TokenResponse
+	deviceResponse   *xai.DeviceAuthorizationResponse
+	deviceToken      *xai.TokenResponse
+	devicePollErr    error
+	deviceStartErr   error
+	deviceStartCalls int
+	devicePollCalls  int
+	deviceProxyURL   string
+	deviceClientID   string
+	deviceScope      string
+	exchangeCalls    int
+	principalType    string
+	principalID      string
+}
+
+func (s *grokOAuthClientStub) StartDeviceAuthorization(_ context.Context, proxyURL, clientID, scope string) (*xai.DeviceAuthorizationResponse, error) {
+	s.deviceStartCalls++
+	s.deviceProxyURL = proxyURL
+	s.deviceClientID = clientID
+	s.deviceScope = scope
+	return s.deviceResponse, s.deviceStartErr
+}
+
+func (s *grokOAuthClientStub) PollDeviceAuthorization(context.Context, string, string, string) (*xai.TokenResponse, error) {
+	s.devicePollCalls++
+	return s.deviceToken, s.devicePollErr
 }
 
 func (s *grokOAuthClientStub) ExchangeCode(context.Context, string, string, string, string, string) (*xai.TokenResponse, error) {
@@ -60,6 +83,116 @@ func TestGrokOAuthServiceRefreshTokenPreservesOriginalRefreshTokenWhenNotRotated
 	require.Equal(t, "new-access-token", info.AccessToken)
 	require.Equal(t, "original-refresh-token", info.RefreshToken)
 	require.Equal(t, "client-id", info.ClientID)
+}
+
+func TestGrokOAuthServiceDeviceFlowDelaysPollingBindsOperationAndCompletesIdempotently(t *testing.T) {
+	client := &grokOAuthClientStub{
+		deviceResponse: &xai.DeviceAuthorizationResponse{
+			DeviceCode:              "device-secret",
+			UserCode:                "ABCD-EFGH",
+			VerificationURI:         "https://accounts.x.ai/oauth2/device",
+			VerificationURIComplete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH",
+			Interval:                5,
+			ExpiresIn:               1800,
+		},
+		deviceToken: &xai.TokenResponse{
+			AccessToken:  "device-access",
+			RefreshToken: "device-refresh",
+			ExpiresIn:    3600,
+		},
+	}
+	svc := NewGrokOAuthService(nil, client)
+	defer svc.Stop()
+
+	accountID := int64(42)
+	expectedCredentials := map[string]any{"refresh_token": "generation-a", "model_mapping": map[string]any{"grok": "grok-4"}}
+	started, err := svc.StartDeviceAuthorization(context.Background(), nil, &accountID, expectedCredentials)
+	require.NoError(t, err)
+	expectedCredentials["refresh_token"] = "caller-mutated"
+	require.Equal(t, 1, client.deviceStartCalls)
+	require.Equal(t, xai.DefaultClientID, client.deviceClientID)
+	require.Equal(t, xai.DefaultScope, client.deviceScope)
+	require.Equal(t, "ABCD-EFGH", started.UserCode)
+
+	pending, err := svc.PollDeviceAuthorization(context.Background(), started.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", pending.Status)
+	require.Zero(t, client.devicePollCalls, "a fresh device code must not be polled immediately")
+
+	session, ok := svc.deviceStore.Get(started.SessionID)
+	require.True(t, ok)
+	session.mu.Lock()
+	session.nextPollAt = time.Now().Add(-time.Second)
+	session.mu.Unlock()
+	authorized, err := svc.PollDeviceAuthorization(context.Background(), started.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, "authorized", authorized.Status)
+	require.Equal(t, 1, client.devicePollCalls)
+	payload, err := json.Marshal(authorized)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), "device-access")
+	require.NotContains(t, string(payload), "device-refresh")
+
+	callbackCalls := 0
+	_, err = svc.CompleteDeviceAuthorization(started.SessionID, nil, nil, func(*GrokTokenInfo, map[string]any) (int64, error) {
+		callbackCalls++
+		return 99, nil
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GROK_DEVICE_ACCOUNT_CHANGED")
+	require.Zero(t, callbackCalls)
+
+	completedID, err := svc.CompleteDeviceAuthorization(started.SessionID, nil, &accountID, func(info *GrokTokenInfo, generation map[string]any) (int64, error) {
+		callbackCalls++
+		require.Equal(t, "device-access", info.AccessToken)
+		require.Equal(t, "device-refresh", info.RefreshToken)
+		require.Equal(t, "generation-a", generation["refresh_token"])
+		return 99, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(99), completedID)
+	require.Equal(t, 1, callbackCalls)
+
+	completedID, err = svc.CompleteDeviceAuthorization(started.SessionID, nil, &accountID, func(*GrokTokenInfo, map[string]any) (int64, error) {
+		callbackCalls++
+		return 100, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(99), completedID)
+	require.Equal(t, 1, callbackCalls, "completion retry must return the stored receipt")
+
+	authorized, err = svc.PollDeviceAuthorization(context.Background(), started.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, "authorized", authorized.Status)
+	require.Equal(t, 1, client.devicePollCalls, "completed sessions must not poll xAI again")
+}
+
+func TestGrokOAuthServiceDeviceFlowHonorsSlowDown(t *testing.T) {
+	client := &grokOAuthClientStub{
+		deviceResponse: &xai.DeviceAuthorizationResponse{
+			DeviceCode:      "device-secret",
+			UserCode:        "ABCD-EFGH",
+			VerificationURI: "https://accounts.x.ai/oauth2/device",
+			Interval:        5,
+			ExpiresIn:       1800,
+		},
+		devicePollErr: &xai.DeviceAuthorizationError{Code: "slow_down", RetryAfter: 22 * time.Second},
+	}
+	svc := NewGrokOAuthService(nil, client)
+	defer svc.Stop()
+
+	started, err := svc.StartDeviceAuthorization(context.Background(), nil, nil, nil)
+	require.NoError(t, err)
+	session, ok := svc.deviceStore.Get(started.SessionID)
+	require.True(t, ok)
+	session.mu.Lock()
+	session.nextPollAt = time.Now().Add(-time.Second)
+	session.mu.Unlock()
+
+	pending, err := svc.PollDeviceAuthorization(context.Background(), started.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", pending.Status)
+	require.Equal(t, 22, pending.RetryAfterSeconds)
 }
 
 func TestGrokOAuthServiceRefreshAccountTokenForwardsJWTPrincipal(t *testing.T) {
@@ -151,6 +284,32 @@ func TestGrokOAuthServiceBuildAccountCredentialsUsesInferredCLIBaseURL(t *testin
 	require.NoError(t, err)
 	require.Equal(t, xai.DefaultCLIBaseURL, info.BaseURL)
 	require.Equal(t, xai.DefaultCLIBaseURL, svc.BuildAccountCredentials(info)["base_url"])
+}
+
+func TestMergeGrokOAuthManagedCredentialsPreservesDeviceOriginButDropsStaleFailure(t *testing.T) {
+	merged := MergeGrokOAuthManagedCredentials(
+		map[string]any{
+			"access_token":                           "old-access",
+			"refresh_token":                          "old-refresh",
+			"id_token":                               "stale-id-token",
+			GrokOAuthFlowCredentialKey:               GrokOAuthFlowDevice,
+			GrokOAuthRefreshFailureCodeCredentialKey: "invalid_grant",
+			GrokOAuthRefreshFailureAtCredentialKey:   "2026-08-04T00:00:00Z",
+			"model_mapping":                          map[string]any{"grok": "grok-4"},
+		},
+		map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "new-refresh",
+		},
+	)
+
+	require.Equal(t, "new-access", merged["access_token"])
+	require.Equal(t, "new-refresh", merged["refresh_token"])
+	require.Equal(t, GrokOAuthFlowDevice, merged[GrokOAuthFlowCredentialKey])
+	require.NotContains(t, merged, "id_token")
+	require.NotContains(t, merged, GrokOAuthRefreshFailureCodeCredentialKey)
+	require.NotContains(t, merged, GrokOAuthRefreshFailureAtCredentialKey)
+	require.Contains(t, merged, "model_mapping")
 }
 
 func TestEnrichGrokOAuthCredentialsBuildsStablePrincipalIdentity(t *testing.T) {

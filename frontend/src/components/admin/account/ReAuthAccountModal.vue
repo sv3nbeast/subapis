@@ -138,10 +138,18 @@
         :show-help="isAnthropic"
         :show-proxy-warning="isAnthropic"
         :show-cookie-option="isAnthropic"
+        :show-device-option="isGrok"
+        :show-manual-option="true"
+        :device-user-code="grokOAuth.deviceUserCode.value"
+        :device-verification-url="grokOAuth.deviceVerificationUrl.value"
+        :device-status="grokOAuth.deviceStatus.value"
+        :initial-input-method="isGrok ? 'device' : 'manual'"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
         :platform="currentOAuthPlatform"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
+        @start-device="handleStartGrokDeviceAuthorization"
+        @update:input-method="handleOAuthInputMethodChange"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
       />
@@ -324,8 +332,17 @@ const currentError = computed(() => {
 
 // Computed
 const isManualInputMethod = computed(() => {
-  // OpenAI/Gemini/Antigravity/Grok/Kiro/Droid always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || isKiro.value || isDroid.value || oauthFlowRef.value?.inputMethod === 'manual'
+  if (isGrok.value) {
+    return oauthFlowRef.value?.inputMethod === 'manual'
+  }
+  return (
+    isOpenAILike.value ||
+    isGemini.value ||
+    isAntigravity.value ||
+    isKiro.value ||
+    isDroid.value ||
+    oauthFlowRef.value?.inputMethod === 'manual'
+  )
 })
 
 const canExchangeCode = computed(() => {
@@ -416,6 +433,30 @@ const handleGenerateUrl = async () => {
   } else {
     await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
   }
+}
+
+const handleOAuthInputMethodChange = (method: AuthInputMethod) => {
+  if (isGrok.value && method !== 'device') {
+    grokOAuth.cancelDeviceAuthorization()
+  }
+}
+
+const handleStartGrokDeviceAuthorization = async () => {
+  if (!props.account || !isGrok.value) return
+
+  await grokOAuth.startDeviceAuthorization({
+    proxyId: props.account.proxy_id,
+    accountId: props.account.id,
+    onAuthorized: async (sessionId) => {
+      const updatedAccount = await adminAPI.grok.completeDeviceReauthorization(
+        props.account!.id,
+        sessionId
+      )
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized', updatedAccount)
+      handleClose()
+    }
+  })
 }
 
 const handleExchangeCode = async () => {

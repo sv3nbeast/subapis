@@ -58,6 +58,14 @@ func (grokImportOAuthClientStub) ExchangeCode(context.Context, string, string, s
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
 }
 
+func (grokImportOAuthClientStub) StartDeviceAuthorization(context.Context, string, string, string) (*xai.DeviceAuthorizationResponse, error) {
+	return nil, nil
+}
+
+func (grokImportOAuthClientStub) PollDeviceAuthorization(context.Context, string, string, string) (*xai.TokenResponse, error) {
+	return nil, nil
+}
+
 func (grokImportOAuthClientStub) RefreshToken(context.Context, string, string, string, string, string) (*xai.TokenResponse, error) {
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
 }
@@ -73,7 +81,7 @@ func TestGrokSSOBatchImportKeepsCreatedAccountsWhenOneAutomaticProbeFails(t *tes
 	defer oauthService.Stop()
 	prober := newGrokImportProbeStub(3)
 	prober.failures[502] = infraerrors.New(502, "GROK_TEST_PROBE_FAILED", "sensitive-upstream-body")
-	handler := NewGrokOAuthHandler(oauthService, adminService, nil, nil)
+	handler := NewGrokOAuthHandler(oauthService, adminService, nil, nil, nil, nil)
 	handler.importProber = prober
 
 	router := gin.New()

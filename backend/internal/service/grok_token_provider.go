@@ -361,6 +361,49 @@ func (p *GrokTokenProvider) ForceRefreshAccessToken(ctx context.Context, account
 	return accessToken, nil
 }
 
+// ForceRefreshAccountForAdmin routes explicit account refreshes through the
+// same local/distributed lock and exact-generation CAS as background and
+// request-path refreshes. No account-bound caller may spend a rotating Grok
+// refresh token by calling GrokOAuthService directly.
+func (p *GrokTokenProvider) ForceRefreshAccountForAdmin(ctx context.Context, account *Account) (*Account, error) {
+	if p == nil {
+		return nil, errors.New("grok token provider not configured")
+	}
+	if account == nil {
+		return nil, errors.New("account is nil")
+	}
+	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
+		return nil, errors.New("not a grok oauth account")
+	}
+	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		return nil, errGrokOAuthRefreshTokenMissing
+	}
+	if p.refreshAPI == nil || p.executor == nil || p.accountRepo == nil {
+		return nil, errGrokOAuthRefreshNotConfigured
+	}
+
+	result, err := p.refreshAPI.RefreshIfNeeded(ctx, account, forceOAuthRefreshExecutor{OAuthRefreshExecutor: p.executor}, 0)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("grok token refresh returned empty result")
+	}
+	if result.LockHeld {
+		if _, waitErr := p.waitForRefreshedToken(ctx, account, GrokTokenCacheKey(account)); waitErr != nil {
+			return nil, waitErr
+		}
+		return p.accountRepo.GetByID(ctx, account.ID)
+	}
+	if !result.Refreshed {
+		return nil, errors.New("grok oauth account is not active or no longer refreshable")
+	}
+	if result.Account != nil {
+		return result.Account, nil
+	}
+	return p.accountRepo.GetByID(ctx, account.ID)
+}
+
 func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, grokRefreshLockWaitTimeout)
 	defer cancel()

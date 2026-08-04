@@ -5217,6 +5217,22 @@ const baseMessages = {
         },
         grok: {
           title: 'Grok 账号授权',
+          deviceAuth: '设备授权（推荐）',
+          deviceStart: '开始设备授权',
+          deviceCode: '设备验证码',
+          deviceOpen: '打开 xAI 并授权',
+          deviceRestart: '重新开始设备授权',
+          deviceStartFailed: '启动 Grok 设备授权失败',
+          devicePollFailed: 'Grok 设备授权未完成',
+          deviceExpired: '设备授权已过期，请重新开始',
+          deviceStatus: {
+            idle: '尚未开始',
+            pending: '等待您在 xAI 完成授权，完成后将自动保存账号。',
+            authorized: '授权成功，正在保存账号。',
+            completing: '授权成功，正在保存账号。',
+            completed: '账号已保存。',
+            failed: '授权未完成，请重新开始。'
+          },
           followSteps: '请按照以下步骤授权您的 xAI/Grok 账号：',
           step1GenerateUrl: '生成 xAI 授权链接',
           generateAuthUrl: '生成授权链接',

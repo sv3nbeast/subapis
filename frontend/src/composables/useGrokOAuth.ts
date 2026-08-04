@@ -14,13 +14,134 @@ export function useGrokOAuth() {
   const state = ref('')
   const loading = ref(false)
   const error = ref('')
+  const deviceUserCode = ref('')
+  const deviceVerificationUrl = ref('')
+  const deviceStatus = ref<'idle' | 'pending' | 'authorized' | 'completing' | 'completed' | 'failed'>('idle')
+  const deviceExpiresAt = ref(0)
+  let deviceRun = 0
+  let devicePollTimer: ReturnType<typeof setTimeout> | null = null
+
+  const stopDevicePolling = () => {
+    deviceRun += 1
+    if (devicePollTimer) {
+      clearTimeout(devicePollTimer)
+      devicePollTimer = null
+    }
+  }
 
   const resetState = () => {
+    stopDevicePolling()
     authUrl.value = ''
     sessionId.value = ''
     state.value = ''
     loading.value = false
     error.value = ''
+    deviceUserCode.value = ''
+    deviceVerificationUrl.value = ''
+    deviceStatus.value = 'idle'
+    deviceExpiresAt.value = 0
+  }
+
+  const cancelDeviceAuthorization = () => {
+    stopDevicePolling()
+    deviceUserCode.value = ''
+    deviceVerificationUrl.value = ''
+    deviceStatus.value = 'idle'
+    deviceExpiresAt.value = 0
+  }
+
+  const startDeviceAuthorization = async (params: {
+    proxyId?: number | null
+    accountId?: number
+    onAuthorized: (sessionId: string) => Promise<void>
+  }): Promise<boolean> => {
+    stopDevicePolling()
+    const run = deviceRun
+    authUrl.value = ''
+    sessionId.value = ''
+    state.value = ''
+    deviceUserCode.value = ''
+    deviceVerificationUrl.value = ''
+    deviceStatus.value = 'idle'
+    deviceExpiresAt.value = 0
+    error.value = ''
+    loading.value = true
+
+    try {
+      const payload: { proxy_id?: number; account_id?: number } = {}
+      if (params.proxyId) payload.proxy_id = params.proxyId
+      if (params.accountId) payload.account_id = params.accountId
+      const result = await adminAPI.grok.startDeviceAuthorization(payload)
+      if (run !== deviceRun) return false
+      sessionId.value = result.session_id
+      deviceUserCode.value = result.user_code
+      deviceVerificationUrl.value = result.verification_uri_complete || result.verification_uri
+      deviceExpiresAt.value = result.expires_at
+      deviceStatus.value = 'pending'
+      scheduleDevicePoll(run, params.onAuthorized, result.interval_seconds)
+      return true
+    } catch (err: any) {
+      if (run !== deviceRun) return false
+      deviceStatus.value = 'failed'
+      error.value = extractApiErrorMessage(err, t('admin.accounts.oauth.grok.deviceStartFailed'))
+      appStore.showError(error.value)
+      return false
+    } finally {
+      if (run === deviceRun) loading.value = false
+    }
+  }
+
+  const scheduleDevicePoll = (
+    run: number,
+    onAuthorized: (sessionId: string) => Promise<void>,
+    delaySeconds: number
+  ) => {
+    if (run !== deviceRun || !sessionId.value) return
+    const delay = Math.max(1, Number.isFinite(delaySeconds) ? delaySeconds : 5) * 1000
+    devicePollTimer = setTimeout(() => {
+      devicePollTimer = null
+      void pollDeviceAuthorization(run, onAuthorized)
+    }, delay)
+  }
+
+  const pollDeviceAuthorization = async (
+    run: number,
+    onAuthorized: (sessionId: string) => Promise<void>
+  ) => {
+    const currentSessionId = sessionId.value
+    if (run !== deviceRun || !currentSessionId) return
+    if (deviceExpiresAt.value > 0 && Date.now() >= deviceExpiresAt.value * 1000) {
+      deviceStatus.value = 'failed'
+      error.value = t('admin.accounts.oauth.grok.deviceExpired')
+      return
+    }
+    try {
+      const result = await adminAPI.grok.pollDeviceAuthorization(currentSessionId)
+      if (run !== deviceRun) return
+      if (result.status !== 'authorized') {
+        scheduleDevicePoll(run, onAuthorized, result.retry_after_seconds || 5)
+        return
+      }
+      deviceStatus.value = 'authorized'
+      loading.value = true
+      deviceStatus.value = 'completing'
+      await onAuthorized(currentSessionId)
+      if (run !== deviceRun) return
+      deviceStatus.value = 'completed'
+    } catch (err: any) {
+      if (run !== deviceRun) return
+      const status = Number(err?.response?.status || 0)
+      if (status === 0 || status === 429 || status >= 500) {
+        deviceStatus.value = 'pending'
+        scheduleDevicePoll(run, onAuthorized, 5)
+      } else {
+        deviceStatus.value = 'failed'
+        error.value = extractApiErrorMessage(err, t('admin.accounts.oauth.grok.devicePollFailed'))
+        appStore.showError(error.value)
+      }
+    } finally {
+      if (run === deviceRun) loading.value = false
+    }
   }
 
   const generateAuthUrl = async (proxyId: number | null | undefined): Promise<boolean> => {
@@ -147,8 +268,14 @@ export function useGrokOAuth() {
     state,
     loading,
     error,
+    deviceUserCode,
+    deviceVerificationUrl,
+    deviceStatus,
+    deviceExpiresAt,
     resetState,
+    cancelDeviceAuthorization,
     generateAuthUrl,
+    startDeviceAuthorization,
     exchangeAuthCode,
     validateRefreshToken,
     buildCredentials,

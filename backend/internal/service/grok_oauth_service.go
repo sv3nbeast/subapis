@@ -15,10 +15,25 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
-const grokDefaultAccessTokenTTL = 6 * time.Hour
+const (
+	grokDefaultAccessTokenTTL  = 6 * time.Hour
+	GrokOAuthFlowCredentialKey = "_oauth_flow"
+	GrokOAuthFlowDevice        = "device"
+)
+
+var grokOAuthManagedCredentialKeys = map[string]struct{}{
+	"access_token": {}, "refresh_token": {}, "id_token": {}, "token_type": {},
+	"expires_at": {}, "client_id": {}, "scope": {}, "email": {}, "user_id": {},
+	"team_id": {}, "principal_type": {}, "principal_id": {}, "identity_key": {},
+	"subscription_tier": {}, "entitlement_status": {}, "_token_version": {},
+	GrokOAuthFlowCredentialKey:               {},
+	GrokOAuthRefreshFailureCodeCredentialKey: {},
+	GrokOAuthRefreshFailureAtCredentialKey:   {},
+}
 
 type GrokOAuthService struct {
 	sessionStore *xai.SessionStore
+	deviceStore  *grokDeviceSessionStore
 	proxyRepo    ProxyRepository
 	oauthClient  GrokOAuthClient
 }
@@ -26,6 +41,7 @@ type GrokOAuthService struct {
 func NewGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthClient) *GrokOAuthService {
 	return &GrokOAuthService{
 		sessionStore: xai.NewSessionStore(),
+		deviceStore:  newGrokDeviceSessionStore(),
 		proxyRepo:    proxyRepo,
 		oauthClient:  oauthClient,
 	}
@@ -235,8 +251,9 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	}
 	expiresAt := time.Unix(tokenInfo.ExpiresAt, 0).UTC().Format(time.RFC3339)
 	creds := map[string]any{
-		"access_token": tokenInfo.AccessToken,
-		"expires_at":   expiresAt,
+		"access_token":   tokenInfo.AccessToken,
+		"expires_at":     expiresAt,
+		"_token_version": time.Now().UnixMilli(),
 	}
 	if tokenInfo.RefreshToken != "" {
 		creds["refresh_token"] = tokenInfo.RefreshToken
@@ -287,6 +304,9 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 
 func (s *GrokOAuthService) Stop() {
 	s.sessionStore.Stop()
+	if s.deviceStore != nil {
+		s.deviceStore.Stop()
+	}
 }
 
 func (s *GrokOAuthService) tokenInfoFromResponse(tokenResp *xai.TokenResponse, clientID string, existing map[string]any) *GrokTokenInfo {
@@ -523,22 +543,31 @@ func PreserveGrokOAuthRoutingCredentials(account *Account, incoming map[string]a
 	if account == nil || account.Platform != PlatformGrok {
 		return incoming
 	}
-
-	merged := make(map[string]any, len(incoming)+2)
-	for key, value := range incoming {
-		merged[key] = value
-	}
-	for _, key := range []string{"base_url", "model_mapping"} {
-		if _, exists := merged[key]; exists {
-			continue
-		}
-		if value, exists := account.Credentials[key]; exists {
-			merged[key] = value
-		}
-	}
+	merged := clearGrokOAuthRefreshFailure(MergeGrokOAuthManagedCredentials(account.Credentials, incoming))
 	if _, exists := merged["base_url"]; !exists {
 		accessToken, _ := merged["access_token"].(string)
 		merged["base_url"] = inferGrokBaseURL(accessToken)
+	}
+	return merged
+}
+
+// MergeGrokOAuthManagedCredentials replaces the complete OAuth credential
+// generation while retaining operator-owned routing and compatibility fields.
+// Managed fields absent from the new generation are deliberately removed so a
+// stale id_token or permanent refresh failure marker cannot survive reauth.
+func MergeGrokOAuthManagedCredentials(existing, incoming map[string]any) map[string]any {
+	merged := make(map[string]any, len(existing)+len(incoming))
+	for key, value := range existing {
+		_, managed := grokOAuthManagedCredentialKeys[key]
+		if !managed || key == GrokOAuthFlowCredentialKey {
+			merged[key] = value
+		}
+	}
+	for key, value := range incoming {
+		_, managed := grokOAuthManagedCredentialKeys[key]
+		if _, exists := merged[key]; managed || !exists {
+			merged[key] = value
+		}
 	}
 	return merged
 }

@@ -40,6 +40,10 @@ type OAuthHandler struct {
 	oauthService *service.OAuthService
 }
 
+type grokAccountCredentialRefresher interface {
+	ForceRefreshAccountForAdmin(context.Context, *service.Account) (*service.Account, error)
+}
+
 // NewOAuthHandler creates a new OAuth handler
 func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 	return &OAuthHandler{
@@ -56,6 +60,7 @@ type AccountHandler struct {
 	antigravityOAuthService *service.AntigravityOAuthService
 	kiroOAuthService        *service.KiroOAuthService
 	grokOAuthService        service.GrokOAuthTokenService
+	grokAccountRefresher    grokAccountCredentialRefresher
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
@@ -115,6 +120,12 @@ func NewAccountHandler(
 // SetKiroOAuthService injects Kiro OAuth refresh support for manual account refresh.
 func (h *AccountHandler) SetKiroOAuthService(kiroOAuthService *service.KiroOAuthService) {
 	h.kiroOAuthService = kiroOAuthService
+}
+
+// SetGrokAccountRefresher ensures admin single/batch refreshes share the same
+// rotating-token lock used by the gateway and background refresher.
+func (h *AccountHandler) SetGrokAccountRefresher(refresher grokAccountCredentialRefresher) {
+	h.grokAccountRefresher = refresher
 }
 
 // CreateAccountRequest represents create account request
@@ -1290,18 +1301,14 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			}
 		}
 	} else if account.Platform == service.PlatformGrok {
-		if h.grokOAuthService == nil {
-			return nil, "", fmt.Errorf("grok oauth service is not configured")
+		if h.grokAccountRefresher == nil {
+			return nil, "", fmt.Errorf("grok oauth account refresher is not configured")
 		}
-		tokenInfo, err := h.grokOAuthService.RefreshAccountToken(ctx, account)
+		updatedAccount, err := h.grokAccountRefresher.ForceRefreshAccountForAdmin(ctx, account)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to refresh Grok credentials: %w", err)
 		}
-
-		newCredentials = service.MergeCredentials(account.Credentials, h.grokOAuthService.BuildAccountCredentials(tokenInfo))
-		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-			newCredentials["base_url"] = baseURL
-		}
+		return updatedAccount, "", nil
 	} else {
 		// Use Anthropic/Claude OAuth service to refresh token
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)

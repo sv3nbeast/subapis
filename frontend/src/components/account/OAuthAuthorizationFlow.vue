@@ -15,6 +15,17 @@
             {{ methodLabel }}
           </label>
           <div class="flex flex-wrap gap-4">
+            <label v-if="showDeviceOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="device"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t(getOAuthKey('deviceAuth'))
+              }}</span>
+            </label>
             <label v-if="showManualOption" class="flex cursor-pointer items-center gap-2">
               <input
                 v-model="inputMethod"
@@ -125,6 +136,80 @@
                 t('admin.accounts.oauth.openai.codexPatAuth')
               }}</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Device Authorization Flow -->
+        <div v-if="inputMethod === 'device'" class="space-y-4">
+          <div
+            class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
+          >
+            <button
+              v-if="!deviceUserCode"
+              type="button"
+              class="btn btn-primary w-full"
+              :disabled="loading"
+              @click="emit('start-device')"
+            >
+              <svg
+                v-if="loading"
+                class="-ml-1 mr-2 h-4 w-4 animate-spin"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <Icon v-else name="link" size="sm" class="mr-2" />
+              {{ t(getOAuthKey('deviceStart')) }}
+            </button>
+
+            <div v-else class="space-y-4">
+              <div>
+                <div class="mb-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+                  {{ t(getOAuthKey('deviceCode')) }}
+                </div>
+                <div class="flex items-center gap-2">
+                  <code class="min-w-0 flex-1 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-center text-lg font-semibold text-blue-950 dark:border-blue-700 dark:bg-gray-900 dark:text-blue-100">{{ deviceUserCode }}</code>
+                  <button
+                    type="button"
+                    class="btn btn-secondary p-2"
+                    :title="t('common.copy')"
+                    @click="copyToClipboard(deviceUserCode, t('common.copied'))"
+                  >
+                    <Icon name="copy" size="sm" />
+                  </button>
+                </div>
+              </div>
+              <a
+                :href="deviceVerificationUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary flex w-full items-center justify-center"
+              >
+                <Icon name="externalLink" size="sm" class="mr-2" />
+                {{ t(getOAuthKey('deviceOpen')) }}
+              </a>
+              <p class="text-center text-sm text-blue-700 dark:text-blue-300">
+                {{ t(getOAuthKey(`deviceStatus.${deviceStatus}`)) }}
+              </p>
+              <button
+                v-if="deviceStatus === 'failed'"
+                type="button"
+                class="btn btn-secondary w-full"
+                @click="emit('start-device')"
+              >
+                <Icon name="refresh" size="sm" class="mr-2" />
+                {{ t(getOAuthKey('deviceRestart')) }}
+              </button>
+            </div>
+
+            <div
+              v-if="error"
+              class="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">{{ error }}</p>
+            </div>
           </div>
         </div>
 
@@ -836,7 +921,11 @@ interface Props {
   showAgentIdentityOption?: boolean
   showCodexPatOption?: boolean
   showSsoOption?: boolean
+  showDeviceOption?: boolean
   showManualOption?: boolean
+  deviceUserCode?: string
+  deviceVerificationUrl?: string
+  deviceStatus?: 'idle' | 'pending' | 'authorized' | 'completing' | 'completed' | 'failed'
   initialInputMethod?: AuthInputMethod
   platform?: AccountPlatform // Platform type for different UI/text
   showProjectId?: boolean // New prop to control project ID visibility
@@ -860,7 +949,11 @@ const props = withDefaults(defineProps<Props>(), {
   showAgentIdentityOption: false,
   showCodexPatOption: false,
   showSsoOption: false,
+  showDeviceOption: false,
   showManualOption: true,
+  deviceUserCode: '',
+  deviceVerificationUrl: '',
+  deviceStatus: 'idle',
   initialInputMethod: 'manual',
   platform: 'anthropic',
   showProjectId: true
@@ -868,6 +961,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   'generate-url': []
+  'start-device': []
   'exchange-code': [code: string]
   'cookie-auth': [sessionKey: string]
   'validate-refresh-token': [refreshToken: string]
@@ -933,6 +1027,7 @@ const projectId = ref('')
 
 // Computed: show method selection only when there is something to choose.
 const methodOptionCount = computed(() => [
+  props.showDeviceOption,
   props.showManualOption,
   props.showCookieOption,
   props.showRefreshTokenOption,

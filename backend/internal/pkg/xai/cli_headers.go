@@ -13,9 +13,9 @@ const (
 	// CLI client identity expected by cli-chat-proxy.grok.com (Grok Build / free path).
 	// Upstream rejects requests with missing version as:
 	//   426 Your Grok CLI version (none) is outdated...
-	CLIClientVersion      = "0.2.99"
+	CLIClientVersion      = "0.2.118"
 	CLIClientIdentifier   = "grok-shell"
-	CLIUserAgent          = "grok-shell/0.2.99 (linux; x86_64)"
+	CLIUserAgent          = "grok-shell/0.2.118 (linux; x86_64)"
 	CLIAuthenticatorHdr   = "x-authenticateresponse"
 	CLIAuthenticatorValue = "authenticate-response"
 	CLIClientVersionHdr   = "x-grok-client-version"

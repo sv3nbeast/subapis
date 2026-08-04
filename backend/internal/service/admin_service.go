@@ -3618,6 +3618,35 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	return updated, nil
 }
 
+func (s *adminServiceImpl) ReauthorizeGrokOAuthAccountIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedCredentials map[string]any,
+	expectedProxyID *int64,
+	credentials map[string]any,
+	extra map[string]any,
+) (bool, error) {
+	repo, ok := s.accountRepo.(GrokDeviceReauthorizationRepository)
+	if !ok {
+		return false, infraerrors.New(http.StatusServiceUnavailable, "GROK_DEVICE_REAUTH_NOT_CONFIGURED", "Grok device reauthorization persistence is not configured")
+	}
+	applied, err := repo.ReauthorizeGrokOAuthIfCredentialsUnchanged(
+		ctx,
+		id,
+		expectedCredentials,
+		expectedProxyID,
+		credentials,
+		extra,
+	)
+	if err != nil || !applied {
+		return applied, err
+	}
+	if s.runtimeBlocker != nil {
+		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
+	}
+	return true, nil
+}
+
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
 	delete(updates, OllamaCloudUsageSessionExtraKey)

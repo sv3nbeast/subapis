@@ -5,6 +5,7 @@
 
 import { apiClient } from '../client'
 import type { GrokBillingSnapshot } from '@/types'
+import type { Account, CreateAccountRequest } from '@/types'
 
 export interface GrokAuthUrlResponse {
   auth_url: string
@@ -23,6 +24,27 @@ export interface GrokExchangeCodeRequest {
   code: string
   proxy_id?: number
   redirect_uri?: string
+}
+
+export interface GrokDeviceAuthorizationStartResponse {
+  session_id: string
+  user_code: string
+  verification_uri: string
+  verification_uri_complete?: string
+  interval_seconds: number
+  expires_at: number
+}
+
+export interface GrokDeviceAuthorizationPollResponse {
+  status: 'pending' | 'authorized'
+  retry_after_seconds?: number
+}
+
+export type GrokCompleteDeviceAccountRequest = Omit<
+  CreateAccountRequest,
+  'platform' | 'type'
+> & {
+  session_id: string
 }
 
 export interface GrokTokenInfo {
@@ -136,6 +158,48 @@ export async function exchangeCode(payload: GrokExchangeCodeRequest): Promise<Gr
   return data
 }
 
+export async function startDeviceAuthorization(payload: {
+  proxy_id?: number
+  account_id?: number
+}): Promise<GrokDeviceAuthorizationStartResponse> {
+  const { data } = await apiClient.post<GrokDeviceAuthorizationStartResponse>(
+    '/admin/grok/oauth/device/start',
+    payload
+  )
+  return data
+}
+
+export async function pollDeviceAuthorization(
+  sessionId: string
+): Promise<GrokDeviceAuthorizationPollResponse> {
+  const { data } = await apiClient.post<GrokDeviceAuthorizationPollResponse>(
+    '/admin/grok/oauth/device/poll',
+    { session_id: sessionId }
+  )
+  return data
+}
+
+export async function completeDeviceAccount(
+  payload: GrokCompleteDeviceAccountRequest
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
+    '/admin/grok/oauth/device/create-account',
+    payload
+  )
+  return data
+}
+
+export async function completeDeviceReauthorization(
+  accountId: number,
+  sessionId: string
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
+    `/admin/grok/accounts/${accountId}/device-reauthorize`,
+    { session_id: sessionId }
+  )
+  return data
+}
+
 export async function refreshGrokToken(
   refreshToken: string,
   proxyId?: number | null
@@ -169,4 +233,15 @@ export async function createFromSSO(payload: GrokSSOToOAuthRequest): Promise<Gro
   return data
 }
 
-export default { generateAuthUrl, exchangeCode, refreshGrokToken, queryQuota, resetQuota, createFromSSO }
+export default {
+  generateAuthUrl,
+  exchangeCode,
+  startDeviceAuthorization,
+  pollDeviceAuthorization,
+  completeDeviceAccount,
+  completeDeviceReauthorization,
+  refreshGrokToken,
+  queryQuota,
+  resetQuota,
+  createFromSSO
+}

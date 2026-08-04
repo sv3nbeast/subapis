@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ type GrokOAuthHandler struct {
 	grokOAuthService *service.GrokOAuthService
 	adminService     service.AdminService
 	quotaService     *service.GrokQuotaService
+	tokenInvalidator service.TokenCacheInvalidator
+	accountRefresher grokAccountCredentialRefresher
 	importProber     grokImportProber
 	reconciler       service.GrokOAuthReconciler
 }
@@ -32,14 +35,231 @@ func NewGrokOAuthHandler(
 	adminService service.AdminService,
 	quotaService *service.GrokQuotaService,
 	reconciler service.GrokOAuthReconciler,
+	tokenInvalidator service.TokenCacheInvalidator,
+	accountRefresher *service.GrokTokenProvider,
 ) *GrokOAuthHandler {
 	return &GrokOAuthHandler{
 		grokOAuthService: grokOAuthService,
 		adminService:     adminService,
 		quotaService:     quotaService,
+		tokenInvalidator: tokenInvalidator,
+		accountRefresher: accountRefresher,
 		importProber:     quotaService,
 		reconciler:       reconciler,
 	}
+}
+
+type GrokDeviceAuthorizationStartRequest struct {
+	ProxyID   *int64 `json:"proxy_id"`
+	AccountID *int64 `json:"account_id"`
+}
+
+func (h *GrokOAuthHandler) StartDeviceAuthorization(c *gin.Context) {
+	var req GrokDeviceAuthorizationStartRequest
+	var credentials map[string]any
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req = GrokDeviceAuthorizationStartRequest{}
+	}
+	if req.AccountID != nil {
+		account, err := h.adminService.GetAccount(c.Request.Context(), *req.AccountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if account.Platform != service.PlatformGrok || !account.IsOAuth() {
+			response.BadRequest(c, "Account is not a Grok OAuth account")
+			return
+		}
+		req.ProxyID = account.ProxyID
+		credentials = account.Credentials
+	}
+	result, err := h.grokOAuthService.StartDeviceAuthorization(c.Request.Context(), req.ProxyID, req.AccountID, credentials)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+type GrokDeviceAuthorizationPollRequest struct {
+	SessionID string `json:"session_id" binding:"required"`
+}
+
+func (h *GrokOAuthHandler) PollDeviceAuthorization(c *gin.Context) {
+	var req GrokDeviceAuthorizationPollRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.grokOAuthService.PollDeviceAuthorization(c.Request.Context(), req.SessionID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+type GrokCompleteDeviceAccountRequest struct {
+	SessionID               string         `json:"session_id" binding:"required"`
+	Name                    string         `json:"name" binding:"required"`
+	Notes                   *string        `json:"notes"`
+	Credentials             map[string]any `json:"credentials"`
+	Extra                   map[string]any `json:"extra"`
+	ProxyID                 *int64         `json:"proxy_id"`
+	Concurrency             int            `json:"concurrency"`
+	Priority                int            `json:"priority"`
+	RateMultiplier          *float64       `json:"rate_multiplier"`
+	LoadFactor              *int           `json:"load_factor"`
+	GroupIDs                []int64        `json:"group_ids"`
+	ExpiresAt               *int64         `json:"expires_at"`
+	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
+	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"`
+}
+
+func (h *GrokOAuthHandler) CompleteDeviceAccount(c *gin.Context) {
+	var req GrokCompleteDeviceAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	var account *service.Account
+	createdNow := false
+	accountID, err := h.grokOAuthService.CompleteDeviceAuthorization(req.SessionID, req.ProxyID, nil, func(tokenInfo *service.GrokTokenInfo, _ map[string]any) (int64, error) {
+		oauthCredentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
+		oauthCredentials[service.GrokOAuthFlowCredentialKey] = service.GrokOAuthFlowDevice
+		credentials := service.MergeGrokOAuthManagedCredentials(req.Credentials, oauthCredentials)
+		extra := mergeGrokDeviceExtra(req.Extra, tokenInfo)
+		skipMixedCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
+
+		created, createErr := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
+			Name:                  strings.TrimSpace(req.Name),
+			Notes:                 req.Notes,
+			Platform:              service.PlatformGrok,
+			Type:                  service.AccountTypeOAuth,
+			Credentials:           credentials,
+			Extra:                 extra,
+			ProxyID:               req.ProxyID,
+			Concurrency:           req.Concurrency,
+			Priority:              req.Priority,
+			RateMultiplier:        req.RateMultiplier,
+			LoadFactor:            req.LoadFactor,
+			GroupIDs:              req.GroupIDs,
+			ExpiresAt:             req.ExpiresAt,
+			AutoPauseOnExpired:    req.AutoPauseOnExpired,
+			SkipMixedChannelCheck: skipMixedCheck,
+		})
+		if createErr != nil {
+			return 0, createErr
+		}
+		account = created
+		createdNow = true
+		return created.ID, nil
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account == nil {
+		account, err = h.adminService.GetAccount(c.Request.Context(), accountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	if createdNow {
+		h.scheduleGrokImportProbe(account)
+	}
+	response.Success(c, dto.AccountFromService(account))
+}
+
+type GrokCompleteDeviceReauthorizationRequest struct {
+	SessionID string `json:"session_id" binding:"required"`
+}
+
+func (h *GrokOAuthHandler) CompleteDeviceReauthorization(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req GrokCompleteDeviceReauthorizationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	existing, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if existing.Platform != service.PlatformGrok || !existing.IsOAuth() {
+		response.BadRequest(c, "Account is not a Grok OAuth account")
+		return
+	}
+	reauthorizer, ok := h.adminService.(service.GrokDeviceReauthorizationAdminService)
+	if !ok {
+		response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "GROK_DEVICE_REAUTH_NOT_CONFIGURED", "Grok device reauthorization persistence is not configured"))
+		return
+	}
+
+	var updated *service.Account
+	completedAccountID, err := h.grokOAuthService.CompleteDeviceAuthorization(req.SessionID, existing.ProxyID, &accountID, func(tokenInfo *service.GrokTokenInfo, expectedCredentials map[string]any) (int64, error) {
+		credentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
+		credentials[service.GrokOAuthFlowCredentialKey] = service.GrokOAuthFlowDevice
+		credentials = service.PreserveGrokOAuthRoutingCredentials(existing, credentials)
+		applied, err := reauthorizer.ReauthorizeGrokOAuthAccountIfUnchanged(
+			c.Request.Context(),
+			accountID,
+			expectedCredentials,
+			existing.ProxyID,
+			credentials,
+			mergeGrokDeviceExtra(nil, tokenInfo),
+		)
+		if err != nil {
+			return 0, err
+		}
+		if !applied {
+			return 0, infraerrors.New(http.StatusConflict, "GROK_DEVICE_CREDENTIALS_CHANGED", "account credentials changed during device authorization; start authorization again")
+		}
+		return accountID, nil
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if updated == nil {
+		updated, err = h.adminService.GetAccount(c.Request.Context(), completedAccountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	if h.tokenInvalidator != nil && updated != nil {
+		if err := h.tokenInvalidator.InvalidateToken(c.Request.Context(), updated); err != nil {
+			slog.Warn("grok_device_reauthorization.invalidate_token_failed", "account_id", accountID, "error", err)
+		}
+	}
+	response.Success(c, dto.AccountFromService(updated))
+}
+
+func mergeGrokDeviceExtra(existing map[string]any, tokenInfo *service.GrokTokenInfo) map[string]any {
+	merged := make(map[string]any, len(existing)+3)
+	for key, value := range existing {
+		merged[key] = value
+	}
+	if tokenInfo == nil {
+		return merged
+	}
+	if tokenInfo.Email != "" {
+		merged["email"] = tokenInfo.Email
+	}
+	if tokenInfo.SubscriptionTier != "" {
+		merged["subscription_tier"] = tokenInfo.SubscriptionTier
+	}
+	if tokenInfo.EntitlementStatus != "" {
+		merged["entitlement_status"] = tokenInfo.EntitlementStatus
+	}
+	return merged
 }
 
 type GrokGenerateAuthURLRequest struct {
@@ -144,19 +364,11 @@ func (h *GrokOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.BadRequest(c, "Cannot refresh non-OAuth account credentials")
 		return
 	}
-	tokenInfo, err := h.grokOAuthService.RefreshAccountToken(c.Request.Context(), account)
-	if err != nil {
-		response.ErrorFrom(c, err)
+	if h.accountRefresher == nil {
+		response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_REFRESH_NOT_CONFIGURED", "Grok OAuth account refresher is not configured"))
 		return
 	}
-	newCredentials := h.grokOAuthService.BuildAccountCredentials(tokenInfo)
-	newCredentials = service.MergeCredentials(account.Credentials, newCredentials)
-	if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-		newCredentials["base_url"] = baseURL
-	}
-	updatedAccount, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
-		Credentials: newCredentials,
-	})
+	updatedAccount, err := h.accountRefresher.ForceRefreshAccountForAdmin(c.Request.Context(), account)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

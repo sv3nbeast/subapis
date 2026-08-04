@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,88 @@ func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
 	require.Equal(t, "refresh-access", refreshed.AccessToken)
 	require.Equal(t, "refresh-rotated", refreshed.RefreshToken)
 	require.Equal(t, int64(7200), refreshed.ExpiresIn)
+}
+
+func TestGrokOAuthClientDeviceFlowMatchesOfficialContract(t *testing.T) {
+	var tokenPolls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, r.ParseForm())
+		require.Equal(t, xai.CLIClientVersion, r.Header.Get(xai.CLIClientVersionHdr))
+		require.Equal(t, xai.DeviceSurfaceUI, r.Header.Get(xai.DeviceSurfaceHeader))
+
+		switch r.URL.Path {
+		case "/device":
+			require.Equal(t, xai.DefaultClientID, r.Form.Get("client_id"))
+			require.Equal(t, xai.DefaultScope, r.Form.Get("scope"))
+			require.Equal(t, "grok-build", r.Form.Get("referrer"))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code":               "device-secret",
+				"user_code":                 "ABCD-EFGH",
+				"verification_uri":          "https://accounts.x.ai/oauth2/device",
+				"verification_uri_complete": "https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH",
+				"interval":                  5,
+				"expires_in":                1800,
+			})
+		case "/token":
+			tokenPolls++
+			require.Equal(t, xai.DeviceGrantType, r.Form.Get("grant_type"))
+			require.Equal(t, xai.DefaultClientID, r.Form.Get("client_id"))
+			require.Equal(t, "device-secret", r.Form.Get("device_code"))
+			if tokenPolls == 1 {
+				w.Header().Set("Retry-After", "7")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"authorization_pending","error_description":"waiting"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "device-access",
+				"refresh_token": "device-refresh",
+				"expires_in":    3600,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	t.Setenv(xai.EnvDeviceURL, server.URL+"/device")
+	t.Setenv(xai.EnvTokenURL, server.URL+"/token")
+
+	client := NewGrokOAuthClient()
+	device, err := client.StartDeviceAuthorization(context.Background(), "", "", "")
+	require.NoError(t, err)
+	require.Equal(t, "ABCD-EFGH", device.UserCode)
+
+	_, err = client.PollDeviceAuthorization(context.Background(), device.DeviceCode, "", "")
+	var pending *xai.DeviceAuthorizationError
+	require.ErrorAs(t, err, &pending)
+	require.Equal(t, "authorization_pending", pending.Code)
+	require.Equal(t, 7*time.Second, pending.RetryAfter)
+
+	token, err := client.PollDeviceAuthorization(context.Background(), device.DeviceCode, "", "")
+	require.NoError(t, err)
+	require.Equal(t, "device-access", token.AccessToken)
+	require.Equal(t, "device-refresh", token.RefreshToken)
+}
+
+func TestGrokOAuthClientDeviceFlowRejectsInvalidVerificationURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"device_code":      "device-secret",
+			"user_code":        "ABCD-EFGH",
+			"verification_uri": "javascript:alert(1)",
+			"expires_in":       1800,
+		})
+	}))
+	defer server.Close()
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+	t.Setenv(xai.EnvDeviceURL, server.URL)
+
+	client := NewGrokOAuthClient()
+	_, err := client.StartDeviceAuthorization(context.Background(), "", "", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GROK_DEVICE_VERIFICATION_URL_INVALID")
 }
 
 func TestGrokOAuthClientRefreshForbiddenClassifiesOnlyExplicitEntitlement(t *testing.T) {

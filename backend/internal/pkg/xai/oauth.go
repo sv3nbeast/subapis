@@ -21,15 +21,20 @@ const (
 	OAuthIssuer         = "https://auth.x.ai"
 	DiscoveryURL        = OAuthIssuer + "/.well-known/openid-configuration"
 	DefaultAuthorizeURL = OAuthIssuer + "/oauth2/authorize"
+	DefaultDeviceURL    = OAuthIssuer + "/oauth2/device/code"
 	DefaultTokenURL     = OAuthIssuer + "/oauth2/token"
 	DefaultBaseURL      = "https://api.x.ai/v1"
 	DefaultCLIBaseURL   = "https://cli-chat-proxy.grok.com/v1"
 	DefaultClientID     = "b1a00492-073a-47ea-816f-4c329264a828"
-	DefaultScope        = "openid profile email offline_access grok-cli:access api:access"
+	DefaultScope        = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write"
 	DefaultRedirectURI  = "http://127.0.0.1:56121/callback"
 	SessionTTL          = 30 * time.Minute
+	DeviceGrantType     = "urn:ietf:params:oauth:grant-type:device_code"
+	DeviceSurfaceHeader = "x-grok-client-surface"
+	DeviceSurfaceUI     = "ui"
 
 	EnvAuthorizeURL               = "XAI_OAUTH_AUTHORIZE_URL"
+	EnvDeviceURL                  = "XAI_OAUTH_DEVICE_URL"
 	EnvTokenURL                   = "XAI_OAUTH_TOKEN_URL"
 	EnvClientID                   = "XAI_OAUTH_CLIENT_ID"
 	EnvScope                      = "XAI_OAUTH_SCOPE"
@@ -129,6 +134,14 @@ func EffectiveAuthorizeURL() string {
 	return envOrDefault(EnvAuthorizeURL, DefaultAuthorizeURL)
 }
 
+func EffectiveDeviceURL() string {
+	return envOrDefault(EnvDeviceURL, DefaultDeviceURL)
+}
+
+func ValidatedDeviceURL() (string, error) {
+	return ValidateOAuthEndpointURL(EffectiveDeviceURL())
+}
+
 func ValidatedAuthorizeURL() (string, error) {
 	return ValidateOAuthEndpointURL(EffectiveAuthorizeURL())
 }
@@ -195,6 +208,7 @@ type RuntimeSanityCheck struct {
 type RuntimeSanityReport struct {
 	BaseURL               RuntimeSanityCheck `json:"base_url"`
 	OAuthAuthorizeURL     RuntimeSanityCheck `json:"oauth_authorize_url"`
+	OAuthDeviceURL        RuntimeSanityCheck `json:"oauth_device_url"`
 	OAuthTokenURL         RuntimeSanityCheck `json:"oauth_token_url"`
 	OAuthRedirectURI      RuntimeSanityCheck `json:"oauth_redirect_uri"`
 	UnsafeURLOverrides    bool               `json:"unsafe_url_overrides"`
@@ -207,6 +221,7 @@ func RuntimeSanity() RuntimeSanityReport {
 	return RuntimeSanityReport{
 		BaseURL:               runtimeSanityCheck(EffectiveBaseURL(""), EnvBaseURL, ValidatedBaseURL),
 		OAuthAuthorizeURL:     runtimeSanityCheck(EffectiveAuthorizeURL(), EnvAuthorizeURL, func(string) (string, error) { return ValidatedAuthorizeURL() }),
+		OAuthDeviceURL:        runtimeSanityCheck(EffectiveDeviceURL(), EnvDeviceURL, func(string) (string, error) { return ValidatedDeviceURL() }),
 		OAuthTokenURL:         runtimeSanityCheck(EffectiveTokenURL(), EnvTokenURL, func(string) (string, error) { return ValidatedTokenURL() }),
 		OAuthRedirectURI:      runtimeSanityCheck(EffectiveRedirectURI(""), EnvRedirectURI, validateRedirectURI),
 		UnsafeURLOverrides:    AllowUnsafeURLOverrides(),
@@ -467,8 +482,7 @@ func BuildAuthorizationURL(state, codeChallenge, redirectURI, nonce string) (str
 	params.Set("nonce", nonce)
 	params.Set("code_challenge", codeChallenge)
 	params.Set("code_challenge_method", "S256")
-	params.Set("plan", "generic")
-	params.Set("referrer", "sub2api")
+	params.Set("referrer", "grok-build")
 
 	return fmt.Sprintf("%s?%s", authorizeURL, params.Encode()), nil
 }
@@ -630,4 +644,34 @@ type TokenResponse struct {
 	TokenType    string `json:"token_type,omitempty"`
 	ExpiresIn    int64  `json:"expires_in,omitempty"`
 	Scope        string `json:"scope,omitempty"`
+}
+
+type DeviceAuthorizationResponse struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
+	Interval                int    `json:"interval,omitempty"`
+	ExpiresIn               int    `json:"expires_in,omitempty"`
+}
+
+type DeviceAuthorizationError struct {
+	StatusCode  int
+	Code        string
+	Description string
+	RetryAfter  time.Duration
+}
+
+func (e *DeviceAuthorizationError) Error() string {
+	if e == nil {
+		return "xAI device authorization failed"
+	}
+	detail := strings.TrimSpace(e.Description)
+	if detail == "" {
+		detail = strings.TrimSpace(e.Code)
+	}
+	if detail == "" {
+		detail = "unknown error"
+	}
+	return fmt.Sprintf("xAI device authorization failed: %s", logredact.RedactText(detail))
 }

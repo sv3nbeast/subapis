@@ -3740,10 +3740,16 @@
         :show-agent-identity-option="form.platform === 'openai'"
         :show-codex-pat-option="form.platform === 'openai'"
         :show-sso-option="form.platform === 'grok'"
+        :show-device-option="form.platform === 'grok'"
         :show-manual-option="true"
-        :initial-input-method="'manual'"
+        :device-user-code="grokOAuth.deviceUserCode.value"
+        :device-verification-url="grokOAuth.deviceVerificationUrl.value"
+        :device-status="grokOAuth.deviceStatus.value"
+        :initial-input-method="form.platform === 'grok' ? 'device' : 'manual'"
         :platform="form.platform"
         :show-project-id="geminiOAuthType === 'code_assist'"
+        @start-device="handleStartGrokDeviceAuthorization"
+        @update:input-method="handleOAuthInputMethodChange"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
         @validate-refresh-token="handleValidateRefreshToken"
@@ -6164,6 +6170,49 @@ const handleGenerateUrl = async () => {
   } else {
     await oauth.generateAuthUrl(addMethod.value, form.proxy_id)
   }
+}
+
+const handleOAuthInputMethodChange = (method: AuthInputMethod) => {
+  if (form.platform === 'grok' && method !== 'device') {
+    grokOAuth.cancelDeviceAuthorization()
+  }
+}
+
+const handleStartGrokDeviceAuthorization = async () => {
+  if (form.platform !== 'grok' || !validateGrokOAuthUpstreamConfig()) return
+
+  const credentials: Record<string, unknown> = {}
+  applyGrokOAuthUpstreamConfig(credentials)
+  const modelMapping = buildModelMappingObject(
+    modelRestrictionMode.value,
+    allowedModels.value,
+    modelMappings.value
+  )
+  if (modelMapping) credentials.model_mapping = modelMapping
+  if (!applyTempUnschedConfig(credentials)) return
+
+  await grokOAuth.startDeviceAuthorization({
+    proxyId: form.proxy_id,
+    onAuthorized: async (sessionId) => {
+      await adminAPI.grok.completeDeviceAccount({
+        session_id: sessionId,
+        name: form.name,
+        notes: form.notes,
+        credentials,
+        proxy_id: form.proxy_id,
+        concurrency: form.concurrency,
+        load_factor: form.load_factor,
+        priority: form.priority,
+        rate_multiplier: form.rate_multiplier,
+        group_ids: form.group_ids,
+        expires_at: form.expires_at,
+        auto_pause_on_expired: autoPauseOnExpired.value
+      })
+      appStore.showSuccess(t('admin.accounts.accountCreated'))
+      emit('created')
+      handleClose()
+    }
+  })
 }
 
 const handleValidateRefreshToken = (rt: string) => {

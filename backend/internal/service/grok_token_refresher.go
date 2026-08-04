@@ -35,6 +35,9 @@ func (r *GrokTokenRefresher) NeedsRefresh(account *Account, refreshWindow time.D
 	if strings.TrimSpace(account.GetGrokAccessToken()) == "" {
 		return true
 	}
+	if grokOAuthStoredPermanentRefreshFailure(account) != "" {
+		return !grokOAuthAccessTokenHardValidAt(account, time.Now())
+	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {
 		return true
@@ -49,12 +52,15 @@ func (r *GrokTokenRefresher) Refresh(ctx context.Context, account *Account) (map
 	if r == nil || r.grokOAuthService == nil {
 		return nil, errors.New("grok oauth service is not configured")
 	}
+	if err := grokOAuthStoredRefreshFailureError(account); err != nil {
+		return nil, err
+	}
 	tokenInfo, err := r.grokOAuthService.RefreshAccountToken(ctx, account)
 	if err != nil {
 		return nil, err
 	}
 	newCredentials := r.grokOAuthService.BuildAccountCredentials(tokenInfo)
-	newCredentials = MergeCredentials(account.Credentials, newCredentials)
+	newCredentials = MergeGrokOAuthManagedCredentials(account.Credentials, newCredentials)
 	if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
 		newCredentials["base_url"] = baseURL
 	}

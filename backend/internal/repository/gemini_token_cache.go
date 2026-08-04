@@ -15,6 +15,13 @@ const (
 	oauthRefreshLockKeyPrefix = "oauth:refresh_lock:"
 )
 
+var oauthRefreshLeaseReleaseScript = redis.NewScript(`
+	if redis.call('GET', KEYS[1]) == ARGV[1] then
+		return redis.call('DEL', KEYS[1])
+	end
+	return 0
+`)
+
 type geminiTokenCache struct {
 	rdb *redis.Client
 }
@@ -47,3 +54,15 @@ func (c *geminiTokenCache) ReleaseRefreshLock(ctx context.Context, cacheKey stri
 	key := fmt.Sprintf("%s%s", oauthRefreshLockKeyPrefix, cacheKey)
 	return c.rdb.Del(ctx, key).Err()
 }
+
+func (c *geminiTokenCache) AcquireRefreshLease(ctx context.Context, cacheKey, owner string, ttl time.Duration) (bool, error) {
+	key := fmt.Sprintf("%s%s", oauthRefreshLockKeyPrefix, cacheKey)
+	return c.rdb.SetNX(ctx, key, owner, ttl).Result()
+}
+
+func (c *geminiTokenCache) ReleaseRefreshLease(ctx context.Context, cacheKey, owner string) error {
+	key := fmt.Sprintf("%s%s", oauthRefreshLockKeyPrefix, cacheKey)
+	return oauthRefreshLeaseReleaseScript.Run(ctx, c.rdb, []string{key}, owner).Err()
+}
+
+var _ service.OAuthRefreshLeaseCache = (*geminiTokenCache)(nil)

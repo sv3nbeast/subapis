@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +57,113 @@ func (c *grokOAuthClient) ExchangeCode(ctx context.Context, code, codeVerifier, 
 	}
 	if !resp.IsSuccessState() {
 		return nil, grokOAuthStatusError("GROK_OAUTH_TOKEN_EXCHANGE_FAILED", "token exchange failed", resp)
+	}
+	return &tokenResp, nil
+}
+
+func (c *grokOAuthClient) StartDeviceAuthorization(ctx context.Context, proxyURL, clientID, scope string) (*xai.DeviceAuthorizationResponse, error) {
+	client, err := createGrokReqClient(proxyURL)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
+	}
+	deviceURL, err := xai.ValidatedDeviceURL()
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "GROK_DEVICE_URL_INVALID", "invalid device authorization URL: %v", err)
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = xai.EffectiveClientID()
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = xai.EffectiveScope()
+	}
+
+	formData := url.Values{
+		"client_id": {clientID},
+		"scope":     {scope},
+		"referrer":  {"grok-build"},
+	}
+	var result xai.DeviceAuthorizationResponse
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeader("Accept", "application/json").
+		SetHeader(xai.CLIClientVersionHdr, xai.CLIClientVersion).
+		SetHeader(xai.DeviceSurfaceHeader, xai.DeviceSurfaceUI).
+		SetFormDataFromValues(formData).
+		SetSuccessResult(&result).
+		Post(deviceURL)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_REQUEST_FAILED", "request failed: %v", err)
+	}
+	if !resp.IsSuccessState() {
+		return nil, grokOAuthStatusError("GROK_DEVICE_START_FAILED", "device authorization start failed", resp)
+	}
+	if strings.TrimSpace(result.DeviceCode) == "" || !validGrokDeviceUserCode(result.UserCode) || strings.TrimSpace(result.VerificationURI) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "GROK_DEVICE_RESPONSE_INVALID", "xAI device authorization response is incomplete")
+	}
+	if _, err := xai.ValidateOAuthEndpointURL(result.VerificationURI); err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_VERIFICATION_URL_INVALID", "xAI returned an invalid verification URL: %v", err)
+	}
+	if strings.TrimSpace(result.VerificationURIComplete) != "" {
+		if _, err := xai.ValidateOAuthEndpointURL(result.VerificationURIComplete); err != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_VERIFICATION_URL_INVALID", "xAI returned an invalid complete verification URL: %v", err)
+		}
+	}
+	if result.Interval <= 0 {
+		result.Interval = 5
+	}
+	if result.ExpiresIn <= 0 {
+		result.ExpiresIn = int(xai.SessionTTL.Seconds())
+	}
+	return &result, nil
+}
+
+func (c *grokOAuthClient) PollDeviceAuthorization(ctx context.Context, deviceCode, proxyURL, clientID string) (*xai.TokenResponse, error) {
+	client, err := createGrokReqClient(proxyURL)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = xai.EffectiveClientID()
+	}
+	formData := url.Values{
+		"grant_type":  {xai.DeviceGrantType},
+		"client_id":   {clientID},
+		"device_code": {strings.TrimSpace(deviceCode)},
+	}
+	var tokenResp xai.TokenResponse
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeader("Accept", "application/json").
+		SetHeader(xai.CLIClientVersionHdr, xai.CLIClientVersion).
+		SetHeader(xai.DeviceSurfaceHeader, xai.DeviceSurfaceUI).
+		SetFormDataFromValues(formData).
+		SetSuccessResult(&tokenResp).
+		Post(c.tokenURL)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_DEVICE_REQUEST_FAILED", "request failed: %v", err)
+	}
+	if !resp.IsSuccessState() {
+		var payload struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		_ = json.Unmarshal([]byte(resp.String()), &payload)
+		code := strings.TrimSpace(payload.Error)
+		if code == "authorization_pending" || code == "slow_down" || code == "access_denied" || code == "expired_token" {
+			return nil, &xai.DeviceAuthorizationError{
+				StatusCode:  resp.StatusCode,
+				Code:        code,
+				Description: payload.ErrorDescription,
+				RetryAfter:  parseGrokOAuthRetryAfter(resp.Header.Get("Retry-After")),
+			}
+		}
+		return nil, grokOAuthStatusError("GROK_DEVICE_POLL_FAILED", "device authorization polling failed", resp)
+	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "GROK_DEVICE_TOKEN_INVALID", "xAI device token response did not contain an access token")
 	}
 	return &tokenResp, nil
 }
@@ -186,3 +295,29 @@ func grokOAuthHasExplicitEntitlementDenial(body string) bool {
 		strings.Contains(lower, "subscription required") ||
 		strings.Contains(lower, "no active grok subscription")
 }
+
+func validGrokDeviceUserCode(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func parseGrokOAuthRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil && retryAt.After(time.Now()) {
+		return time.Until(retryAt)
+	}
+	return 0
+}
+
+var _ service.GrokOAuthClient = (*grokOAuthClient)(nil)

@@ -5,11 +5,13 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -633,8 +635,8 @@ func TestRefreshIfNeeded_RequestPathDBRereadMissingGrokRefreshCredentialReturnsP
 	require.Zero(t, repo.updateCalls)
 }
 
-func TestRefreshIfNeeded_LateSuccessAfterDeadlineDoesNotPersist(t *testing.T) {
-	account := &Account{ID: 85, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive}
+func TestRefreshIfNeeded_NonRotatingLateSuccessAfterDeadlineDoesNotPersist(t *testing.T) {
+	account := &Account{ID: 85, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive}
 	repo := &refreshAPIAccountRepo{account: account}
 	executor := &refreshAPIExecutorStub{
 		needsRefresh: true,
@@ -650,6 +652,40 @@ func TestRefreshIfNeeded_LateSuccessAfterDeadlineDoesNotPersist(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Nil(t, result)
 	require.Zero(t, repo.updateCredentialsCalls, "late credentials must not cross the unified API persistence boundary")
+}
+
+func TestRefreshIfNeeded_GrokRotationPersistsAfterCallerDeadline(t *testing.T) {
+	account := &Account{
+		ID:       851,
+		Platform: PlatformGrok,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+		},
+	}
+	repo := &refreshAPIAccountRepo{account: account}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true,
+		credentials: map[string]any{
+			"access_token":  "rotated-access",
+			"refresh_token": "rotated-refresh",
+		},
+		delay: 30 * time.Millisecond,
+	}
+	api := NewOAuthRefreshAPI(repo, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	result, err := api.RefreshIfNeeded(ctx, account, executor, time.Hour)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Refreshed)
+	require.Equal(t, 1, repo.updateCredentialsCalls)
+	require.Equal(t, "rotated-access", repo.account.GetGrokAccessToken())
+	require.Equal(t, "rotated-refresh", repo.account.GetGrokRefreshToken())
 }
 
 func TestRefreshIfNeeded_NilCredentials(t *testing.T) {
@@ -1002,13 +1038,65 @@ func TestRefreshIfNeeded_ReleasesDistributedLockWithCleanupContext(t *testing.T)
 
 	result, err := api.RefreshIfNeeded(ctx, account, executor, 3*time.Minute)
 
-	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, result)
-	require.Zero(t, repo.updateCalls)
-	require.Equal(t, "old-access", account.GetGrokAccessToken())
-	require.Zero(t, account.GetCredentialAsInt64("_token_version"))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Refreshed)
+	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, "new-at", repo.account.GetGrokAccessToken())
+	require.NotZero(t, repo.account.GetCredentialAsInt64("_token_version"))
 	require.Equal(t, 1, cache.releaseCalls)
 	require.NoError(t, cache.releaseCtxErr)
+}
+
+func TestRefreshIfNeeded_GrokFailsClosedWhenDistributedLeaseUnavailable(t *testing.T) {
+	account := &Account{
+		ID:          23,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"refresh_token": "rt"},
+	}
+	repo := &refreshAPIAccountRepo{account: account}
+	cache := &refreshAPICacheStub{lockErr: errors.New("redis unavailable")}
+	executor := &refreshAPIExecutorStub{needsRefresh: true}
+	api := NewOAuthRefreshAPI(repo, cache)
+
+	result, err := api.RefreshIfNeeded(context.Background(), account, executor, time.Hour)
+
+	require.ErrorContains(t, err, "refresh lease unavailable")
+	require.Nil(t, result)
+	require.Zero(t, executor.refreshCalls)
+}
+
+func TestRefreshIfNeeded_GrokAmbiguousTransportFailureIsCycleTerminal(t *testing.T) {
+	account := &Account{
+		ID:          24,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"refresh_token": "rt"},
+	}
+	repo := &refreshAPIAccountRepo{account: account}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true,
+		err: infraerrors.New(
+			http.StatusBadGateway,
+			"GROK_OAUTH_REQUEST_FAILED",
+			"request failed after an ambiguous transport close",
+		),
+	}
+	api := NewOAuthRefreshAPI(repo, nil)
+
+	result, err := api.RefreshIfNeeded(context.Background(), account, executor, time.Hour)
+
+	require.Error(t, err)
+	var containmentErr *providerCycleContainmentRefreshError
+	require.ErrorAs(t, err, &containmentErr)
+	require.NotNil(t, result)
+	require.Equal(t, 1, executor.refreshCalls)
+	require.Zero(t, repo.updateCredentialsCalls)
 }
 
 // dynamicRefreshExecutor is a test helper with function-based NeedsRefresh and Refresh.

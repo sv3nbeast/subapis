@@ -5179,6 +5179,22 @@ const baseMessages = {
         },
         grok: {
           title: 'Grok Account Authorization',
+          deviceAuth: 'Device Authorization (Recommended)',
+          deviceStart: 'Start Device Authorization',
+          deviceCode: 'Device Code',
+          deviceOpen: 'Open xAI and Authorize',
+          deviceRestart: 'Restart Device Authorization',
+          deviceStartFailed: 'Failed to start Grok device authorization',
+          devicePollFailed: 'Grok device authorization did not complete',
+          deviceExpired: 'Device authorization expired. Start again.',
+          deviceStatus: {
+            idle: 'Not started',
+            pending: 'Waiting for authorization in xAI. The account will be saved automatically.',
+            authorized: 'Authorized. Saving the account.',
+            completing: 'Authorized. Saving the account.',
+            completed: 'Account saved.',
+            failed: 'Authorization did not complete. Start again.'
+          },
           followSteps: 'Follow these steps to authorize your xAI/Grok account:',
           step1GenerateUrl: 'Generate the xAI authorization URL',
           generateAuthUrl: 'Generate Auth URL',

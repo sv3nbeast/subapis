@@ -92,7 +92,7 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 		Header:     http.Header{},
 	}}
 	quotaService := service.NewGrokQuotaService(repo, nil, service.NewGrokTokenProvider(repo, nil), upstream, nil)
-	handler := NewGrokOAuthHandler(nil, nil, quotaService, nil)
+	handler := NewGrokOAuthHandler(nil, nil, quotaService, nil, nil, nil)
 
 	router := gin.New()
 	router.GET("/api/v1/admin/grok/accounts/:id/quota", handler.QueryQuota)
@@ -124,7 +124,7 @@ func TestGrokOAuthHandlerResetQuotaReturnsUnsupported(t *testing.T) {
 		Type:     service.AccountTypeOAuth,
 	}}
 	quotaService := service.NewGrokQuotaService(repo, nil, nil, nil, nil)
-	handler := NewGrokOAuthHandler(nil, nil, quotaService, nil)
+	handler := NewGrokOAuthHandler(nil, nil, quotaService, nil, nil, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/grok/accounts/:id/reset-quota", handler.ResetQuota)
@@ -142,7 +142,7 @@ func TestGrokOAuthHandlerRuntimeSanityDoesNotExposeSecrets(t *testing.T) {
 	t.Setenv(xai.EnvBaseURL, "http://127.0.0.1:8080/v1?access_token=secret")
 	t.Setenv(xai.EnvClientID, "client-secret-like-value")
 
-	handler := NewGrokOAuthHandler(nil, nil, nil, nil)
+	handler := NewGrokOAuthHandler(nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.GET("/api/v1/admin/grok/runtime-sanity", handler.RuntimeSanity)
 	rec := httptest.NewRecorder()

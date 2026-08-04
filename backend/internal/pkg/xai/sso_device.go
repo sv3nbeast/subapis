@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	SSOBuildScope        = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write"
+	SSOBuildScope        = DefaultScope
 	SSOAccountsURL       = "https://accounts.x.ai/"
-	SSODeviceURL         = OAuthIssuer + "/oauth2/device/code"
+	SSODeviceURL         = DefaultDeviceURL
 	SSOVerifyURL         = OAuthIssuer + "/oauth2/device/verify"
 	SSOApproveURL        = OAuthIssuer + "/oauth2/device/approve"
 	SSOTokenURL          = OAuthIssuer + "/oauth2/token"

@@ -53,6 +53,17 @@ type GrokOAuthRefreshMutationRepository interface {
 	SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnchanged(ctx context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, until time.Time, reason string) (bool, error)
 }
 
+type GrokOAuthPermanentRefreshFailureRepository interface {
+	MarkGrokOAuthPermanentRefreshFailureIfCredentialsUnchanged(
+		ctx context.Context,
+		id int64,
+		expectedCredentials map[string]any,
+		expectedProxyID *int64,
+		failureCode string,
+		failedAt time.Time,
+	) (bool, error)
+}
+
 // TokenRefreshService OAuth token自动刷新服务
 // 定期检查并刷新即将过期的token
 type TokenRefreshService struct {
@@ -1125,8 +1136,33 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
 			if !isGrokOAuthReconcileRefresh(ctx) && grokOAuthAccessTokenHardValidAt(account, time.Now()) {
+				failureRepo, ok := s.accountRepo.(GrokOAuthPermanentRefreshFailureRepository)
+				if !ok {
+					return &providerConfigurationRefreshError{
+						err: errors.New("grok OAuth permanent refresh failure repository is not configured"),
+					}
+				}
+				failureCode := grokOAuthPermanentRefreshFailureCode(err)
+				applied, markErr := failureRepo.MarkGrokOAuthPermanentRefreshFailureIfCredentialsUnchanged(
+					ctx,
+					account.ID,
+					account.Credentials,
+					account.ProxyID,
+					failureCode,
+					time.Now(),
+				)
+				if markErr != nil {
+					return &providerCycleContainmentRefreshError{
+						err: fmt.Errorf("persist Grok OAuth permanent refresh failure: %w", markErr),
+					}
+				}
+				if !applied {
+					slog.Info("token_refresh.grok_permanent_failure_skipped_stale_credentials", "account_id", account.ID)
+					return errRefreshSkipped
+				}
 				slog.Warn("token_refresh.grok_refresh_failed_access_token_still_valid",
 					"account_id", account.ID,
+					"failure_code", failureCode,
 					"expires_at", account.GetCredentialAsTime("expires_at").UTC().Format(time.RFC3339),
 					"error", logredact.RedactText(err.Error()),
 				)

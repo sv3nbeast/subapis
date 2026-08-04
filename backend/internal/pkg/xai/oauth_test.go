@@ -64,7 +64,7 @@ func TestParseAuthorizationInput(t *testing.T) {
 	}
 }
 
-func TestBuildAuthorizationURLIncludesHermesCompatibleParameters(t *testing.T) {
+func TestBuildAuthorizationURLUsesOfficialGrokBuildContract(t *testing.T) {
 	t.Setenv(EnvAuthorizeURL, "https://auth.example.test/oauth2/authorize")
 	t.Setenv(EnvClientID, "client-id")
 	t.Setenv(EnvScope, "openid profile offline_access api:access")
@@ -87,8 +87,15 @@ func TestBuildAuthorizationURLIncludesHermesCompatibleParameters(t *testing.T) {
 	require.Equal(t, "nonce", values.Get("nonce"))
 	require.Equal(t, "challenge", values.Get("code_challenge"))
 	require.Equal(t, "S256", values.Get("code_challenge_method"))
-	require.Equal(t, "generic", values.Get("plan"))
-	require.Equal(t, "sub2api", values.Get("referrer"))
+	require.Empty(t, values.Get("plan"))
+	require.Equal(t, "grok-build", values.Get("referrer"))
+}
+
+func TestDefaultScopeMatchesOfficialGrokBuildScope(t *testing.T) {
+	require.Equal(t,
+		"openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write",
+		DefaultScope,
+	)
 }
 
 func TestValidateXAIURLsAllowOfficialOAuthAndGatewayHosts(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,6 +23,67 @@ func TestAccountRepository_SetTempUnschedulable_NoRowsAffectedDoesNotWriteOutbox
 	require.Len(t, exec.execQueries, 1)
 	require.Contains(t, exec.execQueries[0], "UPDATE accounts")
 	require.NotContains(t, strings.Join(exec.execQueries, "\n"), "scheduler_outbox")
+}
+
+func TestAccountRepository_MarkGrokOAuthPermanentRefreshFailureUsesExactGenerationAndAtomicOutbox(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	proxyID := int64(17)
+	failedAt := time.Date(2026, time.August, 4, 2, 3, 4, 500, time.UTC)
+
+	applied, err := repo.MarkGrokOAuthPermanentRefreshFailureIfCredentialsUnchanged(
+		context.Background(),
+		42,
+		map[string]any{"access_token": "wire-valid", "refresh_token": "revoked"},
+		&proxyID,
+		"invalid_grant",
+		failedAt,
+	)
+
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Len(t, exec.execQueries, 1, "credential marker and scheduler outbox must commit in one statement")
+	normalized := normalizeSQLWhitespace(exec.execQueries[0])
+	require.Contains(t, normalized, "WITH updated AS")
+	require.Contains(t, normalized, "a.credentials = $10::jsonb")
+	require.Contains(t, normalized, "a.proxy_id IS NOT DISTINCT FROM $11")
+	require.Contains(t, normalized, "INSERT INTO scheduler_outbox")
+	require.Len(t, exec.execArgs[0], 12)
+	require.Equal(t, service.GrokOAuthRefreshFailureCodeCredentialKey, exec.execArgs[0][0])
+	require.Equal(t, service.GrokOAuthRefreshFailureAtCredentialKey, exec.execArgs[0][1])
+	require.Equal(t, "invalid_grant", exec.execArgs[0][2])
+	require.Equal(t, &proxyID, exec.execArgs[0][10])
+	require.Equal(t, service.SchedulerOutboxEventAccountChanged, exec.execArgs[0][11])
+}
+
+func TestAccountRepository_ReauthorizeGrokOAuthUsesExactGenerationAndAtomicRecovery(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	proxyID := int64(17)
+
+	applied, err := repo.ReauthorizeGrokOAuthIfCredentialsUnchanged(
+		context.Background(),
+		42,
+		map[string]any{"access_token": "old-access", "refresh_token": "old-refresh"},
+		&proxyID,
+		map[string]any{"access_token": "new-access", "refresh_token": "new-refresh"},
+		map[string]any{"email": "user@example.com"},
+	)
+
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Len(t, exec.execQueries, 1)
+	normalized := normalizeSQLWhitespace(exec.execQueries[0])
+	require.Contains(t, normalized, "WITH updated AS")
+	require.Contains(t, normalized, "a.credentials = $7::jsonb")
+	require.Contains(t, normalized, "a.proxy_id IS NOT DISTINCT FROM $8")
+	require.Contains(t, normalized, "status = $3")
+	require.Contains(t, normalized, "rate_limit_reset_at = NULL")
+	require.Contains(t, normalized, "temp_unschedulable_until = NULL")
+	require.Contains(t, normalized, "INSERT INTO scheduler_outbox")
+	require.Len(t, exec.execArgs[0], 9)
+	require.Equal(t, &proxyID, exec.execArgs[0][7])
+	require.Equal(t, service.SchedulerOutboxEventAccountChanged, exec.execArgs[0][8])
 }
 
 func TestAccountRepository_ListOAuthRefreshCandidates_SQLFilter(t *testing.T) {
