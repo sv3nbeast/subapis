@@ -1371,6 +1371,78 @@ func TestGatewayService_AnthropicOAuth_OfficialCompactionPreservesNativeNonStrea
 	require.False(t, *events[0].UpstreamStream)
 	require.Equal(t, "compaction", events[0].AnthropicHelperKind)
 	require.True(t, events[0].NativeHelperNonStream)
+	require.True(t, events[0].NativeNonStream)
+	require.Equal(t, anthropicNativeNonStreamCompaction, events[0].NativeNonStreamKind)
+}
+
+func TestGatewayService_AnthropicOAuth_OfficialAgentClassifierPreservesNativeNonStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.222 (external, cli)")
+
+	body := claudeCodeAgentClassifierBodyForTest()
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	require.False(t, parsed.Stream)
+
+	upstreamJSON := `{"id":"msg_classifier","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"{\"state\":\"done\",\"detail\":\"task complete\",\"tempo\":\"idle\",\"output\":{}}"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":20}}`
+	upstream := &anthropicHTTPUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"x-request-id": []string{"rid-native-agent-classifier"},
+			},
+			Body: io.NopCloser(strings.NewReader(upstreamJSON)),
+		},
+	}
+
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		deferredService:      &DeferredService{},
+	}
+	account := &Account{
+		ID:          305,
+		Name:        "anthropic-oauth-native-agent-classifier",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+	ctx := SetClaudeCodeUserAgent(SetClaudeCodeClient(context.Background(), true), "claude-cli/2.1.222 (external, cli)")
+
+	result, err := svc.Forward(ctx, c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool(), "official classifier must stay native non-stream")
+	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "system.0.text").String(), claudeCodeAgentClassifierSystemPrefix))
+	require.Equal(t, "ephemeral", gjson.GetBytes(upstream.lastBody, "system.0.cache_control.type").String())
+	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
+	require.Equal(t, "done", gjson.GetBytes(rec.Body.Bytes(), "content.0.text|@fromstr|state").String())
+	require.False(t, result.Stream)
+
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Kind: "test"})
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].ClientStream)
+	require.NotNil(t, events[0].UpstreamStream)
+	require.False(t, *events[0].ClientStream)
+	require.False(t, *events[0].UpstreamStream)
+	require.Empty(t, events[0].AnthropicHelperKind)
+	require.False(t, events[0].NativeHelperNonStream)
+	require.True(t, events[0].NativeNonStream)
+	require.Equal(t, anthropicNativeNonStreamAgentClassifier, events[0].NativeNonStreamKind)
 }
 
 func TestGatewayService_AnthropicOpus5_ClampsXHighWhenThinkingDisabledBeforeUpstream(t *testing.T) {
@@ -1446,16 +1518,24 @@ func TestGatewayService_AnthropicOpus5_ClampsXHighWhenThinkingDisabledBeforeUpst
 	}
 }
 
-func TestShouldPreserveAnthropicNativeNonStream_RequiresValidatedClaudeCode(t *testing.T) {
+func TestAnthropicNativeNonStreamKind_RequiresValidatedClaudeCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	c.Request.Header.Set("X-Stainless-Helper", "compaction")
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	claudeCodeCtx := SetClaudeCodeClient(context.Background(), true)
 
-	require.False(t, shouldPreserveAnthropicNativeNonStream(context.Background(), c, account, false))
-	require.True(t, shouldPreserveAnthropicNativeNonStream(SetClaudeCodeClient(context.Background(), true), c, account, false))
-	require.False(t, shouldPreserveAnthropicNativeNonStream(SetClaudeCodeClient(context.Background(), true), c, account, true))
+	require.Empty(t, anthropicNativeNonStreamKind(context.Background(), c, account, false, nil))
+	require.Equal(t, anthropicNativeNonStreamCompaction, anthropicNativeNonStreamKind(claudeCodeCtx, c, account, false, nil))
+	require.Empty(t, anthropicNativeNonStreamKind(claudeCodeCtx, c, account, true, nil))
+
+	c.Request.Header.Del("X-Stainless-Helper")
+	classifierBody := claudeCodeAgentClassifierBodyForTest()
+	require.Empty(t, anthropicNativeNonStreamKind(context.Background(), c, account, false, classifierBody))
+	require.Equal(t, anthropicNativeNonStreamAgentClassifier, anthropicNativeNonStreamKind(claudeCodeCtx, c, account, false, classifierBody))
+	require.Empty(t, anthropicNativeNonStreamKind(claudeCodeCtx, c, account, true, classifierBody))
+	require.Empty(t, anthropicNativeNonStreamKind(claudeCodeCtx, c, &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, false, classifierBody))
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {

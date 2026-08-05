@@ -313,8 +313,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// (SUB2API_DEBUG_GATEWAY_USER_ID)时,放行该用户的非流式请求走 Forward(强制
 	// stream=true 聚合),以抓取上游真实请求+响应定位 429 根因;抓包一关守卫即全量恢复。
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
+	isClaudeCodeAgentClassifier := isClaudeCodeClient && service.IsClaudeCodeAgentClassifierRequest(body)
 	isInterceptableSync := isConnectionProbe ||
-		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone
+		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone ||
+		isClaudeCodeAgentClassifier
 	groupAllowsNonStream := apiKey != nil && apiKey.Group != nil && apiKey.Group.AllowNonStreamMessages
 	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync && !h.gatewayService.AllowSyncForDebugCapture(c) && !groupAllowsNonStream {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")

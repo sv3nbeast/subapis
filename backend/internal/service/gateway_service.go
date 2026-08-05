@@ -389,11 +389,17 @@ func classifyAnthropicStainlessHelper(raw string) string {
 	return anthropicStainlessHelperOther
 }
 
-func shouldPreserveAnthropicNativeNonStream(ctx context.Context, c *gin.Context, account *Account, clientStream bool) bool {
+func anthropicNativeNonStreamKind(ctx context.Context, c *gin.Context, account *Account, clientStream bool, body []byte) string {
 	if clientStream || c == nil || account == nil || !account.IsAnthropicOAuthOrSetupToken() || !IsClaudeCodeClient(ctx) {
-		return false
+		return ""
 	}
-	return classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader)) == anthropicStainlessHelperCompaction
+	if classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader)) == anthropicStainlessHelperCompaction {
+		return anthropicNativeNonStreamCompaction
+	}
+	if IsClaudeCodeAgentClassifierRequest(body) {
+		return anthropicNativeNonStreamAgentClassifier
+	}
+	return ""
 }
 
 func extractSystemPreviewFromBody(body []byte) string {
@@ -6925,12 +6931,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	originalModel := reqModel
 
 	// 普通非流式客户端请求内部强制转流式上游、再聚合回非流式 JSON 返回。
-	// 例外：新版官方 Claude SDK/CLI 会发送带 x-stainless-helper: compaction 的
-	// 原生非流式压缩请求。该请求类型本身就是官方协议形状，改写成 stream=true
-	// 反而会让 body 与 SDK helper 指纹不一致，因此必须原样保留非流式语义。
+	// 例外：官方 Claude CLI 的 compaction 与 agent_classifier 都是原生非流请求。
+	// 将这些已知协议改成 stream=true 会破坏请求形状，并触发上游通用 429。
 	clientStream := reqStream
-	nativeHelperNonStream := shouldPreserveAnthropicNativeNonStream(ctx, c, account, clientStream)
-	forceStreamAggregate := !clientStream && !nativeHelperNonStream
+	nativeNonStreamKind := anthropicNativeNonStreamKind(ctx, c, account, clientStream, body)
+	preserveNativeNonStream := nativeNonStreamKind != ""
+	forceStreamAggregate := !clientStream && !preserveNativeNonStream
 	if forceStreamAggregate {
 		reqStream = true
 		streamBody, setErr := sjson.SetBytes(body, "stream", true)
@@ -6944,27 +6950,28 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	helperKind := ""
 	if c != nil {
 		helperKind = classifyAnthropicStainlessHelper(c.GetHeader(anthropicStainlessHelperHeader))
-		setOpsAnthropicRequestShape(c, clientStream, reqStream, helperKind, nativeHelperNonStream)
+		setOpsAnthropicRequestShape(c, clientStream, reqStream, helperKind, nativeNonStreamKind)
 	}
 	if !clientStream {
 		slog.InfoContext(ctx, "gateway.anthropic_nonstream_shape",
 			"client_stream", clientStream,
 			"upstream_stream", reqStream,
 			"helper_kind", helperKind,
-			"native_helper_nonstream", nativeHelperNonStream,
+			"native_nonstream_kind", nativeNonStreamKind,
 		)
 	}
 
 	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
 	if c != nil && s.debugBodyCaptureEnabled(c) {
 		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
-			"account":         fmt.Sprintf("%d(%s)", account.ID, account.Name),
-			"account_type":    string(account.Type),
-			"model":           reqModel,
-			"client_stream":   strconv.FormatBool(clientStream),
-			"upstream_stream": strconv.FormatBool(reqStream),
-			"helper_kind":     helperKind,
-			"user_id":         strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+			"account":               fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type":          string(account.Type),
+			"model":                 reqModel,
+			"client_stream":         strconv.FormatBool(clientStream),
+			"upstream_stream":       strconv.FormatBool(reqStream),
+			"helper_kind":           helperKind,
+			"native_nonstream_kind": nativeNonStreamKind,
+			"user_id":               strconv.FormatInt(s.ginUserIDForDebug(c), 10),
 		})
 	}
 

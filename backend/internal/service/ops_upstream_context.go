@@ -70,19 +70,24 @@ type opsAnthropicRequestShape struct {
 	UpstreamStream        bool
 	HelperKind            string
 	NativeHelperNonStream bool
+	NativeNonStream       bool
+	NativeNonStreamKind   string
 }
 
 // setOpsAnthropicRequestShape records only bounded protocol-shape metadata.
 // It deliberately excludes prompts and raw helper header values.
-func setOpsAnthropicRequestShape(c *gin.Context, clientStream, upstreamStream bool, helperKind string, nativeHelperNonStream bool) {
+func setOpsAnthropicRequestShape(c *gin.Context, clientStream, upstreamStream bool, helperKind, nativeNonStreamKind string) {
 	if c == nil {
 		return
 	}
+	nativeNonStreamKind = strings.TrimSpace(nativeNonStreamKind)
 	c.Set(OpsAnthropicRequestShapeKey, opsAnthropicRequestShape{
 		ClientStream:          clientStream,
 		UpstreamStream:        upstreamStream,
 		HelperKind:            strings.TrimSpace(helperKind),
-		NativeHelperNonStream: nativeHelperNonStream,
+		NativeHelperNonStream: nativeNonStreamKind == anthropicNativeNonStreamCompaction,
+		NativeNonStream:       nativeNonStreamKind != "",
+		NativeNonStreamKind:   nativeNonStreamKind,
 	})
 }
 
@@ -308,6 +313,8 @@ type OpsUpstreamErrorEvent struct {
 	UpstreamStream        *bool  `json:"upstream_stream,omitempty"`
 	AnthropicHelperKind   string `json:"anthropic_helper_kind,omitempty"`
 	NativeHelperNonStream bool   `json:"native_helper_nonstream,omitempty"`
+	NativeNonStream       bool   `json:"native_nonstream,omitempty"`
+	NativeNonStreamKind   string `json:"native_nonstream_kind,omitempty"`
 
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`
@@ -332,6 +339,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.MappedModel = strings.TrimSpace(ev.MappedModel)
 	ev.KiroModelID = strings.TrimSpace(ev.KiroModelID)
 	ev.AnthropicHelperKind = strings.TrimSpace(ev.AnthropicHelperKind)
+	ev.NativeNonStreamKind = strings.TrimSpace(ev.NativeNonStreamKind)
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Detail = strings.TrimSpace(ev.Detail)
@@ -366,6 +374,12 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 			}
 			if !ev.NativeHelperNonStream {
 				ev.NativeHelperNonStream = shape.NativeHelperNonStream
+			}
+			if !ev.NativeNonStream {
+				ev.NativeNonStream = shape.NativeNonStream
+			}
+			if ev.NativeNonStreamKind == "" {
+				ev.NativeNonStreamKind = shape.NativeNonStreamKind
 			}
 		}
 	}

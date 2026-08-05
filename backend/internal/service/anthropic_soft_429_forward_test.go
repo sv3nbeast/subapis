@@ -109,6 +109,28 @@ func TestGatewayService_Forward_ClassifiesAnthropicSoft429BeforeWriting(t *testi
 	requireAnthropicSoft429Failover(t, err, recorder, upstream)
 }
 
+func TestGatewayService_Forward_AgentClassifierSoft429BeforeWriting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &anthropicSoft429Upstream{}
+	svc := newAnthropicSoft429ForwardService(upstream)
+	c, recorder := newAnthropicSoft429GinContext()
+	parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(claudeCodeAgentClassifierBodyForTest()), PlatformAnthropic)
+	require.NoError(t, parseErr)
+	ctx := SetClaudeCodeClient(context.Background(), true)
+
+	_, err := svc.Forward(ctx, c, newAnthropicSoft429OAuthAccount(), parsed)
+
+	requireAnthropicSoft429Failover(t, err, recorder, upstream)
+	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events := rawEvents.([]*OpsUpstreamErrorEvent)
+	require.NotEmpty(t, events)
+	require.True(t, events[len(events)-1].NativeNonStream)
+	require.Equal(t, anthropicNativeNonStreamAgentClassifier, events[len(events)-1].NativeNonStreamKind)
+	require.NotNil(t, events[len(events)-1].UpstreamStream)
+	require.False(t, *events[len(events)-1].UpstreamStream)
+}
+
 func TestGatewayService_ForwardPassthrough_ClassifiesAnthropicSoft429BeforeWriting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &anthropicSoft429Upstream{}
