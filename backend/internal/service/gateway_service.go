@@ -474,6 +474,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		toolsCount = len(tools.Array())
 	}
 	hasInvokeText := strings.Contains(strings.ToLower(string(body)), "<invoke")
+	_, hasCCH := anthropicCCHDigitsOffset(body)
 
 	// Truncate preview to keep logs sane.
 	if len(sysPreview) > 300 {
@@ -490,7 +491,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 	}
 
 	return fmt.Sprintf(
-		"url=%s account=%d(%s) tokenType=%s mimic=%t tools_count=%d has_invoke_text=%t meta.user_id=%q system.preview=%q headers={%s}",
+		"url=%s account=%d(%s) tokenType=%s mimic=%t tools_count=%d has_invoke_text=%t cch_present=%t meta.user_id=%q system.preview=%q headers={%s}",
 		req.URL.String(),
 		aid,
 		aname,
@@ -498,6 +499,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 		mimicClaudeCode,
 		toolsCount,
 		hasInvokeText,
+		hasCCH,
 		metaUserID,
 		sysPreview,
 		strings.Join(h, " "),
@@ -6197,9 +6199,8 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	//    区别于真实 CLI。这里注入 claudeCodeSystemPromptExpansion（中性段落）把形态做到
 	//    接近真实，同时不注入会污染被代理用户行为的工具专属指令。
 	//
-	//    缺失 billing block 的系统 payload 是 Anthropic 判定第三方的关键信号之一
-	//    （真实 CLI 每个请求都带）。新版 CLI 已取消 cch=... 签名字段，故 block 不再注入
-	//    cch（见 buildBillingAttributionText）。
+	//    缺失 billing block 的系统 payload 是 Anthropic 判定第三方的关键信号之一。
+	//    cch 必须覆盖最终 wire body，因此在 buildUpstreamRequest 的末尾统一补入并签署。
 	systemBlocks, blockErr := buildClaudeOAuthSystemPromptBlocksJSON(body, expansionPrompt, blocksConfig)
 	if blockErr != nil {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to build configured Claude OAuth system blocks: %v", blockErr)
@@ -6794,7 +6795,7 @@ func (s *GatewayService) injectBridgeCacheBreakpoints(c *gin.Context, body []byt
 //  1. 后台 settings 显式覆盖(管理员可强制全局 UA,如 channel 调试用途)。
 //  2. 否则按 ctx 中入站 UA 形式选 canonical:
 //     - agent-sdk 形式 → AgentSDKCanonicalUserAgent (2.1.181 + claude-desktop-3p + agent-sdk)
-//     - 其他兜底 → PlainCLICanonicalUserAgent (2.1.156 plain CLI)
+//     - 其他兜底 → PlainCLICanonicalUserAgent (2.1.220 plain CLI)
 //
 // 此函数是修 4-8 死循环的核心:agent-sdk 入站时上游 UA 形式与 body 内的
 // agent-sdk 特征(system-reminder / Task tool / skills 等)保持一致,避免
@@ -9230,11 +9231,14 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			// this as a legitimate Claude Code request; without it, the request is
 			// rejected as third-party ("out of extra usage").
 			requiredBetas := claude.FullClaudeCodeMimicryBetas()
-			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
+			finalBeta := mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet)
+			setHeaderRaw(req.Header, "anthropic-beta", ensureClaudeOAuthCredentialBetas(finalBeta))
 		} else {
-			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
+			// Claude Code 客户端：保留客户端能力 beta，并补齐由上游 OAuth
+			// 凭证决定的 claude-code / oauth / extended-cache-ttl 标识。
 			clientBetaHeader := getHeaderRaw(req.Header, "anthropic-beta")
-			setHeaderRaw(req.Header, "anthropic-beta", stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), effectiveDropSet))
+			finalBeta := stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBetaHeader), effectiveDropSet)
+			setHeaderRaw(req.Header, "anthropic-beta", ensureClaudeOAuthCredentialBetas(finalBeta))
 		}
 	} else {
 		// API-key accounts: apply beta policy filter to strip controlled tokens
@@ -9256,6 +9260,15 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	s.applyClaudeUpstreamUserAgent(ctx, req)
+	if shouldFinalizeAnthropicCCH(account, tokenType, req.URL) {
+		signedBody, signErr := finalizeAnthropicCCH(body, getHeaderRaw(req.Header, "User-Agent"))
+		if signErr != nil {
+			return nil, nil, fmt.Errorf("finalize Anthropic OAuth CCH: %w", signErr)
+		}
+		body = signedBody
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
@@ -9403,51 +9416,61 @@ func (s *GatewayService) buildUpstreamRequestAnthropicVertex(
 	return req, nil
 }
 
-// getBetaHeader 处理anthropic-beta header
-// 对于OAuth账号，需要确保包含oauth-2025-04-20
+// getBetaHeader preserves caller capability betas while adding the beta tokens
+// determined by the selected upstream OAuth credential.
 func (s *GatewayService) getBetaHeader(modelID string, clientBetaHeader string) string {
-	// 如果客户端传了anthropic-beta
 	if clientBetaHeader != "" {
-		// 已包含oauth beta则直接返回
-		if strings.Contains(clientBetaHeader, claude.BetaOAuth) {
-			return clientBetaHeader
-		}
+		return ensureClaudeOAuthCredentialBetas(clientBetaHeader)
+	}
 
-		// 需要添加oauth beta
-		parts := strings.Split(clientBetaHeader, ",")
-		for i, p := range parts {
-			parts[i] = strings.TrimSpace(p)
-		}
+	// Keep the existing capability baseline when the client supplied no header.
+	if strings.Contains(strings.ToLower(modelID), "haiku") {
+		return ensureClaudeOAuthCredentialBetas(claude.HaikuBetaHeader)
+	}
+	return ensureClaudeOAuthCredentialBetas(claude.DefaultBetaHeader)
+}
 
-		// 在claude-code-20250219后面插入oauth beta
-		claudeCodeIdx := -1
-		for i, p := range parts {
-			if p == claude.BetaClaudeCode {
-				claudeCodeIdx = i
+func ensureClaudeOAuthCredentialBetas(header string) string {
+	return ensureClaudeOAuthCredentialBetasWithExtendedCache(header, true)
+}
+
+func ensureClaudeOAuthCountTokensCredentialBetas(header string) string {
+	return ensureClaudeOAuthCredentialBetasWithExtendedCache(header, false)
+}
+
+func ensureClaudeOAuthCredentialBetasWithExtendedCache(header string, includeExtendedCache bool) string {
+	parts := make([]string, 0, 16)
+	seen := make(map[string]bool, 16)
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		parts = append(parts, part)
+		seen[part] = true
+	}
+
+	if !seen[claude.BetaClaudeCode] {
+		parts = append([]string{claude.BetaClaudeCode}, parts...)
+		seen[claude.BetaClaudeCode] = true
+	}
+	if !seen[claude.BetaOAuth] {
+		insertAt := 0
+		for i, part := range parts {
+			if part == claude.BetaClaudeCode {
+				insertAt = i + 1
 				break
 			}
 		}
-
-		if claudeCodeIdx >= 0 {
-			// 在claude-code后面插入
-			newParts := make([]string, 0, len(parts)+1)
-			newParts = append(newParts, parts[:claudeCodeIdx+1]...)
-			newParts = append(newParts, claude.BetaOAuth)
-			newParts = append(newParts, parts[claudeCodeIdx+1:]...)
-			return strings.Join(newParts, ",")
-		}
-
-		// 没有claude-code，放在第一位
-		return claude.BetaOAuth + "," + clientBetaHeader
+		parts = append(parts, "")
+		copy(parts[insertAt+1:], parts[insertAt:])
+		parts[insertAt] = claude.BetaOAuth
+		seen[claude.BetaOAuth] = true
 	}
-
-	// 客户端没传，根据模型生成
-	// haiku 模型不需要 claude-code beta
-	if strings.Contains(strings.ToLower(modelID), "haiku") {
-		return claude.HaikuBetaHeader
+	if includeExtendedCache && !seen[claude.BetaExtendedCacheTTL] {
+		parts = append(parts, claude.BetaExtendedCacheTTL)
 	}
-
-	return claude.DefaultBetaHeader
+	return strings.Join(parts, ",")
 }
 
 func requestNeedsBetaFeatures(body []byte) bool {
@@ -13205,18 +13228,20 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			applyClaudeCodeMimicHeaders(req, false)
 
 			incomingBeta := getHeaderRaw(req.Header, "anthropic-beta")
-			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
-			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
+			requiredBetas := strings.Split(claude.CountTokensBetaHeader, ",")
+			finalBeta := mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet)
+			setHeaderRaw(req.Header, "anthropic-beta", ensureClaudeOAuthCountTokensCredentialBetas(finalBeta))
 		} else {
 			clientBetaHeader := getHeaderRaw(req.Header, "anthropic-beta")
 			if clientBetaHeader == "" {
 				setHeaderRaw(req.Header, "anthropic-beta", claude.CountTokensBetaHeader)
 			} else {
-				beta := s.getBetaHeader(modelID, clientBetaHeader)
+				beta := clientBetaHeader
 				if !strings.Contains(beta, claude.BetaTokenCounting) {
 					beta = beta + "," + claude.BetaTokenCounting
 				}
-				setHeaderRaw(req.Header, "anthropic-beta", stripBetaTokensWithSet(beta, ctEffectiveDropSet))
+				finalBeta := stripBetaTokensWithSet(beta, ctEffectiveDropSet)
+				setHeaderRaw(req.Header, "anthropic-beta", ensureClaudeOAuthCountTokensCredentialBetas(finalBeta))
 			}
 		}
 	} else {
@@ -13239,6 +13264,15 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	s.applyClaudeUpstreamUserAgent(ctx, req)
+	if shouldFinalizeAnthropicCCH(account, tokenType, req.URL) {
+		signedBody, signErr := finalizeAnthropicCCH(body, getHeaderRaw(req.Header, "User-Agent"))
+		if signErr != nil {
+			return nil, nil, fmt.Errorf("finalize Anthropic OAuth count_tokens CCH: %w", signErr)
+		}
+		body = signedBody
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 	syncClaudeCodeSessionHeaderFromBody(req, body)
 
 	if c != nil && tokenType == "oauth" {
@@ -13621,17 +13655,19 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 
 	if tokenType == "oauth" {
 		if mimicClaudeCode {
-			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
-			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
+			requiredBetas := strings.Split(claude.CountTokensBetaHeader, ",")
+			finalBeta := mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet)
+			return ensureClaudeOAuthCountTokensCredentialBetas(finalBeta), true
 		}
 		if clientBeta == "" {
 			return claude.CountTokensBetaHeader, true
 		}
-		beta := s.getBetaHeader(modelID, clientBeta)
+		beta := clientBeta
 		if !strings.Contains(beta, claude.BetaTokenCounting) {
 			beta += "," + claude.BetaTokenCounting
 		}
-		return stripBetaTokensWithSet(beta, effectiveDropSet), true
+		finalBeta := stripBetaTokensWithSet(beta, effectiveDropSet)
+		return ensureClaudeOAuthCountTokensCredentialBetas(finalBeta), true
 	}
 
 	if clientBeta != "" {

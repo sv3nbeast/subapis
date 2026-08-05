@@ -533,8 +533,8 @@ const (
 	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
 	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
-	// SettingKeyEnableCCHSigning 已废弃（no-op）：新版 Claude Code CLI 已取消 cch 签名字段，
-	// 网关随之不再注入/签名 cch。保留该 key 仅为向后兼容，开关不再产生任何效果。
+	// SettingKeyEnableCCHSigning 已废弃（no-op）。直连 Anthropic OAuth 的 CCH 是协议必需字段，
+	// 由网关自动签署，不再允许关闭。保留该 key 仅为设置 API 和旧数据库向后兼容。
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
 	// SettingKeyWebSearchEmulationConfig stores JSON config for global web search emulation.
 	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config"

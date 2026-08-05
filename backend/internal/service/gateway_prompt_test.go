@@ -417,7 +417,7 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.Contains(t, billingBlock["text"], "x-anthropic-billing-header:")
 			require.Contains(t, billingBlock["text"], "cc_version=")
 			require.Contains(t, billingBlock["text"], "cc_entrypoint=cli")
-			// 新版 CLI 已取消 cch=... 签名字段，注入的 billing block 不应再带 cch。
+			// CCH 在最终直连 OAuth wire body 阶段补入；prompt 重写阶段只生成 attribution。
 			require.NotContains(t, billingBlock["text"], "cch=")
 
 			systemBlock, ok := systemArr[1].(map[string]any)

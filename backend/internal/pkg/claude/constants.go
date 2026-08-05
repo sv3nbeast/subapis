@@ -53,8 +53,10 @@ const MessageBetaHeaderNoTools = DefaultBetaHeader
 // MessageBetaHeaderWithTools /v1/messages 在有工具时的 beta header
 const MessageBetaHeaderWithTools = DefaultBetaHeader
 
-// CountTokensBetaHeader count_tokens 请求使用的 anthropic-beta header
-const CountTokensBetaHeader = DefaultBetaHeader + "," + BetaTokenCounting
+// CountTokensBetaHeader matches Claude Code's reduced OAuth count_tokens profile.
+// Inference-only capability betas such as extended-cache-ttl are deliberately
+// absent from this endpoint.
+const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaContextManagement + "," + BetaTokenCounting
 
 // HaikuBetaHeader Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）。
 // 对齐 Claude Code CLI 2.1.165 title/Haiku 请求抓包。
@@ -74,7 +76,7 @@ const DefaultCacheControlTTL = "5m"
 // CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
 // 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
 // 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
-const CLICurrentVersion = "2.1.156"
+const CLICurrentVersion = "2.1.220"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -103,13 +105,13 @@ func FullClaudeCodeMimicryBetas() []string {
 // 与 PlainCLICanonicalUserAgent / PlainCLICanonicalFingerprint 一一对应。
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with current official Claude Code CLI traffic.
-	"User-Agent":                                "claude-cli/2.1.156 (external, cli)",
+	"User-Agent":                                "claude-cli/2.1.220 (external, cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.94.0",
 	"X-Stainless-OS":                            "MacOS",
 	"X-Stainless-Arch":                          "arm64",
 	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v24.3.0",
+	"X-Stainless-Runtime-Version":               "v26.3.0",
 	"X-Stainless-Retry-Count":                   "0",
 	"X-Stainless-Timeout":                       "600",
 	"X-App":                                     "cli",
@@ -127,12 +129,12 @@ var DefaultHeaders = map[string]string{
 //
 // 修复:按入站 UA 形式分两套 canonical,每套内部版本号/OS/Arch 全部死写为
 // 固定值,fingerprint cache key 升级为 fingerprint:<account.ID>:<form>。
-// agent-sdk 形式锁 admin 真实的 2.1.181 + MacOS/arm64;plain CLI 形式保留
-// 2.1.156 + MacOS/arm64(版本号不变,只把曾被 Windows 污染的指纹改回 MacOS)。
+// agent-sdk 形式锁 admin 真实的 2.1.181 + MacOS/arm64;plain CLI 形式使用
+// 已验证 CCH 请求形态的 2.1.220 + MacOS/arm64。
 const (
 	// PlainCLICanonicalUserAgent 是 plain Claude CLI 主对话形式的统一 UA。
 	// 版本号与 CLICurrentVersion 一致,不轻易升版避免触发上游 prompt cache 失效。
-	PlainCLICanonicalUserAgent = "claude-cli/2.1.156 (external, cli)"
+	PlainCLICanonicalUserAgent = "claude-cli/2.1.220 (external, cli)"
 
 	// AgentSDKCanonicalUserAgent 是 Claude Code Task 子代理 / Agent SDK 桥接形式
 	// 的统一 UA,对齐 admin 真实客户端 2.1.181 + agent-sdk/0.3.181。
@@ -160,7 +162,7 @@ var PlainCLICanonicalFingerprint = CanonicalFingerprint{
 	StainlessOS:             "MacOS",
 	StainlessArch:           "arm64",
 	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v24.3.0",
+	StainlessRuntimeVersion: "v26.3.0",
 }
 
 // AgentSDKCanonicalFingerprint 是 agent-sdk 形式的固定指纹。

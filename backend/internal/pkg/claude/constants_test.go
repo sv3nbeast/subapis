@@ -65,6 +65,16 @@ func TestClaudeCodeMimicryBetaConstants(t *testing.T) {
 	if strings.Contains(HaikuBetaHeader, BetaClaudeCode) {
 		t.Fatalf("HaikuBetaHeader must not include Claude Code beta: %s", HaikuBetaHeader)
 	}
+	for _, token := range []string{BetaClaudeCode, BetaOAuth, BetaInterleavedThinking, BetaContextManagement, BetaTokenCounting} {
+		if !strings.Contains(CountTokensBetaHeader, token) {
+			t.Fatalf("CountTokensBetaHeader missing %q: %s", token, CountTokensBetaHeader)
+		}
+	}
+	for _, token := range []string{BetaExtendedCacheTTL, BetaPromptCachingScope, BetaAdvancedToolUse, BetaEffort} {
+		if strings.Contains(CountTokensBetaHeader, token) {
+			t.Fatalf("CountTokensBetaHeader must not include inference beta %q: %s", token, CountTokensBetaHeader)
+		}
+	}
 }
 
 func TestDefaultModelsContainCurrentModelsWithoutDuplicates(t *testing.T) {

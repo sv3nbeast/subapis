@@ -1015,6 +1015,29 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("hides the legacy CCH toggle and omits its no-op setting", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      enable_cch_signing: true,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    expect(wrapper.text()).not.toContain(
+      "admin.settings.gatewayForwarding.cchSigning",
+    );
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(updateSettings.mock.calls[0]?.[0]).not.toHaveProperty(
+      "enable_cch_signing",
+    );
+  });
+
   it("submits Claude OAuth system prompt injection gateway settings", async () => {
     const blocks = `[{"type":"text","text":"custom block","cache_control":true}]`;
     getSettings.mockResolvedValueOnce({

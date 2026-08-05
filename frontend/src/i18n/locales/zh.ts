@@ -7508,7 +7508,7 @@ const baseMessages = {
         antigravityUserAgentVersionHint:
           '留空时使用 ANTIGRAVITY_USER_AGENT_VERSION 或内置默认值 1.23.2；填写后后台设置优先。',
         claudeUpstreamUserAgent: 'Claude/Anthropic 上游 UA',
-        claudeUpstreamUserAgentPlaceholder: 'claude-cli/2.1.156 (external, cli)',
+        claudeUpstreamUserAgentPlaceholder: 'claude-cli/2.1.220 (external, cli)',
         claudeUpstreamUserAgentHint:
           '强制所有 Claude/Anthropic 上游请求使用此完整 User-Agent。留空时使用内置默认值；客户端传入、指纹缓存和监控模板均不能覆盖。',
         openaiCodexUserAgent: 'OpenAI Codex UA',

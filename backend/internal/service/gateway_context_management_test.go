@@ -222,7 +222,7 @@ func TestComputeFinalAnthropicBeta_APIKeyHaiku_StillUsesAPIKeyBetas(t *testing.T
 // ============================================================================
 
 func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_AlwaysIncludesContextManagement(t *testing.T) {
-	// count_tokens mimic 继续注入完整 mimicry beta，并额外携带 token-counting beta。
+	// count_tokens mimic uses the official reduced profile and carries token-counting.
 	s := newTestGatewayServiceForBeta(false)
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", true, "claude-haiku-4-5", http.Header{}, []byte(`{}`), nil)
 	require.True(t, ok)
@@ -230,6 +230,8 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_AlwaysIncludesContextMa
 		"count_tokens + mimic Haiku 必须保留 context-management beta")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting),
 		"count_tokens 路径必须含 token-counting beta")
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaExtendedCacheTTL),
+		"count_tokens 不应强制 inference-only extended-cache-ttl beta")
 }
 
 // 重构等价性回归：
@@ -247,7 +249,7 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_PreservesClientBeta(t *
 	require.True(t, anthropicBetaTokensContains(final, "context-1m-2025-08-07"),
 		"客户端透传的其他 beta token 同样需要保留")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement),
-		"同时 FullClaudeCodeMimicryBetas 不打折扣")
+		"同时保留 count_tokens 固定 context-management beta")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting),
 		"同时补齐 token-counting beta")
 }
@@ -272,8 +274,8 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_NoClientBetaInjec
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", false, "claude-haiku-4-5", http.Header{}, []byte(`{}`), nil)
 	require.True(t, ok)
 	require.Equal(t, claude.CountTokensBetaHeader, final)
-	// CountTokensBetaHeader 不含 context-management beta
-	require.False(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
+	// Claude Code 的 count_tokens 固定携带 context-management 能力 beta。
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
 }
 
 func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_AppendsBetaTokenCounting(t *testing.T) {
