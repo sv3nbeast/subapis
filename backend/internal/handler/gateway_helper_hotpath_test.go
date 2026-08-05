@@ -169,6 +169,16 @@ func validClaudeCodeBodyJSON() []byte {
 	}`)
 }
 
+func validClaudeCodeAgentClassifierBodyJSON() []byte {
+	return []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":1024,
+		"metadata":{"user_id":"{\"device_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"account_uuid\":\"\",\"session_id\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"}"},
+		"system":[{"type":"text","text":"A user kicked off a Claude Code agent to do a coding task and walked away. Read the tail and classify it."}],
+		"messages":[{"role":"user","content":"Current state: working"}]
+	}`)
+}
+
 func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 	t.Run("non_cli_user_agent_sets_false", func(t *testing.T) {
 		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
@@ -212,6 +222,23 @@ func TestSetClaudeCodeClientContext_FastPathAndStrictPath(t *testing.T) {
 		SetClaudeCodeClientContext(c, []byte(`{"model":"claude-haiku-4-5-20251001","stream":true}`), nil)
 		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
 		require.Equal(t, "claude-cli/2.1.2 (external, cli)", service.ClaudeCodeUserAgent(c.Request.Context()))
+	})
+
+	t.Run("remote_cli_agent_classifier_sets_true_without_version_binding", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/9.9.999 (external, remote)")
+
+		SetClaudeCodeClientContext(c, validClaudeCodeAgentClassifierBodyJSON(), nil)
+		require.True(t, service.IsClaudeCodeClient(c.Request.Context()))
+		require.Equal(t, "9.9.999", service.GetClaudeCodeVersion(c.Request.Context()))
+	})
+
+	t.Run("remote_cli_ordinary_sync_body_stays_false", func(t *testing.T) {
+		c, _ := newHelperTestContext(http.MethodPost, "/v1/messages")
+		c.Request.Header.Set("User-Agent", "claude-cli/9.9.999 (external, remote)")
+
+		SetClaudeCodeClientContext(c, []byte(`{"model":"claude-opus-5","max_tokens":1024,"stream":false,"metadata":{"user_id":"test"},"system":[{"type":"text","text":"ordinary system prompt"}],"messages":[{"role":"user","content":"hello"}]}`), nil)
+		require.False(t, service.IsClaudeCodeClient(c.Request.Context()))
 	})
 
 	t.Run("desktop_agent_messages_path_invalid_body_sets_true", func(t *testing.T) {

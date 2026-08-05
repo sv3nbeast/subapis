@@ -58,6 +58,13 @@ func SetClaudeCodeClientContext(c *gin.Context, body []byte, parsedReq *service.
 			_ = json.Unmarshal(body, &bodyMap)
 		}
 		isClaudeCode = claudeCodeValidator.Validate(c.Request, bodyMap)
+		if !isClaudeCode && service.IsClaudeCodeAgentClassifierRequest(body) {
+			// Remote/background Claude Code classifiers intentionally replace the
+			// normal CLI system prompt with their dedicated native non-stream prompt.
+			// The strict validator cannot match that shape, but the UA fast path and
+			// classifier protocol checks above still establish an official CLI request.
+			isClaudeCode = true
+		}
 		if !isClaudeCode && service.IsClaudeCodeExternalClientUserAgent(ua) {
 			// Claude Desktop 3P / Agent SDK requests are real Claude CLI clients, but
 			// some tool-continuation probes omit the full Claude Code system/metadata.
