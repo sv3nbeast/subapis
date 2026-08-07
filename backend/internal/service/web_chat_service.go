@@ -147,7 +147,7 @@ func (s *WebChatService) Options(ctx context.Context, userID int64) (*WebChatOpt
 		TemplatesEnabled: runtime.TemplatesEnabled,
 		HistoryEnabled:   runtime.HistoryEnabled,
 		FilesEnabled:     runtime.FilesEnabled,
-		FileFormats:      []string{"pdf", "docx", "txt", "md", "csv"},
+		FileFormats:      []string{"pdf", "docx", "xlsx", "txt", "md", "csv"},
 	}
 	if s.documents != nil {
 		options.FileLimits = s.documents.Limits(ctx)

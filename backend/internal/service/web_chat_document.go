@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,8 +39,13 @@ const (
 	defaultWebChatProjectFiles  = 50
 	defaultWebChatUserBytes     = int64(500 << 20)
 	webChatKnowledgeMaxChars    = 12000
-	webChatExtractedMaxChars    = 5_000_000
+	// Keep the extraction ceiling aligned with the default 20 MiB upload limit.
+	// The previous 5M-character ceiling rejected otherwise valid multi-megabyte
+	// text files before they could be indexed.
+	webChatExtractedMaxChars    = 20_000_000
 	webChatDOCXMaxXMLBytes      = int64(32 << 20)
+	webChatXLSXMaxXMLBytes      = int64(64 << 20)
+	webChatXLSXMaxXMLTotalBytes = int64(128 << 20)
 )
 
 var (
@@ -619,7 +626,7 @@ func (s *WebChatDocumentService) failJob(ctx context.Context, doc *WebChatDocume
 	return s.repo.FailDocument(ctx, doc.ID, doc.LeaseOwner, err.Error(), next)
 }
 
-var webChatAllowedTypes = map[string]string{".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv"}
+var webChatAllowedTypes = map[string]string{".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv"}
 
 func validateWebChatDocument(name, declared string, data []byte) (string, string, bool) {
 	ext := strings.ToLower(filepath.Ext(name))
@@ -628,7 +635,9 @@ func validateWebChatDocument(name, declared string, data []byte) (string, string
 		return "", "", false
 	}
 	d := strings.ToLower(strings.TrimSpace(strings.Split(declared, ";")[0]))
-	aliasOK := (ext == ".md" && d == "text/plain") || (ext == ".csv" && d == "application/vnd.ms-excel")
+	aliasOK := (ext == ".md" && d == "text/plain") ||
+		(ext == ".csv" && d == "application/vnd.ms-excel") ||
+		(ext == ".xlsx" && (d == "application/vnd.ms-excel" || d == "application/zip"))
 	if d != "" && d != "application/octet-stream" && d != typ && !aliasOK {
 		return "", "", false
 	}
@@ -639,6 +648,10 @@ func validateWebChatDocument(name, declared string, data []byte) (string, string
 		}
 	case ".docx":
 		if !validWebChatDOCX(data) {
+			return "", "", false
+		}
+	case ".xlsx":
+		if !validWebChatXLSX(data) {
 			return "", "", false
 		}
 	case ".txt", ".md", ".csv":
@@ -669,6 +682,269 @@ func validWebChatDOCX(data []byte) bool {
 	return hasTypes && hasDocument
 }
 
+// validWebChatXLSX performs a lightweight OOXML container check without
+// extracting arbitrary archive entries. Spreadsheet files are ZIP containers,
+// so the size checks also protect the document worker from zip-bomb payloads.
+func validWebChatXLSX(data []byte) bool {
+	if len(data) < 4 || !bytes.Equal(data[:2], []byte("PK")) {
+		return false
+	}
+	z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return false
+	}
+	hasTypes, hasWorkbook, hasWorksheet := false, false, false
+	var xmlBytes uint64
+	for _, f := range z.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		isXML := strings.HasSuffix(strings.ToLower(f.Name), ".xml")
+		if isXML {
+			if f.UncompressedSize64 > uint64(webChatXLSXMaxXMLBytes) {
+				return false
+			}
+			xmlBytes += f.UncompressedSize64
+			if xmlBytes > uint64(webChatXLSXMaxXMLTotalBytes) {
+				return false
+			}
+		}
+		switch f.Name {
+		case "[Content_Types].xml":
+			hasTypes = true
+		case "xl/workbook.xml":
+			hasWorkbook = true
+		default:
+			if strings.HasPrefix(f.Name, "xl/worksheets/") && isXML {
+				hasWorksheet = true
+			}
+		}
+	}
+	return hasTypes && hasWorkbook && hasWorksheet
+}
+
+func readWebChatXLSXXML(file *zip.File) ([]byte, error) {
+	if file == nil || file.UncompressedSize64 > uint64(webChatXLSXMaxXMLBytes) {
+		return nil, ErrWebChatDocumentUnsafe
+	}
+	r, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	data, err := io.ReadAll(io.LimitReader(r, webChatXLSXMaxXMLBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > webChatXLSXMaxXMLBytes {
+		return nil, ErrWebChatDocumentUnsafe
+	}
+	return data, nil
+}
+
+func parseXLSX(data []byte) ([]parsedSection, error) {
+	if !validWebChatXLSX(data) {
+		return nil, ErrWebChatDocumentUnsafe
+	}
+	z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("parse XLSX archive: %w", err)
+	}
+	entries := make(map[string]*zip.File, len(z.File))
+	worksheets := make([]*zip.File, 0, 4)
+	for _, file := range z.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		entries[file.Name] = file
+		if strings.HasPrefix(file.Name, "xl/worksheets/") && strings.HasSuffix(strings.ToLower(file.Name), ".xml") {
+			worksheets = append(worksheets, file)
+		}
+	}
+	sort.Slice(worksheets, func(i, j int) bool { return worksheets[i].Name < worksheets[j].Name })
+
+	var sharedStrings []string
+	if file := entries["xl/sharedStrings.xml"]; file != nil {
+		xmlData, err := readWebChatXLSXXML(file)
+		if err != nil {
+			return nil, fmt.Errorf("read XLSX shared strings: %w", err)
+		}
+		sharedStrings, err = parseXLSXSharedStrings(xmlData)
+		if err != nil {
+			return nil, fmt.Errorf("parse XLSX shared strings: %w", err)
+		}
+	}
+
+	sections := make([]parsedSection, 0)
+	for index, file := range worksheets {
+		xmlData, err := readWebChatXLSXXML(file)
+		if err != nil {
+			return nil, fmt.Errorf("read XLSX worksheet %d: %w", index+1, err)
+		}
+		rows, err := parseXLSXWorksheet(xmlData, sharedStrings, fmt.Sprintf("工作表%d", index+1))
+		if err != nil {
+			return nil, fmt.Errorf("parse XLSX worksheet %d: %w", index+1, err)
+		}
+		sections = append(sections, rows...)
+		if extractedSectionChars(sections) > webChatExtractedMaxChars {
+			return nil, ErrWebChatDocumentUnsafe
+		}
+	}
+	return sections, nil
+}
+
+func parseXLSXSharedStrings(data []byte) ([]string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	stringsTable := make([]string, 0)
+	var value strings.Builder
+	inString, capturingText := false, false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch element := token.(type) {
+		case xml.StartElement:
+			switch element.Name.Local {
+			case "si":
+				inString = true
+				value.Reset()
+			case "t":
+				if inString {
+					capturingText = true
+				}
+			}
+		case xml.CharData:
+			if capturingText {
+				value.Write([]byte(element))
+			}
+		case xml.EndElement:
+			switch element.Name.Local {
+			case "t":
+				capturingText = false
+			case "si":
+				stringsTable = append(stringsTable, value.String())
+				inString = false
+			}
+		}
+	}
+	return stringsTable, nil
+}
+
+func parseXLSXWorksheet(data []byte, sharedStrings []string, sheetLabel string) ([]parsedSection, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	sections := make([]parsedSection, 0)
+	var rowCells []string
+	var cellValue strings.Builder
+	var cellType, captureElement string
+	inRow, inCell := false, false
+	rowNumber, captureDepth := 0, 0
+
+	finishCell := func() error {
+		if !inCell {
+			return nil
+		}
+		raw := cellValue.String()
+		value := raw
+		switch cellType {
+		case "s":
+			index, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil || index < 0 || index >= len(sharedStrings) {
+				return ErrWebChatDocumentUnsafe
+			}
+			value = sharedStrings[index]
+		case "b":
+			if strings.TrimSpace(raw) == "1" {
+				value = "TRUE"
+			} else {
+				value = "FALSE"
+			}
+		case "inlineStr", "str":
+			value = raw
+		}
+		rowCells = append(rowCells, value)
+		inCell = false
+		cellType = ""
+		cellValue.Reset()
+		return nil
+	}
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch element := token.(type) {
+		case xml.StartElement:
+			switch element.Name.Local {
+			case "row":
+				inRow = true
+				rowCells = rowCells[:0]
+				rowNumber++
+				for _, attr := range element.Attr {
+					if attr.Name.Local == "r" {
+						if parsed, parseErr := strconv.Atoi(attr.Value); parseErr == nil && parsed > 0 {
+							rowNumber = parsed
+						}
+						break
+					}
+				}
+			case "c":
+				if inRow {
+					inCell = true
+					cellValue.Reset()
+					cellType = ""
+					for _, attr := range element.Attr {
+						if attr.Name.Local == "t" {
+							cellType = attr.Value
+							break
+						}
+					}
+				}
+			case "v", "t":
+				if inCell && captureDepth == 0 {
+					captureElement, captureDepth = element.Name.Local, 1
+				}
+			}
+		case xml.CharData:
+			if captureDepth > 0 {
+				cellValue.Write([]byte(element))
+			}
+		case xml.EndElement:
+			if captureDepth > 0 && element.Name.Local == captureElement {
+				captureDepth = 0
+				captureElement = ""
+			}
+			switch element.Name.Local {
+			case "c":
+				if err := finishCell(); err != nil {
+					return nil, err
+				}
+			case "row":
+				if inRow {
+					text := strings.TrimSpace(strings.Join(rowCells, " | "))
+					if text != "" {
+						sections = append(sections, parsedSection{label: fmt.Sprintf("%s · 第%d行", sheetLabel, rowNumber), text: text})
+					}
+				}
+				inRow = false
+			}
+		}
+	}
+	if inCell {
+		if err := finishCell(); err != nil {
+			return nil, err
+		}
+	}
+	return sections, nil
+}
+
 func parseWebChatDocument(ext string, data []byte) ([]WebChatDocumentChunk, int64, error) {
 	var sections []parsedSection
 	var err error
@@ -680,6 +956,8 @@ func parseWebChatDocument(ext string, data []byte) ([]WebChatDocumentChunk, int6
 		sections = parseTextParagraphs(string(data))
 	case ".csv":
 		sections, err = parseCSV(data)
+	case ".xlsx":
+		sections, err = parseXLSX(data)
 	case ".docx":
 		sections, err = parseDOCX(data)
 	case ".pdf":

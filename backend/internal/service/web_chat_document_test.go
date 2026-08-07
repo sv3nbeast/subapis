@@ -31,6 +31,8 @@ func TestValidateWebChatDocumentRejectsSpoofedTypes(t *testing.T) {
 	require.False(t, ok)
 	_, _, ok = validateWebChatDocument("valid.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", testDOCX(t, "valid"))
 	require.True(t, ok)
+	_, _, ok = validateWebChatDocument("valid.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", testXLSX(t))
+	require.True(t, ok)
 }
 
 func TestParseWebChatDocumentParagraphLocationsAndLimits(t *testing.T) {
@@ -93,6 +95,7 @@ func TestUpdateAdminConfigRequiresDedicatedReachableStorage(t *testing.T) {
 
 func TestParseWebChatDocumentFixtures(t *testing.T) {
 	docx := testDOCX(t, "DOCX quarterly revenue increased")
+	xlsx := testXLSX(t)
 	pdfData := testPDF("PDF quarterly revenue increased")
 	tests := []struct {
 		name, ext string
@@ -102,6 +105,7 @@ func TestParseWebChatDocumentFixtures(t *testing.T) {
 		{"txt", ".txt", []byte("TXT quarterly revenue increased"), "TXT quarterly"},
 		{"markdown", ".md", []byte("# Notes\nMarkdown quarterly revenue increased"), "Markdown quarterly"},
 		{"csv", ".csv", []byte("quarter,revenue\nQ1,120\n"), "Q1 | 120"},
+		{"xlsx", ".xlsx", xlsx, "Q1 | 120"},
 		{"docx", ".docx", docx, "DOCX quarterly"},
 		{"pdf", ".pdf", pdfData, "PDF quarterly"},
 	}
@@ -148,6 +152,25 @@ func testDOCX(t *testing.T, text string) []byte {
 	require.NoError(t, err)
 	_, err = w.Write([]byte(`<?xml version="1.0"?><w:document xmlns:w="x"><w:body><w:p><w:r><w:t>` + text + `</w:t></w:r></w:p></w:body></w:document>`))
 	require.NoError(t, err)
+	require.NoError(t, z.Close())
+	return out.Bytes()
+}
+
+func testXLSX(t *testing.T) []byte {
+	var out bytes.Buffer
+	z := zip.NewWriter(&out)
+	entries := map[string]string{
+		"[Content_Types].xml":      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+		"xl/workbook.xml":          `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/sharedStrings.xml":     `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>quarter</t></si><si><t>revenue</t></si></sst>`,
+		"xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Q1</t></is></c><c r="B2"><v>120</v></c></row></sheetData></worksheet>`,
+	}
+	for name, content := range entries {
+		file, err := z.Create(name)
+		require.NoError(t, err)
+		_, err = file.Write([]byte(content))
+		require.NoError(t, err)
+	}
 	require.NoError(t, z.Close())
 	return out.Bytes()
 }

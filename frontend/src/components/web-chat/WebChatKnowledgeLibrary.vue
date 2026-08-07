@@ -2,9 +2,9 @@
   <BaseDialog :show="show" :title="`${project?.name || ''} · ${t('webChat.knowledgeLibrary')}`" width="wide" @close="emit('close')">
     <div class="space-y-4" @dragover.prevent @drop.prevent="dropFiles">
       <label class="drop-zone">
-        <input class="hidden" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv" @change="pickFiles" />
+        <input class="hidden" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pickFiles" />
         <Icon name="upload" size="lg" /><strong>{{ t('webChat.dropDocuments') }}</strong>
-        <span>PDF · DOCX · TXT · Markdown · CSV · {{ maxSizeLabel }}</span>
+        <span>PDF · DOCX · XLSX · TXT · Markdown · CSV · {{ maxSizeLabel }}</span>
       </label>
       <div v-for="upload in uploads" :key="upload.key" class="upload-row"><span class="truncate">{{ upload.name }}</span><progress :value="upload.progress" max="100"/><small>{{ upload.error || `${upload.progress}%` }}</small><button v-if="upload.error" class="btn btn-secondary btn-sm" @click="retryUpload(upload)">{{ t('webChat.retry') }}</button></div>
       <div class="flex gap-2"><button v-for="item in filters" :key="item.value" class="filter" :class="{active:filter===item.value}" @click="filter=item.value">{{ item.label }}</button></div>

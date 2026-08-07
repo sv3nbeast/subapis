@@ -24,7 +24,7 @@
     <div class="composer-bottom">
       <span>
         <label v-if="filesEnabled" class="template-trigger">
-          <input class="hidden" type="file" multiple accept=".pdf,.docx,.txt,.md,.csv" @change="pick" />
+          <input class="hidden" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv" @change="pick" />
           <Icon name="upload" size="xs" /> {{ t('webChat.attach') }}
         </label>
         <button v-if="templatesEnabled" type="button" class="template-trigger" @click="emit('open-template')">

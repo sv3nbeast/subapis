@@ -218,6 +218,7 @@ func TestWebChatService_OptionsUsesDisplayModels(t *testing.T) {
 	require.Len(t, options.Groups, 1)
 	require.Equal(t, "claude-opus-4-6", options.Groups[0].Models[0].Name)
 	require.NotNil(t, options.Groups[0].Models[0].Pricing)
+	require.Contains(t, options.FileFormats, "xlsx")
 	require.Equal(t, int64(2), *options.DefaultGroupID)
 	require.Equal(t, "claude-opus-4-6", options.DefaultModel)
 }
