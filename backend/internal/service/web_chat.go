@@ -29,8 +29,13 @@ type WebChatModelPricing struct {
 }
 
 type WebChatModelOption struct {
-	Name    string               `json:"name"`
-	Pricing *WebChatModelPricing `json:"pricing,omitempty"`
+	// Name is the canonical model value sent back when creating/sending a
+	// session. DisplayName is optional and is used only for user-facing text.
+	// This keeps provider-specific routing aliases out of the UI without
+	// changing the configured model identity.
+	Name        string               `json:"name"`
+	DisplayName string               `json:"display_name,omitempty"`
+	Pricing     *WebChatModelPricing `json:"pricing,omitempty"`
 }
 
 type WebChatGroupOption struct {

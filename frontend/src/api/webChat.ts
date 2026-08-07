@@ -28,6 +28,7 @@ export interface WebChatModelPricing {
 
 export interface WebChatModelOption {
   name: string
+  display_name?: string
   pricing?: WebChatModelPricing | null
 }
 

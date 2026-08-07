@@ -222,6 +222,27 @@ func TestWebChatService_OptionsUsesDisplayModels(t *testing.T) {
 	require.Equal(t, "claude-opus-4-6", options.DefaultModel)
 }
 
+func TestWebChatService_OptionsHidesKiroRoutingSuffixOnlyInDisplayName(t *testing.T) {
+	apiKeySvc := webChatAPIKeyManagerStub{
+		groups: []Group{{ID: 9, Name: "Claude-AWS", Status: StatusActive, Platform: PlatformKiro}},
+	}
+	svc := NewWebChatService(&webChatRepoStub{}, nil, apiKeySvc, webChatCatalogStub{
+		modelsByGroup: map[int64][]SupportedModel{
+			9: {
+				{Name: "claude-opus-4-8-kiro", Platform: PlatformKiro},
+				{Name: "claude-sonnet-4-6", Platform: PlatformKiro},
+			},
+		},
+	}, webChatRuntimeStub{enabled: true})
+
+	options, err := svc.Options(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-8-kiro", options.Groups[0].Models[0].Name)
+	require.Equal(t, "claude-opus-4-8", options.Groups[0].Models[0].DisplayName)
+	require.Empty(t, options.Groups[0].Models[1].DisplayName)
+}
+
 func TestWebChatService_PrepareSendUsesRequestedTarget(t *testing.T) {
 	repo := &webChatRepoStub{
 		session: &WebChatSession{ID: 88, UserID: 7, GroupID: 1, Model: "old-model"},

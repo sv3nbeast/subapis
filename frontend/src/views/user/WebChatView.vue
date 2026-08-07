@@ -19,8 +19,8 @@
         <div class="session-list">
           <article v-for="session in displayedSessions" :key="session.id" class="session-item" :class="{ active: session.id === activeSessionId }">
             <button class="min-w-0 flex-1 text-left" @click="selectSession(session)">
-              <div class="flex items-center gap-1.5"><span v-if="session.pinned_at" class="pin-dot">◆</span><strong class="truncate text-sm">{{ session.title || session.model }}</strong></div>
-              <p class="mt-1 truncate text-xs text-gray-500">{{ session.group_name || groupName(session.group_id) }} · {{ session.model }}</p>
+              <div class="flex items-center gap-1.5"><span v-if="session.pinned_at" class="pin-dot">◆</span><strong class="truncate text-sm">{{ session.title || sessionModelLabel(session) }}</strong></div>
+              <p class="mt-1 truncate text-xs text-gray-500">{{ session.group_name || groupName(session.group_id) }} · {{ sessionModelLabel(session) }}</p>
             </button>
             <div class="session-actions">
               <button :title="t('webChat.pin')" @click="togglePin(session)">◆</button>
@@ -36,7 +36,7 @@
       <main class="chat-panel">
         <header class="chat-header">
           <button class="icon-button session-toggle" :aria-label="t('webChat.openSessions')" @click="sessionsOpen = true"><Icon name="menu" size="sm" /></button>
-          <div class="min-w-0 flex-1"><p class="text-xs text-primary-600">{{ selectedGroup?.name || t('webChat.selectGroup') }}</p><h1 class="truncate text-xl font-black">{{ activeSession?.title || activeSession?.model || t('webChat.title') }}</h1></div>
+          <div class="min-w-0 flex-1"><p class="text-xs text-primary-600">{{ selectedGroup?.name || t('webChat.selectGroup') }}</p><h1 class="truncate text-xl font-black">{{ activeSession?.title || (activeSession ? sessionModelLabel(activeSession) : '') || t('webChat.title') }}</h1></div>
           <div v-if="activeSession" class="header-actions">
             <button class="icon-button" :title="t('webChat.exportMarkdown')" @click="exportConversation('markdown')"><Icon name="download" size="sm" /><span>MD</span></button>
             <button class="icon-button" :title="t('webChat.exportJson')" @click="exportConversation('json')"><Icon name="download" size="sm" /><span>JSON</span></button>
@@ -99,8 +99,8 @@
             <p class="context-label">{{ t('webChat.context') }}</p>
             <button class="icon-button context-toggle" :aria-label="t('common.close')" @click="contextOpen = false"><Icon name="x" size="sm" /></button>
           </div>
-          <label>{{ t('webChat.group') }}</label><select v-model.number="selectedGroupId" class="input" :disabled="sending"><option v-for="group in options.groups" :key="group.id" :value="group.id">{{ group.name }} · {{ platformLabel(group.platform) }}</option></select>
-          <label>{{ t('webChat.model') }}</label><select v-model="selectedModel" class="input" :disabled="sending"><option v-for="model in selectedGroupModels" :key="model.name" :value="model.name">{{ model.name }}</option></select>
+          <label>{{ t('webChat.group') }}</label><select v-model.number="selectedGroupId" class="input" :disabled="sending"><option v-for="group in options.groups" :key="group.id" :value="group.id">{{ groupOptionLabel(group) }}</option></select>
+          <label>{{ t('webChat.model') }}</label><select v-model="selectedModel" class="input" :disabled="sending"><option v-for="model in selectedGroupModels" :key="model.name" :value="model.name">{{ model.display_name || modelDisplayName(model.name, selectedGroup?.platform) }}</option></select>
           <template v-if="options.projects_enabled && activeSession"><label>{{ t('webChat.project') }}</label><select :value="activeSession.project_id || ''" class="input" :disabled="sending" @change="moveActiveSession"><option value="">{{ t('webChat.uncategorized') }}</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></template>
           <label v-if="options.files_enabled && activeSession" class="knowledge-toggle"><span>{{ t('webChat.useProjectKnowledge') }}</span><input type="checkbox" :checked="activeSession.knowledge_enabled" :disabled="sending" @change="toggleKnowledge"/></label>
           <WebChatSources v-if="latestSources.length" :sources="latestSources" />
@@ -171,6 +171,31 @@ const pricingItems=computed(()=>{const p=selectedModelOption.value?.pricing;if(!
   {label:t('webChat.inputPrice'),value:formatScaled(p.input_price??null,1_000_000)},{label:t('webChat.outputPrice'),value:formatScaled(p.output_price??null,1_000_000)},
   {label:t('webChat.cacheWritePrice'),value:formatScaled(p.cache_write_price??null,1_000_000)},{label:t('webChat.cacheReadPrice'),value:formatScaled(p.cache_read_price??null,1_000_000)}].filter(i=>i.value!=='-')})
 
+function modelDisplayName(model: string, platform?: string): string {
+  const name = (model || '').trim()
+  if ((platform || '').trim().toLowerCase() !== 'kiro') return name
+  for (const suffix of ['-kiro', '_kiro', ' (kiro)', ' [kiro]', ' - kiro']) {
+    if (name.toLowerCase().endsWith(suffix) && name.length > suffix.length) {
+      return name.slice(0, -suffix.length).trim()
+    }
+  }
+  return name
+}
+
+function groupOptionLabel(group: WebChatOptions['groups'][number]): string {
+  const name = (group.name || '').trim()
+  // Claude-AWS is already an explicit user-facing channel name; appending
+  // "· Kiro" only exposes the internal provider classification twice.
+  if (group.platform.trim().toLowerCase() === 'kiro' && /(?:aws|kiro)/i.test(name)) return name
+  return `${name} · ${platformLabel(group.platform)}`
+}
+
+function sessionModelLabel(session: WebChatSession): string {
+  const platform = session.platform || options.value.groups.find(group => group.id === session.group_id)?.platform
+  const option = options.value.groups.find(group => group.id === session.group_id)?.models.find(model => model.name === session.model)
+  return option?.display_name || modelDisplayName(session.model, platform)
+}
+
 watch(selectedGroupId,()=>{if(!selectedGroupModels.value.some(m=>m.name===selectedModel.value))selectedModel.value=selectedGroupModels.value[0]?.name||''})
 watch(sessionQuery,()=>{if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refreshSessions(),250)})
 watch(draft,value=>localStorage.setItem(draftKey(activeSessionId.value),value))
@@ -210,7 +235,7 @@ function stopGeneration(){abortController.value?.abort()}
 function localMessage(sessionID:number,role:'user'|'assistant',content:string):WebChatMessage{const now=new Date().toISOString(),id=-Date.now();return{id,session_id:sessionID,user_id:authStore.user?.id||0,role,content,status:'completed',input_tokens:0,output_tokens:0,cache_read_tokens:0,cache_creation_tokens:0,logical_id:id,version_index:1,version_count:1,version_reason:'original',sources:[],created_at:now,updated_at:now}}
 function quoteMessage(message:WebChatMessage){draft.value=`${message.content.split('\n').map(line=>`> ${line}`).join('\n')}\n\n${draft.value}`;void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer-input')?.focus())}
 async function copyText(text:string){await navigator.clipboard.writeText(text)}
-function exportConversation(format:'markdown'|'json'){const s=activeSession.value;if(!s)return;const content=format==='json'?JSON.stringify({session:s,messages:messages.value},null,2):[`# ${s.title||s.model}`,`> ${s.group_name||groupName(s.group_id)} · ${s.model}`,'',...messages.value.flatMap(m=>[`## ${m.role==='user'?'User':'Assistant'}`,m.content,''])].join('\n');const blob=new Blob([content],{type:format==='json'?'application/json':'text/markdown'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`web-chat-${s.id}.${format==='json'?'json':'md'}`;a.click();URL.revokeObjectURL(url)}
+function exportConversation(format:'markdown'|'json'){const s=activeSession.value;if(!s)return;const displayModel=sessionModelLabel(s);const content=format==='json'?JSON.stringify({session:s,messages:messages.value},null,2):[`# ${s.title||displayModel}`,`> ${s.group_name||groupName(s.group_id)} · ${displayModel}`,'',...messages.value.flatMap(m=>[`## ${m.role==='user'?'User':'Assistant'}`,m.content,''])].join('\n');const blob=new Blob([content],{type:format==='json'?'application/json':'text/markdown'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`web-chat-${s.id}.${format==='json'?'json':'md'}`;a.click();URL.revokeObjectURL(url)}
 
 function draftKey(id:number|null){return`subapis.webChat.draft.${authStore.user?.id||'anonymous'}.${id??'new'}`}
 function groupName(id:number){return options.value.groups.find(g=>g.id===id)?.name||`#${id}`}

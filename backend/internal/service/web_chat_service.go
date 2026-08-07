@@ -710,9 +710,11 @@ func (s *WebChatService) webChatGroups(ctx context.Context, userID int64) ([]Web
 			if strings.TrimSpace(model.Name) == "" {
 				continue
 			}
+			modelName := strings.TrimSpace(model.Name)
 			models = append(models, WebChatModelOption{
-				Name:    model.Name,
-				Pricing: webChatPricingFromChannel(model.Pricing),
+				Name:        modelName,
+				DisplayName: webChatModelDisplayName(modelName, g.Platform),
+				Pricing:     webChatPricingFromChannel(model.Pricing),
 			})
 		}
 		out = append(out, WebChatGroupOption{
@@ -725,6 +727,25 @@ func (s *WebChatService) webChatGroups(ctx context.Context, userID int64) ([]Web
 		})
 	}
 	return out, nil
+}
+
+// webChatModelDisplayName removes an internal Kiro routing marker from
+// user-facing Web Chat labels. The canonical Name remains unchanged so the
+// request still follows the exact channel mapping configured by the operator.
+func webChatModelDisplayName(model, platform string) string {
+	if !strings.EqualFold(strings.TrimSpace(platform), PlatformKiro) {
+		return ""
+	}
+
+	name := strings.TrimSpace(model)
+	lower := strings.ToLower(name)
+	for _, suffix := range []string{"-kiro", "_kiro", " (kiro)", " [kiro]", " - kiro"} {
+		if !strings.HasSuffix(lower, suffix) || len(name) <= len(suffix) {
+			continue
+		}
+		return strings.TrimSpace(name[:len(name)-len(suffix)])
+	}
+	return ""
 }
 
 func (s *WebChatService) validateGroupModel(ctx context.Context, userID, groupID int64, model string) (*WebChatGroupOption, *WebChatModelOption, error) {
