@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,6 +22,22 @@ func TestWebChatDocumentSearchQueryFiltersZeroScoreWithTrigram(t *testing.T) {
 	require.Contains(t, query, "similarity(")
 	require.Contains(t, query, "score>0")
 	require.Contains(t, query, "per_doc<=3")
+}
+
+func TestMergeExplicitDocumentChunksKeepsAttachmentHeaders(t *testing.T) {
+	explicit := []service.WebChatDocumentChunk{
+		{ID: 10, DocumentID: 1, ChunkIndex: 0, Content: "header 1"},
+		{ID: 11, DocumentID: 1, ChunkIndex: 1, Content: "row 1"},
+		{ID: 20, DocumentID: 2, ChunkIndex: 0, Content: "header 2"},
+	}
+	ranked := []service.WebChatDocumentChunk{
+		{ID: 11, DocumentID: 1, ChunkIndex: 1, Content: "row 1"},
+		{ID: 21, DocumentID: 2, ChunkIndex: 1, Content: "row 2"},
+	}
+
+	got := mergeExplicitDocumentChunks(explicit, ranked, 4)
+
+	require.Equal(t, []int64{10, 20, 11, 21}, []int64{got[0].ID, got[1].ID, got[2].ID, got[3].ID})
 }
 
 func TestTruncateDocumentSearchQuery(t *testing.T) {

@@ -206,7 +206,10 @@ func (r *webChatDocumentRepository) SearchDocumentChunks(ctx context.Context, us
 	}
 	query = truncateDocumentSearchQuery(strings.TrimSpace(query), 512)
 	if query == "" {
-		return []service.WebChatDocumentChunk{}, nil
+		if len(ids) == 0 {
+			return []service.WebChatDocumentChunk{}, nil
+		}
+		return r.listExplicitDocumentChunks(ctx, userID, ids, limit)
 	}
 	var hasTrigram bool
 	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='pg_trgm')`).Scan(&hasTrigram); err != nil {
@@ -224,7 +227,89 @@ func (r *webChatDocumentRepository) SearchDocumentChunks(ctx context.Context, us
 		}
 		out = append(out, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	// Explicitly attached documents must remain visible to the model even when
+	// the question has no lexical match (for example, asking how many columns
+	// an XLSX contains). Add the first chunk of each attachment, then fill any
+	// remaining slots with ranked hits or subsequent chunks.
+	explicit, err := r.listExplicitDocumentChunks(ctx, userID, ids, limit)
+	if err != nil {
+		return nil, err
+	}
+	return mergeExplicitDocumentChunks(explicit, out, limit), nil
+}
+
+func (r *webChatDocumentRepository) listExplicitDocumentChunks(ctx context.Context, userID int64, ids []int64, limit int) ([]service.WebChatDocumentChunk, error) {
+	if limit <= 0 {
+		limit = 8
+	}
+	if len(ids) == 0 {
+		return []service.WebChatDocumentChunk{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `WITH ranked AS (
+		SELECT c.id,c.document_id,c.chunk_index,c.page_number,c.location_label,c.content,d.original_name,
+			row_number() OVER(PARTITION BY c.document_id ORDER BY c.chunk_index) AS per_document
+		FROM web_chat_document_chunks c JOIN web_chat_documents d ON d.id=c.document_id
+		WHERE d.user_id=$1 AND d.deleted_at IS NULL AND d.status='ready' AND d.enabled AND d.id=ANY($2)
+	)
+	SELECT id,document_id,chunk_index,page_number,location_label,content,original_name
+	FROM ranked WHERE per_document<=$3 ORDER BY per_document,document_id,chunk_index LIMIT $3`, userID, pq.Array(ids), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]service.WebChatDocumentChunk, 0, limit)
+	for rows.Next() {
+		var c service.WebChatDocumentChunk
+		if err := rows.Scan(&c.ID, &c.DocumentID, &c.ChunkIndex, &c.PageNumber, &c.LocationLabel, &c.Content, &c.DocumentName); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
 	return out, rows.Err()
+}
+
+func mergeExplicitDocumentChunks(explicit, ranked []service.WebChatDocumentChunk, limit int) []service.WebChatDocumentChunk {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]service.WebChatDocumentChunk, 0, limit)
+	seenDocuments := make(map[int64]struct{}, len(explicit))
+	seenChunks := make(map[int64]struct{}, len(explicit)+len(ranked))
+	appendChunk := func(chunk service.WebChatDocumentChunk) bool {
+		if len(out) >= limit {
+			return false
+		}
+		if _, ok := seenChunks[chunk.ID]; ok {
+			return true
+		}
+		seenChunks[chunk.ID] = struct{}{}
+		out = append(out, chunk)
+		return true
+	}
+
+	// Keep one leading chunk per attachment so headers and sheet metadata are
+	// available even when the query only asks for document structure.
+	for _, chunk := range explicit {
+		if _, ok := seenDocuments[chunk.DocumentID]; ok {
+			continue
+		}
+		seenDocuments[chunk.DocumentID] = struct{}{}
+		appendChunk(chunk)
+	}
+	for _, chunk := range ranked {
+		appendChunk(chunk)
+	}
+	for _, chunk := range explicit {
+		appendChunk(chunk)
+	}
+	return out
 }
 
 func truncateDocumentSearchQuery(value string, maxRunes int) string {
