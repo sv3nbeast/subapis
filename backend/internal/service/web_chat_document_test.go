@@ -59,6 +59,27 @@ func TestBuildWebChatKnowledgeContextOnlySnapshotsInjectedSources(t *testing.T) 
 	require.NotContains(t, knowledge, "second.txt")
 }
 
+func TestPrepareKnowledgeExplicitAttachmentsIgnoreKnowledgeToggle(t *testing.T) {
+	projectID := int64(99)
+	repo := &webChatDocumentRepoTestDouble{
+		searchChunks: []WebChatDocumentChunk{{
+			ID: 7, DocumentID: 42, DocumentName: "report.xlsx", LocationLabel: "工作表1 · 第1行", Content: "quarter | revenue",
+		}},
+	}
+	settings := newWebChatDocumentSettingsTestDouble()
+	settings.values[SettingKeyWebChatFilesEnabled] = "true"
+	documentService := NewWebChatDocumentService(repo, settings, nil, nil)
+
+	sources, knowledge, err := documentService.PrepareKnowledge(context.Background(), 7, &WebChatSession{ProjectID: &projectID}, 100, 101, "这个文件有几列", []int64{42}, false)
+
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Contains(t, knowledge, "report.xlsx")
+	require.Contains(t, knowledge, "quarter | revenue")
+	require.Contains(t, knowledge, "附件1")
+	require.Equal(t, int64(0), repo.searchedProjectID)
+}
+
 func TestRunOnePersistsCompletionFailureAsRetryOrFailed(t *testing.T) {
 	repo := &webChatDocumentRepoTestDouble{
 		job:         &WebChatDocument{ID: 7, ObjectKey: "docs/7.txt", Extension: ".txt", Status: WebChatDocumentStatusUploaded, LeaseOwner: "owner", AttemptCount: 3},
@@ -228,10 +249,12 @@ func (webChatDocumentStoreTestDouble) Delete(context.Context, string) error { re
 func (webChatDocumentStoreTestDouble) HeadBucket(context.Context) error     { return nil }
 
 type webChatDocumentRepoTestDouble struct {
-	job         *WebChatDocument
-	completeErr error
-	failCalls   int
-	lastFailure string
+	job               *WebChatDocument
+	completeErr       error
+	failCalls         int
+	lastFailure       string
+	searchChunks      []WebChatDocumentChunk
+	searchedProjectID int64
 }
 
 func (r *webChatDocumentRepoTestDouble) CreateDocument(context.Context, *WebChatDocument, WebChatDocumentLimits) error {
@@ -269,8 +292,9 @@ func (r *webChatDocumentRepoTestDouble) FailDocument(_ context.Context, _ int64,
 func (r *webChatDocumentRepoTestDouble) FinishDocumentDelete(context.Context, int64, string) error {
 	return nil
 }
-func (r *webChatDocumentRepoTestDouble) SearchDocumentChunks(context.Context, int64, int64, []int64, string, int) ([]WebChatDocumentChunk, error) {
-	return nil, nil
+func (r *webChatDocumentRepoTestDouble) SearchDocumentChunks(_ context.Context, _ int64, projectID int64, _ []int64, _ string, _ int) ([]WebChatDocumentChunk, error) {
+	r.searchedProjectID = projectID
+	return r.searchChunks, nil
 }
 func (r *webChatDocumentRepoTestDouble) LinkMessageDocuments(context.Context, int64, int64, []int64) error {
 	return nil

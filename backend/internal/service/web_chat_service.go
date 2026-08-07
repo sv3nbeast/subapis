@@ -436,7 +436,9 @@ func (s *WebChatService) prepareBranchGeneration(ctx context.Context, userID, se
 		return nil, err
 	}
 	var sources []WebChatSource
-	if s.documents != nil && session.KnowledgeEnabled {
+	// Replays must keep the original turn's explicit attachments even if the
+	// session's project-knowledge toggle was changed after that turn.
+	if s.documents != nil && (session.KnowledgeEnabled || len(requestedDocuments) > 0) {
 		query := lastUserContent(messages)
 		var knowledge string
 		userMessageID := int64(0)

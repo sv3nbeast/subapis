@@ -76,6 +76,24 @@ func TestWebChatBuildUpstreamPayloadUsesMessagesForClaudeLikePlatforms(t *testin
 	require.Equal(t, "5m", gjson.GetBytes(payload, "messages.0.content.0.cache_control.ttl").String())
 }
 
+func TestWebChatBuildUpstreamPayloadPreservesAttachmentContext(t *testing.T) {
+	attachmentContext := "用户问题：这个文件里有几列\n\n[附件1] 文件：report.xlsx；位置：工作表1 · 第1行\nquarter | revenue"
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformKiro, service.PlatformOpenAI} {
+		t.Run(platform, func(t *testing.T) {
+			h := &WebChatHandler{}
+			_, payload, _, err := h.buildUpstreamPayload(&service.WebChatSession{
+				Platform:        platform,
+				Model:           "test-model",
+				MaxOutputTokens: 1024,
+			}, []service.OpenAIChatMessage{{Role: "user", Content: attachmentContext}})
+
+			require.NoError(t, err)
+			require.Contains(t, string(payload), "report.xlsx")
+			require.Contains(t, string(payload), "quarter | revenue")
+		})
+	}
+}
+
 func TestWebChatBuildUpstreamPayloadUsesChatCompletionsForOpenAI(t *testing.T) {
 	h := &WebChatHandler{}
 	temperature := 0.4
