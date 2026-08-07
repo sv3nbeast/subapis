@@ -704,6 +704,12 @@ func (s *WebChatService) webChatGroups(ctx context.Context, userID int64) ([]Web
 	out := make([]WebChatGroupOption, 0, len(groups))
 	for i := range groups {
 		g := groups[i]
+		// Web Chat is a browser client, so a group restricted to Claude Code
+		// clients can never pass the gateway's client gate. Do not advertise
+		// such groups in the selector or allow them to become new sessions.
+		if g.ClaudeCodeOnly {
+			continue
+		}
 		supported := s.displayModels(ctx, g.ID, g.Platform)
 		models := make([]WebChatModelOption, 0, len(supported))
 		for _, model := range supported {

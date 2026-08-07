@@ -199,7 +199,10 @@ func TestWebChatService_PrepareSendDisabledRejects(t *testing.T) {
 func TestWebChatService_OptionsUsesDisplayModels(t *testing.T) {
 	one := 0.000005
 	apiKeySvc := webChatAPIKeyManagerStub{
-		groups: []Group{{ID: 2, Name: "claude-opus-4.6", Status: StatusActive, Platform: PlatformAnthropic}},
+		groups: []Group{
+			{ID: 2, Name: "claude-opus-4.6", Status: StatusActive, Platform: PlatformAnthropic},
+			{ID: 3, Name: "Claude CLI Only", Status: StatusActive, Platform: PlatformAnthropic, ClaudeCodeOnly: true},
+		},
 	}
 	svc := NewWebChatService(&webChatRepoStub{}, nil, apiKeySvc, webChatCatalogStub{
 		modelsByGroup: map[int64][]SupportedModel{
@@ -208,6 +211,7 @@ func TestWebChatService_OptionsUsesDisplayModels(t *testing.T) {
 				Platform: PlatformAnthropic,
 				Pricing:  &ChannelModelPricing{BillingMode: BillingModeToken, InputPrice: &one},
 			}},
+			3: {{Name: "claude-opus-4-6", Platform: PlatformAnthropic}},
 		},
 	}, webChatRuntimeStub{enabled: true})
 
