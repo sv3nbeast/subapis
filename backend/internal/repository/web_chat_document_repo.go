@@ -50,6 +50,18 @@ func (r *webChatDocumentRepository) CreateDocument(ctx context.Context, d *servi
 	return tx.Commit()
 }
 
+func (r *webChatDocumentRepository) FindDocumentByScopeHash(ctx context.Context, userID int64, projectID, sessionID *int64, digest string) (*service.WebChatDocument, error) {
+	var d service.WebChatDocument
+	err := scanWebChatDocument(r.db.QueryRowContext(ctx, `SELECT `+webChatDocumentColumns+` FROM web_chat_documents WHERE user_id=$1 AND (($2::bigint IS NOT NULL AND project_id=$2) OR ($2::bigint IS NULL AND project_id IS NULL)) AND (($3::bigint IS NOT NULL AND session_id=$3) OR ($3::bigint IS NULL AND session_id IS NULL)) AND sha256=$4 AND deleted_at IS NULL AND status<>'deleting' ORDER BY id DESC LIMIT 1`, userID, projectID, sessionID, digest), &d)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrWebChatDocumentNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 func (r *webChatDocumentRepository) ListProjectDocuments(ctx context.Context, userID, projectID int64) (out []service.WebChatDocument, err error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+webChatDocumentColumns+` FROM web_chat_documents WHERE user_id=$1 AND project_id=$2 AND deleted_at IS NULL ORDER BY created_at DESC,id DESC`, userID, projectID)
 	if err != nil {

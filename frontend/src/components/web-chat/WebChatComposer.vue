@@ -6,7 +6,7 @@
         <button type="button" @click="emit('remove-document', doc.id)">×</button>
       </span>
       <span v-for="failed in failedAttachments" :key="failed.key" class="attachment-failed" :title="failed.error">
-        {{ failed.file.name }} · {{ t('webChat.documentFailed') }}
+        {{ failed.file.name }} · {{ failed.error || t('webChat.documentFailed') }}
         <button type="button" @click="emit('retry-attachment', failed.key)">{{ t('webChat.retry') }}</button>
         <button type="button" @click="emit('remove-failed-attachment', failed.key)">×</button>
       </span>

@@ -131,6 +131,7 @@ func (c *WebChatDocumentS3Config) IsConfigured() bool {
 
 type WebChatDocumentRepository interface {
 	CreateDocument(context.Context, *WebChatDocument, WebChatDocumentLimits) error
+	FindDocumentByScopeHash(context.Context, int64, *int64, *int64, string) (*WebChatDocument, error)
 	ListProjectDocuments(context.Context, int64, int64) ([]WebChatDocument, error)
 	GetDocument(context.Context, int64, int64) (*WebChatDocument, error)
 	SetDocumentEnabled(context.Context, int64, int64, bool) (*WebChatDocument, error)
@@ -255,6 +256,16 @@ func (s *WebChatDocumentService) Upload(ctx context.Context, userID int64, proje
 	if !ok {
 		return nil, ErrWebChatDocumentType
 	}
+	hashBytes := sha256.Sum256(data)
+	digest := hex.EncodeToString(hashBytes[:])
+	if existing, lookupErr := s.repo.FindDocumentByScopeHash(ctx, userID, projectID, sessionID, digest); lookupErr == nil {
+		if existing.Status == WebChatDocumentStatusFailed {
+			return s.repo.RetryDocument(ctx, userID, existing.ID)
+		}
+		return existing, nil
+	} else if !errors.Is(lookupErr, ErrWebChatDocumentNotFound) {
+		return nil, lookupErr
+	}
 	count, used, err := s.repo.DocumentUsage(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
@@ -270,8 +281,6 @@ func (s *WebChatDocumentService) Upload(ctx context.Context, userID int64, proje
 	if err != nil {
 		return nil, err
 	}
-	hashBytes := sha256.Sum256(data)
-	digest := hex.EncodeToString(hashBytes[:])
 	key := strings.Trim(strings.TrimSpace(cfg.Prefix), "/")
 	if key != "" {
 		key += "/"
@@ -294,6 +303,16 @@ func (s *WebChatDocumentService) Upload(ctx context.Context, userID int64, proje
 	if err = s.repo.CreateDocument(ctx, doc, limits); err != nil {
 		_ = store.Delete(context.WithoutCancel(ctx), key)
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			existing, lookupErr := s.repo.FindDocumentByScopeHash(ctx, userID, projectID, sessionID, digest)
+			if lookupErr == nil {
+				if existing.Status == WebChatDocumentStatusFailed {
+					return s.repo.RetryDocument(ctx, userID, existing.ID)
+				}
+				return existing, nil
+			}
+			if !errors.Is(lookupErr, ErrWebChatDocumentNotFound) {
+				return nil, lookupErr
+			}
 			return nil, ErrWebChatDocumentDuplicate
 		}
 		return nil, err

@@ -35,6 +35,40 @@ func TestValidateWebChatDocumentRejectsSpoofedTypes(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestUploadReusesExistingDocumentBeforeQuotaAndStorage(t *testing.T) {
+	settings := newWebChatDocumentSettingsTestDouble()
+	settings.values[SettingKeyWebChatFilesEnabled] = "true"
+	existing := &WebChatDocument{ID: 42, Status: WebChatDocumentStatusReady, OriginalName: "report.xlsx"}
+	repo := &webChatDocumentRepoTestDouble{existingDoc: existing}
+	storeCalls := 0
+	documentService := NewWebChatDocumentService(repo, settings, nil, func(context.Context, *WebChatDocumentS3Config) (WebChatDocumentStore, error) {
+		storeCalls++
+		return nil, errors.New("storage should not be opened for a duplicate")
+	})
+	sessionID := int64(9)
+
+	got, err := documentService.Upload(context.Background(), 7, nil, &sessionID, "report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", testXLSX(t))
+
+	require.NoError(t, err)
+	require.Same(t, existing, got)
+	require.Zero(t, storeCalls)
+}
+
+func TestUploadRetriesExistingFailedDocument(t *testing.T) {
+	settings := newWebChatDocumentSettingsTestDouble()
+	settings.values[SettingKeyWebChatFilesEnabled] = "true"
+	existing := &WebChatDocument{ID: 42, Status: WebChatDocumentStatusFailed}
+	retried := &WebChatDocument{ID: 42, Status: WebChatDocumentStatusUploaded}
+	repo := &webChatDocumentRepoTestDouble{existingDoc: existing, retryDoc: retried}
+	documentService := NewWebChatDocumentService(repo, settings, nil, nil)
+	sessionID := int64(9)
+
+	got, err := documentService.Upload(context.Background(), 7, nil, &sessionID, "report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", testXLSX(t))
+
+	require.NoError(t, err)
+	require.Same(t, retried, got)
+}
+
 func TestParseWebChatDocumentParagraphLocationsAndLimits(t *testing.T) {
 	chunks, _, err := parseWebChatDocument(".md", []byte("first paragraph\n\nsecond paragraph"))
 	require.NoError(t, err)
@@ -250,6 +284,10 @@ func (webChatDocumentStoreTestDouble) HeadBucket(context.Context) error     { re
 
 type webChatDocumentRepoTestDouble struct {
 	job               *WebChatDocument
+	existingDoc       *WebChatDocument
+	retryDoc          *WebChatDocument
+	createErr         error
+	findErr           error
 	completeErr       error
 	failCalls         int
 	lastFailure       string
@@ -258,7 +296,19 @@ type webChatDocumentRepoTestDouble struct {
 }
 
 func (r *webChatDocumentRepoTestDouble) CreateDocument(context.Context, *WebChatDocument, WebChatDocumentLimits) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
 	return nil
+}
+func (r *webChatDocumentRepoTestDouble) FindDocumentByScopeHash(context.Context, int64, *int64, *int64, string) (*WebChatDocument, error) {
+	if r.findErr != nil {
+		return nil, r.findErr
+	}
+	if r.existingDoc == nil {
+		return nil, ErrWebChatDocumentNotFound
+	}
+	return r.existingDoc, nil
 }
 func (r *webChatDocumentRepoTestDouble) ListProjectDocuments(context.Context, int64, int64) ([]WebChatDocument, error) {
 	return nil, nil
@@ -270,6 +320,9 @@ func (r *webChatDocumentRepoTestDouble) SetDocumentEnabled(context.Context, int6
 	return nil, nil
 }
 func (r *webChatDocumentRepoTestDouble) RetryDocument(context.Context, int64, int64) (*WebChatDocument, error) {
+	if r.retryDoc != nil {
+		return r.retryDoc, nil
+	}
 	return nil, nil
 }
 func (r *webChatDocumentRepoTestDouble) DocumentUsage(context.Context, int64, *int64) (int, int64, error) {
