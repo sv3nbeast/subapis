@@ -390,8 +390,17 @@
               </div>
             </template>
             <template #cell-rate_multiplier="{ row }">
-              <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-                {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+              <span class="inline-flex items-center gap-1 text-sm font-mono text-gray-700 dark:text-gray-300">
+                <span>{{ formatMultiplier(row.rate_multiplier ?? 1) }}x</span>
+                <span
+                  v-if="row.extra?.upstream_billing_rate_sync_enabled === true"
+                  class="inline-flex cursor-help text-emerald-600 dark:text-emerald-400"
+                  :aria-label="t('admin.accounts.upstreamBilling.syncedRateTooltip')"
+                  :title="t('admin.accounts.upstreamBilling.syncedRateTooltip')"
+                  data-testid="account-rate-sync-indicator"
+                >
+                  <Icon name="sync" size="xs" />
+                </span>
               </span>
             </template>
             <template #header-upstream_billing_rate="{ column }">
@@ -670,6 +679,7 @@ import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfil
 import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
+import { formatMultiplier } from '@/utils/formatters'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { sanitizeUrl } from '@/utils/url'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -1115,11 +1125,31 @@ const {
   clear: clearSelectedIds,
   removeMany: removeSelectedAccounts,
   toggleVisible,
-  selectVisible: selectPage
+  selectVisible: selectCurrentPage
 } = useTableSelection<Account>({
   rows: accounts,
   getId: (account) => account.id
 })
+
+const selectingAllResults = ref(false)
+const selectedAllResultIDs = ref<Set<number> | null>(null)
+const selectionRequestVersion = ref(0)
+const allResultsSelected = computed(() => {
+  const snapshot = selectedAllResultIDs.value
+  if (!snapshot || snapshot.size === 0 || snapshot.size !== selectedSet.value.size) return false
+  return Array.from(snapshot).every(id => selectedSet.value.has(id))
+})
+
+const clearSelection = () => {
+  selectionRequestVersion.value++
+  selectingAllResults.value = false
+  selectedAllResultIDs.value = null
+  clearSelectedIds()
+}
+
+const selectPage = () => {
+  selectCurrentPage()
+}
 
 useSwipeSelect(accountTableRef, {
   isSelected,
@@ -1160,6 +1190,7 @@ const reload = async () => {
 }
 
 const debouncedReload = () => {
+  clearSelection()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -1778,6 +1809,9 @@ const handleBulkProbeUpstreamBilling = async () => {
     results.forEach((result) => {
       if (result.snapshot) patchUpstreamBillingSnapshot(result.account_id, result.snapshot)
     })
+    if (results.some((result) => result.snapshot)) {
+      await refreshAccountsAfterUpstreamBillingProbe()
+    }
     const failed = results.filter((result) => result.error).length
     if (failed > 0) {
       appStore.showError(
@@ -2116,7 +2150,10 @@ const handleProbeUpstreamBilling = async (account: Account) => {
   probingUpstreamBilling.add(account.id)
   try {
     const result = await adminAPI.accounts.probeUpstreamBilling(account.id)
-    if (result.snapshot) patchUpstreamBillingSnapshot(account.id, result.snapshot)
+    if (result.snapshot) {
+      patchUpstreamBillingSnapshot(account.id, result.snapshot)
+      await refreshAccountsAfterUpstreamBillingProbe()
+    }
   } catch (error) {
     console.error('Failed to probe upstream billing:', error)
     appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.probeFailed')))

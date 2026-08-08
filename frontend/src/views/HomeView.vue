@@ -714,6 +714,9 @@ const siteName = computed(() => normalizeSiteName(appStore.cachedPublicSettings?
 const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
+const compactHomeEnabled = computed(() => appStore.cachedPublicSettings?.compact_home_enabled === true)
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const publicModelMarketEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.publicModelMarket))
 const apiBaseUrl = computed(() => {
   const configured = appStore.cachedPublicSettings?.api_base_url || appStore.apiBaseUrl
@@ -1140,7 +1143,7 @@ onMounted(() => {
     channelsVisible.value = true
   }
 
-  snapContainerRef.value?.scrollTo({ top: 0, left: 0 })
+  snapContainerRef.value?.scrollTo?.({ top: 0, left: 0 })
   snapContainerRef.value?.addEventListener('wheel', handleSnapWheel, { passive: false })
   window.addEventListener('keydown', handleSnapKeydown)
 

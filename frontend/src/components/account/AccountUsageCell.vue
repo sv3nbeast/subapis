@@ -792,6 +792,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'kiro-usage-meta', meta: { plan_type?: string; kiro_overages_enabled: boolean }): void
+  (e: 'account-updated', account: Account): void
 }>()
 
 const { t } = useI18n()

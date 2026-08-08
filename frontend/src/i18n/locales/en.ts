@@ -1117,6 +1117,9 @@ const baseMessages = {
     turnstileExpired: 'Verification expired, please try again',
     turnstileFailed: 'Verification failed, please try again',
     completeVerification: 'Please complete the verification',
+    captchaClickToVerify: 'Click to verify',
+    captchaVerified: 'Verified',
+    captchaVerifying: 'Verifying...',
     verifyYourEmail: 'Verify Your Email',
     sessionExpired: 'Session expired',
     sessionExpiredDesc: 'Please go back to the registration page and start again.',
@@ -1595,6 +1598,11 @@ const baseMessages = {
     model: 'Model',
     requestedModel: 'Requested',
     upstreamModel: 'Upstream',
+    sentUpstreamModel: 'Sent Upstream Model',
+    upstreamResponseModel: 'Upstream Response Model',
+    upstreamModelMismatch: 'Upstream Model Mismatch',
+    modelMismatch: 'Model Mismatch',
+    modelVariant: 'Model Variant',
     reasoningEffort: 'Reasoning Effort',
     endpoint: 'Endpoint',
     endpointDistribution: 'Endpoint Distribution',
@@ -3216,6 +3224,18 @@ const baseMessages = {
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
       deleteConfirmSubscription:
         "Are you sure you want to delete subscription group '{name}'? This will invalidate all API keys bound to this subscription and delete all related subscription records. This action cannot be undone.",
+      profitControl: {
+        enable: 'Enable Profit Control',
+        enabledHint: 'Only accounts that meet the configured minimum margin and safety buffer are selected.',
+        disabledHint: 'When disabled, account selection does not enforce a profit margin.',
+        minMargin: 'Minimum Margin',
+        minMarginHint: 'Minimum profit margin required after upstream cost and rate multipliers.',
+        safetyBuffer: 'Safety Buffer',
+        safetyBufferHint: 'Additional margin reserved for upstream price fluctuations.',
+        marginRangeError: 'Minimum margin must be between 0% (inclusive) and 100% (exclusive).',
+        bufferRangeError: 'Safety buffer must be between 0% (inclusive) and 100% (exclusive).',
+        sumTooHigh: 'The combined minimum margin and safety buffer must be less than 100%.'
+      },
       subscription: {
         title: 'Subscription Settings',
         type: 'Billing Type',
@@ -3686,6 +3706,8 @@ const baseMessages = {
       modeOff: 'Off',
       modeOffDesc: 'Content moderation is disabled and no audit records are written.',
       baseUrl: 'OpenAI Base URL',
+      proxy: 'Proxy',
+      proxyHint: 'Optionally route moderation requests through a configured proxy.',
       model: 'Model',
       apiKey: 'OpenAI API Key',
       apiKeys: 'OpenAI API Keys',
@@ -4109,6 +4131,8 @@ const baseMessages = {
       quotaEndsInHoursMinutes: 'Quota ends in {hours}h {minutes}m',
       quotaEndsInDaysHours: 'Quota ends in {days}d {hours}h',
       daysRemaining: 'days remaining',
+      hoursMinutesRemaining: '{hours}h {minutes}m remaining',
+      minutesRemaining: '{minutes}m remaining',
       remainingDays: 'Remaining days',
       noExpiration: 'No expiration',
       status: {
@@ -4542,6 +4566,10 @@ const baseMessages = {
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
       bulkActions: {
         selected: '{count} account(s) selected',
+        selectedAll: 'All {count} account(s) selected',
+        selectingAll: 'Selecting all accounts...',
+        selectAllResults: 'Select all {count} result(s)',
+        selectAllFailed: 'Failed to select all accounts',
         selectCurrentPage: 'Select this page',
         clear: 'Clear selection',
         edit: 'Bulk Edit',
@@ -4570,7 +4598,9 @@ const baseMessages = {
         mixedPlatformWarning:
           'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
         mixedPlatformModelRestrictionDisabled:
-          'Model whitelist/mapping changes are disabled for mixed-platform bulk edits. Edit each platform separately.'
+          'Model whitelist/mapping changes are disabled for mixed-platform bulk edits. Edit each platform separately.',
+        rateSyncWarning: 'Billing-rate synchronization applies only to supported account types.',
+        rateSyncConflict: 'Billing-rate synchronization conflicts with {count} selected account(s).'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',
       bulkDeleteConfirm: 'Delete the selected {count} account(s)? This action cannot be undone.',
@@ -4647,6 +4677,8 @@ const baseMessages = {
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',
+        flattenNamespacesDesc: 'Disabled by default: Codex namespace tool declarations are forwarded as-is on /responses. Enable only for a relay that rejects namespace tools; flattening renames them to namespace__tool.',
         responsesWebsocketsV2: 'Responses WebSocket v2',
         responsesWebsocketsV2Desc:
           'Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).',
@@ -5627,6 +5659,10 @@ const baseMessages = {
         expirationDetails: 'Reset credit expiration details',
         noCreditsAvailable: 'No reset credits available',
         resetSuccess: 'Reset {windows} window(s)',
+        refreshCachePersistFailed: 'Quota was refreshed, but the refreshed cache could not be saved.',
+        resetCacheRefreshFailed: 'Reset succeeded, but the refreshed quota could not be loaded.',
+        resetAccountRecoveryFailed: 'Reset succeeded, but account state recovery failed.',
+        resetAccountRefreshFailed: 'Reset succeeded, but account state refresh failed.',
         confirmTitle: 'Confirm Weekly Limit Reset',
         confirmMessage:
           'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
@@ -6121,6 +6157,10 @@ const baseMessages = {
       requestId: 'Request ID',
       requestIdCopied: 'Request ID copied',
       allModels: 'All Models',
+      allUpstreamModelAudit: 'All Upstream Model Audit Results',
+      upstreamModelAudit: 'Upstream Model Audit',
+      upstreamModelMismatchOnly: 'Mismatches Only',
+      upstreamModelMatchedOnly: 'Matches Only',
       allAccounts: 'All Accounts',
       allGroups: 'All Groups',
       allTypes: 'All Types',

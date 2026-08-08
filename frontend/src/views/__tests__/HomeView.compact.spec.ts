@@ -3,7 +3,7 @@ import { mount, RouterLinkStub } from '@vue/test-utils'
 
 import HomeView from '../HomeView.vue'
 
-const { appStore, authStore } = vi.hoisted(() => ({
+const { appStore, authStore, announcementStore, copyToClipboard } = vi.hoisted(() => ({
   appStore: {
     cachedPublicSettings: {} as Record<string, unknown>,
     siteName: 'Fallback site',
@@ -18,11 +18,27 @@ const { appStore, authStore } = vi.hoisted(() => ({
     user: null as { email?: string } | null,
     checkAuth: vi.fn(),
   },
+  announcementStore: {
+    announcements: [],
+    loading: false,
+    fetchAnnouncements: vi.fn(),
+  },
+  copyToClipboard: vi.fn(),
 }))
 
 vi.mock('@/stores', () => ({
   useAppStore: () => appStore,
   useAuthStore: () => authStore,
+  useAnnouncementStore: () => announcementStore,
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({ copyToClipboard }),
+}))
+
+vi.mock('@/utils/featureFlags', () => ({
+  FeatureFlags: { publicModelMarket: 'publicModelMarket' },
+  isFeatureFlagEnabled: () => false,
 }))
 
 vi.mock('vue-i18n', async (importOriginal) => {
@@ -46,6 +62,8 @@ function mountHome(settings: Record<string, unknown> = {}) {
         RouterLink: RouterLinkStub,
         LocaleSwitcher: { template: '<div data-testid="locale-switcher" />' },
         Icon: { template: '<span data-testid="icon" />' },
+        PublicBrand: { template: '<div data-testid="public-brand" />' },
+        HomeChannelStatusPreview: { template: '<div data-testid="channel-status-preview" />' },
       },
     },
   })
@@ -97,7 +115,7 @@ describe('HomeView compact mode', () => {
     const wrapper = mountHome(settings)
 
     expect(wrapper.find('[data-testid="compact-home"]').exists()).toBe(false)
-    expect(wrapper.find('.terminal-container').exists()).toBe(true)
+    expect(wrapper.find('.home-page').exists()).toBe(true)
   })
 
   it('links unauthenticated visitors to login', () => {
