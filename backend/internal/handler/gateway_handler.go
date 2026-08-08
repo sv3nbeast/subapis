@@ -1126,6 +1126,60 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			attemptParsedReq.OnUpstreamAccepted = nil
 
 			releaseAccountSlotAfterForward(accountReleaseFunc, err)
+			submitPartialForwardUsage := func(partial *service.ForwardResult) {
+				if partial == nil {
+					return
+				}
+				// Forward can return an interrupted-stream result together with an
+				// error. Its observed upstream usage must follow the normal billing
+				// path; pre-output failover errors never carry a result.
+				if partial.ReasoningEffort == nil {
+					partial.ReasoningEffort = service.NormalizeClaudeOutputEffort(attemptParsedReq.OutputEffort)
+				}
+				if partial.ReasoningEffort == nil && attemptParsedReq.ThinkingEnabled {
+					protocolModel := partial.UpstreamModel
+					if protocolModel == "" {
+						protocolModel = partial.Model
+					}
+					partial.ReasoningEffort = service.DefaultEffortForThinkingEnabled(protocolModel)
+				}
+				userAgent := c.GetHeader("User-Agent")
+				clientIP := ip.GetClientIP(c)
+				requestPayloadHash := service.HashUsageRequestPayload(attemptParsedReq.Body.Bytes())
+				inboundEndpoint := GetInboundEndpoint(c)
+				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+				forceCacheBilling := fs.ForceCacheBilling
+				quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
+				sessionID := service.ExtractClientSessionID(c)
+				h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
+					if recordErr := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+						Result:             partial,
+						QuotaPlatform:      quotaPlatform,
+						APIKey:             currentAPIKey,
+						User:               currentAPIKey.User,
+						Account:            account,
+						Subscription:       currentSubscription,
+						InboundEndpoint:    inboundEndpoint,
+						UpstreamEndpoint:   upstreamEndpoint,
+						UserAgent:          userAgent,
+						IPAddress:          clientIP,
+						SessionID:          sessionID,
+						RequestPayloadHash: requestPayloadHash,
+						ForceCacheBilling:  forceCacheBilling,
+						APIKeyService:      h.apiKeyService,
+						ChannelUsageFields: channelMapping.ToUsageFields(reqModel, partial.UpstreamModel),
+					}); recordErr != nil {
+						logger.L().With(
+							zap.String("component", "handler.gateway.messages"),
+							zap.Int64("user_id", subject.UserID),
+							zap.Int64("api_key_id", currentAPIKey.ID),
+							zap.Any("group_id", currentAPIKey.GroupID),
+							zap.String("model", reqModel),
+							zap.Int64("account_id", account.ID),
+						).Error("gateway.record_partial_usage_failed", zap.Error(recordErr))
+					}
+				})
+			}
 			if err != nil {
 				if isOpenAIForwardClientCanceled(c, err) {
 					markOpenAIClientClosedRequest(c)
@@ -1239,8 +1293,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				// Forward 与错误一起返回的部分结果：流中断前上游已计量的 usage 照常入账，
 				// 避免上游已产生消耗的请求完全漏记（#5148）。failover 错误恒定 result=nil，
 				// 不会走到这里重复计费。
-				// Failed forwards do not have a complete usage snapshot; failover
-				// errors are intentionally excluded from asynchronous billing here.
+				submitPartialForwardUsage(result)
 				return
 			}
 

@@ -2831,3 +2831,12 @@ ec5954108 修复（grok）：保留valid OAuth sessions during refresh
 b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
 4e447fc8d 修复（anthropic）：保留CLI compaction request shape
 042f8c1a3 新增（kiro）：增加phased network observability
+
+## 2026-08-09 二次检查与修复
+
+- 三线状态：`origin/main` 为 `cc67b1aca`，官方领先 `0`；`main` 与 `codex/official-sync-review` 在复核开始时同指向 `f2efaff09`，未推送远端。
+- 发现并修复 P1：此前本地提交 `bd52e5d77` 的“Anthropic 流中断后保留已观测 usage”逻辑在后续文件融合时遗漏。常规转发和 API Key 透传均会在缺少 terminal / 读错误时丢弃部分 usage，导致漏记漏计费。
+- 修复：`Forward` 与 Anthropic API Key 透传在非 failover 流错误时返回部分 `ForwardResult`；`Messages` 将该部分 usage 送入现有记录队列。`UpstreamFailoverError` 与零 usage 仍返回 `nil`，避免重试双记账或幽灵账单。
+- 验证：`git diff --check`、全包编译、`go test ./... -run '^$'` 通过；流中断/读错误/零 usage/failover 边界、API Key 透传、Responses failover、终端事件、Responses→Anthropic、路由护栏及 `-race` 聚焦测试通过。
+- 网关审阅：静态生命周期检查未见冲突标记、提前释放或新增预首 token 阻塞；生产 TTFT 与真实缓存连续性尚无可比遥测，生产发布前仍需按发布流程做 canary 验证。
+- 补充：`GOPROXY=https://goproxy.cn,direct go test ./... -count=1` 完整运行仍未全绿，失败集中于同步前已存在的混合测试断言漂移（Codex UA、OpenAI 流/紧凑模式、usage-log 列与参数、订阅仓储桩等）；本次流中断部分 usage 的直接回归与 `-race` 用例均通过，未借机改写这些本地业务语义。

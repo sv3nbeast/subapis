@@ -7710,13 +7710,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var clientDisconnect bool
 	if reqStream {
 		var streamErr error
+		var streamResult *streamingResult
 		if forceStreamAggregate {
 			// 账号上游只支持流式：聚合上游 SSE 为完整 JSON 后以 application/json 返回。
 			usage, streamErr = s.handleBufferedAnthropicStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel)
 		} else {
-			streamResult, handleErr := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
-			streamErr = handleErr
-			if handleErr == nil {
+			streamResult, streamErr = s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
+			if streamErr == nil {
 				usage = streamResult.usage
 				firstTokenMs = streamResult.firstTokenMs
 				clientDisconnect = streamResult.clientDisconnect
@@ -7764,6 +7764,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					StatusCode:   403,
 					ResponseBody: body,
 				}
+			}
+			// Preserve usage emitted before an interrupted terminal event. The helper
+			// rejects UpstreamFailoverError, which must not be billed until a retry
+			// completes successfully.
+			if partial := partialStreamUsageResult(resp, streamResult, originalModel, mappedModel, startTime, streamErr); partial != nil {
+				return partial, streamErr
 			}
 			return nil, streamErr
 		}
@@ -8052,6 +8058,12 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	if input.RequestStream {
 		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.StartTime, input.RequestModel)
 		if err != nil {
+			// Interrupted streams can already contain billable provider usage. Keep
+			// it attached to the error for the handler; failover errors deliberately
+			// remain result-less so a retry cannot be billed twice.
+			if partial := partialStreamUsageResult(resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
+				return partial, err
+			}
 			return nil, err
 		}
 		usage = streamResult.usage
@@ -10486,6 +10498,42 @@ type streamingResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
+}
+
+// hasObservedTokens reports whether a streaming response has supplied any
+// provider usage. An all-zero snapshot is not sufficient evidence to create a
+// usage record after an interrupted stream.
+func (u *ClaudeUsage) hasObservedTokens() bool {
+	if u == nil {
+		return false
+	}
+	return u.InputTokens > 0 || u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 || u.CacheReadInputTokens > 0 ||
+		u.CacheCreation5mTokens > 0 || u.CacheCreation1hTokens > 0 ||
+		u.ImageOutputTokens > 0
+}
+
+// partialStreamUsageResult keeps usage that the upstream supplied before a
+// terminal-error path. A pre-output UpstreamFailoverError must never carry a
+// result because its replacement attempt owns the eventual charge.
+func partialStreamUsageResult(resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
+	if resp == nil || streamResult == nil || !streamResult.usage.hasObservedTokens() {
+		return nil
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) {
+		return nil
+	}
+	return &ForwardResult{
+		RequestID:        resp.Header.Get("x-request-id"),
+		Usage:            *streamResult.usage,
+		Model:            model,
+		UpstreamModel:    upstreamModel,
+		Stream:           true,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     streamResult.firstTokenMs,
+		ClientDisconnect: streamResult.clientDisconnect,
+	}
 }
 
 type clientVisibleStreamError interface {
