@@ -2787,3 +2787,45 @@ a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads
 - 验证：`GOPROXY=https://goproxy.cn,direct go build ./...` 通过；`go test ./... -run '^$'`（全包编译/初始化）通过；路由子路径、利润门 failover、Responses→Anthropic 聚焦测试通过。
 - 全量测试仍有与本地历史测试夹杂的行为差异（Codex 默认 UA、上游 billing probe 旧断言、usage-log 旧列布局等），未在本批次改写本地业务语义。
 - 下一步：将 review 融合线快进提升到 `main`，不自动推送远端。
+
+## 2026-08-09 01:12:08 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `ce7b2c6f12b742ee4e41b027c87bc7c075d0b754`
+- 官方提交: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 合并基线: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 官方领先数量: `0`
+- 本地领先数量: `660`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+（无）
+
+### 本地领先
+
+ce7b2c6f1 sync: complete official main 0.1.172 integration
+602420d8d merge: sync official main through 0.1.172
+6c7df69ba 文档（sync）：record official sync preparation
+5ef202e0d 修复（web-chat）：make document uploads idempotent
+0cc645e82 修复（web-chat）：always forward explicit attachments
+36e513455 修复（web-chat）：hide Claude Code only groups
+1f7de9289 修复（web-chat）：保留explicit attachment context
+cb55fc4a9 新增（web-chat）：支持 XLSX 与 larger text files
+9c93a1853 修复（web-chat）：hide AWS Kiro routing labels
+3bb0ea767 修复（anthropic）：sign final OAuth request bodies
+2965ace0a 修复（anthropic）：recognize remote classifier clients
+5d0421bc9 修复（anthropic）：保留native agent classifier 请求
+80299f3ab 修复（grok）：protect OAuth token rotation
+23d12f545 修复（认证）：使失效 incomplete quota snapshots
+88e9cbba7 修复（认证）：hydrate subscription model quota ratios
+b0d775c95 修复（subscription）：enforce per-model quota through 认证 cache
+ec5954108 修复（grok）：保留valid OAuth sessions during refresh
+b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
+4e447fc8d 修复（anthropic）：保留CLI compaction request shape
+042f8c1a3 新增（kiro）：增加phased network observability
