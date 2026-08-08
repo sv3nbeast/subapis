@@ -2594,3 +2594,186 @@ ed0c937d0 新增（ui）：增加preview rollout 与 dashboard polish
 - 前端验证: lint、typecheck、production build 通过；全量测试为 `25 failed files / 91 failed tests`，与同步前基线精确一致，新增失败 `0`。
 - 网关回归审查: `PASS`；`stream=PASS`、`cache-hit=PASS`、`recreate=PASS`、`latency=PASS`。批量/单独运行仍失败的旧 OpenAI flush 断言均存在于同步前 service 基线，不属于本次增量；受影响的终态、首输出、缓存和 failover 合同测试已独立通过。
 - 工作区保护: 主工作区 17 项 Anthropic/429 未提交改动未被修改、stash、reset 或混入；本次仅提交隔离融合工作树。
+
+## 2026-08-08 22:11:30 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `5ef202e0de216a2f468bf8ea8d62c40f73553d33`
+- 官方提交: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 合并基线: `8fd01c2814f42997d79bdb4bafcbcfab2fabeee3`
+- 官方领先数量: `215`
+- 本地领先数量: `657`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+cc67b1aca 合并拉取请求 #5406（来源：bestony/fix/openai-oauth-routing-hints）
+8ad0a5ff5 修复（deps）：bump nanoid 3.3.16 -> 3.3.17 到 clear GHSA-2v37-7h3g-55p8 audit gate
+68d8f122e 杂项：将VERSION同步到 0.1.172 [skip ci]
+155c49496 合并拉取请求 #5399（来源：fengshao1227/fix/responses-anthropic-invalid-content-blocks）
+899157487 合并拉取请求 #5345（来源：puppywang/fix/oauth-pending-account-takeover）
+8f7b0a314 合并拉取请求 #5398（来源：Wei-Shaw/fix/openai-capacity-shed-stream-recovery）
+64090de66 修复（apicompat）：Responses→Anthropic 转换不再发出上游会拒收的 content block
+de904c433 合并拉取请求 #5396（来源：Brisbanehuang/codex/upstream-response-model-audit）
+14a27f196 测试（网关）：校准 error 帧边界 flush 期望至 pre-output failover 新契约
+c33c3208e 修复（网关）：流内降载错误恢复 pre-output failover 并对客户端改写为可重试错误码
+de349187d 修复（openai）：加固 priority routing hints
+815035fcc 修复（openai）：send OAuth routing hints
+915cc7e7b 修复（openai）：stop injecting legacy beta 时 OAuth responses
+db0bff82c 新增（usage）：audit upstream response models
+e88fc52ce 合并拉取请求 #5383（来源：fengshao1227/fix/responses-tool-parameters-null-type）
+045b620d0 合并拉取请求 #5391（来源：fengshao1227/fix/codex-plan-gated-image-model-no-cooldown）
+e79429b03 合并拉取请求 #5392（来源：fengshao1227/fix/grok-405-failover-and-cooldown）
+02fbcbe3a 修复（ratelimit）：守卫按端点来源门控，并与冷却键对齐模型口径
+b5d9fd21b 修复（ratelimit）：图片模型被 Codex 文本端点拒绝时不再写模型冷却
+146b8b668 回退（grok）：撤回 405 账号级踢号，只保留 failover 分类
+
+### 本地领先
+
+5ef202e0d 修复（web-chat）：make document uploads idempotent
+0cc645e82 修复（web-chat）：always forward explicit attachments
+36e513455 修复（web-chat）：hide Claude Code only groups
+1f7de9289 修复（web-chat）：保留explicit attachment context
+cb55fc4a9 新增（web-chat）：支持 XLSX 与 larger text files
+9c93a1853 修复（web-chat）：hide AWS Kiro routing labels
+3bb0ea767 修复（anthropic）：sign final OAuth request bodies
+2965ace0a 修复（anthropic）：recognize remote classifier clients
+5d0421bc9 修复（anthropic）：保留native agent classifier 请求
+80299f3ab 修复（grok）：protect OAuth token rotation
+23d12f545 修复（认证）：使失效 incomplete quota snapshots
+88e9cbba7 修复（认证）：hydrate subscription model quota ratios
+b0d775c95 修复（subscription）：enforce per-model quota through 认证 cache
+ec5954108 修复（grok）：保留valid OAuth sessions during refresh
+b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
+4e447fc8d 修复（anthropic）：保留CLI compaction request shape
+042f8c1a3 新增（kiro）：增加phased network observability
+e4acb96aa 修复（openai）：route large HTTP ingress over SSE
+a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads"
+98bce9bb7 修复（openai）：keep websocket reader active during large uploads
+
+## 2026-08-08 22:11:59 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `5ef202e0de216a2f468bf8ea8d62c40f73553d33`
+- 官方提交: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 合并基线: `8fd01c2814f42997d79bdb4bafcbcfab2fabeee3`
+- 官方领先数量: `215`
+- 本地领先数量: `657`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+cc67b1aca 合并拉取请求 #5406（来源：bestony/fix/openai-oauth-routing-hints）
+8ad0a5ff5 修复（deps）：bump nanoid 3.3.16 -> 3.3.17 到 clear GHSA-2v37-7h3g-55p8 audit gate
+68d8f122e 杂项：将VERSION同步到 0.1.172 [skip ci]
+155c49496 合并拉取请求 #5399（来源：fengshao1227/fix/responses-anthropic-invalid-content-blocks）
+899157487 合并拉取请求 #5345（来源：puppywang/fix/oauth-pending-account-takeover）
+8f7b0a314 合并拉取请求 #5398（来源：Wei-Shaw/fix/openai-capacity-shed-stream-recovery）
+64090de66 修复（apicompat）：Responses→Anthropic 转换不再发出上游会拒收的 content block
+de904c433 合并拉取请求 #5396（来源：Brisbanehuang/codex/upstream-response-model-audit）
+14a27f196 测试（网关）：校准 error 帧边界 flush 期望至 pre-output failover 新契约
+c33c3208e 修复（网关）：流内降载错误恢复 pre-output failover 并对客户端改写为可重试错误码
+de349187d 修复（openai）：加固 priority routing hints
+815035fcc 修复（openai）：send OAuth routing hints
+915cc7e7b 修复（openai）：stop injecting legacy beta 时 OAuth responses
+db0bff82c 新增（usage）：audit upstream response models
+e88fc52ce 合并拉取请求 #5383（来源：fengshao1227/fix/responses-tool-parameters-null-type）
+045b620d0 合并拉取请求 #5391（来源：fengshao1227/fix/codex-plan-gated-image-model-no-cooldown）
+e79429b03 合并拉取请求 #5392（来源：fengshao1227/fix/grok-405-failover-and-cooldown）
+02fbcbe3a 修复（ratelimit）：守卫按端点来源门控，并与冷却键对齐模型口径
+b5d9fd21b 修复（ratelimit）：图片模型被 Codex 文本端点拒绝时不再写模型冷却
+146b8b668 回退（grok）：撤回 405 账号级踢号，只保留 failover 分类
+
+### 本地领先
+
+5ef202e0d 修复（web-chat）：make document uploads idempotent
+0cc645e82 修复（web-chat）：always forward explicit attachments
+36e513455 修复（web-chat）：hide Claude Code only groups
+1f7de9289 修复（web-chat）：保留explicit attachment context
+cb55fc4a9 新增（web-chat）：支持 XLSX 与 larger text files
+9c93a1853 修复（web-chat）：hide AWS Kiro routing labels
+3bb0ea767 修复（anthropic）：sign final OAuth request bodies
+2965ace0a 修复（anthropic）：recognize remote classifier clients
+5d0421bc9 修复（anthropic）：保留native agent classifier 请求
+80299f3ab 修复（grok）：protect OAuth token rotation
+23d12f545 修复（认证）：使失效 incomplete quota snapshots
+88e9cbba7 修复（认证）：hydrate subscription model quota ratios
+b0d775c95 修复（subscription）：enforce per-model quota through 认证 cache
+ec5954108 修复（grok）：保留valid OAuth sessions during refresh
+b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
+4e447fc8d 修复（anthropic）：保留CLI compaction request shape
+042f8c1a3 新增（kiro）：增加phased network observability
+e4acb96aa 修复（openai）：route large HTTP ingress over SSE
+a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads"
+98bce9bb7 修复（openai）：keep websocket reader active during large uploads
+
+## 2026-08-08 22:13:52 +0800
+
+- 模式: `ai`
+- 目标分支: `main`
+- 官方引用: `origin/main`
+- 本地提交: `5ef202e0de216a2f468bf8ea8d62c40f73553d33`
+- 官方提交: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 合并基线: `8fd01c2814f42997d79bdb4bafcbcfab2fabeee3`
+- 官方领先数量: `215`
+- 本地领先数量: `657`
+- 动作: 仅分析
+- 报告路径: `/tmp/sub2api-threeway-sync.md`
+
+> 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
+
+### 官方领先
+
+cc67b1aca 合并拉取请求 #5406（来源：bestony/fix/openai-oauth-routing-hints）
+8ad0a5ff5 修复（deps）：bump nanoid 3.3.16 -> 3.3.17 到 clear GHSA-2v37-7h3g-55p8 audit gate
+68d8f122e 杂项：将VERSION同步到 0.1.172 [skip ci]
+155c49496 合并拉取请求 #5399（来源：fengshao1227/fix/responses-anthropic-invalid-content-blocks）
+899157487 合并拉取请求 #5345（来源：puppywang/fix/oauth-pending-account-takeover）
+8f7b0a314 合并拉取请求 #5398（来源：Wei-Shaw/fix/openai-capacity-shed-stream-recovery）
+64090de66 修复（apicompat）：Responses→Anthropic 转换不再发出上游会拒收的 content block
+de904c433 合并拉取请求 #5396（来源：Brisbanehuang/codex/upstream-response-model-audit）
+14a27f196 测试（网关）：校准 error 帧边界 flush 期望至 pre-output failover 新契约
+c33c3208e 修复（网关）：流内降载错误恢复 pre-output failover 并对客户端改写为可重试错误码
+de349187d 修复（openai）：加固 priority routing hints
+815035fcc 修复（openai）：send OAuth routing hints
+915cc7e7b 修复（openai）：stop injecting legacy beta 时 OAuth responses
+db0bff82c 新增（usage）：audit upstream response models
+e88fc52ce 合并拉取请求 #5383（来源：fengshao1227/fix/responses-tool-parameters-null-type）
+045b620d0 合并拉取请求 #5391（来源：fengshao1227/fix/codex-plan-gated-image-model-no-cooldown）
+e79429b03 合并拉取请求 #5392（来源：fengshao1227/fix/grok-405-failover-and-cooldown）
+02fbcbe3a 修复（ratelimit）：守卫按端点来源门控，并与冷却键对齐模型口径
+b5d9fd21b 修复（ratelimit）：图片模型被 Codex 文本端点拒绝时不再写模型冷却
+146b8b668 回退（grok）：撤回 405 账号级踢号，只保留 failover 分类
+
+### 本地领先
+
+5ef202e0d 修复（web-chat）：make document uploads idempotent
+0cc645e82 修复（web-chat）：always forward explicit attachments
+36e513455 修复（web-chat）：hide Claude Code only groups
+1f7de9289 修复（web-chat）：保留explicit attachment context
+cb55fc4a9 新增（web-chat）：支持 XLSX 与 larger text files
+9c93a1853 修复（web-chat）：hide AWS Kiro routing labels
+3bb0ea767 修复（anthropic）：sign final OAuth request bodies
+2965ace0a 修复（anthropic）：recognize remote classifier clients
+5d0421bc9 修复（anthropic）：保留native agent classifier 请求
+80299f3ab 修复（grok）：protect OAuth token rotation
+23d12f545 修复（认证）：使失效 incomplete quota snapshots
+88e9cbba7 修复（认证）：hydrate subscription model quota ratios
+b0d775c95 修复（subscription）：enforce per-model quota through 认证 cache
+ec5954108 修复（grok）：保留valid OAuth sessions during refresh
+b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
+4e447fc8d 修复（anthropic）：保留CLI compaction request shape
+042f8c1a3 新增（kiro）：增加phased network observability
+e4acb96aa 修复（openai）：route large HTTP ingress over SSE
+a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads"
+98bce9bb7 修复（openai）：keep websocket reader active during large uploads
