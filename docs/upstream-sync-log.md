@@ -1099,7 +1099,8 @@ git log --cherry-pick --right-only --no-merges --oneline HEAD...origin/main
 - 合并基线: `0d69c0cd643bab82bd011682407030955f2389a7`
 - 官方领先数量: `417`
 - 本地领先数量: `146`
-- 动作: 仅分析
+- 动作: promote 后复核（未推送远端）
+- 提升结果: `main` 与 `codex/official-sync-review` 已快进至 `7f60213be`
 - 报告路径: `/tmp/sub2api-threeway-sync.md`
 
 > 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
