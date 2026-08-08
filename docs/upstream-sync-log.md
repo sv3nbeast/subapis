@@ -2799,7 +2799,8 @@ a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads
 - 合并基线: `cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
 - 官方领先数量: `0`
 - 本地领先数量: `660`
-- 动作: 仅分析
+- 动作: promote 后复核（未推送远端）
+- 提升结果: `main` 与 `codex/official-sync-review` 已快进至 `2890d3f65`
 - 报告路径: `/tmp/sub2api-threeway-sync.md`
 
 > 说明：下面的提交标题由脚本自动生成中文摘要；提交 SHA、分支名、路径等标识保持原样。
