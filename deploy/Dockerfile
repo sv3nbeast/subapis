@@ -120,7 +120,7 @@ RUN addgroup -g 1000 sub2api && \
 # Set working directory
 WORKDIR /app
 
-# Copy binary from builder
+# Copy binary and runtime fallback resources from builder
 COPY --from=backend-builder /app/sub2api /app/sub2api
 COPY --from=backend-builder /app/antigravityworker /app/antigravityworker
 COPY --from=backend-builder /app/antigravityworker-boringcrypto /app/antigravityworker-boringcrypto

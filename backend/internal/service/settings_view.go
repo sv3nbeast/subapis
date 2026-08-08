@@ -39,12 +39,28 @@ type SystemSettings struct {
 	SMTPFromName           string
 	SMTPUseTLS             bool
 
-	TurnstileEnabled             bool
-	TurnstileSiteKey             string
-	TurnstileSecretKey           string
-	TurnstileSecretKeyConfigured bool
-	APIKeyACLTrustForwardedIP    bool
-	ForwardedClientIPHeaders     []string
+	TurnstileEnabled                       bool
+	TurnstileSiteKey                       string
+	TurnstileSecretKey                     string
+	TurnstileSecretKeyConfigured           bool
+	TencentCaptchaEnabled                  bool
+	TencentCaptchaAppID                    string
+	TencentCaptchaAppSecretKey             string
+	TencentCaptchaAppSecretKeyConfigured   bool
+	TencentCaptchaCloudSecretID            string
+	TencentCaptchaCloudSecretIDConfigured  bool
+	TencentCaptchaCloudSecretKey           string
+	TencentCaptchaCloudSecretKeyConfigured bool
+	TencentCaptchaRegion                   string
+	AliyunCaptchaEnabled                   bool
+	AliyunCaptchaAccessKeyID               string
+	AliyunCaptchaAccessKeySecret           string
+	AliyunCaptchaAccessKeySecretConfigured bool
+	AliyunCaptchaSceneID                   string
+	AliyunCaptchaPrefix                    string
+	AliyunCaptchaRegion                    string
+	APIKeyACLTrustForwardedIP              bool
+	ForwardedClientIPHeaders               []string
 
 	// LinuxDo Connect OAuth 登录
 	LinuxDoConnectEnabled                bool
@@ -140,6 +156,7 @@ type SystemSettings struct {
 	ContactInfo                 string
 	DocURL                      string
 	HomeContent                 string
+	CompactHomeEnabled          bool
 	HideCcsImportButton         bool
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
@@ -314,6 +331,13 @@ type PublicSettings struct {
 	LoginAgreementDocuments          []LoginAgreementDocument
 	TurnstileEnabled                 bool
 	TurnstileSiteKey                 string
+	TencentCaptchaEnabled            bool
+	TencentCaptchaAppID              string
+	TencentCaptchaRegion             string
+	AliyunCaptchaEnabled             bool
+	AliyunCaptchaSceneID             string
+	AliyunCaptchaPrefix              string
+	AliyunCaptchaRegion              string
 	SiteName                         string
 	SiteLogo                         string
 	SiteSubtitle                     string
@@ -321,6 +345,7 @@ type PublicSettings struct {
 	ContactInfo                      string
 	DocURL                           string
 	HomeContent                      string
+	CompactHomeEnabled               bool
 	HideCcsImportButton              bool
 
 	PurchaseSubscriptionEnabled bool

@@ -40,8 +40,8 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn(),
+    showError,
+    showSuccess,
     showInfo: vi.fn()
   })
 }))
@@ -72,6 +72,19 @@ const DataTableStub = {
       <div v-for="row in data" :key="row.id">
         <div data-test="id-cell"><slot name="cell-id" :value="row.id" :row="row" /></div>
         <slot name="cell-created_at" :value="row.created_at" :row="row" />
+        <div data-test="account-rate"><slot name="cell-rate_multiplier" :row="row" /></div>
+      </div>
+    </div>
+  `
+}
+
+const ProbeDataTableStub = {
+  props: ['data'],
+  template: `
+    <div>
+      <div v-for="row in data" :key="row.id">
+        <div data-test="account-rate"><slot name="cell-rate_multiplier" :row="row" /></div>
+        <slot name="cell-upstream_billing_rate" :row="row" />
       </div>
     </div>
   `

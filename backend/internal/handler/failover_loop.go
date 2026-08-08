@@ -469,6 +469,17 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionE
 		s.LastFailoverErr.StatusCode == http.StatusServiceUnavailable &&
 		s.SwitchCount <= s.MaxSwitches {
 
+		// 排除列表全由利润门否决贡献时，清空后会被原样恢复：退避重试拿不到
+		// 任何新候选，而利润否决不推进 SwitchCount，退避条件将永远成立。
+		// 这里直接判定耗尽，避免每 2s 空转一轮的活锁。
+		if s.allExclusionsAreProfitVetoed() {
+			logger.FromContext(ctx).Warn("gateway.failover_selection_exhausted_by_profit_veto",
+				zap.Int("profit_veto_count", s.profitVetoCount),
+				zap.Int("excluded_accounts", len(s.FailedAccountIDs)),
+			)
+			return FailoverExhausted
+		}
+
 		logger.FromContext(ctx).Warn("gateway.failover_single_account_backoff",
 			zap.Duration("backoff_delay", singleAccountBackoffDelay),
 			zap.Int("switch_count", s.SwitchCount),
@@ -482,6 +493,11 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context, selectionE
 			zap.Int("max_switches", s.MaxSwitches),
 		)
 		s.FailedAccountIDs = make(map[int64]struct{})
+		// 利润门否决的账号不参与退避重试的解除：判定依据（冻结的下游倍率）在
+		// 同一请求内不变，放它们回池只会被再次否决。
+		for id := range s.profitVetoedAccountIDs {
+			s.FailedAccountIDs[id] = struct{}{}
+		}
 		return FailoverContinue
 	}
 	return FailoverExhausted
