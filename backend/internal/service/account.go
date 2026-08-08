@@ -2016,6 +2016,16 @@ func (a *Account) IsOpenAIWSForceHTTPEnabled() bool {
 	return ok && enabled
 }
 
+// IsOpenAIResponsesFlattenNamespacesEnabled reports the account-level escape
+// hatch for compatibility upstreams that do not understand Codex namespaces.
+func (a *Account) IsOpenAIResponsesFlattenNamespacesEnabled() bool {
+	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_responses_flatten_namespaces"].(bool)
+	return ok && enabled
+}
+
 const (
 	OpenAIHTTPIngressWSOverrideInherit = "inherit"
 	OpenAIHTTPIngressWSOverrideOn      = "on"

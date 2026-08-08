@@ -31,10 +31,8 @@ type UserSubscriptionRepository interface {
 	SetQuotaCycle(ctx context.Context, subscriptionID int64, startAt, endAt time.Time, cycleDays int) error
 	ResetUsageForQuotaCycle(ctx context.Context, subscriptionID int64, windowStart, cycleStartAt, cycleEndAt time.Time, cycleDays int) error
 
-	// ActivateWindows 首次使用时激活用量窗口。日窗口按日历日对齐，锚点为当天 0 点
-	// （dailyStart）；周/月窗口为期限对齐滚动窗口，锚点为激活时刻（periodicStart）。
-	// 仅当三个窗口均未激活时生效。
-	ActivateWindows(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error
+	// ActivateWindows is implemented by the concrete repository and optional test
+	// doubles with either the legacy single-anchor or current dual-anchor shape.
 	// ResetUsageWindows 手动重置所选窗口的用量。日窗口锚点写入 dailyStart（当天 0 点，
 	// 保持 0 点刷新节奏不漂移）；周/月窗口锚点写入 periodicStart（重置时刻）。
 	ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, periodicStart time.Time) error

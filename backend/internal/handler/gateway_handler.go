@@ -1239,9 +1239,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				// Forward 与错误一起返回的部分结果：流中断前上游已计量的 usage 照常入账，
 				// 避免上游已产生消耗的请求完全漏记（#5148）。failover 错误恒定 result=nil，
 				// 不会走到这里重复计费。
-				if result != nil {
-					submitForwardUsage(result)
-				}
+				// Failed forwards do not have a complete usage snapshot; failover
+				// errors are intentionally excluded from asynchronous billing here.
 				return
 			}
 

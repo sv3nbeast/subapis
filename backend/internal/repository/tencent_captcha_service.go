@@ -57,8 +57,8 @@ func (v *tencentCaptchaVerifier) VerifyTicket(ctx context.Context, credentials s
 	}
 	return &service.TencentCaptchaVerifyResponse{
 		CaptchaCode: valueOrZero(response.Response.CaptchaCode),
-		CaptchaMsg:  valueOrEmpty(response.Response.CaptchaMsg),
-		RequestID:   valueOrEmpty(response.Response.RequestId),
+		CaptchaMsg:  tencentValueOrEmpty(response.Response.CaptchaMsg),
+		RequestID:   tencentValueOrEmpty(response.Response.RequestId),
 	}, nil
 }
 
@@ -69,7 +69,7 @@ func valueOrZero(value *int64) int64 {
 	return *value
 }
 
-func valueOrEmpty(value *string) string {
+func tencentValueOrEmpty(value *string) string {
 	if value == nil {
 		return ""
 	}

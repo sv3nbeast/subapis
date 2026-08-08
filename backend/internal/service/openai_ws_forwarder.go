@@ -59,6 +59,17 @@ const (
 	openAIWSMaxPrevResponseIDDeletePasses        = 8
 )
 
+func newOpenAIWSDownstreamWriteContext(controlCtx context.Context, hooks *OpenAIWSIngressHooks, timeout time.Duration) (context.Context, context.CancelFunc) {
+	parent := controlCtx
+	if hooks != nil && hooks.ClientLifecycleContext != nil {
+		parent = hooks.ClientLifecycleContext
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
 var openAIWSLogValueReplacer = strings.NewReplacer(
 	"error", "err",
 	"fallback", "fb",
@@ -1158,6 +1169,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	turnState string,
 	turnMetadata string,
 	promptCacheKey string,
+	extra ...string,
 ) (http.Header, openAIWSSessionHeaderResolution, error) {
 	headers := make(http.Header)
 	headers.Set("authorization", "Bearer "+token)

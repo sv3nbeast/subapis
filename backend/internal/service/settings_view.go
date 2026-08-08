@@ -240,6 +240,9 @@ type SystemSettings struct {
 	AntigravityUserAgentVersion                   string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
 	ClaudeUpstreamUserAgent                       string // Claude/Anthropic 上游完整 User-Agent；空值使用内置默认
 	OpenAICodexUserAgent                          string // OpenAI Codex 上游完整 User-Agent；空值使用内置默认
+	OpenAICodexClientVersion                      string
+	OpenAICodexClientVersionSynced                string
+	OpenAICodexVersionAutoSyncEnabled             bool
 	ProxyAutoSelectMaxAnthropicAccountsPerProxy   int    // Anthropic 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxOpenAIAccountsPerProxy      int    // OpenAI 账号创建自动选代理时的同平台容量（默认 1）
 	ProxyAutoSelectMaxAntigravityAccountsPerProxy int    // Antigravity 账号创建自动选代理时的同平台容量（默认 5）

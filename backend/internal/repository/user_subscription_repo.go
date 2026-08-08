@@ -403,7 +403,7 @@ func (r *userSubscriptionRepository) ResetUsageForQuotaCycle(ctx context.Context
 	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 }
 
-func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
+func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
 	n, err := client.UserSubscription.Update().
 		Where(
@@ -440,7 +440,7 @@ func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id i
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`
-	result, err := client.ExecContext(ctx, query, id, resetDaily, resetWeekly, resetMonthly, newWindowStart)
+	result, err := client.ExecContext(ctx, query, id, resetDaily, resetWeekly, resetMonthly, dailyStart)
 	if err != nil {
 		return err
 	}

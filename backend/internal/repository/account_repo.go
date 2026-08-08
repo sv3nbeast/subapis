@@ -396,8 +396,12 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier)
 }
 
+func (r *accountRepository) UpdateWithAccountBillingSettings(ctx context.Context, account *service.Account, probeEnabled, rateSyncEnabled *bool, rateMultiplier *float64) error {
+	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier)
+}
+
 func (r *accountRepository) UpdateWithUpstreamBillingProbeEnabled(ctx context.Context, account *service.Account, enabled bool) error {
-	return r.updateAccount(ctx, account, &enabled)
+	return r.updateAccount(ctx, account, &enabled, nil, account.RateMultiplier)
 }
 
 func (r *accountRepository) updateAccount(
@@ -601,9 +605,9 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	var identityUnchanged, ollamaGroupIdentityUnchanged, ollamaProxyIdentityUnchanged bool
-	var currentEnabled, currentSnapshot, currentOllamaSession, currentOllamaAutoRefresh, currentOllamaSnapshot []byte
+	var currentEnabled, currentRateSyncEnabled, currentSnapshot, currentOllamaSession, currentOllamaAutoRefresh, currentOllamaSnapshot []byte
 	if err := rows.Scan(&identityUnchanged, &ollamaGroupIdentityUnchanged, &ollamaProxyIdentityUnchanged,
-		&currentEnabled, &currentSnapshot, &currentOllamaSession, &currentOllamaAutoRefresh, &currentOllamaSnapshot); err != nil {
+		&currentEnabled, &currentRateSyncEnabled, &currentSnapshot, &currentOllamaSession, &currentOllamaAutoRefresh, &currentOllamaSnapshot); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
@@ -2131,33 +2135,49 @@ func (r *accountRepository) ListModelAvailabilityCandidates(ctx context.Context,
 }
 
 // UpdateUpstreamBillingProbeSnapshot stores a probe result only while the
-// network identity and prior snapshot used by that probe are still current.
-func (r *accountRepository) UpdateUpstreamBillingProbeSnapshot(ctx context.Context, account *service.Account, snapshot *service.UpstreamBillingProbeSnapshot) error {
+// network identity used by that probe is still current.
+func (r *accountRepository) UpdateUpstreamBillingProbeSnapshot(
+	ctx context.Context,
+	account *service.Account,
+	snapshot *service.UpstreamBillingProbeSnapshot,
+	rateMultiplier *float64,
+) error {
 	if account == nil || snapshot == nil {
 		return service.ErrAccountNilInput
+	}
+	if snapshot.Status != service.UpstreamBillingProbeStatusOK {
+		rateMultiplier = nil
 	}
 	if dbent.TxFromContext(ctx) == nil {
 		tx, err := r.client.Tx(ctx)
 		if errors.Is(err, dbent.ErrTxStarted) {
-			return r.updateUpstreamBillingProbeSnapshotInTx(ctx, account, snapshot)
+			return r.updateUpstreamBillingProbeSnapshotInTx(ctx, account, snapshot, rateMultiplier)
 		}
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if err := r.updateUpstreamBillingProbeSnapshotInTx(dbent.NewTxContext(ctx, tx), account, snapshot); err != nil {
+
+		if err := r.updateUpstreamBillingProbeSnapshotInTx(dbent.NewTxContext(ctx, tx), account, snapshot, rateMultiplier); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		// The durable outbox event is committed with the snapshot. This direct
+		// cache write only reduces visibility latency on the current instance.
 		r.syncSchedulerAccountSnapshot(ctx, account.ID)
 		return nil
 	}
-	return r.updateUpstreamBillingProbeSnapshotInTx(ctx, account, snapshot)
+	return r.updateUpstreamBillingProbeSnapshotInTx(ctx, account, snapshot, rateMultiplier)
 }
 
-func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(ctx context.Context, account *service.Account, snapshot *service.UpstreamBillingProbeSnapshot) error {
+func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(
+	ctx context.Context,
+	account *service.Account,
+	snapshot *service.UpstreamBillingProbeSnapshot,
+	rateMultiplier *float64,
+) error {
 	payload, err := json.Marshal(map[string]any{service.UpstreamBillingProbeExtraKey: snapshot})
 	if err != nil {
 		return err
@@ -2167,16 +2187,26 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(ctx context.C
 		return err
 	}
 	var expectedSnapshot any
-	var expectedEnabled any
 	if account.Extra != nil {
 		expectedSnapshot = account.Extra[service.UpstreamBillingProbeExtraKey]
-		expectedEnabled = account.Extra[service.UpstreamBillingProbeEnabledExtraKey]
 	}
 	expectedSnapshotJSON, err := json.Marshal(expectedSnapshot)
 	if err != nil {
 		return err
 	}
+	var expectedEnabled any
+	if account.Extra != nil {
+		expectedEnabled = account.Extra[service.UpstreamBillingProbeEnabledExtraKey]
+	}
 	expectedEnabledJSON, err := json.Marshal(expectedEnabled)
+	if err != nil {
+		return err
+	}
+	var expectedRateSyncEnabled any
+	if account.Extra != nil {
+		expectedRateSyncEnabled = account.Extra[service.UpstreamBillingRateSyncEnabledExtraKey]
+	}
+	expectedRateSyncEnabledJSON, err := json.Marshal(expectedRateSyncEnabled)
 	if err != nil {
 		return err
 	}
@@ -2194,7 +2224,16 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(ctx context.C
 	}
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
-		SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+		SET
+			extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
+			rate_multiplier = CASE
+				WHEN $10::numeric IS NOT NULL
+					AND extra @> '{"upstream_billing_probe_enabled": true}'::jsonb
+					AND extra @> '{"upstream_billing_rate_sync_enabled": true}'::jsonb
+				THEN $10::numeric
+				ELSE rate_multiplier
+			END,
+			updated_at = NOW()
 		WHERE id = $2
 			AND platform = $3
 			AND type = $4
@@ -2202,8 +2241,9 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(ctx context.C
 			AND proxy_id IS NOT DISTINCT FROM $6
 			AND COALESCE(extra -> 'upstream_billing_probe', 'null'::jsonb) = $7::jsonb
 			AND COALESCE(extra -> 'upstream_billing_probe_enabled', 'null'::jsonb) = $8::jsonb
+			AND COALESCE(extra -> 'upstream_billing_rate_sync_enabled', 'null'::jsonb) = $9::jsonb
 			AND deleted_at IS NULL
-	`, string(payload), account.ID, account.Platform, account.Type, string(credentials), proxyID, string(expectedSnapshotJSON), string(expectedEnabledJSON))
+	`, string(payload), account.ID, account.Platform, account.Type, string(credentials), proxyID, string(expectedSnapshotJSON), string(expectedEnabledJSON), string(expectedRateSyncEnabledJSON), rateMultiplier)
 	if err != nil {
 		return err
 	}

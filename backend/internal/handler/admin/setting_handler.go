@@ -108,6 +108,11 @@ func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *s
 	h.notificationEmailService = notificationEmailService
 }
 
+// SetAliyunCaptchaService attaches the optional Aliyun captcha verifier.
+func (h *SettingHandler) SetAliyunCaptchaService(svc *service.AliyunCaptchaService) {
+	h.aliyunCaptchaService = svc
+}
+
 // SetStepUpDeps attaches the services required to safely change the step-up switch.
 func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userService *service.UserService) {
 	h.totpService = totpService

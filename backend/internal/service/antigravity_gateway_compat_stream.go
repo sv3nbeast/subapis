@@ -16,6 +16,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// observeAntigravityGeminiSSELine records the upstream response model while
+// keeping the compatibility stream path's existing translation behavior.
+func (s *AntigravityGatewayService) observeAntigravityGeminiSSELine(c *gin.Context, line string) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "data:") {
+		return
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return
+	}
+	raw := []byte(payload)
+	if inner, err := s.unwrapV1InternalResponse(raw); err == nil && len(inner) > 0 {
+		raw = inner
+	}
+	observer.ObserveGemini(raw)
+}
+
 type antigravityCompatStreamAdapter interface {
 	Emit(*apicompat.AnthropicStreamEvent, *antigravityClientWriter)
 	Finalize(*antigravityClientWriter)

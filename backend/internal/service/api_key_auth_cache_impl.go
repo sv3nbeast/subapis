@@ -427,6 +427,9 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			PeakStart:                       groupForSnapshot.PeakStart,
 			PeakEnd:                         groupForSnapshot.PeakEnd,
 			PeakRateMultiplier:              groupForSnapshot.PeakRateMultiplier,
+			ProfitControlEnabled:            groupForSnapshot.ProfitControlEnabled,
+			ProfitMinMargin:                 groupForSnapshot.ProfitMinMargin,
+			ProfitSafetyBuffer:              groupForSnapshot.ProfitSafetyBuffer,
 		}
 	}
 	return snapshot

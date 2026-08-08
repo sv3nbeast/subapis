@@ -12,13 +12,14 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/gin-gonic/gin"
 )
 
 // collectClaudeStreamResponse collects a Gemini SSE response and converts it
 // into one Anthropic JSON response for the compatibility bridge. It is kept
 // separate from the client-writing streaming path so Responses and Chat
 // Completions can apply their own final translation.
-func (s *AntigravityGatewayService) collectClaudeStreamResponse(resp *http.Response, startTime time.Time, originalModel string) ([]byte, *antigravityStreamResult, error) {
+func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) ([]byte, *antigravityStreamResult, error) {
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
@@ -90,6 +91,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(resp *http.Respo
 			}
 
 			trimmed := strings.TrimRight(ev.line, "\r\n")
+			s.observeAntigravityGeminiSSELine(c, ev.line)
 			if !strings.HasPrefix(trimmed, "data:") {
 				continue
 			}

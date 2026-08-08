@@ -42,6 +42,20 @@ func DefaultModelIDs() []string {
 	return ids
 }
 
+// IsBrowserUserAgent reports whether ua looks like a browser identity. Browser
+// UAs are not valid Codex service identities and are replaced on OAuth routes.
+func IsBrowserUserAgent(ua string) bool {
+	ua = strings.ToLower(strings.TrimSpace(ua))
+	if !strings.HasPrefix(ua, "mozilla/") {
+		return false
+	}
+	return strings.Contains(ua, "chrome/") ||
+		strings.Contains(ua, "firefox/") ||
+		strings.Contains(ua, "safari/") ||
+		strings.Contains(ua, "edg/") ||
+		strings.Contains(ua, "opr/")
+}
+
 // DefaultTestModel default model for testing OpenAI accounts
 const DefaultTestModel = "gpt-5.4"
 

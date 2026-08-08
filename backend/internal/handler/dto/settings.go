@@ -218,6 +218,9 @@ type SystemSettings struct {
 	ClaudeOAuthSystemPrompt                       string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks                 string `json:"claude_oauth_system_prompt_blocks"`
 	OpenAICodexUserAgent                          string `json:"openai_codex_user_agent"`
+	OpenAICodexClientVersion                      string `json:"openai_codex_client_version"`
+	OpenAICodexClientVersionSynced                string `json:"openai_codex_client_version_synced"`
+	OpenAICodexVersionAutoSyncEnabled             bool   `json:"openai_codex_version_auto_sync_enabled"`
 	MinCodexVersion                               string `json:"min_codex_version"`
 	MaxCodexVersion                               string `json:"max_codex_version"`
 	CodexCLIOnlyBlacklist                         string `json:"codex_cli_only_blacklist"`
@@ -361,9 +364,17 @@ type PublicSettings struct {
 	LoginAgreementDocuments          []LoginAgreementDocument  `json:"login_agreement_documents"`
 	TurnstileEnabled                 bool                      `json:"turnstile_enabled"`
 	TurnstileSiteKey                 string                    `json:"turnstile_site_key"`
+	TencentCaptchaEnabled            bool                      `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID              string                    `json:"tencent_captcha_app_id"`
+	TencentCaptchaRegion             string                    `json:"tencent_captcha_region"`
+	AliyunCaptchaEnabled             bool                      `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaSceneID             string                    `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix              string                    `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion              string                    `json:"aliyun_captcha_region"`
 	SiteName                         string                    `json:"site_name"`
 	SiteLogo                         string                    `json:"site_logo"`
 	SiteSubtitle                     string                    `json:"site_subtitle"`
+	CompactHomeEnabled               bool                      `json:"compact_home_enabled"`
 	APIBaseURL                       string                    `json:"api_base_url"`
 	ContactInfo                      string                    `json:"contact_info"`
 	DocURL                           string                    `json:"doc_url"`

@@ -1065,9 +1065,10 @@ type GatewayOpenAIHTTP2Config struct {
 // GatewayOpenAIProxyStreamCircuitConfig controls the bounded, in-process
 // proxy-ID circuit used for incomplete OpenAI Responses SSE streams.
 type GatewayOpenAIProxyStreamCircuitConfig struct {
-	FailureThreshold int `mapstructure:"failure_threshold"`
-	WindowSeconds    int `mapstructure:"window_seconds"`
-	TTLSeconds       int `mapstructure:"ttl_seconds"`
+	Disabled         bool `mapstructure:"disabled"`
+	FailureThreshold int  `mapstructure:"failure_threshold"`
+	WindowSeconds    int  `mapstructure:"window_seconds"`
+	TTLSeconds       int  `mapstructure:"ttl_seconds"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置

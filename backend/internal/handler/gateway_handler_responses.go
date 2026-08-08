@@ -84,6 +84,8 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	setOpsRequestContext(c, reqModel, reqStream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
+	pricingCtx, pricingAt := service.WithGatewayTokenRequestPricing(c.Request.Context())
+	c.Request = c.Request.WithContext(pricingCtx)
 	requestCtx := c.Request.Context()
 	imageGenerationIntent := service.IsImageGenerationIntent("/v1/responses", reqModel, body)
 	if imageGenerationIntent {

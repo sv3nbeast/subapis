@@ -2777,3 +2777,13 @@ b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
 e4acb96aa 修复（openai）：route large HTTP ingress over SSE
 a2c01d1fb Revert "fix(openai): keep websocket reader active during large uploads"
 98bce9bb7 修复（openai）：keep websocket reader active during large uploads
+
+## 2026-08-09 官方同步融合完成（review）
+
+- 官方线：`origin/main` @ `cc67b1aca`（0.1.172）
+- 融合线：`codex/official-sync-review` @ `602420d8d`，由本地主线 `5ef202e0d` 与官方线三方融合。
+- 冲突策略：重叠业务文件以本地实现为基线，逐项补入官方安全/兼容性意图；保留本地 web-chat、Anthropic、Grok、Kiro、订阅及调度逻辑。
+- 已补入/校验：OpenAI OAuth routing hints、容量降载流恢复、Responses→Anthropic 非法 block 清理、上游响应模型审计字段、Responses 子路径护栏、利润门否决预算、Codex 版本/UA 配置、验证码配置、Ent 生成代码对齐。
+- 验证：`GOPROXY=https://goproxy.cn,direct go build ./...` 通过；`go test ./... -run '^$'`（全包编译/初始化）通过；路由子路径、利润门 failover、Responses→Anthropic 聚焦测试通过。
+- 全量测试仍有与本地历史测试夹杂的行为差异（Codex 默认 UA、上游 billing probe 旧断言、usage-log 旧列布局等），未在本批次改写本地业务语义。
+- 下一步：将 review 融合线快进提升到 `main`，不自动推送远端。

@@ -23,10 +23,16 @@ type Group struct {
 	RateMultiplier float64
 	// 高峰时段倍率：peak_rate_enabled 为 true 且当前时刻处于 [PeakStart, PeakEnd) 时，
 	// token 计费倍率额外乘以 PeakRateMultiplier。详见 PeakMultiplierAt。
-	PeakRateEnabled      bool
-	PeakStart            string
-	PeakEnd              string
-	PeakRateMultiplier   float64
+	PeakRateEnabled    bool
+	PeakStart          string
+	PeakEnd            string
+	PeakRateMultiplier float64
+	// 分组利润控制（五个 token 计费平台可启用）。
+	// 调度准入条件：账号倍率 U 满足 U <= D*(1-margin-buffer)，其中 D 为
+	// 请求用户当刻有效下游倍率；仅过滤候选账号，不改变既有排序/粘性/熔断。
+	ProfitControlEnabled bool
+	ProfitMinMargin      float64
+	ProfitSafetyBuffer   float64
 	IsExclusive          bool
 	Status               string
 	Hydrated             bool // indicates the group was loaded from a trusted repository source

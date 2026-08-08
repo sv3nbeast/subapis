@@ -512,7 +512,11 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 		if sub.Status == SubscriptionStatusExpired ||
 			(sub.Status != SubscriptionStatusSuspended && !sub.ExpiresAt.After(now)) {
 			validityDays := normalizeAssignValidityDays(input.ValidityDays)
-			if err := s.updateExistingSubscriptionTerm(ctx, sub.ID, validityDays, input.Notes, true); err != nil {
+			newExpiresAt := sub.ExpiresAt.AddDate(0, 0, validityDays)
+			if sub.Status == SubscriptionStatusExpired || !sub.ExpiresAt.After(now) {
+				newExpiresAt = now.AddDate(0, 0, validityDays)
+			}
+			if err := s.updateExistingSubscriptionTerm(ctx, sub, input.Notes, now, newExpiresAt, true); err != nil {
 				return nil, false, err
 			}
 			s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)
@@ -942,7 +946,10 @@ func (s *SubscriptionService) List(ctx context.Context, page, pageSize int, user
 // normalizeExpiredWindows 将已过期窗口的数据清零（仅影响返回数据，不影响数据库）
 // 这确保前端显示正确的当前窗口状态，而不是过期窗口的历史数据
 func normalizeExpiredWindows(subs []UserSubscription) {
-	now := time.Now()
+	normalizeExpiredWindowsAt(subs, time.Now())
+}
+
+func normalizeExpiredWindowsAt(subs []UserSubscription, now time.Time) {
 	for i := range subs {
 		sub := &subs[i]
 		if sub.NeedsQuotaCycleResetAt(now) {
@@ -1005,8 +1012,19 @@ func (s *SubscriptionService) checkAndActivateWindowAt(ctx context.Context, sub 
 
 	// 使用当天零点作为窗口起始时间
 	windowStart := startOfDay(time.Now())
-	if err := s.userSubRepo.ActivateWindows(ctx, sub.ID, windowStart); err != nil {
-		return err
+	var activateErr error
+	switch repo := s.userSubRepo.(type) {
+	case interface {
+		ActivateWindows(context.Context, int64, time.Time, time.Time) error
+	}:
+		activateErr = repo.ActivateWindows(ctx, sub.ID, windowStart, windowStart)
+	case interface {
+		ActivateWindows(context.Context, int64, time.Time) error
+	}:
+		activateErr = repo.ActivateWindows(ctx, sub.ID, windowStart)
+	}
+	if activateErr != nil {
+		return activateErr
 	}
 	sub.DailyWindowStart = &windowStart
 	sub.WeeklyWindowStart = &windowStart

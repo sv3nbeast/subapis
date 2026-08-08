@@ -55,6 +55,8 @@ const (
 	// Service 层在 SingleAccountRetry 模式下已做充分原地重试（最多 3 次、总等待 30s），
 	// Handler 层只需短暂间隔后重新进入 Service 层即可。
 	singleAccountBackoffDelay = 2 * time.Second
+	// maxProfitVetoAttempts limits request-scoped retries rejected by group profit control.
+	maxProfitVetoAttempts = 10
 
 	// Legacy Kiro behavior is retained behind off/observe so rollout can be
 	// reverted without a binary rollback. Enforce mode never enters this path.
@@ -67,6 +69,8 @@ const (
 	kiro429DecisionExclude       = "exclude_account"
 	kiro429DecisionExhausted     = "exhausted"
 )
+
+const profitVetoExhaustedMessage = "No available accounts: all candidates rejected by group profit control"
 
 // Kept as a variable so failover state tests can exercise the transition
 // without sleeping five real seconds. Production value is fixed by the
@@ -97,6 +101,8 @@ type FailoverState struct {
 	hasBoundSession          bool
 	earliestKiroRetryAt      time.Time
 	lastNonRateLimitWasKiro  bool
+	profitVetoedAccountIDs   map[int64]struct{}
+	profitVetoCount          int
 }
 
 // NewFailoverState 创建 failover 状态
@@ -112,7 +118,46 @@ func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 		AvoidEmailDomainSuffixes: make(map[string]struct{}),
 		ModelCapacityRetryState:  service.NewModelCapacityRetryState(0),
 		hasBoundSession:          hasBoundSession,
+		profitVetoedAccountIDs:   make(map[int64]struct{}),
 	}
+}
+
+func (s *FailoverState) RecordProfitVeto(accountID int64) FailoverAction {
+	if s == nil {
+		return FailoverExhausted
+	}
+	if s.FailedAccountIDs == nil {
+		s.FailedAccountIDs = make(map[int64]struct{})
+	}
+	s.FailedAccountIDs[accountID] = struct{}{}
+	if s.profitVetoedAccountIDs == nil {
+		s.profitVetoedAccountIDs = make(map[int64]struct{})
+	}
+	s.profitVetoedAccountIDs[accountID] = struct{}{}
+	s.profitVetoCount++
+	if s.profitVetoCount >= maxProfitVetoAttempts {
+		return FailoverExhausted
+	}
+	return FailoverContinue
+}
+
+func (s *FailoverState) ProfitVetoCount() int {
+	if s == nil {
+		return 0
+	}
+	return s.profitVetoCount
+}
+
+func (s *FailoverState) allExclusionsAreProfitVetoed() bool {
+	if s == nil || len(s.profitVetoedAccountIDs) == 0 || len(s.FailedAccountIDs) == 0 {
+		return false
+	}
+	for id := range s.FailedAccountIDs {
+		if _, ok := s.profitVetoedAccountIDs[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *FailoverState) RecordAvoidEmailDomainSuffix(suffix string) {

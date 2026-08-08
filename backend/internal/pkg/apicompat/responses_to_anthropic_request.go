@@ -322,14 +322,8 @@ func convertResponsesInputToAnthropicWithPairing(instructions string, inputRaw j
 			}
 
 		default:
-			// Unknown role/type — attempt as user message
-			if item.Content != nil {
-				flushPendingUser()
-				messages = append(messages, AnthropicMessage{
-					Role:    "user",
-					Content: item.Content,
-				})
-			}
+			// Unknown role/type — sanitize content through the same whitelist as user messages.
+			flushPendingUser()
 			content, err := convertResponsesUserToAnthropicContent(item.Content)
 			if err != nil {
 				return nil, nil, err
