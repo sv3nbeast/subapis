@@ -75,11 +75,28 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	useGrokResponses := account.Platform == PlatformGrok && shouldUseGrokResponsesForChat(c, body)
-	if account.Platform == PlatformGrok && !useGrokResponses {
-		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	if account.Platform == PlatformGrok {
+		if !useGrokResponses {
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+		// The group mode decides whether /responses is permitted. Once enabled,
+		// compatible Grok OAuth Chat requests must retain the specialized bridge:
+		// it preserves cache identity, tool history and CLI conversation headers
+		// that the generic converter cannot represent without loss.
+		if account.IsGrokOAuth() {
+			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {
+				return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+			} else {
+				logger.L().Debug("grok chat_completions: using raw fallback",
+					zap.Int64("account_id", account.ID),
+					zap.String("reason", reason),
+				)
+				return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+			}
+		}
 	}
 
-	// 入口分流：APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
+	// 入口分流：APIKey 账号 + 强制或已探测确认不支持 Responses，走 CC 直转。
 	// 自动模式下标记缺失（未探测）按"现状即证据"原则继续走下方原 Responses 转换路径。
 	if account.Platform != PlatformGrok && account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)

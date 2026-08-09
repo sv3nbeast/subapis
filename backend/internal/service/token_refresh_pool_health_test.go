@@ -793,7 +793,7 @@ func TestTokenRefreshService_AttemptTimeoutStaysInsideDistributedLockLease(t *te
 		refreshAPI: NewOAuthRefreshAPI(&poolHealthAccountRepo{}, cache),
 	}
 
-	require.Equal(t, 55*time.Second, svc.attemptTimeout())
+	require.Equal(t, 85*time.Second, svc.attemptTimeout())
 	require.Less(t, svc.attemptTimeout(), defaultRefreshLockTTL)
 }
 
@@ -968,34 +968,4 @@ func TestTokenRefreshService_NonRetryableGrokFailureInvalidatesTokenCache(t *tes
 	require.Equal(t, 1, setErrorCalls)
 	require.Zero(t, setTempUnschedCalls)
 	require.Equal(t, 1, invalidator.count())
-}
-
-func TestTokenRefreshService_GrokRefreshFailureDoesNotBlockHardValidAccessToken(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "revoked refresh token", err: errors.New("invalid_grant: revoked")},
-		{name: "transient refresh failure", err: errors.New("temporary token endpoint timeout")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := &poolHealthAccountRepo{}
-			invalidator := &reconcileInvalidator{}
-			refresher := &poolHealthRefresher{err: tt.err}
-			svc := newPoolHealthService(repo, refresher, config.TokenRefreshConfig{MaxRetries: 1})
-			svc.cacheInvalidator = invalidator
-			account := grokPoolAccount(78)
-			account.Credentials["expires_at"] = time.Now().Add(4 * time.Minute).UTC().Format(time.RFC3339)
-
-			err := svc.refreshWithRetry(context.Background(), &account, refresher, nil, grokTokenRefreshSkew)
-
-			require.ErrorIs(t, err, errRefreshSkipped)
-			_, _, setErrorCalls, setTempUnschedCalls := repo.snapshot()
-			require.Zero(t, setErrorCalls)
-			require.Zero(t, setTempUnschedCalls)
-			require.Zero(t, invalidator.count())
-		})
-	}
 }

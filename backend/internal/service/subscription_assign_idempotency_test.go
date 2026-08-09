@@ -268,6 +268,13 @@ func (s *subscriptionUserSubRepoStub) GetByID(_ context.Context, id int64) (*Use
 	return &cp, nil
 }
 
+// The production renewal path locks and reloads the row before calculating the
+// new term. This in-memory repository has no concurrent backing store, so its
+// read is the test equivalent of that locked reload.
+func (s *subscriptionUserSubRepoStub) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
+	return s.GetByID(ctx, id)
+}
+
 func (s *subscriptionUserSubRepoStub) ExtendExpiry(_ context.Context, id int64, expiresAt time.Time) error {
 	sub := s.byID[id]
 	if sub == nil {
@@ -632,6 +639,9 @@ func TestAssignOrExtendSubscriptionExpiredRenewalResetsUsage(t *testing.T) {
 		DailyUsageUSD:      12.3,
 		WeeklyUsageUSD:     123.4,
 		MonthlyUsageUSD:    456.7,
+		QuotaCycleStartAt:  &oldDailyWindow,
+		QuotaCycleEndAt:    &expiredAt,
+		QuotaCycleDays:     30,
 		Notes:              "old",
 	})
 
@@ -649,14 +659,23 @@ func TestAssignOrExtendSubscriptionExpiredRenewalResetsUsage(t *testing.T) {
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)
-	require.Equal(t, 1, subRepo.resetDailyCalls)
-	require.Equal(t, 1, subRepo.resetWeeklyCalls)
-	require.Equal(t, 1, subRepo.resetMonthlyCalls)
+	// Expired renewals persist one locked record update. Do not split it into
+	// per-window resets, otherwise a concurrent renewal can mix old and new
+	// window anchors.
+	require.Zero(t, subRepo.resetDailyCalls)
+	require.Zero(t, subRepo.resetWeeklyCalls)
+	require.Zero(t, subRepo.resetMonthlyCalls)
 	require.NotNil(t, sub.DailyWindowStart)
 	require.NotNil(t, sub.WeeklyWindowStart)
 	require.NotNil(t, sub.MonthlyWindowStart)
-	require.Equal(t, sub.DailyWindowStart, sub.WeeklyWindowStart)
-	require.Equal(t, sub.DailyWindowStart, sub.MonthlyWindowStart)
+	require.Equal(t, timezone.StartOfDay(sub.StartsAt), *sub.DailyWindowStart)
+	require.Equal(t, sub.StartsAt, *sub.WeeklyWindowStart)
+	require.Equal(t, sub.StartsAt, *sub.MonthlyWindowStart)
+	require.NotNil(t, sub.QuotaCycleStartAt)
+	require.NotNil(t, sub.QuotaCycleEndAt)
+	require.Equal(t, sub.StartsAt, *sub.QuotaCycleStartAt)
+	require.Equal(t, sub.ExpiresAt, *sub.QuotaCycleEndAt)
+	require.Equal(t, 30, sub.QuotaCycleDays)
 	require.Contains(t, sub.Notes, "payment order 1")
 	require.True(t, sub.ExpiresAt.After(time.Now()))
 }

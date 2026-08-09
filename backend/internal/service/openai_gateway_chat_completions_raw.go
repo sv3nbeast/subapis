@@ -150,6 +150,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
 	customUA := account.GetOpenAIUserAgent()
 	if customUA == "" && account.Platform == PlatformGrok {
 		// Free Build needs grok-shell UA; official api.x.ai keeps gateway UA.
@@ -188,6 +189,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
+					ResponseHeaders:        resp.Header.Clone(),
 					RetryableOnSameAccount: shouldRetryOpenAIAccountOnSameAccount(account, resp.StatusCode, respBody, false),
 				}
 			}

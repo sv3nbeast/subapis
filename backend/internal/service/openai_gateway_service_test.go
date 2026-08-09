@@ -1884,6 +1884,15 @@ func TestOpenAIStreamingResponseFailedAfterOutputSanitizesVerboseResponseForClie
 	require.NotContains(t, body, `"instructions"`)
 	require.NotContains(t, body, `"output"`)
 	require.NotContains(t, body, `"usage"`)
+
+	opsValue, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok, "已向客户端输出后 response.failed 仍必须记录上游错误")
+	opsEvents, ok := opsValue.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, opsEvents, 1)
+	require.Equal(t, "stream_terminal_failed", opsEvents[0].Kind)
+	require.False(t, opsEvents[0].Passthrough)
+	require.Equal(t, "rid-failed-after-output", opsEvents[0].UpstreamRequestID)
 }
 
 func TestOpenAIStreamingContextWindowResponseFailedBeforeOutputPassesThrough(t *testing.T) {
@@ -2530,6 +2539,15 @@ func TestOpenAIStreamingPassthroughResponseFailedAfterOutputSanitizesVerboseResp
 	require.NotContains(t, body, `"instructions"`)
 	require.NotContains(t, body, `"output"`)
 	require.NotContains(t, body, `"usage"`)
+
+	opsValue, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok, "透传流在已输出后失败也必须记录上游错误")
+	opsEvents, ok := opsValue.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, opsEvents, 1)
+	require.Equal(t, "stream_terminal_failed", opsEvents[0].Kind)
+	require.True(t, opsEvents[0].Passthrough)
+	require.Equal(t, "rid-pass-failed-after-output", opsEvents[0].UpstreamRequestID)
 }
 
 func TestOpenAIStreamingPassthroughResponseDoneWithoutDoneMarkerStillSucceeds(t *testing.T) {

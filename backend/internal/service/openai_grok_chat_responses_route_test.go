@@ -57,7 +57,10 @@ func TestForwardAsChatCompletionsForGrokResponsesRoute(t *testing.T) {
 		},
 		Body: io.NopCloser(strings.NewReader(upstreamBody)),
 	}}
-	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 	require.NoError(t, err)

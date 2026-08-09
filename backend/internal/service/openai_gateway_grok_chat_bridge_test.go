@@ -230,7 +230,7 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7101})
+	c.Set("api_key", &APIKey{ID: 7101, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(71)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
@@ -306,7 +306,7 @@ func TestForwardGrokChatViaResponsesCodeBuddyUsesStableConversationHeader(t *tes
 			c.Request.Header.Set("X-Conversation-Request-ID", tt.requestID)
 			c.Request.Header.Set("X-Conversation-Message-ID", tt.messageID)
 			c.Request.Header.Set("X-Request-ID", "generic-"+tt.requestID)
-			c.Set("api_key", &APIKey{ID: 7111})
+			c.Set("api_key", &APIKey{ID: 7111, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 			identity := resolveGrokCacheIdentity(c, tt.body, "", "grok-4.5")
 			require.NotEmpty(t, identity)
@@ -348,7 +348,7 @@ func TestForwardGrokChatViaResponsesTraeToolHistoryKeepsCacheRoute(t *testing.T)
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
 	c.Request.Header.Set(grokClientToolCacheOptInHeader, "prefer-cache")
-	c.Set("api_key", &APIKey{ID: 7151})
+	c.Set("api_key", &APIKey{ID: 7151, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(715)
 	account.Credentials["subscription_tier"] = "free"
@@ -405,7 +405,7 @@ func TestForwardGrokChatViaResponsesTraeCompatibilityFieldsKeepCacheRoute(t *tes
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7161})
+	c.Set("api_key", &APIKey{ID: 7161, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(716)
 	account.Credentials["subscription_tier"] = "free"
@@ -456,7 +456,7 @@ func TestForwardGrokChatViaResponsesStreamingPropagatesCachedUsage(t *testing.T)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7201})
+	c.Set("api_key", &APIKey{ID: 7201, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(72)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
@@ -543,7 +543,7 @@ func TestForwardGrokChatViaResponses429UsesGrokRateLimitPolicy(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 7501})
+	c.Set("api_key", &APIKey{ID: 7501, Group: &Group{Platform: PlatformGrok, GrokChatUpstreamMode: GrokChatUpstreamModeResponses}})
 
 	account := grokChatBridgeTestAccount(75)
 	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
@@ -574,7 +574,9 @@ func TestForwardGrokChatViaResponses429UsesGrokRateLimitPolicy(t *testing.T) {
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 	require.Equal(t, grokChatResponsesEndpoint, GetActualOpenAIUpstreamEndpoint(c))
 	require.Equal(t, 1, repo.rateLimitedCalls)
-	require.Zero(t, repo.tempUnschedCalls)
+	// A generic 429 both records the quota window and temporarily removes the
+	// credential from scheduling until Retry-After; this mirrors the raw path.
+	require.Equal(t, 1, repo.tempUnschedCalls)
 	require.WithinDuration(t, before.Add(45*time.Second), repo.lastRateLimitResetAt, time.Second)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }

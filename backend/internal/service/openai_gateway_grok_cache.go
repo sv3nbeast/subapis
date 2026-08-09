@@ -522,7 +522,9 @@ func applyGrokCacheHeaders(headers http.Header, identity string) {
 	}
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
-		headers.Del(grokConversationIDHeader)
+		// The shared Grok Build CLI transport may already have installed its
+		// tenant-isolated conversation UUID from prompt_cache_key. Do not erase
+		// that identity merely because this legacy cache route has no override.
 		return
 	}
 	headers.Set(grokConversationIDHeader, identity)

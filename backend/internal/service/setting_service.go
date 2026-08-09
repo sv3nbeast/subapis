@@ -114,7 +114,7 @@ type cachedAntigravityUserAgentVersion struct {
 }
 
 // DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）
-const DefaultOpenAICodexUserAgent = "codex-tui/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)"
+const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {
@@ -1633,7 +1633,10 @@ func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) s
 	if rebuilt := openai.SetCodexUserAgentVersion(ua, version); rebuilt != "" {
 		return rebuilt
 	}
-	return buildCodexCLIUserAgent(version)
+	// Let the identity pairing layer reject non-Codex shapes and choose its
+	// canonical fallback; do not silently turn an explicit custom value into a
+	// different fingerprint here.
+	return ua
 }
 
 // InvalidateOpenAICodexClientVersionCache is retained as the cache-invalidation

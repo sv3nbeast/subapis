@@ -1178,7 +1178,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if eventType == "error" {
 					s.handleOpenAIWSErrorEventTransientFailure(ctx, account, capturedSessionModel, handshakeHeaders, payload)
 				}
-				if wroteDownstream || eventType != "error" {
+				if wroteDownstream || (eventType != "error" && eventType != "response.failed") {
+					return nil
+				}
+				if isUpstreamAccountModelUnsupportedError(http.StatusBadRequest, payload) {
+					logOpenAIWSV2Passthrough(
+						"relay_account_model_unsupported_failover account_id=%d event=%s",
+						account.ID,
+						truncateOpenAIWSLogValue(eventType, openAIWSLogValueMaxLen),
+					)
+					return s.newOpenAIAccountModelUnsupportedFailover(
+						ctx,
+						c,
+						account,
+						handshakeHeaders,
+						payload,
+						requestModel,
+					)
+				}
+				if eventType != "error" {
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)

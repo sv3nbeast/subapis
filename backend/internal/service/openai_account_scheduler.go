@@ -1243,8 +1243,8 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 				continue
 			}
 		}
-		if s.shouldBindOpenAISelectionBeforeSuccess(req, fresh) {
-			_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
+		if s.shouldBindOpenAISelectionBeforeSuccess(ctx, req, fresh) {
+			_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, fresh.ID)
 		}
 		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 			Account:     fresh,
@@ -1318,8 +1318,8 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			return nil, acquireErr
 		}
 		if result != nil && result.Acquired {
-			if s.shouldBindOpenAISelectionBeforeSuccess(req, account) {
-				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, account.ID)
+			if s.shouldBindOpenAISelectionBeforeSuccess(ctx, req, account) {
+				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
 			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 				Account:     account,
@@ -1343,12 +1343,12 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 	return nil, nil
 }
 
-func (s *defaultOpenAIAccountScheduler) shouldBindOpenAISelectionBeforeSuccess(req OpenAIAccountScheduleRequest, account *Account) bool {
+func (s *defaultOpenAIAccountScheduler) shouldBindOpenAISelectionBeforeSuccess(ctx context.Context, req OpenAIAccountScheduleRequest, account *Account) bool {
 	if strings.TrimSpace(req.SessionHash) == "" || req.PreserveStickyBinding || req.DeferStickyMigration {
 		return false
 	}
 	if req.AllowKiroBridge && s != nil && s.service != nil && s.service.kiroBridgeService != nil {
-		return s.service.kiroBridgeService.shouldBindSelectionBeforeSuccess(account, req.GroupID, req.SessionHash, false, false)
+		return s.service.kiroBridgeService.shouldBindSelectionBeforeSuccess(ctx, account, req.GroupID, req.SessionHash, false, false)
 	}
 	return true
 }
@@ -1428,6 +1428,12 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				continue
 			}
 		}
+		// Check the named profit veto before the shared eligibility predicate so
+		// exhausted-pool errors retain the actionable threshold reason.
+		if vetoed, reason := openAIProfitControlVetoReason(ctx, account); vetoed {
+			filterStats.exclude(reason)
+			continue
+		}
 		if !s.service.isAccountEligibleForOpenAISchedule(ctx, account, req) {
 			filterStats.exclude("not_eligible")
 			continue
@@ -1469,7 +1475,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		if cooldownErr := s.kiroBridgeCooldownExhausted(ctx, req); cooldownErr != nil {
 			return nil, 0, 0, 0, cooldownErr
 		}
-		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
+		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, filterStats.summary(""))
 	}
 
 	loadMap := map[int64]*AccountLoadInfo{}
@@ -2272,15 +2278,11 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	kiroBridgeModel string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
-	// 分组利润控制：唯一文本调度入口的防御性装门。handler 文本
-	// 入口已在请求开始经 WithOpenAIRequestPricingContext 装门并固定 pricingAt，
-	// 此处对同分组门直接复用（failover 重入阈值稳定），仅为不经 handler 装配的
-	// 内部调用兜底。图片/视频调度不在利润门范围：requiredImageCapability 非空的
-	// Images 调度不装门；requiredCapability == OpenAIEndpointCapabilityResponses
-	// 当前仅显式生图意图的 /v1/responses 设置（HTTP openAIResponsesRequiredCapability
-	// 与 WS 桥同款判定），同样不装门——若未来把该 capability 用于非生图流量，
-	// 需要同步收窄本条件（有测试钉死该映射）。
-	if requiredImageCapability == "" && requiredCapability != OpenAIEndpointCapabilityResponses {
+	// 分组利润控制：唯一文本调度入口的防御性装门。handler 文本入口已在请求
+	// 开始处装门并固定 pricingAt，此处对同分组门直接复用，仅为不经 handler
+	// 装配的内部调用兜底。只有专用图片调度不在利润门范围；Responses 请求
+	// 即使声明 image_generation 工具，仍可能产生文本 token，不能绕过准入门。
+	if requiredImageCapability == "" {
 		ctx = s.withOpenAIProfitControlGate(ctx, groupID)
 	}
 	platform = normalizeOpenAICompatiblePlatform(platform)

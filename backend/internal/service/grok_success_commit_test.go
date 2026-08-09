@@ -494,7 +494,7 @@ func TestGrokSuccessCommitCoversAllResponsePaths(t *testing.T) {
 		resp := &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     grokSuccessTestHeaders("application/json"),
-			Body:       io.NopCloser(strings.NewReader(`{"data":[]}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"url":"https://images.test/success.png"}]}`)),
 		}
 		svc := newGrokSuccessTestService(repo, resp)
 		counter := attachGrokSuccessCounter(svc)

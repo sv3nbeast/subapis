@@ -109,8 +109,8 @@ func TestProfitControl_UsesAccountRateInsteadOfProbeSnapshot(t *testing.T) {
 	require.Equal(t, openAIProfitFilterReasonThreshold, reason)
 }
 
-// 显式生图意图（requiredCapability=Responses）在唯一调度入口跳门（图片边界不装门）。
-func TestProfitControl_ResponsesImageIntentSkipsGateAtScheduler(t *testing.T) {
+// 仅专用图片调度（requiredImageCapability）跳过利润门；/responses 即使声明生图工具仍可能产生 token，必须受门保护。
+func TestProfitControl_DedicatedImagesSkipGateAtScheduler(t *testing.T) {
 	now := time.Now()
 	expensive := upstreamCostTestAccount(51, UpstreamBillingProbeStatusOK, 0.8, now.Add(-time.Minute), 30*time.Minute)
 	expensive.Status = StatusActive
@@ -128,8 +128,8 @@ func TestProfitControl_ResponsesImageIntentSkipsGateAtScheduler(t *testing.T) {
 	_, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "", "", "gpt-test", nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityChatCompletions, false, false, true)
 	require.ErrorIs(t, err, ErrNoAvailableAccounts, "文本能力必须过利润门")
 
-	selection, _, err := svc.SelectAccountWithSchedulerForCapability(ctx, &groupID, "", "", "gpt-test", nil, OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityResponses, false, false, true)
-	require.NoError(t, err, "生图意图不装门，保持既有调度")
+	selection, _, err := svc.SelectAccountWithSchedulerForImages(ctx, &groupID, "", "gpt-test", nil, OpenAIImagesCapabilityBasic)
+	require.NoError(t, err, "专用图片端点不装利润门，保持既有调度")
 	require.NotNil(t, selection)
 	require.Equal(t, expensive.ID, selection.Account.ID)
 	if selection.ReleaseFunc != nil {

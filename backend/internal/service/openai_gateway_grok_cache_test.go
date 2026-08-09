@@ -340,8 +340,10 @@ func TestApplyGrokCacheIdentityWritesResponsesBodyAndHeader(t *testing.T) {
 	headers.Set(grokConversationIDHeader, "spoofed-client-value")
 	applyGrokCacheHeaders(headers, "isolated-id")
 	require.Equal(t, "isolated-id", headers.Get(grokConversationIDHeader))
+	// An empty cache identity must not erase the isolated server-side identity
+	// already selected for the shared Grok Build transport.
 	applyGrokCacheHeaders(headers, "")
-	require.Empty(t, headers.Get(grokConversationIDHeader))
+	require.Equal(t, "isolated-id", headers.Get(grokConversationIDHeader))
 
 	chatBody, err := stripGrokChatPromptCacheKey(body)
 	require.NoError(t, err)

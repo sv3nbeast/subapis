@@ -1114,7 +1114,12 @@ func (s *GatewayService) applyKiroSelectionBindingPolicy(selection *AccountSelec
 		(strings.TrimSpace(sessionHash) != "" && selection.Account != nil && selection.Account.Platform == PlatformKiro && s.kiroResilienceEnforced(groupID)))
 }
 
-func (s *GatewayService) shouldBindSelectionBeforeSuccess(account *Account, groupID *int64, sessionHash string, preserve, deferMigration bool) bool {
+func (s *GatewayService) shouldBindSelectionBeforeSuccess(ctx context.Context, account *Account, groupID *int64, sessionHash string, preserve, deferMigration bool) bool {
+	// Profit-controlled routes bind only after terminal admission; an early
+	// selection must not replace a still-admissible sticky account.
+	if gatewayProfitControlGateActive(ctx) {
+		return false
+	}
 	if strings.TrimSpace(sessionHash) == "" || preserve || deferMigration {
 		return false
 	}

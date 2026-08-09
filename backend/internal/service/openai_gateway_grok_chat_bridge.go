@@ -633,13 +633,17 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
 
-	s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
-
+	// Commit Grok quota and health only after the entire translated response has
+	// a valid terminal event. Updating from headers before that point marks a
+	// truncated stream as a successful account turn.
 	var result *OpenAIForwardResult
 	if clientStream {
 		result, err = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
 		result, err = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	if err == nil && result != nil {
+		s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 	}
 	if result != nil {
 		result.UpstreamEndpoint = grokChatResponsesEndpoint

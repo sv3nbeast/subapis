@@ -1256,10 +1256,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	} else {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Originator", "codex_cli_rs")
-	req.Header.Set("User-Agent", codexCLIUserAgent)
-	req.Header.Set("Version", codexCLIVersion)
+	applyOpenAICodexProbeHeaders(req.Header)
 	probeSessionID := compactProbeSessionID(account.ID)
 	req.Header.Set("Session_ID", probeSessionID)
 	req.Header.Set("Conversation_ID", probeSessionID)
@@ -1271,12 +1268,6 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
-	// API-key probes also use the Codex-compatible identity fingerprint so
-	// providers that gate /responses/compact by client identity see a complete
-	// probe request, including the per-request window id.
-	if !isOAuth {
-		applyOpenAICodexProbeHeaders(req.Header)
-	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
