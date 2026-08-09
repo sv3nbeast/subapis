@@ -2640,6 +2640,20 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
+// shouldRunOpenAIWSIngressPreflightPing only permits a preflight ping when the
+// connection can process its pong without an active reader. coder/websocket
+// cannot do that on an idle pooled connection; calling Ping there converts a
+// healthy long-lived session into a deterministic timeout.
+func shouldRunOpenAIWSIngressPreflightPing(turn, turnRetry int, lease *openAIWSConnLease, lastTurnFinishedAt time.Time) bool {
+	if turn <= 1 || turnRetry != 0 || lease == nil || !lease.SupportsIdlePingWithoutReader() {
+		return false
+	}
+	if openAIWSIngressPreflightPingIdle <= 0 || lastTurnFinishedAt.IsZero() {
+		return true
+	}
+	return time.Since(lastTurnFinishedAt) >= openAIWSIngressPreflightPingIdle
+}
+
 func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	ctx context.Context,
 	c *gin.Context,
@@ -3288,19 +3302,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		acquireTimeout = 30 * time.Second
 	}
 
-	acquireTurnLease := func(turn int, preferred string, forcePreferredConn bool) (*openAIWSConnLease, error) {
+	acquireTurnLease := func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
 		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文。
-		req.ForceNewConn = dedicatedMode
+		// 对于首个客户端可见事件前发生的上游读写失败，也必须强制新建。
+		// 此时原连接已经被标记 broken；继续从 ctx_pool 取另一条空闲连接会
+		// 重复命中同一批未被 reader 驱动、可能已被上游关闭的陈旧连接。
+		req.ForceNewConn = dedicatedMode || forceNewConn
+		if req.ForceNewConn {
+			req.PreferredConnID = ""
+			req.ForcePreferredConn = false
+		}
 		acquireCtx, acquireCancel := context.WithTimeout(ctx, acquireTimeout)
 		lease, acquireErr := pool.Acquire(acquireCtx, req)
 		acquireCancel()
 		if acquireErr != nil {
 			dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(acquireErr)
 			logOpenAIWSModeInfo(
-				"ingress_ws_upstream_acquire_fail account_id=%d turn=%d reason=%s dial_status=%d dial_class=%s dial_close_status=%s dial_close_reason=%s dial_resp_server=%s dial_resp_via=%s dial_resp_cf_ray=%s dial_resp_x_request_id=%s cause=%s preferred_conn_id=%s force_preferred_conn=%v ws_host=%s ws_path=%s proxy_enabled=%v",
+				"ingress_ws_upstream_acquire_fail account_id=%d turn=%d reason=%s dial_status=%d dial_class=%s dial_close_status=%s dial_close_reason=%s dial_resp_server=%s dial_resp_via=%s dial_resp_cf_ray=%s dial_resp_x_request_id=%s cause=%s preferred_conn_id=%s force_preferred_conn=%v force_new_conn=%v ws_host=%s ws_path=%s proxy_enabled=%v",
 				account.ID,
 				turn,
 				normalizeOpenAIWSLogValue(classifyOpenAIWSAcquireError(acquireErr)),
@@ -3315,6 +3336,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				truncateOpenAIWSLogValue(acquireErr.Error(), openAIWSLogValueMaxLen),
 				truncateOpenAIWSLogValue(preferred, openAIWSIDValueMaxLen),
 				forcePreferredConn,
+				req.ForceNewConn,
 				wsHost,
 				wsPath,
 				account.ProxyID != nil && account.Proxy != nil,
@@ -3357,7 +3379,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			baseAcquireReq.Headers = updatedHeaders
 		}
 		logOpenAIWSModeInfo(
-			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
+			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s force_new_conn=%v",
 			account.ID,
 			turn,
 			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
@@ -3365,6 +3387,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			lease.ConnPickDuration().Milliseconds(),
 			lease.QueueWaitDuration().Milliseconds(),
 			truncateOpenAIWSLogValue(preferred, openAIWSIDValueMaxLen),
+			req.ForceNewConn,
 		)
 		return lease, nil
 	}
@@ -3728,6 +3751,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	turn := 1
 	turnRetry := 0
+	forceFreshRetry := false
 	turnPrevRecoveryTried := false
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
@@ -3838,7 +3862,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnRetry++
 		logOpenAIWSModeInfo(
-			"ingress_ws_turn_retry account_id=%d turn=%d retry=%d reason=%s conn_id=%s",
+			"ingress_ws_turn_retry account_id=%d turn=%d retry=%d reason=%s conn_id=%s force_new_conn=true",
 			account.ID,
 			turn,
 			turnRetry,
@@ -3846,6 +3870,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
 		)
 		resetSessionLease(true)
+		forceFreshRetry = true
 		skipBeforeTurn = true
 		return true
 	}
@@ -4015,10 +4040,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		forcePreferredConn := isStrictAffinityTurn(currentPayload)
 		if sessionLease == nil {
-			acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn)
+			acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn, forceFreshRetry)
 			if acquireErr != nil {
 				return fmt.Errorf("acquire upstream websocket: %w", acquireErr)
 			}
+			forceFreshRetry = false
 			sessionLease = acquiredLease
 			sessionConnID = strings.TrimSpace(sessionLease.ConnID())
 			if storeDisabled {
@@ -4027,13 +4053,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				unpinSessionConn(sessionConnID)
 			}
 		}
-		shouldPreflightPing := turn > 1 && sessionLease != nil && turnRetry == 0
-		if shouldPreflightPing && openAIWSIngressPreflightPingIdle > 0 && !lastTurnFinishedAt.IsZero() {
-			if time.Since(lastTurnFinishedAt) < openAIWSIngressPreflightPingIdle {
-				shouldPreflightPing = false
-			}
-		}
-		if shouldPreflightPing {
+		if shouldRunOpenAIWSIngressPreflightPing(turn, turnRetry, sessionLease, lastTurnFinishedAt) {
 			if pingErr := sessionLease.PingWithTimeout(openAIWSConnHealthCheckTO); pingErr != nil {
 				logOpenAIWSModeInfo(
 					"ingress_ws_upstream_preflight_ping_fail account_id=%d turn=%d conn_id=%s cause=%s",
@@ -4123,7 +4143,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				resetSessionLease(true)
 
-				acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn)
+				acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn, true)
 				if acquireErr != nil {
 					return fmt.Errorf("acquire upstream websocket after preflight ping fail: %w", acquireErr)
 				}

@@ -44,6 +44,73 @@ func TestOpenAIWSConnPool_CleanupStaleAndTrimIdle(t *testing.T) {
 	require.NotNil(t, ap.conns["idle_new"], "newer idle should be kept")
 }
 
+func TestOpenAIWSConnPool_AcquireRetiresExpiredIdleConnWithoutReader(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+
+	account := &Account{ID: 101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1}
+	staleClient := &openAIWSIdlePingUnsupportedConn{}
+	staleConn := newOpenAIWSConn("unprobed_idle", account.ID, staleClient, nil)
+	staleConn.lastUsedNano.Store(time.Now().Add(-openAIWSConnHealthCheckIdle - time.Second).UnixNano())
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.conns[staleConn.id] = staleConn
+
+	lease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/backend-api/codex/responses",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.False(t, lease.Reused(), "无法在空闲时处理 ping 的过期连接不得复用")
+	require.Equal(t, 1, dialer.DialCount(), "应新建连接而不是把首个请求交给不可探测的旧连接")
+
+	staleClient.mu.Lock()
+	staleClosed := staleClient.closed
+	staleClient.mu.Unlock()
+	require.True(t, staleClosed, "被淘汰的不可探测连接必须关闭")
+
+	lease.MarkBroken()
+	lease.Release()
+}
+
+func TestOpenAIWSConnPool_AcquireKeepsStrictPreferredConnWhenIdlePingUnsupported(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+
+	account := &Account{ID: 102, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	strictConn := newOpenAIWSConn("strict_preferred", account.ID, &openAIWSIdlePingUnsupportedConn{}, nil)
+	strictConn.lastUsedNano.Store(time.Now().Add(-openAIWSConnHealthCheckIdle - time.Second).UnixNano())
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.conns[strictConn.id] = strictConn
+
+	lease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:            account,
+		WSURL:              "wss://example.com/backend-api/codex/responses",
+		PreferredConnID:    strictConn.id,
+		ForcePreferredConn: true,
+	})
+	require.NoError(t, err)
+	require.True(t, lease.Reused(), "严格续链必须保留其连接锚点")
+	require.Equal(t, strictConn.id, lease.ConnID())
+	require.Zero(t, dialer.DialCount())
+	lease.MarkBroken()
+	lease.Release()
+}
+
 func TestOpenAIWSConnPool_NextConnIDFormat(t *testing.T) {
 	pool := newOpenAIWSConnPool(&config.Config{})
 	id1 := pool.nextConnID(42)

@@ -868,6 +868,18 @@ retryAcquire:
 	now := time.Now()
 	if ap.lastCleanupAt.IsZero() || now.Sub(ap.lastCleanupAt) >= openAIWSAcquireCleanupInterval {
 		evicted = p.cleanupAccountLocked(ap, now, effectiveMaxConns)
+		// coder/websocket cannot process a peer ping while a pooled connection has
+		// no active reader. Such a socket cannot be probed safely, so do not trust it
+		// after the normal health-check idle window. This stays on the existing
+		// acquire cleanup cadence rather than adding an O(pool-size) scan to every
+		// hot-path acquire or continuously redialing min-idle connections.
+		protectedConnID := ""
+		if !req.ForceNewConn && req.ForcePreferredConn {
+			// 严格续链不能在此主动拆掉唯一可用的连接锚点；其可用性由调用方的
+			// fail-close/replay 语义处理。普通会话粘连仍可在此安全地重拨。
+			protectedConnID = stringsTrim(req.PreferredConnID)
+		}
+		evicted = append(evicted, p.evictExpiredUnprobedIdleConnsLocked(ap, now, protectedConnID)...)
 		ap.lastCleanupAt = now
 	}
 	pickStartedAt := time.Now()
@@ -1239,6 +1251,42 @@ func (p *openAIWSConnPool) pickOldestIdleConnLocked(ap *openAIWSAccountPool) *op
 		}
 	}
 	return oldest
+}
+
+// evictExpiredUnprobedIdleConnsLocked retires only idle connections that the
+// underlying client explicitly says cannot be pinged without a reader. A
+// normal health check cannot safely validate these sockets; once they have
+// crossed the health-check idle window, reuse can surface as broken pipe/EOF on
+// the next user request.
+//
+// The caller must hold ap.mu.
+func (p *openAIWSConnPool) evictExpiredUnprobedIdleConnsLocked(ap *openAIWSAccountPool, now time.Time, protectedConnID string) []*openAIWSConn {
+	if ap == nil || len(ap.conns) == 0 {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	evicted := make([]*openAIWSConn, 0)
+	protectedConnID = stringsTrim(protectedConnID)
+	for id, conn := range ap.conns {
+		if id == protectedConnID || conn == nil || conn.isLeased() || conn.waiters.Load() > 0 || p.isConnPinnedLocked(ap, id) {
+			continue
+		}
+		if conn.supportsIdlePingWithoutReader() || conn.idleDuration(now) < openAIWSConnHealthCheckIdle {
+			continue
+		}
+		delete(ap.conns, id)
+		if len(ap.pinnedConns) > 0 {
+			delete(ap.pinnedConns, id)
+		}
+		evicted = append(evicted, conn)
+	}
+	if len(evicted) > 0 {
+		ap.signalChangedLocked()
+	}
+	return evicted
 }
 
 func (p *openAIWSConnPool) pickOldestIdleConnWithoutHandshakeCompatibilityOrRoutingAffinityLocked(

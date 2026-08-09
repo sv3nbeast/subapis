@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	coderws "github.com/coder/websocket"
@@ -44,6 +45,37 @@ func TestIsOpenAIWSClientDisconnectError(t *testing.T) {
 			require.Equal(t, tt.want, isOpenAIWSClientDisconnectError(tt.err))
 		})
 	}
+}
+
+func TestShouldRunOpenAIWSIngressPreflightPing(t *testing.T) {
+	lastTurnFinishedAt := time.Now().Add(-openAIWSIngressPreflightPingIdle - time.Millisecond)
+	safeLease := &openAIWSConnLease{
+		conn: newOpenAIWSConn("preflight_safe", 1, &openAIWSFakeConn{}, nil),
+	}
+	unsafeLease := &openAIWSConnLease{
+		conn: newOpenAIWSConn("preflight_unsafe", 1, &openAIWSIdlePingUnsupportedConn{}, nil),
+	}
+
+	require.True(t, shouldRunOpenAIWSIngressPreflightPing(2, 0, safeLease, lastTurnFinishedAt))
+	require.False(t, shouldRunOpenAIWSIngressPreflightPing(2, 0, unsafeLease, lastTurnFinishedAt), "无 reader 时不能对 coder/websocket 执行 ping")
+	require.False(t, shouldRunOpenAIWSIngressPreflightPing(1, 0, safeLease, lastTurnFinishedAt))
+	require.False(t, shouldRunOpenAIWSIngressPreflightPing(2, 1, safeLease, lastTurnFinishedAt))
+	require.False(t, shouldRunOpenAIWSIngressPreflightPing(2, 0, safeLease, time.Now()))
+}
+
+func TestIsOpenAIWSIngressTurnRetryable(t *testing.T) {
+	require.True(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError("write_upstream", errors.New("broken pipe"), false),
+	))
+	require.True(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError("read_upstream", io.EOF, false),
+	))
+	require.False(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError("read_upstream", io.EOF, true),
+	), "下游已收到事件后不得重放请求")
+	require.False(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError("read_upstream", context.DeadlineExceeded, false),
+	))
 }
 
 func TestIsOpenAIWSIngressPreviousResponseNotFound(t *testing.T) {

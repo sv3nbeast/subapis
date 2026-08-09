@@ -3243,9 +3243,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
 	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
 	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
-	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
@@ -3370,6 +3370,17 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	firstTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_1", gjson.GetBytes(firstTurn, "response.id").String())
 
+	// 模拟连接池中同时残留另一条已失活的空闲连接。旧逻辑在首字节前写失败
+	// 后会从池中复用它，导致客户端仍拿不到 response.completed；修复后必须
+	// 无条件重新拨号，不能把重试交给另一条未知健康状态的池化连接。
+	pooledStale := &openAIWSWriteFailAfterFirstTurnConn{failOnWrite: true}
+	pooledStaleConn := newOpenAIWSConn("pooled_stale_retry_target", account.ID, pooledStale, nil)
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.mu.Lock()
+	ap.conns[pooledStaleConn.id] = pooledStaleConn
+	ap.signalChangedLocked()
+	ap.mu.Unlock()
+
 	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_turn_write_retry_1"}`)
 	secondTurn := readMessage()
 	require.Equal(t, "resp_turn_write_retry_2", gjson.GetBytes(secondTurn, "response.id").String())
@@ -3381,7 +3392,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_WriteFailBeforeD
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
-	require.Equal(t, 2, dialer.DialCount(), "第二轮 turn 上游写失败且未写下游时应自动重试并换连")
+	require.Equal(t, 2, dialer.DialCount(), "第二轮 turn 上游写失败且未写下游时应强制新建连接重试")
+	pooledStale.mu.Lock()
+	pooledStaleWrites := pooledStale.writeCount
+	pooledStale.mu.Unlock()
+	require.Zero(t, pooledStaleWrites, "重试不得复用池中另一条已失活连接")
 	hooksMu.Lock()
 	beforeTurn1 := beforeTurnCalls[1]
 	beforeTurn2 := beforeTurnCalls[2]
@@ -4042,11 +4057,13 @@ type openAIWSWriteFailAfterFirstTurnConn struct {
 	mu          sync.Mutex
 	events      [][]byte
 	failOnWrite bool
+	writeCount  int
 }
 
 func (c *openAIWSWriteFailAfterFirstTurnConn) WriteJSON(context.Context, any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.writeCount++
 	if c.failOnWrite {
 		return errors.New("write failed on stale conn")
 	}
