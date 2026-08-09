@@ -16,23 +16,21 @@
       <!-- Header: name + badge + price -->
       <div class="mb-4 flex items-start justify-between gap-3">
         <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span :class="['shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', badgeLightClass]">
-              {{ pLabel }}
-            </span>
-            <span v-if="isRenewal" class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-              {{ t('payment.renewNow') }}
-            </span>
-          </div>
-          <h3 class="mt-2 line-clamp-2 text-lg font-black leading-tight tracking-tight text-gray-950 dark:text-white">{{ plan.name }}</h3>
+          <h3
+            :title="plan.name"
+            class="h-12 min-w-0 break-words [overflow-wrap:anywhere] text-base font-bold leading-6 text-gray-950 dark:text-white line-clamp-2"
+          >
+            {{ plan.name }}
+          </h3>
           <p v-if="plan.description" class="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
             {{ plan.description }}
           </p>
         </div>
         <div class="shrink-0 text-right">
           <div class="flex items-baseline gap-1">
-            <span class="text-xs font-semibold text-gray-400 dark:text-dark-500">$</span>
+            <span class="text-xs font-semibold text-gray-400 dark:text-dark-500">{{ planCurrencySymbol }}</span>
             <span :class="['text-3xl font-black tracking-tight', textClass]">{{ plan.price }}</span>
+            <span v-if="plan.currency" class="text-xs font-medium text-gray-400 dark:text-dark-500">{{ plan.currency }}</span>
           </div>
           <div class="flex items-center justify-end gap-1">
             <span :class="['inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', badgeLightClass]">
@@ -41,7 +39,7 @@
             <span class="text-[11px] text-gray-400 dark:text-dark-500">/ {{ validitySuffix }}</span>
           </div>
           <div v-if="plan.original_price" class="mt-0.5 flex items-center justify-end gap-1.5">
-            <span class="text-xs text-gray-400 line-through dark:text-dark-500">${{ plan.original_price }}</span>
+            <span class="text-xs text-gray-400 line-through dark:text-dark-500">{{ planCurrencySymbol }}{{ plan.original_price }}<template v-if="plan.currency"> {{ plan.currency }}</template></span>
             <span :class="['rounded px-1 py-0.5 text-[10px] font-semibold', discountClass]">{{ discountText }}</span>
           </div>
         </div>
@@ -119,6 +117,8 @@ import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
+import { planValiditySuffix } from './validity'
+import { currencySymbol } from '@/components/payment/currency'
 import {
   platformAccentBarClass,
   platformBadgeLightClass,
@@ -161,6 +161,7 @@ const rateDisplay = computed(() => {
 })
 
 const appStore = useAppStore()
+const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency || 'USD'))
 
 const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
 
@@ -187,10 +188,5 @@ const modelQuotaEntries = computed(() =>
     .map(([model, ratio]) => ({ model, percent: Number((ratio * 100).toFixed(2)) })),
 )
 
-const validitySuffix = computed(() => {
-  const u = (props.plan.validity_unit || 'day').trim().toLowerCase()
-  if (u === 'month' || u === 'months') return t('payment.perMonth')
-  if (u === 'year' || u === 'years') return t('payment.perYear')
-  return `${props.plan.validity_days}${t('payment.days')}`
-})
+const validitySuffix = computed(() => planValiditySuffix(props.plan, t))
 </script>
