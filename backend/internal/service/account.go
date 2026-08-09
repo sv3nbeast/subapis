@@ -2086,6 +2086,19 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 	return ok && enabled
 }
 
+// IsAnthropicOAuthPassthroughEnabled reports whether an Anthropic OAuth or
+// SetupToken account opts into the native Claude Code request path.
+// The flag is deliberately separate from anthropic_passthrough, which is the
+// legacy API-key/Anthropic-compatible relay switch.
+// Field: accounts.extra.anthropic_oauth_passthrough.
+func (a *Account) IsAnthropicOAuthPassthroughEnabled() bool {
+	if a == nil || !a.IsAnthropicOAuthOrSetupToken() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra[anthropicOAuthPassthroughExtra].(bool)
+	return ok && enabled
+}
+
 // ValidateKiroCreditUnitPriceFromExtra validates account-level Kiro credit cost metadata.
 func ValidateKiroCreditUnitPriceFromExtra(extra map[string]any) error {
 	if extra == nil {

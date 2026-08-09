@@ -256,9 +256,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	service.CaptureAnthropicOAuthNativeIngressHeaders(c)
 
-	body = service.StripAnthropicBillingHeaderBlocks(body)
-	setOpsRequestContext(c, "", false, body)
+	// ParseGatewayRequest keeps the untouched ingress bytes for account-scoped
+	// Anthropic OAuth strict passthrough, while its working Body remains the
+	// existing billing-header-stripped representation used by all other paths.
+	setOpsRequestContext(c, "", false, service.StripAnthropicBillingHeaderBlocks(body))
 
 	bodyRef := service.NewRequestBodyRef(body)
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
@@ -1088,17 +1091,23 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 			}
-			// Bedrock CC 兼容：清理 body 专有字段 + 过滤 anthropic-beta header，适用于所有转发路径
-			if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
-				if queueRelease != nil {
-					queueRelease()
+			// Bedrock CC 兼容：清理 body 专有字段 + 过滤 anthropic-beta header。
+			// Native Anthropic OAuth passthrough is deliberately excluded: this
+			// compatibility layer rewrites both the body and anthropic-beta header
+			// before Forward, defeating byte/header fidelity even though Forward
+			// later reads OriginalBody.
+			if !h.gatewayService.ShouldUseAnthropicOAuthNativePassthrough(c.Request.Context(), c, account, attemptParsedReq) {
+				if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
+					if queueRelease != nil {
+						queueRelease()
+					}
+					attemptParsedReq.OnUpstreamAccepted = nil
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
+					h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+					return
 				}
-				attemptParsedReq.OnUpstreamAccepted = nil
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-				return
 			}
 			attemptBody := attemptParsedReq.Body.Bytes()
 
@@ -1242,6 +1251,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if errors.As(err, &failoverErr) {
 					// 流式内容已写入客户端，无法撤销，禁止 failover 以防止流拼接腐化
 					if c.Writer.Size() != writerSizeBeforeForward {
+						// Native passthrough may already have copied an upstream
+						// `event: error` frame. It is the terminal protocol frame;
+						// do not append a second gateway error frame.
+						if service.HasGatewaySSEErrorWritten(c) {
+							return
+						}
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)
 						return
 					}
@@ -2285,9 +2300,12 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	service.CaptureAnthropicOAuthNativeIngressHeaders(c)
 
-	body = service.StripAnthropicBillingHeaderBlocks(body)
-	setOpsRequestContext(c, "", false, body)
+	// Keep the untouched ingress bytes available to the optional OAuth strict
+	// passthrough path; ParseGatewayRequest still exposes the canonical stripped
+	// Body to routing and all legacy forwarding modes.
+	setOpsRequestContext(c, "", false, service.StripAnthropicBillingHeaderBlocks(body))
 
 	bodyRef := service.NewRequestBodyRef(body)
 	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)

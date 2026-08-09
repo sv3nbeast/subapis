@@ -4845,6 +4845,9 @@ const baseMessages = {
         apiKeyHint: 'Grok 订阅支持使用 OAuth refresh token；API Key 账号不在本次范围内。'
       },
       anthropic: {
+        oauthNativePassthrough: 'OAuth 原生严格透传',
+        oauthNativePassthroughDesc:
+          '仅对 Anthropic OAuth/SetupToken 的 Claude Code 请求生效。只替换认证并保留原始请求体、请求头和响应格式；非 Claude Code 请求继续使用兼容逻辑。默认关闭。',
         apiKeyPassthrough: '自动透传（仅替换认证）',
         apiKeyPassthroughDesc:
           '仅对 Anthropic API Key 生效。开启后，messages/count_tokens 请求将透传上游并仅替换认证，保留计费/并发/审计及必要安全过滤；关闭即可回滚到现有兼容链路。',

@@ -3412,6 +3412,38 @@
         </div>
       </div>
 
+      <!-- Anthropic OAuth/SetupToken 原生严格透传开关 -->
+      <div
+        v-if="form.platform === 'anthropic' && accountCategory === 'oauth-based'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.oauthNativePassthrough') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.oauthNativePassthroughDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="anthropicOAuthPassthroughEnabled"
+            @click="anthropicOAuthPassthroughEnabled = !anthropicOAuthPassthroughEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              anthropicOAuthPassthroughEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                anthropicOAuthPassthroughEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <div
         v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -4418,6 +4450,7 @@ const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
+const anthropicOAuthPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -5184,6 +5217,7 @@ watch(
     }
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
+      anthropicOAuthPassthroughEnabled.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
       webSearchEmulationMode.value = 'default'
     }
@@ -5219,6 +5253,9 @@ watch([accountCategory, () => form.platform], ([category, platform]) => {
     anthropicPassthroughEnabled.value = false
     anthropicAPIKeyAuthScheme.value = 'x_api_key'
     webSearchEmulationMode.value = 'default'
+  }
+  if (platform !== 'anthropic' || category !== 'oauth-based') {
+    anthropicOAuthPassthroughEnabled.value = false
   }
   if (platform === 'kiro') {
     if (category === 'apikey-relay' && form.priority === KIRO_DEFAULT_PRIORITY) {
@@ -5636,6 +5673,7 @@ const resetForm = () => {
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
   anthropicPassthroughEnabled.value = false
+  anthropicOAuthPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   // Reset quota control state
@@ -5782,26 +5820,38 @@ const buildOpenAICodexImportExtra = (): Record<string, unknown> | undefined => {
 
 const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
   const isAnthropicAPIKey = form.platform === 'anthropic' && accountCategory.value === 'apikey'
+  const isAnthropicOAuth = form.platform === 'anthropic' && accountCategory.value === 'oauth-based'
   const isKiroRelayAPIKey = form.platform === 'kiro' && accountCategory.value === 'apikey-relay'
-  if (!isAnthropicAPIKey && !isKiroRelayAPIKey) {
+  if (!isAnthropicAPIKey && !isKiroRelayAPIKey && !isAnthropicOAuth) {
     return base
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
-  if (isKiroRelayAPIKey || anthropicPassthroughEnabled.value) {
-    extra.anthropic_passthrough = true
-  } else {
-    delete extra.anthropic_passthrough
+  if (isAnthropicAPIKey || isKiroRelayAPIKey) {
+    if (isKiroRelayAPIKey || anthropicPassthroughEnabled.value) {
+      extra.anthropic_passthrough = true
+    } else {
+      delete extra.anthropic_passthrough
+    }
   }
-  if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
-    extra.anthropic_apikey_auth_scheme = 'authorization_bearer'
-  } else {
-    delete extra.anthropic_apikey_auth_scheme
+  if (isAnthropicOAuth) {
+    if (anthropicOAuthPassthroughEnabled.value) {
+      extra.anthropic_oauth_passthrough = true
+    } else {
+      delete extra.anthropic_oauth_passthrough
+    }
   }
-  if (webSearchEmulationMode.value === 'default') {
-    delete extra.web_search_emulation
-  } else {
-    extra.web_search_emulation = webSearchEmulationMode.value
+  if (isAnthropicAPIKey) {
+    if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
+      extra.anthropic_apikey_auth_scheme = 'authorization_bearer'
+    } else {
+      delete extra.anthropic_apikey_auth_scheme
+    }
+    if (webSearchEmulationMode.value === 'default') {
+      delete extra.web_search_emulation
+    } else {
+      extra.web_search_emulation = webSearchEmulationMode.value
+    }
   }
 
   return Object.keys(extra).length > 0 ? extra : undefined
@@ -7292,7 +7342,7 @@ const handleAnthropicExchange = async (authCode: string) => {
 
     // Build extra with quota control settings
     const baseExtra = oauth.buildExtraInfo(tokenInfo) || {}
-    const extra: Record<string, unknown> = { ...baseExtra }
+    const extra: Record<string, unknown> = { ...(buildAnthropicExtra(baseExtra) || {}) }
 
     // Add window cost limit settings
     if (windowCostEnabled.value && windowCostLimit.value != null && windowCostLimit.value > 0) {
@@ -7415,7 +7465,7 @@ const handleCookieAuth = async (sessionKey: string) => {
 
         // Build extra with quota control settings
         const baseExtra = oauth.buildExtraInfo(tokenInfo) || {}
-        const extra: Record<string, unknown> = { ...baseExtra }
+        const extra: Record<string, unknown> = { ...(buildAnthropicExtra(baseExtra) || {}) }
 
         // Add window cost limit settings
         if (windowCostEnabled.value && windowCostLimit.value != null && windowCostLimit.value > 0) {

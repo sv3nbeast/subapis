@@ -86,6 +86,92 @@ func TestAccount_IsAnthropicAPIKeyPassthroughEnabled(t *testing.T) {
 	})
 }
 
+func TestAccount_IsAnthropicOAuthPassthroughEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		account *Account
+		want    bool
+	}{
+		{
+			name: "OAuth enabled",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: true,
+		},
+		{
+			name: "SetupToken enabled",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeSetupToken,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: true,
+		},
+		{
+			name: "disabled by default",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+			},
+			want: false,
+		},
+		{
+			name: "wrong type",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": "true"},
+			},
+			want: false,
+		},
+		{
+			name: "API key cannot opt in",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeAPIKey,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: false,
+		},
+		{
+			name: "Bedrock cannot opt in",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeBedrock,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: false,
+		},
+		{
+			name: "Vertex service account cannot opt in",
+			account: &Account{
+				Platform: PlatformAnthropic,
+				Type:     AccountTypeServiceAccount,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: false,
+		},
+		{
+			name: "other platform cannot opt in",
+			account: &Account{
+				Platform: PlatformKiro,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"anthropic_oauth_passthrough": true},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.account.IsAnthropicOAuthPassthroughEnabled())
+		})
+	}
+}
+
 func TestAccount_GetAnthropicAPIKeyAuthScheme(t *testing.T) {
 	tests := []struct {
 		name    string

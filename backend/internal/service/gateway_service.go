@@ -6927,15 +6927,27 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
-	if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(parsed.Body.Bytes()); changed {
-		if err := parsed.ReplaceBody(normalizedBody); err != nil {
-			return nil, fmt.Errorf("normalize claude code date watermark: %w", err)
+	nativeOAuthPassthrough := s.shouldUseAnthropicOAuthNativePassthrough(ctx, c, account, parsed)
+	if !nativeOAuthPassthrough {
+		markAnthropicOAuthNativePassthroughFallback(c, account)
+	}
+	if !nativeOAuthPassthrough {
+		if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(parsed.Body.Bytes()); changed {
+			if err := parsed.ReplaceBody(normalizedBody); err != nil {
+				return nil, fmt.Errorf("normalize claude code date watermark: %w", err)
+			}
 		}
 	}
 	if account != nil && account.Platform == PlatformKiro {
 		ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	}
 
+	// Native Claude Code OAuth passthrough must run before every shared body
+	// normalization stage. It replaces only authentication and keeps the
+	// original request body/header values intact.
+	if nativeOAuthPassthrough {
+		return s.forwardAnthropicOAuthNativePassthrough(ctx, c, account, parsed, startTime)
+	}
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
@@ -12799,6 +12811,15 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
 	}
+	nativeOAuthPassthrough := s.shouldUseAnthropicOAuthNativePassthrough(ctx, c, account, parsed)
+	if nativeOAuthPassthrough {
+		if c != nil {
+			c.Set("anthropic_passthrough_mode", "native")
+			c.Set("anthropic_passthrough_fallback", "")
+		}
+		return s.forwardCountTokensAnthropicOAuthNativePassthrough(ctx, c, account, anthropicOAuthNativeBody(parsed))
+	}
+	markAnthropicOAuthNativePassthroughFallback(c, account)
 	if normalizedBody, changed := normalizeClaudeCodeDateWatermarkInAnthropicSystem(parsed.Body.Bytes()); changed {
 		if err := parsed.ReplaceBody(normalizedBody); err != nil {
 			return fmt.Errorf("normalize claude code date watermark: %w", err)

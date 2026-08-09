@@ -85,7 +85,11 @@ func TestParseGatewayRequest_StripsAnthropicBillingHeaderBlocks(t *testing.T) {
 
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), domain.PlatformAnthropic)
 	require.NoError(t, err)
+	require.Equal(t, body, parsed.OriginalBody, "strict passthrough must retain the untouched ingress bytes")
 	require.NotContains(t, string(parsed.Body.Bytes()), "x-anthropic-billing-header:")
+	clone, err := parsed.CloneForBody([]byte(`{"model":"claude-opus-5-alias"}`))
+	require.NoError(t, err)
+	require.Equal(t, body, clone.OriginalBody, "per-account failover clones must retain the untouched ingress bytes")
 
 	var system []any
 	require.NoError(t, json.Unmarshal(parsed.SystemRaw(), &system))

@@ -309,7 +309,8 @@ func DescribeInvalidJSON(body []byte) error {
 // 2. 将解析结果 ParsedRequest 传递给 Service 层
 // 3. 避免重复 json.Unmarshal，减少 CPU 和内存开销
 type ParsedRequest struct {
-	Body            *RequestBodyRef // 原始请求体引用（保留用于转发）；替换内容请走 ReplaceBody
+	Body            *RequestBodyRef // 规范化后的请求体引用；替换内容请走 ReplaceBody
+	OriginalBody    []byte          // 入站 Anthropic JSON 原始字节；严格透传使用，ReplaceBody 不修改
 	Model           string          // 请求的模型名称
 	Stream          bool            // 是否为流式请求
 	MetadataUserID  string          // metadata.user_id（用于会话亲和）
@@ -398,10 +399,14 @@ func normalizeSessionUserAgentFallback(raw string) string {
 // protocol 指定请求协议格式（domain.PlatformAnthropic / domain.PlatformGemini），
 // 不同协议使用不同的 system/messages 字段名。
 func ParseGatewayRequest(body *RequestBodyRef, protocol string) (*ParsedRequest, error) {
+	var originalBody []byte
+	if body != nil && protocol == domain.PlatformAnthropic {
+		originalBody = body.Bytes()
+	}
 	if body != nil && protocol == domain.PlatformAnthropic {
 		body.Replace(StripAnthropicBillingHeaderBlocks(body.Bytes()))
 	}
-	parsed := &ParsedRequest{Body: body}
+	parsed := &ParsedRequest{Body: body, OriginalBody: originalBody}
 	if err := parseGatewayRequestCurrentBody(parsed, protocol); err != nil {
 		return nil, err
 	}

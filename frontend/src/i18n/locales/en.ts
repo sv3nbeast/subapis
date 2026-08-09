@@ -4780,6 +4780,9 @@ const baseMessages = {
           'Grok subscription support uses OAuth refresh tokens; API keys are out of scope for this account type.'
       },
       anthropic: {
+        oauthNativePassthrough: 'OAuth native strict passthrough',
+        oauthNativePassthroughDesc:
+          'Only applies to Anthropic OAuth/SetupToken Claude Code requests. It replaces auth only and preserves the original request body, headers, and response format; non-Claude Code requests keep using compatibility mode. Off by default.',
         apiKeyPassthrough: 'Auto passthrough (auth only)',
         apiKeyPassthroughDesc:
           'Only applies to Anthropic API Key accounts. When enabled, messages/count_tokens are forwarded in passthrough mode with auth replacement only, while billing/concurrency/audit and safety filtering are preserved. Disable to roll back immediately.',
