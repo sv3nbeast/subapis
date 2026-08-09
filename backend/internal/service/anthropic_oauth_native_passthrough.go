@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -115,6 +117,32 @@ func anthropicOAuthNativeBody(parsed *ParsedRequest) []byte {
 	return parsed.Body.Bytes()
 }
 
+type anthropicOAuthNativeRequestTrace struct {
+	gotConn      atomic.Bool
+	wroteHeaders atomic.Bool
+	wroteRequest atomic.Bool
+}
+
+func withAnthropicOAuthNativeRequestTrace(ctx context.Context) (context.Context, *anthropicOAuthNativeRequestTrace) {
+	state := &anthropicOAuthNativeRequestTrace{}
+	trace := &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) {
+			state.gotConn.Store(true)
+		},
+		WroteHeaders: func() {
+			state.wroteHeaders.Store(true)
+		},
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			state.wroteRequest.Store(true)
+		},
+	}
+	return httptrace.WithClientTrace(ctx, trace), state
+}
+
+func (s *anthropicOAuthNativeRequestTrace) safeToFailover() bool {
+	return s != nil && !s.gotConn.Load() && !s.wroteHeaders.Load() && !s.wroteRequest.Load()
+}
+
 func (s *GatewayService) forwardAnthropicOAuthNativePassthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -153,82 +181,63 @@ func (s *GatewayService) forwardAnthropicOAuthNativePassthrough(
 	}
 	setOpsUpstreamRequestBody(c, body)
 
-	var resp *http.Response
-	retryStart := time.Now()
-	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
-		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, requestStream)
-		upstreamReq, err := s.buildAnthropicOAuthNativeRequest(upstreamCtx, c, account, body, token)
+	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, requestStream)
+	upstreamCtx, requestTrace := withAnthropicOAuthNativeRequestTrace(upstreamCtx)
+	upstreamReq, err := s.buildAnthropicOAuthNativeRequest(upstreamCtx, c, account, body, token)
+	if err != nil {
 		releaseUpstreamCtx()
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
+	}
 
-		// A native passthrough request never uses the account's synthetic TLS
-		// profile. This keeps transport identity consistent with the original CLI.
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
-		if err != nil {
-			if resp != nil && resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			if isRetryablePreResponseNetworkError(err) {
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-					Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
-					UpstreamStatusCode: http.StatusBadGateway, UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
-					Passthrough: true, Kind: "native_request_network_failover", Message: safeErr,
-				})
-				errorBody, _ := json.Marshal(map[string]any{
-					"type": "error",
-					"error": map[string]string{
-						"type":    "upstream_disconnected",
-						"message": "upstream request disconnected before response: " + sanitizeStreamError(err),
-					},
-				})
-				return nil, &UpstreamFailoverError{
-					StatusCode: http.StatusBadGateway, ResponseBody: errorBody,
-					// Do not replay an OAuth request on the same account after a
-					// transport error: net/http may have written the request upstream
-					// before the connection failed, so a same-account retry can create a
-					// duplicate generation/charge.  The handler may still apply its
-					// normal cross-account failover policy.
-					RetryableOnSameAccount: false, RequestedModel: requestModel, Cause: err,
-				}
-			}
-			setOpsUpstreamError(c, 0, safeErr, "")
-			if c != nil {
-				c.JSON(http.StatusBadGateway, gin.H{
-					"type":  "error",
-					"error": gin.H{"type": "upstream_error", "message": "Upstream request failed"},
-				})
-			}
-			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
-		}
-
-		if resp.StatusCode >= 400 && resp.StatusCode != http.StatusBadRequest && s.shouldRetryUpstreamError(account, resp.StatusCode) && attempt < maxRetryAttempts {
-			elapsed := time.Since(retryStart)
-			if elapsed >= maxRetryElapsed {
-				break
-			}
-			bodyBytes, _ := s.readUpstreamErrorBody(resp)
+	// Strict native requests are sent exactly once per account. In particular,
+	// an upstream 403 is authoritative and must not be amplified by the generic
+	// OAuth retry loop.
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
+	releaseUpstreamCtx()
+	if err != nil {
+		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
+		}
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		if isRetryablePreResponseNetworkError(err) {
+			safeToFailover := requestTrace.safeToFailover()
+			kind := "native_request_network_ambiguous"
+			if safeToFailover {
+				kind = "native_request_network_failover"
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
-				UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
-				Passthrough: true, Kind: "native_retry", Message: extractUpstreamErrorMessage(bodyBytes),
+				UpstreamStatusCode: http.StatusBadGateway, UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+				Passthrough: true, Kind: kind, Message: safeErr,
 			})
-			delay := retryBackoffDelay(attempt)
-			if remaining := maxRetryElapsed - elapsed; delay > remaining {
-				delay = remaining
+			errorBody, _ := json.Marshal(map[string]any{
+				"type": "error",
+				"error": map[string]string{
+					"type":    "upstream_disconnected",
+					"message": "upstream request disconnected before response: " + sanitizeStreamError(err),
+				},
+			})
+			failoverErr := &UpstreamFailoverError{
+				StatusCode: http.StatusBadGateway, ResponseBody: errorBody,
+				RetryableOnSameAccount: false, RequestedModel: requestModel,
+				FailureKind: UpstreamFailureTransportError, Cause: err,
 			}
-			if delay <= 0 {
-				break
+			if !safeToFailover {
+				// Once a connection or request write has started, a missing response
+				// is ambiguous: Anthropic may still be generating and billing it.
+				failoverErr.FailoverProhibited = true
+				failoverErr.NextAccountAction = NextAccountStop
 			}
-			if err := sleepWithContext(ctx, delay); err != nil {
-				return nil, err
-			}
-			continue
+			return nil, failoverErr
 		}
-		break
+		setOpsUpstreamError(c, 0, safeErr, "")
+		if c != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"type":  "error",
+				"error": gin.H{"type": "upstream_error", "message": "Upstream request failed"},
+			})
+		}
+		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 
 	if resp == nil || resp.Body == nil {
@@ -241,6 +250,11 @@ func (s *GatewayService) forwardAnthropicOAuthNativePassthrough(
 			respBody, _ := s.readUpstreamErrorBody(resp)
 			softRateLimit := IsAnthropicSoftRateLimitResponse(account, resp.StatusCode, resp.Header, respBody)
 			if !softRateLimit {
+				// handleFailoverSideEffects owns the existing account-state policy and
+				// reads resp.Body itself. Restore the captured bytes so classification,
+				// custom rules, and audit messages do not see an empty response.
+				_ = resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
 				s.handleFailoverSideEffects(ctx, resp, account, requestModel)
 			}
 			return nil, &UpstreamFailoverError{
@@ -403,6 +417,44 @@ func (s *GatewayService) handleAnthropicOAuthNativeNonStreamingResponse(
 	return usage, nil
 }
 
+func anthropicOAuthNativeSSEHasSemanticOutput(data string) bool {
+	data = strings.TrimSpace(data)
+	if data == "" || data == "[DONE]" || !gjson.Valid(data) {
+		return false
+	}
+	eventType := gjson.Get(data, "type").String()
+	switch eventType {
+	case "content_block_start":
+		blockType := gjson.Get(data, "content_block.type").String()
+		switch blockType {
+		case "text":
+			return gjson.Get(data, "content_block.text").String() != ""
+		case "thinking":
+			return gjson.Get(data, "content_block.thinking").String() != ""
+		default:
+			// Tool and server-tool blocks expose an id/name at block start and are
+			// already meaningful client-visible model output.
+			return blockType != ""
+		}
+	case "content_block_delta":
+		deltaType := gjson.Get(data, "delta.type").String()
+		switch deltaType {
+		case "text_delta":
+			return gjson.Get(data, "delta.text").String() != ""
+		case "thinking_delta":
+			return gjson.Get(data, "delta.thinking").String() != ""
+		case "input_json_delta":
+			return gjson.Get(data, "delta.partial_json").String() != ""
+		case "signature_delta", "":
+			return false
+		default:
+			return gjson.Get(data, "delta").Exists()
+		}
+	default:
+		return false
+	}
+}
+
 func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 	ctx context.Context,
 	resp *http.Response,
@@ -440,7 +492,10 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 	}
 	firstTokenMs := (*int)(nil)
 	clientDisconnected := false
+	downstreamStarted := false
+	sawSemanticOutput := false
 	sawTerminalEvent := false
+	pendingTerminalEvent := false
 	lastEventName := ""
 	type nativeReadEvent struct {
 		chunk []byte
@@ -518,6 +573,18 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 		firstSemanticCh = firstSemanticTimer.C
 		defer firstSemanticTimer.Stop()
 	}
+	stopFirstSemanticTimer := func() {
+		if firstSemanticTimer == nil || firstSemanticCh == nil {
+			return
+		}
+		if !firstSemanticTimer.Stop() {
+			select {
+			case <-firstSemanticTimer.C:
+			default:
+			}
+		}
+		firstSemanticCh = nil
+	}
 	var pendingUpstreamStreamError error
 	pendingUpstreamStreamErrorType := ""
 	pendingUpstreamStreamErrorMessage := ""
@@ -564,9 +631,11 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 			if !clientDisconnected {
 				if _, writeErr := c.Writer.Write(chunk); writeErr != nil {
 					clientDisconnected = true
+					stopFirstSemanticTimer()
 					logger.LegacyPrintf("service.gateway", "[Anthropic Native Passthrough] client disconnected: account=%d model=%s", account.ID, model)
 				} else {
 					wroteToClient = true
+					downstreamStarted = true
 					if flusher != nil {
 						flusher.Flush()
 					}
@@ -574,29 +643,32 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 			}
 			line := strings.TrimRight(string(chunk), "\r\n")
 			trimmed := strings.TrimSpace(line)
-			if trimmed == "" && pendingUpstreamStreamError != nil {
-				markNativeStreamError(pendingUpstreamStreamErrorType, pendingUpstreamStreamErrorMessage)
-				return usage, firstTokenMs, clientDisconnected, pendingUpstreamStreamError
+			if trimmed == "" {
+				if pendingUpstreamStreamError != nil {
+					markNativeStreamError(pendingUpstreamStreamErrorType, pendingUpstreamStreamErrorMessage)
+					return usage, firstTokenMs, clientDisconnected, pendingUpstreamStreamError
+				}
+				// An event-only terminal record is complete only after its blank-line
+				// delimiter. Treating the event field alone as terminal would turn a
+				// truncated `event: message_stop` line followed by EOF into success.
+				if pendingTerminalEvent || anthropicStreamEventIsTerminal(lastEventName, "") {
+					sawTerminalEvent = true
+				}
+				pendingTerminalEvent = false
+				lastEventName = ""
+				continue
 			}
 			if strings.HasPrefix(trimmed, "event:") {
 				lastEventName = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
-				if anthropicStreamEventIsTerminal(lastEventName, "") {
-					sawTerminalEvent = true
-				}
 			}
 			if data, ok := extractAnthropicSSEDataLine(trimmed); ok {
 				data = strings.TrimSpace(data)
-				if firstTokenMs == nil && wroteToClient && data != "" && data != "[DONE]" && !strings.EqualFold(lastEventName, "error") {
-					ms := int(time.Since(startTime).Milliseconds())
-					firstTokenMs = &ms
-					if firstSemanticTimer != nil {
-						if !firstSemanticTimer.Stop() {
-							select {
-							case <-firstSemanticTimer.C:
-							default:
-							}
-						}
-						firstSemanticCh = nil
+				if !sawSemanticOutput && anthropicOAuthNativeSSEHasSemanticOutput(data) {
+					sawSemanticOutput = true
+					stopFirstSemanticTimer()
+					if wroteToClient {
+						ms := int(time.Since(startTime).Milliseconds())
+						firstTokenMs = &ms
 					}
 				}
 				s.parseSSEUsagePassthrough(data, usage)
@@ -616,7 +688,10 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 					pendingUpstreamStreamErrorMessage = errorMessage
 				}
 				if data == "[DONE]" || anthropicStreamEventIsTerminal(lastEventName, data) {
-					sawTerminalEvent = true
+					// SSE delivers a record only after its blank-line delimiter.
+					// Retain this as pending so EOF immediately after a terminal
+					// data line is classified as truncation rather than success.
+					pendingTerminalEvent = true
 				}
 			}
 
@@ -624,8 +699,11 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 			if clientDisconnected {
 				return usage, firstTokenMs, true, fmt.Errorf("native stream usage incomplete after client disconnect timeout")
 			}
-			if firstTokenMs == nil {
+			if !sawSemanticOutput && !downstreamStarted {
 				return usage, nil, false, newAnthropicFirstSemanticTimeoutFailover(account, model)
+			}
+			if !sawSemanticOutput {
+				return usage, nil, false, fmt.Errorf("native stream first semantic timeout after response start")
 			}
 			logger.LegacyPrintf("service.gateway", "[Anthropic Native Passthrough] stream data interval timeout: account=%d model=%s interval=%s", account.ID, model, streamInterval)
 			if s.rateLimitService != nil {
@@ -634,8 +712,14 @@ func (s *GatewayService) handleAnthropicOAuthNativeStreamingResponse(
 			return usage, firstTokenMs, false, fmt.Errorf("native stream data interval timeout")
 
 		case <-firstSemanticCh:
-			if firstTokenMs != nil {
+			if sawSemanticOutput {
 				continue
+			}
+			if clientDisconnected {
+				return usage, nil, true, fmt.Errorf("native stream usage incomplete after client disconnect")
+			}
+			if downstreamStarted {
+				return usage, nil, false, fmt.Errorf("native stream first semantic timeout after response start")
 			}
 			return usage, nil, clientDisconnected, newAnthropicFirstSemanticTimeoutFailover(account, model)
 		}
@@ -683,26 +767,30 @@ func (s *GatewayService) forwardCountTokensAnthropicOAuthNativePassthrough(
 		return err
 	}
 	if resp.StatusCode >= 400 {
-		if isCountTokensUnsupported404(resp.StatusCode, respBody) {
-			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported by upstream")
-			return nil
-		}
 		s.handleCountTokensUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
-		s.countTokensError(c, resp.StatusCode, "upstream_error", "Upstream request failed")
+		// Strict mode keeps the provider's count_tokens error contract intact.
+		// Account-state/rate-limit handling above remains a gateway concern, but
+		// must not replace Anthropic's status, headers, or response bytes.
+		MarkResponseCommitted(c)
+		writeAnthropicOAuthNativeCountTokensResponse(s, c, resp, respBody)
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", resp.StatusCode)
 		}
 		return fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
+	writeAnthropicOAuthNativeCountTokensResponse(s, c, resp, respBody)
+	return nil
+}
+
+func writeAnthropicOAuthNativeCountTokensResponse(s *GatewayService, c *gin.Context, resp *http.Response, body []byte) {
 	writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	c.Data(resp.StatusCode, contentType, respBody)
-	return nil
+	c.Data(resp.StatusCode, contentType, body)
 }
 
 func (s *GatewayService) buildAnthropicOAuthNativeCountTokensRequest(

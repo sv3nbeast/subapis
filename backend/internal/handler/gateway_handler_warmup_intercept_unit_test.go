@@ -1,11 +1,11 @@
-//go:build unit
-
 package handler
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -162,8 +163,12 @@ func (f *fakeConcurrencyCache) CleanupExpiredAccountSlots(context.Context, int64
 func (f *fakeConcurrencyCache) CleanupExpiredAccountSlotKeys(context.Context) error     { return nil }
 func (f *fakeConcurrencyCache) CleanupStaleProcessSlots(context.Context, string) error  { return nil }
 
-func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*service.Account) (*GatewayHandler, func()) {
+func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*service.Account, upstreamOpt ...service.HTTPUpstream) (*GatewayHandler, func()) {
 	t.Helper()
+	var upstream service.HTTPUpstream
+	if len(upstreamOpt) > 0 {
+		upstream = upstreamOpt[0]
+	}
 
 	schedulerCache := &fakeSchedulerCache{accounts: accounts}
 	schedulerSnapshot := service.NewSchedulerSnapshotService(schedulerCache, nil, nil, nil, nil)
@@ -184,7 +189,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		nil, // rateLimitService
 		nil, // billingCacheService
 		nil, // identityService
-		nil, // httpUpstream
+		upstream,
 		nil, // deferredService
 		nil, // claudeTokenProvider
 		nil, // kiroTokenProvider
@@ -222,6 +227,249 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		billingCacheSvc.Stop()
 	}
 	return h, cleanup
+}
+
+type nativeOAuthHandlerUpstream struct {
+	response *http.Response
+	request  *http.Request
+	body     []byte
+	calls    int
+}
+
+type nativeOAuthHandlerSettingRepo struct {
+	service.SettingRepository
+}
+
+func nativeOAuthHandlerHeaderValue(header http.Header, key string) string {
+	for wireKey, values := range header {
+		if strings.EqualFold(wireKey, key) && len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
+}
+
+func (r *nativeOAuthHandlerSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
+	values := make(map[string]string, len(keys))
+	for _, key := range keys {
+		values[key] = ""
+	}
+	return values, nil
+}
+
+func (u *nativeOAuthHandlerUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return u.DoWithTLS(req, "", 0, 0, nil)
+}
+
+func (u *nativeOAuthHandlerUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.calls++
+	u.request = req
+	if req != nil && req.Body != nil {
+		u.body, _ = io.ReadAll(req.Body)
+	}
+	return u.response, nil
+}
+
+func TestGatewayHandlerMessages_AnthropicOAuthNativeErrorEventIsNotDuplicated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(2010)
+	accountID := int64(1010)
+	group := &service.Group{
+		ID:       groupID,
+		Hydrated: true,
+		Platform: service.PlatformAnthropic,
+		Status:   service.StatusActive,
+	}
+	account := &service.Account{
+		ID:       accountID,
+		Name:     "anthropic-native-handler",
+		Platform: service.PlatformAnthropic,
+		Type:     service.AccountTypeSetupToken,
+		Credentials: map[string]any{
+			"access_token":              "oauth-upstream-token",
+			"intercept_warmup_requests": true,
+		},
+		Extra: map[string]any{
+			"anthropic_oauth_passthrough": true,
+		},
+		Concurrency:   1,
+		Priority:      1,
+		Status:        service.StatusActive,
+		Schedulable:   true,
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	upstreamSSE := "event: error\n" +
+		"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"upstream busy\"}}\n\n"
+	upstream := &nativeOAuthHandlerUpstream{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"x-request-id": []string{"rid-native-handler"},
+		},
+		Body: io.NopCloser(strings.NewReader(upstreamSSE)),
+	}}
+	h, cleanup := newTestGatewayHandler(t, group, []*service.Account{account}, upstream)
+	defer cleanup()
+	h.cfg = &config.Config{RunMode: config.RunModeSimple}
+	h.settingService = service.NewSettingService(&nativeOAuthHandlerSettingRepo{}, &config.Config{})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-opus-5","stream":true,"max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"Warmup"}]}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.220 (external, cli)")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Anthropic-Beta", "interleaved-thinking-2025-05-14")
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
+	c.Request = req
+
+	apiKey := &service.APIKey{
+		ID: 3010, UserID: 4010, GroupID: &groupID, Status: service.StatusActive,
+		User:  &service.User{ID: 4010, Concurrency: 10, Balance: 100},
+		Group: group,
+	}
+	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.UserID, Concurrency: 10})
+
+	h.Messages(c)
+
+	require.Equal(t, upstreamSSE, rec.Body.String())
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: error"))
+	require.NotContains(t, rec.Body.String(), "Upstream request failed")
+	require.Equal(t, body, upstream.body)
+	require.Equal(t, "Bearer oauth-upstream-token", nativeOAuthHandlerHeaderValue(upstream.request.Header, "Authorization"))
+	require.Equal(t, "claude-cli/2.1.220 (external, cli)", nativeOAuthHandlerHeaderValue(upstream.request.Header, "User-Agent"))
+	require.Equal(t, 1, upstream.calls, "native strict warmup must bypass the optional gateway mock")
+	mode, _ := c.Get("anthropic_passthrough_mode")
+	require.Equal(t, "native", mode)
+}
+
+func TestGatewayHandlerMessages_AnthropicOAuthNativeCompactionBypassesSyncGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(2011)
+	accountID := int64(1011)
+	group := &service.Group{
+		ID: groupID, Hydrated: true, Platform: service.PlatformAnthropic,
+		Status: service.StatusActive, AllowNonStreamMessages: false,
+	}
+	account := &service.Account{
+		ID: accountID, Name: "anthropic-native-compaction", Platform: service.PlatformAnthropic,
+		Type: service.AccountTypeSetupToken,
+		Credentials: map[string]any{
+			"access_token": "oauth-upstream-token",
+		},
+		Extra: map[string]any{
+			"anthropic_oauth_passthrough": true,
+		},
+		Concurrency: 1, Priority: 1, Status: service.StatusActive, Schedulable: true,
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	upstreamBody := `{"type":"error","error":{"type":"upstream_test","message":"compaction reached upstream"}}`
+	upstream := &nativeOAuthHandlerUpstream{response: &http.Response{
+		StatusCode: http.StatusTeapot,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	h, cleanup := newTestGatewayHandler(t, group, []*service.Account{account}, upstream)
+	defer cleanup()
+	h.cfg = &config.Config{RunMode: config.RunModeSimple}
+	h.settingService = service.NewSettingService(&nativeOAuthHandlerSettingRepo{}, &config.Config{})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-opus-5","stream":false,"max_tokens":1024,"system":[{"type":"text","text":"You are a helpful AI assistant tasked with summarizing conversations."}],"messages":[{"role":"user","content":"summarize"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.220 (external, cli)")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Anthropic-Beta", "interleaved-thinking-2025-05-14")
+	req.Header.Set("X-Stainless-Helper", "compaction")
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
+	c.Request = req
+
+	apiKey := &service.APIKey{
+		ID: 3011, UserID: 4011, GroupID: &groupID, Status: service.StatusActive,
+		User: &service.User{ID: 4011, Concurrency: 10, Balance: 100}, Group: group,
+	}
+	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.UserID, Concurrency: 10})
+
+	h.Messages(c)
+
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, body, upstream.body)
+	require.Equal(t, http.StatusTeapot, rec.Code)
+	require.Equal(t, upstreamBody, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "Synchronous /v1/messages requests are not supported")
+}
+
+func TestGatewayHandlerCountTokens_AnthropicOAuthNativePreservesRequestAndErrorResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(2012)
+	accountID := int64(1012)
+	group := &service.Group{
+		ID: groupID, Hydrated: true, Platform: service.PlatformAnthropic,
+		Status: service.StatusActive,
+	}
+	account := &service.Account{
+		ID: accountID, Name: "anthropic-native-count-tokens", Platform: service.PlatformAnthropic,
+		Type: service.AccountTypeSetupToken,
+		Credentials: map[string]any{
+			"access_token": "oauth-upstream-token",
+		},
+		Extra: map[string]any{
+			"anthropic_oauth_passthrough": true,
+		},
+		Concurrency: 1, Priority: 1, Status: service.StatusActive, Schedulable: true,
+		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
+	}
+	upstreamBody := `{"type":"error","error":{"type":"invalid_request_error","message":"native count error"},"extra":{"preserve":true}}`
+	upstream := &nativeOAuthHandlerUpstream{response: &http.Response{
+		StatusCode: http.StatusTeapot,
+		Header: http.Header{
+			"Content-Type": []string{"application/problem+json"},
+			"x-request-id": []string{"rid-native-count-handler"},
+		},
+		Body: io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	h, cleanup := newTestGatewayHandler(t, group, []*service.Account{account}, upstream)
+	defer cleanup()
+	h.cfg = &config.Config{RunMode: config.RunModeSimple}
+	h.settingService = service.NewSettingService(&nativeOAuthHandlerSettingRepo{}, &config.Config{})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"count this"}],"metadata":{"user_id":"user_01ARZ3NDEKTSV4RRFFQ69G5FAV_account__session_01ARZ3NDEKTSV4RRFFQ69G5FAV"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.220 (external, cli)")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	req.Header.Set("Anthropic-Beta", "interleaved-thinking-2025-05-14")
+	req.Header.Set("X-Stainless-Helper", "compaction")
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
+	c.Request = req
+
+	apiKey := &service.APIKey{
+		ID: 3012, UserID: 4012, GroupID: &groupID, Status: service.StatusActive,
+		User: &service.User{ID: 4012, Concurrency: 10, Balance: 100}, Group: group,
+	}
+	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.UserID, Concurrency: 10})
+
+	h.CountTokens(c)
+
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, body, upstream.body)
+	require.Equal(t, "Bearer oauth-upstream-token", nativeOAuthHandlerHeaderValue(upstream.request.Header, "Authorization"))
+	require.Equal(t, "claude-cli/2.1.220 (external, cli)", nativeOAuthHandlerHeaderValue(upstream.request.Header, "User-Agent"))
+	require.Equal(t, "compaction", nativeOAuthHandlerHeaderValue(upstream.request.Header, "X-Stainless-Helper"))
+	require.Equal(t, http.StatusTeapot, rec.Code)
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Equal(t, upstreamBody, rec.Body.String())
 }
 
 func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedSchedulingV1(t *testing.T) {

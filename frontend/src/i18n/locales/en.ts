@@ -4782,7 +4782,7 @@ const baseMessages = {
       anthropic: {
         oauthNativePassthrough: 'OAuth native strict passthrough',
         oauthNativePassthroughDesc:
-          'Only applies to Anthropic OAuth/SetupToken Claude Code requests. It replaces auth only and preserves the original request body, headers, and response format; non-Claude Code requests keep using compatibility mode. Off by default.',
+          'Only applies to Anthropic OAuth/SetupToken Claude Code requests. Normal messages and official helpers such as compaction replace only auth while preserving the original body, allowed client headers, and response format. Connection probes remain local gateway responses; non-Claude Code requests keep using compatibility mode. Off by default.',
         apiKeyPassthrough: 'Auto passthrough (auth only)',
         apiKeyPassthroughDesc:
           'Only applies to Anthropic API Key accounts. When enabled, messages/count_tokens are forwarded in passthrough mode with auth replacement only, while billing/concurrency/audit and safety filtering are preserved. Disable to roll back immediately.',

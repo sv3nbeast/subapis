@@ -58,6 +58,12 @@ func IsClaudeCodeAgentClassifierRequest(body []byte) bool {
 	return false
 }
 
+// IsClaudeCodeCompactionRequest reports whether the official Stainless helper
+// header identifies Claude Code's native non-streaming compaction request.
+func IsClaudeCodeCompactionRequest(helperHeader string) bool {
+	return classifyAnthropicStainlessHelper(helperHeader) == anthropicStainlessHelperCompaction
+}
+
 func isClaudeCodeAgentClassifierSystemText(text string) bool {
 	text = strings.TrimSpace(text)
 	if strings.HasPrefix(text, claudeCodeAgentClassifierSystemPrefix) {

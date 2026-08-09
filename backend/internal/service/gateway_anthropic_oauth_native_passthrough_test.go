@@ -5,12 +5,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +61,74 @@ func newNativePassthroughTestContext(t *testing.T, path string) (*gin.Context, *
 type closeBlockingReadCloser struct {
 	closed chan struct{}
 	once   sync.Once
+}
+
+type prefixThenCloseBlockingReadCloser struct {
+	reader *bytes.Reader
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newPrefixThenCloseBlockingReadCloser(prefix []byte) *prefixThenCloseBlockingReadCloser {
+	return &prefixThenCloseBlockingReadCloser{reader: bytes.NewReader(prefix), closed: make(chan struct{})}
+}
+
+func (r *prefixThenCloseBlockingReadCloser) Read(p []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(p)
+	}
+	<-r.closed
+	return 0, io.EOF
+}
+
+func (r *prefixThenCloseBlockingReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+type nativePassthroughHTTPUpstream struct {
+	mu    sync.Mutex
+	calls int
+	do    func(*http.Request) (*http.Response, error)
+}
+
+type nativePassthroughAccountRepo struct {
+	AccountRepository
+	setErrorCalls int
+	lastError     string
+}
+
+type nativePassthroughTrackedBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *nativePassthroughTrackedBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func (r *nativePassthroughAccountRepo) SetError(_ context.Context, _ int64, message string) error {
+	r.setErrorCalls++
+	r.lastError = message
+	return nil
+}
+
+func (u *nativePassthroughHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	u.mu.Lock()
+	u.calls++
+	u.mu.Unlock()
+	return u.do(req)
+}
+
+func (u *nativePassthroughHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func (u *nativePassthroughHTTPUpstream) Calls() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.calls
 }
 
 func newCloseBlockingReadCloser() *closeBlockingReadCloser {
@@ -145,6 +218,42 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_ForwardDoesNotRewriteBod
 	require.Equal(t, upstreamBody, rec.Body.String())
 }
 
+func TestGatewayService_AnthropicOAuthNativePassthrough_DoesNotTriggerCompanionRequests(t *testing.T) {
+	c, _ := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":false,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
+	upstream := &nativePassthroughHTTPUpstream{do: func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"id":"msg_native","type":"message","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":4,"output_tokens":2}}`,
+			)),
+		}, nil
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		ClaudeCodeMimicry: config.GatewayClaudeCodeMimicryConfig{
+			Enabled: true,
+			SyntheticCompanion: config.GatewayClaudeCodeSyntheticCompanionConfig{
+				Enabled: true,
+				Mode:    config.ClaudeCodeSyntheticCompanionModeAuxAndTitle,
+			},
+		},
+	}}
+	svc := &GatewayService{
+		cfg:                      cfg,
+		responseHeaderFilter:     compileResponseHeaderFilter(cfg),
+		httpUpstream:             upstream,
+		claudeCodeCompanionProbe: NewClaudeCodeCompanionProbeService(upstream),
+	}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), OriginalBody: original, Model: "claude-opus-5"}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, upstream.Calls())
+	require.Never(t, func() bool { return upstream.Calls() > 1 }, 150*time.Millisecond, 10*time.Millisecond,
+		"native strict mode must not launch synthetic companion endpoints")
+}
+
 func TestGatewayService_AnthropicOAuthNativePassthrough_ForwardCountTokensDoesNotRewriteBody(t *testing.T) {
 	c, rec := newNativePassthroughTestContext(t, "/v1/messages/count_tokens")
 	original := []byte(`{"model":"claude-opus-5-thinking","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"thinking":{"type":"adaptive"},"metadata":{"user_id":"native-user"}}`)
@@ -167,6 +276,33 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_ForwardCountTokensDoesNo
 	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "x-api-key"))
 	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "cookie"))
 	require.Equal(t, upstreamBody, rec.Body.String())
+}
+
+func TestGatewayService_AnthropicOAuthNativePassthrough_ForwardCountTokensPreservesErrorResponse(t *testing.T) {
+	c, rec := newNativePassthroughTestContext(t, "/v1/messages/count_tokens")
+	original := []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"hello"}]}`)
+	upstreamBody := `{"type":"error","error":{"type":"invalid_request_error","message":"native count error"},"extra":{"preserve":true}}`
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusTeapot,
+		Header: http.Header{
+			"Content-Type": []string{"application/problem+json"},
+			"x-request-id": []string{"rid-count-native-error"},
+		},
+		Body: io.NopCloser(bytes.NewBufferString(upstreamBody)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+	}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), OriginalBody: original, Model: "claude-opus-5"}
+	err := svc.ForwardCountTokens(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.ErrorContains(t, err, "native count error")
+	require.Equal(t, http.StatusTeapot, rec.Code)
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Equal(t, upstreamBody, rec.Body.String(), "strict count_tokens errors must remain byte-for-byte intact")
+	require.True(t, IsResponseCommitted(c))
 }
 
 func TestGatewayService_AnthropicOAuthNativePassthrough_NonFailoverErrorPreservesResponseBody(t *testing.T) {
@@ -216,6 +352,15 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_StreamingCopiesSSEBytesE
 	require.NotNil(t, result.FirstTokenMs)
 }
 
+func TestAnthropicOAuthNativeSSEHasSemanticOutput(t *testing.T) {
+	require.False(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"message_start","message":{"usage":{"input_tokens":11}}}`))
+	require.False(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"content_block_start","content_block":{"type":"text","text":""}}`))
+	require.False(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"sig"}}`))
+	require.True(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}`))
+	require.True(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"plan"}}`))
+	require.True(t, anthropicOAuthNativeSSEHasSemanticOutput(`{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_1","name":"Read"}}`))
+}
+
 func TestGatewayService_AnthropicOAuthNativePassthrough_RecognizesTerminalEventWithoutData(t *testing.T) {
 	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
 	original := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
@@ -234,6 +379,50 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_RecognizesTerminalEventW
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, upstreamSSE, rec.Body.String())
+	require.Nil(t, result.FirstTokenMs, "message_start and message_stop are not semantic output")
+}
+
+func TestGatewayService_AnthropicOAuthNativePassthrough_EventOnlyTerminalWithoutDelimiterIsIncomplete(t *testing.T) {
+	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	truncatedSSE := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4}}}\n\n" +
+		"event: message_stop\n"
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewBufferString(truncatedSSE)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg), httpUpstream: upstream}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), Model: "claude-opus-5", Stream: true}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.ErrorContains(t, err, "missing terminal event")
+	require.NotNil(t, result, "usage before an incomplete terminal record remains billable")
+	require.Equal(t, truncatedSSE, rec.Body.String())
+	require.Nil(t, result.FirstTokenMs)
+}
+
+func TestGatewayService_AnthropicOAuthNativePassthrough_DataTerminalWithoutDelimiterIsIncomplete(t *testing.T) {
+	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	truncatedSSE := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4}}}\n\n" +
+		"event: message_stop\n" +
+		"data: {\"type\":\"message_stop\"}\n"
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(bytes.NewBufferString(truncatedSSE)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg), httpUpstream: upstream}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), Model: "claude-opus-5", Stream: true}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.ErrorContains(t, err, "missing terminal event")
+	require.NotNil(t, result, "usage before an incomplete terminal record remains billable")
+	require.Equal(t, truncatedSSE, rec.Body.String())
+	require.Nil(t, result.FirstTokenMs)
 }
 
 func TestGatewayService_AnthropicOAuthNativePassthrough_StreamingEOFBeforeTerminalReturnsPartialUsage(t *testing.T) {
@@ -321,6 +510,36 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_PreservesSoftRateLimitFa
 	require.True(t, failoverErr.RetryableOnSameAccount)
 }
 
+func TestGatewayService_AnthropicOAuthNativePassthrough_403IsSentOnce(t *testing.T) {
+	c, _ := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":false,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
+	responseBody := &nativePassthroughTrackedBody{Reader: strings.NewReader(`{"type":"error","error":{"type":"permission_error","message":"forbidden"}}`)}
+	upstream := &nativePassthroughHTTPUpstream{do: func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       responseBody,
+		}, nil
+	}}
+	repo := &nativePassthroughAccountRepo{}
+	svc := &GatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), OriginalBody: original, Model: "claude-opus-5"}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.Equal(t, http.StatusForbidden, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, 1, upstream.Calls(), "strict 403 must not be replayed on the same account")
+	require.Equal(t, 1, repo.setErrorCalls, "single 403 must still use the gateway's existing account error policy")
+	require.Contains(t, repo.lastError, "forbidden", "account policy must receive the captured upstream error body")
+	require.True(t, responseBody.closed, "captured error bodies must release the tracked upstream connection before replacement")
+}
+
 func TestGatewayService_AnthropicOAuthNativePassthrough_PreSemanticTimeoutIsFailoverSafe(t *testing.T) {
 	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
 	original := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
@@ -345,17 +564,67 @@ func TestGatewayService_AnthropicOAuthNativePassthrough_PreSemanticTimeoutIsFail
 	require.Empty(t, rec.Body.String(), "pre-semantic timeout must not commit downstream bytes before failover")
 }
 
-func TestGatewayService_AnthropicOAuthNativePassthrough_PreResponseNetworkErrorIsFailoverSafe(t *testing.T) {
+func TestGatewayService_AnthropicOAuthNativePassthrough_MetadataThenSemanticTimeoutDoesNotFailover(t *testing.T) {
+	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
+	messageStart := []byte("event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n")
+	blockingBody := newPrefixThenCloseBlockingReadCloser(messageStart)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       blockingBody,
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize, FirstSemanticTimeout: 1}}
+	svc := &GatewayService{cfg: cfg, responseHeaderFilter: compileResponseHeaderFilter(cfg), httpUpstream: upstream}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), OriginalBody: original, Model: "claude-opus-5", Stream: true}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.ErrorContains(t, err, "first semantic timeout after response start")
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr), "client-visible metadata makes replay unsafe")
+	require.NotNil(t, result, "message_start usage remains observable on timeout")
+	require.Nil(t, result.FirstTokenMs, "message_start must not be reported as first token")
+	require.Equal(t, string(messageStart), rec.Body.String())
+}
+
+func TestGatewayService_AnthropicOAuthNativePassthrough_PreConnectNetworkErrorIsFailoverSafe(t *testing.T) {
 	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
 	original := []byte(`{"model":"claude-opus-5","stream":false,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
-	upstream := &anthropicHTTPUpstreamRecorder{err: io.ErrUnexpectedEOF}
+	upstream := &nativePassthroughHTTPUpstream{do: func(*http.Request) (*http.Response, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "api.anthropic.com"}
+	}}
 	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
 	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), Model: "claude-opus-5"}
 	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
 	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError
 	require.True(t, errors.As(err, &failoverErr))
-	require.False(t, failoverErr.RetryableOnSameAccount, "an ambiguous transport failure must not replay the same OAuth request")
+	require.False(t, failoverErr.FailoverProhibited)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.Equal(t, 1, upstream.Calls())
+	require.Empty(t, rec.Body.String())
+}
+
+func TestGatewayService_AnthropicOAuthNativePassthrough_AmbiguousNetworkErrorProhibitsFailover(t *testing.T) {
+	c, rec := newNativePassthroughTestContext(t, "/v1/messages")
+	original := []byte(`{"model":"claude-opus-5","stream":false,"messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"native-user"}}`)
+	upstream := &nativePassthroughHTTPUpstream{do: func(req *http.Request) (*http.Response, error) {
+		trace := httptrace.ContextClientTrace(req.Context())
+		require.NotNil(t, trace)
+		require.NotNil(t, trace.WroteHeaders)
+		trace.WroteHeaders()
+		return nil, io.ErrUnexpectedEOF
+	}}
+	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(original), OriginalBody: original, Model: "claude-opus-5"}
+	result, err := svc.Forward(SetClaudeCodeClient(context.Background(), true), c, newAnthropicOAuthNativeAccountForTest(), parsed)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.True(t, failoverErr.FailoverProhibited)
+	require.False(t, failoverErr.ShouldRetryNextAccount())
+	require.Equal(t, NextAccountStop, failoverErr.NextAccountAction)
+	require.Equal(t, 1, upstream.Calls())
 	require.Empty(t, rec.Body.String())
 }
 

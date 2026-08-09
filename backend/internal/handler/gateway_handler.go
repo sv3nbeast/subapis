@@ -319,9 +319,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// stream=true 聚合),以抓取上游真实请求+响应定位 429 根因;抓包一关守卫即全量恢复。
 	isConnectionProbe, _ := service.IsClaudeCodeConnectionProbeRequestFromContext(c.Request.Context())
 	isClaudeCodeAgentClassifier := isClaudeCodeClient && service.IsClaudeCodeAgentClassifierRequest(body)
+	isClaudeCodeCompaction := isClaudeCodeClient && service.IsClaudeCodeCompactionRequest(c.GetHeader("X-Stainless-Helper"))
 	isInterceptableSync := isConnectionProbe ||
 		detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient) != InterceptTypeNone ||
-		isClaudeCodeAgentClassifier
+		isClaudeCodeAgentClassifier ||
+		isClaudeCodeCompaction
 	groupAllowsNonStream := apiKey != nil && apiKey.Group != nil && apiKey.Group.AllowNonStreamMessages
 	if isAnthropicMessagesSyncRequest(reqStream) && !isInterceptableSync && !h.gatewayService.AllowSyncForDebugCapture(c) && !groupAllowsNonStream {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Synchronous /v1/messages requests are not supported; set stream=true")
@@ -876,14 +878,17 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			accountSelectedFields = append(accountSelectedFields, gatewayProxyLogFields(account)...)
 			reqLog.Info("sticky.account_selected", accountSelectedFields...)
 
+			nativeOAuthPassthrough := h.gatewayService.ShouldUseAnthropicOAuthNativePassthrough(c.Request.Context(), c, account, attemptParsedReq)
+
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			// 注意：连通性探测请求（max_tokens=1, !stream）无条件拦截，
 			// 涵盖 claude-cli、Claude Code Desktop、Anthropic SDK 等所有客户端的 Test Connection。
 			// 不依赖账号 intercept_warmup_requests 开关，避免账号池配额被探测请求耗尽。
+			// 严格透传只保留连接探测这一项网关保护；其余可选模拟请求必须原样到达上游。
 			interceptType := InterceptTypeNone
 			if isClaudeCodeConnectionProbeRequest(parsedReq.MaxTokens, reqStream) {
 				interceptType = InterceptTypeMaxTokensOneHaiku
-			} else if account.IsInterceptWarmupEnabled() {
+			} else if !nativeOAuthPassthrough && account.IsInterceptWarmupEnabled() {
 				interceptType = detectInterceptType(body, reqModel, parsedReq.MaxTokens, reqStream, isClaudeCodeClient)
 			}
 			if interceptType != InterceptTypeNone {
@@ -1096,7 +1101,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// compatibility layer rewrites both the body and anthropic-beta header
 			// before Forward, defeating byte/header fidelity even though Forward
 			// later reads OriginalBody.
-			if !h.gatewayService.ShouldUseAnthropicOAuthNativePassthrough(c.Request.Context(), c, account, attemptParsedReq) {
+			if !nativeOAuthPassthrough {
 				if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
 					if queueRelease != nil {
 						queueRelease()
