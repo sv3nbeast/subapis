@@ -17,17 +17,7 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 	searchContent := make([]map[string]any, 0)
 	if results != nil {
 		for _, result := range results.Results {
-			snippet := ""
-			if result.Snippet != nil {
-				snippet = strings.TrimSpace(*result.Snippet)
-			}
-			searchContent = append(searchContent, map[string]any{
-				"type":              "web_search_result",
-				"title":             result.Title,
-				"url":               result.URL,
-				"encrypted_content": snippet,
-				"page_age":          nil,
-			})
+			searchContent = append(searchContent, buildWebSearchResultBlock(result))
 		}
 	}
 
@@ -190,6 +180,124 @@ func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
 // Anthropic. A zero count is a byte-compatible no-op for non-search usage.
 func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests int) ([]byte, bool) {
 	return filterSSEChunkWithServerToolUsage(chunk, -1, offset, false, webSearchRequests, 0)
+}
+
+// FinalizeWebSearchSSEChunks rewrites the final Kiro turn into the already-open
+// Anthropic stream and appends citation deltas to its final text block. Search
+// results are server-side data, so official Anthropic streams always expose
+// citations even when the model rendered ordinary Markdown links.
+func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, searches []SearchIndicator) [][]byte {
+	adjusted := make([][]byte, 0, len(chunks)+4)
+	for _, chunk := range chunks {
+		rewritten, shouldForward := AdjustSSEChunkWithWebSearchUsage(chunk, offset, webSearchRequests)
+		if shouldForward {
+			adjusted = append(adjusted, rewritten)
+		}
+	}
+
+	textIndex, text := finalSSETextBlock(adjusted)
+	if textIndex < 0 {
+		return adjusted
+	}
+	citations := buildWebSearchCitations(searches, text)
+	if len(citations) == 0 {
+		return adjusted
+	}
+
+	result := make([][]byte, 0, len(adjusted)+len(citations))
+	inserted := false
+	for _, chunk := range adjusted {
+		if !inserted && isSSEContentBlockStop(chunk, textIndex) {
+			for _, citation := range citations {
+				result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": textIndex,
+					"delta": map[string]any{
+						"type":     "citations_delta",
+						"citation": citation,
+					},
+				}))
+			}
+			inserted = true
+		}
+		result = append(result, chunk)
+	}
+	return result
+}
+
+func finalSSETextBlock(chunks [][]byte) (int, string) {
+	textBlocks := make(map[int]*strings.Builder)
+	lastTextIndex := -1
+	for _, chunk := range chunks {
+		payload := firstSSEJSONPayload(chunk)
+		if len(payload) == 0 {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(payload, &event) != nil {
+			continue
+		}
+		index, ok := event["index"].(float64)
+		if !ok {
+			continue
+		}
+		idx := int(index)
+		switch eventType, _ := event["type"].(string); eventType {
+		case "content_block_start":
+			block, _ := event["content_block"].(map[string]any)
+			if blockType, _ := block["type"].(string); blockType == "text" {
+				builder := &strings.Builder{}
+				if initial, _ := block["text"].(string); initial != "" {
+					_, _ = builder.WriteString(initial)
+				}
+				textBlocks[idx] = builder
+				lastTextIndex = idx
+			}
+		case "content_block_delta":
+			delta, _ := event["delta"].(map[string]any)
+			if deltaType, _ := delta["type"].(string); deltaType == "text_delta" {
+				if builder := textBlocks[idx]; builder != nil {
+					if value, _ := delta["text"].(string); value != "" {
+						_, _ = builder.WriteString(value)
+					}
+				}
+			}
+		}
+	}
+	if lastTextIndex < 0 || textBlocks[lastTextIndex] == nil {
+		return -1, ""
+	}
+	return lastTextIndex, textBlocks[lastTextIndex].String()
+}
+
+func firstSSEJSONPayload(chunk []byte) []byte {
+	for _, line := range strings.Split(string(chunk), "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			if payload != "" && payload != "[DONE]" {
+				return []byte(payload)
+			}
+		}
+	}
+	return nil
+}
+
+func isSSEContentBlockStop(chunk []byte, index int) bool {
+	payload := firstSSEJSONPayload(chunk)
+	if len(payload) == 0 {
+		return false
+	}
+	var event map[string]any
+	if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_stop" {
+		return false
+	}
+	idx, ok := event["index"].(float64)
+	return ok && int(idx) == index
+}
+
+func marshalSSEEvent(eventType string, event map[string]any) []byte {
+	payload, _ := json.Marshal(event)
+	return []byte("event: " + eventType + "\ndata: " + string(payload) + "\n\n")
 }
 
 // AdjustSSEChunkWithCodeExecutionUsage reuses the final Kiro terminal envelope

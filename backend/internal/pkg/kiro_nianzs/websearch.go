@@ -1,8 +1,14 @@
 package kiro
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,6 +20,14 @@ const minimalWebSearchDescription = "Search the web for information. Use this to
 const remoteWebSearchDescription = "WebSearch looks up information outside the model's training data. Supports multiple queries to gather comprehensive information."
 
 var cachedWebSearchDescription atomic.Value // stores string
+
+// webSearchOpaqueKey protects gateway-generated web-search passback fields.
+// Anthropic treats encrypted_content and encrypted_index as opaque values that
+// clients must replay verbatim. Kiro's MCP endpoint returns plaintext snippets,
+// so the adapter seals them before exposing the Anthropic-compatible response.
+// A process-local key is intentional: history replay after a restart still has
+// the public title/URL and degrades without leaking the original snippet.
+var webSearchOpaqueKey = newWebSearchOpaqueKey()
 
 type MCPRequest struct {
 	ID      string `json:"id"`
@@ -185,6 +199,152 @@ func ReplaceWebSearchToolDescription(body []byte) ([]byte, error) {
 	return updated, nil
 }
 
+// NormalizeWebSearchHistoryForKiro converts gateway-generated Anthropic server
+// tool blocks from earlier assistant turns into ordinary text context before
+// Kiro translation. This makes encrypted_content genuinely replayable: when
+// the process key is still available the sealed snippet is restored, while a
+// post-restart continuation still retains the public title and URL.
+func NormalizeWebSearchHistoryForKiro(body []byte) ([]byte, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, err
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok {
+		return body, nil
+	}
+	modified := false
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			continue
+		}
+		normalized := make([]any, 0, len(content)+1)
+		history := make([]WebSearchResult, 0)
+		messageModified := false
+		for _, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok {
+				normalized = append(normalized, rawBlock)
+				continue
+			}
+			switch getInterfaceString(block["type"]) {
+			case "server_tool_use":
+				if isWebSearchToolName(getInterfaceString(block["name"]), "") {
+					modified = true
+					messageModified = true
+					continue
+				}
+			case "web_search_tool_result":
+				modified = true
+				messageModified = true
+				history = append(history, webSearchResultsFromHistoryBlock(block)...)
+				continue
+			}
+			normalized = append(normalized, rawBlock)
+		}
+		if messageModified {
+			normalized = stripWebSearchCitationsFromTextBlocks(normalized)
+		}
+		if len(history) > 0 {
+			normalized = append(normalized, map[string]any{
+				"type": "text",
+				"text": formatWebSearchHistoryText(history),
+			})
+		}
+		if len(normalized) == 0 {
+			normalized = append(normalized, map[string]any{
+				"type": "text", "text": "(web search completed)",
+			})
+		}
+		if messageModified {
+			message["content"] = normalized
+		}
+	}
+	if !modified {
+		return body, nil
+	}
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return body, err
+	}
+	return updated, nil
+}
+
+func stripWebSearchCitationsFromTextBlocks(content []any) []any {
+	for i, rawBlock := range content {
+		block, ok := rawBlock.(map[string]any)
+		if !ok || getInterfaceString(block["type"]) != "text" {
+			continue
+		}
+		if _, hasCitations := block["citations"]; !hasCitations {
+			continue
+		}
+		copyBlock := make(map[string]any, len(block)-1)
+		for key, value := range block {
+			if key != "citations" {
+				copyBlock[key] = value
+			}
+		}
+		content[i] = copyBlock
+	}
+	return content
+}
+
+func webSearchResultsFromHistoryBlock(block map[string]any) []WebSearchResult {
+	items, ok := block["content"].([]any)
+	if !ok {
+		return nil
+	}
+	results := make([]WebSearchResult, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || getInterfaceString(item["type"]) != "web_search_result" {
+			continue
+		}
+		result := WebSearchResult{
+			Title: getInterfaceString(item["title"]),
+			URL:   getInterfaceString(item["url"]),
+		}
+		if envelope, ok := openWebSearchOpaquePayload(getInterfaceString(item["encrypted_content"])); ok {
+			if result.Title == "" {
+				result.Title = envelope.Title
+			}
+			if result.URL == "" {
+				result.URL = envelope.URL
+			}
+			if strings.TrimSpace(envelope.Snippet) != "" {
+				snippet := strings.TrimSpace(envelope.Snippet)
+				result.Snippet = &snippet
+			}
+		}
+		if result.Title != "" || result.URL != "" || result.Snippet != nil {
+			results = append(results, result)
+		}
+		if len(results) == 20 {
+			break
+		}
+	}
+	return results
+}
+
+func formatWebSearchHistoryText(results []WebSearchResult) string {
+	var builder strings.Builder
+	_, _ = builder.WriteString("<web_search_history>\n")
+	for i, result := range results {
+		_, _ = fmt.Fprintf(&builder, "%d. %s\nURL: %s\n", i+1, result.Title, result.URL)
+		if result.Snippet != nil && strings.TrimSpace(*result.Snippet) != "" {
+			_, _ = fmt.Fprintf(&builder, "Snippet: %s\n", truncateWebSearchCitationText(strings.TrimSpace(*result.Snippet), 500))
+		}
+	}
+	_, _ = builder.WriteString("</web_search_history>")
+	return builder.String()
+}
+
 func InjectToolResultsClaude(claudePayload []byte, toolUseID, query string, results *WebSearchResults) ([]byte, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(claudePayload, &payload); err != nil {
@@ -261,6 +421,7 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 	}
 	updated = append(updated, content...)
 	response["content"] = updated
+	injectWebSearchCitationsIntoContent(updated, searches)
 	if successfulSearches := successfulSearchCount(searches); successfulSearches > 0 {
 		usage, ok := response["usage"].(map[string]any)
 		if !ok {
@@ -293,19 +454,183 @@ func buildSearchResultContent(results *WebSearchResults) []map[string]any {
 		return content
 	}
 	for _, result := range results.Results {
-		snippet := ""
-		if result.Snippet != nil {
-			snippet = strings.TrimSpace(*result.Snippet)
-		}
-		content = append(content, map[string]any{
-			"type":              "web_search_result",
-			"title":             result.Title,
-			"url":               result.URL,
-			"encrypted_content": snippet,
-			"page_age":          nil,
-		})
+		content = append(content, buildWebSearchResultBlock(result))
 	}
 	return content
+}
+
+func buildWebSearchResultBlock(result WebSearchResult) map[string]any {
+	return map[string]any{
+		"type":              "web_search_result",
+		"title":             result.Title,
+		"url":               result.URL,
+		"encrypted_content": sealWebSearchOpaquePayload("content", result),
+		"page_age":          webSearchPageAge(result.PublishedDate),
+	}
+}
+
+func webSearchPageAge(publishedDate *int64) any {
+	if publishedDate == nil || *publishedDate <= 0 {
+		return nil
+	}
+	seconds := *publishedDate
+	// Some MCP implementations return Unix milliseconds.
+	if seconds > 100000000000 {
+		seconds /= 1000
+	}
+	return time.Unix(seconds, 0).UTC().Format("January 2, 2006")
+}
+
+func newWebSearchOpaqueKey() [32]byte {
+	var key [32]byte
+	if _, err := io.ReadFull(rand.Reader, key[:]); err == nil {
+		return key
+	}
+	return sha256.Sum256([]byte(fmt.Sprintf("sub2api-web-search-%d", time.Now().UnixNano())))
+}
+
+type webSearchOpaqueEnvelope struct {
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+func sealWebSearchOpaquePayload(kind string, result WebSearchResult) string {
+	snippet := ""
+	if result.Snippet != nil {
+		snippet = strings.TrimSpace(*result.Snippet)
+	}
+	plain, err := json.Marshal(webSearchOpaqueEnvelope{
+		Kind: kind, Title: result.Title, URL: result.URL, Snippet: snippet,
+	})
+	if err != nil {
+		return ""
+	}
+
+	block, err := aes.NewCipher(webSearchOpaqueKey[:])
+	if err != nil {
+		return fallbackWebSearchOpaquePayload(plain)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return fallbackWebSearchOpaquePayload(plain)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return fallbackWebSearchOpaquePayload(plain)
+	}
+	sealed := gcm.Seal(nil, nonce, plain, []byte("sub2api:web-search:v1"))
+	wire := make([]byte, 1, 1+len(nonce)+len(sealed))
+	wire[0] = 1
+	wire = append(wire, nonce...)
+	wire = append(wire, sealed...)
+	return base64.RawStdEncoding.EncodeToString(wire)
+}
+
+func fallbackWebSearchOpaquePayload(plain []byte) string {
+	digest := sha256.Sum256(plain)
+	wire := append([]byte{0}, digest[:]...)
+	return base64.RawStdEncoding.EncodeToString(wire)
+}
+
+func openWebSearchOpaquePayload(token string) (webSearchOpaqueEnvelope, bool) {
+	var envelope webSearchOpaqueEnvelope
+	wire, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(token))
+	if err != nil || len(wire) < 2 || wire[0] != 1 {
+		return envelope, false
+	}
+	block, err := aes.NewCipher(webSearchOpaqueKey[:])
+	if err != nil {
+		return envelope, false
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil || len(wire) <= 1+gcm.NonceSize() {
+		return envelope, false
+	}
+	nonce := wire[1 : 1+gcm.NonceSize()]
+	plain, err := gcm.Open(nil, nonce, wire[1+gcm.NonceSize():], []byte("sub2api:web-search:v1"))
+	if err != nil || json.Unmarshal(plain, &envelope) != nil {
+		return webSearchOpaqueEnvelope{}, false
+	}
+	return envelope, true
+}
+
+func injectWebSearchCitationsIntoContent(content []any, searches []SearchIndicator) {
+	if len(searches) == 0 {
+		return
+	}
+	for i := len(content) - 1; i >= 0; i-- {
+		block, ok := content[i].(map[string]any)
+		if !ok || getInterfaceString(block["type"]) != "text" {
+			continue
+		}
+		text := getInterfaceString(block["text"])
+		citations := buildWebSearchCitations(searches, text)
+		if len(citations) > 0 {
+			block["citations"] = citations
+		}
+		return
+	}
+}
+
+func buildWebSearchCitations(searches []SearchIndicator, responseText string) []map[string]any {
+	all := make([]WebSearchResult, 0)
+	for _, search := range searches {
+		if search.Results != nil {
+			all = append(all, search.Results.Results...)
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+
+	matched := make([]WebSearchResult, 0, 4)
+	seen := make(map[string]struct{})
+	for _, result := range all {
+		url := strings.TrimSpace(result.URL)
+		if url == "" || !strings.Contains(responseText, url) {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		matched = append(matched, result)
+		if len(matched) == 4 {
+			break
+		}
+	}
+	// Anthropic web-search responses always carry citations. Kiro sometimes
+	// summarizes a result without repeating its URL, so attach the first result
+	// rather than returning a structurally citation-free response.
+	if len(matched) == 0 {
+		matched = append(matched, all[0])
+	}
+
+	citations := make([]map[string]any, 0, len(matched))
+	for _, result := range matched {
+		citedText := strings.TrimSpace(result.Title)
+		if result.Snippet != nil && strings.TrimSpace(*result.Snippet) != "" {
+			citedText = truncateWebSearchCitationText(strings.TrimSpace(*result.Snippet), 150)
+		}
+		citations = append(citations, map[string]any{
+			"type":            "web_search_result_location",
+			"url":             result.URL,
+			"title":           result.Title,
+			"encrypted_index": sealWebSearchOpaquePayload("index", result),
+			"cited_text":      citedText,
+		})
+	}
+	return citations
+}
+
+func truncateWebSearchCitationText(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes])
 }
 
 func ExtractWebSearchToolUseFromResponse(responsePayload []byte) (toolUseID, query string, ok bool) {

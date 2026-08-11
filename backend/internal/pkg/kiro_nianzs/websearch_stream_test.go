@@ -23,7 +23,12 @@ func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
 	require.Contains(t, string(events[1]), `"{\"query\":\"golang concurrency\"}"`)
 	require.Contains(t, string(events[3]), `"type":"web_search_tool_result"`)
 	require.Contains(t, string(events[3]), `"tool_use_id":"srvtoolu_test"`)
-	require.Contains(t, string(events[3]), `"encrypted_content":"result snippet"`)
+	opaqueContent := gjson.Get(extractSSEDataForTest(t, events[3]), "content_block.content.0.encrypted_content").String()
+	require.NotEmpty(t, opaqueContent)
+	require.NotEqual(t, "result snippet", opaqueContent)
+	envelope, ok := openWebSearchOpaquePayload(opaqueContent)
+	require.True(t, ok)
+	require.Equal(t, "result snippet", envelope.Snippet)
 }
 
 func TestGenerateSearchIndicatorEvents_PairsSearchResultWithServerToolUse(t *testing.T) {
@@ -110,6 +115,35 @@ func TestAdjustSSEChunkWithWebSearchUsage_AddsRequestCountOnlyToFinalUsage(t *te
 	adjusted, shouldForward = AdjustSSEChunkWithWebSearchUsage(contentDelta, 2, 2)
 	require.True(t, shouldForward)
 	require.False(t, gjson.Get(extractSSEDataForTest(t, adjusted), "usage.server_tool_use").Exists())
+}
+
+func TestFinalizeWebSearchSSEChunksAddsOfficialCitationDeltaBeforeTextStop(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"See https://go.dev\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"),
+		[]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"),
+	}
+	snippet := "The Go programming language documentation."
+	searches := []SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{
+		{Title: "Go", URL: "https://go.dev", Snippet: &snippet},
+	}}}}
+
+	finalized := FinalizeWebSearchSSEChunks(chunks, 4, 1, searches)
+	wire := ""
+	for _, chunk := range finalized {
+		wire += string(chunk)
+	}
+	require.NotContains(t, wire, `"type":"message_start"`)
+	require.Contains(t, wire, `"index":4`)
+	require.Contains(t, wire, `"type":"citations_delta"`)
+	require.Contains(t, wire, `"type":"web_search_result_location"`)
+	require.Contains(t, wire, `"url":"https://go.dev"`)
+	require.Less(t, strings.Index(wire, `"type":"citations_delta"`), strings.Index(wire, `"type":"content_block_stop"`))
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+	require.Equal(t, int64(1), gjson.Get(extractSSEDataForTest(t, finalized[len(finalized)-2]), "usage.server_tool_use.web_search_requests").Int())
 }
 
 func extractSSEDataForTest(t *testing.T, chunk []byte) string {

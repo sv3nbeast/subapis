@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -89,11 +90,91 @@ func TestInjectSearchIndicatorsInResponse(t *testing.T) {
 	require.Equal(t, "srvtoolu_test", gjson.GetBytes(updated, "content.0.id").String())
 	require.Equal(t, "web_search_tool_result", gjson.GetBytes(updated, "content.1.type").String())
 	require.Equal(t, gjson.GetBytes(updated, "content.0.id").String(), gjson.GetBytes(updated, "content.1.tool_use_id").String())
-	require.Equal(t, "result snippet", gjson.GetBytes(updated, "content.1.content.0.encrypted_content").String())
+	opaqueContent := gjson.GetBytes(updated, "content.1.content.0.encrypted_content").String()
+	require.NotEmpty(t, opaqueContent)
+	require.NotEqual(t, "result snippet", opaqueContent)
+	envelope, ok := openWebSearchOpaquePayload(opaqueContent)
+	require.True(t, ok)
+	require.Equal(t, "content", envelope.Kind)
+	require.Equal(t, "result snippet", envelope.Snippet)
 	require.Equal(t, "null", gjson.GetBytes(updated, "content.1.content.0.page_age").Raw)
 	require.False(t, gjson.GetBytes(updated, "content.1.content.0.page_content").Exists())
 	require.Equal(t, "text", gjson.GetBytes(updated, "content.2.type").String())
+	require.Equal(t, "web_search_result_location", gjson.GetBytes(updated, "content.2.citations.0.type").String())
+	require.Equal(t, "https://go.dev", gjson.GetBytes(updated, "content.2.citations.0.url").String())
+	require.Equal(t, "Go", gjson.GetBytes(updated, "content.2.citations.0.title").String())
+	require.Equal(t, "result snippet", gjson.GetBytes(updated, "content.2.citations.0.cited_text").String())
+	require.NotEmpty(t, gjson.GetBytes(updated, "content.2.citations.0.encrypted_index").String())
 	require.Equal(t, int64(1), gjson.GetBytes(updated, "usage.server_tool_use.web_search_requests").Int())
+}
+
+func TestWebSearchOpaquePayloadIsEncryptedAndRandomized(t *testing.T) {
+	snippet := "private result text"
+	result := WebSearchResult{Title: "Example", URL: "https://example.com", Snippet: &snippet}
+	first := sealWebSearchOpaquePayload("content", result)
+	second := sealWebSearchOpaquePayload("content", result)
+
+	require.NotEqual(t, first, second)
+	require.NotContains(t, first, snippet)
+	opened, ok := openWebSearchOpaquePayload(first)
+	require.True(t, ok)
+	require.Equal(t, "content", opened.Kind)
+	require.Equal(t, result.Title, opened.Title)
+	require.Equal(t, result.URL, opened.URL)
+	require.Equal(t, snippet, opened.Snippet)
+}
+
+func TestBuildWebSearchResultBlockFormatsPublishedDate(t *testing.T) {
+	published := int64(1710000000000)
+	block := buildWebSearchResultBlock(WebSearchResult{
+		Title: "Example", URL: "https://example.com", PublishedDate: &published,
+	})
+	require.Equal(t, "March 9, 2024", block["page_age"])
+}
+
+func TestBuildWebSearchCitationsPrefersURLsUsedInAnswerAndCapsQuotedText(t *testing.T) {
+	longSnippet := strings.Repeat("界", 180)
+	otherSnippet := "other"
+	searches := []SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{
+		{Title: "Other", URL: "https://other.example", Snippet: &otherSnippet},
+		{Title: "Matched", URL: "https://matched.example", Snippet: &longSnippet},
+	}}}}
+
+	citations := buildWebSearchCitations(searches, "See https://matched.example for details")
+	require.Len(t, citations, 1)
+	require.Equal(t, "https://matched.example", citations[0]["url"])
+	require.Len(t, []rune(citations[0]["cited_text"].(string)), 150)
+	require.NotEmpty(t, citations[0]["encrypted_index"])
+}
+
+func TestNormalizeWebSearchHistoryForKiroRestoresSealedResultAndRemovesServerBlocks(t *testing.T) {
+	snippet := "official documentation"
+	result := WebSearchResult{Title: "Go", URL: "https://go.dev", Snippet: &snippet}
+	serverID := "srvtoolu_01history"
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-opus-5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "search go"},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "server_tool_use", "id": serverID, "name": "web_search", "input": map[string]any{"query": "go"}},
+				map[string]any{"type": "web_search_tool_result", "tool_use_id": serverID, "content": []any{buildWebSearchResultBlock(result)}},
+				map[string]any{"type": "text", "text": "Go is documented here.", "citations": buildWebSearchCitations([]SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{result}}}}, "")},
+			}},
+			map[string]any{"role": "user", "content": "continue"},
+		},
+		"tools": []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}},
+	})
+	require.NoError(t, err)
+
+	normalized, err := NormalizeWebSearchHistoryForKiro(body)
+	require.NoError(t, err)
+	require.NotContains(t, string(normalized), `"server_tool_use"`)
+	require.NotContains(t, string(normalized), `"web_search_tool_result"`)
+	require.NotContains(t, string(normalized), `"citations"`)
+	require.Contains(t, string(normalized), "Go is documented here.")
+	require.Contains(t, gjson.GetBytes(normalized, "messages.1.content.1.text").String(), "<web_search_history>")
+	require.Contains(t, string(normalized), "official documentation")
+	require.Contains(t, string(normalized), "https://go.dev")
 }
 
 func TestInjectSearchIndicatorsInResponse_DoesNotBillFailedSearch(t *testing.T) {

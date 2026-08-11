@@ -451,6 +451,8 @@ func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testin
 	require.Contains(t, wire, `"type":"server_tool_use"`)
 	require.Contains(t, wire, `"type":"web_search_tool_result"`)
 	require.Contains(t, wire, `"text":"Use goroutines and channels."`)
+	require.Contains(t, wire, `"type":"citations_delta"`)
+	require.Contains(t, wire, `"type":"web_search_result_location"`)
 	var serverToolUseID, resultToolUseID string
 	for _, event := range nianzsSSEPayloadsByType(wire, "content_block_start") {
 		switch event.Get("content_block.type").String() {
@@ -505,6 +507,9 @@ func TestNianzsMessagesWebSearchNonStreamingPairsResultAndReportsUsage(t *testin
 	require.Equal(t, gjson.Get(response, "content.0.id").String(), gjson.Get(response, "content.1.tool_use_id").String())
 	require.Equal(t, int64(1), gjson.Get(response, "usage.server_tool_use.web_search_requests").Int())
 	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.2.text").String())
+	require.Equal(t, "web_search_result_location", gjson.Get(response, "content.2.citations.0.type").String())
+	require.Equal(t, "https://go.dev", gjson.Get(response, "content.2.citations.0.url").String())
+	require.NotEmpty(t, gjson.Get(response, "content.2.citations.0.encrypted_index").String())
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
 }
@@ -584,11 +589,168 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	}
 	require.Len(t, serverToolIDs, 2)
 	require.Equal(t, serverToolIDs, resultToolIDs)
+	for id := range serverToolIDs {
+		require.True(t, strings.HasPrefix(id, "srvtoolu_"), "server tool ID must use Anthropic namespace: %s", id)
+	}
 	require.Len(t, indices, 5, "two search pairs plus the final text block must use distinct indices")
 	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
 	require.Len(t, messageDeltas, 1)
 	require.Equal(t, int64(2), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())
 	require.Contains(t, wire, `"text":"Use channels for communication and synchronize shared memory explicitly."`)
+}
+
+func TestNianzsMessagesWebSearchCommitsCacheOnlyAfterCompleteFirstTurn(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"jsonrpc":"2.0","id":"search","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go\",\"url\":\"https://go.dev\",\"snippet\":\"docs\"}]}"}]}}`,
+			)),
+		}
+	}
+
+	t.Run("truncated turn does not commit", func(t *testing.T) {
+		truncated := bytes.NewBuffer(nil)
+		_, _ = truncated.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "PARTIAL_ONLY"},
+		}))
+		svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+		upstream.responses = []*http.Response{mcpResponse(), {
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+			Body:       io.NopCloser(bytes.NewReader(truncated.Bytes())),
+		}}
+		cacheKey := uint64(time.Now().UnixNano())
+		plan := nianzsCodeExecutionCachePlanForTest(cacheKey)
+		defer nianzsDeleteCodeExecutionCachePlanForTest(cacheKey)
+
+		resp, _, openErr := svc.openKiroAnthropicStreamResponseNianzs(
+			context.Background(), account, parsed, body, "claude-opus-5", "claude-opus-5", nil, nil, plan,
+		)
+		require.NoError(t, openErr)
+		require.NotNil(t, resp)
+		wire, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		require.Error(t, readErr)
+		require.Contains(t, string(wire), `"type":"server_tool_use"`)
+		require.NotContains(t, string(wire), "event: message_stop")
+		require.False(t, nianzsCodeExecutionCachePlanCommittedForTest(cacheKey))
+	})
+
+	t.Run("complete turn commits", func(t *testing.T) {
+		svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+		upstream.responses = []*http.Response{mcpResponse(), kiroEventStreamResponse(t, "done", 9, 3)}
+		cacheKey := uint64(time.Now().UnixNano())
+		plan := nianzsCodeExecutionCachePlanForTest(cacheKey)
+		defer nianzsDeleteCodeExecutionCachePlanForTest(cacheKey)
+
+		resp, _, openErr := svc.openKiroAnthropicStreamResponseNianzs(
+			context.Background(), account, parsed, body, "claude-opus-5", "claude-opus-5", nil, nil, plan,
+		)
+		require.NoError(t, openErr)
+		require.NotNil(t, resp)
+		wire, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		require.NoError(t, readErr)
+		require.Equal(t, 1, strings.Count(string(wire), "event: message_stop"))
+		require.True(t, nianzsCodeExecutionCachePlanCommittedForTest(cacheKey))
+	})
+}
+
+func TestNianzsMessagesWebSearchTruncatedTurnSurfacesOneInBandError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	truncated := bytes.NewBuffer(nil)
+	_, _ = truncated.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "PARTIAL_ONLY"},
+	}))
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"jsonrpc":"2.0","id":"search","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go\",\"url\":\"https://go.dev\",\"snippet\":\"docs\"}]}"}]}}`,
+			)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+			Body:       io.NopCloser(bytes.NewReader(truncated.Bytes())),
+		},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+	require.Error(t, forwardErr)
+	require.Nil(t, result)
+	wire := recorder.Body.String()
+	require.Contains(t, wire, `"type":"server_tool_use"`)
+	require.Contains(t, wire, `"type":"stream_read_error"`)
+	require.Equal(t, 1, strings.Count(wire, "event: error"))
+	require.Equal(t, 0, strings.Count(wire, "event: message_stop"))
+}
+
+func TestNianzsMessagesWebSearchContinuationNormalizesSyntheticHistoryBeforeKiro(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-5","max_tokens":128,"stream":false,
+		"messages":[
+			{"role":"user","content":"search go"},
+			{"role":"assistant","content":[
+				{"type":"server_tool_use","id":"srvtoolu_01history","name":"web_search","input":{"query":"go"}},
+				{"type":"web_search_tool_result","tool_use_id":"srvtoolu_01history","content":[{"type":"web_search_result","title":"Go","url":"https://go.dev","encrypted_content":"expired-token","page_age":null}]},
+				{"type":"text","text":"Go docs","citations":[{"type":"web_search_result_location","url":"https://go.dev","title":"Go","encrypted_index":"expired-index","cited_text":"docs"}]}
+			]},
+			{"role":"user","content":"Perform a web search for the query: Go release news"}
+		],
+		"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"jsonrpc":"2.0","id":"search","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go News\",\"url\":\"https://go.dev/blog\",\"snippet\":\"news\"}]}"}]}}`,
+		)),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{mcpResponse, kiroEventStreamResponse(t, "latest news", 15, 4)}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	kiroPayload := string(upstream.bodies[1])
+	require.NotContains(t, kiroPayload, "server_tool_use")
+	require.NotContains(t, kiroPayload, "web_search_tool_result")
+	require.NotContains(t, kiroPayload, "encrypted_index")
+	require.Contains(t, kiroPayload, "web_search_history")
+	require.Contains(t, kiroPayload, "https://go.dev")
 }
 
 func TestNianzsMessagesNamedToolChoiceUsesOnlySelectedToolEndToEnd(t *testing.T) {

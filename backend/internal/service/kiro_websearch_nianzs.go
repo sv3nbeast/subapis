@@ -55,7 +55,9 @@ func (w *nianzsKiroStreamChunkCollector) Write(p []byte) (int, error) {
 
 func nianzsBufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int) ([][]byte, *nianzskiro.StreamResult, error) {
 	collector := &nianzsKiroStreamChunkCollector{}
-	result, err := nianzskiro.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, nianzskiro.KiroRequestContext{})
+	result, err := nianzskiro.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, nianzskiro.KiroRequestContext{
+		RequireTerminalEvent: true,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,13 +120,18 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		return nianzsErrKiroWebSearchFallback
 	}
 
-	currentBody, err := nianzskiro.ReplaceWebSearchToolDescription(anthropicBody)
+	currentBody, err := nianzskiro.NormalizeWebSearchHistoryForKiro(anthropicBody)
+	if err != nil {
+		currentBody = anthropicBody
+	}
+	currentBody, err = nianzskiro.ReplaceWebSearchToolDescription(currentBody)
 	if err != nil {
 		currentBody = anthropicBody
 	}
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	nextContentBlockIndex := 0
 	webSearchRequests := 0
+	searches := make([]nianzskiro.SearchIndicator, 0, 2)
 
 	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
 		return err
@@ -142,6 +149,11 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		} else if results != nil {
 			webSearchRequests++
 		}
+		searches = append(searches, nianzskiro.SearchIndicator{
+			ToolUseID: currentToolUseID,
+			Query:     query,
+			Results:   results,
+		})
 
 		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
 			return err
@@ -160,17 +172,17 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return &nianzsKiroWebSearchHTTPError{Response: resp}
 		}
-		if iteration == 0 {
-			// 首轮请求已确认成功，此时提交缓存前缀落盘才是安全的。
-			plan.commit()
-		}
-
 		chunks, _, streamErr := func() ([][]byte, *nianzskiro.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return nianzsBufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
 		}()
 		if streamErr != nil {
 			return streamErr
+		}
+		if iteration == 0 {
+			// A 2xx header is not proof that a Kiro Event Stream completed. Commit
+			// only after the first turn reached explicit completion evidence.
+			plan.commit()
 		}
 
 		analysis := nianzskiro.AnalyzeBufferedStream(chunks)
@@ -183,20 +195,14 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 				nextContentBlockIndex = maxIndex + 1
 			}
 			query = analysis.WebSearchQuery
-			if strings.TrimSpace(analysis.WebSearchToolUseID) == "" {
-				currentToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
-			} else {
-				currentToolUseID = analysis.WebSearchToolUseID
-			}
+			// The upstream custom-tool ID often carries toolu_bdrk_. A server
+			// tool exposed through Anthropic must use a fresh srvtoolu_ ID.
+			currentToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
 			continue
 		}
 
-		for _, chunk := range chunks {
-			adjusted, shouldForward := nianzskiro.AdjustSSEChunkWithWebSearchUsage(chunk, nextContentBlockIndex, webSearchRequests)
-			if !shouldForward {
-				continue
-			}
-			if _, err := w.Write(adjusted); err != nil {
+		for _, chunk := range nianzskiro.FinalizeWebSearchSSEChunks(chunks, nextContentBlockIndex, webSearchRequests, searches) {
+			if _, err := w.Write(chunk); err != nil {
 				return err
 			}
 		}
@@ -212,7 +218,11 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 		return nil, nianzsErrKiroWebSearchFallback
 	}
 
-	currentBody, err := nianzskiro.ReplaceWebSearchToolDescription(anthropicBody)
+	currentBody, err := nianzskiro.NormalizeWebSearchHistoryForKiro(anthropicBody)
+	if err != nil {
+		currentBody = anthropicBody
+	}
+	currentBody, err = nianzskiro.ReplaceWebSearchToolDescription(currentBody)
 	if err != nil {
 		currentBody = anthropicBody
 	}
@@ -221,8 +231,7 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	searches := make([]nianzskiro.SearchIndicator, 0, 2)
 	requestID := ""
-	var cacheUsage *nianzsKiroCacheEmulationUsage
-	cacheUsageResolved := false
+	plan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 
 	for iteration := 0; iteration < nianzsKiroMaxWebSearchIterations; iteration++ {
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
@@ -255,9 +264,9 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 
 		parseResult, parseErr := func() (*nianzskiro.ParseResult, error) {
 			defer func() { _ = resp.Body.Close() }()
-			if !cacheUsageResolved {
-				cacheUsage = s.buildKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-				cacheUsageResolved = true
+			var cacheUsage *nianzsKiroCacheEmulationUsage
+			if iteration == 0 {
+				cacheUsage = plan.result()
 			}
 			return nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, nianzskiro.KiroRequestContext{
 				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
@@ -267,11 +276,14 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 		if parseErr != nil {
 			return nil, parseErr
 		}
+		if iteration == 0 {
+			plan.commit()
+		}
 		if requestID == "" {
 			requestID = nianzsBuildKiroRequestID(resp)
 		}
 
-		nextToolUseID, nextQuery, hasNext := nianzskiro.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
+		_, nextQuery, hasNext := nianzskiro.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
 		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= nianzsKiroMaxWebSearchIterations {
 			finalBody, injectErr := nianzskiro.InjectSearchIndicatorsInResponse(parseResult.ResponseBody, searches)
 			if injectErr == nil {
@@ -285,10 +297,9 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 		}
 
 		query = nextQuery
-		if strings.TrimSpace(nextToolUseID) == "" {
-			nextToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
-		}
-		currentToolUseID = nextToolUseID
+		// Never expose a custom Kiro/Bedrock tool ID as an Anthropic server
+		// tool ID. The synthetic request/result pair owns its own namespace.
+		currentToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	}
 
 	return nil, fmt.Errorf("kiro web search exceeded max iterations")
