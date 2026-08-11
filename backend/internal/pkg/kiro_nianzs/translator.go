@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -112,7 +113,11 @@ type KiroRequestContext struct {
 	StructuredOutputUserHint string
 	StopSequences            []string
 	MaxOutputTokens          int
-	forcedToolChoiceName     string
+	// RequireTerminalEvent prevents callers that perform server-side work from
+	// treating a transport EOF as a successful model turn. Kiro's normal
+	// messageStopEvent remains the authoritative completion boundary.
+	RequireTerminalEvent bool
+	forcedToolChoiceName string
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -537,7 +542,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body)
+	content, toolUses, usage, stopReason, err := parseEventStream(body, requestCtx.RequireTerminalEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -588,6 +593,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
 	var outputTextBuf strings.Builder
+	sawTerminalEvent := false
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -1274,6 +1280,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
+			if isKiroTerminalEventType(semanticEvents[i].SourceEventType) {
+				sawTerminalEvent = true
+			}
 			if kiroUpstreamTraceEnabled {
 				ev := &semanticEvents[i]
 				detail := ev.Content
@@ -1289,6 +1298,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 				return nil, err
 			}
 		}
+	}
+	if requestCtx.RequireTerminalEvent && !sawTerminalEvent {
+		return nil, errors.New("incomplete kiro event stream: missing terminal event")
 	}
 
 	if err := closeOpenStreamingTool(); err != nil {
@@ -2995,12 +3007,13 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, error) {
+func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
 	var usage Usage
 	stopReason := ""
+	sawTerminalEvent := false
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
@@ -3036,6 +3049,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 		if sr := readStopReason(event); sr != "" {
 			stopReason = sr
+		}
+		if isKiroTerminalEventType(msg.EventType) {
+			sawTerminalEvent = true
 		}
 		switch msg.EventType {
 		case "assistantResponseEvent":
@@ -3080,6 +3096,9 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 			updateUsageFromEvent(&usage, msg.EventType, event)
 		}
 	}
+	if requireTerminalEvent && !sawTerminalEvent {
+		return "", nil, usage, stopReason, errors.New("incomplete kiro event stream: missing terminal event")
+	}
 	closeReasoning()
 
 	if currentTool != nil && currentTool.ToolUseID != "" && !processedIDs[currentTool.ToolUseID] {
@@ -3120,6 +3139,15 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}
 	}
 	return cleanText, toolUses, usage, stopReason, nil
+}
+
+func isKiroTerminalEventType(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "messageStopEvent", "message_stop":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {

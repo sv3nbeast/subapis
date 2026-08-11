@@ -1018,6 +1018,7 @@ type GatewayService struct {
 	balanceNotifyService       *BalanceNotifyService
 	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
 	userPlatformQuotaRepo      UserPlatformQuotaRepository
+	kiroCodeExecutionRunner    nianzsKiroCodeExecutionRunner
 }
 
 func (s *GatewayService) SetCompositeResolver(resolver *CompositeRouteResolver) {

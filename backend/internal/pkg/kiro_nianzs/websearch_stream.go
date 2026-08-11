@@ -189,7 +189,13 @@ func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
 // reports successful server-side web-search calls in the same usage object as
 // Anthropic. A zero count is a byte-compatible no-op for non-search usage.
 func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests int) ([]byte, bool) {
-	return filterSSEChunkWithWebSearchUsage(chunk, -1, offset, false, webSearchRequests)
+	return filterSSEChunkWithServerToolUsage(chunk, -1, offset, false, webSearchRequests, 0)
+}
+
+// AdjustSSEChunkWithCodeExecutionUsage reuses the final Kiro terminal envelope
+// while reporting the server-side Python executions performed by Sub2API.
+func AdjustSSEChunkWithCodeExecutionUsage(chunk []byte, offset, codeExecutionRequests int) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, -1, offset, false, 0, codeExecutionRequests)
 }
 
 func MaxContentBlockIndex(chunks [][]byte) int {
@@ -220,10 +226,14 @@ func MaxContentBlockIndex(chunks [][]byte) int {
 }
 
 func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool) ([]byte, bool) {
-	return filterSSEChunkWithWebSearchUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, 0)
+	return filterSSEChunkWithServerToolUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, 0, 0)
 }
 
 func filterSSEChunkWithWebSearchUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests int) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, webSearchRequests, 0)
+}
+
+func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests, codeExecutionRequests int) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -251,7 +261,7 @@ func filterSSEChunkWithWebSearchUsage(chunk []byte, webSearchToolUseIndex, index
 			if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
 				continue
 			}
-			adjusted := adjustEventPayload(payload, indexOffset, webSearchRequests)
+			adjusted := adjustEventPayload(payload, indexOffset, webSearchRequests, codeExecutionRequests)
 			if adjusted == "" {
 				continue
 			}
@@ -296,8 +306,8 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppr
 	return false
 }
 
-func adjustEventPayload(payload string, indexOffset, webSearchRequests int) string {
-	if payload == "" || (indexOffset == 0 && webSearchRequests <= 0) {
+func adjustEventPayload(payload string, indexOffset, webSearchRequests, codeExecutionRequests int) string {
+	if payload == "" || (indexOffset == 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0) {
 		return payload
 	}
 	var event map[string]any
@@ -314,13 +324,23 @@ func adjustEventPayload(payload string, indexOffset, webSearchRequests int) stri
 			}
 		}
 	case "message_delta":
-		if webSearchRequests > 0 {
+		if webSearchRequests > 0 || codeExecutionRequests > 0 {
 			usage, ok := event["usage"].(map[string]any)
 			if !ok {
 				usage = map[string]any{}
 				event["usage"] = usage
 			}
-			usage["server_tool_use"] = map[string]any{"web_search_requests": webSearchRequests}
+			serverUsage, _ := usage["server_tool_use"].(map[string]any)
+			if serverUsage == nil {
+				serverUsage = map[string]any{}
+				usage["server_tool_use"] = serverUsage
+			}
+			if webSearchRequests > 0 {
+				serverUsage["web_search_requests"] = webSearchRequests
+			}
+			if codeExecutionRequests > 0 {
+				serverUsage["code_execution_requests"] = codeExecutionRequests
+			}
 			changed = true
 		}
 	}

@@ -177,6 +177,55 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if tokenType != "oauth" && tokenType != "apikey" {
 		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
+	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(body) {
+		codeResult, codeErr := s.executeKiroCodeExecutionNianzs(
+			ctx, account, parsed, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header, runner,
+		)
+		switch {
+		case errors.Is(codeErr, nianzsErrKiroCodeExecutionFallback):
+		case codeErr == nil:
+			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
+			c.Header("Content-Type", "application/json")
+			claudeReqID := nianzskiro.NewClaudeRequestID()
+			c.Header("x-request-id", claudeReqID)
+			c.Header("request-id", claudeReqID)
+			c.Data(http.StatusOK, "application/json", codeResult.ResponseBody)
+			return &ForwardResult{
+				RequestID:     codeResult.RequestID,
+				Usage:         codeResult.Usage,
+				Model:         originalModel,
+				UpstreamModel: upstreamModel,
+				Stream:        false,
+				Duration:      time.Since(startTime),
+			}, nil
+		default:
+			var httpErr *nianzsKiroCodeExecutionHTTPError
+			if errors.As(codeErr, &httpErr) && httpErr.Response != nil {
+				return nil, s.handleKiroHTTPErrorNianzs(ctx, httpErr.Response, c, account, mappedModel, body)
+			}
+			var failoverErr *UpstreamFailoverError
+			if errors.As(codeErr, &failoverErr) {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "failover",
+					Message:            sanitizeUpstreamErrorMessage(codeErr.Error()),
+				})
+				return nil, failoverErr
+			}
+			safeErr := sanitizeUpstreamErrorMessage(codeErr.Error())
+			c.JSON(http.StatusBadGateway, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "api_error",
+					"message": "Upstream request failed",
+				},
+			})
+			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		}
+	}
 	if isOnlyWebSearchToolInBody(body) {
 		webSearchResult, webSearchErr := s.executeKiroWebSearchNianzs(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
 		switch {
@@ -315,6 +364,50 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	defer releaseUpstreamCtx()
 
 	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
+	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(anthropicBody) {
+		plan := cachePlanOverride
+		if plan == nil {
+			plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+		}
+		preparedBody, prepareErr := nianzskiro.ReplaceLegacyCodeExecutionTool(anthropicBody)
+		if prepareErr != nil {
+			return nil, inputTokens, prepareErr
+		}
+		initialResponse, initialRequestCtx, err := s.executeKiroUpstreamWithParsedNianzs(
+			upstreamCtx, account, parsed, preparedBody, mappedModel, requestModel, token, headers,
+		)
+		if err != nil {
+			return nil, inputTokens, err
+		}
+		if initialResponse.StatusCode < 200 || initialResponse.StatusCode >= 300 {
+			return initialResponse, inputTokens, nil
+		}
+		// The first upstream request is accepted before the pipe is exposed. The
+		// cache plan is committed only after its Event Stream reaches a verified
+		// terminal event inside streamKiroCodeExecutionAsAnthropicNianzs.
+		pr, pw := io.Pipe()
+		wrappedHeaders := make(http.Header)
+		wrappedHeaders.Set("Content-Type", "text/event-stream")
+		claudeReqID := nianzskiro.NewClaudeRequestID()
+		wrappedHeaders.Set("x-request-id", claudeReqID)
+		wrappedHeaders.Set("request-id", claudeReqID)
+		go func() {
+			streamErr := s.streamKiroCodeExecutionAsAnthropicNianzs(
+				upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel,
+				token, inputTokens, headers, pw, plan, runner, initialResponse, initialRequestCtx,
+			)
+			if streamErr != nil {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			_ = pw.Close()
+		}()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     wrappedHeaders,
+			Body:       pr,
+		}, inputTokens, nil
+	}
 	if isOnlyWebSearchToolInBody(anthropicBody) {
 		plan := cachePlanOverride
 		if plan == nil {

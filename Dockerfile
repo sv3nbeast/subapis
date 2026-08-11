@@ -114,7 +114,12 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     -ldflags="-s -w" \
     -trimpath \
     -o /app/antigravityworker-boringcrypto \
-    ./cmd/antigravityworker
+    ./cmd/antigravityworker && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -o /app/kirocodeexecworker \
+    ./cmd/kirocodeexecworker
 
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
@@ -136,6 +141,7 @@ RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     su-exec \
+    python3 \
     libpq \
     zstd-libs \
     lz4-libs \
@@ -161,6 +167,7 @@ WORKDIR /app
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/antigravityworker /app/antigravityworker
 COPY --from=backend-builder --chown=sub2api:sub2api /app/antigravityworker-boringcrypto /app/antigravityworker-boringcrypto
+COPY --from=backend-builder --chown=sub2api:sub2api /app/kirocodeexecworker /app/kirocodeexecworker
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
 
 # Create data directory
