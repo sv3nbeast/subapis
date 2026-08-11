@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,4 +71,50 @@ func TestAdjustSSEChunk_OffsetsIndicesAndDropsMessageStart(t *testing.T) {
 	adjusted, shouldForward := AdjustSSEChunk([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"), 3)
 	require.True(t, shouldForward)
 	require.Contains(t, string(adjusted), `"index":3`)
+}
+
+func TestAnalyzeBufferedStream_DoesNotMixAdjacentNativeSearchBlocks(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_private\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"first query\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":4,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_native\",\"name\":\"web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":4,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"native query\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":4}\n\n"),
+	}
+
+	result := AnalyzeBufferedStream(chunks)
+	require.True(t, result.HasWebSearchToolUse)
+	require.Equal(t, 3, result.WebSearchToolUseIndex)
+	require.Equal(t, "first query", result.WebSearchQuery)
+}
+
+func TestFilterChunksForClient_ReassemblesFragmentedSSE(t *testing.T) {
+	wire := strings.Join([]string{
+		"event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Searching\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_private\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"golang\\\"}\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+	}, "")
+	fragments := make([][]byte, 0, len(wire))
+	for i := range wire {
+		fragments = append(fragments, []byte(wire[i:i+1]))
+	}
+
+	analysis := AnalyzeBufferedStream(fragments)
+	require.True(t, analysis.HasWebSearchToolUse)
+	require.Equal(t, 1, analysis.WebSearchToolUseIndex)
+	require.Equal(t, "golang", analysis.WebSearchQuery)
+	filtered := FilterChunksForClient(fragments, analysis.WebSearchToolUseIndex, 2)
+	joined := ""
+	for _, chunk := range filtered {
+		joined += string(chunk)
+	}
+	require.NotContains(t, joined, "toolu_bdrk_private")
+	require.NotContains(t, joined, `"type":"message_delta"`)
+	require.Contains(t, joined, `"index":2`)
 }

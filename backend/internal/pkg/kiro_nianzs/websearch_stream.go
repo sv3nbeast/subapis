@@ -74,81 +74,100 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 	result := BufferedStreamResult{WebSearchToolUseIndex: -1}
 	var currentToolName string
 	currentToolIndex := -1
+	currentToolID := ""
 	var toolInputBuilder strings.Builder
+	resetTool := func() {
+		currentToolName = ""
+		currentToolIndex = -1
+		currentToolID = ""
+		toolInputBuilder.Reset()
+	}
 
-	for _, chunk := range chunks {
-		lines := strings.Split(string(chunk), "\n")
-		for _, line := range lines {
-			if !strings.HasPrefix(line, "data: ") {
+	for _, frame := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(frame)
+		if len(payload) == 0 || string(payload) == "[DONE]" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+
+		switch eventType, _ := event["type"].(string); eventType {
+		case "message_delta":
+			if delta, ok := event["delta"].(map[string]any); ok {
+				if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
+					result.StopReason = stopReason
+				}
+			}
+		case "content_block_start":
+			// Native server_tool_use/result blocks must never inherit the
+			// preceding custom tool's input accumulator.
+			resetTool()
+			contentBlock, ok := event["content_block"].(map[string]any)
+			if !ok {
 				continue
 			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
-			if payload == "" || payload == "[DONE]" {
+			blockType, _ := contentBlock["type"].(string)
+			if blockType != "tool_use" {
 				continue
 			}
-
-			var event map[string]any
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			currentToolName, _ = contentBlock["name"].(string)
+			currentToolName = strings.ToLower(strings.TrimSpace(currentToolName))
+			if idx, ok := event["index"].(float64); ok {
+				currentToolIndex = int(idx)
+			}
+			currentToolID, _ = contentBlock["id"].(string)
+			if isWebSearchToolName(currentToolName, "") && strings.TrimSpace(result.WebSearchToolUseID) == "" {
+				result.WebSearchToolUseID = strings.TrimSpace(currentToolID)
+			}
+			if input, ok := contentBlock["input"].(map[string]any); ok {
+				if query, ok := input["query"].(string); ok {
+					_, _ = toolInputBuilder.WriteString(`{"query":`)
+					encoded, _ := json.Marshal(query)
+					_, _ = toolInputBuilder.Write(encoded)
+					_, _ = toolInputBuilder.WriteString(`}`)
+				}
+			}
+		case "content_block_delta":
+			if currentToolName == "" {
 				continue
 			}
-
-			switch eventType, _ := event["type"].(string); eventType {
-			case "message_delta":
-				if delta, ok := event["delta"].(map[string]any); ok {
-					if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
-						result.StopReason = stopReason
-					}
-				}
-			case "content_block_start":
-				contentBlock, ok := event["content_block"].(map[string]any)
-				if !ok {
-					continue
-				}
-				blockType, _ := contentBlock["type"].(string)
-				if blockType != "tool_use" {
-					continue
-				}
-				currentToolName, _ = contentBlock["name"].(string)
-				currentToolName = strings.ToLower(strings.TrimSpace(currentToolName))
-				if idx, ok := event["index"].(float64); ok {
-					currentToolIndex = int(idx)
-				}
-				if toolUseID, ok := contentBlock["id"].(string); ok && isWebSearchToolName(currentToolName, "") {
-					result.WebSearchToolUseID = strings.TrimSpace(toolUseID)
-				}
-				toolInputBuilder.Reset()
-			case "content_block_delta":
-				if currentToolName == "" {
-					continue
-				}
-				delta, ok := event["delta"].(map[string]any)
-				if !ok {
-					continue
-				}
-				deltaType, _ := delta["type"].(string)
-				if deltaType != "input_json_delta" {
-					continue
-				}
-				if partialJSON, ok := delta["partial_json"].(string); ok {
-					_, _ = toolInputBuilder.WriteString(partialJSON)
-				}
-			case "content_block_stop":
-				if !isWebSearchToolName(currentToolName, "") {
-					currentToolName = ""
-					currentToolIndex = -1
-					toolInputBuilder.Reset()
-					continue
-				}
-				result.HasWebSearchToolUse = true
-				result.WebSearchToolUseIndex = currentToolIndex
+			if idx, ok := event["index"].(float64); ok && currentToolIndex >= 0 && int(idx) != currentToolIndex {
+				continue
+			}
+			delta, ok := event["delta"].(map[string]any)
+			if !ok {
+				continue
+			}
+			deltaType, _ := delta["type"].(string)
+			if deltaType != "input_json_delta" {
+				continue
+			}
+			if partialJSON, ok := delta["partial_json"].(string); ok {
+				_, _ = toolInputBuilder.WriteString(partialJSON)
+			}
+		case "content_block_stop":
+			if currentToolName == "" {
+				continue
+			}
+			if idx, ok := event["index"].(float64); ok && currentToolIndex >= 0 && int(idx) != currentToolIndex {
+				continue
+			}
+			if isWebSearchToolName(currentToolName, "") {
 				var input map[string]string
+				query := ""
 				if err := json.Unmarshal([]byte(toolInputBuilder.String()), &input); err == nil {
-					result.WebSearchQuery = strings.TrimSpace(input["query"])
+					query = strings.TrimSpace(input["query"])
 				}
-				currentToolName = ""
-				currentToolIndex = -1
-				toolInputBuilder.Reset()
+				if query != "" && !result.HasWebSearchToolUse {
+					result.HasWebSearchToolUse = true
+					result.WebSearchToolUseIndex = currentToolIndex
+					result.WebSearchQuery = query
+				}
 			}
+			resetTool()
 		}
 	}
 
@@ -156,14 +175,40 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 }
 
 func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset int) [][]byte {
-	filtered := make([][]byte, 0, len(chunks))
-	for _, chunk := range chunks {
-		adjusted, shouldForward := filterSSEChunk(chunk, webSearchToolUseIndex, indexOffset, true)
+	frames := splitSSEFrames(chunks)
+	filtered := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
+		adjusted, shouldForward := filterSSEChunk(frame, webSearchToolUseIndex, indexOffset, true)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
 	}
 	return filtered
+}
+
+// splitSSEFrames joins arbitrary writer fragments and restores complete SSE
+// records before any event-level filtering or index rewriting is attempted.
+func splitSSEFrames(chunks [][]byte) [][]byte {
+	var wire strings.Builder
+	for _, chunk := range chunks {
+		if len(chunk) > 0 {
+			_, _ = wire.Write(chunk)
+		}
+	}
+	normalized := strings.ReplaceAll(wire.String(), "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Split(normalized, "\n\n")
+	frames := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		frames = append(frames, []byte(part+"\n\n"))
+	}
+	return frames
 }
 
 // AdjustSSEChunk rewrites a final buffered Kiro turn into the already-open
@@ -308,25 +353,19 @@ func AdjustSSEChunkWithCodeExecutionUsage(chunk []byte, offset, codeExecutionReq
 
 func MaxContentBlockIndex(chunks [][]byte) int {
 	maxIndex := -1
-	for _, chunk := range chunks {
-		lines := strings.Split(string(chunk), "\n")
-		for _, line := range lines {
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
-			if payload == "" || payload == "[DONE]" {
-				continue
-			}
-			var event map[string]any
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
-				continue
-			}
-			switch eventType, _ := event["type"].(string); eventType {
-			case "content_block_start", "content_block_delta", "content_block_stop":
-				if idx, ok := event["index"].(float64); ok && int(idx) > maxIndex {
-					maxIndex = int(idx)
-				}
+	for _, chunk := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(chunk)
+		if len(payload) == 0 || string(payload) == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+		switch eventType, _ := event["type"].(string); eventType {
+		case "content_block_start", "content_block_delta", "content_block_stop":
+			if idx, ok := event["index"].(float64); ok && int(idx) > maxIndex {
+				maxIndex = int(idx)
 			}
 		}
 	}
