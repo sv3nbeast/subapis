@@ -652,7 +652,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		if currentThinking.Len() > 0 {
-			sig := thinkingSignature(currentThinking.String(), model, currentMessageID)
+			sig := kiroThinkingSignature(currentThinking.String(), model, currentMessageID)
 			currentThinking.Reset()
 			if sig != "" {
 				if err := writeEvent("content_block_delta", map[string]any{
@@ -3475,7 +3475,7 @@ func extractThinkingBlocksWithSignature(content, model, msgID string) []map[stri
 			blocks = append(blocks, map[string]any{
 				"type":      "thinking",
 				"thinking":  thinking,
-				"signature": thinkingSignature(thinking, model, msgID),
+				"signature": kiroThinkingSignature(thinking, model, msgID),
 			})
 		}
 		pendingThinking.Reset()
