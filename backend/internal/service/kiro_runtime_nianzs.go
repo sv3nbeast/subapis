@@ -80,9 +80,19 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if next := account.GetMappedModel(originalModel); next != "" {
 		mappedModel = next
 	}
-	body := parsed.Body.Bytes()
+	clientBody := parsed.Body.Bytes()
+	body := clientBody
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
+	}
+	if s.debugBodyCaptureEnabled(c) {
+		s.debugLogGatewaySnapshot("KIRO_CLIENT_ORIGINAL", c.Request.Header, clientBody, map[string]string{
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"mapped_model": mappedModel,
+			"model":        originalModel,
+			"stream":       strconv.FormatBool(parsed.Stream),
+			"user_id":      strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+		})
 	}
 	logger.L().Debug("gateway forward_kiro_messages: request prepared",
 		zap.Int64("account_id", account.ID),
@@ -259,6 +269,15 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		})
 		return nil, err
 	}
+	if schema, strict := nianzsKiroStructuredOutputSchema(body); strict {
+		var normalized bool
+		parseResult.ResponseBody, normalized = nianzsNormalizeStructuredOutputResponseJSONWithStatus(parseResult.ResponseBody, schema)
+		logger.L().Debug("kiro strict structured output completed",
+			zap.Int64("account_id", account.ID),
+			zap.Bool("normalized", normalized),
+			zap.Bool("stream", false),
+		)
+	}
 
 	c.Header("Content-Type", "application/json")
 	requestID := nianzsBuildKiroRequestID(resp)
@@ -345,9 +364,21 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	wrappedHeaders.Set("x-request-id", claudeReqID)
 	wrappedHeaders.Set("request-id", claudeReqID)
 
+	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, resp.Body, pw, requestModel, inputTokens, requestCtx)
+		streamWriter := io.Writer(pw)
+		var structuredWriter *nianzsStructuredOutputSSEWriter
+		if strictStructuredOutput {
+			// Kiro does not expose constrained decoding. For the object schema
+			// shape supported by Anthropic, incrementally project each completed
+			// member so extra fields are removed without full-response buffering.
+			if next, ok := newNianzsStructuredOutputSSEWriter(pw, structuredSchema); ok {
+				structuredWriter = next
+				streamWriter = structuredWriter
+			}
+		}
+		_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, resp.Body, streamWriter, requestModel, inputTokens, requestCtx)
 		if streamErr != nil {
 			// Do not inject an upstream SSE error frame here. The production
 			// downstream handler intentionally parses provider error events as
@@ -356,6 +387,17 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			// client write, or emit exactly one client-visible error after output.
 			_ = pw.CloseWithError(streamErr)
 			return
+		}
+		if structuredWriter != nil {
+			if finishErr := structuredWriter.Finish(); finishErr != nil {
+				_ = pw.CloseWithError(finishErr)
+				return
+			}
+			logger.L().Debug("kiro strict structured output completed",
+				zap.Int64("account_id", account.ID),
+				zap.Bool("normalized", structuredWriter.enforced),
+				zap.Bool("stream", true),
+			)
 		}
 		_ = pw.Close()
 	}()
