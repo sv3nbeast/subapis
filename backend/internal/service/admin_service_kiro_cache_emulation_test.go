@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -12,6 +13,9 @@ type groupRepoStubForKiroCacheEmulation struct {
 	updated *Group
 	getByID *Group
 }
+
+func kiroCacheTestFloatPtr(value float64) *float64 { return &value }
+func kiroCacheTestStringPtr(value string) *string  { return &value }
 
 func (s *groupRepoStubForKiroCacheEmulation) Create(_ context.Context, g *Group) error {
 	s.created = g
@@ -89,8 +93,8 @@ func TestAdminServiceKiroCacheEmulationCreatePersistsConfig(t *testing.T) {
 		Platform:                  PlatformKiro,
 		RateMultiplier:            1,
 		KiroCacheEmulationEnabled: true,
-		KiroCacheEmulationRatio:   0.5,
-		KiroEndpointMode:          KiroEndpointModeAuto,
+		KiroCacheEmulationRatio:   kiroCacheTestFloatPtr(0.5),
+		KiroEndpointMode:          kiroCacheTestStringPtr(KiroEndpointModeAuto),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup error: %v", err)
@@ -199,8 +203,8 @@ func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
 		Platform:                  PlatformOpenAI,
 		RateMultiplier:            1,
 		KiroCacheEmulationEnabled: true,
-		KiroCacheEmulationRatio:   0.5,
-		KiroEndpointMode:          KiroEndpointModeKRS,
+		KiroCacheEmulationRatio:   kiroCacheTestFloatPtr(0.5),
+		KiroEndpointMode:          kiroCacheTestStringPtr(KiroEndpointModeKRS),
 	})
 	if err != nil {
 		t.Fatalf("CreateGroup error: %v", err)
@@ -219,5 +223,92 @@ func TestAdminServiceKiroCacheEmulationDisabledForNonKiro(t *testing.T) {
 	}
 	if repo.created.KiroEndpointMode != KiroEndpointModeQ {
 		t.Fatalf("non-Kiro endpoint mode = %q, want %q", repo.created.KiroEndpointMode, KiroEndpointModeQ)
+	}
+}
+
+func TestAdminServiceKiroCacheModesDefaultToNianzsValues(t *testing.T) {
+	repo := &groupRepoStubForKiroCacheEmulation{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name: "kiro-defaults", Platform: PlatformKiro, RateMultiplier: 1,
+	})
+	if err != nil {
+		t.Fatalf("CreateGroup error: %v", err)
+	}
+	if group.KiroCacheEmulationMode != KiroCacheEmulationModeUniform {
+		t.Fatalf("mode = %q, want uniform", group.KiroCacheEmulationMode)
+	}
+	if group.KiroCacheEmulationRatio != 1 || group.KiroCacheCreationEmulationRatio != 1 || group.KiroCacheReadEmulationRatio != 1 {
+		t.Fatalf("ratios = %v/%v/%v, want 1/1/1", group.KiroCacheEmulationRatio, group.KiroCacheCreationEmulationRatio, group.KiroCacheReadEmulationRatio)
+	}
+	if group.KiroEndpointMode != KiroEndpointModeQ {
+		t.Fatalf("endpoint = %q, want q", group.KiroEndpointMode)
+	}
+}
+
+func TestAdminServiceKiroIndependentModeInheritsUniformRatio(t *testing.T) {
+	repo := &groupRepoStubForKiroCacheEmulation{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	ratio := 0.4
+	mode := KiroCacheEmulationModeIndependent
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name: "kiro-independent", Platform: PlatformKiro, RateMultiplier: 1,
+		KiroCacheEmulationEnabled: true,
+		KiroCacheEmulationRatio:   &ratio,
+		KiroCacheEmulationMode:    &mode,
+	})
+	if err != nil {
+		t.Fatalf("CreateGroup error: %v", err)
+	}
+	if group.KiroCacheEmulationMode != KiroCacheEmulationModeIndependent || group.KiroCacheCreationEmulationRatio != ratio || group.KiroCacheReadEmulationRatio != ratio {
+		t.Fatalf("mode/ratios = %s/%v/%v, want independent/%v/%v", group.KiroCacheEmulationMode, group.KiroCacheCreationEmulationRatio, group.KiroCacheReadEmulationRatio, ratio, ratio)
+	}
+}
+
+func TestAdminServiceKiroSwitchToIndependentPreservesUniformRatioUnlessExplicit(t *testing.T) {
+	mode := KiroCacheEmulationModeIndependent
+	for _, tc := range []struct {
+		name               string
+		creation, read     *float64
+		wantCreation, want float64
+	}{
+		{name: "inherit", wantCreation: 0.4, want: 0.4},
+		{name: "explicit", creation: kiroCacheTestFloatPtr(0.8), read: kiroCacheTestFloatPtr(0.2), wantCreation: 0.8, want: 0.2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &groupRepoStubForKiroCacheEmulation{getByID: &Group{
+				ID: 1, Name: "existing", Platform: PlatformKiro, Status: StatusActive,
+				RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard,
+				KiroCacheEmulationRatio: 0.4, KiroCacheEmulationMode: KiroCacheEmulationModeUniform,
+			}}
+			svc := &adminServiceImpl{groupRepo: repo}
+			group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+				KiroCacheEmulationMode:          &mode,
+				KiroCacheCreationEmulationRatio: tc.creation,
+				KiroCacheReadEmulationRatio:     tc.read,
+			})
+			if err != nil {
+				t.Fatalf("UpdateGroup error: %v", err)
+			}
+			if group.KiroCacheCreationEmulationRatio != tc.wantCreation || group.KiroCacheReadEmulationRatio != tc.want {
+				t.Fatalf("ratios = %v/%v, want %v/%v", group.KiroCacheCreationEmulationRatio, group.KiroCacheReadEmulationRatio, tc.wantCreation, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdminServiceRejectsNonFiniteKiroCacheRatios(t *testing.T) {
+	for _, value := range []float64{-0.01, 1.01, math.NaN(), math.Inf(1)} {
+		repo := &groupRepoStubForKiroCacheEmulation{}
+		svc := &adminServiceImpl{groupRepo: repo}
+		_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "invalid", Platform: PlatformKiro, RateMultiplier: 1,
+			KiroCacheCreationEmulationRatio: &value,
+		})
+		if err == nil {
+			t.Fatalf("CreateGroup accepted invalid ratio %v", value)
+		}
 	}
 }

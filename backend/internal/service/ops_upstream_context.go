@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	OpsUpstreamErrorsKey        = "ops_upstream_errors"
 	OpsNetworkErrorTypeKey      = "ops_network_error_type"
 	OpsAnthropicRequestShapeKey = "ops_anthropic_request_shape"
+	OpsKiroEngineKey            = "ops_kiro_engine"
 
 	// Best-effort capture of the current upstream request body so ops can
 	// retry the specific upstream attempt (not just the client request).
@@ -306,6 +308,7 @@ type OpsUpstreamErrorEvent struct {
 	RequestedModel        string `json:"requested_model,omitempty"`
 	MappedModel           string `json:"mapped_model,omitempty"`
 	KiroModelID           string `json:"kiro_model_id,omitempty"`
+	KiroEngine            string `json:"kiro_engine,omitempty"`
 	HasTools              bool   `json:"has_tools,omitempty"`
 	HasAdaptiveThinking   bool   `json:"has_adaptive_thinking,omitempty"`
 	HasContext1MBeta      bool   `json:"has_context_1m_beta,omitempty"`
@@ -338,6 +341,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	ev.RequestedModel = strings.TrimSpace(ev.RequestedModel)
 	ev.MappedModel = strings.TrimSpace(ev.MappedModel)
 	ev.KiroModelID = strings.TrimSpace(ev.KiroModelID)
+	ev.KiroEngine = strings.TrimSpace(ev.KiroEngine)
 	ev.AnthropicHelperKind = strings.TrimSpace(ev.AnthropicHelperKind)
 	ev.NativeNonStreamKind = strings.TrimSpace(ev.NativeNonStreamKind)
 	ev.UpstreamURL = strings.TrimSpace(ev.UpstreamURL)
@@ -381,6 +385,11 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 			if ev.NativeNonStreamKind == "" {
 				ev.NativeNonStreamKind = shape.NativeNonStreamKind
 			}
+		}
+	}
+	if ev.KiroEngine == "" {
+		if engine, ok := c.Get(OpsKiroEngineKey); ok {
+			ev.KiroEngine = strings.TrimSpace(fmt.Sprint(engine))
 		}
 	}
 

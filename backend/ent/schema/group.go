@@ -255,6 +255,18 @@ func (Group) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(5,4)"}).
 			Default(1.0).
 			Comment("Kiro 模拟缓存生效比例，范围 0-1（仅 kiro 分组生效）"),
+		field.String("kiro_cache_emulation_mode").
+			MaxLen(16).
+			Default("uniform").
+			Comment("Kiro 模拟缓存比例模式：uniform=统一比例，independent=独立比例"),
+		field.Float("kiro_cache_creation_emulation_ratio").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(5,4)"}).
+			Default(1.0).
+			Comment("Kiro 缓存创建模拟比例，范围 0-1（独立模式生效）"),
+		field.Float("kiro_cache_read_emulation_ratio").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(5,4)"}).
+			Default(1.0).
+			Comment("Kiro 缓存读取模拟比例，范围 0-1（独立模式生效）"),
 		field.String("kiro_endpoint_mode").
 			MaxLen(16).
 			Default("q").

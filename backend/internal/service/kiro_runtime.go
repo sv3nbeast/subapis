@@ -358,6 +358,10 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
 	}
+	s.recordKiroEngine(c, parsed.GroupID, account)
+	if s.useNianzsKiroEngine(parsed.GroupID) {
+		return s.forwardKiroMessagesNianzs(ctx, c, adaptKiroAccountForNianzs(account), parsed, startTime)
+	}
 	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	if msg := validateKiroRequestShape(parsed); msg != "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1096,6 +1100,9 @@ func resolveKiroUpstreamModel(mappedModel string) string {
 }
 
 func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group) (*http.Response, int, error) {
+	if parsed != nil && s.useNianzsKiroEngine(parsed.GroupID) {
+		return s.openKiroAnthropicStreamResponseNianzs(ctx, adaptKiroAccountForNianzs(account), parsed, anthropicBody, mappedModel, requestModel, headers, group, nil)
+	}
 	ctx = WithKiroGPTTimeoutsDisabled(ctx, requestModel)
 	ctx = s.withKiroCacheBillingScopeForParsed(ctx, parsed)
 	groupID := parsedGroupID(parsed)

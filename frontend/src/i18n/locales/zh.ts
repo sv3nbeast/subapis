@@ -3404,7 +3404,13 @@ const baseMessages = {
         stickyTTLHint: '范围 60 到 86400。默认 3600 秒。',
         enabled: '启用模拟缓存',
         ratio: '缓存比例',
-        ratioHint: '范围 0 到 1，例如 0.5 表示只生效一半模拟缓存 token。'
+        ratioHint: '范围 0% 到 100%，表示模拟缓存 token 的生效比例。',
+        ratioMode: '比例设置',
+        uniformMode: '统一比例',
+        independentMode: '独立比例',
+        creationRatio: '缓存创建比例',
+        readRatio: '缓存读取比例',
+        independentRatioHint: '独立控制缓存创建 token 与缓存读取 token 的模拟比例。'
       },
       copyAccounts: {
         title: '从分组复制账号',

@@ -350,6 +350,9 @@ type AccountUsageService struct {
 	tlsFPProfileService     *TLSFingerprintProfileService
 	kiroCooldownStore       KiroCooldownStore
 	kiroTokenProvider       KiroUsageTokenProvider
+	nianzsKiroCooldownStore NianzsKiroCooldownStore
+	nianzsKiroTokenProvider KiroUsageTokenProvider
+	kiroEngine              KiroEngine
 	settingService          *SettingService
 	agentIdentityTaskMu     sync.Mutex
 	agentIdentityWS         agentIdentityWSConnectionInvalidator
@@ -403,6 +406,19 @@ func (s *AccountUsageService) SetKiroTokenProvider(provider KiroUsageTokenProvid
 	return s
 }
 
+func (s *AccountUsageService) SetNianzsKiroRuntime(provider KiroUsageTokenProvider, store NianzsKiroCooldownStore, engine string) *AccountUsageService {
+	if s != nil {
+		s.nianzsKiroTokenProvider = provider
+		s.nianzsKiroCooldownStore = store
+		s.kiroEngine = normalizeKiroEngine(engine)
+	}
+	return s
+}
+
+func (s *AccountUsageService) useNianzsKiroRuntime() bool {
+	return s != nil && s.kiroEngine == KiroEngineNianzs
+}
+
 func (s *AccountUsageService) SetSettingService(settingService *SettingService) *AccountUsageService {
 	if s != nil {
 		s.settingService = settingService
@@ -446,6 +462,9 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 	}
 
 	if account.Platform == PlatformKiro {
+		if s.useNianzsKiroRuntime() {
+			return s.getKiroUsageNianzs(ctx, account, "active", false)
+		}
 		return s.getKiroUsage(ctx, account, "active", false)
 	}
 
@@ -572,6 +591,9 @@ func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int
 	}
 
 	if account.Platform == PlatformKiro {
+		if s.useNianzsKiroRuntime() {
+			return s.getKiroUsageNianzs(ctx, account, "passive", false)
+		}
 		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 

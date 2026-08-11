@@ -368,6 +368,8 @@ type openAIStickyEscapeConfig struct {
 	errorRate float64
 }
 
+type openAINianzsKiroCooldownRecoveryAttemptedKey struct{}
+
 func newDefaultOpenAIAccountScheduler(service *OpenAIGatewayService, stats *openAIAccountRuntimeStats) OpenAIAccountScheduler {
 	if stats == nil {
 		stats = newOpenAIAccountRuntimeStats()
@@ -1469,6 +1471,15 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		})
 	}
 	if len(filtered) == 0 {
+		if ctx.Value(openAINianzsKiroCooldownRecoveryAttemptedKey{}) != true &&
+			s.service.kiroBridgeService != nil &&
+			s.service.kiroBridgeService.tryRecoverOpenAIKiroCooldownPoolNianzs(ctx, req.GroupID, accounts, cooldownAccountIDs) {
+			retryCtx := context.WithValue(ctx, openAINianzsKiroCooldownRecoveryAttemptedKey{}, true)
+			if refreshed, refreshErr := s.service.listSchedulableAccountsForSchedule(retryCtx, req.GroupID, req.Platform, req.AllowKiroBridge); refreshErr == nil {
+				retryCtx = s.service.kiroBridgeService.withKiroCooldownPrefetch(retryCtx, refreshed, req.GroupID)
+			}
+			return s.selectByLoadBalance(retryCtx, req)
+		}
 		if err := kiroCooldownExhaustedErrorFromContext(ctx, cooldownAccountIDs); err != nil {
 			return nil, 0, 0, 0, err
 		}

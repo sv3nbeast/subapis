@@ -3410,7 +3410,13 @@ const baseMessages = {
         stickyTTLHint: '60 to 86400. Default is 3600 seconds.',
         enabled: 'Enable cache emulation',
         ratio: 'Cache ratio',
-        ratioHint: '0 to 1. For example, 0.5 applies half of the simulated cache tokens.'
+        ratioHint: '0% to 100%, representing the share of simulated cache tokens that applies.',
+        ratioMode: 'Ratio settings',
+        uniformMode: 'Uniform ratio',
+        independentMode: 'Independent ratios',
+        creationRatio: 'Cache creation ratio',
+        readRatio: 'Cache read ratio',
+        independentRatioHint: 'Control simulated cache creation and cache read tokens independently.'
       },
       copyAccounts: {
         title: 'Copy Accounts from Groups',

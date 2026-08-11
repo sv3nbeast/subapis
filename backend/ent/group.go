@@ -135,6 +135,12 @@ type Group struct {
 	KiroStickySessionTTLSeconds int `json:"kiro_sticky_session_ttl_seconds,omitempty"`
 	// Kiro 模拟缓存生效比例，范围 0-1（仅 kiro 分组生效）
 	KiroCacheEmulationRatio float64 `json:"kiro_cache_emulation_ratio,omitempty"`
+	// Kiro 模拟缓存比例模式：uniform=统一比例，independent=独立比例
+	KiroCacheEmulationMode string `json:"kiro_cache_emulation_mode,omitempty"`
+	// Kiro 缓存创建模拟比例，范围 0-1（独立模式生效）
+	KiroCacheCreationEmulationRatio float64 `json:"kiro_cache_creation_emulation_ratio,omitempty"`
+	// Kiro 缓存读取模拟比例，范围 0-1（独立模式生效）
+	KiroCacheReadEmulationRatio float64 `json:"kiro_cache_read_emulation_ratio,omitempty"`
 	// Kiro endpoint 模式：q、krs、auto（仅 kiro 分组生效）
 	KiroEndpointMode string `json:"kiro_endpoint_mode,omitempty"`
 	// OpenAI reasoning effort 上限；可选 minimal/low/medium/high/xhigh/max
@@ -257,11 +263,11 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldAllowNonStreamMessages, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldKiroCacheEmulationEnabled, group.FieldKiroAutoStickyEnabled, group.FieldProfitControlEnabled:
 			values[i] = new(sql.NullBool)
-		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldKiroCacheEmulationRatio, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
+		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldKiroCacheEmulationRatio, group.FieldKiroCacheCreationEmulationRatio, group.FieldKiroCacheReadEmulationRatio, group.FieldProfitMinMargin, group.FieldProfitSafetyBuffer:
 			values[i] = new(sql.NullFloat64)
 		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldGrokChatResponsesGrayPercent, group.FieldRpmLimit, group.FieldKiroStickySessionTTLSeconds:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldGrokChatUpstreamMode, group.FieldKiroEndpointMode, group.FieldMaxReasoningEffort:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldDuplicateOperationID, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel, group.FieldGrokChatUpstreamMode, group.FieldKiroCacheEmulationMode, group.FieldKiroEndpointMode, group.FieldMaxReasoningEffort:
 			values[i] = new(sql.NullString)
 		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
 			values[i] = new(sql.NullTime)
@@ -659,6 +665,24 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.KiroCacheEmulationRatio = value.Float64
 			}
+		case group.FieldKiroCacheEmulationMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_cache_emulation_mode", values[i])
+			} else if value.Valid {
+				_m.KiroCacheEmulationMode = value.String
+			}
+		case group.FieldKiroCacheCreationEmulationRatio:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_cache_creation_emulation_ratio", values[i])
+			} else if value.Valid {
+				_m.KiroCacheCreationEmulationRatio = value.Float64
+			}
+		case group.FieldKiroCacheReadEmulationRatio:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field kiro_cache_read_emulation_ratio", values[i])
+			} else if value.Valid {
+				_m.KiroCacheReadEmulationRatio = value.Float64
+			}
 		case group.FieldKiroEndpointMode:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field kiro_endpoint_mode", values[i])
@@ -976,6 +1000,15 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("kiro_cache_emulation_ratio=")
 	builder.WriteString(fmt.Sprintf("%v", _m.KiroCacheEmulationRatio))
+	builder.WriteString(", ")
+	builder.WriteString("kiro_cache_emulation_mode=")
+	builder.WriteString(_m.KiroCacheEmulationMode)
+	builder.WriteString(", ")
+	builder.WriteString("kiro_cache_creation_emulation_ratio=")
+	builder.WriteString(fmt.Sprintf("%v", _m.KiroCacheCreationEmulationRatio))
+	builder.WriteString(", ")
+	builder.WriteString("kiro_cache_read_emulation_ratio=")
+	builder.WriteString(fmt.Sprintf("%v", _m.KiroCacheReadEmulationRatio))
 	builder.WriteString(", ")
 	builder.WriteString("kiro_endpoint_mode=")
 	builder.WriteString(_m.KiroEndpointMode)

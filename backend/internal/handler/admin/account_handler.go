@@ -58,7 +58,7 @@ type AccountHandler struct {
 	openaiOAuthService      *service.OpenAIOAuthService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
-	kiroOAuthService        *service.KiroOAuthService
+	kiroOAuthService        service.KiroOAuthOperations
 	grokOAuthService        service.GrokOAuthTokenService
 	grokAccountRefresher    grokAccountCredentialRefresher
 	rateLimitService        *service.RateLimitService
@@ -118,7 +118,7 @@ func NewAccountHandler(
 }
 
 // SetKiroOAuthService injects Kiro OAuth refresh support for manual account refresh.
-func (h *AccountHandler) SetKiroOAuthService(kiroOAuthService *service.KiroOAuthService) {
+func (h *AccountHandler) SetKiroOAuthService(kiroOAuthService service.KiroOAuthOperations) {
 	h.kiroOAuthService = kiroOAuthService
 }
 
@@ -2639,11 +2639,15 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	if account.Platform == service.PlatformKiro {
 		mapping := account.GetModelMapping()
+		defaultModels := kiropkg.DefaultModels
+		if h.kiroOAuthService != nil {
+			defaultModels = h.kiroOAuthService.DefaultModels()
+		}
 		if len(mapping) == 0 {
-			response.Success(c, kiropkg.DefaultModels)
+			response.Success(c, defaultModels)
 			return
 		}
-		response.Success(c, buildMappedKiroModels(mapping))
+		response.Success(c, buildMappedKiroModelsFromDefaults(mapping, defaultModels))
 		return
 	}
 
@@ -2779,6 +2783,10 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 }
 
 func buildMappedKiroModels(mapping map[string]string) []kiropkg.Model {
+	return buildMappedKiroModelsFromDefaults(mapping, kiropkg.DefaultModels)
+}
+
+func buildMappedKiroModelsFromDefaults(mapping map[string]string, defaultModels []kiropkg.Model) []kiropkg.Model {
 	models := make([]kiropkg.Model, 0, len(mapping))
 	requestedModels := make([]string, 0, len(mapping))
 	for requestedModel := range mapping {
@@ -2787,7 +2795,7 @@ func buildMappedKiroModels(mapping map[string]string) []kiropkg.Model {
 	sort.Strings(requestedModels)
 	for _, requestedModel := range requestedModels {
 		var found bool
-		for _, dm := range kiropkg.DefaultModels {
+		for _, dm := range defaultModels {
 			if dm.ID == requestedModel {
 				models = append(models, dm)
 				found = true

@@ -93,6 +93,45 @@ func TestLoadDefaultKiroUnresponsiveFailurePolicy(t *testing.T) {
 	require.Equal(t, 120, cfg.Gateway.KiroResilience.UnresponsiveFailureWindowSec)
 }
 
+func TestLoadDefaultKiroEngine(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, KiroEngineNianzs, cfg.Gateway.KiroEngine)
+	require.Empty(t, cfg.Gateway.KiroNianzsGroupIDs)
+}
+
+func TestLoadKiroEngineFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_KIRO_ENGINE", KiroEngineNianzs)
+	t.Setenv("GATEWAY_KIRO_NIANZS_GROUP_IDS", "29,33")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, KiroEngineNianzs, cfg.Gateway.KiroEngine)
+	require.Equal(t, []int64{29, 33}, cfg.Gateway.KiroNianzsGroupIDs)
+}
+
+func TestLoadKiroEngineLegacyRollbackFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_KIRO_ENGINE", KiroEngineLegacy)
+	t.Setenv("GATEWAY_KIRO_NIANZS_GROUP_IDS", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, KiroEngineLegacy, cfg.Gateway.KiroEngine)
+	require.Empty(t, cfg.Gateway.KiroNianzsGroupIDs)
+}
+
+func TestLoadRejectsUnknownKiroEngine(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_KIRO_ENGINE", "unknown")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "gateway.kiro_engine must be one of: legacy/nianzs")
+}
+
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

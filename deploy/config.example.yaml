@@ -459,6 +459,13 @@ gateway:
   # Allow failover on selected 400 errors (default: off)
   # 允许在特定 400 错误时进行故障转移（默认：关闭）
   failover_on_400: false
+  # Kiro implementation selector. nianzs is the default; legacy is the
+  # immediate rollback engine. In legacy mode, IDs below opt selected groups
+  # back into nianzs for canary verification.
+  # Kiro 实现选择器。默认 nianzs；legacy 为即时回退引擎。legacy 模式下可用
+  # 下方分组 ID 做 nianzs 灰度；完整回退时必须保持列表为空。
+  kiro_engine: "nianzs" # nianzs / legacy
+  kiro_nianzs_group_ids: []
   # Kiro-only resilience rollout. Use observe first, then enforce selected groups.
   # Kiro 专属限流/超时/切号保护；先 observe，再按分组切换到 enforce。
   kiro_resilience:

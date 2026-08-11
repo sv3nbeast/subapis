@@ -84,7 +84,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	}
 
 	if account != nil && account.IsKiroDirect() {
-		return s.forwardKiroAsChatCompletions(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, includeUsage, reasoningEffort, parsed, startTime)
+		return s.forwardKiroAsChatCompletions(ctx, c, account, body, anthropicBody, originalModel, mappedModel, clientStream, includeUsage, reasoningEffort, parsed, startTime)
 	}
 
 	// 6. Apply Claude Code mimicry for OAuth accounts.
@@ -212,6 +212,7 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
+	clientBody []byte,
 	anthropicBody []byte,
 	originalModel string,
 	mappedModel string,
@@ -221,19 +222,37 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 	parsed *ParsedRequest,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	s.recordKiroEngine(c, parsedGroupID(parsed), account)
 	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
 	if err != nil {
 		return nil, err
 	}
 	toolBacked := hasKiroNativeToolProgressInput(anthropicBody)
 	configureKiroNativeToolProgressGuard(kiroParsed, mappedModel, toolBacked, IsOpenAIKiroBridgeModel(originalModel))
-	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	var resp *http.Response
+	if s.useNianzsKiroEngine(kiroParsed.GroupID) {
+		nianzsAccount := adaptKiroAccountForNianzs(account)
+		cachePlan := s.prepareKiroChatCompletionsCacheEmulationUsageNianzs(
+			ctx,
+			nianzsAccount,
+			kiroParsed.Group,
+			clientBody,
+			mappedModel,
+			nianzsEstimateKiroInputTokens(ctx, anthropicBody),
+		)
+		resp, _, err = s.openKiroAnthropicStreamResponseNianzs(ctx, nianzsAccount, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group, cachePlan)
+	} else {
+		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
+		if s.useNianzsKiroEngine(kiroParsed.GroupID) {
+			return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, anthropicBody)
+		}
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {

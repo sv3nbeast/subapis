@@ -1005,6 +1005,10 @@ type GatewayConfig struct {
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
 	// KiroResilience: Kiro 上游限流、超时和切号保护配置。
 	KiroResilience GatewayKiroResilienceConfig `mapstructure:"kiro_resilience"`
+	// KiroEngine: Kiro 网关执行引擎。legacy 保留当前生产实现，nianzs 使用
+	// 固定上游快照。KiroNianzsGroupIDs 允许在全局 legacy 模式下按分组灰度。
+	KiroEngine         string  `mapstructure:"kiro_engine"`
+	KiroNianzsGroupIDs []int64 `mapstructure:"kiro_nianzs_group_ids"`
 
 	// TLSFingerprint: TLS指纹伪装配置
 	TLSFingerprint TLSFingerprintConfig `mapstructure:"tls_fingerprint"`
@@ -1413,6 +1417,9 @@ type GatewaySchedulingConfig struct {
 }
 
 const (
+	KiroEngineLegacy = "legacy"
+	KiroEngineNianzs = "nianzs"
+
 	KiroResilienceModeOff     = "off"
 	KiroResilienceModeObserve = "observe"
 	KiroResilienceModeEnforce = "enforce"
@@ -2276,6 +2283,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_cooldown_max_seconds", 120)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_threshold", 2)
 	viper.SetDefault("gateway.kiro_resilience.unresponsive_failure_window_seconds", 120)
+	// New installations and upgrades use the pinned nianzs implementation for
+	// every Kiro request. Operators can atomically roll back with
+	// GATEWAY_KIRO_ENGINE=legacy (and an empty canary allowlist).
+	viper.SetDefault("gateway.kiro_engine", KiroEngineNianzs)
+	viper.SetDefault("gateway.kiro_nianzs_group_ids", []int64{})
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
@@ -3112,6 +3124,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.FirstSemanticTimeout < 0 {
 		return fmt.Errorf("gateway.first_semantic_timeout must be non-negative")
+	}
+	kiroEngine := strings.ToLower(strings.TrimSpace(c.Gateway.KiroEngine))
+	switch kiroEngine {
+	case "", KiroEngineLegacy, KiroEngineNianzs:
+	default:
+		return fmt.Errorf("gateway.kiro_engine must be one of: legacy/nianzs")
 	}
 	kiroResilience := c.Gateway.KiroResilience
 	if kiroMode := strings.ToLower(strings.TrimSpace(kiroResilience.Mode)); kiroMode != "" {

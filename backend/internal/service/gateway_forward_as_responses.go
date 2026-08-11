@@ -170,7 +170,7 @@ func (s *GatewayService) ForwardAsResponses(
 		if kiroCompactRequest {
 			compactOptions = &kiroCompactResponseOptions{Scope: kiroScope}
 		}
-		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools, compactOptions)
+		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, body, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools, compactOptions)
 		if handleErr == nil && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 				ID:                 result.ResponseID,
@@ -344,6 +344,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
+	clientBody []byte,
 	anthropicBody []byte,
 	originalModel string,
 	mappedModel string,
@@ -354,6 +355,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 	toolMetadata kiroCodexResponsesToolMetadata,
 	compactOptions *kiroCompactResponseOptions,
 ) (*ForwardResult, error) {
+	s.recordKiroEngine(c, parsedGroupID(parsed), account)
 	kiroParsed, err := buildKiroParsedRequestFromAnthropicBody(anthropicBody, originalModel, true, parsed)
 	if err != nil {
 		return nil, err
@@ -364,13 +366,30 @@ func (s *GatewayService) forwardKiroAsResponses(
 	// correct provider-specific recovery policy.
 	toolBacked := toolMetadata.ForwardedToolCount > 0 || len(toolMetadata.CustomToolNames) > 0 || hasKiroNativeToolProgressInput(anthropicBody)
 	configureKiroNativeToolProgressGuard(kiroParsed, mappedModel, toolBacked, IsOpenAIKiroBridgeModel(originalModel))
-	resp, _, err := s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	var resp *http.Response
+	if s.useNianzsKiroEngine(kiroParsed.GroupID) {
+		nianzsAccount := adaptKiroAccountForNianzs(account)
+		cachePlan := s.prepareKiroResponsesCacheEmulationUsageNianzs(
+			ctx,
+			nianzsAccount,
+			kiroParsed.Group,
+			clientBody,
+			mappedModel,
+			nianzsEstimateKiroInputTokens(ctx, anthropicBody),
+		)
+		resp, _, err = s.openKiroAnthropicStreamResponseNianzs(ctx, nianzsAccount, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group, cachePlan)
+	} else {
+		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
+		if s.useNianzsKiroEngine(kiroParsed.GroupID) {
+			return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, anthropicBody)
+		}
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
 	if clientStream {

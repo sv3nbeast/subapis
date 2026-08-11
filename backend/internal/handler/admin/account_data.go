@@ -259,7 +259,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 
 func (h *AccountHandler) ImportData(c *gin.Context) {
 	if body, err := c.GetRawData(); err == nil {
-		if normalizedBody, ok, normalizeErr := normalizeKiroAccountImportBody(body); normalizeErr != nil {
+		if normalizedBody, ok, normalizeErr := normalizeKiroAccountImportBodyWithOAuth(body, h.kiroOAuthService); normalizeErr != nil {
 			response.BadRequest(c, normalizeErr.Error())
 			return
 		} else if ok {
@@ -292,6 +292,10 @@ func (h *AccountHandler) ImportData(c *gin.Context) {
 }
 
 func normalizeKiroAccountImportBody(body []byte) ([]byte, bool, error) {
+	return normalizeKiroAccountImportBodyWithOAuth(body, nil)
+}
+
+func normalizeKiroAccountImportBodyWithOAuth(body []byte, oauth service.KiroOAuthOperations) ([]byte, bool, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, false, nil
@@ -300,7 +304,7 @@ func normalizeKiroAccountImportBody(body []byte) ([]byte, bool, error) {
 	if len(rawData) == 0 {
 		return nil, false, nil
 	}
-	payload, ok, err := buildKiroDataPayloadFromRaw(rawData)
+	payload, ok, err := buildKiroDataPayloadFromRawWithOAuth(rawData, oauth)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -317,6 +321,10 @@ func normalizeKiroAccountImportBody(body []byte) ([]byte, bool, error) {
 }
 
 func buildKiroDataPayloadFromRaw(raw json.RawMessage) (DataPayload, bool, error) {
+	return buildKiroDataPayloadFromRawWithOAuth(raw, nil)
+}
+
+func buildKiroDataPayloadFromRawWithOAuth(raw json.RawMessage, oauth service.KiroOAuthOperations) (DataPayload, bool, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return DataPayload{}, false, nil
@@ -347,7 +355,7 @@ func buildKiroDataPayloadFromRaw(raw json.RawMessage) (DataPayload, bool, error)
 
 	accounts := make([]DataAccount, 0, len(items))
 	for i, item := range items {
-		account, err := buildKiroDataAccount(item, i, len(items))
+		account, err := buildKiroDataAccountWithOAuth(item, i, len(items), oauth)
 		if err != nil {
 			return DataPayload{}, true, err
 		}
@@ -379,6 +387,38 @@ func looksLikeKiroTokenJSON(raw json.RawMessage) bool {
 }
 
 func buildKiroDataAccount(raw json.RawMessage, index, total int) (DataAccount, error) {
+	return buildKiroDataAccountWithOAuth(raw, index, total, nil)
+}
+
+func buildKiroDataAccountWithOAuth(raw json.RawMessage, index, total int, oauth service.KiroOAuthOperations) (DataAccount, error) {
+	if oauth != nil {
+		token, err := oauth.ImportToken(&service.KiroImportTokenInput{TokenJSON: string(raw)})
+		if err != nil {
+			return DataAccount{}, fmt.Errorf("invalid kiro token at index %d: %w", index+1, err)
+		}
+		var obj map[string]any
+		_ = json.Unmarshal(raw, &obj)
+		name := firstNonEmpty(
+			stringFromMap(obj, "name"),
+			stringFromMap(obj, "label"),
+			stringFromMap(obj, "email"),
+			token.Email,
+			kiroImportNameFromProfileArn(token.ProfileArn),
+			kiroImportNameFromClientID(token.ClientID),
+		)
+		if name == "" {
+			name = "Kiro account"
+		}
+		if total > 1 && (stringFromMap(obj, "name") == "" && stringFromMap(obj, "label") == "") {
+			name = fmt.Sprintf("%s #%d", name, index+1)
+		}
+		notes := "Imported from Kiro token JSON"
+		return DataAccount{
+			Name: name, Notes: &notes, Platform: service.PlatformKiro,
+			Type: service.AccountTypeOAuth, Credentials: oauth.BuildAccountCredentials(token),
+			Concurrency: 10, Priority: 1,
+		}, nil
+	}
 	token, err := kiropkg.ParseImportedToken(string(raw), "")
 	if err != nil {
 		return DataAccount{}, fmt.Errorf("invalid kiro token at index %d: %w", index+1, err)

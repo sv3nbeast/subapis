@@ -89,6 +89,9 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
 		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).
 		SetKiroCacheEmulationRatio(groupIn.KiroCacheEmulationRatio).
+		SetKiroCacheEmulationMode(groupIn.KiroCacheEmulationMode).
+		SetKiroCacheCreationEmulationRatio(groupIn.KiroCacheCreationEmulationRatio).
+		SetKiroCacheReadEmulationRatio(groupIn.KiroCacheReadEmulationRatio).
 		SetKiroEndpointMode(groupIn.KiroEndpointMode).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
@@ -244,6 +247,9 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetKiroAutoStickyEnabled(groupIn.KiroAutoStickyEnabled).
 		SetKiroStickySessionTTLSeconds(groupIn.KiroStickySessionTTLSeconds).
 		SetKiroCacheEmulationRatio(groupIn.KiroCacheEmulationRatio).
+		SetKiroCacheEmulationMode(groupIn.KiroCacheEmulationMode).
+		SetKiroCacheCreationEmulationRatio(groupIn.KiroCacheCreationEmulationRatio).
+		SetKiroCacheReadEmulationRatio(groupIn.KiroCacheReadEmulationRatio).
 		SetKiroEndpointMode(groupIn.KiroEndpointMode).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).

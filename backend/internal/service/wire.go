@@ -9,7 +9,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
@@ -119,7 +118,7 @@ func ProvideTokenRefreshService(
 	openaiOAuthService *OpenAIOAuthService,
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
-	kiroOAuthService *KiroOAuthService,
+	kiroOAuthService *KiroOAuthEngineService,
 	droidOAuthService *DroidOAuthService,
 	grokOAuthService *GrokOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
@@ -243,6 +242,31 @@ func ProvideKiroTokenProvider(
 	return p
 }
 
+func ProvideNianzsKiroOAuthService(proxyRepo ProxyRepository) *NianzsKiroOAuthService {
+	return NianzsNewKiroOAuthService(proxyRepo)
+}
+
+func ProvideKiroOAuthEngineService(
+	legacy *KiroOAuthService,
+	nianzs *NianzsKiroOAuthService,
+	cfg *config.Config,
+) *KiroOAuthEngineService {
+	return NewKiroOAuthEngineService(legacy, nianzs, cfg)
+}
+
+func ProvideNianzsKiroTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	kiroOAuthService *NianzsKiroOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+) *NianzsKiroTokenProvider {
+	provider := NianzsNewKiroTokenProvider(accountRepo, tokenCache, kiroOAuthService)
+	executor := NianzsNewKiroTokenRefresher(kiroOAuthService)
+	provider.SetRefreshAPI(refreshAPI, executor)
+	provider.SetRefreshPolicy(GeminiProviderRefreshPolicy())
+	return provider
+}
+
 func ProvideDroidTokenProvider(
 	accountRepo AccountRepository,
 	tokenCache GeminiTokenCache,
@@ -257,7 +281,7 @@ func ProvideDroidTokenProvider(
 }
 
 func ProvideKiroCooldownStore(redisClient *redis.Client) KiroCooldownStore {
-	return kirocooldown.NewStore(redisClient)
+	return newDualKiroCooldownStore(redisClient)
 }
 
 // ProvideGrokTokenProvider creates GrokTokenProvider with OAuthRefreshAPI injection.
@@ -414,6 +438,9 @@ func ProvideAccountUsageService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	settingService *SettingService,
 	kiroTokenProvider *KiroTokenProvider,
+	nianzsKiroTokenProvider *NianzsKiroTokenProvider,
+	kiroCooldownStore KiroCooldownStore,
+	cfg *config.Config,
 	openAIGatewayService *OpenAIGatewayService,
 ) *AccountUsageService {
 	service := NewAccountUsageService(
@@ -428,6 +455,11 @@ func ProvideAccountUsageService(
 		identityCache,
 		tlsFPProfileService,
 	).SetSettingService(settingService).SetKiroTokenProvider(kiroTokenProvider).SetGrokQuotaService(grokQuotaService)
+	var nianzsCooldownStore NianzsKiroCooldownStore
+	if provider, ok := kiroCooldownStore.(nianzsKiroCooldownStoreProvider); ok {
+		nianzsCooldownStore = provider.NianzsKiroCooldownStore()
+	}
+	service.SetNianzsKiroRuntime(nianzsKiroTokenProvider, nianzsCooldownStore, cfg.Gateway.KiroEngine)
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }
@@ -437,6 +469,7 @@ func ProvideAccountTestService(
 	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
 	kiroTokenProvider *KiroTokenProvider,
+	nianzsKiroTokenProvider *NianzsKiroTokenProvider,
 	droidTokenProvider *DroidTokenProvider,
 	grokTokenProvider *GrokTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
@@ -458,6 +491,7 @@ func ProvideAccountTestService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.SetNianzsKiroTokenProvider(nianzsKiroTokenProvider)
 	return service
 }
 
@@ -632,6 +666,7 @@ func ProvideGatewayService(
 	deferredService *DeferredService,
 	claudeTokenProvider *ClaudeTokenProvider,
 	kiroTokenProvider *KiroTokenProvider,
+	nianzsKiroTokenProvider *NianzsKiroTokenProvider,
 	droidTokenProvider *DroidTokenProvider,
 	kiroCooldownStore KiroCooldownStore,
 	sessionLimitCache SessionLimitCache,
@@ -655,6 +690,7 @@ func ProvideGatewayService(
 		tlsFPProfileService, channelService, resolver, balanceNotifyService, userPlatformQuotaRepo,
 	)
 	svc.SetCompositeResolver(compositeResolver)
+	svc.SetNianzsKiroTokenProvider(nianzsKiroTokenProvider)
 	return svc
 }
 
@@ -907,12 +943,16 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(TokenCacheInvalidator), new(*CompositeTokenCacheInvalidator)),
 	NewAntigravityOAuthService,
 	NewKiroOAuthService,
+	ProvideNianzsKiroOAuthService,
+	ProvideKiroOAuthEngineService,
+	wire.Bind(new(KiroOAuthOperations), new(*KiroOAuthEngineService)),
 	NewDroidOAuthService,
 	ProvideOAuthRefreshAPI,
 	ProvideGeminiTokenProvider,
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideKiroTokenProvider,
+	ProvideNianzsKiroTokenProvider,
 	ProvideDroidTokenProvider,
 	ProvideKiroCooldownStore,
 	ProvideGrokTokenProvider,

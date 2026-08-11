@@ -991,8 +991,10 @@ type GatewayService struct {
 	concurrencyService         *ConcurrencyService
 	claudeTokenProvider        *ClaudeTokenProvider
 	kiroTokenProvider          *KiroTokenProvider
+	nianzsKiroTokenProvider    *NianzsKiroTokenProvider
 	droidTokenProvider         *DroidTokenProvider
 	kiroCooldownStore          KiroCooldownStore
+	nianzsKiroCooldownStore    NianzsKiroCooldownStore
 	sessionLimitCache          SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
 	rpmCache                   RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
 	modelCapacityCooldownCache ModelCapacityCooldownCache
@@ -1110,6 +1112,9 @@ func NewGatewayService(
 		claudeCodeCompanionProbe:   NewClaudeCodeCompanionProbeService(httpUpstream),
 		userPlatformQuotaRepo:      userPlatformQuotaRepo,
 	}
+	if provider, ok := kiroCooldownStore.(nianzsKiroCooldownStoreProvider); ok {
+		svc.nianzsKiroCooldownStore = provider.NianzsKiroCooldownStore()
+	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
 		svc.userGroupRateCache,
@@ -1127,6 +1132,12 @@ func NewGatewayService(
 		svc.kiroTokenProvider.SetProfileARNResolver(svc.resolveAndPersistKiroProfileArnOnly)
 	}
 	return svc
+}
+
+func (s *GatewayService) SetNianzsKiroTokenProvider(provider *NianzsKiroTokenProvider) {
+	if s != nil {
+		s.nianzsKiroTokenProvider = provider
+	}
 }
 
 // GenerateSessionHash 从预解析请求计算粘性会话 hash
@@ -2497,6 +2508,9 @@ func (s *GatewayService) SelectAccountForModel(ctx context.Context, groupID *int
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	if s.useNianzsKiroScheduler(ctx, groupID) {
+		return s.SelectAccountForModelWithExclusionsNianzs(ctx, groupID, sessionHash, requestedModel, excludedIDs)
+	}
 	// 优先检查 context 中的强制平台（/antigravity 路由）
 	var platform string
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
@@ -2549,6 +2563,9 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 // metadataUserID: 用于客户端亲和调度，从中提取客户端 ID
 // sub2apiUserID: 系统用户 ID，用于二维亲和调度
 func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error) {
+	if s.useNianzsKiroScheduler(ctx, groupID) {
+		return s.SelectAccountWithLoadAwarenessNianzs(ctx, groupID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+	}
 	// 调试日志：记录调度入口参数
 	excludedIDsList := make([]int64, 0, len(excludedIDs))
 	for id := range excludedIDs {
@@ -12826,6 +12843,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 	}
 	if account != nil && account.IsKiroDirect() {
+		s.recordKiroEngine(c, parsed.GroupID, account)
+		if s.useNianzsKiroEngine(parsed.GroupID) {
+			c.JSON(http.StatusOK, gin.H{"input_tokens": max(nianzsEstimateKiroInputTokens(ctx, parsed.Body.Bytes()), 1)})
+			return nil
+		}
 		c.JSON(http.StatusOK, gin.H{"input_tokens": max(estimateKiroInputTokens(parsed.Body.Bytes()), 1)})
 		return nil
 	}

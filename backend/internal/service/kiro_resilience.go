@@ -913,10 +913,16 @@ func (s *GatewayService) kiroResilienceMode(groupID *int64) string {
 }
 
 func (s *GatewayService) kiroResilienceEnforced(groupID *int64) bool {
+	if s.useNianzsKiroEngine(groupID) {
+		return false
+	}
 	return s.kiroResilienceMode(groupID) == config.KiroResilienceModeEnforce
 }
 
 func (s *GatewayService) kiroResilienceObserved(groupID *int64) bool {
+	if s.useNianzsKiroEngine(groupID) {
+		return false
+	}
 	return s.kiroResilienceMode(groupID) == config.KiroResilienceModeObserve
 }
 
@@ -1362,8 +1368,18 @@ func (s *GatewayService) kiroUnresponsiveCooldown(groupID *int64) (time.Duration
 }
 
 func (s *GatewayService) withKiroCooldownPrefetch(ctx context.Context, accounts []Account, groupID *int64) context.Context {
+	if s == nil {
+		return ctx
+	}
+	// The OpenAI-compatible scheduler is shared by native OpenAI accounts and
+	// opted-in Kiro bridge accounts. Keep that scheduler, but source every Kiro
+	// cooldown decision from the engine selected for this group. In particular,
+	// a nianzs request must never observe rollback-engine Redis state.
+	if s.useNianzsKiroEngine(groupID) {
+		return s.withNianzsKiroCooldownPrefetch(ctx, accounts, groupID)
+	}
 	mode := s.kiroResilienceMode(groupID)
-	if mode == config.KiroResilienceModeOff || s == nil || s.kiroCooldownStore == nil || len(accounts) == 0 {
+	if mode == config.KiroResilienceModeOff || s.kiroCooldownStore == nil || len(accounts) == 0 {
 		return ctx
 	}
 	accountKeys := make(map[int64]string)
@@ -1493,7 +1509,13 @@ func (s *GatewayService) kiroCooldownExhaustedFromRepository(
 	excludedIDs map[int64]struct{},
 	eligible func(*Account) bool,
 ) error {
-	if s == nil || s.accountRepo == nil || !s.kiroResilienceEnforced(groupID) {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	if s.useNianzsKiroEngine(groupID) {
+		return s.nianzsKiroCooldownExhaustedFromRepository(ctx, groupID, requestedModel, excludedIDs, eligible)
+	}
+	if !s.kiroResilienceEnforced(groupID) {
 		return nil
 	}
 	var accounts []Account

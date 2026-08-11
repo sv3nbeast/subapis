@@ -1052,6 +1052,62 @@ func (_u *GroupUpdate) AddKiroCacheEmulationRatio(v float64) *GroupUpdate {
 	return _u
 }
 
+// SetKiroCacheEmulationMode sets the "kiro_cache_emulation_mode" field.
+func (_u *GroupUpdate) SetKiroCacheEmulationMode(v string) *GroupUpdate {
+	_u.mutation.SetKiroCacheEmulationMode(v)
+	return _u
+}
+
+// SetNillableKiroCacheEmulationMode sets the "kiro_cache_emulation_mode" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroCacheEmulationMode(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroCacheEmulationMode(*v)
+	}
+	return _u
+}
+
+// SetKiroCacheCreationEmulationRatio sets the "kiro_cache_creation_emulation_ratio" field.
+func (_u *GroupUpdate) SetKiroCacheCreationEmulationRatio(v float64) *GroupUpdate {
+	_u.mutation.ResetKiroCacheCreationEmulationRatio()
+	_u.mutation.SetKiroCacheCreationEmulationRatio(v)
+	return _u
+}
+
+// SetNillableKiroCacheCreationEmulationRatio sets the "kiro_cache_creation_emulation_ratio" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroCacheCreationEmulationRatio(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroCacheCreationEmulationRatio(*v)
+	}
+	return _u
+}
+
+// AddKiroCacheCreationEmulationRatio adds value to the "kiro_cache_creation_emulation_ratio" field.
+func (_u *GroupUpdate) AddKiroCacheCreationEmulationRatio(v float64) *GroupUpdate {
+	_u.mutation.AddKiroCacheCreationEmulationRatio(v)
+	return _u
+}
+
+// SetKiroCacheReadEmulationRatio sets the "kiro_cache_read_emulation_ratio" field.
+func (_u *GroupUpdate) SetKiroCacheReadEmulationRatio(v float64) *GroupUpdate {
+	_u.mutation.ResetKiroCacheReadEmulationRatio()
+	_u.mutation.SetKiroCacheReadEmulationRatio(v)
+	return _u
+}
+
+// SetNillableKiroCacheReadEmulationRatio sets the "kiro_cache_read_emulation_ratio" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroCacheReadEmulationRatio(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroCacheReadEmulationRatio(*v)
+	}
+	return _u
+}
+
+// AddKiroCacheReadEmulationRatio adds value to the "kiro_cache_read_emulation_ratio" field.
+func (_u *GroupUpdate) AddKiroCacheReadEmulationRatio(v float64) *GroupUpdate {
+	_u.mutation.AddKiroCacheReadEmulationRatio(v)
+	return _u
+}
+
 // SetKiroEndpointMode sets the "kiro_endpoint_mode" field.
 func (_u *GroupUpdate) SetKiroEndpointMode(v string) *GroupUpdate {
 	_u.mutation.SetKiroEndpointMode(v)
@@ -1453,6 +1509,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "grok_chat_upstream_mode", err: fmt.Errorf(`ent: validator failed for field "Group.grok_chat_upstream_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.KiroCacheEmulationMode(); ok {
+		if err := group.KiroCacheEmulationModeValidator(v); err != nil {
+			return &ValidationError{Name: "kiro_cache_emulation_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_cache_emulation_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.KiroEndpointMode(); ok {
 		if err := group.KiroEndpointModeValidator(v); err != nil {
 			return &ValidationError{Name: "kiro_endpoint_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_endpoint_mode": %w`, err)}
@@ -1770,6 +1831,21 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedKiroCacheEmulationRatio(); ok {
 		_spec.AddField(group.FieldKiroCacheEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.KiroCacheEmulationMode(); ok {
+		_spec.SetField(group.FieldKiroCacheEmulationMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.KiroCacheCreationEmulationRatio(); ok {
+		_spec.SetField(group.FieldKiroCacheCreationEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCacheCreationEmulationRatio(); ok {
+		_spec.AddField(group.FieldKiroCacheCreationEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.KiroCacheReadEmulationRatio(); ok {
+		_spec.SetField(group.FieldKiroCacheReadEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCacheReadEmulationRatio(); ok {
+		_spec.AddField(group.FieldKiroCacheReadEmulationRatio, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.KiroEndpointMode(); ok {
 		_spec.SetField(group.FieldKiroEndpointMode, field.TypeString, value)
@@ -3130,6 +3206,62 @@ func (_u *GroupUpdateOne) AddKiroCacheEmulationRatio(v float64) *GroupUpdateOne 
 	return _u
 }
 
+// SetKiroCacheEmulationMode sets the "kiro_cache_emulation_mode" field.
+func (_u *GroupUpdateOne) SetKiroCacheEmulationMode(v string) *GroupUpdateOne {
+	_u.mutation.SetKiroCacheEmulationMode(v)
+	return _u
+}
+
+// SetNillableKiroCacheEmulationMode sets the "kiro_cache_emulation_mode" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroCacheEmulationMode(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroCacheEmulationMode(*v)
+	}
+	return _u
+}
+
+// SetKiroCacheCreationEmulationRatio sets the "kiro_cache_creation_emulation_ratio" field.
+func (_u *GroupUpdateOne) SetKiroCacheCreationEmulationRatio(v float64) *GroupUpdateOne {
+	_u.mutation.ResetKiroCacheCreationEmulationRatio()
+	_u.mutation.SetKiroCacheCreationEmulationRatio(v)
+	return _u
+}
+
+// SetNillableKiroCacheCreationEmulationRatio sets the "kiro_cache_creation_emulation_ratio" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroCacheCreationEmulationRatio(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroCacheCreationEmulationRatio(*v)
+	}
+	return _u
+}
+
+// AddKiroCacheCreationEmulationRatio adds value to the "kiro_cache_creation_emulation_ratio" field.
+func (_u *GroupUpdateOne) AddKiroCacheCreationEmulationRatio(v float64) *GroupUpdateOne {
+	_u.mutation.AddKiroCacheCreationEmulationRatio(v)
+	return _u
+}
+
+// SetKiroCacheReadEmulationRatio sets the "kiro_cache_read_emulation_ratio" field.
+func (_u *GroupUpdateOne) SetKiroCacheReadEmulationRatio(v float64) *GroupUpdateOne {
+	_u.mutation.ResetKiroCacheReadEmulationRatio()
+	_u.mutation.SetKiroCacheReadEmulationRatio(v)
+	return _u
+}
+
+// SetNillableKiroCacheReadEmulationRatio sets the "kiro_cache_read_emulation_ratio" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroCacheReadEmulationRatio(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroCacheReadEmulationRatio(*v)
+	}
+	return _u
+}
+
+// AddKiroCacheReadEmulationRatio adds value to the "kiro_cache_read_emulation_ratio" field.
+func (_u *GroupUpdateOne) AddKiroCacheReadEmulationRatio(v float64) *GroupUpdateOne {
+	_u.mutation.AddKiroCacheReadEmulationRatio(v)
+	return _u
+}
+
 // SetKiroEndpointMode sets the "kiro_endpoint_mode" field.
 func (_u *GroupUpdateOne) SetKiroEndpointMode(v string) *GroupUpdateOne {
 	_u.mutation.SetKiroEndpointMode(v)
@@ -3544,6 +3676,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "grok_chat_upstream_mode", err: fmt.Errorf(`ent: validator failed for field "Group.grok_chat_upstream_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.KiroCacheEmulationMode(); ok {
+		if err := group.KiroCacheEmulationModeValidator(v); err != nil {
+			return &ValidationError{Name: "kiro_cache_emulation_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_cache_emulation_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.KiroEndpointMode(); ok {
 		if err := group.KiroEndpointModeValidator(v); err != nil {
 			return &ValidationError{Name: "kiro_endpoint_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_endpoint_mode": %w`, err)}
@@ -3878,6 +4015,21 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AddedKiroCacheEmulationRatio(); ok {
 		_spec.AddField(group.FieldKiroCacheEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.KiroCacheEmulationMode(); ok {
+		_spec.SetField(group.FieldKiroCacheEmulationMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.KiroCacheCreationEmulationRatio(); ok {
+		_spec.SetField(group.FieldKiroCacheCreationEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCacheCreationEmulationRatio(); ok {
+		_spec.AddField(group.FieldKiroCacheCreationEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.KiroCacheReadEmulationRatio(); ok {
+		_spec.SetField(group.FieldKiroCacheReadEmulationRatio, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedKiroCacheReadEmulationRatio(); ok {
+		_spec.AddField(group.FieldKiroCacheReadEmulationRatio, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.KiroEndpointMode(); ok {
 		_spec.SetField(group.FieldKiroEndpointMode, field.TypeString, value)

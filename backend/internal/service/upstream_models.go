@@ -148,8 +148,12 @@ func (s *AccountTestService) buildKiroUpstreamModelsPageRequest(ctx context.Cont
 	}
 
 	token := strings.TrimSpace(account.GetCredential("access_token"))
-	if token == "" && s.kiroTokenProvider != nil {
-		accessToken, tokenErr := s.kiroTokenProvider.GetAccessToken(ctx, account)
+	var tokenProvider KiroUsageTokenProvider = s.kiroTokenProvider
+	if s.cfg != nil && normalizeKiroEngine(s.cfg.Gateway.KiroEngine) == KiroEngineNianzs && s.nianzsKiroTokenProvider != nil {
+		tokenProvider = s.nianzsKiroTokenProvider
+	}
+	if token == "" && tokenProvider != nil {
+		accessToken, tokenErr := tokenProvider.GetAccessToken(ctx, account)
 		if tokenErr != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to get Kiro access token", tokenErr)
 		}

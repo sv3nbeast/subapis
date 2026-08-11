@@ -1,0 +1,480 @@
+// Source-faithful, namespaced integration of kiro_websearch.go from
+// github.com/nianzs/sub2api at d483aefe7c2d1da5139c6f5b011eb6843b1e7dbb.
+// Only package identifiers and the kiro package import are rewritten so the
+// legacy engine remains available for an immediate rollback.
+
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+
+	nianzskiro "github.com/Wei-Shaw/sub2api/internal/pkg/kiro_nianzs"
+)
+
+const nianzsKiroMaxWebSearchIterations = 5
+
+var (
+	nianzsErrKiroWebSearchFallback = errors.New("kiro web search fallback")
+	nianzsKiroWebSearchDescCache   sync.Map
+)
+
+type nianzsKiroWebSearchExecution struct {
+	ResponseBody []byte
+	Usage        ClaudeUsage
+	RequestID    string
+}
+
+type nianzsKiroWebSearchHTTPError struct {
+	Response *http.Response
+}
+
+type nianzsKiroStreamChunkCollector struct {
+	chunks [][]byte
+}
+
+func (e *nianzsKiroWebSearchHTTPError) Error() string {
+	if e == nil || e.Response == nil {
+		return "kiro web search http error"
+	}
+	return fmt.Sprintf("kiro web search http error: %d", e.Response.StatusCode)
+}
+
+func (w *nianzsKiroStreamChunkCollector) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		w.chunks = append(w.chunks, append([]byte(nil), p...))
+	}
+	return len(p), nil
+}
+
+func nianzsBufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int) ([][]byte, *nianzskiro.StreamResult, error) {
+	collector := &nianzsKiroStreamChunkCollector{}
+	result, err := nianzskiro.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, nianzskiro.KiroRequestContext{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return collector.chunks, result, nil
+}
+
+func nianzsWriteSSEChunks(w io.Writer, chunks [][]byte) error {
+	for _, chunk := range chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		if _, err := w.Write(chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nianzsWriteAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens int, cacheUsage *nianzsKiroCacheEmulationUsage) error {
+	if strings.TrimSpace(msgID) == "" {
+		msgID = "msg_" + nianzskiro.GenerateToolUseID()
+	}
+	if strings.TrimSpace(model) == "" {
+		model = "kiro"
+	}
+	usage := map[string]any{
+		"input_tokens":  inputTokens,
+		"output_tokens": 0,
+	}
+	if cacheUsage != nil {
+		usage["input_tokens"] = cacheUsage.InputTokens
+		usage["cache_creation_input_tokens"] = cacheUsage.CacheCreationInputTokens
+		usage["cache_read_input_tokens"] = cacheUsage.CacheReadInputTokens
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":            msgID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         model,
+			"content":       []any{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+			"usage":         usage,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "event: message_start\ndata: "+string(payload)+"\n\n")
+	return err
+}
+
+func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
+	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, plan *nianzsKiroCacheEmulationPlan,
+) error {
+	query := nianzskiro.ExtractSearchQuery(anthropicBody)
+	if strings.TrimSpace(query) == "" {
+		return nianzsErrKiroWebSearchFallback
+	}
+
+	currentBody, err := nianzskiro.ReplaceWebSearchToolDescription(anthropicBody)
+	if err != nil {
+		currentBody = anthropicBody
+	}
+	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
+	nextContentBlockIndex := 0
+
+	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
+		return err
+	}
+
+	for iteration := 0; iteration < nianzsKiroMaxWebSearchIterations; iteration++ {
+		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
+
+		results, nextToken, mcpErr := s.callKiroWebSearchMCPNianzs(ctx, account, token, query)
+		if strings.TrimSpace(nextToken) != "" {
+			token = nextToken
+		}
+		if mcpErr != nil {
+			results = nil
+		}
+
+		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
+			return err
+		}
+		nextContentBlockIndex += 2
+
+		currentBody, err = nianzskiro.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
+		if err != nil {
+			return nianzsErrKiroWebSearchFallback
+		}
+
+		resp, _, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return &nianzsKiroWebSearchHTTPError{Response: resp}
+		}
+		if iteration == 0 {
+			// 首轮请求已确认成功，此时提交缓存前缀落盘才是安全的。
+			plan.commit()
+		}
+
+		chunks, _, streamErr := func() ([][]byte, *nianzskiro.StreamResult, error) {
+			defer func() { _ = resp.Body.Close() }()
+			return nianzsBufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
+		}()
+		if streamErr != nil {
+			return streamErr
+		}
+
+		analysis := nianzskiro.AnalyzeBufferedStream(chunks)
+		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < nianzsKiroMaxWebSearchIterations {
+			filtered := nianzskiro.FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, nextContentBlockIndex)
+			if err := nianzsWriteSSEChunks(w, filtered); err != nil {
+				return err
+			}
+			if maxIndex := nianzskiro.MaxContentBlockIndex(filtered); maxIndex >= nextContentBlockIndex {
+				nextContentBlockIndex = maxIndex + 1
+			}
+			query = analysis.WebSearchQuery
+			if strings.TrimSpace(analysis.WebSearchToolUseID) == "" {
+				currentToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
+			} else {
+				currentToolUseID = analysis.WebSearchToolUseID
+			}
+			continue
+		}
+
+		for _, chunk := range chunks {
+			adjusted, shouldForward := nianzskiro.AdjustSSEChunk(chunk, nextContentBlockIndex)
+			if !shouldForward {
+				continue
+			}
+			if _, err := w.Write(adjusted); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return fmt.Errorf("kiro web search exceeded max iterations")
+}
+
+func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*nianzsKiroWebSearchExecution, error) {
+	query := nianzskiro.ExtractSearchQuery(anthropicBody)
+	if strings.TrimSpace(query) == "" {
+		return nil, nianzsErrKiroWebSearchFallback
+	}
+
+	currentBody, err := nianzskiro.ReplaceWebSearchToolDescription(anthropicBody)
+	if err != nil {
+		currentBody = anthropicBody
+	}
+
+	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
+	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
+	searches := make([]nianzskiro.SearchIndicator, 0, 2)
+	requestID := ""
+	var cacheUsage *nianzsKiroCacheEmulationUsage
+	cacheUsageResolved := false
+
+	for iteration := 0; iteration < nianzsKiroMaxWebSearchIterations; iteration++ {
+		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
+
+		results, nextToken, mcpErr := s.callKiroWebSearchMCPNianzs(ctx, account, token, query)
+		if strings.TrimSpace(nextToken) != "" {
+			token = nextToken
+		}
+		if mcpErr != nil {
+			results = nil
+		}
+		searches = append(searches, nianzskiro.SearchIndicator{
+			ToolUseID: currentToolUseID,
+			Query:     query,
+			Results:   results,
+		})
+
+		currentBody, err = nianzskiro.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
+		if err != nil {
+			return nil, nianzsErrKiroWebSearchFallback
+		}
+
+		resp, _, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, &nianzsKiroWebSearchHTTPError{Response: resp}
+		}
+
+		parseResult, parseErr := func() (*nianzskiro.ParseResult, error) {
+			defer func() { _ = resp.Body.Close() }()
+			if !cacheUsageResolved {
+				cacheUsage = s.buildKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+				cacheUsageResolved = true
+			}
+			return nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, nianzskiro.KiroRequestContext{
+				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
+				EstimatedInputTokens: inputTokens,
+			})
+		}()
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if requestID == "" {
+			requestID = nianzsBuildKiroRequestID(resp)
+		}
+
+		nextToolUseID, nextQuery, hasNext := nianzskiro.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
+		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= nianzsKiroMaxWebSearchIterations {
+			finalBody, injectErr := nianzskiro.InjectSearchIndicatorsInResponse(parseResult.ResponseBody, searches)
+			if injectErr == nil {
+				parseResult.ResponseBody = finalBody
+			}
+			return &nianzsKiroWebSearchExecution{
+				ResponseBody: parseResult.ResponseBody,
+				Usage:        nianzsKiroUsageToClaude(parseResult.Usage, inputTokens),
+				RequestID:    requestID,
+			}, nil
+		}
+
+		query = nextQuery
+		if strings.TrimSpace(nextToolUseID) == "" {
+			nextToolUseID = "srvtoolu_" + nianzskiro.GenerateToolUseID()
+		}
+		currentToolUseID = nextToolUseID
+	}
+
+	return nil, fmt.Errorf("kiro web search exceeded max iterations")
+}
+
+func (s *GatewayService) prefetchKiroWebSearchDescriptionNianzs(ctx context.Context, account *Account, token string) {
+	endpoint := nianzskiro.BuildMcpEndpoint(nianzsKiroAPIRegion(account))
+	if cached, ok := nianzsKiroWebSearchDescCache.Load(endpoint); ok {
+		if desc, ok := cached.(string); ok && strings.TrimSpace(desc) != "" {
+			nianzskiro.SetCachedWebSearchDescription(desc)
+		}
+		return
+	}
+
+	reqBody, _ := json.Marshal(nianzskiro.MCPRequest{
+		ID:      "tools_list",
+		JSONRPC: "2.0",
+		Method:  "tools/list",
+	})
+	resp, _, err := s.doKiroMCPJSONRequestNianzs(ctx, account, endpoint, reqBody, token)
+	if err != nil || resp == nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	var result nianzskiro.MCPResponse
+	if err := json.Unmarshal(body, &result); err != nil || result.Result == nil {
+		return
+	}
+	for _, tool := range result.Result.Tools {
+		if strings.EqualFold(tool.Name, "web_search") && strings.TrimSpace(tool.Description) != "" {
+			nianzsKiroWebSearchDescCache.Store(endpoint, tool.Description)
+			nianzskiro.SetCachedWebSearchDescription(tool.Description)
+			return
+		}
+	}
+}
+
+func (s *GatewayService) callKiroWebSearchMCPNianzs(ctx context.Context, account *Account, token, query string) (*nianzskiro.WebSearchResults, string, error) {
+	reqBody, err := json.Marshal(nianzsBuildKiroWebSearchMCPRequest(query))
+	if err != nil {
+		return nil, token, err
+	}
+
+	endpoint := nianzskiro.BuildMcpEndpoint(nianzsKiroAPIRegion(account))
+	resp, nextToken, err := s.doKiroMCPJSONRequestNianzs(ctx, account, endpoint, reqBody, token)
+	if err != nil {
+		return nil, nextToken, err
+	}
+	if resp == nil {
+		return nil, nextToken, fmt.Errorf("kiro web search returned nil response")
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nextToken, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, nextToken, fmt.Errorf("kiro mcp status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var parsed nianzskiro.MCPResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, nextToken, err
+	}
+	if parsed.Error != nil {
+		msg := "unknown error"
+		if parsed.Error.Message != nil && strings.TrimSpace(*parsed.Error.Message) != "" {
+			msg = strings.TrimSpace(*parsed.Error.Message)
+		}
+		code := 0
+		if parsed.Error.Code != nil {
+			code = *parsed.Error.Code
+		}
+		return nil, nextToken, fmt.Errorf("kiro mcp error %d: %s", code, msg)
+	}
+
+	return nianzskiro.ParseSearchResults(&parsed), nextToken, nil
+}
+
+func nianzsBuildKiroWebSearchMCPRequest(query string) nianzskiro.MCPRequest {
+	return nianzskiro.MCPRequest{
+		ID:      fmt.Sprintf("web_search_%s", nianzskiro.GenerateToolUseID()),
+		JSONRPC: "2.0",
+		Method:  "tools/call",
+		Params: map[string]any{
+			"name": "web_search",
+			"arguments": map[string]any{
+				"query": query,
+				"_meta": map[string]any{
+					"_isValid":        true,
+					"_activePath":     []string{"query"},
+					"_completedPaths": [][]string{{"query"}},
+				},
+			},
+		},
+	}
+}
+
+func (s *GatewayService) doKiroMCPJSONRequestNianzs(ctx context.Context, account *Account, endpoint string, payload []byte, token string) (*http.Response, string, error) {
+	currentToken := token
+	accountKey := nianzsBuildKiroAccountKey(account)
+	proxyURL := nianzsKiroProxyURL(account)
+	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := s.checkKiroCooldownNianzs(ctx, accountKey); err != nil {
+			if failoverErr := nianzsAsKiroCooldownFailoverError(err); failoverErr != nil {
+				return nil, currentToken, failoverErr
+			}
+			return nil, currentToken, err
+		}
+
+		req, err := nianzsNewKiroJSONRequest(ctx, endpoint, payload, currentToken, accountKey, nianzsBuildKiroMachineID(account), "", account)
+		if err != nil {
+			return nil, currentToken, err
+		}
+
+		resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		if err != nil {
+			return nil, currentToken, err
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			respBody, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, currentToken, readErr
+			}
+			if resp.StatusCode == http.StatusForbidden && nianzsIsKiroSuspendedBody(respBody) {
+				if _, err := s.markKiroSuspendedNianzs(ctx, accountKey); err != nil {
+					return nil, currentToken, err
+				}
+				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+				return resp, currentToken, nil
+			}
+			if resp.StatusCode == http.StatusForbidden && !nianzsIsKiroTokenErrorBody(respBody) {
+				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+				return resp, currentToken, nil
+			}
+			if s.nianzsKiroTokenProvider == nil {
+				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+				return resp, currentToken, nil
+			}
+			refreshedToken, refreshErr := s.nianzsKiroTokenProvider.ForceRefreshAccessToken(ctx, account)
+			if refreshErr != nil {
+				resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+				return resp, currentToken, nil
+			}
+			currentToken = refreshedToken
+			accountKey = nianzsBuildKiroAccountKey(account)
+			if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
+				return nil, currentToken, sleepErr
+			}
+			continue
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if _, err := s.markKiro429Nianzs(ctx, account.ID, accountKey); err != nil {
+				_ = resp.Body.Close()
+				return nil, currentToken, err
+			}
+		}
+		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 {
+			if attempt < 2 {
+				_ = resp.Body.Close()
+				if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
+					return nil, currentToken, sleepErr
+				}
+				continue
+			}
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if err := s.markKiroSuccessNianzs(ctx, account.ID, accountKey); err != nil {
+				_ = resp.Body.Close()
+				return nil, currentToken, err
+			}
+		}
+
+		return resp, currentToken, nil
+	}
+
+	return nil, currentToken, fmt.Errorf("kiro mcp request retries exhausted")
+}

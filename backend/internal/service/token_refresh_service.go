@@ -75,6 +75,7 @@ type TokenRefreshService struct {
 	executors        []OAuthRefreshExecutor
 	refreshPolicy    BackgroundRefreshPolicy
 	cfg              *config.TokenRefreshConfig
+	kiroEngine       KiroEngine
 	cacheInvalidator TokenCacheInvalidator
 	schedulerCache   SchedulerCache   // 用于同步更新调度器缓存，解决 token 刷新后缓存不一致问题
 	tempUnschedCache TempUnschedCache // 用于清除 Redis 中的临时不可调度缓存
@@ -138,7 +139,7 @@ func NewTokenRefreshServiceWithKiro(
 	openaiOAuthService *OpenAIOAuthService,
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
-	kiroOAuthService *KiroOAuthService,
+	kiroOAuthService kiroAccountTokenRefresher,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -166,7 +167,7 @@ func newTokenRefreshService(
 	openaiOAuthService *OpenAIOAuthService,
 	geminiOAuthService *GeminiOAuthService,
 	antigravityOAuthService *AntigravityOAuthService,
-	kiroOAuthService *KiroOAuthService,
+	kiroOAuthService kiroAccountTokenRefresher,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
@@ -188,6 +189,9 @@ func newTokenRefreshService(
 		stopCh:           make(chan struct{}),
 		runCtx:           runCtx,
 		runCancel:        runCancel,
+	}
+	if cfg != nil {
+		s.kiroEngine = normalizeKiroEngine(cfg.Gateway.KiroEngine)
 	}
 	if pager, ok := accountRepo.(OAuthRefreshCandidatePager); ok {
 		s.candidatePager = pager
@@ -1455,7 +1459,18 @@ func (s *TokenRefreshService) ensureKiroProfileArn(ctx context.Context, account 
 	if s == nil || account == nil || account.Platform != PlatformKiro || account.Type != AccountTypeOAuth {
 		return
 	}
-	if profileArn := strings.TrimSpace(account.GetCredential("profile_arn")); profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
+	profileArn := strings.TrimSpace(account.GetCredential("profile_arn"))
+	if s.kiroEngine == KiroEngineNianzs {
+		if profileArn != "" && !nianzsKiroIsPlaceholderProfileARN(profileArn) {
+			return
+		}
+		token := strings.TrimSpace(account.GetCredential("access_token"))
+		if token != "" {
+			_ = nianzsKiroResolveAndPersistProfileArn(ctx, s.accountRepo, account, token)
+		}
+		return
+	}
+	if profileArn != "" && !kiroIsPlaceholderProfileARN(profileArn) {
 		return
 	}
 	token := strings.TrimSpace(account.GetCredential("access_token"))

@@ -690,6 +690,9 @@ export interface Group {
   kiro_auto_sticky_enabled: boolean
   kiro_sticky_session_ttl_seconds: number
   kiro_cache_emulation_ratio: number
+  kiro_cache_emulation_mode: 'uniform' | 'independent'
+  kiro_cache_creation_emulation_ratio: number
+  kiro_cache_read_emulation_ratio: number
   kiro_endpoint_mode: 'q' | 'krs' | 'auto'
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number
@@ -903,6 +906,9 @@ export interface CreateGroupRequest {
   kiro_auto_sticky_enabled?: boolean
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
+  kiro_cache_emulation_mode?: 'uniform' | 'independent'
+  kiro_cache_creation_emulation_ratio?: number
+  kiro_cache_read_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number
@@ -964,6 +970,9 @@ export interface UpdateGroupRequest {
   kiro_auto_sticky_enabled?: boolean
   kiro_sticky_session_ttl_seconds?: number
   kiro_cache_emulation_ratio?: number
+  kiro_cache_emulation_mode?: 'uniform' | 'independent'
+  kiro_cache_creation_emulation_ratio?: number
+  kiro_cache_read_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number

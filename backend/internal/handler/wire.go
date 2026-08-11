@@ -174,7 +174,7 @@ func ProvideAdminAccountHandler(
 	geminiOAuthService *service.GeminiOAuthService,
 	antigravityOAuthService *service.AntigravityOAuthService,
 	grokOAuthService service.GrokOAuthTokenService,
-	kiroOAuthService *service.KiroOAuthService,
+	kiroOAuthService *service.KiroOAuthEngineService,
 	grokTokenProvider *service.GrokTokenProvider,
 	rateLimitService *service.RateLimitService,
 	accountUsageService *service.AccountUsageService,

@@ -70,6 +70,7 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
 	kiroTokenProvider         *KiroTokenProvider
+	nianzsKiroTokenProvider   *NianzsKiroTokenProvider
 	droidTokenProvider        *DroidTokenProvider
 	grokTokenProvider         *GrokTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
@@ -78,6 +79,13 @@ type AccountTestService struct {
 	tlsFPProfileService       *TLSFingerprintProfileService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
+}
+
+func (s *AccountTestService) SetNianzsKiroTokenProvider(provider *NianzsKiroTokenProvider) *AccountTestService {
+	if s != nil {
+		s.nianzsKiroTokenProvider = provider
+	}
+	return s
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -229,6 +237,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.IsKiroDirect() {
+		if s.cfg != nil && normalizeKiroEngine(s.cfg.Gateway.KiroEngine) == KiroEngineNianzs {
+			return s.testKiroAccountConnectionNianzs(c, adaptKiroAccountForNianzs(account), modelID)
+		}
 		return s.testKiroAccountConnection(c, account, modelID)
 	}
 

@@ -7,10 +7,10 @@ import (
 )
 
 type KiroOAuthHandler struct {
-	kiroOAuthService *service.KiroOAuthService
+	kiroOAuthService service.KiroOAuthOperations
 }
 
-func NewKiroOAuthHandler(kiroOAuthService *service.KiroOAuthService) *KiroOAuthHandler {
+func NewKiroOAuthHandler(kiroOAuthService service.KiroOAuthOperations) *KiroOAuthHandler {
 	return &KiroOAuthHandler{kiroOAuthService: kiroOAuthService}
 }
 
