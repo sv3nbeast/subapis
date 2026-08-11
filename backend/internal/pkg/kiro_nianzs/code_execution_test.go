@@ -127,3 +127,19 @@ func TestLegacyCodeExecutionResultContentIsJSONSerializable(t *testing.T) {
 	_, err := json.Marshal(legacyCodeExecutionResultContent(CodeExecutionResult{Stdout: "ok"}))
 	require.NoError(t, err)
 }
+
+func TestKiroCompletionEvidenceRejectsBareEOFButAcceptsRuntimeBoundaries(t *testing.T) {
+	require.False(t, kiroEventProvidesCompletionEvidence("assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "partial"},
+	}))
+	require.True(t, kiroEventProvidesCompletionEvidence("messageStopEvent", map[string]any{}))
+	require.True(t, kiroEventProvidesCompletionEvidence("toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{"stop": true},
+	}))
+	require.True(t, kiroEventProvidesCompletionEvidence("messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"outputTokens": json.Number("3")}},
+	}))
+	require.True(t, kiroEventProvidesCompletionEvidence("assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+}

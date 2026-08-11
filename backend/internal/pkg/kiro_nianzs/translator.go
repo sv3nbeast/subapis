@@ -114,8 +114,9 @@ type KiroRequestContext struct {
 	StopSequences            []string
 	MaxOutputTokens          int
 	// RequireTerminalEvent prevents callers that perform server-side work from
-	// treating a transport EOF as a successful model turn. Kiro's normal
-	// messageStopEvent remains the authoritative completion boundary.
+	// treating a bare transport EOF as a successful model turn. Kiro may prove
+	// completion with messageStop, an explicit stop reason, a stopped tool call,
+	// or final usage metadata depending on the endpoint/runtime version.
 	RequireTerminalEvent bool
 	forcedToolChoiceName string
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
@@ -593,7 +594,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
 	var outputTextBuf strings.Builder
-	sawTerminalEvent := false
+	sawCompletionEvidence := false
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -1268,6 +1269,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := decoder.Decode(&trailing); err != io.EOF {
 			continue
 		}
+		if kiroEventProvidesCompletionEvidence(msg.EventType, event) {
+			sawCompletionEvidence = true
+		}
 
 		if kiroUpstreamTraceEnabled {
 			payloadPrefix := string(msg.Payload)
@@ -1280,9 +1284,6 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
-			if isKiroTerminalEventType(semanticEvents[i].SourceEventType) {
-				sawTerminalEvent = true
-			}
 			if kiroUpstreamTraceEnabled {
 				ev := &semanticEvents[i]
 				detail := ev.Content
@@ -1299,8 +1300,8 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 		}
 	}
-	if requestCtx.RequireTerminalEvent && !sawTerminalEvent {
-		return nil, errors.New("incomplete kiro event stream: missing terminal event")
+	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
+		return nil, errors.New("incomplete kiro event stream: missing completion evidence")
 	}
 
 	if err := closeOpenStreamingTool(); err != nil {
@@ -3013,7 +3014,7 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 	var toolUses []KiroToolUse
 	var usage Usage
 	stopReason := ""
-	sawTerminalEvent := false
+	sawCompletionEvidence := false
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
@@ -3050,8 +3051,8 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 		if sr := readStopReason(event); sr != "" {
 			stopReason = sr
 		}
-		if isKiroTerminalEventType(msg.EventType) {
-			sawTerminalEvent = true
+		if kiroEventProvidesCompletionEvidence(msg.EventType, event) {
+			sawCompletionEvidence = true
 		}
 		switch msg.EventType {
 		case "assistantResponseEvent":
@@ -3096,8 +3097,8 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 			updateUsageFromEvent(&usage, msg.EventType, event)
 		}
 	}
-	if requireTerminalEvent && !sawTerminalEvent {
-		return "", nil, usage, stopReason, errors.New("incomplete kiro event stream: missing terminal event")
+	if requireTerminalEvent && !sawCompletionEvidence {
+		return "", nil, usage, stopReason, errors.New("incomplete kiro event stream: missing completion evidence")
 	}
 	closeReasoning()
 
@@ -3144,6 +3145,44 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 func isKiroTerminalEventType(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
 	case "messageStopEvent", "message_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func kiroEventProvidesCompletionEvidence(eventType string, event map[string]any) bool {
+	if isKiroTerminalEventType(eventType) {
+		return true
+	}
+	meta := nestedEvent(event, eventType)
+	if isKiroCompletionStopReason(readStopReason(event)) || isKiroCompletionStopReason(readStopReason(meta)) {
+		return true
+	}
+	switch strings.TrimSpace(eventType) {
+	case "toolUseEvent":
+		stopped, _ := meta["stop"].(bool)
+		return stopped
+	case "messageMetadataEvent", "metadataEvent", "usageEvent":
+		if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok && len(tokenUsage) > 0 {
+			return true
+		}
+		for _, name := range []string{"inputTokens", "outputTokens", "totalTokens"} {
+			if _, ok := meta[name]; ok {
+				return true
+			}
+		}
+	case "meteringEvent":
+		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok && value > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func isKiroCompletionStopReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "end_turn", "tool_use", "max_tokens", "stop_sequence":
 		return true
 	default:
 		return false
