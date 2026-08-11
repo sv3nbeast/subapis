@@ -112,6 +112,7 @@ type KiroRequestContext struct {
 	StructuredOutputUserHint string
 	StopSequences            []string
 	MaxOutputTokens          int
+	forcedToolChoiceName     string
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -465,6 +466,9 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	if structuredOutputTool != nil {
 		kiroTools = append(kiroTools, *structuredOutputTool)
 	}
+	if requestCtx.forcedToolChoiceName != "" {
+		kiroTools = filterKiroToolsForForcedChoice(kiroTools, requestCtx.forcedToolChoiceName)
+	}
 	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
 	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
@@ -659,6 +663,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		thinkingBlockOpen = false
 		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": thinkingBlockIndex})
 	}
+	var writeTextDelta func(text string, allowWhitespace bool) error
 	discardStreamingTool := func(toolUseID string) {
 		if toolUseID == "" {
 			return
@@ -685,6 +690,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 
+		structuredOutput := isStructuredOutputToolName(name, requestCtx)
 		responseName := normalizeResponseToolName(restoreResponseToolName(name, requestCtx))
 		inputJSON, input, ok := normalizeStreamingToolInput(responseName, buf.String())
 		if !ok {
@@ -695,6 +701,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		contentKey := toolUseContentKey(tool)
 		if contentKey == "" || emittedToolContents[contentKey] {
 			return nil
+		}
+		if structuredOutput {
+			emittedToolContents[contentKey] = true
+			if stopReason == "" || stopReason == "tool_use" {
+				stopReason = "end_turn"
+			}
+			return writeTextDelta(inputJSON, true)
 		}
 		if err := ensureMessageStart(); err != nil {
 			return err
@@ -802,7 +815,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		return closeStreamingTool(toolUseID)
 	}
-	writeTextDelta := func(text string, allowWhitespace bool) error {
+	writeTextDelta = func(text string, allowWhitespace bool) error {
 		if text == "" {
 			return nil
 		}
@@ -1007,8 +1020,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			"type":  "content_block_start",
 			"index": thinkingBlockIndex,
 			"content_block": map[string]any{
-				"type":     "thinking",
-				"thinking": "",
+				"type":      "thinking",
+				"thinking":  "",
+				"signature": "",
 			},
 		})
 	}
@@ -1640,6 +1654,7 @@ func extractClaudeToolChoiceHint(claudeBody []byte, requestCtx *KiroRequestConte
 	case "tool":
 		toolName := mapKiroToolName(toolChoice.Get("name").String(), requestCtx)
 		if toolName != "" {
+			requestCtx.forcedToolChoiceName = toolName
 			return fmt.Sprintf("[INSTRUCTION: You MUST use the tool named '%s' to respond. Do not use any other tool or respond with text only.]", toolName)
 		}
 	case "none":
@@ -1689,6 +1704,23 @@ func hasForcedClaudeToolChoice(claudeBody []byte) bool {
 	default:
 		return false
 	}
+}
+
+// filterKiroToolsForForcedChoice implements Anthropic's named tool_choice
+// semantics without adding a retry or buffering step. If the named tool is not
+// present, retain the original set so malformed client input still reaches the
+// upstream validation path instead of silently removing every tool.
+func filterKiroToolsForForcedChoice(tools []KiroToolWrapper, forcedName string) []KiroToolWrapper {
+	forcedName = strings.TrimSpace(forcedName)
+	if forcedName == "" || len(tools) <= 1 {
+		return tools
+	}
+	for _, tool := range tools {
+		if strings.TrimSpace(tool.ToolSpecification.Name) == forcedName {
+			return []KiroToolWrapper{tool}
+		}
+	}
+	return tools
 }
 
 func joinPromptHints(hints ...string) string {

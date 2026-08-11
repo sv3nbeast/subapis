@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	nianzskiro "github.com/Wei-Shaw/sub2api/internal/pkg/kiro_nianzs"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	nianzscooldown "github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown_nianzs"
 	"github.com/alicebob/miniredis/v2"
@@ -29,6 +31,21 @@ type trackingNianzsCooldownStore struct {
 type nianzsErrorAfterReader struct {
 	reader *bytes.Reader
 	err    error
+}
+
+func nianzsSSEPayloadsByType(wire, eventType string) []gjson.Result {
+	results := make([]gjson.Result, 0)
+	for _, line := range strings.Split(wire, "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if payload == "" || payload == "[DONE]" || gjson.Get(payload, "type").String() != eventType {
+			continue
+		}
+		results = append(results, gjson.Parse(payload))
+	}
+	return results
 }
 
 func (r *nianzsErrorAfterReader) Read(p []byte) (int, error) {
@@ -393,6 +410,323 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"jsonrpc":"2.0","id":"web_search_test","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go\",\"url\":\"https://go.dev\",\"snippet\":\"official docs\"}]}"}]}}`,
+		)),
+	}
+	upstreamResponse := kiroEventStreamResponse(t, "Use goroutines and channels.", 12, 5)
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{mcpResponse, upstreamResponse}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Stream)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, mcpEndpoint, upstream.requests[0].URL.String())
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.requests[1].URL.String())
+	wire := recorder.Body.String()
+	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
+	require.Equal(t, 1, strings.Count(wire, "event: message_delta"))
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+	require.Contains(t, wire, `"type":"server_tool_use"`)
+	require.Contains(t, wire, `"type":"web_search_tool_result"`)
+	require.Contains(t, wire, `"text":"Use goroutines and channels."`)
+	var serverToolUseID, resultToolUseID string
+	for _, event := range nianzsSSEPayloadsByType(wire, "content_block_start") {
+		switch event.Get("content_block.type").String() {
+		case "server_tool_use":
+			serverToolUseID = event.Get("content_block.id").String()
+		case "web_search_tool_result":
+			resultToolUseID = event.Get("content_block.tool_use_id").String()
+		}
+	}
+	require.NotEmpty(t, serverToolUseID)
+	require.Equal(t, serverToolUseID, resultToolUseID)
+	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
+	require.Len(t, messageDeltas, 1)
+	require.Equal(t, int64(1), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 5, result.Usage.OutputTokens)
+}
+
+func TestNianzsMessagesWebSearchNonStreamingPairsResultAndReportsUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":false,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"jsonrpc":"2.0","id":"web_search_test","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go\",\"url\":\"https://go.dev\",\"snippet\":\"official docs\"}]}"}]}}`,
+		)),
+	}
+	upstreamResponse := kiroEventStreamResponse(t, "Use goroutines and channels.", 12, 5)
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{mcpResponse, upstreamResponse}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Len(t, upstream.requests, 2)
+	response := recorder.Body.String()
+	require.Equal(t, "server_tool_use", gjson.Get(response, "content.0.type").String())
+	require.Equal(t, "web_search_tool_result", gjson.Get(response, "content.1.type").String())
+	require.Equal(t, gjson.Get(response, "content.0.id").String(), gjson.Get(response, "content.1.tool_use_id").String())
+	require.Equal(t, int64(1), gjson.Get(response, "usage.server_tool_use.web_search_requests").Int())
+	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.2.text").String())
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 5, result.Usage.OutputTokens)
+}
+
+func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Research Go concurrency and refine the query if needed"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":2}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := func(id, title, url string) *http.Response {
+		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"result":{"content":[{"type":"text","text":%q}]}}`, id,
+			fmt.Sprintf(`{"results":[{"title":%q,"url":%q,"snippet":"official docs"}]}`, title, url))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(payload)),
+		}
+	}
+	intermediate := bytes.NewBuffer(nil)
+	_, _ = intermediate.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "srvtoolu_refined",
+			"name":      "web_search",
+			"input":     `{"query":"Go memory model channels 2026"}`,
+			"stop":      true,
+		},
+	}))
+	_, _ = intermediate.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 10, "outputTokens": 2}},
+	}))
+	_, _ = intermediate.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+	intermediateResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(intermediate.Bytes())),
+	}
+
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{
+		mcpResponse("search_one", "Go Concurrency", "https://go.dev/doc/effective_go#concurrency"),
+		intermediateResponse,
+		mcpResponse("search_two", "Go Memory Model", "https://go.dev/ref/mem"),
+		kiroEventStreamResponse(t, "Use channels for communication and synchronize shared memory explicitly.", 18, 7),
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 4)
+	wire := recorder.Body.String()
+	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
+	require.Equal(t, 1, strings.Count(wire, "event: message_delta"))
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+
+	serverToolIDs := make(map[string]bool)
+	resultToolIDs := make(map[string]bool)
+	indices := make(map[int64]bool)
+	for _, event := range nianzsSSEPayloadsByType(wire, "content_block_start") {
+		indices[event.Get("index").Int()] = true
+		switch event.Get("content_block.type").String() {
+		case "server_tool_use":
+			serverToolIDs[event.Get("content_block.id").String()] = true
+		case "web_search_tool_result":
+			resultToolIDs[event.Get("content_block.tool_use_id").String()] = true
+		}
+	}
+	require.Len(t, serverToolIDs, 2)
+	require.Equal(t, serverToolIDs, resultToolIDs)
+	require.Len(t, indices, 5, "two search pairs plus the final text block must use distinct indices")
+	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
+	require.Len(t, messageDeltas, 1)
+	require.Equal(t, int64(2), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())
+	require.Contains(t, wire, `"text":"Use channels for communication and synchronize shared memory explicitly."`)
+}
+
+func TestNianzsMessagesNamedToolChoiceUsesOnlySelectedToolEndToEnd(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,
+		"messages":[{"role":"user","content":"use beta"}],
+		"tools":[
+			{"name":"alpha","description":"alpha","input_schema":{"type":"object","properties":{}}},
+			{"name":"beta","description":"beta","input_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}},
+			{"name":"gamma","description":"gamma","input_schema":{"type":"object","properties":{}}}
+		],
+		"tool_choice":{"type":"tool","name":"beta"}
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{"toolUseId": "toolu_beta", "name": "beta", "input": `{"value":"ok"}`, "stop": true},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 20, "outputTokens": 4}},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	forwardedTools := gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, forwardedTools, 1)
+	require.Equal(t, "beta", forwardedTools[0].Get("toolSpecification.name").String())
+	wire := recorder.Body.String()
+	require.Contains(t, wire, `"type":"tool_use"`)
+	require.Contains(t, wire, `"name":"beta"`)
+	require.Contains(t, wire, `"partial_json":"{\"value\":\"ok\"}"`)
+	require.Contains(t, wire, `"stop_reason":"tool_use"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+}
+
+func TestNianzsMessagesStructuredOutputStreamingToolBecomesJSONEndToEnd(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,
+		"messages":[{"role":"user","content":"return the structured answer"}],
+		"output_config":{"format":{"type":"json_schema","name":"schema_answer","schema":{"type":"object","properties":{"ok":{"type":"boolean"},"count":{"type":"integer"}},"required":["ok","count"],"additionalProperties":false}}}
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{"toolUseId": "toolu_schema", "name": "schema_answer", "input": `{"ok":true,"count":2}`, "stop": true},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 15, "outputTokens": 6}},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	forwardedTools := gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, forwardedTools, 1)
+	require.Equal(t, "schema_answer", forwardedTools[0].Get("toolSpecification.name").String())
+	require.False(t, forwardedTools[0].Get("toolSpecification.inputSchema.json.additionalProperties").Bool())
+	wire := recorder.Body.String()
+	require.NotContains(t, wire, `"type":"tool_use"`)
+	require.Contains(t, wire, `"type":"text_delta"`)
+	require.Contains(t, wire, `"text":"{\"count\":2,\"ok\":true}"`)
+	require.Contains(t, wire, `"stop_reason":"end_turn"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+}
+
+func TestNianzsMessagesStructuredOutputNonStreamingToolBecomesJSONEndToEnd(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-sonnet-4-6","max_tokens":128,"stream":false,
+		"messages":[{"role":"user","content":"return the structured answer"}],
+		"output_config":{"format":{"type":"json_schema","name":"schema_answer","schema":{"type":"object","properties":{"ok":{"type":"boolean"},"count":{"type":"integer"}},"required":["ok","count"],"additionalProperties":false}}}
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{"toolUseId": "toolu_schema_nonstream", "name": "schema_answer", "input": `{"ok":true,"count":2}`, "stop": true},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 15, "outputTokens": 6}},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Equal(t, "text", gjson.Get(recorder.Body.String(), "content.0.type").String())
+	require.JSONEq(t, `{"count":2,"ok":true}`, gjson.Get(recorder.Body.String(), "content.0.text").String())
+	require.Equal(t, "end_turn", gjson.Get(recorder.Body.String(), "stop_reason").String())
+	require.Equal(t, int64(15), gjson.Get(recorder.Body.String(), "usage.input_tokens").Int())
+	require.Equal(t, int64(6), gjson.Get(recorder.Body.String(), "usage.output_tokens").Int())
 }
 
 func TestNianzsMessagesStreamFlushesBeforeUpstreamTerminal(t *testing.T) {

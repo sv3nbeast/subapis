@@ -1,9 +1,11 @@
 package kiro
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
@@ -20,8 +22,19 @@ func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
 	require.Contains(t, string(events[1]), `"type":"input_json_delta"`)
 	require.Contains(t, string(events[1]), `"{\"query\":\"golang concurrency\"}"`)
 	require.Contains(t, string(events[3]), `"type":"web_search_tool_result"`)
-	require.NotContains(t, string(events[3]), `"tool_use_id"`)
+	require.Contains(t, string(events[3]), `"tool_use_id":"srvtoolu_test"`)
 	require.Contains(t, string(events[3]), `"encrypted_content":"result snippet"`)
+}
+
+func TestGenerateSearchIndicatorEvents_PairsSearchResultWithServerToolUse(t *testing.T) {
+	events := GenerateSearchIndicatorEvents("current weather", "srvtoolu_pair", &WebSearchResults{}, 4)
+	require.Len(t, events, 5)
+
+	toolUse := gjson.Parse(extractSSEDataForTest(t, events[0]))
+	toolResult := gjson.Parse(extractSSEDataForTest(t, events[3]))
+	require.Equal(t, "server_tool_use", toolUse.Get("content_block.type").String())
+	require.Equal(t, "web_search_tool_result", toolResult.Get("content_block.type").String())
+	require.Equal(t, toolUse.Get("content_block.id").String(), toolResult.Get("content_block.tool_use_id").String())
 }
 
 func TestAnalyzeBufferedStream_ExtractsWebSearchToolUse(t *testing.T) {
@@ -70,4 +83,42 @@ func TestAdjustSSEChunk_OffsetsIndicesAndDropsMessageStart(t *testing.T) {
 	adjusted, shouldForward := AdjustSSEChunk([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"), 3)
 	require.True(t, shouldForward)
 	require.Contains(t, string(adjusted), `"index":3`)
+}
+
+func TestAdjustSSEChunk_PreservesFinalTerminalEvents(t *testing.T) {
+	messageDelta := []byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}\n\n")
+	adjusted, shouldForward := AdjustSSEChunk(messageDelta, 2)
+	require.True(t, shouldForward)
+	require.JSONEq(t,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"output_tokens":3}}`,
+		extractSSEDataForTest(t, adjusted),
+	)
+
+	messageStop := []byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	adjusted, shouldForward = AdjustSSEChunk(messageStop, 2)
+	require.True(t, shouldForward)
+	require.JSONEq(t, `{"type":"message_stop"}`, extractSSEDataForTest(t, adjusted))
+}
+
+func TestAdjustSSEChunkWithWebSearchUsage_AddsRequestCountOnlyToFinalUsage(t *testing.T) {
+	messageDelta := []byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}\n\n")
+	adjusted, shouldForward := AdjustSSEChunkWithWebSearchUsage(messageDelta, 2, 2)
+	require.True(t, shouldForward)
+	require.Equal(t, int64(2), gjson.Get(extractSSEDataForTest(t, adjusted), "usage.server_tool_use.web_search_requests").Int())
+
+	contentDelta := []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+	adjusted, shouldForward = AdjustSSEChunkWithWebSearchUsage(contentDelta, 2, 2)
+	require.True(t, shouldForward)
+	require.False(t, gjson.Get(extractSSEDataForTest(t, adjusted), "usage.server_tool_use").Exists())
+}
+
+func extractSSEDataForTest(t *testing.T, chunk []byte) string {
+	t.Helper()
+	for _, line := range strings.Split(string(chunk), "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			return strings.TrimPrefix(line, "data: ")
+		}
+	}
+	t.Fatalf("SSE chunk has no data line: %q", string(chunk))
+	return ""
 }

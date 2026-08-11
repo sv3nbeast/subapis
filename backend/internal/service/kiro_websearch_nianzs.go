@@ -124,6 +124,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	}
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
 	nextContentBlockIndex := 0
+	webSearchRequests := 0
 
 	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
 		return err
@@ -138,6 +139,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		}
 		if mcpErr != nil {
 			results = nil
+		} else if results != nil {
+			webSearchRequests++
 		}
 
 		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
@@ -189,7 +192,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		}
 
 		for _, chunk := range chunks {
-			adjusted, shouldForward := nianzskiro.AdjustSSEChunk(chunk, nextContentBlockIndex)
+			adjusted, shouldForward := nianzskiro.AdjustSSEChunkWithWebSearchUsage(chunk, nextContentBlockIndex, webSearchRequests)
 			if !shouldForward {
 				continue
 			}

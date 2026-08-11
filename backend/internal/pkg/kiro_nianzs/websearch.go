@@ -254,18 +254,37 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 			"input": map[string]any{"query": search.Query},
 		})
 		updated = append(updated, map[string]any{
-			"type":    "web_search_tool_result",
-			"content": buildSearchResultContent(search.Results),
+			"type":        "web_search_tool_result",
+			"tool_use_id": search.ToolUseID,
+			"content":     buildSearchResultContent(search.Results),
 		})
 	}
 	updated = append(updated, content...)
 	response["content"] = updated
+	if successfulSearches := successfulSearchCount(searches); successfulSearches > 0 {
+		usage, ok := response["usage"].(map[string]any)
+		if !ok {
+			usage = map[string]any{}
+			response["usage"] = usage
+		}
+		usage["server_tool_use"] = map[string]any{"web_search_requests": successfulSearches}
+	}
 
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return responsePayload, err
 	}
 	return encoded, nil
+}
+
+func successfulSearchCount(searches []SearchIndicator) int {
+	count := 0
+	for _, search := range searches {
+		if search.Results != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func buildSearchResultContent(results *WebSearchResults) []map[string]any {

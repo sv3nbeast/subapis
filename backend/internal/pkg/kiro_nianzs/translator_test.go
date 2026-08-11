@@ -566,6 +566,117 @@ func TestBuildKiroPayloadInjectsToolChoiceHints(t *testing.T) {
 	require.Contains(t, systemContent, "MUST use the tool named 'remote_web_search'")
 }
 
+func TestBuildKiroPayloadNamedToolChoiceExposesOnlySelectedActiveTool(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"use beta"}],
+		"tools":[
+			{"name":"alpha","description":"alpha tool","input_schema":{"type":"object","properties":{}}},
+			{"name":"beta","description":"beta tool","input_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}},
+			{"name":"gamma","description":"gamma tool","input_schema":{"type":"object","properties":{}}}
+		],
+		"tool_choice":{"type":"tool","name":"beta"}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	tools := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, tools, 1)
+	require.Equal(t, "beta", tools[0].Get("toolSpecification.name").String())
+}
+
+func TestBuildKiroPayloadAutoToolChoiceKeepsAllActiveTools(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"choose if useful"}],
+		"tools":[
+			{"name":"alpha","input_schema":{"type":"object","properties":{}}},
+			{"name":"beta","input_schema":{"type":"object","properties":{}}},
+			{"name":"gamma","input_schema":{"type":"object","properties":{}}}
+		],
+		"tool_choice":{"type":"auto"}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	tools := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, tools, 3)
+}
+
+func TestBuildKiroPayloadNamedToolChoiceKeepsOnlySelectedPlusHistorySchema(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_alpha","name":"alpha","input":{}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_alpha","content":"done"},{"type":"text","text":"now use beta"}]}
+		],
+		"tools":[
+			{"name":"alpha","input_schema":{"type":"object","properties":{}}},
+			{"name":"beta","input_schema":{"type":"object","properties":{}}},
+			{"name":"gamma","input_schema":{"type":"object","properties":{}}}
+		],
+		"tool_choice":{"type":"tool","name":"beta"}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	tools := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, tools, 2)
+	require.Equal(t, "beta", tools[0].Get("toolSpecification.name").String())
+	require.Equal(t, "alpha", tools[1].Get("toolSpecification.name").String())
+	require.Equal(t, "Tool used in conversation history", tools[1].Get("toolSpecification.description").String())
+}
+
+func TestBuildKiroPayloadClaudeCodeSizedNamedToolChoiceKeepsOnlySelectedTool(t *testing.T) {
+	tools := make([]map[string]any, 0, 29)
+	for i := 0; i < 29; i++ {
+		tools = append(tools, map[string]any{
+			"name":        fmt.Sprintf("claude_code_tool_%02d", i),
+			"description": strings.Repeat(fmt.Sprintf("tool %02d description ", i), 80),
+			"input_schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "string"},
+				},
+				"required": []string{"value"},
+			},
+		})
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":       "claude-opus-4-8",
+		"max_tokens":  256,
+		"messages":    []map[string]any{{"role": "user", "content": "call the requested diagnostic tool"}},
+		"tools":       tools,
+		"tool_choice": map[string]any{"type": "tool", "name": "claude_code_tool_23"},
+	})
+	require.NoError(t, err)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "CLI", nil)
+	require.NoError(t, err)
+	forwarded := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, forwarded, 1)
+	require.Equal(t, "claude_code_tool_23", forwarded[0].Get("toolSpecification.name").String())
+}
+
+func TestBuildKiroPayloadStructuredOutputPreservesClientToolsAndAddsSchemaTool(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"return a structured answer"}],
+		"tools":[{"name":"lookup","description":"lookup data","input_schema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}],
+		"output_config":{"format":{"type":"json_schema","name":"schema_answer","schema":{"type":"object","properties":{"ok":{"type":"boolean"},"count":{"type":"integer"}},"required":["ok","count"],"additionalProperties":false}}}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.6", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	forwarded := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, forwarded, 2)
+	require.Equal(t, "lookup", forwarded[0].Get("toolSpecification.name").String())
+	require.Equal(t, "schema_answer", forwarded[1].Get("toolSpecification.name").String())
+	require.Equal(t, false, forwarded[1].Get("toolSpecification.inputSchema.json.additionalProperties").Bool())
+	require.Equal(t, "boolean", forwarded[1].Get("toolSpecification.inputSchema.json.properties.ok.type").String())
+	require.Equal(t, "schema_answer", result.Context.StructuredOutputToolName)
+}
+
 func TestBuildKiroPayloadInjectsRequiredToolChoiceHint(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",
@@ -1870,10 +1981,113 @@ func TestStreamEventStreamAsAnthropicThinkingOnlyResponse(t *testing.T) {
 
 	output := out.String()
 	require.Contains(t, output, `"type":"thinking"`)
+	require.Contains(t, output, `"signature":""`, "thinking content_block_start must match the Anthropic streaming shape")
 	require.Contains(t, output, `"type":"thinking_delta"`)
 	require.Contains(t, output, `"thinking":"I should think first."`)
 	require.Contains(t, output, `event: message_delta`)
 	require.Contains(t, output, `event: message_stop`)
+}
+
+func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "inspect the request"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 11, "outputTokens": 6}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 11, KiroRequestContext{ThinkingEnabled: true})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	require.GreaterOrEqual(t, len(events), 10)
+	names := eventNamesForTest(events)
+	require.Equal(t, []string{
+		"message_start",
+		"content_block_start",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_stop",
+		"content_block_start",
+	}, names[:6])
+	require.Equal(t, "content_block_stop", names[len(names)-3])
+	require.Equal(t, "message_delta", names[len(names)-2])
+	require.Equal(t, "message_stop", names[len(names)-1])
+	for _, name := range names[6 : len(names)-3] {
+		require.Equal(t, "content_block_delta", name)
+	}
+
+	require.Equal(t, "thinking", events[1].Get("content_block.type").String())
+	require.Equal(t, "", events[1].Get("content_block.signature").String())
+	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
+	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
+	require.NotEmpty(t, events[3].Get("delta.signature").String())
+	require.Equal(t, int64(0), events[4].Get("index").Int())
+	require.Equal(t, "text", events[5].Get("content_block.type").String())
+	require.Equal(t, int64(1), events[5].Get("index").Int())
+	for _, event := range events[6 : len(events)-3] {
+		require.Equal(t, "text_delta", event.Get("delta.type").String())
+	}
+	messageDelta := events[len(events)-2]
+	require.Equal(t, "end_turn", messageDelta.Get("delta.stop_reason").String())
+	require.Equal(t, int64(6), messageDelta.Get("usage.output_tokens").Int())
+}
+
+func parseAnthropicSSEEventsForTest(t *testing.T, wire string) []gjson.Result {
+	t.Helper()
+	var events []gjson.Result
+	for _, block := range strings.Split(wire, "\n\n") {
+		for _, line := range strings.Split(block, "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data: ")
+			require.True(t, gjson.Valid(payload), "invalid SSE JSON payload: %s", payload)
+			events = append(events, gjson.Parse(payload))
+		}
+	}
+	return events
+}
+
+func eventNamesForTest(events []gjson.Result) []string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.Get("type").String())
+	}
+	return names
+}
+
+func TestStreamEventStreamAsAnthropicStructuredOutputStreamingToolBecomesJSONText(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_structured",
+			"name":      "schema_answer",
+			"input":     `{"ok":true,"count":2}`,
+			"stop":      true,
+		},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-sonnet-4-6", 9, KiroRequestContext{
+		StructuredOutputToolName: "schema_answer",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	wire := out.String()
+	require.NotContains(t, wire, `"type":"tool_use"`)
+	require.Contains(t, wire, `"type":"text_delta"`)
+	require.Contains(t, wire, `"text":"{\"count\":2,\"ok\":true}"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 }
 
 func TestStreamEventStreamAsAnthropicParsesMultipleReasoningEventsWhenEnabled(t *testing.T) {

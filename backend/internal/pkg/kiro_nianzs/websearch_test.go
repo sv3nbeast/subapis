@@ -88,11 +88,21 @@ func TestInjectSearchIndicatorsInResponse(t *testing.T) {
 	require.Equal(t, "server_tool_use", gjson.GetBytes(updated, "content.0.type").String())
 	require.Equal(t, "srvtoolu_test", gjson.GetBytes(updated, "content.0.id").String())
 	require.Equal(t, "web_search_tool_result", gjson.GetBytes(updated, "content.1.type").String())
-	require.False(t, gjson.GetBytes(updated, "content.1.tool_use_id").Exists())
+	require.Equal(t, gjson.GetBytes(updated, "content.0.id").String(), gjson.GetBytes(updated, "content.1.tool_use_id").String())
 	require.Equal(t, "result snippet", gjson.GetBytes(updated, "content.1.content.0.encrypted_content").String())
 	require.Equal(t, "null", gjson.GetBytes(updated, "content.1.content.0.page_age").Raw)
 	require.False(t, gjson.GetBytes(updated, "content.1.content.0.page_content").Exists())
 	require.Equal(t, "text", gjson.GetBytes(updated, "content.2.type").String())
+	require.Equal(t, int64(1), gjson.GetBytes(updated, "usage.server_tool_use.web_search_requests").Int())
+}
+
+func TestInjectSearchIndicatorsInResponse_DoesNotBillFailedSearch(t *testing.T) {
+	response := []byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	updated, err := InjectSearchIndicatorsInResponse(response, []SearchIndicator{
+		{ToolUseID: "srvtoolu_failed", Query: "unavailable", Results: nil},
+	})
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(updated, "usage.server_tool_use").Exists())
 }
 
 func TestParseSearchResults_PreservesExtendedFields(t *testing.T) {

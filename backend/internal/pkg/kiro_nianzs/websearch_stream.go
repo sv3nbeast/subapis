@@ -60,8 +60,9 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 			"type":  "content_block_start",
 			"index": startIndex + 1,
 			"content_block": map[string]any{
-				"type":    "web_search_tool_result",
-				"content": searchContent,
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"content":     searchContent,
 			},
 		},
 		{
@@ -167,7 +168,7 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset int) [][]byte {
 	filtered := make([][]byte, 0, len(chunks))
 	for _, chunk := range chunks {
-		adjusted, shouldForward := filterSSEChunk(chunk, webSearchToolUseIndex, indexOffset)
+		adjusted, shouldForward := filterSSEChunk(chunk, webSearchToolUseIndex, indexOffset, true)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
@@ -175,8 +176,20 @@ func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset i
 	return filtered
 }
 
+// AdjustSSEChunk rewrites a final buffered Kiro turn into the already-open
+// Anthropic response stream. The outer web-search adapter owns message_start,
+// while the final translated turn still owns the single message_delta and
+// message_stop terminal pair. Intermediate turns use FilterChunksForClient and
+// deliberately suppress their terminal envelope.
 func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
-	return filterSSEChunk(chunk, -1, offset)
+	return AdjustSSEChunkWithWebSearchUsage(chunk, offset, 0)
+}
+
+// AdjustSSEChunkWithWebSearchUsage preserves the final terminal envelope and
+// reports successful server-side web-search calls in the same usage object as
+// Anthropic. A zero count is a byte-compatible no-op for non-search usage.
+func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests int) ([]byte, bool) {
+	return filterSSEChunkWithWebSearchUsage(chunk, -1, offset, false, webSearchRequests)
 }
 
 func MaxContentBlockIndex(chunks [][]byte) int {
@@ -206,7 +219,11 @@ func MaxContentBlockIndex(chunks [][]byte) int {
 	return maxIndex
 }
 
-func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byte, bool) {
+func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool) ([]byte, bool) {
+	return filterSSEChunkWithWebSearchUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, 0)
+}
+
+func filterSSEChunkWithWebSearchUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests int) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -216,7 +233,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 		if strings.HasPrefix(line, "event: ") {
 			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "data: ") {
 				payload := strings.TrimSpace(strings.TrimPrefix(lines[i+1], "data: "))
-				if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+				if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
 					i++
 					continue
 				}
@@ -231,10 +248,10 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 			if payload == "[DONE]" {
 				continue
 			}
-			if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+			if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
 				continue
 			}
-			adjusted := adjustEventPayload(payload, indexOffset)
+			adjusted := adjustEventPayload(payload, indexOffset, webSearchRequests)
 			if adjusted == "" {
 				continue
 			}
@@ -255,7 +272,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool {
+func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppressMessageTerminal bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -264,7 +281,10 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 		return false
 	}
 	eventType, _ := event["type"].(string)
-	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
+	if eventType == "message_start" {
+		return true
+	}
+	if suppressMessageTerminal && (eventType == "message_delta" || eventType == "message_stop") {
 		return true
 	}
 	if webSearchToolUseIndex < 0 {
@@ -276,21 +296,37 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 	return false
 }
 
-func adjustEventPayload(payload string, indexOffset int) string {
-	if payload == "" || indexOffset == 0 {
+func adjustEventPayload(payload string, indexOffset, webSearchRequests int) string {
+	if payload == "" || (indexOffset == 0 && webSearchRequests <= 0) {
 		return payload
 	}
 	var event map[string]any
 	if err := json.Unmarshal([]byte(payload), &event); err != nil {
 		return payload
 	}
+	changed := false
 	switch eventType, _ := event["type"].(string); eventType {
 	case "content_block_start", "content_block_delta", "content_block_stop":
-		if idx, ok := event["index"].(float64); ok {
-			event["index"] = int(idx) + indexOffset
-			if adjusted, err := json.Marshal(event); err == nil {
-				return string(adjusted)
+		if indexOffset != 0 {
+			if idx, ok := event["index"].(float64); ok {
+				event["index"] = int(idx) + indexOffset
+				changed = true
 			}
+		}
+	case "message_delta":
+		if webSearchRequests > 0 {
+			usage, ok := event["usage"].(map[string]any)
+			if !ok {
+				usage = map[string]any{}
+				event["usage"] = usage
+			}
+			usage["server_tool_use"] = map[string]any{"web_search_requests": webSearchRequests}
+			changed = true
+		}
+	}
+	if changed {
+		if adjusted, err := json.Marshal(event); err == nil {
+			return string(adjusted)
 		}
 	}
 	return payload
