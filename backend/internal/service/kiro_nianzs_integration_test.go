@@ -729,6 +729,9 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	// The private Kiro refinement tool_use is consumed by the adapter. The
 	// client sees decision text, two server-tool pairs, and final text at 0..5.
 	require.Len(t, indices, 6, "search decision, two search pairs, and final text must use distinct indices")
+	for index := int64(0); index < 6; index++ {
+		require.True(t, indices[index], "client-visible content indices must be contiguous; missing %d", index)
+	}
 	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
 	require.Len(t, messageDeltas, 1)
 	require.Equal(t, int64(2), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())

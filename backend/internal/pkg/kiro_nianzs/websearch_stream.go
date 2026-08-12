@@ -446,7 +446,7 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 			if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
 				continue
 			}
-			adjusted := adjustEventPayload(payload, indexOffset, webSearchRequests, codeExecutionRequests)
+			adjusted := adjustEventPayload(payload, indexOffset, webSearchToolUseIndex, webSearchRequests, codeExecutionRequests)
 			if adjusted == "" {
 				continue
 			}
@@ -498,8 +498,8 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppr
 	return false
 }
 
-func adjustEventPayload(payload string, indexOffset, webSearchRequests, codeExecutionRequests int) string {
-	if payload == "" || (indexOffset == 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0) {
+func adjustEventPayload(payload string, indexOffset, suppressedContentBlockIndex, webSearchRequests, codeExecutionRequests int) string {
+	if payload == "" || (indexOffset == 0 && suppressedContentBlockIndex < 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0) {
 		return payload
 	}
 	var event map[string]any
@@ -509,9 +509,17 @@ func adjustEventPayload(payload string, indexOffset, webSearchRequests, codeExec
 	changed := false
 	switch eventType, _ := event["type"].(string); eventType {
 	case "content_block_start", "content_block_delta", "content_block_stop":
-		if indexOffset != 0 {
-			if idx, ok := event["index"].(float64); ok {
-				event["index"] = int(idx) + indexOffset
+		if idx, ok := event["index"].(float64); ok {
+			sourceIndex := int(idx)
+			adjustedIndex := sourceIndex + indexOffset
+			// Removing the private refinement block must also close its index
+			// slot. Otherwise a later narrative block keeps its original index
+			// and the client observes a gap in the Anthropic SSE sequence.
+			if suppressedContentBlockIndex >= 0 && sourceIndex > suppressedContentBlockIndex {
+				adjustedIndex--
+			}
+			if adjustedIndex != sourceIndex {
+				event["index"] = adjustedIndex
 				changed = true
 			}
 		}

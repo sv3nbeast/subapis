@@ -107,6 +107,29 @@ func TestFilterChunksForClient_ConsumesRefinementToolUseAndOffsetsNarrative(t *t
 	require.Equal(t, 2, MaxContentBlockIndex(filtered))
 }
 
+func TestFilterChunksForClient_ClosesSuppressedRefinementIndexGap(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_private\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"golang concurrency\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Refining the search.\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"),
+	}
+
+	filtered := FilterChunksForClient(chunks, 0, 4)
+	require.NotEmpty(t, filtered)
+	joined := ""
+	for _, chunk := range filtered {
+		joined += string(chunk)
+	}
+	require.NotContains(t, joined, "toolu_bdrk_private")
+	require.Contains(t, joined, `"text":"Refining the search."`)
+	require.Contains(t, joined, `"index":4`)
+	require.NotContains(t, joined, `"index":5`)
+	require.Equal(t, 4, MaxContentBlockIndex(filtered))
+}
+
 func TestAdjustSSEChunk_OffsetsIndicesAndDropsMessageStart(t *testing.T) {
 	_, shouldForward := AdjustSSEChunk([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"), 2)
 	require.False(t, shouldForward)
