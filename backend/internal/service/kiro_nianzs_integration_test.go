@@ -722,13 +722,13 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	}
 	require.Len(t, serverToolIDs, 2)
 	require.Equal(t, serverToolIDs, resultToolIDs)
-	require.Contains(t, wire, `"name":"remote_web_search"`)
+	require.NotContains(t, wire, `"name":"remote_web_search"`)
 	for id := range serverToolIDs {
 		require.True(t, strings.HasPrefix(id, "srvtoolu_"), "server tool ID must use Anthropic namespace: %s", id)
 	}
-	// The initial search-decision text and the model's refinement tool_use remain
-	// visible around the two server-tool turns, so this fixture uses indices 0..6.
-	require.Len(t, indices, 7, "search decision, two search pairs, refinement tool, and final text must use distinct indices")
+	// The private Kiro refinement tool_use is consumed by the adapter. The
+	// client sees decision text, two server-tool pairs, and final text at 0..5.
+	require.Len(t, indices, 6, "search decision, two search pairs, and final text must use distinct indices")
 	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
 	require.Len(t, messageDeltas, 1)
 	require.Equal(t, int64(2), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())

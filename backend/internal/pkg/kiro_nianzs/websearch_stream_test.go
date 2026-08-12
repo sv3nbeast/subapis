@@ -81,7 +81,7 @@ func TestAnalyzeBufferedStream_ExtractsWebSearchToolUse(t *testing.T) {
 	require.Equal(t, "tool_use", result.StopReason)
 }
 
-func TestFilterChunksForClient_PreservesRefinementToolUseAndOffsetsIndices(t *testing.T) {
+func TestFilterChunksForClient_ConsumesRefinementToolUseAndOffsetsNarrative(t *testing.T) {
 	chunks := [][]byte{
 		[]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"),
 		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
@@ -101,9 +101,10 @@ func TestFilterChunksForClient_PreservesRefinementToolUseAndOffsetsIndices(t *te
 	}
 	require.NotContains(t, joined, `"type":"message_start"`)
 	require.NotContains(t, joined, `"type":"message_delta"`)
-	require.Contains(t, joined, `"name":"web_search"`)
+	require.NotContains(t, joined, `"name":"web_search"`)
+	require.NotContains(t, joined, `"srvtoolu_next"`)
 	require.Contains(t, joined, `"index":2`)
-	require.Equal(t, 3, MaxContentBlockIndex(filtered))
+	require.Equal(t, 2, MaxContentBlockIndex(filtered))
 }
 
 func TestAdjustSSEChunk_OffsetsIndicesAndDropsMessageStart(t *testing.T) {
@@ -212,7 +213,7 @@ func TestFilterChunksForClient_ReassemblesFragmentedSSE(t *testing.T) {
 	for _, chunk := range filtered {
 		joined += string(chunk)
 	}
-	require.Contains(t, joined, "toolu_bdrk_private")
+	require.NotContains(t, joined, "toolu_bdrk_private")
 	require.NotContains(t, joined, `"type":"message_delta"`)
 	require.Contains(t, joined, `"index":2`)
 }

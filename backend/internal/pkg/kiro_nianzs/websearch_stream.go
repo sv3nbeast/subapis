@@ -467,7 +467,7 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, _ int, suppressMessageTerminal bool) bool {
+func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppressMessageTerminal bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -482,10 +482,19 @@ func shouldSuppressEventPayload(payload string, _ int, suppressMessageTerminal b
 	if suppressMessageTerminal && (eventType == "message_delta" || eventType == "message_stop") {
 		return true
 	}
-	// Keep the intermediate custom web-search tool block visible. Anthropic's
-	// native web-search stream exposes the model's refinement tool_use between
-	// the first result and the next server_tool_use; only the terminal envelope
-	// is owned by this adapter and must be removed here.
+	// Kiro expresses a refinement as a private client tool_use. The adapter
+	// consumes that block to execute the next MCP search, then exposes the next
+	// call as a fresh Anthropic server_tool_use/result pair. Forwarding the
+	// private block would leave a client-visible tool_use with no tool_result
+	// and make Claude Code treat the server-side search loop as unfinished.
+	if webSearchToolUseIndex >= 0 {
+		switch eventType {
+		case "content_block_start", "content_block_delta", "content_block_stop":
+			if index, ok := event["index"].(float64); ok && int(index) == webSearchToolUseIndex {
+				return true
+			}
+		}
+	}
 	return false
 }
 
