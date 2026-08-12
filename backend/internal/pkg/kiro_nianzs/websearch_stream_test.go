@@ -201,6 +201,56 @@ func TestFinalizeWebSearchSSEChunksAddsOfficialCitationDeltaBeforeTextStop(t *te
 	require.Equal(t, int64(1), gjson.Get(extractSSEDataForTest(t, finalized[len(finalized)-2]), "usage.server_tool_use.web_search_requests").Int())
 }
 
+func TestFinalizeWebSearchSSEChunksSegmentsCitationsAndPreservesText(t *testing.T) {
+	const answer = "Summary\n\n- First [source](https://one.example)\n\nBridge\n\n- Second [source](https://two.example)\n\nConclusion"
+	chunks := [][]byte{
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		marshalSSEEvent("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": answer},
+		}),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n"),
+		[]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"),
+	}
+	firstSnippet := "first result"
+	secondSnippet := "second result"
+	searches := []SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{
+		{Title: "One", URL: "https://one.example", Snippet: &firstSnippet},
+		{Title: "Two", URL: "https://two.example", Snippet: &secondSnippet},
+	}}}}
+
+	finalized := FinalizeWebSearchSSEChunks(chunks, 2, 1, searches)
+	starts := make(map[int]gjson.Result)
+	var joined strings.Builder
+	var citationURLs []string
+	for _, chunk := range finalized {
+		data := gjson.Parse(extractSSEDataForTest(t, chunk))
+		switch data.Get("type").String() {
+		case "content_block_start":
+			starts[int(data.Get("index").Int())] = data
+		case "content_block_delta":
+			switch data.Get("delta.type").String() {
+			case "text_delta":
+				joined.WriteString(data.Get("delta.text").String())
+			case "citations_delta":
+				citationURLs = append(citationURLs, data.Get("delta.citation.url").String())
+			}
+		}
+	}
+	require.Equal(t, answer, joined.String())
+	require.Equal(t, []string{"https://one.example", "https://two.example"}, citationURLs)
+	require.Len(t, starts, 5)
+	for index := 2; index <= 6; index++ {
+		require.Contains(t, starts, index)
+	}
+	require.False(t, starts[2].Get("content_block.citations").Exists())
+	require.True(t, starts[3].Get("content_block.citations").IsArray())
+	require.False(t, starts[4].Get("content_block.citations").Exists())
+	require.True(t, starts[5].Get("content_block.citations").IsArray())
+	require.False(t, starts[6].Get("content_block.citations").Exists())
+}
+
 func TestAnalyzeBufferedStream_DoesNotMixAdjacentNativeSearchBlocks(t *testing.T) {
 	chunks := [][]byte{
 		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_private\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),

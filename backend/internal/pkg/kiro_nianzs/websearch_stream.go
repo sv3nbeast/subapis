@@ -244,9 +244,9 @@ func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests in
 }
 
 // FinalizeWebSearchSSEChunks rewrites the final Kiro turn into the already-open
-// Anthropic stream and attaches citation deltas to its final text block.
-// Claude begins a cited text block with citations:[] and emits citation deltas
-// before the text they qualify, so preserve that ordering here.
+// Anthropic stream and segments its final text into cited and uncited blocks.
+// Claude begins every cited block with citations:[] and emits its citation
+// deltas before the text they qualify, so preserve both topology and ordering.
 func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, searches []SearchIndicator) [][]byte {
 	adjusted := make([][]byte, 0, len(chunks)+4)
 	for _, chunk := range chunks {
@@ -260,28 +260,57 @@ func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, 
 	if textIndex < 0 {
 		return adjusted
 	}
-	citations := buildWebSearchCitations(searches, text)
-	if len(citations) == 0 {
+	segments := buildWebSearchCitationSegments(searches, text)
+	if len(segments) == 0 {
 		return adjusted
 	}
 
-	result := make([][]byte, 0, len(adjusted)+len(citations))
-	inserted := false
+	result := make([][]byte, 0, len(adjusted)+len(segments)*3)
+	replaced := false
+	indexDelta := len(segments) - 1
 	for _, chunk := range adjusted {
-		if !inserted {
-			if citedStart, ok := addCitationsToSSETextBlockStart(chunk, textIndex); ok {
-				result = append(result, citedStart)
-				for _, citation := range citations {
-					result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
-						"type":  "content_block_delta",
-						"index": textIndex,
-						"delta": map[string]any{
-							"type":     "citations_delta",
-							"citation": citation,
-						},
-					}))
+		payload := firstSSEJSONPayload(chunk)
+		var event map[string]any
+		if len(payload) > 0 && json.Unmarshal(payload, &event) == nil {
+			eventType, _ := event["type"].(string)
+			index, hasIndex := event["index"].(float64)
+			if hasIndex && int(index) == textIndex && isContentBlockSSEEvent(eventType) {
+				if !replaced && eventType == "content_block_start" {
+					for segmentOffset, segment := range segments {
+						segmentIndex := textIndex + segmentOffset
+						block := map[string]any{"type": "text", "text": ""}
+						if len(segment.Citations) > 0 {
+							block["citations"] = []any{}
+						}
+						result = append(result, marshalSSEEvent("content_block_start", map[string]any{
+							"type": "content_block_start", "index": segmentIndex, "content_block": block,
+						}))
+						for _, citation := range segment.Citations {
+							result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+								"type":  "content_block_delta",
+								"index": segmentIndex,
+								"delta": map[string]any{
+									"type":     "citations_delta",
+									"citation": citation,
+								},
+							}))
+						}
+						result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": segmentIndex,
+							"delta": map[string]any{"type": "text_delta", "text": segment.Text},
+						}))
+						result = append(result, marshalSSEEvent("content_block_stop", map[string]any{
+							"type": "content_block_stop", "index": segmentIndex,
+						}))
+					}
+					replaced = true
 				}
-				inserted = true
+				continue
+			}
+			if replaced && indexDelta > 0 && hasIndex && int(index) > textIndex && isContentBlockSSEEvent(eventType) {
+				event["index"] = int(index) + indexDelta
+				result = append(result, marshalSSEEvent(eventType, event))
 				continue
 			}
 		}
@@ -290,25 +319,13 @@ func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, 
 	return result
 }
 
-func addCitationsToSSETextBlockStart(chunk []byte, index int) ([]byte, bool) {
-	payload := firstSSEJSONPayload(chunk)
-	if len(payload) == 0 {
-		return nil, false
+func isContentBlockSSEEvent(eventType string) bool {
+	switch eventType {
+	case "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
 	}
-	var event map[string]any
-	if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_start" {
-		return nil, false
-	}
-	idx, ok := event["index"].(float64)
-	if !ok || int(idx) != index {
-		return nil, false
-	}
-	block, _ := event["content_block"].(map[string]any)
-	if blockType, _ := block["type"].(string); blockType != "text" {
-		return nil, false
-	}
-	block["citations"] = []any{}
-	return marshalSSEEvent("content_block_start", event), true
 }
 
 func finalSSETextBlock(chunks [][]byte) (int, string) {

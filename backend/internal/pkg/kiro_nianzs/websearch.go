@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"cmp"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -649,8 +651,8 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 		})
 	}
 	updated = append(updated, content...)
+	updated = segmentWebSearchCitationsInContent(updated, searches)
 	response["content"] = updated
-	injectWebSearchCitationsIntoContent(updated, searches)
 	if successfulSearches := successfulSearchCount(searches); successfulSearches > 0 {
 		usage, ok := response["usage"].(map[string]any)
 		if !ok {
@@ -1023,9 +1025,14 @@ func readWebSearchProtoUvarint(wire []byte, offset int) (uint64, int, bool) {
 	return 0, offset, false
 }
 
-func injectWebSearchCitationsIntoContent(content []any, searches []SearchIndicator) {
+type webSearchCitedTextSegment struct {
+	Text      string
+	Citations []map[string]any
+}
+
+func segmentWebSearchCitationsInContent(content []any, searches []SearchIndicator) []any {
 	if len(searches) == 0 {
-		return
+		return content
 	}
 	for i := len(content) - 1; i >= 0; i-- {
 		block, ok := content[i].(map[string]any)
@@ -1033,12 +1040,104 @@ func injectWebSearchCitationsIntoContent(content []any, searches []SearchIndicat
 			continue
 		}
 		text := getInterfaceString(block["text"])
-		citations := buildWebSearchCitations(searches, text)
-		if len(citations) > 0 {
-			block["citations"] = citations
+		segments := buildWebSearchCitationSegments(searches, text)
+		if len(segments) == 0 {
+			return content
 		}
-		return
+
+		replacement := make([]any, 0, len(content)+len(segments)-1)
+		replacement = append(replacement, content[:i]...)
+		for _, segment := range segments {
+			segmentedBlock := make(map[string]any, len(block)+1)
+			for key, value := range block {
+				segmentedBlock[key] = value
+			}
+			segmentedBlock["text"] = segment.Text
+			delete(segmentedBlock, "citations")
+			if len(segment.Citations) > 0 {
+				segmentedBlock["citations"] = segment.Citations
+			}
+			replacement = append(replacement, segmentedBlock)
+		}
+		replacement = append(replacement, content[i+1:]...)
+		return replacement
 	}
+	return content
+}
+
+// buildWebSearchCitationSegments associates each citation with the line of
+// answer text that actually contains its result URL. Anthropic emits cited and
+// uncited prose as separate text blocks; keeping that association prevents a
+// citation from appearing to qualify the entire answer. Kiro commonly writes
+// search summaries as Markdown bullets, making line boundaries the most stable
+// semantic boundary available without rewriting model output.
+func buildWebSearchCitationSegments(searches []SearchIndicator, responseText string) []webSearchCitedTextSegment {
+	citations := buildWebSearchCitations(searches, responseText)
+	if len(citations) == 0 || responseText == "" {
+		return nil
+	}
+
+	type citedRange struct {
+		start     int
+		end       int
+		citations []map[string]any
+	}
+	ranges := make([]citedRange, 0, len(citations))
+	for _, citation := range citations {
+		url := strings.TrimSpace(getInterfaceString(citation["url"]))
+		position := strings.Index(responseText, url)
+		if url == "" || position < 0 {
+			continue
+		}
+		start := strings.LastIndex(responseText[:position], "\n") + 1
+		end := len(responseText)
+		if lineEnd := strings.Index(responseText[position+len(url):], "\n"); lineEnd >= 0 {
+			end = position + len(url) + lineEnd + 1
+		}
+		ranges = append(ranges, citedRange{start: start, end: end, citations: []map[string]any{citation}})
+	}
+
+	// When Kiro paraphrases a result without including its URL, preserve the
+	// existing fallback: cite the complete answer with the first result.
+	if len(ranges) == 0 {
+		return []webSearchCitedTextSegment{{Text: responseText, Citations: citations}}
+	}
+
+	slices.SortFunc(ranges, func(left, right citedRange) int {
+		if left.start != right.start {
+			return cmp.Compare(left.start, right.start)
+		}
+		return cmp.Compare(left.end, right.end)
+	})
+	merged := make([]citedRange, 0, len(ranges))
+	for _, current := range ranges {
+		if len(merged) == 0 || current.start >= merged[len(merged)-1].end {
+			merged = append(merged, current)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if current.end > last.end {
+			last.end = current.end
+		}
+		last.citations = append(last.citations, current.citations...)
+	}
+
+	segments := make([]webSearchCitedTextSegment, 0, len(merged)*2+1)
+	cursor := 0
+	for _, cited := range merged {
+		if cited.start > cursor {
+			segments = append(segments, webSearchCitedTextSegment{Text: responseText[cursor:cited.start]})
+		}
+		segments = append(segments, webSearchCitedTextSegment{
+			Text:      responseText[cited.start:cited.end],
+			Citations: cited.citations,
+		})
+		cursor = cited.end
+	}
+	if cursor < len(responseText) {
+		segments = append(segments, webSearchCitedTextSegment{Text: responseText[cursor:]})
+	}
+	return segments
 }
 
 func buildWebSearchCitations(searches []SearchIndicator, responseText string) []map[string]any {

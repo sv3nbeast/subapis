@@ -158,6 +158,40 @@ func TestInjectSearchIndicatorsInResponse(t *testing.T) {
 	require.Equal(t, int64(1), gjson.GetBytes(updated, "usage.server_tool_use.web_search_requests").Int())
 }
 
+func TestInjectSearchIndicatorsInResponseSegmentsCitationsWithTheirSourceLines(t *testing.T) {
+	const answer = "Summary\n\n- First [source](https://one.example)\n\nBridge\n\n- Second [source](https://two.example)\n\nConclusion"
+	response, err := json.Marshal(map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": answer}},
+		"usage":   map[string]any{},
+	})
+	require.NoError(t, err)
+	firstSnippet := "first result"
+	secondSnippet := "second result"
+	updated, err := InjectSearchIndicatorsInResponse(response, []SearchIndicator{{
+		ToolUseID: "srvtoolu_segmented",
+		Query:     "segmented citations",
+		Results: &WebSearchResults{Results: []WebSearchResult{
+			{Title: "One", URL: "https://one.example", Snippet: &firstSnippet},
+			{Title: "Two", URL: "https://two.example", Snippet: &secondSnippet},
+		}},
+	}})
+	require.NoError(t, err)
+
+	content := gjson.GetBytes(updated, "content").Array()
+	require.Len(t, content, 7)
+	var joined strings.Builder
+	for _, block := range content[2:] {
+		require.Equal(t, "text", block.Get("type").String())
+		joined.WriteString(block.Get("text").String())
+	}
+	require.Equal(t, answer, joined.String())
+	require.False(t, content[2].Get("citations").Exists())
+	require.Equal(t, "https://one.example", content[3].Get("citations.0.url").String())
+	require.False(t, content[4].Get("citations").Exists())
+	require.Equal(t, "https://two.example", content[5].Get("citations.0.url").String())
+	require.False(t, content[6].Get("citations").Exists())
+}
+
 func TestWebSearchOpaquePayloadIsEncryptedAndRandomized(t *testing.T) {
 	snippet := "private result text"
 	result := WebSearchResult{Title: "Example", URL: "https://example.com", Snippet: &snippet}
