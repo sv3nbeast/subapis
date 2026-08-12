@@ -787,6 +787,7 @@ func TestNianzsMessagesWebSearchCommitsCacheOnlyAfterCompleteFirstTurn(t *testin
 		)
 		require.NoError(t, openErr)
 		require.NotNil(t, resp)
+		require.Contains(t, resp.Header.Values("Vary"), "Accept-Encoding")
 		wire, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		require.Error(t, readErr)

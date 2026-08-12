@@ -186,6 +186,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		case codeErr == nil:
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
+			nianzsEnsureClaudeResponseVary(c.Writer.Header())
 			claudeReqID := nianzskiro.NewClaudeRequestID()
 			c.Header("x-request-id", claudeReqID)
 			c.Header("request-id", claudeReqID)
@@ -233,6 +234,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		case webSearchErr == nil:
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
+			nianzsEnsureClaudeResponseVary(c.Writer.Header())
 			claudeReqID := nianzskiro.NewClaudeRequestID()
 			c.Header("x-request-id", claudeReqID)
 			c.Header("request-id", claudeReqID)
@@ -334,6 +336,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	}
 
 	c.Header("Content-Type", "application/json")
+	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsBuildKiroRequestID(resp)
 	claudeReqID := nianzskiro.NewClaudeRequestID()
 	c.Header("x-request-id", claudeReqID)
@@ -393,6 +396,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		pr, pw := io.Pipe()
 		wrappedHeaders := make(http.Header)
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
+		nianzsEnsureClaudeResponseVary(wrappedHeaders)
 		claudeReqID := nianzskiro.NewClaudeRequestID()
 		wrappedHeaders.Set("x-request-id", claudeReqID)
 		wrappedHeaders.Set("request-id", claudeReqID)
@@ -421,6 +425,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		pr, pw := io.Pipe()
 		wrappedHeaders := make(http.Header)
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
+		nianzsEnsureClaudeResponseVary(wrappedHeaders)
 		go func() {
 			streamErr := s.streamKiroWebSearchAsAnthropicNianzs(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
 			if streamErr != nil {
@@ -457,6 +462,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
+	nianzsEnsureClaudeResponseVary(wrappedHeaders)
 	claudeReqID := nianzskiro.NewClaudeRequestID()
 	wrappedHeaders.Set("x-request-id", claudeReqID)
 	wrappedHeaders.Set("request-id", claudeReqID)
@@ -508,6 +514,17 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		Header:     wrappedHeaders,
 		Body:       pr,
 	}, inputTokens, nil
+}
+
+func nianzsEnsureClaudeResponseVary(headers http.Header) {
+	for _, value := range headers.Values("Vary") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "Accept-Encoding") {
+				return
+			}
+		}
+	}
+	headers.Add("Vary", "Accept-Encoding")
 }
 
 func (s *GatewayService) executeKiroUpstreamNianzs(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, nianzskiro.KiroRequestContext, error) {

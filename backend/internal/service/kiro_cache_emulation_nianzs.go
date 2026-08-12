@@ -439,7 +439,7 @@ func nianzsFlattenKiroCacheBlocks(ctx context.Context, payload map[string]any) [
 			value := nianzsStripKiroCacheControl(tool)
 			blocks = append(blocks, nianzsKiroPendingBlock{
 				value:  map[string]any{"kind": "tool", "tool_index": toolIndex, "tool": value},
-				tokens: nianzsKiroTokensPerTool, breakpointTTL: nianzsExtractKiroCacheTTL(tool),
+				tokens: nianzsCountKiroToolDefinitionTokens(tool), breakpointTTL: nianzsExtractKiroCacheTTL(tool),
 			})
 		}
 	}
@@ -1029,9 +1029,19 @@ func nianzsCountKiroInputTokensFromPayload(ctx context.Context, payload map[stri
 		tokens += len(messages) * nianzsKiroTokensPerMessage
 	}
 	if tools, ok := payload["tools"].([]any); ok {
-		tokens += len(tools) * nianzsKiroTokensPerTool
+		for _, tool := range tools {
+			tokens += nianzsCountKiroToolDefinitionTokens(tool)
+		}
 	}
 	return max(tokens, 1)
+}
+
+func nianzsCountKiroToolDefinitionTokens(value any) int {
+	canonical, err := nianzsCanonicalJSON(nianzsStripKiroCacheControl(value))
+	if err != nil {
+		return nianzsKiroTokensPerTool
+	}
+	return max(anthropictokenizer.CountTokens(string(canonical)), nianzsKiroTokensPerTool)
 }
 
 func nianzsCountKiroSystemBlockTokens(value any) int {

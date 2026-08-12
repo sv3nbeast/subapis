@@ -12,6 +12,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -352,6 +353,35 @@ func TestNianzsKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	}
 }
 
+func TestNianzsKiroInputTokenEstimateCountsFullToolDefinition(t *testing.T) {
+	shortBody := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"inspect","input_schema":{"type":"object"}}]}`)
+	longBody := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object","properties":{"path":{"type":"string","description":%q}}},"cache_control":{"type":"ephemeral"}}]}`,
+		strings.Repeat("Inspect repository files and report precise findings. ", 400),
+		strings.Repeat("Absolute path. ", 200),
+	))
+
+	shortEstimate := nianzsEstimateKiroInputTokens(context.Background(), shortBody)
+	longEstimate := nianzsEstimateKiroInputTokens(context.Background(), longBody)
+	if longEstimate <= shortEstimate+nianzsKiroTokensPerTool {
+		t.Fatalf("long tool schema must contribute its serialized prompt content: short=%d long=%d", shortEstimate, longEstimate)
+	}
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(longBody, &payload))
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), longBody, "claude-sonnet-4-6", longEstimate)
+	require.True(t, ok)
+	require.NotEmpty(t, profile.blocks)
+	tools := payload["tools"].([]any)
+	require.Equal(t, nianzsCountKiroToolDefinitionTokens(tools[0]), profile.blocks[0].cumulativeTokens)
+}
+
+func TestNianzsEnsureClaudeResponseVary(t *testing.T) {
+	headers := http.Header{"Vary": []string{"Origin"}}
+	nianzsEnsureClaudeResponseVary(headers)
+	nianzsEnsureClaudeResponseVary(headers)
+	require.Equal(t, []string{"Origin", "Accept-Encoding"}, headers.Values("Vary"))
+}
+
 func TestNianzsKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	if got := anthropictokenizer.CountTokens("abc def"); got != 1 {
 		t.Fatalf("english tokens = %d, want 1", got)
@@ -361,6 +391,23 @@ func TestNianzsKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	}
 	if nianzsKiroTokensPerTool != 150 {
 		t.Fatalf("tool tokens = %d, want 150", nianzsKiroTokensPerTool)
+	}
+	shortTool := map[string]any{"name": "short", "input_schema": map[string]any{"type": "object"}}
+	if got := nianzsCountKiroToolDefinitionTokens(shortTool); got != nianzsKiroTokensPerTool {
+		t.Fatalf("short tool tokens = %d, want floor %d", got, nianzsKiroTokensPerTool)
+	}
+	longTool := map[string]any{
+		"name":          "long",
+		"description":   strings.Repeat("Inspect repository files and report precise findings. ", 400),
+		"input_schema":  map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string", "description": strings.Repeat("Absolute path. ", 200)}}},
+		"cache_control": map[string]any{"type": "ephemeral"},
+	}
+	withoutCacheControl := nianzsStripKiroCacheControl(longTool)
+	canonical, err := nianzsCanonicalJSON(withoutCacheControl)
+	require.NoError(t, err)
+	wantLong := max(anthropictokenizer.CountTokens(string(canonical)), nianzsKiroTokensPerTool)
+	if got := nianzsCountKiroToolDefinitionTokens(longTool); got != wantLong || got <= nianzsKiroTokensPerTool {
+		t.Fatalf("long tool tokens = %d, want %d and greater than floor", got, wantLong)
 	}
 	if got := nianzsCountKiroMessageContentTokens(context.Background(), map[string]any{"thinking": "abc def"}); got != 1 {
 		t.Fatalf("thinking tokens = %d, want 1", got)
