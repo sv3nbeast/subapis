@@ -14,12 +14,11 @@ type BufferedStreamResult struct {
 }
 
 func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchResults, startIndex int) [][]byte {
-	searchContent := make([]map[string]any, 0)
-	if results != nil {
-		for _, result := range results.Results {
-			searchContent = append(searchContent, buildWebSearchResultBlock(result))
-		}
-	}
+	return GenerateSearchIndicatorEventsWithError(query, toolUseID, results, "", startIndex)
+}
+
+func GenerateSearchIndicatorEventsWithError(query, toolUseID string, results *WebSearchResults, errorCode string, startIndex int) [][]byte {
+	searchContent := buildWebSearchToolResultContent(results, errorCode)
 
 	inputJSON, _ := json.Marshal(map[string]string{"query": query})
 

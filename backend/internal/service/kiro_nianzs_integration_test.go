@@ -592,6 +592,54 @@ func TestNianzsMessagesWebSearchNonStreamingPairsResultAndReportsUsage(t *testin
 	require.Equal(t, 5, result.Usage.OutputTokens)
 }
 
+func TestNianzsMessagesWebSearchNonStreamingRejectsBareEOF(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":false,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	mcpEndpoint := nianzskiro.BuildMcpEndpoint("us-east-1")
+	nianzsKiroWebSearchDescCache.Store(mcpEndpoint, "Search the web for current information.")
+	t.Cleanup(func() { nianzsKiroWebSearchDescCache.Delete(mcpEndpoint) })
+
+	mcpResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"jsonrpc":"2.0","id":"web_search_test","result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Go\",\"url\":\"https://go.dev\"}]}"}]}}`,
+		)),
+	}
+	partial := bytes.NewBuffer(nil)
+	_, _ = partial.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "partial answer"},
+	}))
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{mcpResponse, {
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(partial.Bytes())),
+	}}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+	require.ErrorContains(t, forwardErr, "missing completion evidence")
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadGateway, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "partial answer")
+}
+
+func TestNianzsKiroWebSearchErrorCodeMapsAnthropicValues(t *testing.T) {
+	require.Equal(t, nianzskiro.WebSearchErrorTooManyRequests, nianzsKiroWebSearchErrorCode(&nianzsKiroWebSearchMCPError{
+		StatusCode: http.StatusTooManyRequests,
+	}))
+	require.Equal(t, nianzskiro.WebSearchErrorQueryTooLong, nianzsKiroWebSearchErrorCode(&nianzsKiroWebSearchMCPError{
+		StatusCode: http.StatusBadRequest,
+		Message:    "query is too long",
+	}))
+	require.Equal(t, nianzskiro.WebSearchErrorUnavailable, nianzsKiroWebSearchErrorCode(errors.New("transport reset")))
+}
+
 func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Research Go concurrency and refine the query if needed"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":2}]}`)
@@ -648,6 +696,11 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.requests, 4)
+	firstTurnTools := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools")
+	finalTurnTools := gjson.GetBytes(upstream.bodies[3], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools")
+	require.True(t, firstTurnTools.IsArray())
+	require.Equal(t, "Tool used in conversation history", finalTurnTools.Get("0.toolSpecification.description").String(),
+		"the final allowed search turn must drop the active search definition and retain only the history placeholder")
 	wire := recorder.Body.String()
 	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
 	require.Equal(t, 1, strings.Count(wire, "event: message_delta"))

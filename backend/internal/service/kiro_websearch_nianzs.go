@@ -35,6 +35,12 @@ type nianzsKiroWebSearchHTTPError struct {
 	Response *http.Response
 }
 
+type nianzsKiroWebSearchMCPError struct {
+	StatusCode int
+	Code       int
+	Message    string
+}
+
 type nianzsKiroStreamChunkCollector struct {
 	chunks [][]byte
 }
@@ -44,6 +50,41 @@ func (e *nianzsKiroWebSearchHTTPError) Error() string {
 		return "kiro web search http error"
 	}
 	return fmt.Sprintf("kiro web search http error: %d", e.Response.StatusCode)
+}
+
+func (e *nianzsKiroWebSearchMCPError) Error() string {
+	if e == nil {
+		return "kiro web search MCP error"
+	}
+	return fmt.Sprintf("kiro web search MCP error: status=%d code=%d message=%s", e.StatusCode, e.Code, strings.TrimSpace(e.Message))
+}
+
+func nianzsKiroWebSearchErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var mcpErr *nianzsKiroWebSearchMCPError
+	if errors.As(err, &mcpErr) {
+		switch mcpErr.StatusCode {
+		case http.StatusTooManyRequests:
+			return nianzskiro.WebSearchErrorTooManyRequests
+		case http.StatusRequestEntityTooLarge:
+			return nianzskiro.WebSearchErrorRequestTooLarge
+		}
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "max_uses"), strings.Contains(message, "max uses"):
+		return nianzskiro.WebSearchErrorMaxUsesExceeded
+	case strings.Contains(message, "query") && strings.Contains(message, "too long"):
+		return nianzskiro.WebSearchErrorQueryTooLong
+	case strings.Contains(message, "request") && strings.Contains(message, "too large"):
+		return nianzskiro.WebSearchErrorRequestTooLarge
+	case strings.Contains(message, "invalid"):
+		return nianzskiro.WebSearchErrorInvalidToolInput
+	default:
+		return nianzskiro.WebSearchErrorUnavailable
+	}
 }
 
 func (w *nianzsKiroStreamChunkCollector) Write(p []byte) (int, error) {
@@ -129,6 +170,8 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		currentBody = anthropicBody
 	}
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
+	searchConfig := nianzskiro.ExtractWebSearchToolConfig(anthropicBody)
+	maxIterations := min(searchConfig.MaxUses, nianzsKiroMaxWebSearchIterations)
 	nextContentBlockIndex := 0
 	webSearchRequests := 0
 	searches := make([]nianzskiro.SearchIndicator, 0, 2)
@@ -137,25 +180,28 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		return err
 	}
 
-	for iteration := 0; iteration < nianzsKiroMaxWebSearchIterations; iteration++ {
+	for iteration := 0; iteration < maxIterations; iteration++ {
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCPNianzs(ctx, account, token, query)
+		resultErrorCode := nianzsKiroWebSearchErrorCode(mcpErr)
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
 		if mcpErr != nil {
 			results = nil
 		} else if results != nil {
+			results = nianzskiro.ApplyWebSearchDomainFilters(results, searchConfig)
 			webSearchRequests++
 		}
 		searches = append(searches, nianzskiro.SearchIndicator{
 			ToolUseID: currentToolUseID,
 			Query:     query,
 			Results:   results,
+			ErrorCode: resultErrorCode,
 		})
 
-		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
+		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEventsWithError(query, currentToolUseID, results, resultErrorCode, nextContentBlockIndex)); err != nil {
 			return err
 		}
 		nextContentBlockIndex += 2
@@ -163,6 +209,11 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		currentBody, err = nianzskiro.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
 		if err != nil {
 			return nianzsErrKiroWebSearchFallback
+		}
+		if iteration+1 >= maxIterations {
+			if withoutSearch, removeErr := nianzskiro.RemoveWebSearchTools(currentBody); removeErr == nil {
+				currentBody = withoutSearch
+			}
 		}
 
 		resp, _, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
@@ -186,7 +237,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		}
 
 		analysis := nianzskiro.AnalyzeBufferedStream(chunks)
-		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < nianzsKiroMaxWebSearchIterations {
+		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < maxIterations {
 			filtered := nianzskiro.FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, nextContentBlockIndex)
 			if err := nianzsWriteSSEChunks(w, filtered); err != nil {
 				return err
@@ -229,29 +280,40 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 
 	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
 	currentToolUseID := "srvtoolu_" + nianzskiro.GenerateToolUseID()
+	searchConfig := nianzskiro.ExtractWebSearchToolConfig(anthropicBody)
+	maxIterations := min(searchConfig.MaxUses, nianzsKiroMaxWebSearchIterations)
 	searches := make([]nianzskiro.SearchIndicator, 0, 2)
 	requestID := ""
 	plan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 
-	for iteration := 0; iteration < nianzsKiroMaxWebSearchIterations; iteration++ {
+	for iteration := 0; iteration < maxIterations; iteration++ {
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCPNianzs(ctx, account, token, query)
+		resultErrorCode := nianzsKiroWebSearchErrorCode(mcpErr)
 		if strings.TrimSpace(nextToken) != "" {
 			token = nextToken
 		}
 		if mcpErr != nil {
 			results = nil
+		} else if results != nil {
+			results = nianzskiro.ApplyWebSearchDomainFilters(results, searchConfig)
 		}
 		searches = append(searches, nianzskiro.SearchIndicator{
 			ToolUseID: currentToolUseID,
 			Query:     query,
 			Results:   results,
+			ErrorCode: resultErrorCode,
 		})
 
 		currentBody, err = nianzskiro.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
 		if err != nil {
 			return nil, nianzsErrKiroWebSearchFallback
+		}
+		if iteration+1 >= maxIterations {
+			if withoutSearch, removeErr := nianzskiro.RemoveWebSearchTools(currentBody); removeErr == nil {
+				currentBody = withoutSearch
+			}
 		}
 
 		resp, _, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
@@ -271,6 +333,7 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 			return nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, nianzskiro.KiroRequestContext{
 				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
 				EstimatedInputTokens: inputTokens,
+				RequireTerminalEvent: true,
 			})
 		}()
 		if parseErr != nil {
@@ -284,7 +347,7 @@ func (s *GatewayService) executeKiroWebSearchNianzs(ctx context.Context, account
 		}
 
 		_, nextQuery, hasNext := nianzskiro.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
-		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= nianzsKiroMaxWebSearchIterations {
+		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= maxIterations {
 			finalBody, injectErr := nianzskiro.InjectSearchIndicatorsInResponse(parseResult.ResponseBody, searches)
 			if injectErr == nil {
 				parseResult.ResponseBody = finalBody
@@ -366,7 +429,7 @@ func (s *GatewayService) callKiroWebSearchMCPNianzs(ctx context.Context, account
 		return nil, nextToken, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nextToken, fmt.Errorf("kiro mcp status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, nextToken, &nianzsKiroWebSearchMCPError{StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 
 	var parsed nianzskiro.MCPResponse
@@ -382,7 +445,7 @@ func (s *GatewayService) callKiroWebSearchMCPNianzs(ctx context.Context, account
 		if parsed.Error.Code != nil {
 			code = *parsed.Error.Code
 		}
-		return nil, nextToken, fmt.Errorf("kiro mcp error %d: %s", code, msg)
+		return nil, nextToken, &nianzsKiroWebSearchMCPError{StatusCode: resp.StatusCode, Code: code, Message: msg}
 	}
 
 	return nianzskiro.ParseSearchResults(&parsed), nextToken, nil

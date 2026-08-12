@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -72,7 +73,23 @@ type SearchIndicator struct {
 	ToolUseID string
 	Query     string
 	Results   *WebSearchResults
+	ErrorCode string
 }
+
+type WebSearchToolConfig struct {
+	MaxUses        int
+	AllowedDomains []string
+	BlockedDomains []string
+}
+
+const (
+	WebSearchErrorInvalidToolInput = "invalid_tool_input"
+	WebSearchErrorUnavailable      = "unavailable"
+	WebSearchErrorMaxUsesExceeded  = "max_uses_exceeded"
+	WebSearchErrorTooManyRequests  = "too_many_requests"
+	WebSearchErrorQueryTooLong     = "query_too_long"
+	WebSearchErrorRequestTooLarge  = "request_too_large"
+)
 
 func GetCachedWebSearchDescription() string {
 	if v := cachedWebSearchDescription.Load(); v != nil {
@@ -131,6 +148,127 @@ func ExtractSearchQuery(body []byte) string {
 		}
 	}
 	return ""
+}
+
+func ExtractWebSearchToolConfig(body []byte) WebSearchToolConfig {
+	config := WebSearchToolConfig{MaxUses: 5}
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return config
+	}
+	for _, tool := range tools.Array() {
+		if !isWebSearchToolName(tool.Get("name").String(), tool.Get("type").String()) {
+			continue
+		}
+		if maxUses := int(tool.Get("max_uses").Int()); maxUses > 0 {
+			config.MaxUses = maxUses
+		}
+		config.AllowedDomains = webSearchDomainList(tool.Get("allowed_domains"))
+		config.BlockedDomains = webSearchDomainList(tool.Get("blocked_domains"))
+		return config
+	}
+	return config
+}
+
+func webSearchDomainList(value gjson.Result) []string {
+	if !value.IsArray() {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	domains := make([]string, 0, len(value.Array()))
+	for _, item := range value.Array() {
+		domain := normalizeWebSearchDomain(item.String())
+		if domain == "" {
+			continue
+		}
+		if _, ok := seen[domain]; ok {
+			continue
+		}
+		seen[domain] = struct{}{}
+		domains = append(domains, domain)
+	}
+	return domains
+}
+
+func ApplyWebSearchDomainFilters(results *WebSearchResults, config WebSearchToolConfig) *WebSearchResults {
+	if results == nil || (len(config.AllowedDomains) == 0 && len(config.BlockedDomains) == 0) {
+		return results
+	}
+	filtered := &WebSearchResults{Results: make([]WebSearchResult, 0, len(results.Results))}
+	for _, result := range results.Results {
+		domain := webSearchResultDomain(result)
+		if len(config.AllowedDomains) > 0 && !webSearchDomainMatchesAny(domain, config.AllowedDomains) {
+			continue
+		}
+		if webSearchDomainMatchesAny(domain, config.BlockedDomains) {
+			continue
+		}
+		filtered.Results = append(filtered.Results, result)
+	}
+	return filtered
+}
+
+func webSearchResultDomain(result WebSearchResult) string {
+	if parsed, err := url.Parse(strings.TrimSpace(result.URL)); err == nil {
+		if domain := normalizeWebSearchDomain(parsed.Hostname()); domain != "" {
+			return domain
+		}
+	}
+	if result.Domain != nil {
+		return normalizeWebSearchDomain(*result.Domain)
+	}
+	return ""
+}
+
+func normalizeWebSearchDomain(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimPrefix(domain, "www.")
+	domain = strings.Trim(domain, ".")
+	if slash := strings.IndexByte(domain, '/'); slash >= 0 {
+		domain = domain[:slash]
+	}
+	if colon := strings.LastIndexByte(domain, ':'); colon >= 0 {
+		domain = domain[:colon]
+	}
+	return strings.Trim(domain, ".")
+}
+
+func webSearchDomainMatchesAny(domain string, candidates []string) bool {
+	domain = normalizeWebSearchDomain(domain)
+	for _, candidate := range candidates {
+		candidate = normalizeWebSearchDomain(candidate)
+		if domain == candidate || (domain != "" && candidate != "" && strings.HasSuffix(domain, "."+candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
+func RemoveWebSearchTools(body []byte) ([]byte, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body, err
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok {
+		return body, nil
+	}
+	filtered := make([]any, 0, len(tools))
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		if ok && isWebSearchToolName(getInterfaceString(tool["name"]), getInterfaceString(tool["type"])) {
+			continue
+		}
+		filtered = append(filtered, rawTool)
+	}
+	payload["tools"] = filtered
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return body, err
+	}
+	return updated, nil
 }
 
 func extractSearchText(content gjson.Result) string {
@@ -429,7 +567,7 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 		updated = append(updated, map[string]any{
 			"type":        "web_search_tool_result",
 			"tool_use_id": search.ToolUseID,
-			"content":     buildSearchResultContent(search.Results),
+			"content":     buildWebSearchToolResultContent(search.Results, search.ErrorCode),
 		})
 	}
 	updated = append(updated, content...)
@@ -470,6 +608,30 @@ func buildSearchResultContent(results *WebSearchResults) []map[string]any {
 		content = append(content, buildWebSearchResultBlock(result))
 	}
 	return content
+}
+
+func buildWebSearchToolResultContent(results *WebSearchResults, errorCode string) any {
+	if normalized := normalizeWebSearchToolResultErrorCode(errorCode); normalized != "" {
+		return map[string]any{
+			"type":       "web_search_tool_result_error",
+			"error_code": normalized,
+		}
+	}
+	return buildSearchResultContent(results)
+}
+
+func normalizeWebSearchToolResultErrorCode(errorCode string) string {
+	switch normalized := strings.ToLower(strings.TrimSpace(errorCode)); normalized {
+	case WebSearchErrorInvalidToolInput,
+		WebSearchErrorUnavailable,
+		WebSearchErrorMaxUsesExceeded,
+		WebSearchErrorTooManyRequests,
+		WebSearchErrorQueryTooLong,
+		WebSearchErrorRequestTooLarge:
+		return normalized
+	default:
+		return ""
+	}
 }
 
 func buildWebSearchResultBlock(result WebSearchResult) map[string]any {

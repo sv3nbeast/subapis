@@ -35,6 +35,32 @@ func TestExtractSearchQueryFallsBackToUserText(t *testing.T) {
 	require.Equal(t, "latest Go release", ExtractSearchQuery(body))
 }
 
+func TestExtractWebSearchToolConfigAndFilterDomains(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"web_search_20250305","max_uses":2,"allowed_domains":["go.dev","example.com"],"blocked_domains":["blog.example.com"]}]}`)
+	config := ExtractWebSearchToolConfig(body)
+	require.Equal(t, 2, config.MaxUses)
+	require.Equal(t, []string{"go.dev", "example.com"}, config.AllowedDomains)
+	require.Equal(t, []string{"blog.example.com"}, config.BlockedDomains)
+
+	filtered := ApplyWebSearchDomainFilters(&WebSearchResults{Results: []WebSearchResult{
+		{Title: "Go", URL: "https://pkg.go.dev/net/http"},
+		{Title: "Allowed", URL: "https://docs.example.com/page"},
+		{Title: "Blocked", URL: "https://blog.example.com/post"},
+		{Title: "Outside", URL: "https://outside.test"},
+	}}, config)
+	require.Len(t, filtered.Results, 2)
+	require.Equal(t, "Go", filtered.Results[0].Title)
+	require.Equal(t, "Allowed", filtered.Results[1].Title)
+}
+
+func TestRemoveWebSearchToolsKeepsOtherTools(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"web_search_20250305","name":"web_search"},{"name":"lookup","input_schema":{"type":"object"}}]}`)
+	updated, err := RemoveWebSearchTools(body)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), gjson.GetBytes(updated, "tools.#").Int())
+	require.Equal(t, "lookup", gjson.GetBytes(updated, "tools.0.name").String())
+}
+
 func TestInjectToolResultsClaudeAppendsMessages(t *testing.T) {
 	body := []byte(`{
 		"messages":[{"role":"user","content":"what is golang"}]
@@ -190,10 +216,17 @@ func TestNormalizeWebSearchHistoryForKiroRestoresSealedResultAndRemovesServerBlo
 func TestInjectSearchIndicatorsInResponse_DoesNotBillFailedSearch(t *testing.T) {
 	response := []byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
 	updated, err := InjectSearchIndicatorsInResponse(response, []SearchIndicator{
-		{ToolUseID: "srvtoolu_failed", Query: "unavailable", Results: nil},
+		{ToolUseID: "srvtoolu_failed", Query: "unavailable", Results: nil, ErrorCode: WebSearchErrorUnavailable},
 	})
 	require.NoError(t, err)
+	require.Equal(t, "web_search_tool_result_error", gjson.GetBytes(updated, "content.1.content.type").String())
+	require.Equal(t, WebSearchErrorUnavailable, gjson.GetBytes(updated, "content.1.content.error_code").String())
 	require.False(t, gjson.GetBytes(updated, "usage.server_tool_use").Exists())
+}
+
+func TestNormalizeWebSearchToolResultErrorCodeRejectsProviderValues(t *testing.T) {
+	require.Equal(t, WebSearchErrorQueryTooLong, normalizeWebSearchToolResultErrorCode(" QUERY_TOO_LONG "))
+	require.Empty(t, normalizeWebSearchToolResultErrorCode("provider_timeout"))
 }
 
 func TestParseSearchResults_PreservesExtendedFields(t *testing.T) {

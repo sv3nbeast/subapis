@@ -42,6 +42,18 @@ func TestGenerateSearchIndicatorEvents_PairsSearchResultWithServerToolUse(t *tes
 	require.Equal(t, toolUse.Get("content_block.id").String(), toolResult.Get("content_block.tool_use_id").String())
 }
 
+func TestGenerateSearchIndicatorEvents_UsesOfficialErrorContentShape(t *testing.T) {
+	events := GenerateSearchIndicatorEventsWithError(
+		"current weather", "srvtoolu_error", nil, WebSearchErrorTooManyRequests, 2,
+	)
+	require.Len(t, events, 5)
+	toolResult := gjson.Parse(extractSSEDataForTest(t, events[3]))
+	require.Equal(t, "web_search_tool_result", toolResult.Get("content_block.type").String())
+	require.Equal(t, "srvtoolu_error", toolResult.Get("content_block.tool_use_id").String())
+	require.Equal(t, "web_search_tool_result_error", toolResult.Get("content_block.content.type").String())
+	require.Equal(t, WebSearchErrorTooManyRequests, toolResult.Get("content_block.content.error_code").String())
+}
+
 func TestAnalyzeBufferedStream_ExtractsWebSearchToolUse(t *testing.T) {
 	chunks := [][]byte{
 		[]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"),
