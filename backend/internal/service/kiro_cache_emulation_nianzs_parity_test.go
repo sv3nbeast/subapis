@@ -51,6 +51,101 @@ func TestNianzsKiroCacheEmulationUsesSnapshotGroupWithoutRepo(t *testing.T) {
 	}
 }
 
+func TestNianzsKiroCacheEmulationUsesAccountPolicyInMixedAnthropicGroup(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{
+		ID:       3401,
+		Platform: PlatformKiro,
+		Extra: map[string]any{
+			"kiro_cache_emulation_enabled": true,
+			"kiro_cache_emulation_ratio":   0.91,
+		},
+	}
+	group := &Group{ID: 9, Platform: PlatformAnthropic}
+	body := nianzsTestKiroCacheRequestBody("mixed-anthropic", false)
+
+	first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	require.NotNil(t, first)
+	require.Equal(t, 1820, first.CacheCreationInputTokens)
+	require.Zero(t, first.CacheReadInputTokens)
+	require.Equal(t, 180, first.InputTokens)
+
+	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	require.NotNil(t, second)
+	require.Zero(t, second.CacheCreationInputTokens)
+	require.Equal(t, 1820, second.CacheReadInputTokens)
+	require.Equal(t, 180, second.InputTokens)
+}
+
+func TestNianzsKiroCacheEmulationAccountPolicyPrecedesKiroGroupPolicy(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{
+		ID:       3402,
+		Platform: PlatformKiro,
+		Extra: map[string]any{
+			"kiro_cache_emulation_enabled": true,
+			"kiro_cache_emulation_ratio":   0.5,
+		},
+	}
+	group := nianzsTestKiroCacheGroup(1)
+	body := nianzsTestKiroCacheRequestBody("account-precedence", false)
+
+	usage := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, body, "claude-sonnet-4-6", 2000)
+	require.NotNil(t, usage)
+	require.Equal(t, 1000, usage.CacheCreationInputTokens)
+	require.Equal(t, 1000, usage.InputTokens)
+}
+
+func TestNianzsKiroCacheEmulationDisabledWithoutAccountOrKiroGroupPolicy(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := &Account{ID: 3403, Platform: PlatformKiro}
+	group := &Group{ID: 9, Platform: PlatformAnthropic}
+
+	usage := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, nianzsTestKiroCacheRequestBody("disabled-mixed", false), "claude-sonnet-4-6", 2000)
+	require.Nil(t, usage)
+}
+
+func TestNianzsKiroResponsesAndChatUseAccountPolicyInMixedAnthropicGroup(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	group := &Group{ID: 10, Platform: PlatformAnthropic}
+	responsesAccount := &Account{
+		ID:       3404,
+		Platform: PlatformKiro,
+		Extra: map[string]any{
+			"kiro_cache_emulation_enabled": true,
+			"kiro_cache_emulation_ratio":   0.91,
+		},
+	}
+	chatAccount := &Account{
+		ID:       3405,
+		Platform: PlatformKiro,
+		Extra: map[string]any{
+			"kiro_cache_emulation_enabled": true,
+			"kiro_cache_emulation_ratio":   0.91,
+		},
+	}
+
+	responsesBody := nianzsTestKiroResponsesCacheRequestBody("mixed-responses", "workspace", "previous")
+	responsesFirst := svc.buildKiroResponsesCacheEmulationUsageNianzs(context.Background(), responsesAccount, group, responsesBody, "gpt-5", 2400)
+	require.NotNil(t, responsesFirst)
+	require.Greater(t, responsesFirst.CacheCreationInputTokens, 0)
+	responsesSecond := svc.buildKiroResponsesCacheEmulationUsageNianzs(context.Background(), responsesAccount, group, responsesBody, "gpt-5", 2400)
+	require.NotNil(t, responsesSecond)
+	require.Greater(t, responsesSecond.CacheReadInputTokens, 0)
+
+	chatBody := nianzsTestKiroChatCompletionsConversationBody([]string{strings.Repeat("mixed chat history ", 700)})
+	chatFirst := svc.buildKiroChatCompletionsCacheEmulationUsageNianzs(context.Background(), chatAccount, group, chatBody, "gpt-5", 2400)
+	require.NotNil(t, chatFirst)
+	require.Greater(t, chatFirst.CacheCreationInputTokens, 0)
+	chatSecond := svc.buildKiroChatCompletionsCacheEmulationUsageNianzs(context.Background(), chatAccount, group, chatBody, "gpt-5", 2400)
+	require.NotNil(t, chatSecond)
+	require.Greater(t, chatSecond.CacheReadInputTokens, 0)
+}
+
 // prepareKiroCacheEmulationUsageNianzs 在 commit() 之前不得改动 tracker：连续两次 prepare
 // 且都不 commit，应当观察到完全相同的（未命中）状态，证明 prepare 从未写入缓存条目。
 func TestNianzsKiroCacheEmulationPrepareDoesNotMutateUntilCommit(t *testing.T) {
