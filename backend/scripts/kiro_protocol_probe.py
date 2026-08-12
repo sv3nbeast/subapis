@@ -50,10 +50,11 @@ class SSEEvent:
 
 
 class Client:
-    def __init__(self, base_url: str, api_key: str, timeout: float) -> None:
+    def __init__(self, base_url: str, api_key: str, timeout: float, user_agent: str) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.user_agent = user_agent
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> bytes:
         body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
@@ -67,7 +68,8 @@ class Client:
                 "Anthropic-Version": "2023-06-01",
                 "Authorization": "Bearer " + self.api_key,
                 "X-Api-Key": self.api_key,
-                "User-Agent": "sub2api-kiro-protocol-probe/1",
+                "User-Agent": self.user_agent,
+                "X-App": "cli",
             },
         )
         try:
@@ -174,7 +176,7 @@ def validate_web_result_content(content: Any) -> tuple[int, str | None]:
     return 0, str(error_code)
 
 
-def validate_web_result_caller(block: dict[str, Any]) -> None:
+def validate_direct_caller(block: dict[str, Any]) -> None:
     caller = block.get("caller")
     require(isinstance(caller, dict), "web-search result caller is missing")
     require(caller.get("type") == "direct", "web-search result caller is not direct")
@@ -202,6 +204,8 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     result_count = 0
     result_errors: list[str] = []
     client_web_search_tool_uses = 0
+    tool_uses = 0
+    tool_names: list[str] = []
     first_content_block_type = ""
     cited_text_blocks = 0
     citation_deltas_before_text = 0
@@ -240,12 +244,15 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                 require(block.get("citations") == [], "cited text block must start with citations: []")
                 open_text_has_citations = True
             elif open_type == "tool_use":
+                validate_direct_caller(block)
+                tool_uses += 1
+                tool_names.append(str(block.get("name", "")))
                 if str(block.get("name", "")).lower() in {
                     "web_search", "web_search_20250305", "remote_web_search", "google_search",
                 }:
                     client_web_search_tool_uses += 1
             elif open_type == "web_search_tool_result":
-                validate_web_result_caller(block)
+                validate_direct_caller(block)
                 tool_id = str(block.get("tool_use_id", ""))
                 require(tool_id in server_tool_ids, "web-search result is not paired with a preceding server tool")
                 result_tool_ids.add(tool_id)
@@ -331,6 +338,8 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
         "web_search_results": result_count,
         "web_search_errors": result_errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
+        "tool_uses": tool_uses,
+        "tool_names": tool_names,
         "citations": citations,
         "first_content_block_type": first_content_block_type,
         "cited_text_blocks": cited_text_blocks,
@@ -372,7 +381,7 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
             require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
             server_ids.add(tool_id)
         elif block_type == "web_search_tool_result":
-            validate_web_result_caller(block)
+            validate_direct_caller(block)
             tool_id = str(block.get("tool_use_id", ""))
             require(tool_id in server_ids, "web-search result is not paired")
             result_ids.add(tool_id)
@@ -455,10 +464,46 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         body["thinking"] = {"type": "enabled", "budget_tokens": 2048}
         facts = validate_sse(parse_sse(client.messages(body)))
         require(facts["thinking_signatures"] > 0, "stream has no thinking signature")
+        observed_profiles = {
+            "claude-opus-4-8": (0x12, 447),
+            "claude-sonnet-4-6": (0x12, 562),
+            "claude-opus-5": (0x08, 397),
+        }
         for signature in facts.pop("signature_values"):
             decoded = opaque_base64(signature, "thinking signature")
-            expected_marker = 0x08 if "opus-5" in model else 0x12
+            expected_marker, expected_size = observed_profiles.get(
+                model.removesuffix("-thinking"),
+                (0x08 if "opus-5" in model else 0x12, 0),
+            )
             require(decoded[0] == expected_marker, f"unexpected signature envelope marker: 0x{decoded[0]:02x}")
+            if expected_size:
+                require(len(decoded) == expected_size, f"unexpected signature envelope size: {len(decoded)}")
+        return facts
+
+    def forced_tool_stream() -> dict[str, Any]:
+        body = message_body(
+            model,
+            "Call protocol_probe exactly once with value TOOL_OK. Do not answer in text.",
+            True,
+            512,
+        )
+        body["tools"] = [{
+            "name": "protocol_probe",
+            "description": "Records one protocol test value.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        }]
+        body["tool_choice"] = {"type": "tool", "name": "protocol_probe"}
+        facts = validate_sse(parse_sse(client.messages(body)))
+        require(facts["first_content_block_type"] == "tool_use", "forced tool stream does not start with tool_use")
+        require(facts["tool_uses"] == 1, "forced tool stream did not emit exactly one tool_use")
+        require(facts["tool_names"] == ["protocol_probe"], "forced tool stream changed the tool name")
+        require(facts["thinking_signatures"] == 0, "forced tool stream leaked unrequested thinking")
+        require(facts["stop_reason"] == "tool_use", "forced tool stream did not stop with tool_use")
         return facts
 
     def web_search(stream: bool) -> dict[str, Any]:
@@ -522,6 +567,7 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
     run("basic_nonstream", basic_nonstream)
     run("basic_stream", basic_stream)
     run("thinking_signature_stream", thinking_stream)
+    run("forced_tool_stream", forced_tool_stream)
     run("web_search_nonstream", lambda: web_search(False))
     run("web_search_stream", lambda: web_search(True))
     run("web_search_claude_code_stream", web_search_claude_code_stream)
@@ -534,12 +580,16 @@ def main() -> int:
     parser.add_argument("--api-key", default=os.getenv("SUB2API_API_KEY", ""))
     parser.add_argument("--model", default=os.getenv("SUB2API_MODEL", ""))
     parser.add_argument("--timeout", type=float, default=float(os.getenv("SUB2API_PROBE_TIMEOUT", "180")))
+    parser.add_argument(
+        "--user-agent",
+        default=os.getenv("SUB2API_USER_AGENT", "sub2api-kiro-protocol-probe/1"),
+    )
     args = parser.parse_args()
     if not args.api_key:
         parser.error("provide --api-key or SUB2API_API_KEY")
 
     try:
-        client = Client(args.base_url, args.api_key, args.timeout)
+        client = Client(args.base_url, args.api_key, args.timeout, args.user_agent)
         models = client.models()
         model = choose_model(models, args.model)
         checks = run_probe(client, model)

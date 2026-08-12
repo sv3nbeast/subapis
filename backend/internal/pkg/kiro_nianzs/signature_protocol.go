@@ -12,10 +12,10 @@ import (
 )
 
 // kiroThinkingSignature is the boundary used by the Kiro Anthropic adapter
-// when it has to materialize a thinking block.  Claude Code's Opus 5 and
-// Fable 5 clients identify their thinking signatures with the CAIS envelope
-// (decoded protobuf marker 0x08).  Older models keep the historical adapter
-// shape until their provider-specific envelope is verified separately.
+// when it has to materialize a thinking block. Current Claude signatures use
+// model-specific protobuf envelopes even though their cryptographic payloads
+// remain opaque. Profiles below are limited to shapes captured through a
+// direct Claude account; unverified models retain the legacy adapter shape.
 //
 // The bytes inside the envelope are intentionally opaque to Sub2API.  They
 // are deterministic for a (thinking, model, message) tuple so a replay of the
@@ -28,8 +28,8 @@ func kiroThinkingSignature(content, model, messageID string) string {
 	}
 
 	normalizedModel := normalizeKiroSignatureModel(model)
-	if isKiroCAISModel(normalizedModel) {
-		return buildKiroCAISThinkingSignature(content, normalizedModel, messageID)
+	if profile, ok := observedKiroSignatureProfile(normalizedModel); ok {
+		return buildKiroObservedThinkingSignature(content, normalizedModel, messageID, profile)
 	}
 	return thinkingSignature(content, model, messageID)
 }
@@ -45,16 +45,39 @@ func normalizeKiroSignatureModel(model string) string {
 	return normalized
 }
 
-func isKiroCAISModel(model string) bool {
+type kiroSignatureEnvelopeProfile struct {
+	wireModel      string
+	channelKind    uint64
+	tailBytes      int
+	includeVersion bool
+}
+
+func observedKiroSignatureProfile(model string) (kiroSignatureEnvelopeProfile, bool) {
 	switch normalizeKiroSignatureModel(model) {
-	case "claude-opus-5", "claude-fable-5":
-		return true
+	case "claude-opus-4.8":
+		return kiroSignatureEnvelopeProfile{
+			wireModel: "claude-opus-4-8", channelKind: 0, tailBytes: 221,
+		}, true
+	case "claude-sonnet-4.6":
+		return kiroSignatureEnvelopeProfile{
+			wireModel: "claude-sonnet-4-6", channelKind: 0, tailBytes: 334,
+		}, true
+	case "claude-opus-5":
+		return kiroSignatureEnvelopeProfile{
+			wireModel: "claude-opus-5", channelKind: 1, tailBytes: 171, includeVersion: true,
+		}, true
+	case "claude-fable-5":
+		// Fable keeps the previously verified CAIS discriminator. Its opaque
+		// trailer length has not been observed through the direct Claude oracle.
+		return kiroSignatureEnvelopeProfile{
+			wireModel: "claude-fable-5", channelKind: 1, includeVersion: true,
+		}, true
 	default:
-		return false
+		return kiroSignatureEnvelopeProfile{}, false
 	}
 }
 
-func buildKiroCAISThinkingSignature(content, model, messageID string) string {
+func buildKiroObservedThinkingSignature(content, model, messageID string, profile kiroSignatureEnvelopeProfile) string {
 	key := kiroSignatureKey(content, model, messageID)
 
 	// CAIS channel block. These fields are the stable discriminator used by
@@ -64,8 +87,8 @@ func buildKiroCAISThinkingSignature(content, model, messageID string) string {
 	channel = appendKiroProtoVarint(channel, 1, 16)
 	channel = appendKiroProtoVarint(channel, 3, 2)
 	channel = appendKiroProtoBytes(channel, 5, kiroSignatureBytes(key, "channel-signature", 64))
-	channel = appendKiroProtoBytes(channel, 6, []byte(model))
-	channel = appendKiroProtoVarint(channel, 7, 1)
+	channel = appendKiroProtoBytes(channel, 6, []byte(profile.wireModel))
+	channel = appendKiroProtoVarint(channel, 7, profile.channelKind)
 	channel = appendKiroProtoBytes(channel, 8, []byte("thinking"))
 	contextID := uuid.NewSHA1(uuid.Nil, []byte("kiro-claude-context\x00"+model+"\x00"+messageID)).String()
 	channel = appendKiroProtoBytes(channel, 11, []byte(contextID))
@@ -75,11 +98,17 @@ func buildKiroCAISThinkingSignature(content, model, messageID string) string {
 	container = appendKiroProtoBytes(container, 2, kiroSignatureBytes(key, "nonce", 12))
 	container = appendKiroProtoBytes(container, 3, kiroSignatureBytes(key, "session", 12))
 	container = appendKiroProtoBytes(container, 4, kiroSignatureBytes(key, "digest", 48))
+	if profile.tailBytes > 0 {
+		container = appendKiroProtoBytes(container, 5, kiroSignatureBytes(key, "attestation", profile.tailBytes))
+	}
 
-	// CAIS top-level envelope: field 1 is the version marker, field 2 carries
-	// the shared container, and field 3 is the observed trailer value.
+	// Newer CAIS envelopes include field 1=2; Opus 4.8 and Sonnet 4.6 begin
+	// directly with the shared field-2 container. All observed profiles end in
+	// field 3=1.
 	body := make([]byte, 0, len(container)+12)
-	body = appendKiroProtoVarint(body, 1, 2)
+	if profile.includeVersion {
+		body = appendKiroProtoVarint(body, 1, 2)
+	}
 	body = appendKiroProtoBytes(body, 2, container)
 	body = appendKiroProtoVarint(body, 3, 1)
 	return base64.StdEncoding.EncodeToString(body)

@@ -125,13 +125,25 @@ func nianzsWriteAnthropicMessageStart(w io.Writer, msgID, model string, inputTok
 		model = "kiro"
 	}
 	usage := map[string]any{
-		"input_tokens":  inputTokens,
-		"output_tokens": 0,
+		"input_tokens":                inputTokens,
+		"output_tokens":               0,
+		"cache_creation_input_tokens": 0,
+		"cache_read_input_tokens":     0,
+		"cache_creation": map[string]any{
+			"ephemeral_5m_input_tokens": 0,
+			"ephemeral_1h_input_tokens": 0,
+		},
+		"service_tier":  "standard",
+		"inference_geo": "not_available",
 	}
 	if cacheUsage != nil {
 		usage["input_tokens"] = cacheUsage.InputTokens
 		usage["cache_creation_input_tokens"] = cacheUsage.CacheCreationInputTokens
 		usage["cache_read_input_tokens"] = cacheUsage.CacheReadInputTokens
+		usage["cache_creation"] = map[string]any{
+			"ephemeral_5m_input_tokens": cacheUsage.CacheCreation5mInputTokens,
+			"ephemeral_1h_input_tokens": cacheUsage.CacheCreation1hInputTokens,
+		}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"type": "message_start",
@@ -141,6 +153,7 @@ func nianzsWriteAnthropicMessageStart(w io.Writer, msgID, model string, inputTok
 			"role":          "assistant",
 			"model":         model,
 			"content":       []any{},
+			"stop_details":  nil,
 			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage":         usage,

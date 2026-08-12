@@ -85,6 +85,8 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 				require.True(t, strings.HasPrefix(toolID, "srvtoolu_"), "server tool ID must use Anthropic namespace")
 				require.Equal(t, "web_search", event.data.Get("content_block.name").String())
 				serverToolIDs[toolID] = struct{}{}
+			case "tool_use":
+				require.Equal(t, "direct", event.data.Get("content_block.caller.type").String())
 			case "web_search_tool_result":
 				require.Equal(t, "direct", event.data.Get("content_block.caller.type").String())
 				toolID := event.data.Get("content_block.tool_use_id").String()

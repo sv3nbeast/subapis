@@ -474,25 +474,27 @@ func TestBuildKiroPayloadSkipsAdditionalModelRequestFieldsForLegacyThinkingModel
 
 // 客户端未请求 thinking 但模型是 Opus 4.7/4.8 时,解析器仍需开启 <thinking> tag 抽取,
 // 否则上游 CoT 文本会原样泄漏到 assistant 正文。
-func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *testing.T) {
+func TestBuildKiroPayloadSeparatesImplicitThinkingStrippingFromExposure(t *testing.T) {
 	cases := []struct {
-		name    string
-		model   string
-		mapped  string
-		wantStr bool
+		name      string
+		model     string
+		mapped    string
+		wantStrip bool
 	}{
-		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStr: true},
-		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStr: true},
-		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStr: true},
-		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStr: false},
+		{name: "opus-4.7 plain", model: "claude-opus-4-7", mapped: "claude-opus-4.7", wantStrip: true},
+		{name: "opus-4.8 plain", model: "claude-opus-4-8", mapped: "claude-opus-4.8", wantStrip: true},
+		{name: "opus-5 plain", model: "claude-opus-5", mapped: "claude-opus-5", wantStrip: true},
+		{name: "sonnet-4.5 plain stays disabled", model: "claude-sonnet-4-5", mapped: "claude-sonnet-4.5", wantStrip: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{"model":"` + tc.model + `","messages":[{"role":"user","content":"hi"}]}`)
 			result, err := BuildKiroPayloadWithContext(body, tc.mapped, "", "AI_EDITOR", nil)
 			require.NoError(t, err)
-			require.Equal(t, tc.wantStr, result.Context.ThinkingEnabled,
-				"ThinkingEnabled mismatch for model %q (mapped %q)", tc.model, tc.mapped)
+			require.False(t, result.Context.ThinkingEnabled,
+				"implicit stripping must not expose a thinking response block")
+			require.Equal(t, tc.wantStrip, result.Context.StripImplicitThinking,
+				"StripImplicitThinking mismatch for model %q (mapped %q)", tc.model, tc.mapped)
 
 			// 隐式开启不应在 system prompt 注入 <thinking_mode> 前缀,避免改变上游请求语义
 			systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
@@ -583,6 +585,20 @@ func TestBuildKiroPayloadNamedToolChoiceExposesOnlySelectedActiveTool(t *testing
 	tools := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
 	require.Len(t, tools, 1)
 	require.Equal(t, "beta", tools[0].Get("toolSpecification.name").String())
+}
+
+func TestBuildKiroPayloadOpus48ForcedToolDoesNotExposeImplicitThinking(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[{"role":"user","content":"use protocol_probe"}],
+		"tools":[{"name":"protocol_probe","input_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}}],
+		"tool_choice":{"type":"tool","name":"protocol_probe"}
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "CLI", nil)
+	require.NoError(t, err)
+	require.False(t, result.Context.ThinkingEnabled)
+	require.True(t, result.Context.StripImplicitThinking)
 }
 
 func TestBuildKiroPayloadAutoToolChoiceKeepsAllActiveTools(t *testing.T) {
@@ -2015,6 +2031,14 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 
 	events := parseAnthropicSSEEventsForTest(t, out.String())
 	require.GreaterOrEqual(t, len(events), 10)
+	messageStart := events[0]
+	require.True(t, messageStart.Get("message.stop_details").Exists())
+	require.Equal(t, "standard", messageStart.Get("message.usage.service_tier").String())
+	require.Equal(t, "not_available", messageStart.Get("message.usage.inference_geo").String())
+	require.Equal(t, int64(0), messageStart.Get("message.usage.cache_creation_input_tokens").Int())
+	require.Equal(t, int64(0), messageStart.Get("message.usage.cache_read_input_tokens").Int())
+	require.Equal(t, int64(0), messageStart.Get("message.usage.cache_creation.ephemeral_5m_input_tokens").Int())
+	require.Equal(t, int64(0), messageStart.Get("message.usage.cache_creation.ephemeral_1h_input_tokens").Int())
 	names := eventNamesForTest(events)
 	require.Equal(t, []string{
 		"message_start",
@@ -2035,8 +2059,8 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	require.Equal(t, "", events[1].Get("content_block.signature").String())
 	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
 	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
-	require.Len(t, events[3].Get("delta.signature").String(), 312)
-	require.True(t, strings.HasPrefix(events[3].Get("delta.signature").String(), "EuYBCkQYAiJA"))
+	require.Len(t, events[3].Get("delta.signature").String(), 596)
+	require.True(t, strings.HasPrefix(events[3].Get("delta.signature").String(), "EroD"))
 	require.Equal(t, int64(0), events[4].Get("index").Int())
 	require.Equal(t, "text", events[5].Get("content_block.type").String())
 	require.Equal(t, int64(1), events[5].Get("index").Int())
@@ -2044,8 +2068,10 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 		require.Equal(t, "text_delta", event.Get("delta.type").String())
 	}
 	messageDelta := events[len(events)-2]
+	require.True(t, messageDelta.Get("delta.stop_details").Exists())
 	require.Equal(t, "end_turn", messageDelta.Get("delta.stop_reason").String())
 	require.Equal(t, int64(6), messageDelta.Get("usage.output_tokens").Int())
+	require.Greater(t, messageDelta.Get("usage.output_tokens_details.thinking_tokens").Int(), int64(0))
 }
 
 func parseAnthropicSSEEventsForTest(t *testing.T, wire string) []gjson.Result {
@@ -2240,6 +2266,123 @@ func TestStreamEventStreamAsAnthropicIgnoresReasoningContentWhenThinkingDisabled
 	require.Equal(t, "end_turn", result.StopReason)
 	require.NotContains(t, out.String(), "hidden reasoning")
 	require.NotContains(t, out.String(), `"type":"thinking"`)
+}
+
+func TestStreamEventStreamAsAnthropicHidesImplicitThinkingBeforeForcedTool(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider-only reasoning"},
+	}))
+	for _, fragment := range []string{"<thinking>hidden ", "detail</thinking>\n\n"} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": fragment},
+		}))
+	}
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_protocol", "name": "protocol_probe",
+			"input": `{"value":"TOOL_OK"}`, "stop": true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-4-8", 11,
+		KiroRequestContext{StripImplicitThinking: true, RequireTerminalEvent: true},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	require.Equal(t, "message_start", events[0].Get("type").String())
+	require.Equal(t, "tool_use", events[1].Get("content_block.type").String())
+	require.Equal(t, int64(0), events[1].Get("index").Int())
+	require.Equal(t, "direct", events[1].Get("content_block.caller.type").String())
+	require.NotContains(t, out.String(), "provider-only reasoning")
+	require.NotContains(t, out.String(), "hidden")
+	require.NotContains(t, out.String(), `"type":"thinking"`)
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestStreamEventStreamAsAnthropicPreservesTextAfterHiddenImplicitThinking(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	for _, fragment := range []string{"<thin", "king>provider-only reasoning</think", "ing>\n\nvisible answer"} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": fragment},
+		}))
+	}
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-4-8", 7,
+		KiroRequestContext{StripImplicitThinking: true, RequireTerminalEvent: true},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	var visible strings.Builder
+	for _, event := range parseAnthropicSSEEventsForTest(t, out.String()) {
+		if event.Get("delta.type").String() == "text_delta" {
+			visible.WriteString(event.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "visible answer", visible.String())
+	require.NotContains(t, out.String(), "provider-only reasoning")
+	require.NotContains(t, out.String(), `"type":"thinking"`)
+}
+
+func TestParseNonStreamingEventStreamHidesImplicitThinkingBeforeForcedTool(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider-only reasoning"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "toolu_protocol", "name": "protocol_probe",
+			"input": `{"value":"TOOL_OK"}`, "stop": true,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "tool_use"},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(
+		stream, "claude-opus-4-8",
+		KiroRequestContext{StripImplicitThinking: true, RequireTerminalEvent: true},
+	)
+	require.NoError(t, err)
+	response := gjson.ParseBytes(result.ResponseBody)
+	require.Equal(t, int64(1), response.Get("content.#").Int())
+	require.Equal(t, "tool_use", response.Get("content.0.type").String())
+	require.Equal(t, "direct", response.Get("content.0.caller.type").String())
+	require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
+	require.NotContains(t, string(result.ResponseBody), `"type":"thinking"`)
+}
+
+func TestParseNonStreamingEventStreamPreservesTextAfterHiddenImplicitThinking(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "<thinking>provider-only reasoning</thinking>\n\nvisible answer",
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(
+		stream, "claude-opus-4-8", KiroRequestContext{StripImplicitThinking: true},
+	)
+	require.NoError(t, err)
+	response := gjson.ParseBytes(result.ResponseBody)
+	require.Equal(t, int64(1), response.Get("content.#").Int())
+	require.Equal(t, "text", response.Get("content.0.type").String())
+	require.Equal(t, "visible answer", response.Get("content.0.text").String())
+	require.True(t, response.Get("stop_details").Exists())
+	require.Equal(t, "standard", response.Get("usage.service_tier").String())
+	require.Equal(t, "not_available", response.Get("usage.inference_geo").String())
+	require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
 }
 
 func TestBuildAssistantMessageStructUsesSpacePlaceholderForToolOnly(t *testing.T) {
