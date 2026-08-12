@@ -13,6 +13,45 @@ type BufferedStreamResult struct {
 	WebSearchToolUseIndex int
 }
 
+// GenerateSearchDecisionEvents emits the client-visible decision to search
+// before the server_tool_use block. Anthropic's server-tool responses expose
+// this as an ordinary text block, and Claude Code keeps it as commentary in
+// the WebSearch tool result. Keeping it separate also lets the streaming path
+// flush meaningful output before the MCP network call begins.
+func GenerateSearchDecisionEvents(query string, index int) [][]byte {
+	text := "I'll search the web for " + strings.TrimSpace(query) + "."
+	events := []map[string]any{
+		{
+			"type":  "content_block_start",
+			"index": index,
+			"content_block": map[string]any{
+				"type": "text",
+				"text": "",
+			},
+		},
+		{
+			"type":  "content_block_delta",
+			"index": index,
+			"delta": map[string]any{
+				"type": "text_delta",
+				"text": text,
+			},
+		},
+		{
+			"type":  "content_block_stop",
+			"index": index,
+		},
+	}
+
+	result := make([][]byte, 0, len(events))
+	for _, event := range events {
+		eventType, _ := event["type"].(string)
+		payload, _ := json.Marshal(event)
+		result = append(result, []byte("event: "+eventType+"\ndata: "+string(payload)+"\n\n"))
+	}
+	return result
+}
+
 func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchResults, startIndex int) [][]byte {
 	return GenerateSearchIndicatorEventsWithError(query, toolUseID, results, "", startIndex)
 }

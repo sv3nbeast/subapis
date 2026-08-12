@@ -580,14 +580,16 @@ func TestNianzsMessagesWebSearchNonStreamingPairsResultAndReportsUsage(t *testin
 	require.False(t, result.Stream)
 	require.Len(t, upstream.requests, 2)
 	response := recorder.Body.String()
-	require.Equal(t, "server_tool_use", gjson.Get(response, "content.0.type").String())
-	require.Equal(t, "web_search_tool_result", gjson.Get(response, "content.1.type").String())
-	require.Equal(t, gjson.Get(response, "content.0.id").String(), gjson.Get(response, "content.1.tool_use_id").String())
+	require.Equal(t, "text", gjson.Get(response, "content.0.type").String())
+	require.Contains(t, gjson.Get(response, "content.0.text").String(), "golang concurrency")
+	require.Equal(t, "server_tool_use", gjson.Get(response, "content.1.type").String())
+	require.Equal(t, "web_search_tool_result", gjson.Get(response, "content.2.type").String())
+	require.Equal(t, gjson.Get(response, "content.1.id").String(), gjson.Get(response, "content.2.tool_use_id").String())
 	require.Equal(t, int64(1), gjson.Get(response, "usage.server_tool_use.web_search_requests").Int())
-	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.2.text").String())
-	require.Equal(t, "web_search_result_location", gjson.Get(response, "content.2.citations.0.type").String())
-	require.Equal(t, "https://go.dev", gjson.Get(response, "content.2.citations.0.url").String())
-	require.NotEmpty(t, gjson.Get(response, "content.2.citations.0.encrypted_index").String())
+	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.3.text").String())
+	require.Equal(t, "web_search_result_location", gjson.Get(response, "content.3.citations.0.type").String())
+	require.Equal(t, "https://go.dev", gjson.Get(response, "content.3.citations.0.url").String())
+	require.NotEmpty(t, gjson.Get(response, "content.3.citations.0.encrypted_index").String())
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
 }
@@ -724,10 +726,9 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	for id := range serverToolIDs {
 		require.True(t, strings.HasPrefix(id, "srvtoolu_"), "server tool ID must use Anthropic namespace: %s", id)
 	}
-	// The model's refinement tool_use remains visible between the first search
-	// result and the second native server-tool turn.  This fixture has no
-	// narrative text before the refinement call, so the wire uses indices 0..5.
-	require.Len(t, indices, 6, "two search pairs, refinement tool, and final text must use distinct indices")
+	// The initial search-decision text and the model's refinement tool_use remain
+	// visible around the two server-tool turns, so this fixture uses indices 0..6.
+	require.Len(t, indices, 7, "search decision, two search pairs, refinement tool, and final text must use distinct indices")
 	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
 	require.Len(t, messageDeltas, 1)
 	require.Equal(t, int64(2), messageDeltas[0].Get("usage.server_tool_use.web_search_requests").Int())

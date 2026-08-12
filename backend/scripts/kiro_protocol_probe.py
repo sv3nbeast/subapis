@@ -196,6 +196,7 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     result_count = 0
     result_errors: list[str] = []
     client_web_search_tool_uses = 0
+    text_before_first_server_tool = False
     message_delta_count = 0
     message_stop_count = 0
     stop_reason = ""
@@ -221,6 +222,8 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                 tool_id = str(block.get("id", ""))
                 require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
                 server_tool_ids.add(tool_id)
+            elif open_type == "text" and not server_tool_ids:
+                text_before_first_server_tool = True
             elif open_type == "tool_use":
                 if str(block.get("name", "")).lower() in {
                     "web_search", "web_search_20250305", "remote_web_search", "google_search",
@@ -305,6 +308,7 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
         "web_search_errors": result_errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "citations": citations,
+        "text_before_first_server_tool": text_before_first_server_tool,
         "signature_values": signatures,
     }
 
@@ -330,6 +334,7 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     client_web_search_tool_uses = 0
     citations = 0
+    text_before_first_server_tool = False
     for block in payload["content"]:
         if not isinstance(block, dict):
             continue
@@ -338,6 +343,8 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
             tool_id = str(block.get("id", ""))
             require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
             server_ids.add(tool_id)
+        elif block_type == "text" and not server_ids:
+            text_before_first_server_tool = True
         elif block_type == "web_search_tool_result":
             tool_id = str(block.get("tool_use_id", ""))
             require(tool_id in server_ids, "web-search result is not paired")
@@ -362,6 +369,7 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
         "web_search_errors": errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "citations": citations,
+        "text_before_first_server_tool": text_before_first_server_tool,
     })
     return facts
 
@@ -449,6 +457,34 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         require(facts["citations"] > 0, "web-search answer has no citations")
         require(facts["client_web_search_tool_uses"] == 0, "response leaked an internal web-search tool_use")
         require(facts["stop_reason"] == "end_turn", "max_uses=1 response did not finish with end_turn")
+        require(facts["text_before_first_server_tool"], "response omitted pre-search decision text")
+        return facts
+
+    def web_search_claude_code_stream() -> dict[str, Any]:
+        body = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "text", "text": "Perform a web search for the query: AI news 2026-08-12"}],
+            }],
+            "system": [
+                {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+                {"type": "text", "text": "You are an assistant for performing a web search tool use"},
+            ],
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            "tool_choice": {"type": "tool", "name": "web_search"},
+            "max_tokens": 64000,
+            "temperature": 1,
+            "stream": True,
+        }
+        facts = validate_sse(parse_sse(client.messages(body)))
+        require(facts["server_tool_uses"] >= 1, "Claude Code shape produced no web-search server tool use")
+        require(not facts["web_search_errors"], f"Claude Code shape returned an error: {facts['web_search_errors']}")
+        require(facts["web_search_results"] > 0, "Claude Code shape returned no results")
+        require(facts["citations"] > 0, "Claude Code shape has no citations")
+        require(facts["client_web_search_tool_uses"] == 0, "Claude Code shape leaked an internal web-search tool_use")
+        require(facts["text_before_first_server_tool"], "Claude Code shape omitted pre-search decision text")
+        require(facts["stop_reason"] == "end_turn", "Claude Code shape did not finish with end_turn")
         return facts
 
     run("basic_nonstream", basic_nonstream)
@@ -456,6 +492,7 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
     run("thinking_signature_stream", thinking_stream)
     run("web_search_nonstream", lambda: web_search(False))
     run("web_search_stream", lambda: web_search(True))
+    run("web_search_claude_code_stream", web_search_claude_code_stream)
     return checks
 
 

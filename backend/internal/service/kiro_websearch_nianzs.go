@@ -179,6 +179,10 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
 		return err
 	}
+	if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchDecisionEvents(query, nextContentBlockIndex)); err != nil {
+		return err
+	}
+	nextContentBlockIndex++
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)

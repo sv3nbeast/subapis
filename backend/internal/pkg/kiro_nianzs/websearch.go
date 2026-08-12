@@ -630,7 +630,11 @@ func InjectSearchIndicatorsInResponse(responsePayload []byte, searches []SearchI
 		return responsePayload, err
 	}
 	content, _ := response["content"].([]any)
-	updated := make([]any, 0, len(searches)*2+len(content))
+	updated := make([]any, 0, 1+len(searches)*2+len(content))
+	updated = append(updated, map[string]any{
+		"type": "text",
+		"text": "I'll search the web for " + strings.TrimSpace(searches[0].Query) + ".",
+	})
 	for _, search := range searches {
 		updated = append(updated, map[string]any{
 			"type":  "server_tool_use",

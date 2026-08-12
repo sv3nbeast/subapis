@@ -8,6 +8,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestGenerateSearchDecisionEventsPrecedesServerToolUse(t *testing.T) {
+	events := GenerateSearchDecisionEvents("golang concurrency", 3)
+	require.Len(t, events, 3)
+	require.Equal(t, "text", gjson.Get(extractSSEDataForTest(t, events[0]), "content_block.type").String())
+	require.Equal(t, int64(3), gjson.Get(extractSSEDataForTest(t, events[0]), "index").Int())
+	require.Equal(t, "text_delta", gjson.Get(extractSSEDataForTest(t, events[1]), "delta.type").String())
+	require.Contains(t, gjson.Get(extractSSEDataForTest(t, events[1]), "delta.text").String(), "golang concurrency")
+	require.Equal(t, "content_block_stop", gjson.Get(extractSSEDataForTest(t, events[2]), "type").String())
+}
+
 func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
 	snippet := "result snippet"
 	events := GenerateSearchIndicatorEvents("golang concurrency", "srvtoolu_test", &WebSearchResults{
