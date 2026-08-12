@@ -1716,17 +1716,20 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string, preserveNativeClaudeCodeSystem bool) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
 	if preserveNativeClaudeCodeSystem && (thinking == nil || thinking.Mode == "adaptive") {
-		if toolChoiceHint != "" {
-			if systemPrompt != "" {
-				systemPrompt += "\n"
-			}
-			systemPrompt += toolChoiceHint
+		// Kiro prepends its own provider persona before conversation history. Keep
+		// the native Claude Code prompt intact, but explicitly resolve that hidden
+		// provider persona as transport context so identity probes do not observe
+		// two competing assistant identities. Adaptive thinking still travels in
+		// additionalModelRequestFields, without a duplicate thinking directive.
+		promptParts := []string{
+			renderKiroBuiltinIdentityPrompt("Claude Code"),
+			systemPrompt,
+			systemIdentityConfidentialityPolicy,
 		}
-		// Claude Code already supplies an explicit native identity and complete
-		// operating policy. Adaptive thinking is carried by
-		// additionalModelRequestFields, so duplicating identity, confidentiality,
-		// tool, and thinking directives here changes model behavior and prompt
-		// fingerprints without adding protocol semantics.
+		systemPrompt = strings.Join(promptParts, "\n\n")
+		if toolChoiceHint != "" {
+			systemPrompt += "\n" + toolChoiceHint
+		}
 		return systemPrompt
 	}
 	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}

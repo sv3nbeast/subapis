@@ -456,12 +456,13 @@ func TestBuildKiroPayloadPreservesNativeClaudeCodeSystemPrompt(t *testing.T) {
 	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", headers)
 	require.NoError(t, err)
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Equal(t,
+	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
+	require.Contains(t, systemContent, "You must never say that you are Kiro")
+	require.Contains(t, systemContent, "You are Claude Code, a senior software engineer")
+	require.Contains(t, systemContent,
 		"You are Claude Code, Anthropic's official CLI for Claude.\n\nFollow the native client instructions exactly.",
-		systemContent,
 	)
-	require.NotContains(t, systemContent, "<CRITICAL_OVERRIDE>")
-	require.NotContains(t, systemContent, "<identity_and_confidentiality>")
+	require.Contains(t, systemContent, "<identity_and_confidentiality>")
 	require.NotContains(t, systemContent, systemChunkedWritePolicy)
 	require.NotContains(t, systemContent, "<thinking_mode>")
 	require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())
