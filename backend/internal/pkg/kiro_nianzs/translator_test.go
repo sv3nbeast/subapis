@@ -2123,7 +2123,7 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	messageDelta := events[len(events)-2]
 	require.True(t, messageDelta.Get("delta.stop_details").Exists())
 	require.Equal(t, "end_turn", messageDelta.Get("delta.stop_reason").String())
-	require.Equal(t, int64(6), messageDelta.Get("usage.output_tokens").Int())
+	require.Equal(t, int64(9), messageDelta.Get("usage.output_tokens").Int(), "incomplete upstream usage should be raised to the modern Claude output lower bound")
 	require.Greater(t, messageDelta.Get("usage.output_tokens_details.thinking_tokens").Int(), int64(0))
 }
 
@@ -3381,6 +3381,28 @@ func TestParseNonStreamingEventStreamEstimatesOutputTokensWhenMissing(t *testing
 	require.Greater(t, result.Usage.OutputTokens, 0, "should estimate outputTokens from response text")
 }
 
+func TestParseNonStreamingEventStreamCorrectsIncompletePositiveOutputTokens(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "2025-01"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        1,
+				"totalTokens":         11,
+			},
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{})
+	require.NoError(t, err)
+	require.Equal(t, 6, result.Usage.OutputTokens)
+	require.Equal(t, 16, result.Usage.TotalTokens)
+	require.Equal(t, int64(6), gjson.GetBytes(result.ResponseBody, "usage.output_tokens").Int())
+}
+
 func TestStreamEventStreamAsAnthropicEstimatesOutputTokensWhenMissing(t *testing.T) {
 	// Kiro sometimes omits outputTokens; output should be estimated from streamed text.
 	pr, pw := io.Pipe()
@@ -3499,8 +3521,43 @@ func TestStreamEventStreamAsAnthropicStreamingToolInputCountsOutputTokens(t *tes
 	require.Contains(t, deltaSection, `"output_tokens":`, "output_tokens should be present in message_delta")
 }
 
-func TestStreamEventStreamAsAnthropicUpstreamOutputTokensNotOverridden(t *testing.T) {
-	// When upstream provides real outputTokens, estimation must not override it.
+func TestStreamEventStreamAsAnthropicCorrectsIncompletePositiveOutputTokens(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "2025-01"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{
+				"uncachedInputTokens": 10,
+				"outputTokens":        1,
+				"totalTokens":         11,
+			},
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 10, KiroRequestContext{
+		ReportUsageIterations: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 6, result.Usage.OutputTokens)
+	require.Equal(t, 16, result.Usage.TotalTokens)
+
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	require.Equal(t, int64(1), events[0].Get("message.usage.output_tokens").Int())
+	messageDelta := events[len(events)-2]
+	require.Equal(t, "message_delta", messageDelta.Get("type").String())
+	require.Equal(t, int64(6), messageDelta.Get("usage.output_tokens").Int())
+	require.Equal(t, int64(6), messageDelta.Get("usage.iterations.0.output_tokens").Int())
+}
+
+func TestStreamEventStreamAsAnthropicPreservesLargerUpstreamOutputTokens(t *testing.T) {
+	// A larger upstream value can include provider output that is not reproduced
+	// verbatim in the translated response, so it remains authoritative.
 	pr, pw := io.Pipe()
 	var out bytes.Buffer
 	errCh := make(chan error, 1)

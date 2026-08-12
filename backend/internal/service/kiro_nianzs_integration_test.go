@@ -405,8 +405,10 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.lastReq.URL.String())
 			require.Equal(t, "nianzs", mustGinString(t, c, OpsKiroEngineKey))
-			require.Equal(t, "gateway-request-id", recorder.Header().Get("X-Request-ID"))
+			responseRequestID := recorder.Header().Get("X-Request-ID")
+			require.Regexp(t, `^req_01[0-9A-Za-z]{25}$`, responseRequestID)
 			require.Empty(t, recorder.Header().Get("Request-ID"))
+			require.Equal(t, responseRequestID, result.RequestID)
 			if stream {
 				require.Contains(t, recorder.Body.String(), `"text":"nianzs messages ok"`)
 				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))

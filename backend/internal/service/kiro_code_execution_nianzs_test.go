@@ -63,7 +63,7 @@ func TestNianzsMessagesLegacyCodeExecutionStreamingClosesServerToolLoop(t *testi
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
 	require.Equal(t, 25, result.Usage.InputTokens)
-	require.Equal(t, 8, result.Usage.OutputTokens)
+	require.Equal(t, 17, result.Usage.OutputTokens)
 	require.Equal(t, []string{"print('HELLO_CHECK')"}, runner.codes)
 	require.Len(t, upstream.requests, 2)
 	require.Contains(t, string(upstream.bodies[1]), "HELLO_CHECK")
@@ -98,7 +98,7 @@ func TestNianzsMessagesLegacyCodeExecutionStreamingClosesServerToolLoop(t *testi
 	require.Equal(t, int64(0), deltas[0].Get("context_management.applied_edits.#").Int())
 	require.Equal(t, "end_turn", deltas[0].Get("delta.stop_reason").String())
 	require.Equal(t, int64(25), deltas[0].Get("usage.input_tokens").Int())
-	require.Equal(t, int64(8), deltas[0].Get("usage.output_tokens").Int())
+	require.Equal(t, int64(17), deltas[0].Get("usage.output_tokens").Int())
 	require.Equal(t, int64(1), deltas[0].Get("usage.server_tool_use.code_execution_requests").Int())
 }
 
@@ -126,7 +126,7 @@ func TestNianzsMessagesLegacyCodeExecutionNonStreamingClosesServerToolLoop(t *te
 	require.NotNil(t, result)
 	require.False(t, result.Stream)
 	require.Equal(t, 25, result.Usage.InputTokens)
-	require.Equal(t, 8, result.Usage.OutputTokens)
+	require.Equal(t, 17, result.Usage.OutputTokens)
 	require.Len(t, upstream.requests, 2)
 	require.Equal(t, []string{"print('HELLO_CHECK')"}, runner.codes)
 
@@ -139,7 +139,7 @@ func TestNianzsMessagesLegacyCodeExecutionNonStreamingClosesServerToolLoop(t *te
 	require.Equal(t, "HELLO_CHECK", gjson.Get(response, "content.2.text").String())
 	require.Equal(t, "end_turn", gjson.Get(response, "stop_reason").String())
 	require.Equal(t, int64(25), gjson.Get(response, "usage.input_tokens").Int())
-	require.Equal(t, int64(8), gjson.Get(response, "usage.output_tokens").Int())
+	require.Equal(t, int64(17), gjson.Get(response, "usage.output_tokens").Int())
 	require.Equal(t, int64(1), gjson.Get(response, "usage.server_tool_use.code_execution_requests").Int())
 }
 

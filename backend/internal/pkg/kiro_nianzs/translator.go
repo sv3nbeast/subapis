@@ -590,7 +590,7 @@ func anthropicBetaHeaderContains(headers http.Header, token string) bool {
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, requestCtx.RequireTerminalEvent)
+	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, model, requestCtx.RequireTerminalEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -1507,11 +1507,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := closeThinking(); err != nil {
 		return nil, err
 	}
-	if usage.OutputTokens == 0 {
-		if est := anthropictokenizer.CountTokens(outputTextBuf.String()); est > 0 {
-			usage.OutputTokens = est
-		}
-	}
+	reconcileKiroOutputUsage(&usage, outputTextBuf.String(), model)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
@@ -1544,7 +1540,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
 	}
 	finalUsageMap["output_tokens_details"] = map[string]any{
-		"thinking_tokens": anthropictokenizer.CountTokens(allThinking.String()),
+		"thinking_tokens": kiroThinkingTokenEstimate(allThinking.String(), model),
 	}
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
@@ -3228,7 +3224,7 @@ type kiroReasoningArtifacts struct {
 	RedactedContents []string
 }
 
-func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, kiroReasoningArtifacts, error) {
+func parseEventStream(body io.Reader, model string, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, kiroReasoningArtifacts, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3344,18 +3340,14 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)
 
-	if usage.OutputTokens == 0 {
-		var outputBuf strings.Builder
-		_, _ = outputBuf.WriteString(cleanText)
-		for _, tu := range toolUses {
-			if b, err := json.Marshal(tu.Input); err == nil {
-				_, _ = outputBuf.Write(b)
-			}
-		}
-		if est := anthropictokenizer.CountTokens(outputBuf.String()); est > 0 {
-			usage.OutputTokens = est
+	var outputBuf strings.Builder
+	_, _ = outputBuf.WriteString(cleanText)
+	for _, tu := range toolUses {
+		if b, err := json.Marshal(tu.Input); err == nil {
+			_, _ = outputBuf.Write(b)
 		}
 	}
+	reconcileKiroOutputUsage(&usage, outputBuf.String(), model)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
@@ -4932,6 +4924,62 @@ func addKiroCacheUsageFields(usageMap map[string]any, usage Usage) {
 		"ephemeral_5m_input_tokens": usage.CacheCreation5mInputTokens,
 		"ephemeral_1h_input_tokens": usage.CacheCreation1hInputTokens,
 	}
+}
+
+// reconcileKiroOutputUsage keeps the Claude usage contract internally
+// consistent when Kiro omits output usage. Claude output accounting includes
+// two generated protocol tokens around non-empty text in the captured native
+// Messages baseline. The modern text estimate plus that framing is a lower
+// bound; a larger upstream value remains authoritative because it can include
+// provider output that is not represented verbatim in the translated response.
+func reconcileKiroOutputUsage(usage *Usage, output, model string) {
+	if usage == nil {
+		return
+	}
+	estimated := 0
+	if usesModernClaudeTokenizer(model) {
+		estimated = anthropictokenizer.EstimateModernClaudeTextTokens(output)
+		if estimated > 0 {
+			estimated += 2
+		}
+	} else {
+		// Older Claude generations retain the legacy behavior: a provider count
+		// wins whenever present, otherwise use the published legacy tokenizer.
+		if usage.OutputTokens > 0 {
+			return
+		}
+		estimated = anthropictokenizer.CountTokens(output)
+	}
+	if estimated <= usage.OutputTokens {
+		return
+	}
+	delta := estimated - usage.OutputTokens
+	usage.OutputTokens = estimated
+	if usage.TotalTokens > 0 {
+		usage.TotalTokens += delta
+	}
+}
+
+func kiroThinkingTokenEstimate(text, model string) int {
+	if usesModernClaudeTokenizer(model) {
+		return anthropictokenizer.EstimateModernClaudeTextTokens(text)
+	}
+	return anthropictokenizer.CountTokens(text)
+}
+
+func usesModernClaudeTokenizer(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	for _, prefix := range []string{
+		"claude-opus-4-7", "claude-opus-4.7",
+		"claude-opus-4-8", "claude-opus-4.8",
+		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5",
+		"claude-fable-5", "claude-mythos-5",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func kiroUsageIteration(usage Usage) map[string]any {

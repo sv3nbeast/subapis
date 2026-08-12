@@ -187,9 +187,10 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
 			nianzsEnsureClaudeResponseVary(c.Writer.Header())
+			requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 			c.Data(http.StatusOK, "application/json", codeResult.ResponseBody)
 			return &ForwardResult{
-				RequestID:     codeResult.RequestID,
+				RequestID:     requestID,
 				Usage:         codeResult.Usage,
 				Model:         originalModel,
 				UpstreamModel: upstreamModel,
@@ -232,9 +233,10 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
 			nianzsEnsureClaudeResponseVary(c.Writer.Header())
+			requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
 			return &ForwardResult{
-				RequestID:     webSearchResult.RequestID,
+				RequestID:     requestID,
 				Usage:         webSearchResult.Usage,
 				Model:         originalModel,
 				UpstreamModel: upstreamModel,
@@ -331,7 +333,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 
 	c.Header("Content-Type", "application/json")
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
-	requestID := nianzsBuildKiroRequestID(resp)
+	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
@@ -388,6 +390,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		wrappedHeaders := make(http.Header)
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		nianzsEnsureClaudeResponseVary(wrappedHeaders)
+		nianzsSetClaudeResponseRequestID(wrappedHeaders)
 		go func() {
 			streamErr := s.streamKiroCodeExecutionAsAnthropicNianzs(
 				upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel,
@@ -414,6 +417,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		wrappedHeaders := make(http.Header)
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		nianzsEnsureClaudeResponseVary(wrappedHeaders)
+		nianzsSetClaudeResponseRequestID(wrappedHeaders)
 		go func() {
 			streamErr := s.streamKiroWebSearchAsAnthropicNianzs(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
 			if streamErr != nil {
@@ -451,8 +455,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
 	nianzsEnsureClaudeResponseVary(wrappedHeaders)
-	wrappedHeaders.Del("x-request-id")
-	wrappedHeaders.Del("request-id")
+	nianzsSetClaudeResponseRequestID(wrappedHeaders)
 
 	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
 	go func() {
@@ -512,6 +515,20 @@ func nianzsEnsureClaudeResponseVary(headers http.Header) {
 		}
 	}
 	headers.Add("Vary", "Accept-Encoding")
+}
+
+func nianzsSetClaudeResponseRequestID(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	requestID := nianzskiro.NewClaudeRequestID()
+	headers.Set("x-request-id", requestID)
+	headers.Del("request-id")
+	// x-client-request-id is an upstream Kiro/AWS echo, not an Anthropic
+	// Messages response header. Keeping it exposes the provider transport and
+	// can make a valid Claude-compatible response fail protocol clients.
+	headers.Del("x-client-request-id")
+	return requestID
 }
 
 func (s *GatewayService) executeKiroUpstreamNianzs(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, nianzskiro.KiroRequestContext, error) {

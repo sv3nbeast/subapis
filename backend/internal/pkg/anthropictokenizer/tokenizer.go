@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	tiktoken "github.com/pkoukk/tiktoken-go"
+	embeddedtokenizer "github.com/tiktoken-go/tokenizer"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -30,6 +31,9 @@ var (
 	tokenizerOnce sync.Once
 	tokenizer     *tiktoken.Tiktoken
 	tokenizerErr  error
+	modernOnce    sync.Once
+	modernCodec   embeddedtokenizer.Codec
+	modernErr     error
 )
 
 // CountTokens returns the Anthropic reference tokenizer count for text.
@@ -44,6 +48,56 @@ func CountTokens(text string) int {
 		return fallbackTokenCount(text)
 	}
 	return len(tok.Encode(norm.NFKC.String(text), []string{"all"}, nil))
+}
+
+// EstimateModernClaudeTextTokens returns a conservative text-token estimate
+// for Claude 4.7 and later. Anthropic does not publish the newer tokenizer and
+// recommends its count_tokens endpoint for exact input counts. For translated
+// Kiro output, where that endpoint cannot count generated text, cl100k provides
+// a substantially closer multilingual/numeric lower bound than the legacy
+// public Claude vocabulary. The legacy count remains a second lower bound.
+func EstimateModernClaudeTextTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	estimated := CountTokens(text)
+	modernOnce.Do(func() {
+		modernCodec, modernErr = embeddedtokenizer.Get(embeddedtokenizer.Cl100kBase)
+	})
+	if modernErr == nil && modernCodec != nil {
+		if ids, _, err := modernCodec.Encode(norm.NFKC.String(text)); err == nil && len(ids) > estimated {
+			estimated = len(ids)
+		}
+	}
+	// Newer Claude tokenization splits short high-entropy uppercase literals
+	// more aggressively than cl100k. This shape is also common in nonce/tag
+	// round-trips, so retain it as an additional conservative lower bound.
+	if literalEstimate := shortUppercaseLiteralTokenEstimate(text); literalEstimate > estimated {
+		estimated = literalEstimate
+	}
+	return estimated
+}
+
+func shortUppercaseLiteralTokenEstimate(text string) int {
+	if len(text) < 6 || len(text) > 12 {
+		return 0
+	}
+	hasDigit := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		default:
+			return 0
+		}
+	}
+	if hasDigit {
+		return len(text)
+	}
+	// A single common pair may merge in an all-letter literal.
+	return len(text) - 1
 }
 
 func getTokenizer() (*tiktoken.Tiktoken, error) {
