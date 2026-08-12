@@ -113,6 +113,11 @@ type ParseResult struct {
 type KiroRequestContext struct {
 	ToolNameMap     map[string]string
 	ThinkingEnabled bool
+	// RequireProviderThinkingSignature prevents the Anthropic adapter from
+	// inventing a signature when Kiro did not authenticate a thinking block.
+	// BuildKiroPayloadWithContext enables it for every client-requested thinking
+	// turn; direct translator callers may leave it false for unsigned fixtures.
+	RequireProviderThinkingSignature bool
 	// SuppressAdaptiveThinkingText preserves the Anthropic adaptive-thinking
 	// block lifecycle and opaque signature while keeping provider-only reasoning
 	// summaries out of the public thinking field. Claude's adaptive Messages
@@ -474,6 +479,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		hasTopP = false
 	}
 	requestCtx.ThinkingEnabled = thinking != nil
+	requestCtx.RequireProviderThinkingSignature = requestCtx.ThinkingEnabled
 	// Opus 4.7/4.8 即便客户端未请求 thinking,上游仍会以 <thinking>...</thinking> 文本流出 CoT;
 	// 此处仅为流式/非流式解析器开启 tag 抽取,不会改写 system prompt,避免将思考内容泄露到正文。
 	requestCtx.StripImplicitThinking = !requestCtx.ThinkingEnabled && requiresImplicitThinkingTagStripping(modelID)
@@ -491,6 +497,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	if IsKiroGPTModel(modelID) {
 		thinking = nil
 		requestCtx.ThinkingEnabled = false
+		requestCtx.RequireProviderThinkingSignature = false
 		requestCtx.StripImplicitThinking = false
 	}
 	requestCtx.SuppressAdaptiveThinkingText = thinking != nil && thinking.Mode == "adaptive"
@@ -590,7 +597,7 @@ func anthropicBetaHeaderContains(headers http.Header, token string) bool {
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, model, requestCtx.RequireTerminalEvent)
+	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, model, requestCtx.RequireTerminalEvent, requestCtx.RequireProviderThinkingSignature)
 	if err != nil {
 		return nil, err
 	}
@@ -638,6 +645,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	thinkingBuffer := ""
 	var currentThinking strings.Builder
 	var allThinking strings.Builder
+	var pendingAuthenticatedThinkingDeltas []string
 	upstreamThinkingSignature := ""
 	inThinkingBlock := false
 	stripThinkingLeadingNewline := false
@@ -645,6 +653,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	var outputTextBuf strings.Builder
 	sawCompletionEvidence := false
 	protocolPingSent := false
+	var startThinkingBlock func() error
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
@@ -715,15 +724,62 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": contentBlockIndex})
 	}
 	closeThinking := func() error {
-		if !thinkingBlockOpen {
+		if !thinkingBlockOpen && currentThinking.Len() == 0 {
 			return nil
 		}
 		if currentThinking.Len() > 0 {
 			sig := strings.TrimSpace(upstreamThinkingSignature)
-			if sig == "" {
-				sig = kiroThinkingSignature(currentThinking.String(), model, currentMessageID)
+			if sig == "" && requestCtx.RequireProviderThinkingSignature {
+				return errors.New("missing provider-native Kiro thinking signature")
+			}
+			if sig != "" {
+				if _, err := validateProviderThinkingSignature(sig); err != nil {
+					return fmt.Errorf("invalid provider-native Kiro thinking signature: %w", err)
+				}
+			}
+			// When provider authentication is required, no part of the thinking
+			// block is client-visible until its opaque signature has arrived and
+			// passed envelope validation. This preserves the gateway's failover
+			// boundary: an unsigned or malformed upstream response fails before
+			// message_start instead of leaving a truncated SSE lifecycle.
+			if !thinkingBlockOpen {
+				if err := startThinkingBlock(); err != nil {
+					return err
+				}
+			}
+			if requestCtx.SuppressAdaptiveThinkingText {
+				// Claude's adaptive Messages stream preserves the thinking block
+				// while withholding its text. Match the observed three progress
+				// frames instead of leaking Kiro's provider-only chunk count.
+				for _, estimatedTokens := range []any{50, 100, nil} {
+					if err := writeEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": thinkingBlockIndex,
+						"delta": map[string]any{
+							"type":             "thinking_delta",
+							"thinking":         "",
+							"estimated_tokens": estimatedTokens,
+						},
+					}); err != nil {
+						return err
+					}
+				}
+			} else if requestCtx.RequireProviderThinkingSignature {
+				for _, text := range pendingAuthenticatedThinkingDeltas {
+					if err := writeEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": thinkingBlockIndex,
+						"delta": map[string]any{
+							"type":     "thinking_delta",
+							"thinking": text,
+						},
+					}); err != nil {
+						return err
+					}
+				}
 			}
 			currentThinking.Reset()
+			pendingAuthenticatedThinkingDeltas = nil
 			upstreamThinkingSignature = ""
 			if sig != "" {
 				if err := writeEvent("content_block_delta", map[string]any{
@@ -787,10 +843,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 			return writeTextDelta(inputJSON, true)
 		}
-		if err := ensureMessageStart(); err != nil {
+		if err := closeThinking(); err != nil {
 			return err
 		}
-		if err := closeThinking(); err != nil {
+		if err := ensureMessageStart(); err != nil {
 			return err
 		}
 		if err := closeText(); err != nil {
@@ -924,15 +980,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
 		}
+		if err := closeThinking(); err != nil {
+			return err
+		}
 		if err := ensureMessageStart(); err != nil {
 			return err
 		}
 		if firstDelta == nil {
 			delta := time.Since(start)
 			firstDelta = &delta
-		}
-		if err := closeThinking(); err != nil {
-			return err
 		}
 		if !textBlockOpen {
 			contentBlockIndex++
@@ -1015,13 +1071,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
 		}
-		if err := ensureMessageStart(); err != nil {
-			return err
-		}
 		if err := closeText(); err != nil {
 			return err
 		}
 		if err := closeThinking(); err != nil {
+			return err
+		}
+		if err := ensureMessageStart(); err != nil {
 			return err
 		}
 		contentBlockIndex++
@@ -1076,7 +1132,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		pendingAssistantText += text
 		return flushPendingAssistantText()
 	}
-	startThinkingBlock := func() error {
+	startThinkingBlock = func() error {
 		if err := closeOpenStreamingTool(); err != nil {
 			return err
 		}
@@ -1107,7 +1163,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		})
 	}
 	emitThinkingDelta := func(text string) error {
-		if !thinkingBlockOpen {
+		if !thinkingBlockOpen && !requestCtx.RequireProviderThinkingSignature {
 			if err := startThinkingBlock(); err != nil {
 				return err
 			}
@@ -1117,16 +1173,19 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			_, _ = currentThinking.WriteString(text)
 			_, _ = allThinking.WriteString(text)
 		}
-		visibleText := text
 		if requestCtx.SuppressAdaptiveThinkingText {
-			visibleText = ""
+			return nil
+		}
+		if requestCtx.RequireProviderThinkingSignature {
+			pendingAuthenticatedThinkingDeltas = append(pendingAuthenticatedThinkingDeltas, text)
+			return nil
 		}
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": thinkingBlockIndex,
 			"delta": map[string]any{
 				"type":     "thinking_delta",
-				"thinking": visibleText,
+				"thinking": text,
 			},
 		})
 	}
@@ -1189,8 +1248,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 					inThinkingBlock = true
 					stripThinkingLeadingNewline = true
 					thinkingBuffer = thinkingBuffer[startPos+len(thinkingStartTag):]
-					if err := startThinkingBlock(); err != nil {
-						return err
+					if !requestCtx.RequireProviderThinkingSignature {
+						if err := startThinkingBlock(); err != nil {
+							return err
+						}
 					}
 					continue
 				}
@@ -3224,7 +3285,7 @@ type kiroReasoningArtifacts struct {
 	RedactedContents []string
 }
 
-func parseEventStream(body io.Reader, model string, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, kiroReasoningArtifacts, error) {
+func parseEventStream(body io.Reader, model string, requireTerminalEvent, requireProviderThinkingSignature bool) (string, []KiroToolUse, Usage, string, kiroReasoningArtifacts, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3298,6 +3359,9 @@ func parseEventStream(body io.Reader, model string, requireTerminalEvent bool) (
 		case "reasoningContentEvent":
 			reasoning := nestedEvent(event, "reasoningContentEvent")
 			if signature := firstNonEmptyString(getString(reasoning, "signature"), getString(event, "signature")); signature != "" {
+				if _, signatureErr := validateProviderThinkingSignature(signature); signatureErr != nil && requireProviderThinkingSignature {
+					return "", nil, usage, stopReason, reasoningArtifacts, fmt.Errorf("invalid provider-native Kiro thinking signature: %w", signatureErr)
+				}
 				reasoningArtifacts.Signature = signature
 			}
 			if redacted := firstNonEmptyString(getString(reasoning, "redactedContent"), getString(event, "redactedContent")); redacted != "" {
@@ -3337,6 +3401,9 @@ func parseEventStream(body io.Reader, model string, requireTerminalEvent bool) (
 		toolUses = append(toolUses, completed...)
 	}
 	cleanText, embeddedToolUses, _ := drainEmbeddedToolText(content.String())
+	if requireProviderThinkingSignature && findRealThinkingStartTag(cleanText, 0) >= 0 && strings.TrimSpace(reasoningArtifacts.Signature) == "" {
+		return "", nil, usage, stopReason, reasoningArtifacts, errors.New("missing provider-native Kiro thinking signature")
+	}
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)
 
@@ -3786,9 +3853,6 @@ func extractThinkingBlocksWithProviderSignature(content, model, msgID, providerS
 		thinking := pendingThinking.String()
 		if strings.TrimSpace(thinking) != "" {
 			signature := strings.TrimSpace(providerSignature)
-			if signature == "" {
-				signature = kiroThinkingSignature(thinking, model, msgID)
-			}
 			blocks = append(blocks, map[string]any{
 				"type":      "thinking",
 				"thinking":  thinking,

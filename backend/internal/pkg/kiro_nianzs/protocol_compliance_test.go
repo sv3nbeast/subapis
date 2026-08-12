@@ -197,9 +197,10 @@ func requireBase64OpaqueValue(t *testing.T, value string) {
 }
 
 func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
-		"reasoningContentEvent": map[string]any{"text": "inspect protocol"},
+		"reasoningContentEvent": map[string]any{"text": "inspect protocol", "signature": providerSignature},
 	}))
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
 		"assistantResponseEvent": map[string]any{"content": "final answer"},
@@ -210,8 +211,9 @@ func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {
 
 	var out bytes.Buffer
 	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 11, KiroRequestContext{
-		ThinkingEnabled:      true,
-		RequireTerminalEvent: true,
+		ThinkingEnabled:                  true,
+		RequireProviderThinkingSignature: true,
+		RequireTerminalEvent:             true,
 	})
 	require.NoError(t, err)
 	requireAnthropicSSEProtocolLifecycle(t, out.String())

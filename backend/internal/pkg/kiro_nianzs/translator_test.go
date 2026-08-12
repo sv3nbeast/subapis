@@ -1040,8 +1040,7 @@ func TestExtractThinkingBlocksParsesRealTags(t *testing.T) {
 	require.Equal(t, "reason", blocks[0]["thinking"])
 	signature, ok := blocks[0]["signature"].(string)
 	require.True(t, ok)
-	require.Len(t, signature, 312)
-	require.True(t, strings.HasPrefix(signature, "EuYBCkQYAiJA"))
+	require.Empty(t, signature, "unsigned parser fixtures must not mint a local thinking signature")
 	require.Equal(t, "text", blocks[1]["type"])
 	require.Equal(t, "final text", blocks[1]["text"])
 }
@@ -1079,8 +1078,7 @@ func TestParseNonStreamingEventStreamThinkingWithTextKeepsEndTurn(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", gjson.GetBytes(result.ResponseBody, "stop_reason").String())
 	require.Equal(t, "thinking", gjson.GetBytes(result.ResponseBody, "content.0.type").String())
-	require.Len(t, gjson.GetBytes(result.ResponseBody, "content.0.signature").String(), 312)
-	require.True(t, strings.HasPrefix(gjson.GetBytes(result.ResponseBody, "content.0.signature").String(), "EuYBCkQYAiJA"))
+	require.Empty(t, gjson.GetBytes(result.ResponseBody, "content.0.signature").String())
 	require.Equal(t, "text", gjson.GetBytes(result.ResponseBody, "content.1.type").String())
 	require.Equal(t, "final", gjson.GetBytes(result.ResponseBody, "content.1.text").String())
 }
@@ -2063,9 +2061,10 @@ func TestStreamEventStreamAsAnthropicThinkingOnlyResponse(t *testing.T) {
 }
 
 func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(t *testing.T) {
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
-		"reasoningContentEvent": map[string]any{"text": "inspect the request"},
+		"reasoningContentEvent": map[string]any{"text": "inspect the request", "signature": providerSignature},
 	}))
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
 		"assistantResponseEvent": map[string]any{"content": "final answer"},
@@ -2078,7 +2077,10 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	}))
 
 	var out bytes.Buffer
-	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 11, KiroRequestContext{ThinkingEnabled: true})
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 11, KiroRequestContext{
+		ThinkingEnabled:                  true,
+		RequireProviderThinkingSignature: true,
+	})
 	require.NoError(t, err)
 	require.Equal(t, "end_turn", result.StopReason)
 
@@ -2112,8 +2114,7 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	require.Equal(t, "", events[1].Get("content_block.signature").String())
 	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
 	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
-	require.Len(t, events[3].Get("delta.signature").String(), 596)
-	require.True(t, strings.HasPrefix(events[3].Get("delta.signature").String(), "EroD"))
+	require.Equal(t, providerSignature, events[3].Get("delta.signature").String())
 	require.Equal(t, int64(0), events[4].Get("index").Int())
 	require.Equal(t, "text", events[5].Get("content_block.type").String())
 	require.Equal(t, int64(1), events[5].Get("index").Int())
@@ -2128,7 +2129,7 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 }
 
 func TestStreamEventStreamAsAnthropicSuppressesAdaptiveThinkingText(t *testing.T) {
-	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{
@@ -2146,18 +2147,51 @@ func TestStreamEventStreamAsAnthropicSuppressesAdaptiveThinkingText(t *testing.T
 	_, err := StreamEventStreamAsAnthropicWithContext(
 		context.Background(), stream, &out, "claude-opus-5", 11,
 		KiroRequestContext{
-			ThinkingEnabled:              true,
-			SuppressAdaptiveThinkingText: true,
-			RequireTerminalEvent:         true,
+			ThinkingEnabled:                  true,
+			SuppressAdaptiveThinkingText:     true,
+			RequireProviderThinkingSignature: true,
+			RequireTerminalEvent:             true,
+			EmitProtocolPing:                 true,
 		},
 	)
 	require.NoError(t, err)
 	events := parseAnthropicSSEEventsForTest(t, out.String())
+	names := eventNamesForTest(events)
+	require.Equal(t, []string{
+		"message_start",
+		"content_block_start",
+		"ping",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_stop",
+		"content_block_start",
+	}, names[:9])
+	require.Equal(t, []string{"content_block_stop", "message_delta", "message_stop"}, names[len(names)-3:])
+	for _, name := range names[9 : len(names)-3] {
+		require.Equal(t, "content_block_delta", name)
+	}
 	require.Equal(t, "thinking", events[1].Get("content_block.type").String())
-	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
-	require.Equal(t, "", events[2].Get("delta.thinking").String())
-	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
-	require.Equal(t, providerSignature, events[3].Get("delta.signature").String())
+	var thinkingDeltas []gjson.Result
+	var signatureDeltas []string
+	for _, event := range events {
+		switch event.Get("delta.type").String() {
+		case "thinking_delta":
+			thinkingDeltas = append(thinkingDeltas, event)
+		case "signature_delta":
+			signatureDeltas = append(signatureDeltas, event.Get("delta.signature").String())
+		}
+	}
+	require.Len(t, thinkingDeltas, 3)
+	require.Equal(t, int64(50), thinkingDeltas[0].Get("delta.estimated_tokens").Int())
+	require.Equal(t, int64(100), thinkingDeltas[1].Get("delta.estimated_tokens").Int())
+	require.True(t, thinkingDeltas[2].Get("delta.estimated_tokens").Exists())
+	require.Equal(t, gjson.Null, thinkingDeltas[2].Get("delta.estimated_tokens").Type)
+	for _, event := range thinkingDeltas {
+		require.Equal(t, "", event.Get("delta.thinking").String())
+	}
+	require.Equal(t, []string{providerSignature}, signatureDeltas)
 	require.NotContains(t, out.String(), "provider-only adaptive reasoning")
 	var visibleText strings.Builder
 	for _, event := range events {
@@ -2168,8 +2202,65 @@ func TestStreamEventStreamAsAnthropicSuppressesAdaptiveThinkingText(t *testing.T
 	require.Equal(t, "final answer", visibleText.String())
 }
 
+func TestStreamEventStreamAsAnthropicRejectsUnauthenticatedThinkingBeforeClientOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		signature string
+		wantError string
+	}{
+		{name: "missing", wantError: "missing provider-native Kiro thinking signature"},
+		{name: "malformed", signature: "not-a-provider-signature", wantError: "invalid provider-native Kiro thinking signature"},
+		{name: "former local fallback", signature: providerThinkingSignatureFixture(t, false), wantError: "invalid provider-native Kiro thinking signature"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := bytes.NewBuffer(nil)
+			reasoning := map[string]any{"text": "private reasoning"}
+			if tt.signature != "" {
+				reasoning["signature"] = tt.signature
+			}
+			_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+				"reasoningContentEvent": reasoning,
+			}))
+			_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": "must not be emitted"},
+			}))
+
+			var out bytes.Buffer
+			_, err := StreamEventStreamAsAnthropicWithContext(
+				context.Background(), stream, &out, "claude-opus-4-8", 11,
+				KiroRequestContext{
+					ThinkingEnabled:                  true,
+					RequireProviderThinkingSignature: true,
+				},
+			)
+			require.ErrorContains(t, err, tt.wantError)
+			require.Empty(t, out.String(), "signature rejection must remain before the client-visible SSE boundary")
+		})
+	}
+}
+
+func TestParseNonStreamingEventStreamRejectsUnauthenticatedThinking(t *testing.T) {
+	for _, signature := range []string{"", "not-a-provider-signature", providerThinkingSignatureFixture(t, false)} {
+		stream := bytes.NewBuffer(nil)
+		reasoning := map[string]any{"text": "private reasoning"}
+		if signature != "" {
+			reasoning["signature"] = signature
+		}
+		_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+			"reasoningContentEvent": reasoning,
+		}))
+
+		_, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-4-8", KiroRequestContext{
+			ThinkingEnabled:                  true,
+			RequireProviderThinkingSignature: true,
+		})
+		require.Error(t, err)
+	}
+}
+
 func TestParseNonStreamingEventStreamSuppressesAdaptiveThinkingText(t *testing.T) {
-	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{
@@ -2201,7 +2292,7 @@ func TestParseNonStreamingEventStreamSuppressesAdaptiveThinkingText(t *testing.T
 }
 
 func TestStreamEventStreamAsAnthropicPassesThroughProviderThinkingSignature(t *testing.T) {
-	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{"text": "provider reasoning"},
@@ -2237,7 +2328,7 @@ func TestStreamEventStreamAsAnthropicPassesThroughProviderThinkingSignature(t *t
 }
 
 func TestParseNonStreamingEventStreamPassesThroughProviderThinkingSignature(t *testing.T) {
-	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	providerSignature := providerThinkingSignatureFixture(t, true)
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
 		"reasoningContentEvent": map[string]any{

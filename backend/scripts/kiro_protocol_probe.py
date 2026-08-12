@@ -301,6 +301,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     code_execution_errors: list[str] = []
     code_execution_stdout: list[str] = []
     signatures: list[str] = []
+    thinking_progress: list[Any] = []
+    thinking_delta_count = 0
+    signature_delta_count = 0
     redacted_thinking_blocks = 0
     citations = 0
     result_count = 0
@@ -421,6 +424,10 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                     signature = delta.get("signature")
                     opaque_base64(signature, "thinking signature")
                     signatures.append(str(signature))
+                    signature_delta_count += 1
+                else:
+                    thinking_delta_count += 1
+                    thinking_progress.append(delta.get("estimated_tokens", "<absent>"))
             elif open_type in {"tool_use", "server_tool_use"}:
                 require(delta_type == "input_json_delta", f"invalid tool delta: {delta_type}")
                 json_fragments.append(str(delta.get("partial_json", "")))
@@ -469,6 +476,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
         "content_blocks": next_index,
         "stop_reason": stop_reason,
         "thinking_signatures": len(signatures),
+        "thinking_delta_count": thinking_delta_count,
+        "signature_delta_count": signature_delta_count,
+        "thinking_progress": thinking_progress,
         "redacted_thinking_blocks": redacted_thinking_blocks,
         "server_tool_uses": len(server_tool_ids),
         "server_tool_names": sorted(server_tool_names.values()),
@@ -643,9 +653,13 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
             True,
             4096,
         )
-        body["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+        body["thinking"] = {"type": "adaptive"}
+        body["output_config"] = {"effort": "high"}
         facts = validate_sse(parse_sse(client.messages(body)))
         require(facts["thinking_signatures"] > 0, "stream has no thinking signature")
+        require(facts["thinking_delta_count"] == 3, f"adaptive thinking emitted {facts['thinking_delta_count']} progress deltas, want 3")
+        require(facts["signature_delta_count"] == 1, f"adaptive thinking emitted {facts['signature_delta_count']} signature deltas, want 1")
+        require(facts["thinking_progress"] == [50, 100, None], f"adaptive thinking progress mismatch: {facts['thinking_progress']!r}")
         envelopes: list[dict[str, Any]] = []
         for signature in facts.pop("signature_values"):
             envelope = validate_thinking_signature(signature, "thinking signature")
