@@ -3,8 +3,10 @@ package kiro
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -55,7 +57,8 @@ type MCPResponse struct {
 }
 
 type WebSearchResults struct {
-	Results []WebSearchResult `json:"results"`
+	Results  []WebSearchResult `json:"results"`
+	OpaqueID string            `json:"-"`
 }
 
 type WebSearchResult struct {
@@ -679,8 +682,9 @@ func buildSearchResultContent(results *WebSearchResults) []map[string]any {
 	if results == nil {
 		return content
 	}
+	opaqueID := ensureWebSearchOpaqueID(results)
 	for _, result := range results.Results {
-		content = append(content, buildWebSearchResultBlock(result))
+		content = append(content, buildWebSearchResultBlockWithOpaqueID(result, opaqueID))
 	}
 	return content
 }
@@ -710,11 +714,15 @@ func normalizeWebSearchToolResultErrorCode(errorCode string) string {
 }
 
 func buildWebSearchResultBlock(result WebSearchResult) map[string]any {
+	return buildWebSearchResultBlockWithOpaqueID(result, newWebSearchOpaqueID())
+}
+
+func buildWebSearchResultBlockWithOpaqueID(result WebSearchResult, opaqueID string) map[string]any {
 	return map[string]any{
 		"type":              "web_search_result",
 		"title":             result.Title,
 		"url":               result.URL,
-		"encrypted_content": sealWebSearchOpaquePayload("content", result),
+		"encrypted_content": sealWebSearchOpaquePayload("content", result, opaqueID),
 		"page_age":          webSearchPageAge(result.PublishedDate),
 	}
 }
@@ -746,7 +754,29 @@ type webSearchOpaqueEnvelope struct {
 	Snippet string `json:"snippet,omitempty"`
 }
 
-func sealWebSearchOpaquePayload(kind string, result WebSearchResult) string {
+func ensureWebSearchOpaqueID(results *WebSearchResults) string {
+	if results == nil {
+		return newWebSearchOpaqueID()
+	}
+	if opaqueID := strings.TrimSpace(results.OpaqueID); opaqueID != "" {
+		return opaqueID
+	}
+	results.OpaqueID = newWebSearchOpaqueID()
+	return results.OpaqueID
+}
+
+func newWebSearchOpaqueID() string {
+	var raw [16]byte
+	if _, err := io.ReadFull(rand.Reader, raw[:]); err != nil {
+		digest := sha256.Sum256([]byte(fmt.Sprintf("sub2api-web-search-id-%d", time.Now().UnixNano())))
+		copy(raw[:], digest[:16])
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+}
+
+func sealWebSearchOpaquePayload(kind string, result WebSearchResult, opaqueIDs ...string) string {
 	snippet := ""
 	if result.Snippet != nil {
 		snippet = strings.TrimSpace(*result.Snippet)
@@ -757,39 +787,180 @@ func sealWebSearchOpaquePayload(kind string, result WebSearchResult) string {
 	if err != nil {
 		return ""
 	}
+	opaqueID := ""
+	if len(opaqueIDs) > 0 {
+		opaqueID = strings.TrimSpace(opaqueIDs[0])
+	}
+	if opaqueID == "" {
+		opaqueID = newWebSearchOpaqueID()
+	}
 
 	block, err := aes.NewCipher(webSearchOpaqueKey[:])
 	if err != nil {
-		return fallbackWebSearchOpaquePayload(plain)
+		return fallbackWebSearchOpaquePayload(kind, opaqueID, plain)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return fallbackWebSearchOpaquePayload(plain)
+		return fallbackWebSearchOpaquePayload(kind, opaqueID, plain)
+	}
+	salt := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return fallbackWebSearchOpaquePayload(kind, opaqueID, plain)
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return fallbackWebSearchOpaquePayload(plain)
+		return fallbackWebSearchOpaquePayload(kind, opaqueID, plain)
 	}
-	sealed := gcm.Seal(nil, nonce, plain, []byte("sub2api:web-search:v1"))
-	wire := make([]byte, 1, 1+len(nonce)+len(sealed))
-	wire[0] = 1
-	wire = append(wire, nonce...)
-	wire = append(wire, sealed...)
-	return base64.RawStdEncoding.EncodeToString(wire)
+	var sealed []byte
+	if webSearchOpaqueKindCode(kind) == 4 {
+		sealed = webSearchOpaqueIndexToken(opaqueID, plain)
+	} else {
+		sealed = gcm.Seal(nil, nonce, plain, []byte("sub2api:web-search:v1"))
+	}
+	authenticator := webSearchOpaqueAuthenticator(kind, opaqueID, salt, nonce, sealed)
+	return encodeWebSearchOpaqueProto(kind, opaqueID, salt, nonce, authenticator, sealed)
 }
 
-func fallbackWebSearchOpaquePayload(plain []byte) string {
+func fallbackWebSearchOpaquePayload(kind, opaqueID string, plain []byte) string {
 	digest := sha256.Sum256(plain)
-	wire := append([]byte{0}, digest[:]...)
-	return base64.RawStdEncoding.EncodeToString(wire)
+	sealed := digest[:]
+	if webSearchOpaqueKindCode(kind) == 4 {
+		sealed = digest[:19]
+	}
+	authenticator := webSearchOpaqueAuthenticator(kind, opaqueID, digest[:12], digest[12:24], sealed)
+	return encodeWebSearchOpaqueProto(kind, opaqueID, digest[:12], digest[12:24], authenticator, sealed)
+}
+
+func webSearchOpaqueIndexToken(opaqueID string, plain []byte) []byte {
+	mac := hmac.New(sha256.New, webSearchOpaqueKey[:])
+	_, _ = mac.Write([]byte("sub2api:web-search:index:" + opaqueID + ":"))
+	_, _ = mac.Write(plain)
+	return mac.Sum(nil)[:19]
+}
+
+func webSearchOpaqueAuthenticator(kind, opaqueID string, salt, nonce, sealed []byte) []byte {
+	mac := hmac.New(sha512.New384, webSearchOpaqueKey[:])
+	_, _ = mac.Write([]byte("sub2api:web-search:v2:" + kind + ":" + opaqueID + ":"))
+	_, _ = mac.Write(salt)
+	_, _ = mac.Write(nonce)
+	_, _ = mac.Write(sealed)
+	return mac.Sum(nil)
+}
+
+// encodeWebSearchOpaqueProto mirrors the captured Anthropic opaque-envelope
+// topology while keeping the payload locally authenticated and replayable:
+// outer field 2 contains the envelope, and outer field 3 distinguishes result
+// content (0) from a citation index (4). The inner header is shared by every
+// opaque value produced for one search response.
+func encodeWebSearchOpaqueProto(kind, opaqueID string, salt, nonce, authenticator, sealed []byte) string {
+	header := appendWebSearchProtoVarint(nil, 1, 18)
+	header = appendWebSearchProtoVarint(header, 3, 2)
+	header = appendWebSearchProtoBytes(header, 4, []byte(opaqueID))
+
+	inner := appendWebSearchProtoBytes(nil, 1, header)
+	inner = appendWebSearchProtoBytes(inner, 2, salt)
+	inner = appendWebSearchProtoBytes(inner, 3, nonce)
+	inner = appendWebSearchProtoBytes(inner, 4, authenticator)
+	inner = appendWebSearchProtoBytes(inner, 5, sealed)
+
+	wire := appendWebSearchProtoBytes(nil, 2, inner)
+	wire = appendWebSearchProtoVarint(wire, 3, webSearchOpaqueKindCode(kind))
+	return base64.StdEncoding.EncodeToString(wire)
+}
+
+func webSearchOpaqueKindCode(kind string) uint64 {
+	if strings.EqualFold(strings.TrimSpace(kind), "index") {
+		return 4
+	}
+	return 0
+}
+
+func webSearchOpaqueKind(code uint64) string {
+	if code == 4 {
+		return "index"
+	}
+	return "content"
+}
+
+func appendWebSearchProtoBytes(dst []byte, field uint64, value []byte) []byte {
+	dst = appendWebSearchProtoUvarint(dst, field<<3|2)
+	dst = appendWebSearchProtoUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func appendWebSearchProtoVarint(dst []byte, field, value uint64) []byte {
+	dst = appendWebSearchProtoUvarint(dst, field<<3)
+	return appendWebSearchProtoUvarint(dst, value)
+}
+
+func appendWebSearchProtoUvarint(dst []byte, value uint64) []byte {
+	for value >= 0x80 {
+		dst = append(dst, byte(value)|0x80)
+		value >>= 7
+	}
+	return append(dst, byte(value))
 }
 
 func openWebSearchOpaquePayload(token string) (webSearchOpaqueEnvelope, bool) {
 	var envelope webSearchOpaqueEnvelope
-	wire, err := base64.RawStdEncoding.DecodeString(strings.TrimSpace(token))
-	if err != nil || len(wire) < 2 || wire[0] != 1 {
+	wire, err := decodeWebSearchOpaqueBase64(token)
+	if err != nil || len(wire) < 2 {
 		return envelope, false
 	}
+	// Retain the v1 reader for continuations generated by an older process.
+	if wire[0] == 1 {
+		return openLegacyWebSearchOpaquePayload(wire)
+	}
+	outerBytes, outerVarints, ok := parseWebSearchOpaqueProto(wire)
+	inner := outerBytes[2]
+	if !ok || len(inner) == 0 {
+		return envelope, false
+	}
+	innerBytes, _, ok := parseWebSearchOpaqueProto(inner)
+	if !ok || len(innerBytes[1]) == 0 || len(innerBytes[2]) != 12 || len(innerBytes[3]) != 12 || len(innerBytes[4]) != sha512.Size384 || len(innerBytes[5]) == 0 {
+		return envelope, false
+	}
+	headerBytes, headerVarints, ok := parseWebSearchOpaqueProto(innerBytes[1])
+	if !ok || headerVarints[1] != 18 || headerVarints[3] != 2 || len(headerBytes[4]) != 36 {
+		return envelope, false
+	}
+	kind := webSearchOpaqueKind(outerVarints[3])
+	opaqueID := string(headerBytes[4])
+	if !hmac.Equal(innerBytes[4], webSearchOpaqueAuthenticator(kind, opaqueID, innerBytes[2], innerBytes[3], innerBytes[5])) {
+		return envelope, false
+	}
+	// Citation indices are authenticated references, not replayable content.
+	if kind == "index" {
+		return envelope, false
+	}
+	block, err := aes.NewCipher(webSearchOpaqueKey[:])
+	if err != nil {
+		return envelope, false
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil || len(innerBytes[3]) != gcm.NonceSize() {
+		return envelope, false
+	}
+	plain, err := gcm.Open(nil, innerBytes[3], innerBytes[5], []byte("sub2api:web-search:v1"))
+	if err != nil || json.Unmarshal(plain, &envelope) != nil {
+		return webSearchOpaqueEnvelope{}, false
+	}
+	if envelope.Kind != kind {
+		return webSearchOpaqueEnvelope{}, false
+	}
+	return envelope, true
+}
+
+func decodeWebSearchOpaqueBase64(token string) ([]byte, error) {
+	value := strings.TrimSpace(token)
+	if wire, err := base64.StdEncoding.DecodeString(value); err == nil {
+		return wire, nil
+	}
+	return base64.RawStdEncoding.DecodeString(value)
+}
+
+func openLegacyWebSearchOpaquePayload(wire []byte) (webSearchOpaqueEnvelope, bool) {
+	var envelope webSearchOpaqueEnvelope
 	block, err := aes.NewCipher(webSearchOpaqueKey[:])
 	if err != nil {
 		return envelope, false
@@ -804,6 +975,52 @@ func openWebSearchOpaquePayload(token string) (webSearchOpaqueEnvelope, bool) {
 		return webSearchOpaqueEnvelope{}, false
 	}
 	return envelope, true
+}
+
+func parseWebSearchOpaqueProto(wire []byte) (map[uint64][]byte, map[uint64]uint64, bool) {
+	bytesFields := make(map[uint64][]byte)
+	varintFields := make(map[uint64]uint64)
+	for offset := 0; offset < len(wire); {
+		tag, next, ok := readWebSearchProtoUvarint(wire, offset)
+		if !ok || tag>>3 == 0 {
+			return nil, nil, false
+		}
+		offset = next
+		field, wireType := tag>>3, tag&7
+		switch wireType {
+		case 0:
+			value, next, ok := readWebSearchProtoUvarint(wire, offset)
+			if !ok {
+				return nil, nil, false
+			}
+			varintFields[field] = value
+			offset = next
+		case 2:
+			size, next, ok := readWebSearchProtoUvarint(wire, offset)
+			if !ok || size > uint64(len(wire)-next) {
+				return nil, nil, false
+			}
+			end := next + int(size)
+			bytesFields[field] = wire[next:end]
+			offset = end
+		default:
+			return nil, nil, false
+		}
+	}
+	return bytesFields, varintFields, true
+}
+
+func readWebSearchProtoUvarint(wire []byte, offset int) (uint64, int, bool) {
+	var value uint64
+	for shift := uint(0); offset < len(wire) && shift < 70; shift += 7 {
+		current := wire[offset]
+		offset++
+		value |= uint64(current&0x7f) << shift
+		if current < 0x80 {
+			return value, offset, true
+		}
+	}
+	return 0, offset, false
 }
 
 func injectWebSearchCitationsIntoContent(content []any, searches []SearchIndicator) {
@@ -825,19 +1042,27 @@ func injectWebSearchCitationsIntoContent(content []any, searches []SearchIndicat
 }
 
 func buildWebSearchCitations(searches []SearchIndicator, responseText string) []map[string]any {
-	all := make([]WebSearchResult, 0)
+	type opaqueResult struct {
+		result   WebSearchResult
+		opaqueID string
+	}
+	all := make([]opaqueResult, 0)
 	for _, search := range searches {
 		if search.Results != nil {
-			all = append(all, search.Results.Results...)
+			opaqueID := ensureWebSearchOpaqueID(search.Results)
+			for _, result := range search.Results.Results {
+				all = append(all, opaqueResult{result: result, opaqueID: opaqueID})
+			}
 		}
 	}
 	if len(all) == 0 {
 		return nil
 	}
 
-	matched := make([]WebSearchResult, 0, 4)
+	matched := make([]opaqueResult, 0, 4)
 	seen := make(map[string]struct{})
-	for _, result := range all {
+	for _, opaque := range all {
+		result := opaque.result
 		url := strings.TrimSpace(result.URL)
 		if url == "" || !strings.Contains(responseText, url) {
 			continue
@@ -846,7 +1071,7 @@ func buildWebSearchCitations(searches []SearchIndicator, responseText string) []
 			continue
 		}
 		seen[url] = struct{}{}
-		matched = append(matched, result)
+		matched = append(matched, opaque)
 		if len(matched) == 4 {
 			break
 		}
@@ -859,7 +1084,8 @@ func buildWebSearchCitations(searches []SearchIndicator, responseText string) []
 	}
 
 	citations := make([]map[string]any, 0, len(matched))
-	for _, result := range matched {
+	for _, opaque := range matched {
+		result := opaque.result
 		citedText := strings.TrimSpace(result.Title)
 		if result.Snippet != nil && strings.TrimSpace(*result.Snippet) != "" {
 			citedText = truncateWebSearchCitationText(strings.TrimSpace(*result.Snippet), 150)
@@ -868,7 +1094,7 @@ func buildWebSearchCitations(searches []SearchIndicator, responseText string) []
 			"type":            "web_search_result_location",
 			"url":             result.URL,
 			"title":           result.Title,
-			"encrypted_index": sealWebSearchOpaquePayload("index", result),
+			"encrypted_index": sealWebSearchOpaquePayload("index", result, opaque.opaqueID),
 			"cited_text":      citedText,
 		})
 	}

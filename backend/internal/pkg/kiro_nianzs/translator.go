@@ -260,6 +260,8 @@ type kiroSemanticEvent struct {
 	Type                   kiroSemanticEventType
 	Content                string
 	Reasoning              string
+	ReasoningSignature     string
+	RedactedContent        string
 	ToolUseID              string
 	ToolName               string
 	ToolInput              string
@@ -547,7 +549,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body, requestCtx.RequireTerminalEvent)
+	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, requestCtx.RequireTerminalEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +564,7 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 		usage.InputTokens = requestCtx.EstimatedInputTokens
 	}
 	return &ParseResult{
-		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, requestCtx),
+		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, reasoningArtifacts, requestCtx),
 		Usage:        usage,
 		StopReason:   stopReason,
 	}, nil
@@ -595,6 +597,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	thinkingBuffer := ""
 	var currentThinking strings.Builder
 	var allThinking strings.Builder
+	upstreamThinkingSignature := ""
 	inThinkingBlock := false
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
@@ -660,8 +663,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil
 		}
 		if currentThinking.Len() > 0 {
-			sig := kiroThinkingSignature(currentThinking.String(), model, currentMessageID)
+			sig := strings.TrimSpace(upstreamThinkingSignature)
+			if sig == "" {
+				sig = kiroThinkingSignature(currentThinking.String(), model, currentMessageID)
+			}
 			currentThinking.Reset()
+			upstreamThinkingSignature = ""
 			if sig != "" {
 				if err := writeEvent("content_block_delta", map[string]any{
 					"type":  "content_block_delta",
@@ -1063,6 +1070,44 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			},
 		})
 	}
+	emitRedactedThinking := func(data string) error {
+		data = strings.TrimSpace(data)
+		if data == "" || !requestCtx.ThinkingEnabled {
+			return nil
+		}
+		if err := closeOpenStreamingTool(); err != nil {
+			return err
+		}
+		if err := closeText(); err != nil {
+			return err
+		}
+		if err := closeThinking(); err != nil {
+			return err
+		}
+		upstreamThinkingSignature = ""
+		if err := ensureMessageStart(); err != nil {
+			return err
+		}
+		if firstDelta == nil {
+			delta := time.Since(start)
+			firstDelta = &delta
+		}
+		contentBlockIndex++
+		if err := writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": contentBlockIndex,
+			"content_block": map[string]any{
+				"type": "redacted_thinking",
+				"data": data,
+			},
+		}); err != nil {
+			return err
+		}
+		_, _ = outputTextBuf.WriteString(data)
+		return writeEvent("content_block_stop", map[string]any{
+			"type": "content_block_stop", "index": contentBlockIndex,
+		})
+	}
 	finishThinkingBlock := func() error {
 		return closeThinking()
 	}
@@ -1266,6 +1311,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			pendingAssistantText += evt.Content
 			return flushPendingAssistantText()
 		case kiroSemanticReasoning:
+			if signature := strings.TrimSpace(evt.ReasoningSignature); signature != "" {
+				upstreamThinkingSignature = signature
+			}
+			if evt.RedactedContent != "" {
+				return emitRedactedThinking(evt.RedactedContent)
+			}
 			if evt.Reasoning == "" || !requestCtx.ThinkingEnabled {
 				return nil
 			}
@@ -3081,11 +3132,17 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, error) {
+type kiroReasoningArtifacts struct {
+	Signature        string
+	RedactedContents []string
+}
+
+func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []KiroToolUse, Usage, string, kiroReasoningArtifacts, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
 	var usage Usage
+	var reasoningArtifacts kiroReasoningArtifacts
 	stopReason := ""
 	sawCompletionEvidence := false
 	processedIDs := make(map[string]bool)
@@ -3105,7 +3162,7 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 			break
 		}
 		if err != nil {
-			return "", nil, usage, stopReason, err
+			return "", nil, usage, stopReason, reasoningArtifacts, err
 		}
 		if msg == nil || len(msg.Payload) == 0 {
 			continue
@@ -3153,6 +3210,12 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 			toolUses = append(toolUses, completed...)
 		case "reasoningContentEvent":
 			reasoning := nestedEvent(event, "reasoningContentEvent")
+			if signature := firstNonEmptyString(getString(reasoning, "signature"), getString(event, "signature")); signature != "" {
+				reasoningArtifacts.Signature = signature
+			}
+			if redacted := firstNonEmptyString(getString(reasoning, "redactedContent"), getString(event, "redactedContent")); redacted != "" {
+				reasoningArtifacts.RedactedContents = append(reasoningArtifacts.RedactedContents, redacted)
+			}
 			text := getString(reasoning, "text")
 			if text == "" {
 				text = getString(event, "text")
@@ -3171,7 +3234,7 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 		}
 	}
 	if requireTerminalEvent && !sawCompletionEvidence {
-		return "", nil, usage, stopReason, errors.New("incomplete kiro event stream: missing completion evidence")
+		return "", nil, usage, stopReason, reasoningArtifacts, errors.New("incomplete kiro event stream: missing completion evidence")
 	}
 	closeReasoning()
 
@@ -3212,7 +3275,7 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 			stopReason = "end_turn"
 		}
 	}
-	return cleanText, toolUses, usage, stopReason, nil
+	return cleanText, toolUses, usage, stopReason, reasoningArtifacts, nil
 }
 
 func isKiroTerminalEventType(eventType string) bool {
@@ -3301,7 +3364,7 @@ func preferAnthropicStopReason(current, candidate string) string {
 	return current
 }
 
-func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {
+func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, reasoningArtifacts kiroReasoningArtifacts, requestCtx KiroRequestContext) []byte {
 	msgID := newClaudeMessageID()
 	var blocks []map[string]any
 	if requestCtx.StripImplicitThinking {
@@ -3310,7 +3373,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 			blocks = append(blocks, map[string]any{"type": "text", "text": content})
 		}
 	} else {
-		blocks = append(blocks, extractThinkingBlocksWithSignature(content, model, msgID)...)
+		blocks = append(blocks, extractThinkingBlocksWithProviderSignature(content, model, msgID, reasoningArtifacts.Signature)...)
 	}
 	stopSequence := ""
 	if len(toolUses) == 0 {
@@ -3352,6 +3415,16 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 			"input":  tool.Input,
 			"caller": map[string]any{"type": "direct"},
 		})
+	}
+	if requestCtx.ThinkingEnabled {
+		for _, data := range reasoningArtifacts.RedactedContents {
+			if data = strings.TrimSpace(data); data != "" {
+				blocks = append(blocks, map[string]any{
+					"type": "redacted_thinking",
+					"data": data,
+				})
+			}
+		}
 	}
 	// 移除"thinking-only 强制 max_tokens"误判分支(与流式路径同步)
 	// 非流式响应若仅有 thinking 块,补一个空 text 块保证协议完整性,但不强设 stop_reason
@@ -3607,6 +3680,10 @@ func extractThinkingBlocks(content string) []map[string]any {
 }
 
 func extractThinkingBlocksWithSignature(content, model, msgID string) []map[string]any {
+	return extractThinkingBlocksWithProviderSignature(content, model, msgID, "")
+}
+
+func extractThinkingBlocksWithProviderSignature(content, model, msgID, providerSignature string) []map[string]any {
 	if content == "" {
 		return nil
 	}
@@ -3618,11 +3695,16 @@ func extractThinkingBlocksWithSignature(content, model, msgID string) []map[stri
 	flushThinking := func() {
 		thinking := pendingThinking.String()
 		if strings.TrimSpace(thinking) != "" {
+			signature := strings.TrimSpace(providerSignature)
+			if signature == "" {
+				signature = kiroThinkingSignature(thinking, model, msgID)
+			}
 			blocks = append(blocks, map[string]any{
 				"type":      "thinking",
 				"thinking":  thinking,
-				"signature": kiroThinkingSignature(thinking, model, msgID),
+				"signature": signature,
 			})
+			providerSignature = ""
 		}
 		pendingThinking.Reset()
 	}
@@ -3991,11 +4073,21 @@ func extractSemanticEvents(eventType string, event map[string]any, lastContentFr
 		if text == "" {
 			text = getString(event, "text")
 		}
-		if text != "" {
+		signature := getString(reasoning, "signature")
+		if signature == "" {
+			signature = getString(event, "signature")
+		}
+		redactedContent := getString(reasoning, "redactedContent")
+		if redactedContent == "" {
+			redactedContent = getString(event, "redactedContent")
+		}
+		if text != "" || signature != "" || redactedContent != "" {
 			out = append(out, kiroSemanticEvent{
-				Type:             kiroSemanticReasoning,
-				Reasoning:        text,
-				SourceStopReason: sourceStopReason,
+				Type:               kiroSemanticReasoning,
+				Reasoning:          text,
+				ReasoningSignature: signature,
+				RedactedContent:    redactedContent,
+				SourceStopReason:   sourceStopReason,
 			})
 		}
 	case "toolUseEvent":

@@ -72,7 +72,7 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			openType = event.data.Get("content_block.type").String()
 			openCitedText = false
 			openTextSeen = false
-			require.Contains(t, []string{"text", "thinking", "tool_use", "server_tool_use", "web_search_tool_result", "code_execution_tool_result"}, openType)
+			require.Contains(t, []string{"text", "thinking", "redacted_thinking", "tool_use", "server_tool_use", "web_search_tool_result", "code_execution_tool_result"}, openType)
 			switch openType {
 			case "text":
 				if event.data.Get("content_block.citations").Exists() {
@@ -80,6 +80,10 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 					require.Equal(t, int64(0), event.data.Get("content_block.citations.#").Int())
 					openCitedText = true
 				}
+			case "thinking":
+				require.Empty(t, event.data.Get("content_block.thinking").String())
+			case "redacted_thinking":
+				requireBase64OpaqueValue(t, event.data.Get("content_block.data").String())
 			case "server_tool_use":
 				toolID := event.data.Get("content_block.id").String()
 				require.True(t, strings.HasPrefix(toolID, "srvtoolu_"), "server tool ID must use Anthropic namespace")
@@ -180,8 +184,11 @@ func requireWebSearchToolResultContent(t *testing.T, content gjson.Result) {
 func requireBase64OpaqueValue(t *testing.T, value string) {
 	t.Helper()
 	require.NotEmpty(t, value)
-	_, err := base64.RawStdEncoding.DecodeString(value)
-	require.NoError(t, err, "opaque protocol field must be valid unpadded base64")
+	_, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		_, err = base64.RawStdEncoding.DecodeString(value)
+	}
+	require.NoError(t, err, "opaque protocol field must be valid base64")
 }
 
 func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {

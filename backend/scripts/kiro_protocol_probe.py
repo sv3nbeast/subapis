@@ -160,20 +160,78 @@ def opaque_base64(value: Any, field: str) -> bytes:
     return decoded
 
 
-def validate_web_result_content(content: Any) -> tuple[int, str | None]:
+def read_proto_varint(wire: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    while offset < len(wire) and shift < 70:
+        current = wire[offset]
+        offset += 1
+        value |= (current & 0x7f) << shift
+        if current < 0x80:
+            return value, offset
+        shift += 7
+    raise ProbeError("invalid protobuf varint")
+
+
+def protobuf_fields(wire: bytes, field: str) -> dict[int, tuple[int, Any]]:
+    fields: dict[int, tuple[int, Any]] = {}
+    offset = 0
+    while offset < len(wire):
+        tag, offset = read_proto_varint(wire, offset)
+        number, wire_type = tag >> 3, tag & 7
+        require(number > 0, f"{field} has an invalid protobuf field number")
+        if wire_type == 0:
+            value, offset = read_proto_varint(wire, offset)
+        elif wire_type == 2:
+            size, offset = read_proto_varint(wire, offset)
+            require(size <= len(wire) - offset, f"{field} has a truncated protobuf field")
+            value = wire[offset:offset + size]
+            offset += size
+        else:
+            raise ProbeError(f"{field} has unsupported protobuf wire type {wire_type}")
+        fields[number] = (wire_type, value)
+    return fields
+
+
+def validate_web_opaque_envelope(value: Any, field: str, expected_kind: int) -> str:
+    wire = opaque_base64(value, field)
+    require(wire[0] == 0x12, f"{field} is not a field-2 protobuf envelope")
+    outer = protobuf_fields(wire, field)
+    require(2 in outer and outer[2][0] == 2, f"{field} has no protobuf envelope payload")
+    require(3 in outer and outer[3] == (0, expected_kind), f"{field} has the wrong envelope kind")
+    inner = protobuf_fields(outer[2][1], field)
+    require(1 in inner and inner[1][0] == 2, f"{field} has no envelope header")
+    require(2 in inner and len(inner[2][1]) == 12, f"{field} has an invalid salt")
+    require(3 in inner and len(inner[3][1]) == 12, f"{field} has an invalid nonce")
+    require(4 in inner and len(inner[4][1]) == 48, f"{field} has an invalid authenticator")
+    require(5 in inner and bool(inner[5][1]), f"{field} has an empty ciphertext")
+    header = protobuf_fields(inner[1][1], field)
+    require(header.get(1) == (0, 18), f"{field} has an invalid header version")
+    require(header.get(3) == (0, 2), f"{field} has an invalid header type")
+    require(4 in header and header[4][0] == 2, f"{field} has no response identifier")
+    response_id = header[4][1].decode("ascii", "strict")
+    require(len(response_id) == 36 and response_id.count("-") == 4, f"{field} response identifier is invalid")
+    return response_id
+
+
+def validate_web_result_content(content: Any) -> tuple[int, str | None, set[str]]:
     if isinstance(content, list):
+        response_ids: set[str] = set()
         for result in content:
             require(isinstance(result, dict), "web-search result item is not an object")
             require(result.get("type") == "web_search_result", "invalid web-search result type")
             require(bool(result.get("title")), "web-search result title is empty")
             require(bool(result.get("url")), "web-search result URL is empty")
-            opaque_base64(result.get("encrypted_content"), "encrypted_content")
-        return len(content), None
+            response_ids.add(validate_web_opaque_envelope(
+                result.get("encrypted_content"), "encrypted_content", 0,
+            ))
+        require(len(response_ids) == 1, "web-search results do not share one opaque response ID")
+        return len(content), None, response_ids
     require(isinstance(content, dict), "web-search result content has invalid union shape")
     require(content.get("type") == "web_search_tool_result_error", "invalid web-search error type")
     error_code = content.get("error_code")
     require(error_code in WEB_SEARCH_ERRORS, f"invalid web-search error code: {error_code!r}")
-    return 0, str(error_code)
+    return 0, str(error_code), set()
 
 
 def validate_direct_caller(block: dict[str, Any]) -> None:
@@ -200,9 +258,12 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     server_tool_ids: set[str] = set()
     result_tool_ids: set[str] = set()
     signatures: list[str] = []
+    redacted_thinking_blocks = 0
     citations = 0
     result_count = 0
     result_errors: list[str] = []
+    result_response_ids: set[str] = set()
+    citation_response_ids: set[str] = set()
     client_web_search_tool_uses = 0
     tool_uses = 0
     tool_names: list[str] = []
@@ -229,7 +290,7 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
             if not first_content_block_type:
                 first_content_block_type = open_type
             require(open_type in {
-                "text", "thinking", "tool_use", "server_tool_use",
+                "text", "thinking", "redacted_thinking", "tool_use", "server_tool_use",
                 "web_search_tool_result", "code_execution_tool_result",
             }, f"unknown content block type: {open_type!r}")
             last_delta = ""
@@ -243,6 +304,11 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
             elif open_type == "text" and "citations" in block:
                 require(block.get("citations") == [], "cited text block must start with citations: []")
                 open_text_has_citations = True
+            elif open_type == "thinking":
+                require(block.get("thinking") == "", "thinking block must start empty")
+            elif open_type == "redacted_thinking":
+                opaque_base64(block.get("data"), "redacted thinking data")
+                redacted_thinking_blocks += 1
             elif open_type == "tool_use":
                 validate_direct_caller(block)
                 tool_uses += 1
@@ -256,8 +322,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                 tool_id = str(block.get("tool_use_id", ""))
                 require(tool_id in server_tool_ids, "web-search result is not paired with a preceding server tool")
                 result_tool_ids.add(tool_id)
-                count, error_code = validate_web_result_content(block.get("content"))
+                count, error_code, response_ids = validate_web_result_content(block.get("content"))
                 result_count += count
+                result_response_ids.update(response_ids)
                 if error_code:
                     result_errors.append(error_code)
         elif event.name == "content_block_delta":
@@ -277,7 +344,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                     require(bool(citation.get("url")), "citation URL is empty")
                     require(bool(citation.get("title")), "citation title is empty")
                     require(bool(citation.get("cited_text")), "citation text is empty")
-                    opaque_base64(citation.get("encrypted_index"), "encrypted_index")
+                    citation_response_ids.add(validate_web_opaque_envelope(
+                        citation.get("encrypted_index"), "encrypted_index", 4,
+                    ))
                     citations += 1
                     citation_deltas_before_text += 1
                 else:
@@ -330,10 +399,13 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     require(message_delta_count == 1, f"expected one message_delta, got {message_delta_count}")
     require(message_stop_count == 1, f"expected one message_stop, got {message_stop_count}")
     require(result_tool_ids.issubset(server_tool_ids), "unpaired server-tool results")
+    if result_response_ids and citation_response_ids:
+        require(citation_response_ids.issubset(result_response_ids), "citations do not reference the search-result envelope")
     return {
         "content_blocks": next_index,
         "stop_reason": stop_reason,
         "thinking_signatures": len(signatures),
+        "redacted_thinking_blocks": redacted_thinking_blocks,
         "server_tool_uses": len(server_tool_ids),
         "web_search_results": result_count,
         "web_search_errors": result_errors,
@@ -385,7 +457,7 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
             tool_id = str(block.get("tool_use_id", ""))
             require(tool_id in server_ids, "web-search result is not paired")
             result_ids.add(tool_id)
-            count, error_code = validate_web_result_content(block.get("content"))
+            count, error_code, _ = validate_web_result_content(block.get("content"))
             result_count += count
             if error_code:
                 errors.append(error_code)
@@ -464,21 +536,52 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         body["thinking"] = {"type": "enabled", "budget_tokens": 2048}
         facts = validate_sse(parse_sse(client.messages(body)))
         require(facts["thinking_signatures"] > 0, "stream has no thinking signature")
-        observed_profiles = {
-            "claude-opus-4-8": (0x12, 447),
-            "claude-sonnet-4-6": (0x12, 562),
-            "claude-opus-5": (0x08, 397),
-        }
+        envelopes: list[dict[str, Any]] = []
         for signature in facts.pop("signature_values"):
             decoded = opaque_base64(signature, "thinking signature")
-            expected_marker, expected_size = observed_profiles.get(
-                model.removesuffix("-thinking"),
-                (0x08 if "opus-5" in model else 0x12, 0),
-            )
-            require(decoded[0] == expected_marker, f"unexpected signature envelope marker: 0x{decoded[0]:02x}")
-            if expected_size:
-                require(len(decoded) == expected_size, f"unexpected signature envelope size: {len(decoded)}")
+            require(decoded[0] in {0x08, 0x12}, f"unexpected signature envelope marker: 0x{decoded[0]:02x}")
+            require(len(decoded) >= 32, f"thinking signature envelope is implausibly short: {len(decoded)}")
+            envelopes.append({"marker": f"0x{decoded[0]:02x}", "decoded_bytes": len(decoded)})
+        facts["signature_envelopes"] = envelopes
         return facts
+
+    def signature_replay() -> dict[str, Any]:
+        prompt = (
+            "Solve this carefully before answering: if three identical pumps fill three tanks in six minutes, "
+            "how many minutes do twelve identical pumps need to fill twelve equal tanks? End with ROUNDTRIP_ONE."
+        )
+        first_body = message_body(model, prompt, False, 4096)
+        first_body["thinking"] = {"type": "enabled", "budget_tokens": 2048}
+        first = decode_json(client.messages(first_body))
+        first_facts = validate_message(first)
+        thinking_blocks = [
+            block for block in first["content"]
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        ]
+        require(bool(thinking_blocks), "non-stream response has no thinking block to replay")
+        envelopes: list[dict[str, Any]] = []
+        for block in thinking_blocks:
+            require(bool(block.get("thinking")), "replay thinking text is empty")
+            decoded = opaque_base64(block.get("signature"), "replay thinking signature")
+            require(decoded[0] in {0x08, 0x12}, f"unexpected replay signature marker: 0x{decoded[0]:02x}")
+            require(len(decoded) >= 32, f"replay signature envelope is implausibly short: {len(decoded)}")
+            envelopes.append({"marker": f"0x{decoded[0]:02x}", "decoded_bytes": len(decoded)})
+
+        replay_body = message_body(model, "", False, 512)
+        replay_body["messages"] = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": first["content"]},
+            {"role": "user", "content": "Use the prior reasoning and reply with exactly ROUNDTRIP_OK."},
+        ]
+        replay = decode_json(client.messages(replay_body))
+        replay_facts = validate_message(replay)
+        return {
+            "original_content_blocks": first_facts["content_blocks"],
+            "replayed_thinking_blocks": len(thinking_blocks),
+            "signature_envelopes": envelopes,
+            "roundtrip_content_blocks": replay_facts["content_blocks"],
+            "roundtrip_stop_reason": replay_facts["stop_reason"],
+        }
 
     def forced_tool_stream() -> dict[str, Any]:
         body = message_body(
@@ -567,6 +670,7 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
     run("basic_nonstream", basic_nonstream)
     run("basic_stream", basic_stream)
     run("thinking_signature_stream", thinking_stream)
+    run("thinking_signature_replay", signature_replay)
     run("forced_tool_stream", forced_tool_stream)
     run("web_search_nonstream", lambda: web_search(False))
     run("web_search_stream", lambda: web_search(True))

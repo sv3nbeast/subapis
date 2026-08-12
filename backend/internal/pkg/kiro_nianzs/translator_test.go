@@ -2074,6 +2074,112 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	require.Greater(t, messageDelta.Get("usage.output_tokens_details.thinking_tokens").Int(), int64(0))
 }
 
+func TestStreamEventStreamAsAnthropicPassesThroughProviderThinkingSignature(t *testing.T) {
+	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider reasoning"},
+	}))
+	// Kiro may deliver the opaque signature in a later reasoning frame with no
+	// text. It must still become the final signature_delta for the open block.
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"signature": providerSignature},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-4-8", 11,
+		KiroRequestContext{ThinkingEnabled: true, RequireTerminalEvent: true},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	var signatureDeltas []string
+	for _, event := range events {
+		if event.Get("delta.type").String() == "signature_delta" {
+			signatureDeltas = append(signatureDeltas, event.Get("delta.signature").String())
+		}
+	}
+	require.Equal(t, []string{providerSignature}, signatureDeltas)
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestParseNonStreamingEventStreamPassesThroughProviderThinkingSignature(t *testing.T) {
+	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{
+			"text": "provider reasoning", "signature": providerSignature,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(
+		stream, "claude-opus-4-8",
+		KiroRequestContext{ThinkingEnabled: true, RequireTerminalEvent: true},
+	)
+	require.NoError(t, err)
+	response := gjson.ParseBytes(result.ResponseBody)
+	require.Equal(t, "thinking", response.Get("content.0.type").String())
+	require.Equal(t, providerSignature, response.Get("content.0.signature").String())
+	require.Equal(t, "provider reasoning", response.Get("content.0.thinking").String())
+	require.Equal(t, "text", response.Get("content.1.type").String())
+	require.Equal(t, "final answer", response.Get("content.1.text").String())
+}
+
+func TestThinkingResponsesPreserveProviderRedactedContent(t *testing.T) {
+	const redacted = "cmVkYWN0ZWRfcmVhc29uaW5n"
+	makeStream := func(t *testing.T) *bytes.Buffer {
+		t.Helper()
+		stream := bytes.NewBuffer(nil)
+		_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+			"reasoningContentEvent": map[string]any{"redactedContent": redacted},
+		}))
+		_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+			"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+		}))
+		return stream
+	}
+
+	t.Run("stream", func(t *testing.T) {
+		var out bytes.Buffer
+		_, err := StreamEventStreamAsAnthropicWithContext(
+			context.Background(), makeStream(t), &out, "claude-opus-4-8", 4,
+			KiroRequestContext{ThinkingEnabled: true, RequireTerminalEvent: true},
+		)
+		require.NoError(t, err)
+		events := parseAnthropicSSEEventsForTest(t, out.String())
+		require.Equal(t, "redacted_thinking", events[1].Get("content_block.type").String())
+		require.Equal(t, redacted, events[1].Get("content_block.data").String())
+		require.Equal(t, "content_block_stop", events[2].Get("type").String())
+		require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+		requireAnthropicSSEProtocolLifecycle(t, out.String())
+	})
+
+	t.Run("nonstream", func(t *testing.T) {
+		result, err := ParseNonStreamingEventStreamWithContext(
+			makeStream(t), "claude-opus-4-8",
+			KiroRequestContext{ThinkingEnabled: true, RequireTerminalEvent: true},
+		)
+		require.NoError(t, err)
+		response := gjson.ParseBytes(result.ResponseBody)
+		require.Equal(t, int64(1), response.Get("content.#").Int())
+		require.Equal(t, "redacted_thinking", response.Get("content.0.type").String())
+		require.Equal(t, redacted, response.Get("content.0.data").String())
+	})
+}
+
 func parseAnthropicSSEEventsForTest(t *testing.T, wire string) []gjson.Result {
 	t.Helper()
 	var events []gjson.Result

@@ -172,6 +172,63 @@ func TestWebSearchOpaquePayloadIsEncryptedAndRandomized(t *testing.T) {
 	require.Equal(t, result.Title, opened.Title)
 	require.Equal(t, result.URL, opened.URL)
 	require.Equal(t, snippet, opened.Snippet)
+
+	wire, err := decodeWebSearchOpaqueBase64(first)
+	require.NoError(t, err)
+	outerBytes, outerVarints, ok := parseWebSearchOpaqueProto(wire)
+	require.True(t, ok)
+	require.Equal(t, uint64(0), outerVarints[3])
+	require.Equal(t, byte(0x12), wire[0], "opaque envelope must begin with protobuf field 2")
+	innerBytes, _, ok := parseWebSearchOpaqueProto(outerBytes[2])
+	require.True(t, ok)
+	require.Len(t, innerBytes[2], 12)
+	require.Len(t, innerBytes[3], 12)
+	require.Len(t, innerBytes[4], 48)
+	require.NotEmpty(t, innerBytes[5])
+	headerBytes, headerVarints, ok := parseWebSearchOpaqueProto(innerBytes[1])
+	require.True(t, ok)
+	require.Equal(t, uint64(18), headerVarints[1])
+	require.Equal(t, uint64(2), headerVarints[3])
+	require.Len(t, headerBytes[4], 36)
+	require.Equal(t, 4, strings.Count(string(headerBytes[4]), "-"))
+}
+
+func TestWebSearchOpaqueValuesShareResponseIDAndDistinguishContentFromIndex(t *testing.T) {
+	snippet := "same search result"
+	results := &WebSearchResults{Results: []WebSearchResult{{
+		Title: "Example", URL: "https://example.com", Snippet: &snippet,
+	}}}
+	content := buildSearchResultContent(results)
+	citations := buildWebSearchCitations(
+		[]SearchIndicator{{Results: results}}, "See https://example.com",
+	)
+	require.Len(t, content, 1)
+	require.Len(t, citations, 1)
+
+	contentID, contentKind, contentPayloadBytes := requireWebSearchOpaqueShapeForTest(
+		t, content[0]["encrypted_content"].(string),
+	)
+	indexID, indexKind, indexPayloadBytes := requireWebSearchOpaqueShapeForTest(
+		t, citations[0]["encrypted_index"].(string),
+	)
+	require.Equal(t, contentID, indexID)
+	require.Equal(t, uint64(0), contentKind)
+	require.Equal(t, uint64(4), indexKind)
+	require.Greater(t, contentPayloadBytes, 19)
+	require.Equal(t, 19, indexPayloadBytes)
+}
+
+func requireWebSearchOpaqueShapeForTest(t *testing.T, value string) (string, uint64, int) {
+	t.Helper()
+	wire, err := decodeWebSearchOpaqueBase64(value)
+	require.NoError(t, err)
+	outerBytes, outerVarints, ok := parseWebSearchOpaqueProto(wire)
+	require.True(t, ok)
+	innerBytes, _, ok := parseWebSearchOpaqueProto(outerBytes[2])
+	require.True(t, ok)
+	headerBytes, _, ok := parseWebSearchOpaqueProto(innerBytes[1])
+	require.True(t, ok)
+	return string(headerBytes[4]), outerVarints[3], len(innerBytes[5])
 }
 
 func TestBuildWebSearchResultBlockFormatsPublishedDate(t *testing.T) {
