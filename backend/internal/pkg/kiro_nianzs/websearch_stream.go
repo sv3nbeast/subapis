@@ -193,14 +193,49 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 
 func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset int) [][]byte {
 	frames := splitSSEFrames(chunks)
+	suppressedIndices := privateWebSearchToolUseIndices(frames)
+	if webSearchToolUseIndex >= 0 {
+		suppressedIndices[webSearchToolUseIndex] = struct{}{}
+	}
 	filtered := make([][]byte, 0, len(frames))
 	for _, frame := range frames {
-		adjusted, shouldForward := filterSSEChunk(frame, webSearchToolUseIndex, indexOffset, true)
+		adjusted, shouldForward := filterSSEChunkWithServerToolUsageIndices(
+			frame, suppressedIndices, indexOffset, true, 0, 0, false,
+		)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
 	}
 	return filtered
+}
+
+// privateWebSearchToolUseIndices finds every Kiro-private search tool block in
+// one translated turn. Kiro can emit multiple searches in parallel, while the
+// adapter executes one refinement at a time. All private blocks must therefore
+// be consumed even when AnalyzeBufferedStream selects only the first query for
+// the next server-side MCP request.
+func privateWebSearchToolUseIndices(chunks [][]byte) map[int]struct{} {
+	indices := make(map[int]struct{})
+	for _, frame := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(frame)
+		if len(payload) == 0 {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_start" {
+			continue
+		}
+		block, _ := event["content_block"].(map[string]any)
+		blockType, _ := block["type"].(string)
+		toolName, _ := block["name"].(string)
+		if blockType != "tool_use" || !isWebSearchToolName(toolName, "") {
+			continue
+		}
+		if index, ok := event["index"].(float64); ok {
+			indices[int(index)] = struct{}{}
+		}
+	}
+	return indices
 }
 
 // splitSSEFrames joins arbitrary writer fragments and restores complete SSE
@@ -250,8 +285,12 @@ func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests in
 // deltas before the text they qualify, so preserve both topology and ordering.
 func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, searches []SearchIndicator) [][]byte {
 	adjusted := make([][]byte, 0, len(chunks)+4)
-	for _, chunk := range chunks {
-		rewritten, shouldForward := AdjustSSEChunkWithWebSearchUsage(chunk, offset, webSearchRequests)
+	frames := splitSSEFrames(chunks)
+	suppressedIndices := privateWebSearchToolUseIndices(frames)
+	for _, chunk := range frames {
+		rewritten, shouldForward := filterSSEChunkWithServerToolUsageIndices(
+			chunk, suppressedIndices, offset, false, webSearchRequests, 0, true,
+		)
 		if shouldForward {
 			adjusted = append(adjusted, rewritten)
 		}
@@ -440,6 +479,24 @@ func filterSSEChunkWithWebSearchUsage(chunk []byte, webSearchToolUseIndex, index
 }
 
 func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests, codeExecutionRequests int) ([]byte, bool) {
+	suppressedIndices := make(map[int]struct{})
+	if webSearchToolUseIndex >= 0 {
+		suppressedIndices[webSearchToolUseIndex] = struct{}{}
+	}
+	return filterSSEChunkWithServerToolUsageIndices(
+		chunk, suppressedIndices, indexOffset, suppressMessageTerminal,
+		webSearchRequests, codeExecutionRequests, false,
+	)
+}
+
+func filterSSEChunkWithServerToolUsageIndices(
+	chunk []byte,
+	suppressedContentBlockIndices map[int]struct{},
+	indexOffset int,
+	suppressMessageTerminal bool,
+	webSearchRequests, codeExecutionRequests int,
+	normalizeSuppressedToolStop bool,
+) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -449,7 +506,7 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 		if strings.HasPrefix(line, "event: ") {
 			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "data: ") {
 				payload := strings.TrimSpace(strings.TrimPrefix(lines[i+1], "data: "))
-				if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
+				if shouldSuppressEventPayload(payload, suppressedContentBlockIndices, suppressMessageTerminal) {
 					i++
 					continue
 				}
@@ -464,10 +521,13 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 			if payload == "[DONE]" {
 				continue
 			}
-			if shouldSuppressEventPayload(payload, webSearchToolUseIndex, suppressMessageTerminal) {
+			if shouldSuppressEventPayload(payload, suppressedContentBlockIndices, suppressMessageTerminal) {
 				continue
 			}
-			adjusted := adjustEventPayload(payload, indexOffset, webSearchToolUseIndex, webSearchRequests, codeExecutionRequests)
+			adjusted := adjustEventPayload(
+				payload, indexOffset, suppressedContentBlockIndices,
+				webSearchRequests, codeExecutionRequests, normalizeSuppressedToolStop,
+			)
 			if adjusted == "" {
 				continue
 			}
@@ -488,7 +548,7 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppressMessageTerminal bool) bool {
+func shouldSuppressEventPayload(payload string, suppressedContentBlockIndices map[int]struct{}, suppressMessageTerminal bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -508,19 +568,26 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppr
 	// call as a fresh Anthropic server_tool_use/result pair. Forwarding the
 	// private block would leave a client-visible tool_use with no tool_result
 	// and make Claude Code treat the server-side search loop as unfinished.
-	if webSearchToolUseIndex >= 0 {
+	if len(suppressedContentBlockIndices) > 0 {
 		switch eventType {
 		case "content_block_start", "content_block_delta", "content_block_stop":
-			if index, ok := event["index"].(float64); ok && int(index) == webSearchToolUseIndex {
-				return true
+			if index, ok := event["index"].(float64); ok {
+				_, shouldSuppress := suppressedContentBlockIndices[int(index)]
+				return shouldSuppress
 			}
 		}
 	}
 	return false
 }
 
-func adjustEventPayload(payload string, indexOffset, suppressedContentBlockIndex, webSearchRequests, codeExecutionRequests int) string {
-	if payload == "" || (indexOffset == 0 && suppressedContentBlockIndex < 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0) {
+func adjustEventPayload(
+	payload string,
+	indexOffset int,
+	suppressedContentBlockIndices map[int]struct{},
+	webSearchRequests, codeExecutionRequests int,
+	normalizeSuppressedToolStop bool,
+) string {
+	if payload == "" || (indexOffset == 0 && len(suppressedContentBlockIndices) == 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0 && !normalizeSuppressedToolStop) {
 		return payload
 	}
 	var event map[string]any
@@ -532,13 +599,16 @@ func adjustEventPayload(payload string, indexOffset, suppressedContentBlockIndex
 	case "content_block_start", "content_block_delta", "content_block_stop":
 		if idx, ok := event["index"].(float64); ok {
 			sourceIndex := int(idx)
-			adjustedIndex := sourceIndex + indexOffset
+			removedBefore := 0
+			for suppressedIndex := range suppressedContentBlockIndices {
+				if suppressedIndex < sourceIndex {
+					removedBefore++
+				}
+			}
+			adjustedIndex := sourceIndex + indexOffset - removedBefore
 			// Removing the private refinement block must also close its index
 			// slot. Otherwise a later narrative block keeps its original index
 			// and the client observes a gap in the Anthropic SSE sequence.
-			if suppressedContentBlockIndex >= 0 && sourceIndex > suppressedContentBlockIndex {
-				adjustedIndex--
-			}
 			if adjustedIndex != sourceIndex {
 				event["index"] = adjustedIndex
 				changed = true
@@ -563,6 +633,13 @@ func adjustEventPayload(payload string, indexOffset, suppressedContentBlockIndex
 				serverUsage["code_execution_requests"] = codeExecutionRequests
 			}
 			changed = true
+		}
+		if normalizeSuppressedToolStop && len(suppressedContentBlockIndices) > 0 {
+			delta, _ := event["delta"].(map[string]any)
+			if stopReason, _ := delta["stop_reason"].(string); stopReason == "tool_use" {
+				delta["stop_reason"] = "end_turn"
+				changed = true
+			}
 		}
 	}
 	if changed {

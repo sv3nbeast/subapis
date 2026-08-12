@@ -691,6 +691,17 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 			"stop":      true,
 		},
 	}))
+	// Kiro may propose multiple search calls in one assistant turn. The adapter
+	// selects one query for the next MCP iteration, but every private tool block
+	// must be consumed so none leaks into the Anthropic server-tool stream.
+	_, _ = intermediate.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
+		"toolUseEvent": map[string]any{
+			"toolUseId": "srvtoolu_parallel_private",
+			"name":      "remote_web_search",
+			"input":     `{"query":"Go scheduler news 2026"}`,
+			"stop":      true,
+		},
+	}))
 	_, _ = intermediate.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
 		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"uncachedInputTokens": 10, "outputTokens": 2}},
 	}))
@@ -744,6 +755,7 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	require.Len(t, serverToolIDs, 2)
 	require.Equal(t, serverToolIDs, resultToolIDs)
 	require.NotContains(t, wire, `"name":"remote_web_search"`)
+	require.NotContains(t, wire, "srvtoolu_parallel_private")
 	for id := range serverToolIDs {
 		require.True(t, strings.HasPrefix(id, "srvtoolu_"), "server tool ID must use Anthropic namespace: %s", id)
 	}

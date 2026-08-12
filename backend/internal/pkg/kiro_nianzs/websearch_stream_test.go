@@ -134,6 +134,39 @@ func TestFilterChunksForClient_ClosesSuppressedRefinementIndexGap(t *testing.T) 
 	require.Equal(t, 4, MaxContentBlockIndex(filtered))
 }
 
+func TestFilterChunksForClient_ConsumesEveryParallelRefinementToolUse(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Searching\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_first\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"first query\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_second\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"second query\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"Waiting for results\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n"),
+		[]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"),
+	}
+
+	analysis := AnalyzeBufferedStream(chunks)
+	require.True(t, analysis.HasWebSearchToolUse)
+	filtered := FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, 2)
+	joined := ""
+	for _, chunk := range filtered {
+		joined += string(chunk)
+	}
+	require.NotContains(t, joined, "remote_web_search")
+	require.NotContains(t, joined, "toolu_bdrk_first")
+	require.NotContains(t, joined, "toolu_bdrk_second")
+	require.Contains(t, joined, `"text":"Waiting for results"`)
+	require.Contains(t, joined, `"index":3`)
+	require.NotContains(t, joined, `"index":4`)
+	require.Equal(t, 3, MaxContentBlockIndex(filtered))
+}
+
 func TestAdjustSSEChunk_OffsetsIndicesAndDropsMessageStart(t *testing.T) {
 	_, shouldForward := AdjustSSEChunk([]byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\n"), 2)
 	require.False(t, shouldForward)
@@ -249,6 +282,36 @@ func TestFinalizeWebSearchSSEChunksSegmentsCitationsAndPreservesText(t *testing.
 	require.False(t, starts[4].Get("content_block.citations").Exists())
 	require.True(t, starts[5].Get("content_block.citations").IsArray())
 	require.False(t, starts[6].Get("content_block.citations").Exists())
+}
+
+func TestFinalizeWebSearchSSEChunksSuppressesPrivateSearchSafetyNet(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Partial answer\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_first\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"first\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"),
+		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_second\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"second\\\"}\"}}\n\n"),
+		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n"),
+		[]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":3}}\n\n"),
+		[]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"),
+	}
+
+	finalized := FinalizeWebSearchSSEChunks(chunks, 2, 1, nil)
+	wire := ""
+	for _, chunk := range finalized {
+		wire += string(chunk)
+	}
+	require.NotContains(t, wire, "remote_web_search")
+	require.NotContains(t, wire, "toolu_bdrk_first")
+	require.NotContains(t, wire, "toolu_bdrk_second")
+	require.Contains(t, wire, `"index":2`)
+	require.NotContains(t, wire, `"index":3`)
+	require.Contains(t, wire, `"stop_reason":"end_turn"`)
+	require.NotContains(t, wire, `"stop_reason":"tool_use"`)
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 }
 
 func TestAnalyzeBufferedStream_DoesNotMixAdjacentNativeSearchBlocks(t *testing.T) {
