@@ -294,7 +294,12 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     last_delta = ""
     json_fragments: list[str] = []
     server_tool_ids: set[str] = set()
+    server_tool_names: dict[str, str] = {}
     result_tool_ids: set[str] = set()
+    code_execution_result_ids: set[str] = set()
+    code_execution_successes = 0
+    code_execution_errors: list[str] = []
+    code_execution_stdout: list[str] = []
     signatures: list[str] = []
     redacted_thinking_blocks = 0
     citations = 0
@@ -339,6 +344,8 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                 tool_id = str(block.get("id", ""))
                 require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
                 server_tool_ids.add(tool_id)
+                server_tool_names[tool_id] = str(block.get("name", ""))
+                require("caller" not in block, "server tool block leaked client-tool caller metadata")
             elif open_type == "text" and "citations" in block:
                 require(block.get("citations") == [], "cited text block must start with citations: []")
                 open_text_has_citations = True
@@ -365,6 +372,25 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                 result_response_ids.update(response_ids)
                 if error_code:
                     result_errors.append(error_code)
+            elif open_type == "code_execution_tool_result":
+                tool_id = str(block.get("tool_use_id", ""))
+                require(tool_id in server_tool_ids, "code-execution result is not paired with a preceding server tool")
+                require(server_tool_names.get(tool_id) == "code_execution", "code-execution result references the wrong server tool")
+                code_execution_result_ids.add(tool_id)
+                content = block.get("content")
+                require(isinstance(content, dict), "code-execution result content is missing")
+                content_type = str(content.get("type", ""))
+                if content_type == "code_execution_result":
+                    require(isinstance(content.get("stdout"), str), "code-execution stdout is missing")
+                    require(isinstance(content.get("stderr"), str), "code-execution stderr is missing")
+                    require(isinstance(content.get("return_code"), int), "code-execution return_code is missing")
+                    code_execution_successes += 1
+                    code_execution_stdout.append(content["stdout"])
+                else:
+                    require(content_type == "code_execution_tool_result_error", "invalid code-execution result type")
+                    error_code = str(content.get("error_code", ""))
+                    require(bool(error_code), "code-execution error code is missing")
+                    code_execution_errors.append(error_code)
         elif event.name == "content_block_delta":
             require(open_index is not None, "content delta without an open block")
             require(data.get("index") == open_index, "content delta index mismatch")
@@ -445,11 +471,16 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
         "thinking_signatures": len(signatures),
         "redacted_thinking_blocks": redacted_thinking_blocks,
         "server_tool_uses": len(server_tool_ids),
+        "server_tool_names": sorted(server_tool_names.values()),
         "web_search_results": result_count,
         "web_search_errors": result_errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "tool_uses": tool_uses,
         "tool_names": tool_names,
+        "code_execution_results": len(code_execution_result_ids),
+        "code_execution_successes": code_execution_successes,
+        "code_execution_errors": code_execution_errors,
+        "code_execution_stdout": code_execution_stdout,
         "citations": citations,
         "first_content_block_type": first_content_block_type,
         "cited_text_blocks": cited_text_blocks,
@@ -516,6 +547,47 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "citations": citations,
         "first_content_block_type": first_content_block_type,
+    })
+    return facts
+
+
+def validate_nonstream_code_execution(payload: dict[str, Any]) -> dict[str, Any]:
+    facts = validate_message(payload)
+    server_ids: set[str] = set()
+    result_ids: set[str] = set()
+    stdout: list[str] = []
+    errors: list[str] = []
+    for block in payload["content"]:
+        require(isinstance(block, dict), "code-execution content block is not an object")
+        block_type = block.get("type")
+        if block_type == "server_tool_use":
+            tool_id = str(block.get("id", ""))
+            require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
+            require(block.get("name") == "code_execution", "non-stream code execution exposed the wrong server tool")
+            require("caller" not in block, "non-stream server tool leaked client-tool caller metadata")
+            server_ids.add(tool_id)
+        elif block_type == "code_execution_tool_result":
+            tool_id = str(block.get("tool_use_id", ""))
+            require(tool_id in server_ids, "non-stream code-execution result is not paired")
+            result_ids.add(tool_id)
+            content = block.get("content")
+            require(isinstance(content, dict), "non-stream code-execution result content is missing")
+            if content.get("type") == "code_execution_result":
+                require(isinstance(content.get("stdout"), str), "non-stream code-execution stdout is missing")
+                require(isinstance(content.get("stderr"), str), "non-stream code-execution stderr is missing")
+                require(isinstance(content.get("return_code"), int), "non-stream code-execution return_code is missing")
+                stdout.append(content["stdout"])
+            else:
+                require(content.get("type") == "code_execution_tool_result_error", "invalid non-stream code-execution result type")
+                error_code = str(content.get("error_code", ""))
+                require(bool(error_code), "non-stream code-execution error code is missing")
+                errors.append(error_code)
+    require(server_ids and server_ids == result_ids, "non-stream code-execution blocks are not paired")
+    facts.update({
+        "server_tool_uses": len(server_ids),
+        "code_execution_results": len(result_ids),
+        "code_execution_stdout": stdout,
+        "code_execution_errors": errors,
     })
     return facts
 
@@ -703,6 +775,35 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         require(facts["stop_reason"] == "end_turn", "Claude Code shape did not finish with end_turn")
         return facts
 
+    def code_execution_claude_code(stream: bool) -> dict[str, Any]:
+        body = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "Write and execute a Python script that prints 'HELLO_CHECK'. Only use the code execution tool, nothing else.",
+                }],
+            }],
+            "tools": [{"type": "code_execution_20250522", "name": "code_execution"}],
+            "max_tokens": 64000,
+            "stream": stream,
+        }
+        if stream:
+            facts = validate_sse(parse_sse(client.messages(body)))
+        else:
+            facts = validate_nonstream_code_execution(decode_json(client.messages(body)))
+        require(facts["server_tool_uses"] == 1, "code execution produced the wrong number of server tool calls")
+        if stream:
+            require(facts["server_tool_names"] == ["code_execution"], "code execution exposed the wrong server tool")
+        require(facts["code_execution_results"] == 1, "code execution produced the wrong number of results")
+        if stream:
+            require(facts["code_execution_successes"] == 1, "code execution did not produce a successful result")
+        require(not facts["code_execution_errors"], f"code execution returned an error: {facts['code_execution_errors']}")
+        require(facts["code_execution_stdout"] == ["HELLO_CHECK\n"], "code execution stdout was changed")
+        require(facts["stop_reason"] == "end_turn", "code execution did not finish with end_turn")
+        return facts
+
     run("basic_nonstream", basic_nonstream)
     run("basic_stream", basic_stream)
     run("thinking_signature_stream", thinking_stream)
@@ -711,6 +812,8 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
     run("web_search_nonstream", lambda: web_search(False))
     run("web_search_stream", lambda: web_search(True))
     run("web_search_claude_code_stream", web_search_claude_code_stream)
+    run("code_execution_claude_code_nonstream", lambda: code_execution_claude_code(False))
+    run("code_execution_claude_code_stream", lambda: code_execution_claude_code(True))
     return checks
 
 

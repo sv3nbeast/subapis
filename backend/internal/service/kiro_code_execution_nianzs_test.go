@@ -75,6 +75,7 @@ func TestNianzsMessagesLegacyCodeExecutionStreamingClosesServerToolLoop(t *testi
 	require.Contains(t, wire, `"type":"code_execution_result"`)
 	require.Contains(t, wire, `HELLO_CHECK`)
 	require.NotContains(t, wire, `"type":"tool_use"`)
+	require.NotContains(t, wire, `"caller"`)
 
 	starts := nianzsSSEPayloadsByType(wire, "content_block_start")
 	blockTypes := make([]string, 0, len(starts))
@@ -122,6 +123,7 @@ func TestNianzsMessagesLegacyCodeExecutionNonStreamingClosesServerToolLoop(t *te
 	response := recorder.Body.String()
 	require.Equal(t, "server_tool_use", gjson.Get(response, "content.0.type").String())
 	require.Equal(t, "code_execution", gjson.Get(response, "content.0.name").String())
+	require.False(t, gjson.Get(response, "content.0.caller").Exists())
 	require.Equal(t, "code_execution_tool_result", gjson.Get(response, "content.1.type").String())
 	require.Equal(t, "HELLO_CHECK\n", gjson.Get(response, "content.1.content.stdout").String())
 	require.Equal(t, "HELLO_CHECK", gjson.Get(response, "content.2.text").String())

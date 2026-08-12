@@ -227,6 +227,9 @@ func (w *nianzsKiroCodeExecutionTurnWriter) handleContentBlockStart(event map[st
 	block["id"] = w.serverToolID
 	block["name"] = "code_execution"
 	block["input"] = map[string]any{}
+	// caller is part of Anthropic client tool_use blocks. Native server tools
+	// such as code_execution do not expose it on content_block_start.
+	delete(block, "caller")
 	return w.writeEvent("content_block_start", event)
 }
 
