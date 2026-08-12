@@ -187,9 +187,6 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
 			nianzsEnsureClaudeResponseVary(c.Writer.Header())
-			claudeReqID := nianzskiro.NewClaudeRequestID()
-			c.Header("x-request-id", claudeReqID)
-			c.Header("request-id", claudeReqID)
 			c.Data(http.StatusOK, "application/json", codeResult.ResponseBody)
 			return &ForwardResult{
 				RequestID:     codeResult.RequestID,
@@ -235,9 +232,6 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
 			nianzsEnsureClaudeResponseVary(c.Writer.Header())
-			claudeReqID := nianzskiro.NewClaudeRequestID()
-			c.Header("x-request-id", claudeReqID)
-			c.Header("request-id", claudeReqID)
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
 			return &ForwardResult{
 				RequestID:     webSearchResult.RequestID,
@@ -338,9 +332,6 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	c.Header("Content-Type", "application/json")
 	nianzsEnsureClaudeResponseVary(c.Writer.Header())
 	requestID := nianzsBuildKiroRequestID(resp)
-	claudeReqID := nianzskiro.NewClaudeRequestID()
-	c.Header("x-request-id", claudeReqID)
-	c.Header("request-id", claudeReqID)
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
@@ -397,9 +388,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		wrappedHeaders := make(http.Header)
 		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		nianzsEnsureClaudeResponseVary(wrappedHeaders)
-		claudeReqID := nianzskiro.NewClaudeRequestID()
-		wrappedHeaders.Set("x-request-id", claudeReqID)
-		wrappedHeaders.Set("request-id", claudeReqID)
 		go func() {
 			streamErr := s.streamKiroCodeExecutionAsAnthropicNianzs(
 				upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel,
@@ -463,9 +451,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
 	nianzsEnsureClaudeResponseVary(wrappedHeaders)
-	claudeReqID := nianzskiro.NewClaudeRequestID()
-	wrappedHeaders.Set("x-request-id", claudeReqID)
-	wrappedHeaders.Set("request-id", claudeReqID)
+	wrappedHeaders.Del("x-request-id")
+	wrappedHeaders.Del("request-id")
 
 	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
 	go func() {

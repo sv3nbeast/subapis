@@ -393,7 +393,11 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
-			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, kiroEventStreamResponse(t, "nianzs messages ok", 9, 4))
+			c.Header("X-Request-ID", "gateway-request-id")
+			upstreamResponse := kiroEventStreamResponse(t, "nianzs messages ok", 9, 4)
+			upstreamResponse.Header.Set("X-Request-ID", "kiro-upstream-request-id")
+			upstreamResponse.Header.Set("Request-ID", "kiro-upstream-request-id")
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
 
 			result, err := svc.Forward(context.Background(), c, account, parsed)
 
@@ -401,12 +405,18 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.lastReq.URL.String())
 			require.Equal(t, "nianzs", mustGinString(t, c, OpsKiroEngineKey))
+			require.Equal(t, "gateway-request-id", recorder.Header().Get("X-Request-ID"))
+			require.Empty(t, recorder.Header().Get("Request-ID"))
 			if stream {
 				require.Contains(t, recorder.Body.String(), `"text":"nianzs messages ok"`)
 				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+				messageStarts := nianzsSSEPayloadsByType(recorder.Body.String(), "message_start")
+				require.Len(t, messageStarts, 1)
+				require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, messageStarts[0].Get("message.id").String())
 			} else {
 				require.Equal(t, "nianzs messages ok", gjson.Get(recorder.Body.String(), "content.0.text").String())
 				require.Equal(t, "end_turn", gjson.Get(recorder.Body.String(), "stop_reason").String())
+				require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, gjson.Get(recorder.Body.String(), "id").String())
 			}
 		})
 	}

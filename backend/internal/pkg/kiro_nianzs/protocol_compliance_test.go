@@ -50,7 +50,7 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 	require.NotEmpty(t, events)
 	require.Equal(t, "message_start", events[0].name)
 	require.Equal(t, "assistant", events[0].data.Get("message.role").String())
-	require.True(t, strings.HasPrefix(events[0].data.Get("message.id").String(), "msg_"))
+	require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, events[0].data.Get("message.id").String())
 	require.Equal(t, int64(0), events[0].data.Get("message.content.#").Int())
 	require.Equal(t, gjson.Null, events[0].data.Get("message.stop_reason").Type)
 
@@ -291,7 +291,7 @@ func TestAnthropicProtocolComplianceWebSearchServerBlocks(t *testing.T) {
 	writeProtocolEventForTest(t, &wire, "message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id": "msg_protocol", "type": "message", "role": "assistant", "content": []any{},
+			"id": "msg_010123456789ABCDEFGHIJKL", "type": "message", "role": "assistant", "content": []any{},
 			"model": "claude-opus-5", "stop_reason": nil, "stop_sequence": nil,
 			"usage": map[string]any{"input_tokens": 3, "output_tokens": 0},
 		},
@@ -340,7 +340,7 @@ func TestAnthropicProtocolComplianceFinalizedWebSearchStreamWithCitations(t *tes
 	writeProtocolEventForTest(t, &wire, "message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id": "msg_protocol_full", "type": "message", "role": "assistant", "content": []any{},
+			"id": "msg_01NOPQRSTUVWXYZabcdefghi", "type": "message", "role": "assistant", "content": []any{},
 			"model": "claude-opus-5", "stop_reason": nil, "stop_sequence": nil,
 			"usage": map[string]any{"input_tokens": 11, "output_tokens": 0},
 		},

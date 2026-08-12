@@ -2176,7 +2176,7 @@ func compactKiroToolResultText(text string, isError bool) string {
 }
 
 func newClaudeMessageID() string {
-	return "msg_01" + randomBase62(25)
+	return "msg_01" + randomBase62(22)
 }
 
 func newClaudeRequestID() string {
