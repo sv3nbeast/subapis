@@ -412,6 +412,84 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 	}
 }
 
+func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		for _, terminal := range []bool{false, true} {
+			terminal := terminal
+			name := fmt.Sprintf("stream_%t/terminal_%t", stream, terminal)
+			t.Run(name, func(t *testing.T) {
+				resetNianzsKiroCacheTracker()
+				group := nianzsTestKiroCacheGroup(1)
+				body := nianzsTestKiroCacheRequestBody("terminal gate "+name, false)
+				if stream {
+					body = bytes.Replace(body, []byte(`"messages"`), []byte(`"stream":true,"messages"`), 1)
+				}
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+				require.NoError(t, err)
+				parsed.Group = group
+				parsed.GroupID = &group.ID
+
+				upstream := bytes.NewBuffer(nil)
+				_, _ = upstream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{"content": "candidate response"},
+				}))
+				if terminal {
+					_, _ = upstream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+						"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+					}))
+				}
+				upstreamResponse := &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+					Body:       io.NopCloser(bytes.NewReader(upstream.Bytes())),
+				}
+				svc, _, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+				inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+				expectedPlan := svc.prepareKiroCacheEmulationUsageNianzs(
+					context.Background(), adaptKiroAccountForNianzs(account), group, body, "claude-sonnet-4-6", inputTokens,
+				)
+				require.NotNil(t, expectedPlan)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+				result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+				if terminal {
+					require.NoError(t, forwardErr)
+					require.NotNil(t, result)
+				} else {
+					require.ErrorContains(t, forwardErr, "missing completion evidence")
+					require.Nil(t, result)
+					require.NotContains(t, recorder.Body.String(), "event: message_stop")
+				}
+
+				nianzsGlobalKiroCacheTracker.mu.Lock()
+				committedEntries := len(nianzsGlobalKiroCacheTracker.entries[expectedPlan.cacheKey])
+				nianzsGlobalKiroCacheTracker.mu.Unlock()
+				if terminal {
+					require.Greater(t, committedEntries, 0, "verified terminal response should commit its prefix")
+				} else {
+					require.Equal(t, 0, committedEntries, "bare EOF must not commit cache state")
+				}
+
+				probe := svc.prepareKiroCacheEmulationUsageNianzs(
+					context.Background(), adaptKiroAccountForNianzs(account), group, body, "claude-sonnet-4-6", inputTokens,
+				)
+				require.NotNil(t, probe)
+				require.NotNil(t, probe.result())
+				if terminal {
+					require.Equal(t, expectedPlan.cacheKey, probe.cacheKey)
+				} else {
+					require.Equal(t, 0, probe.result().CacheReadInputTokens, "bare EOF must not create a phantom cache hit")
+					require.Greater(t, probe.result().CacheCreationInputTokens, 0)
+				}
+			})
+		}
+	}
+}
+
 func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)

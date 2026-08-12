@@ -304,9 +304,10 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, body)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsageNianzs(ctx, account, parsed.Group, body, mappedModel, inputTokens)
-	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+	cachePlan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	requestCtx.CacheEmulationUsage = cachePlan.result().toKiroUsage()
 	requestCtx.EstimatedInputTokens = inputTokens
+	requestCtx.RequireTerminalEvent = true
 	parseResult, err := nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -318,6 +319,10 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		})
 		return nil, err
 	}
+	// A 2xx response only proves that Kiro accepted the request. Persist the
+	// emulated prefix after the Event Stream has supplied terminal evidence and
+	// the complete response has been parsed.
+	cachePlan.commit()
 	if schema, strict := nianzsKiroStructuredOutputSchema(body); strict {
 		var normalized bool
 		parseResult.ResponseBody, normalized = nianzsNormalizeStructuredOutputResponseJSONWithStatus(parseResult.ResponseBody, schema)
@@ -446,9 +451,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	if plan == nil {
 		plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	}
-	// 请求已确认成功(2xx)，此时提交缓存前缀落盘才是安全的。
-	plan.commit()
 	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
+	requestCtx.RequireTerminalEvent = true
 
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()
@@ -492,6 +496,10 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 				zap.Bool("stream", true),
 			)
 		}
+		// Do not commit cache state from a 2xx header or a partial body. The
+		// translator only returns success after terminal evidence and after the
+		// protocol adapter has emitted one complete downstream terminal outcome.
+		plan.commit()
 		_ = pw.Close()
 	}()
 

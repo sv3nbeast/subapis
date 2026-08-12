@@ -1166,21 +1166,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if evt == nil {
 			return nil
 		}
-		// 仅接受 Anthropic 协议规定的 stop_reason 白名单值
-		// 上游中间帧若透传 pause_turn/refusal/stop_sequence 等新值会让客户端误判为终态
-		// 其余值忽略,等流真正 EOF 时由后续兜底分支按 tool_use/end_turn 处理
-		if evt.SourceStopReason != "" {
-			sourceStopReason := strings.ToLower(strings.TrimSpace(evt.SourceStopReason))
-			switch sourceStopReason {
-			case "max_tokens":
-				if stopReason != "stop_sequence" {
-					stopReason = sourceStopReason
-				}
-			case "end_turn", "tool_use":
-				if stopReason != "max_tokens" && stopReason != "stop_sequence" {
-					stopReason = sourceStopReason
-				}
-			}
+		// Preserve every stop reason currently defined by the Anthropic Messages
+		// protocol. Unknown provider values are ignored rather than leaked to a
+		// strict client. A locally matched stop_sequence retains precedence.
+		if sourceStopReason := normalizeAnthropicStopReason(evt.SourceStopReason); sourceStopReason != "" {
+			stopReason = preferAnthropicStopReason(stopReason, sourceStopReason)
 		}
 		switch evt.Type {
 		case kiroSemanticContent:
@@ -1339,7 +1329,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
 	switch stopReason {
-	case "max_tokens", "stop_sequence":
+	case "max_tokens", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
 		// These terminal conditions take precedence over emitted tool blocks.
 	case "":
 		if toolBlockEmitted {
@@ -3048,8 +3038,8 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 		if err := decoder.Decode(&trailing); err != io.EOF {
 			continue
 		}
-		if sr := readStopReason(event); sr != "" {
-			stopReason = sr
+		if sr := normalizeAnthropicStopReason(readStopReason(event)); sr != "" {
+			stopReason = preferAnthropicStopReason(stopReason, sr)
 		}
 		if kiroEventProvidesCompletionEvidence(msg.EventType, event) {
 			sawCompletionEvidence = true
@@ -3063,8 +3053,8 @@ func parseEventStream(body io.Reader, requireTerminalEvent bool) (string, []Kiro
 			} else if text := getString(event, "content"); text != "" {
 				_, _ = content.WriteString(text)
 			}
-			if sr := readStopReason(assistant); sr != "" {
-				stopReason = sr
+			if sr := normalizeAnthropicStopReason(readStopReason(assistant)); sr != "" {
+				stopReason = preferAnthropicStopReason(stopReason, sr)
 			}
 			for _, tool := range readToolUses(assistant, event) {
 				if processedIDs[tool.ToolUseID] {
@@ -3181,12 +3171,51 @@ func kiroEventProvidesCompletionEvidence(eventType string, event map[string]any)
 }
 
 func isKiroCompletionStopReason(reason string) bool {
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "end_turn", "tool_use", "max_tokens", "stop_sequence":
-		return true
+	return normalizeAnthropicStopReason(reason) != ""
+}
+
+func normalizeAnthropicStopReason(reason string) string {
+	switch normalized := strings.ToLower(strings.TrimSpace(reason)); normalized {
+	case "end_turn", "tool_use", "max_tokens", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
+		return normalized
 	default:
-		return false
+		return ""
 	}
+}
+
+func preferAnthropicStopReason(current, candidate string) string {
+	candidate = normalizeAnthropicStopReason(candidate)
+	if candidate == "" {
+		return current
+	}
+	current = normalizeAnthropicStopReason(current)
+	if current == "stop_sequence" {
+		return current
+	}
+	priority := func(reason string) int {
+		switch reason {
+		case "stop_sequence":
+			return 7
+		case "model_context_window_exceeded":
+			return 6
+		case "max_tokens":
+			return 5
+		case "refusal":
+			return 4
+		case "pause_turn":
+			return 3
+		case "tool_use":
+			return 2
+		case "end_turn":
+			return 1
+		default:
+			return 0
+		}
+	}
+	if priority(candidate) >= priority(current) {
+		return candidate
+	}
+	return current
 }
 
 func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, usage Usage, stopReason string, requestCtx KiroRequestContext) []byte {
@@ -3241,6 +3270,7 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 	if len(blocks) == 0 {
 		blocks = append(blocks, map[string]any{"type": "text", "text": ""})
 	}
+	stopReason = normalizeAnthropicStopReason(stopReason)
 	if stopReason == "" {
 		if usableTools > 0 {
 			stopReason = "tool_use"
