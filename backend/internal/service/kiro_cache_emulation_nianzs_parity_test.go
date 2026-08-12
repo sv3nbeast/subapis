@@ -323,7 +323,7 @@ func TestNianzsKiroCacheEmulationOneHourBucket(t *testing.T) {
 	}
 }
 
-func TestNianzsKiroCacheEmulationPrefixPartialHit(t *testing.T) {
+func TestNianzsKiroCacheEmulationLeavesUnmarkedConversationTailUncached(t *testing.T) {
 	resetNianzsKiroCacheTracker()
 	svc := &GatewayService{}
 	account := &Account{ID: 6, Platform: PlatformKiro}
@@ -335,8 +335,8 @@ func TestNianzsKiroCacheEmulationPrefixPartialHit(t *testing.T) {
 		t.Fatalf("unexpected first usage: %+v", first)
 	}
 	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-sonnet-4-6", 6000)
-	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheReadInputTokens >= first.CacheCreationInputTokens || second.CacheCreationInputTokens <= 0 {
-		t.Fatalf("expected partial prefix hit: %+v", second)
+	if second == nil || second.CacheReadInputTokens != first.CacheCreationInputTokens || second.CacheCreationInputTokens != 0 || second.InputTokens <= 0 {
+		t.Fatalf("expected cached marked prefix with uncached conversation tail: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -373,6 +373,58 @@ func TestNianzsKiroInputTokenEstimateCountsFullToolDefinition(t *testing.T) {
 	require.NotEmpty(t, profile.blocks)
 	tools := payload["tools"].([]any)
 	require.Equal(t, nianzsCountKiroToolDefinitionTokens(tools[0]), profile.blocks[0].cumulativeTokens)
+}
+
+func TestNianzsModernClaudeInputAccountingMatchesProviderBaseline(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","max_tokens":64,"stream":false,"system":[{"type":"text","text":"You are a precise assistant. Follow the tool schema exactly and answer concisely.","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"lookup_record","description":"Look up a record by its exact identifier and return the matching fields.","input_schema":{"type":"object","properties":{"record_id":{"type":"string","description":"Exact record identifier."},"include_history":{"type":"boolean","description":"Whether to include prior versions."}},"required":["record_id"]}}],"messages":[{"role":"user","content":"Answer with the word ready."}]}`)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	systemBlocks := nianzsNormalizeKiroSystemBlocks(payload["system"])
+	tools := payload["tools"].([]any)
+	require.Len(t, systemBlocks, 1)
+	require.Len(t, tools, 1)
+	require.Equal(t, 28, nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0]))
+	require.Equal(t, 417, nianzsCountModernClaudeToolDefinitionTokens(tools[0]))
+	require.Equal(t, 464, nianzsEstimateKiroInputTokens(context.Background(), body))
+
+	legacyBody := bytes.Replace(body, []byte(`claude-opus-5`), []byte(`claude-sonnet-4-6`), 1)
+	require.Equal(t, 188, nianzsEstimateKiroInputTokens(context.Background(), legacyBody))
+}
+
+func TestNianzsModernClaudeCacheStopsAtExplicitSystemBreakpoint(t *testing.T) {
+	systemText := strings.Repeat("cacheable system guidance ", 6000)
+	body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"tools":[{"name":"lookup","description":"Look up one exact value.","input_schema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}],"messages":[{"role":"user","content":"uncached conversation tail"}]}`, systemText))
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-5", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+	cacheTokens := last.cumulativeTokens
+	require.Greater(t, cacheTokens, nianzsKiroCacheMinTokensOpus)
+	require.Less(t, cacheTokens, inputTokens)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	tools := payload["tools"].([]any)
+	systemBlocks := nianzsNormalizeKiroSystemBlocks(payload["system"])
+	expectedCacheTokens := nianzsCountModernClaudeToolDefinitionTokens(tools[0]) + nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0])
+	require.Equal(t, expectedCacheTokens, cacheTokens)
+}
+
+func TestNianzsMessagesCacheIdentityIncludesThinkingConfiguration(t *testing.T) {
+	prefix := strings.Repeat("stable cached prefix ", 3000)
+	bodyAdaptive := []byte(fmt.Sprintf(`{"model":"claude-opus-5","thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}]}`, prefix))
+	bodyPlain := []byte(fmt.Sprintf(`{"model":"claude-opus-5","system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}]}`, prefix))
+	adaptive, ok := nianzsBuildKiroCacheProfile(context.Background(), bodyAdaptive, "claude-opus-5", nianzsEstimateKiroInputTokens(context.Background(), bodyAdaptive))
+	require.True(t, ok)
+	plain, ok := nianzsBuildKiroCacheProfile(context.Background(), bodyPlain, "claude-opus-5", nianzsEstimateKiroInputTokens(context.Background(), bodyPlain))
+	require.True(t, ok)
+	adaptiveLast := adaptive.lastCacheableBreakpoint()
+	plainLast := plain.lastCacheableBreakpoint()
+	require.NotNil(t, adaptiveLast)
+	require.NotNil(t, plainLast)
+	require.NotEqual(t, adaptive.blocks[adaptiveLast.blockIndex].prefixFingerprint, plain.blocks[plainLast.blockIndex].prefixFingerprint)
 }
 
 func TestNianzsEnsureClaudeResponseVary(t *testing.T) {
