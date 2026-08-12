@@ -973,6 +973,57 @@ func TestNianzsMessagesStructuredOutputNonStreamingToolBecomesJSONEndToEnd(t *te
 	require.Equal(t, int64(6), gjson.Get(recorder.Body.String(), "usage.output_tokens").Int())
 }
 
+func TestNianzsMessagesRoutePreservesAccountCachePolicyInMixedAnthropicGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			resetNianzsKiroCacheTracker()
+			streamValue := "false"
+			if stream {
+				streamValue = "true"
+			}
+			body := []byte(strings.Replace(
+				string(nianzsTestKiroCacheRequestBody("mixed-route", false)),
+				`{"model"`, `{"stream":`+streamValue+`,"model"`, 1,
+			))
+			groupID := int64(9)
+			group := &Group{ID: groupID, Platform: PlatformAnthropic, Status: StatusActive}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+			account.Extra = map[string]any{
+				"kiro_cache_emulation_enabled": true,
+				"kiro_cache_emulation_ratio":   0.91,
+			}
+			upstream.responses = []*http.Response{
+				kiroEventStreamResponse(t, "mixed cache create", 2000, 4),
+				kiroEventStreamResponse(t, "mixed cache read", 2000, 4),
+			}
+
+			forward := func() *ForwardResult {
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+				require.NoError(t, err)
+				parsed.GroupID = &groupID
+				parsed.Group = group
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+				result, err := svc.Forward(context.Background(), c, account, parsed)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				return result
+			}
+
+			first := forward()
+			require.Greater(t, first.Usage.CacheCreationInputTokens, 0)
+			require.Zero(t, first.Usage.CacheReadInputTokens)
+			second := forward()
+			require.Zero(t, second.Usage.CacheCreationInputTokens)
+			require.Greater(t, second.Usage.CacheReadInputTokens, 0)
+			require.Len(t, upstream.requests, 2)
+		})
+	}
+}
+
 func TestNianzsMessagesStreamFlushesBeforeUpstreamTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"flush early"}],"stream":true}`)

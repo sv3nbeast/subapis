@@ -46,6 +46,46 @@ type nianzsKiroCacheEmulationUsage struct {
 	CacheCreation1hInputTokens int
 }
 
+// nianzsKiroCacheEmulationPolicy is the compatibility boundary between the
+// source-faithful nianzs cache tracker and Sub2API's existing account-level
+// Kiro cache settings. Historically, account settings took precedence and a
+// Kiro group supplied the fallback. Keep that contract so a Kiro account does
+// not lose cache accounting merely because it is scheduled from a mixed
+// Anthropic group.
+type nianzsKiroCacheEmulationPolicy struct {
+	enabled       bool
+	mode          string
+	creationRatio float64
+	readRatio     float64
+}
+
+func resolveNianzsKiroCacheEmulationPolicy(account *Account, group *Group) nianzsKiroCacheEmulationPolicy {
+	if account == nil || account.ID <= 0 || !account.IsKiro() {
+		return nianzsKiroCacheEmulationPolicy{}
+	}
+	if account.EffectiveKiroCacheEmulationEnabled() {
+		ratio := account.GetKiroCacheEmulationRatio()
+		return nianzsKiroCacheEmulationPolicy{
+			enabled:       ratio > 0,
+			mode:          KiroCacheEmulationModeUniform,
+			creationRatio: ratio,
+			readRatio:     ratio,
+		}
+	}
+
+	NormalizeGroupRuntimeFields(group)
+	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() {
+		return nianzsKiroCacheEmulationPolicy{}
+	}
+	creationRatio, readRatio := group.EffectiveKiroCacheEmulationRatios()
+	return nianzsKiroCacheEmulationPolicy{
+		enabled:       creationRatio > 0 || readRatio > 0,
+		mode:          group.EffectiveKiroCacheEmulationMode(),
+		creationRatio: creationRatio,
+		readRatio:     readRatio,
+	}
+}
+
 type nianzsKiroCacheEntry struct {
 	tokens    int
 	ttl       time.Duration
@@ -89,15 +129,15 @@ func (s *GatewayService) buildKiroCacheEmulationUsageNianzs(ctx context.Context,
 }
 
 func (s *GatewayService) prepareKiroCacheEmulationUsageNianzs(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *nianzsKiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
+	policy := resolveNianzsKiroCacheEmulationPolicy(account, group)
+	if !policy.enabled || len(body) == 0 {
 		return nil
 	}
 	profile, ok := nianzsBuildKiroCacheProfile(ctx, body, model, inputTokens)
 	if !ok {
 		return nil
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, group, profile, inputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, policy, profile, inputTokens)
 }
 
 func (s *GatewayService) buildKiroResponsesCacheEmulationUsageNianzs(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *nianzsKiroCacheEmulationUsage {
@@ -107,15 +147,15 @@ func (s *GatewayService) buildKiroResponsesCacheEmulationUsageNianzs(ctx context
 }
 
 func (s *GatewayService) prepareKiroResponsesCacheEmulationUsageNianzs(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *nianzsKiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
+	policy := resolveNianzsKiroCacheEmulationPolicy(account, group)
+	if !policy.enabled || len(body) == 0 {
 		return nil
 	}
 	profile, ok := nianzsBuildKiroResponsesCacheProfile(ctx, body, model, inputTokens)
 	if !ok {
 		return nil
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, group, profile, inputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, policy, profile, inputTokens)
 }
 
 func (s *GatewayService) buildKiroChatCompletionsCacheEmulationUsageNianzs(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *nianzsKiroCacheEmulationUsage {
@@ -125,8 +165,8 @@ func (s *GatewayService) buildKiroChatCompletionsCacheEmulationUsageNianzs(ctx c
 }
 
 func (s *GatewayService) prepareKiroChatCompletionsCacheEmulationUsageNianzs(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *nianzsKiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
+	policy := resolveNianzsKiroCacheEmulationPolicy(account, group)
+	if !policy.enabled || len(body) == 0 {
 		return nil
 	}
 	profile, ok := nianzsBuildKiroChatCompletionsCacheProfile(ctx, body, model, inputTokens)
@@ -137,11 +177,11 @@ func (s *GatewayService) prepareKiroChatCompletionsCacheEmulationUsageNianzs(ctx
 	if effectiveInputTokens <= 0 {
 		effectiveInputTokens = profile.totalInputTokens
 	}
-	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, group, profile, effectiveInputTokens)
+	return s.prepareKiroCacheEmulationPlanFromProfileNianzs(account, policy, profile, effectiveInputTokens)
 }
 
-func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfileNianzs(account *Account, group *Group, profile *nianzsKiroCacheProfile, inputTokens int) *nianzsKiroCacheEmulationPlan {
-	if group == nil || account == nil || account.ID <= 0 || profile == nil {
+func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfileNianzs(account *Account, policy nianzsKiroCacheEmulationPolicy, profile *nianzsKiroCacheProfile, inputTokens int) *nianzsKiroCacheEmulationPlan {
+	if account == nil || account.ID <= 0 || !policy.enabled || profile == nil {
 		return nil
 	}
 	cacheKey := nianzsKiroCacheCredentialKey(account)
@@ -149,14 +189,14 @@ func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfileNianzs(account 
 		return nil
 	}
 	result := nianzsGlobalKiroCacheTracker.compute(cacheKey, profile)
-	if group.EffectiveKiroCacheEmulationMode() == KiroCacheEmulationModeUniform {
-		ratio := group.EffectiveKiroCacheEmulationRatio()
+	if policy.mode == KiroCacheEmulationModeUniform {
+		ratio := policy.readRatio
 		result.CacheReadInputTokens = nianzsScaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
-		result.CacheCreationInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreationInputTokens, ratio)
-		result.CacheCreation5mInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreation5mInputTokens, ratio)
-		result.CacheCreation1hInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreation1hInputTokens, ratio)
+		result.CacheCreationInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreationInputTokens, policy.creationRatio)
+		result.CacheCreation5mInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreation5mInputTokens, policy.creationRatio)
+		result.CacheCreation1hInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreation1hInputTokens, policy.creationRatio)
 	} else {
-		creationRatio, readRatio := group.EffectiveKiroCacheEmulationRatios()
+		creationRatio, readRatio := policy.creationRatio, policy.readRatio
 		result.CacheReadInputTokens = nianzsScaleKiroCacheTokens(result.CacheReadInputTokens, readRatio)
 		result.CacheCreationInputTokens = nianzsScaleKiroCacheTokens(result.CacheCreationInputTokens, creationRatio)
 		result.CacheCreation5mInputTokens, result.CacheCreation1hInputTokens = nianzsScaleKiroCacheCreationTTLTokens(
