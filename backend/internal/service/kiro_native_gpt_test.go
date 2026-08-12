@@ -257,6 +257,41 @@ func TestForwardAsResponsesKiroNativeGPTCapabilityRefusalRetriesOnceThenEmitsToo
 	require.Contains(t, secondContent, kiroNativeToolProgressRetryInstruction)
 }
 
+func TestForwardAsResponsesKiroRestoresNamespacedCustomToolIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"namespace","name":"functions","tools":[
+			{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+		]}],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	upstream.resp = kiroCustomToolEventStreamResponse(t, "toolu_namespace_exec", "functionsExec", `{"input":"text(\"done\")"}`)
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body:  NewRequestBodyRef(body),
+		Model: kiroNativeGPTTestModel,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, int64(1), gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int())
+	require.Equal(t, "functionsExec", gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	wire := rec.Body.String()
+	require.Contains(t, wire, `"type":"custom_tool_call"`)
+	require.Contains(t, wire, `"name":"exec"`)
+	require.Contains(t, wire, `"namespace":"functions"`)
+	require.NotContains(t, wire, `"name":"functions__exec"`)
+}
+
 func TestForwardAsChatCompletionsKiroClaudeToolPreludeRetriesForNonStreamingClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{

@@ -877,6 +877,9 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
 	remoteCompactionV2 := isOpenAIRemoteCompactionV2(c) && gjson.GetBytes(body, "stream").Bool()
+	if remoteCompactionV2 && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
+		c.Set(openAIRemoteCompactionV2Key, true)
+	}
 	if !isCompactRequest && !remoteCompactionV2 && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
 		isCompactRequest = true
@@ -906,6 +909,8 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Con
 	return body, true
 }
 
+const openAIRemoteCompactionV2Key = "openai_remote_compaction_v2"
+
 // isOpenAIRemoteCompactionV2 identifies the native remote compaction wire.
 // It must remain case-sensitive because the upstream feature token is a
 // protocol value; unknown casing is treated as the legacy body-signal bridge.
@@ -922,7 +927,7 @@ func isOpenAIRemoteCompactionV2(c *gin.Context) bool {
 }
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
-	if !isOpenAIRemoteCompactPath(c) {
+	if !isOpenAIRemoteCompactPath(c) && !isOpenAIRemoteCompactionV2Marked(c) {
 		return
 	}
 
@@ -998,6 +1003,15 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 		return
 	}
 	log.Warn("codex.remote_compact.failed")
+}
+
+func isOpenAIRemoteCompactionV2Marked(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	marked, _ := c.Get(openAIRemoteCompactionV2Key)
+	want, _ := marked.(bool)
+	return want
 }
 
 // Messages handles Anthropic Messages API requests routed to OpenAI platform.

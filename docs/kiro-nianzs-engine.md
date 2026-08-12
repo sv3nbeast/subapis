@@ -81,3 +81,15 @@ python3 scripts/verify_nianzs_kiro_parity.py \
 5. 账号连接测试的 3 个 Kiro 函数是否一致；
 6. 是否只存在已登记的双引擎依赖注入、现网 CLI Key 账号适配与状态隔离；
 7. 缓存模式迁移和前端控件 fixture 是否一致。
+
+## 快照后的兼容补丁
+
+2026-08-12 已审计 nianzs `63f014369cd33d02115a745e7838edd632695736`：
+
+- 固定快照覆盖的 `kiro`、`kirocooldown` 和机械命名空间服务文件自
+  `d483aefe` 后没有新的核心实现变更，因此快照 commit 与校验清单保持不变；
+- 单独移植 `13cd8c4fc` 中 Codex 0.147+ namespace/custom 子工具修复，并适配
+  本项目 Kiro Responses 直连路径，避免 `functions.exec` 被丢弃或以摊平名回传；
+- `7ef6a364f` 只有 README、测试构造参数和前端测试调整，没有可移植的运行时修复；
+- Kiro GPT 的 `remote_compaction_v2` 由本项目在服务层模拟为单个 compaction
+  item，因为 nianzs 到上述审计 commit 仍未实现该协议适配。

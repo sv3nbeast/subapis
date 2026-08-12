@@ -185,6 +185,26 @@ func TestLogOpenAIRemoteCompactOutcome_NonCompactSkips(t *testing.T) {
 	require.False(t, logSink.ContainsMessageAtLevel("codex.remote_compact.failed", "warn"))
 }
 
+func TestLogOpenAIRemoteCompactOutcome_NativeV2MarkedRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logSink, restore := captureHandlerStructuredLog(t)
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set(openAIRemoteCompactionV2Key, true)
+	c.Status(http.StatusOK)
+
+	h := &OpenAIGatewayHandler{}
+	h.logOpenAIRemoteCompactOutcome(c, time.Now())
+
+	// A marked native v2 request must enter the same outcome logger even though
+	// its path is /responses rather than /responses/compact.
+	require.True(t, logSink.ContainsMessageAtLevel("codex.remote_compact.succeeded", "info"))
+	require.True(t, logSink.ContainsFieldValue("path", "/v1/responses"))
+}
+
 func TestOpenAIResponses_CompactUnauthorizedLogsFailed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureHandlerStructuredLog(t)

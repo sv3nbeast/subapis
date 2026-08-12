@@ -73,24 +73,34 @@ func (s *GatewayService) ForwardAsResponses(
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
 	kiroGPTRequest := account != nil && account.Platform == PlatformKiro && IsOpenAIKiroBridgeModel(originalModel)
-	kiroCompactRequest := kiroGPTRequest && isOpenAIResponsesCompactPath(c)
+	kiroRemoteCompactionV2 := kiroGPTRequest && isKiroRemoteCompactionV2Request(c, body, clientStream)
+	kiroCompactRequest := kiroGPTRequest && (isOpenAIResponsesCompactPath(c) || kiroRemoteCompactionV2)
 	kiroScope := kiroResponsesScopeForRequest(c, parsed)
+	if kiroRemoteCompactionV2 {
+		// Mark before local token expansion so pre-upstream validation failures
+		// are also returned as a terminal Responses SSE event.
+		MarkOpenAICompactClientStream(c)
+	}
 	if kiroGPTRequest {
 		ctx = WithKiroGPTTimeoutsDisabled(ctx, originalModel)
 		expandedInput, expandErr := expandKiroCompactionInput(responsesReq.Input, kiroScope)
 		if expandErr != nil {
 			if errors.Is(expandErr, errKiroCompactTokenNotFound) {
-				writeResponsesError(c, http.StatusNotFound, "invalid_request_error", "Kiro compact token was not found or does not belong to this API key and group")
+				writeKiroCompactTokenNotFound(c, kiroRemoteCompactionV2)
 			}
 			return nil, fmt.Errorf("expand kiro compact input: %w", expandErr)
 		}
 		responsesReq.Input = expandedInput
 	}
 	if kiroCompactRequest {
+		// Native remote_compaction_v2 intentionally stays on /v1/responses so
+		// real OpenAI upstreams can consume its native wire. Kiro has no native
+		// compaction item support, therefore reuse the existing buffered summary
+		// emulation and bridge its single compaction item back to Responses SSE.
 		compactInput, compactErr := prepareKiroCompactInput(responsesReq.Input, kiroScope)
 		if compactErr != nil {
 			if errors.Is(compactErr, errKiroCompactTokenNotFound) {
-				writeResponsesError(c, http.StatusNotFound, "invalid_request_error", "Kiro compact token was not found or does not belong to this API key and group")
+				writeKiroCompactTokenNotFound(c, kiroRemoteCompactionV2)
 			}
 			return nil, fmt.Errorf("prepare kiro compact input: %w", compactErr)
 		}
@@ -170,7 +180,7 @@ func (s *GatewayService) ForwardAsResponses(
 		if kiroCompactRequest {
 			compactOptions = &kiroCompactResponseOptions{Scope: kiroScope}
 		}
-		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, body, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools, compactOptions)
+		result, handleErr := s.forwardKiroAsResponses(ctx, c, account, body, anthropicBody, originalModel, mappedModel, clientStream, reasoningEffort, parsed, startTime, kiroCodexTools, clientToolMapping, compactOptions)
 		if handleErr == nil && shouldPersistKiroResponsesHistory(storeKiroResponse, originalModel, result) {
 			globalKiroResponsesHistoryStore.save(kiroResponsesHistoryEntry{
 				ID:                 result.ResponseID,
@@ -353,6 +363,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 	parsed *ParsedRequest,
 	startTime time.Time,
 	toolMetadata kiroCodexResponsesToolMetadata,
+	clientToolMapping apicompat.ResponsesClientToolMapping,
 	compactOptions *kiroCompactResponseOptions,
 ) (*ForwardResult, error) {
 	s.recordKiroEngine(c, parsedGroupID(parsed), account)
@@ -397,6 +408,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
+			ClientToolMapping:       clientToolMapping,
 		})
 		if streamErr == nil && result != nil && result.ClientDisconnect && s.kiroResilienceEnforced(kiroParsed.GroupID) {
 			streamErr = newOpenAIClientCanceledError(context.Canceled)
@@ -417,6 +429,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),
 			KiroCompact:             compactOptions,
+			ClientToolMapping:       clientToolMapping,
 		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)

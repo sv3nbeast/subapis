@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -46,6 +47,43 @@ func kiroResponsesScopeForRequest(c *gin.Context, parsed *ParsedRequest) kiroRes
 		scope.GroupID = getOpenAIGroupIDFromContext(c)
 	}
 	return scope
+}
+
+// isKiroRemoteCompactionV2Request identifies the native Codex remote
+// compaction v2 wire that must be emulated when the selected upstream is Kiro.
+// All protocol signals are required so an ordinary streaming Responses request
+// that happens to carry the beta header is never converted into a compaction.
+func isKiroRemoteCompactionV2Request(c *gin.Context, body []byte, clientStream bool) bool {
+	if !clientStream || c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	path := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
+	if !strings.HasSuffix(path, "/responses") {
+		return false
+	}
+	featureEnabled := false
+	for _, headerValue := range c.Request.Header.Values("X-Codex-Beta-Features") {
+		for _, feature := range strings.Split(headerValue, ",") {
+			// Feature tokens are protocol values and intentionally case-sensitive.
+			if strings.TrimSpace(feature) == "remote_compaction_v2" {
+				featureEnabled = true
+				break
+			}
+		}
+		if featureEnabled {
+			break
+		}
+	}
+	return featureEnabled && HasCompactionTriggerInInput(body)
+}
+
+func writeKiroCompactTokenNotFound(c *gin.Context, stream bool) {
+	const message = "Compact token was not found or does not belong to this API key and group"
+	if stream {
+		writeOpenAICompactSSEFailureMessage(c, http.StatusNotFound, "invalid_request_error", message)
+		return
+	}
+	writeResponsesError(c, http.StatusNotFound, "invalid_request_error", message)
 }
 
 func (s *kiroResponsesHistoryStore) saveCompact(scope kiroResponsesScope, summary string) (string, error) {
