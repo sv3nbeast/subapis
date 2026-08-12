@@ -436,6 +436,7 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus5ThinkingModel(t *testing
 	require.Equal(t, "adaptive", gjson.GetBytes(payload, "additionalModelRequestFields.thinking.type").String())
 	require.Equal(t, "high", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
 	require.True(t, kiroBuildResult.Context.ThinkingEnabled)
+	require.True(t, kiroBuildResult.Context.SuppressAdaptiveThinkingText)
 }
 
 func TestBuildKiroPayloadAddsAdditionalModelRequestFieldsForOutputConfigModels(t *testing.T) {
@@ -2094,6 +2095,79 @@ func TestStreamEventStreamAsAnthropicThinkingAndTextFollowCanonicalSSELifecycle(
 	require.Equal(t, "end_turn", messageDelta.Get("delta.stop_reason").String())
 	require.Equal(t, int64(6), messageDelta.Get("usage.output_tokens").Int())
 	require.Greater(t, messageDelta.Get("usage.output_tokens_details.thinking_tokens").Int(), int64(0))
+}
+
+func TestStreamEventStreamAsAnthropicSuppressesAdaptiveThinkingText(t *testing.T) {
+	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{
+			"text": "provider-only adaptive reasoning", "signature": providerSignature,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-5", 11,
+		KiroRequestContext{
+			ThinkingEnabled:              true,
+			SuppressAdaptiveThinkingText: true,
+			RequireTerminalEvent:         true,
+		},
+	)
+	require.NoError(t, err)
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	require.Equal(t, "thinking", events[1].Get("content_block.type").String())
+	require.Equal(t, "thinking_delta", events[2].Get("delta.type").String())
+	require.Equal(t, "", events[2].Get("delta.thinking").String())
+	require.Equal(t, "signature_delta", events[3].Get("delta.type").String())
+	require.Equal(t, providerSignature, events[3].Get("delta.signature").String())
+	require.NotContains(t, out.String(), "provider-only adaptive reasoning")
+	var visibleText strings.Builder
+	for _, event := range events {
+		if event.Get("delta.type").String() == "text_delta" {
+			visibleText.WriteString(event.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "final answer", visibleText.String())
+}
+
+func TestParseNonStreamingEventStreamSuppressesAdaptiveThinkingText(t *testing.T) {
+	const providerSignature = "EgwKBnByb3ZpZGVyEAI="
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{
+			"text": "provider-only adaptive reasoning", "signature": providerSignature,
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "final answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(
+		stream, "claude-opus-5",
+		KiroRequestContext{
+			ThinkingEnabled:              true,
+			SuppressAdaptiveThinkingText: true,
+			RequireTerminalEvent:         true,
+		},
+	)
+	require.NoError(t, err)
+	response := gjson.ParseBytes(result.ResponseBody)
+	require.Equal(t, "thinking", response.Get("content.0.type").String())
+	require.Equal(t, "", response.Get("content.0.thinking").String())
+	require.Equal(t, providerSignature, response.Get("content.0.signature").String())
+	require.Equal(t, "final answer", response.Get("content.1.text").String())
+	require.NotContains(t, string(result.ResponseBody), "provider-only adaptive reasoning")
 }
 
 func TestStreamEventStreamAsAnthropicPassesThroughProviderThinkingSignature(t *testing.T) {

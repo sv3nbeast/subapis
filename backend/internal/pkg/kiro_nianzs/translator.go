@@ -112,6 +112,12 @@ type ParseResult struct {
 type KiroRequestContext struct {
 	ToolNameMap     map[string]string
 	ThinkingEnabled bool
+	// SuppressAdaptiveThinkingText preserves the Anthropic adaptive-thinking
+	// block lifecycle and opaque signature while keeping provider-only reasoning
+	// summaries out of the public thinking field. Claude's adaptive Messages
+	// path emits empty thinking deltas; explicit budget-based thinking remains
+	// visible and therefore does not set this flag.
+	SuppressAdaptiveThinkingText bool
 	// EmitProtocolPing mirrors the Claude Messages streaming keepalive frame
 	// for Claude Code clients. The translator emits it exactly once, immediately
 	// after the first content_block_start, so multi-turn server tools cannot
@@ -486,6 +492,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		requestCtx.ThinkingEnabled = false
 		requestCtx.StripImplicitThinking = false
 	}
+	requestCtx.SuppressAdaptiveThinkingText = thinking != nil && thinking.Mode == "adaptive"
 	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
 
 	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
@@ -1108,12 +1115,16 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			_, _ = currentThinking.WriteString(text)
 			_, _ = allThinking.WriteString(text)
 		}
+		visibleText := text
+		if requestCtx.SuppressAdaptiveThinkingText {
+			visibleText = ""
+		}
 		return writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": thinkingBlockIndex,
 			"delta": map[string]any{
 				"type":     "thinking_delta",
-				"thinking": text,
+				"thinking": visibleText,
 			},
 		})
 	}
@@ -3427,6 +3438,13 @@ func buildClaudeResponse(content string, toolUses []KiroToolUse, model string, u
 		}
 	} else {
 		blocks = append(blocks, extractThinkingBlocksWithProviderSignature(content, model, msgID, reasoningArtifacts.Signature)...)
+	}
+	if requestCtx.SuppressAdaptiveThinkingText {
+		for _, block := range blocks {
+			if block["type"] == "thinking" {
+				block["thinking"] = ""
+			}
+		}
 	}
 	stopSequence := ""
 	if len(toolUses) == 0 {
