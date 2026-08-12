@@ -699,8 +699,8 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	firstTurnTools := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools")
 	finalTurnTools := gjson.GetBytes(upstream.bodies[3], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools")
 	require.True(t, firstTurnTools.IsArray())
-	require.Equal(t, "Tool used in conversation history", finalTurnTools.Get("0.toolSpecification.description").String(),
-		"the final allowed search turn must drop the active search definition and retain only the history placeholder")
+	require.Equal(t, int64(0), finalTurnTools.Get("#").Int(),
+		"the final allowed search turn must not expose an active or placeholder web-search tool")
 	wire := recorder.Body.String()
 	require.Equal(t, 1, strings.Count(wire, "event: message_start"))
 	require.Equal(t, 1, strings.Count(wire, "event: message_delta"))

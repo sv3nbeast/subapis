@@ -251,6 +251,7 @@ func RemoveWebSearchTools(body []byte) ([]byte, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, err
 	}
+	normalizeFinalWebSearchMessages(payload)
 	tools, ok := payload["tools"].([]any)
 	if !ok {
 		return body, nil
@@ -269,6 +270,79 @@ func RemoveWebSearchTools(body []byte) ([]byte, error) {
 		return body, err
 	}
 	return updated, nil
+}
+
+func normalizeFinalWebSearchMessages(payload map[string]any) {
+	messages, ok := payload["messages"].([]any)
+	if !ok {
+		return
+	}
+	queries := make(map[string]string)
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			continue
+		}
+		for index, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch getInterfaceString(block["type"]) {
+			case "tool_use":
+				if !isWebSearchToolName(getInterfaceString(block["name"]), "") {
+					continue
+				}
+				toolUseID := getInterfaceString(block["id"])
+				query := webSearchQueryFromInterface(block["input"])
+				queries[toolUseID] = query
+				content[index] = map[string]any{
+					"type": "text",
+					"text": formatFinalWebSearchRequestText(query),
+				}
+			case "tool_result":
+				toolUseID := getInterfaceString(block["tool_use_id"])
+				query, isWebSearchResult := queries[toolUseID]
+				if !isWebSearchResult {
+					continue
+				}
+				content[index] = map[string]any{
+					"type": "text",
+					"text": formatFinalWebSearchResultText(query, block["content"]),
+				}
+			}
+		}
+		message["content"] = content
+	}
+}
+
+func webSearchQueryFromInterface(value any) string {
+	if input, ok := value.(map[string]any); ok {
+		return getInterfaceString(input["query"])
+	}
+	return ""
+}
+
+func formatFinalWebSearchRequestText(query string) string {
+	if strings.TrimSpace(query) == "" {
+		return "Web search requested."
+	}
+	return "Web search requested for: " + strings.TrimSpace(query)
+}
+
+func formatFinalWebSearchResultText(query string, content any) string {
+	resultText := getInterfaceString(content)
+	if resultText == "" {
+		resultText = "No search results found."
+	}
+	if strings.TrimSpace(query) == "" {
+		return "Web search results:\n" + resultText
+	}
+	return "Web search results for " + strings.TrimSpace(query) + ":\n" + resultText
 }
 
 func extractSearchText(content gjson.Result) string {

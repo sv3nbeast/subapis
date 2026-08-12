@@ -53,12 +53,25 @@ func TestExtractWebSearchToolConfigAndFilterDomains(t *testing.T) {
 	require.Equal(t, "Allowed", filtered.Results[1].Title)
 }
 
-func TestRemoveWebSearchToolsKeepsOtherTools(t *testing.T) {
-	body := []byte(`{"tools":[{"type":"web_search_20250305","name":"web_search"},{"name":"lookup","input_schema":{"type":"object"}}]}`)
+func TestRemoveWebSearchToolsKeepsOtherToolsAndNormalizesSearchHistory(t *testing.T) {
+	body := []byte(`{
+		"tools":[{"type":"web_search_20250305","name":"web_search"},{"name":"lookup","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"search Go"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_search","name":"web_search","input":{"query":"Go docs"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_search","content":"Found https://go.dev"}]}
+		]
+	}`)
 	updated, err := RemoveWebSearchTools(body)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), gjson.GetBytes(updated, "tools.#").Int())
 	require.Equal(t, "lookup", gjson.GetBytes(updated, "tools.0.name").String())
+	require.Equal(t, "text", gjson.GetBytes(updated, "messages.1.content.0.type").String())
+	require.Contains(t, gjson.GetBytes(updated, "messages.1.content.0.text").String(), "Go docs")
+	require.Equal(t, "text", gjson.GetBytes(updated, "messages.2.content.0.type").String())
+	require.Contains(t, gjson.GetBytes(updated, "messages.2.content.0.text").String(), "https://go.dev")
+	require.NotContains(t, string(updated), `"type":"tool_use"`)
+	require.NotContains(t, string(updated), `"type":"tool_result"`)
 }
 
 func TestInjectToolResultsClaudeAppendsMessages(t *testing.T) {

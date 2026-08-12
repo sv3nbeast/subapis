@@ -3,6 +3,7 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -58,6 +59,7 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 	lastDeltaType := ""
 	messageDeltaCount := 0
 	messageStopCount := 0
+	serverToolIDs := make(map[string]struct{})
 	for i, event := range events[1:] {
 		switch event.name {
 		case "content_block_start":
@@ -67,6 +69,18 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			nextIndex++
 			openType = event.data.Get("content_block.type").String()
 			require.Contains(t, []string{"text", "thinking", "tool_use", "server_tool_use", "web_search_tool_result", "code_execution_tool_result"}, openType)
+			switch openType {
+			case "server_tool_use":
+				toolID := event.data.Get("content_block.id").String()
+				require.True(t, strings.HasPrefix(toolID, "srvtoolu_"), "server tool ID must use Anthropic namespace")
+				require.Equal(t, "web_search", event.data.Get("content_block.name").String())
+				serverToolIDs[toolID] = struct{}{}
+			case "web_search_tool_result":
+				toolID := event.data.Get("content_block.tool_use_id").String()
+				_, paired := serverToolIDs[toolID]
+				require.True(t, paired, "web-search result must reference a preceding server tool use")
+				requireWebSearchToolResultContent(t, event.data.Get("content_block.content"))
+			}
 			lastDeltaType = ""
 		case "content_block_delta":
 			require.NotEqual(t, int64(-1), openIndex, "delta requires an open content block")
@@ -74,7 +88,15 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			deltaType := event.data.Get("delta.type").String()
 			switch openType {
 			case "text":
-				require.Equal(t, "text_delta", deltaType)
+				require.Contains(t, []string{"text_delta", "citations_delta"}, deltaType)
+				if deltaType == "citations_delta" {
+					citation := event.data.Get("delta.citation")
+					require.Equal(t, "web_search_result_location", citation.Get("type").String())
+					require.NotEmpty(t, citation.Get("url").String())
+					require.NotEmpty(t, citation.Get("title").String())
+					require.NotEmpty(t, citation.Get("cited_text").String())
+					requireBase64OpaqueValue(t, citation.Get("encrypted_index").String())
+				}
 			case "thinking":
 				require.Contains(t, []string{"thinking_delta", "signature_delta"}, deltaType)
 				if deltaType == "signature_delta" {
@@ -111,6 +133,35 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 	}
 	require.Equal(t, 1, messageDeltaCount)
 	require.Equal(t, 1, messageStopCount)
+}
+
+func requireWebSearchToolResultContent(t *testing.T, content gjson.Result) {
+	t.Helper()
+	if content.IsArray() {
+		for _, result := range content.Array() {
+			require.Equal(t, "web_search_result", result.Get("type").String())
+			require.NotEmpty(t, result.Get("title").String())
+			require.NotEmpty(t, result.Get("url").String())
+			requireBase64OpaqueValue(t, result.Get("encrypted_content").String())
+		}
+		return
+	}
+	require.Equal(t, "web_search_tool_result_error", content.Get("type").String())
+	require.Contains(t, []string{
+		WebSearchErrorInvalidToolInput,
+		WebSearchErrorUnavailable,
+		WebSearchErrorMaxUsesExceeded,
+		WebSearchErrorTooManyRequests,
+		WebSearchErrorQueryTooLong,
+		WebSearchErrorRequestTooLarge,
+	}, content.Get("error_code").String())
+}
+
+func requireBase64OpaqueValue(t *testing.T, value string) {
+	t.Helper()
+	require.NotEmpty(t, value)
+	_, err := base64.RawStdEncoding.DecodeString(value)
+	require.NoError(t, err, "opaque protocol field must be valid unpadded base64")
 }
 
 func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {
@@ -161,6 +212,54 @@ func TestAnthropicProtocolComplianceWebSearchServerBlocks(t *testing.T) {
 	require.Equal(t, "srvtoolu_protocol", events[1].data.Get("content_block.id").String())
 	require.Equal(t, "srvtoolu_protocol", events[4].data.Get("content_block.tool_use_id").String())
 	require.NotEmpty(t, events[4].data.Get("content_block.content.0.encrypted_content").String())
+}
+
+func TestAnthropicProtocolComplianceFinalizedWebSearchStreamWithCitations(t *testing.T) {
+	snippet := "The official Go documentation describes goroutines and channels."
+	results := &WebSearchResults{Results: []WebSearchResult{{
+		Title: "Effective Go", URL: "https://go.dev/doc/effective_go#concurrency", Snippet: &snippet,
+	}}}
+	searches := []SearchIndicator{{ToolUseID: "srvtoolu_protocol_full", Query: "Go concurrency", Results: results}}
+
+	upstream := bytes.NewBuffer(nil)
+	_, _ = upstream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "See https://go.dev/doc/effective_go#concurrency"},
+	}))
+	_, _ = upstream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+	var translated bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), upstream, &translated, "claude-opus-5", 11, KiroRequestContext{
+		RequireTerminalEvent: true,
+	})
+	require.NoError(t, err)
+
+	var wire strings.Builder
+	writeProtocolEventForTest(t, &wire, "message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id": "msg_protocol_full", "type": "message", "role": "assistant", "content": []any{},
+			"model": "claude-opus-5", "stop_reason": nil, "stop_sequence": nil,
+			"usage": map[string]any{"input_tokens": 11, "output_tokens": 0},
+		},
+	})
+	for _, event := range GenerateSearchIndicatorEvents("Go concurrency", "srvtoolu_protocol_full", results, 0) {
+		_, _ = wire.Write(event)
+	}
+	translatedFrames := splitSSEFrames([][]byte{translated.Bytes()})
+	for _, event := range FinalizeWebSearchSSEChunks(translatedFrames, 2, 1, searches) {
+		_, _ = wire.Write(event)
+	}
+
+	requireAnthropicSSEProtocolLifecycle(t, wire.String())
+	events := parseAnthropicSSEProtocolEvents(t, wire.String())
+	citationDeltas := 0
+	for _, event := range events {
+		if event.data.Get("delta.type").String() == "citations_delta" {
+			citationDeltas++
+		}
+	}
+	require.Equal(t, 1, citationDeltas)
 }
 
 func TestAnthropicProtocolCompliancePreservesCurrentStopReasons(t *testing.T) {
