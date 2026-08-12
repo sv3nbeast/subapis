@@ -314,7 +314,7 @@ func TestBuildKiroPayloadInjectsChunkedWritePolicyIntoSystemPrompt(t *testing.T)
 	require.Equal(t, 1, strings.Count(systemContent, systemChunkedWritePolicy))
 }
 
-func TestBuildKiroPayloadInjectsThinkingIntoHistory(t *testing.T) {
+func TestBuildKiroPayloadInjectsExplicitThinkingIntoHistory(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"thinking":{"type":"enabled","budget_tokens":2048},
@@ -333,6 +333,24 @@ func TestBuildKiroPayloadInjectsThinkingIntoHistory(t *testing.T) {
 	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>2048</max_thinking_length>")
 	require.NotContains(t, systemContent, "[Context: Current time is ")
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
+}
+
+func TestBuildKiroPayloadInterleavedThinkingBetaDoesNotEnableThinking(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"messages":[{"role":"user","content":"return JSON"}],
+		"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}}
+	}`)
+	headers := http.Header{}
+	headers.Set("Anthropic-Beta", "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24")
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-4.8", "", "CLI", headers)
+	require.NoError(t, err)
+	require.False(t, result.Context.ThinkingEnabled)
+	require.True(t, result.Context.StripImplicitThinking)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	require.False(t, gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking").Exists())
 }
 
 func TestBuildKiroPayloadDoesNotInjectClaudeThinkingTagsForGPTModels(t *testing.T) {
@@ -535,7 +553,7 @@ func TestBuildKiroPayloadInjectsThinkingForThinkingAliasModel(t *testing.T) {
 	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>20000</max_thinking_length>")
 }
 
-func TestBuildKiroPayloadHeaderOnlyThinking(t *testing.T) {
+func TestBuildKiroPayloadHeaderOnlyInterleavedThinkingDoesNotEnableThinking(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-sonnet-4-5",
 		"messages":[{"role":"user","content":"hello kiro"}]
@@ -549,7 +567,8 @@ func TestBuildKiroPayloadHeaderOnlyThinking(t *testing.T) {
 	payload := kiroBuildResult.Payload
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>16000</max_thinking_length>")
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	require.False(t, kiroBuildResult.Context.ThinkingEnabled)
 }
 
 func TestBuildKiroPayloadInjectsToolChoiceHints(t *testing.T) {

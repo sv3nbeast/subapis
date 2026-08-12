@@ -1578,11 +1578,10 @@ func deriveThinkingDirective(body []byte, headers http.Header) *thinkingDirectiv
 		}
 		return &thinkingDirective{Mode: "enabled", BudgetTokens: budget}
 	}
-	if headers != nil {
-		if beta := headers.Get("Anthropic-Beta"); strings.Contains(beta, "interleaved-thinking") {
-			return &thinkingDirective{Mode: "enabled", BudgetTokens: 16000}
-		}
-	}
+	// interleaved-thinking only changes where explicitly requested thinking may
+	// appear relative to tool calls. It does not enable extended thinking by
+	// itself. Claude Code sends this beta on every request, including ordinary
+	// text, JSON-schema, image, and document turns.
 	if effort := gjson.GetBytes(body, "reasoning_effort").String(); effort != "" && effort != "none" {
 		return &thinkingDirective{Mode: "enabled", BudgetTokens: 16000}
 	}
