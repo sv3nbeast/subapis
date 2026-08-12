@@ -311,7 +311,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool {
+func shouldSuppressEventPayload(payload string, _ int) bool {
 	if payload == "" {
 		return false
 	}
@@ -323,12 +323,9 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
 		return true
 	}
-	if webSearchToolUseIndex < 0 {
-		return false
-	}
-	if idx, ok := event["index"].(float64); ok && int(idx) == webSearchToolUseIndex {
-		return true
-	}
+	// Preserve the model's intermediate custom web-search refinement block.
+	// The native Anthropic stream exposes this tool_use; only the inner turn's
+	// terminal message envelope is suppressed by the adapter.
 	return false
 }
 

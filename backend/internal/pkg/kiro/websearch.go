@@ -111,7 +111,10 @@ func ExtractSearchQuery(body []byte) string {
 		}
 		text := extractSearchText(msg.Get("content"))
 		const prefix = "Perform a web search for the query: "
-		text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+		text = strings.TrimSpace(text)
+		if len(text) >= len(prefix) && strings.EqualFold(text[:len(prefix)], prefix) {
+			text = strings.TrimSpace(text[len(prefix):])
+		}
 		if text != "" {
 			return text
 		}
@@ -190,6 +193,16 @@ func ReplaceWebSearchToolDescription(body []byte) ([]byte, error) {
 					"query": map[string]any{
 						"type":        "string",
 						"description": "The search query to execute",
+					},
+					"allowed_domains": map[string]any{
+						"type":        "array",
+						"description": "Only include search results from these domains",
+						"items":       map[string]any{"type": "string"},
+					},
+					"blocked_domains": map[string]any{
+						"type":        "array",
+						"description": "Never include search results from these domains",
+						"items":       map[string]any{"type": "string"},
 					},
 				},
 				"required":             []string{"query"},

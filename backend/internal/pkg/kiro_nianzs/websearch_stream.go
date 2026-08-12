@@ -429,7 +429,7 @@ func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, inde
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppressMessageTerminal bool) bool {
+func shouldSuppressEventPayload(payload string, _ int, suppressMessageTerminal bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -444,12 +444,10 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int, suppr
 	if suppressMessageTerminal && (eventType == "message_delta" || eventType == "message_stop") {
 		return true
 	}
-	if webSearchToolUseIndex < 0 {
-		return false
-	}
-	if idx, ok := event["index"].(float64); ok && int(idx) == webSearchToolUseIndex {
-		return true
-	}
+	// Keep the intermediate custom web-search tool block visible. Anthropic's
+	// native web-search stream exposes the model's refinement tool_use between
+	// the first result and the next server_tool_use; only the terminal envelope
+	// is owned by this adapter and must be removed here.
 	return false
 }
 

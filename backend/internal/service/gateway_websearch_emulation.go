@@ -83,12 +83,13 @@ func isOnlyWebSearchToolInBody(body []byte) bool {
 }
 
 func isWebSearchToolJSON(tool gjson.Result) bool {
-	toolType := tool.Get("type").String()
+	toolType := strings.ToLower(strings.TrimSpace(tool.Get("type").String()))
 	if strings.HasPrefix(toolType, toolTypeWebSearchPrefix) || toolType == toolTypeGoogleSearch {
 		return true
 	}
-	switch tool.Get("name").String() {
-	case toolNameWebSearch, toolNameGoogleSearch, toolNameWebSearch2025:
+	toolName := strings.ToLower(strings.TrimSpace(tool.Get("name").String()))
+	switch toolName {
+	case toolNameWebSearch, "websearch", toolNameGoogleSearch, toolNameWebSearch2025, "remote_web_search":
 		return true
 	}
 	return false

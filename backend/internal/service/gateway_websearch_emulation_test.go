@@ -33,6 +33,14 @@ func TestIsOnlyWebSearchToolInBody_NameGoogleSearch(t *testing.T) {
 	require.True(t, isOnlyWebSearchToolInBody([]byte(`{"tools":[{"name":"google_search"}]}`)))
 }
 
+func TestIsOnlyWebSearchToolInBody_NameWebSearchIsCaseInsensitive(t *testing.T) {
+	require.True(t, isOnlyWebSearchToolInBody([]byte(`{"tools":[{"name":"WebSearch"}]}`)))
+}
+
+func TestIsOnlyWebSearchToolInBody_TypeWebSearchIsCaseInsensitive(t *testing.T) {
+	require.True(t, isOnlyWebSearchToolInBody([]byte(`{"tools":[{"type":"Web_Search_20250305"}]}`)))
+}
+
 func TestIsOnlyWebSearchToolInBody_MultipleTools(t *testing.T) {
 	require.False(t, isOnlyWebSearchToolInBody(
 		[]byte(`{"tools":[{"type":"web_search"},{"type":"text_editor"}]}`)))

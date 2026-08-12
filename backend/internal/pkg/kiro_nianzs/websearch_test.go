@@ -25,6 +25,16 @@ func TestReplaceWebSearchToolDescriptionUsesTypeFallback(t *testing.T) {
 	require.True(t, gjson.GetBytes(updated, "tools.0.input_schema.additionalProperties").Bool() == false)
 }
 
+func TestExtractSearchQueryAcceptsClaudeCodePrefixCaseInsensitively(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"perform a web search for the query: latest Go release"}]}`)
+	require.Equal(t, "latest Go release", ExtractSearchQuery(body))
+}
+
+func TestExtractSearchQueryFallsBackToUserText(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"latest Go release"}]}`)
+	require.Equal(t, "latest Go release", ExtractSearchQuery(body))
+}
+
 func TestInjectToolResultsClaudeAppendsMessages(t *testing.T) {
 	body := []byte(`{
 		"messages":[{"role":"user","content":"what is golang"}]
