@@ -193,6 +193,44 @@ def protobuf_fields(wire: bytes, field: str) -> dict[int, tuple[int, Any]]:
     return fields
 
 
+def validate_thinking_signature(value: Any, field: str) -> dict[str, Any]:
+    wire = opaque_base64(value, field)
+    require(wire[0] == 0x12, f"{field} is not a field-2 protobuf envelope")
+    outer = protobuf_fields(wire, field)
+    require(2 in outer and outer[2][0] == 2, f"{field} has no protobuf envelope payload")
+    require(outer.get(3) == (0, 1), f"{field} has the wrong thinking envelope kind")
+
+    inner = protobuf_fields(outer[2][1], field)
+    require(1 in inner and inner[1][0] == 2, f"{field} has no channel header")
+    require(2 in inner and len(inner[2][1]) == 12, f"{field} has an invalid nonce")
+    require(3 in inner and len(inner[3][1]) == 12, f"{field} has an invalid session value")
+    require(4 in inner and len(inner[4][1]) == 48, f"{field} has an invalid authenticator")
+    require(5 in inner and bool(inner[5][1]), f"{field} has an empty signed payload")
+
+    channel = protobuf_fields(inner[1][1], field)
+    require(channel.get(1) == (0, 16), f"{field} has an invalid channel version")
+    require(channel.get(3) == (0, 2), f"{field} has an invalid signature schema")
+    require(5 in channel and len(channel[5][1]) == 64, f"{field} has an invalid channel signature")
+    require(6 in channel and channel[6][0] == 2, f"{field} has no provider channel")
+    provider_channel = channel[6][1].decode("ascii", "strict")
+    require(provider_channel.startswith("claude-"), f"{field} provider channel is invalid")
+    require(channel.get(7) is not None and channel[7][0] == 0, f"{field} has no channel kind")
+    require(channel.get(8) == (2, b"thinking"), f"{field} has the wrong block kind")
+    require(11 in channel and channel[11][0] == 2 and bool(channel[11][1]), f"{field} has no context ID")
+    # Kiro provider signatures carry field 2=1 in their channel header. The
+    # local compatibility fallback deliberately omits it, so this lets the
+    # online probe catch regressions back to a merely shape-compatible value.
+    provider_native = channel.get(2) == (0, 1)
+    return {
+        "marker": f"0x{wire[0]:02x}",
+        "decoded_bytes": len(wire),
+        "provider_channel": provider_channel,
+        "provider_native": provider_native,
+        "context_id_bytes": len(channel[11][1]),
+        "signed_payload_bytes": len(inner[5][1]),
+    }
+
+
 def validate_web_opaque_envelope(value: Any, field: str, expected_kind: int) -> str:
     wire = opaque_base64(value, field)
     require(wire[0] == 0x12, f"{field} is not a field-2 protobuf envelope")
@@ -538,10 +576,9 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         require(facts["thinking_signatures"] > 0, "stream has no thinking signature")
         envelopes: list[dict[str, Any]] = []
         for signature in facts.pop("signature_values"):
-            decoded = opaque_base64(signature, "thinking signature")
-            require(decoded[0] in {0x08, 0x12}, f"unexpected signature envelope marker: 0x{decoded[0]:02x}")
-            require(len(decoded) >= 32, f"thinking signature envelope is implausibly short: {len(decoded)}")
-            envelopes.append({"marker": f"0x{decoded[0]:02x}", "decoded_bytes": len(decoded)})
+            envelope = validate_thinking_signature(signature, "thinking signature")
+            require(envelope["provider_native"], "thinking signature is not the provider-issued Kiro envelope")
+            envelopes.append(envelope)
         facts["signature_envelopes"] = envelopes
         return facts
 
@@ -562,10 +599,9 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         envelopes: list[dict[str, Any]] = []
         for block in thinking_blocks:
             require(bool(block.get("thinking")), "replay thinking text is empty")
-            decoded = opaque_base64(block.get("signature"), "replay thinking signature")
-            require(decoded[0] in {0x08, 0x12}, f"unexpected replay signature marker: 0x{decoded[0]:02x}")
-            require(len(decoded) >= 32, f"replay signature envelope is implausibly short: {len(decoded)}")
-            envelopes.append({"marker": f"0x{decoded[0]:02x}", "decoded_bytes": len(decoded)})
+            envelope = validate_thinking_signature(block.get("signature"), "replay thinking signature")
+            require(envelope["provider_native"], "replay signature is not the provider-issued Kiro envelope")
+            envelopes.append(envelope)
 
         replay_body = message_body(model, "", False, 512)
         replay_body["messages"] = [
