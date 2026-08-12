@@ -172,10 +172,11 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 				continue
 			}
 			if isWebSearchToolName(currentToolName, "") {
-				var input map[string]string
+				var input map[string]any
 				query := ""
 				if err := json.Unmarshal([]byte(toolInputBuilder.String()), &input); err == nil {
-					query = strings.TrimSpace(input["query"])
+					query, _ = input["query"].(string)
+					query = strings.TrimSpace(query)
 				}
 				if query != "" && !result.HasWebSearchToolUse {
 					result.HasWebSearchToolUse = true

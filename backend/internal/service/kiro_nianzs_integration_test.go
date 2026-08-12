@@ -686,8 +686,8 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 	_, _ = intermediate.Write(kiroEventStreamFrame(t, "toolUseEvent", map[string]any{
 		"toolUseEvent": map[string]any{
 			"toolUseId": "srvtoolu_refined",
-			"name":      "web_search",
-			"input":     `{"query":"Go memory model channels 2026"}`,
+			"name":      "remote_web_search",
+			"input":     `{"query":"Go memory model channels 2026","blocked_domains":[]}`,
 			"stop":      true,
 		},
 	}))

@@ -254,7 +254,7 @@ func TestFinalizeWebSearchSSEChunksSegmentsCitationsAndPreservesText(t *testing.
 func TestAnalyzeBufferedStream_DoesNotMixAdjacentNativeSearchBlocks(t *testing.T) {
 	chunks := [][]byte{
 		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_private\",\"name\":\"remote_web_search\",\"input\":{}}}\n\n"),
-		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"first query\\\"}\"}}\n\n"),
+		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"first query\\\",\\\"blocked_domains\\\":[] }\"}}\n\n"),
 		[]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n"),
 		[]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":4,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_native\",\"name\":\"web_search\",\"input\":{}}}\n\n"),
 		[]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":4,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"native query\\\"}\"}}\n\n"),
