@@ -784,6 +784,60 @@ func TestNianzsOpenAICompatibleToolStreamsEmitOneTerminal(t *testing.T) {
 	})
 }
 
+func TestNianzsResponsesRecoversCodexNamespacedWaitTool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			resetKiroResponsesHistoryStoreForTest()
+			body := []byte(`{
+				"model":"gpt-5.6-sol",
+				"input":[{"role":"user","content":"run the command and wait"}],
+				"tools":[{"type":"namespace","name":"functions","tools":[
+					{"type":"custom","name":"exec","description":"Run JavaScript orchestration"},
+					{"type":"function","name":"wait","description":"Wait for a running cell","parameters":{"type":"object","properties":{"cell_id":{"type":"string"},"yield_time_ms":{"type":"integer"}},"required":["cell_id"]}}
+				]}],
+				"stream":` + map[bool]string{false: "false", true: "true"}[stream] + `
+			}`)
+			leaked := "load active. Need wait.\n\n=functions.wait to=functions.wait (commentary) ... for cell 133.\n" +
+				`{"cell_id":"133","yield_time_ms":30000}`
+			upstreamResponse := kiroEventStreamResponse(t, leaked, 11, 5)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			account.Credentials["model_mapping"] = map[string]any{"gpt-5.6-sol": "gpt-5.6-sol"}
+
+			result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+				Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			tools := gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+			require.Len(t, tools, 2)
+			require.Equal(t, "functionsExec", tools[0].Get("toolSpecification.name").String())
+			require.Equal(t, "functionsWait", tools[1].Get("toolSpecification.name").String())
+
+			wire := recorder.Body.String()
+			require.Contains(t, wire, `"type":"function_call"`)
+			require.Contains(t, wire, `"name":"wait"`)
+			require.Contains(t, wire, `"namespace":"functions"`)
+			require.Contains(t, wire, `\"cell_id\":\"133\"`)
+			require.NotContains(t, wire, "=functions.wait")
+			require.NotContains(t, wire, "assistant to=functions.wait")
+			require.NotContains(t, wire, `"name":"functions__wait"`)
+			require.NotContains(t, wire, `"name":"functionsWait"`)
+			if stream {
+				require.Equal(t, 1, strings.Count(wire, "event: response.completed"))
+			} else {
+				require.Equal(t, "completed", gjson.Get(wire, "status").String())
+			}
+		})
+	}
+}
+
 func mustGinString(t *testing.T, c *gin.Context, key string) string {
 	t.Helper()
 	value, ok := c.Get(key)

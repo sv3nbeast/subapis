@@ -1086,6 +1086,133 @@ func TestStreamEventStreamAsAnthropicExtractsEmbeddedToolCall(t *testing.T) {
 	require.Contains(t, output, `"partial_json":"{\"query\":\"golang\"}"`)
 }
 
+func TestStreamEventStreamAsAnthropicRecoversCodexNamespacedToolText(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "</json>\n\nload active. Need wait.\n\n=functions.",
+		},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "wait to=functions.wait (commentary) ... for cell 133.\n" +
+				`{"cell_id":"133","yield_time_ms":30000,"max_tokens":30000}` +
+				"\n\n.assistant to=functions.wait command incorrectly?",
+		},
+	}))
+
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+
+	output := out.String()
+	require.NotContains(t, output, "</json")
+	require.Contains(t, output, `load active. Need wait.`)
+	require.Contains(t, output, `"name":"functions__wait"`)
+	require.Contains(t, output, `"partial_json":"{\"cell_id\":\"133\",\"max_tokens\":30000,\"yield_time_ms\":30000}"`)
+	require.NotContains(t, output, "=functions.wait")
+	require.NotContains(t, output, "assistant to=functions.wait")
+}
+
+func TestStreamEventStreamAsAnthropicBuffersCodexArtifactAcrossEvents(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	for _, content := range []string{
+		"</json",
+		"\nload active. Need wait.\n\n",
+		"=functions.wait to=functions.wait ...\n" + `{"cell_id":"133"}`,
+	} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": content},
+		}))
+	}
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.NotContains(t, out.String(), "</json")
+	require.Contains(t, out.String(), `load active. Need wait.`)
+	require.Contains(t, out.String(), `"name":"functions__wait"`)
+}
+
+func TestParseNonStreamingEventStreamRecoversCodexNamespacedToolText(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "Need wait.\n=functions.wait to=functions.wait (commentary)\n" +
+				`{"cell_id":"133","yield_time_ms":30000}`,
+		},
+	}))
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "gpt-5.6-sol", requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "tool_use", result.StopReason)
+	require.Equal(t, "Need wait.\n", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+	require.Equal(t, "tool_use", gjson.GetBytes(result.ResponseBody, "content.1.type").String())
+	require.Equal(t, "functions__wait", gjson.GetBytes(result.ResponseBody, "content.1.name").String())
+	require.Equal(t, "133", gjson.GetBytes(result.ResponseBody, "content.1.input.cell_id").String())
+	require.NotContains(t, string(result.ResponseBody), "=functions.wait")
+}
+
+func TestStreamEventStreamAsAnthropicDoesNotBufferOrdinaryAssistantText(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": `The assistant can discuss functions.wait with {"cell_id":"133"}.`,
+		},
+	}))
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), `The assistant can discuss functions.wait`)
+	require.NotContains(t, out.String(), `"name":"functions__wait"`)
+}
+
+func TestStreamEventStreamAsAnthropicRequiresCompleteCodexToolName(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": `assistant to=functions.wait_long {"cell_id":"133"}`,
+		},
+	}))
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), `assistant to=functions.wait_long`)
+	require.NotContains(t, out.String(), `"name":"functions__wait"`)
+}
+
+func TestStreamEventStreamAsAnthropicPreservesIncompleteCodexLikeTextAtEOF(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "literal =functions."},
+	}))
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{
+		"functionsWait": "functions__wait",
+	}}
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, requestCtx)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), `"text":"literal "`)
+	require.Contains(t, out.String(), `"text":"=functions."`)
+}
+
 func TestStreamEventStreamAsAnthropicSkipsLeadingWhitespaceOnlyChunk(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
@@ -2198,6 +2325,41 @@ func TestBuildKiroPayloadMapsLongToolNameConsistently(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestBuildKiroPayloadMapsNamespacedToolNameConsistently(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"wait for the command"}],
+		"tools":[{"name":"functions__wait","description":"wait","input_schema":{"type":"object","properties":{"cell_id":{"type":"string"}}}}]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "gpt-5.6-sol", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	require.Equal(t, "functionsWait", gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.name").String())
+	require.Equal(t, "functions__wait", result.Context.ToolNameMap["functionsWait"])
+}
+
+func TestBuildKiroPayloadDisambiguatesNamespacedToolNameCollision(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"wait"}],
+		"tools":[
+			{"name":"functions__wait","input_schema":{"type":"object"}},
+			{"name":"functionsWait","input_schema":{"type":"object"}}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "gpt-5.6-sol", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	tools := gjson.GetBytes(result.Payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+	require.Len(t, tools, 2)
+	first := tools[0].Get("toolSpecification.name").String()
+	second := tools[1].Get("toolSpecification.name").String()
+	require.Equal(t, "functionsWait", first)
+	require.NotEqual(t, first, second)
+	require.LessOrEqual(t, len(second), kiroMaxToolNameLen)
+	require.Equal(t, "functionsWait", result.Context.ToolNameMap[second])
 }
 
 func TestParseNonStreamingEventStreamRestoresShortToolName(t *testing.T) {

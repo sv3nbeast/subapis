@@ -118,6 +118,8 @@ type KiroRequestContext struct {
 	// 没有对应入口,不兜底会让响应体 usage.input_tokens 输出 0。
 	// 为 0 时不生效（保持原行为）。
 	EstimatedInputTokens int
+	toolNameForwardMap   map[string]string
+	toolNameOwners       map[string]string
 }
 
 type KiroBuildResult struct {
@@ -533,7 +535,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
-	content, toolUses, usage, stopReason, err := parseEventStream(body)
+	content, toolUses, usage, stopReason, err := parseEventStream(body, requestCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -964,7 +966,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil
 	}
 	flushPendingAssistantText := func() error {
-		text, embeddedTools, pending := drainEmbeddedToolText(pendingAssistantText)
+		text, embeddedTools, pending := drainEmbeddedToolTextForRequest(pendingAssistantText, requestCtx)
 		pendingAssistantText = pending
 		if err := emitTextDelta(text, false); err != nil {
 			return err
@@ -1285,6 +1287,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	if err := flushPendingAssistantText(); err != nil {
 		return nil, err
+	}
+	if tail := preserveUnparsedToolTail(pendingAssistantText, requestCtx); tail != "" {
+		pendingAssistantText = ""
+		if err := emitTextDelta(tail, true); err != nil {
+			return nil, err
+		}
 	}
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
@@ -2009,14 +2017,72 @@ func mapKiroToolName(name string, requestCtx *KiroRequestContext) string {
 	if name == "web_search" {
 		return "remote_web_search"
 	}
-	short := shortenToolNameIfNeeded(name)
-	if short != name && requestCtx != nil {
+	if requestCtx != nil {
+		if mapped := strings.TrimSpace(requestCtx.toolNameForwardMap[name]); mapped != "" {
+			return mapped
+		}
+	}
+	mapped := name
+	// Codex flattens namespace children as namespace__tool. Kiro models are
+	// materially more reliable with identifier-like names; keep ordinary tool
+	// names unchanged and only camel-case the private namespace separator.
+	if strings.Contains(name, "__") {
+		mapped = sanitizeNamespacedKiroToolName(name)
+	}
+	mapped = shortenToolNameIfNeeded(mapped)
+	if requestCtx != nil {
+		if requestCtx.toolNameForwardMap == nil {
+			requestCtx.toolNameForwardMap = make(map[string]string)
+		}
+		if requestCtx.toolNameOwners == nil {
+			requestCtx.toolNameOwners = make(map[string]string)
+		}
+		if owner := requestCtx.toolNameOwners[mapped]; owner != "" && owner != name {
+			mapped = disambiguateKiroToolName(mapped, name)
+		}
+		requestCtx.toolNameForwardMap[name] = mapped
+		requestCtx.toolNameOwners[mapped] = name
+	}
+	if mapped != name && requestCtx != nil {
 		if requestCtx.ToolNameMap == nil {
 			requestCtx.ToolNameMap = make(map[string]string)
 		}
-		requestCtx.ToolNameMap[short] = name
+		requestCtx.ToolNameMap[mapped] = name
 	}
-	return short
+	return mapped
+}
+
+func disambiguateKiroToolName(mapped, original string) string {
+	sum := sha256.Sum256([]byte(original))
+	suffix := "_" + hex.EncodeToString(sum[:4])
+	prefixLimit := kiroMaxToolNameLen - len(suffix)
+	prefix := truncateUTF8(mapped, prefixLimit)
+	return prefix + suffix
+}
+
+func sanitizeNamespacedKiroToolName(name string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(name), func(r rune) bool {
+		return r == '_' || r == '-'
+	})
+	if len(parts) == 0 {
+		return "tool"
+	}
+	var out strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		lower := strings.ToLower(part[:1]) + part[1:]
+		if out.Len() == 0 {
+			_, _ = out.WriteString(lower)
+			continue
+		}
+		_, _ = out.WriteString(strings.ToUpper(lower[:1]) + lower[1:])
+	}
+	if out.Len() == 0 {
+		return "tool"
+	}
+	return out.String()
 }
 
 func normalizeKiroJSONSchema(schema any) any {
@@ -2963,7 +3029,7 @@ func blockToMap(block gjson.Result) map[string]any {
 	return result
 }
 
-func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, error) {
+func parseEventStream(body io.Reader, requestCtx KiroRequestContext) (string, []KiroToolUse, Usage, string, error) {
 	reader := bufio.NewReader(body)
 	var content strings.Builder
 	var toolUses []KiroToolUse
@@ -3061,7 +3127,8 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		}, currentTool, processedIDs)
 		toolUses = append(toolUses, completed...)
 	}
-	cleanText, embeddedToolUses, _ := drainEmbeddedToolText(content.String())
+	cleanText, embeddedToolUses, pending := drainEmbeddedToolTextForRequest(content.String(), requestCtx)
+	cleanText += preserveUnparsedToolTail(pending, requestCtx)
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)
 
@@ -4130,26 +4197,93 @@ func toolUseContentKey(tool KiroToolUse) string {
 }
 
 func drainEmbeddedToolText(text string) (cleanText string, toolUses []KiroToolUse, pending string) {
-	complete, pending := splitCompleteEmbeddedToolText(text)
+	return drainEmbeddedToolTextForRequest(text, KiroRequestContext{})
+}
+
+func drainEmbeddedToolTextForRequest(text string, requestCtx KiroRequestContext) (cleanText string, toolUses []KiroToolUse, pending string) {
+	if hasCodexProtocolArtifactPrefix(text, requestCtx) && !hasCodexToolMarker(text, requestCtx) {
+		return "", nil, text
+	}
+	complete, pending := splitCompleteEmbeddedToolTextForRequest(text, requestCtx)
+	if artifact := codexProtocolArtifactSuffix(complete, requestCtx); artifact != "" {
+		complete = strings.TrimSuffix(complete, artifact)
+		pending = artifact + pending
+	}
+	complete = stripCodexToolProtocolArtifacts(complete, requestCtx, pending != "")
 	if strings.TrimSpace(complete) == "" {
 		// complete 为纯空白(无内嵌工具调用): 作为普通文本原样返回,
 		// 交由下游 writeTextDelta 的缓冲逻辑决定保留(中段空行)还是丢弃(首尾)。
 		// 不能在此直接吞掉, 否则标题后的独立 \n\n chunk 会丢失, 破坏 markdown 结构。
 		return complete, nil, pending
 	}
-	cleanText, toolUses = parseEmbeddedToolCalls(complete)
+	cleanText, toolUses = parseEmbeddedToolCallsForRequest(complete, requestCtx)
 	return cleanText, deduplicateToolUses(toolUses), pending
 }
 
+func hasCodexProtocolArtifactPrefix(text string, requestCtx KiroRequestContext) bool {
+	if len(requestCtx.ToolNameMap) == 0 {
+		return false
+	}
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	return strings.HasPrefix(trimmed, "</json>") || strings.HasPrefix(trimmed, "</json")
+}
+
+func codexProtocolArtifactSuffix(text string, requestCtx KiroRequestContext) string {
+	if len(requestCtx.ToolNameMap) == 0 {
+		return ""
+	}
+	for _, artifact := range []string{"</json>", "</json"} {
+		if strings.HasSuffix(text, artifact) {
+			return artifact
+		}
+	}
+	return ""
+}
+
+func stripCodexToolProtocolArtifacts(text string, requestCtx KiroRequestContext, hasPendingMarker bool) string {
+	if len(requestCtx.ToolNameMap) == 0 || (!hasPendingMarker && !hasCodexToolMarker(text, requestCtx)) {
+		return text
+	}
+	// Codex sometimes emits a truncated JSON fence immediately before the
+	// textual tool envelope. Once a declared namespace tool marker is present,
+	// these fragments are protocol residue rather than user content.
+	for _, artifact := range []string{"</json>", "</json"} {
+		text = strings.ReplaceAll(text, artifact, "")
+	}
+	return text
+}
+
+func preserveUnparsedToolTail(text string, requestCtx KiroRequestContext) string {
+	if text == "" || strings.HasPrefix(text, embeddedToolCallPrefix) || isUnparsedCodexToolTail(text, requestCtx) {
+		return ""
+	}
+	if !hasCodexToolMarker(text, requestCtx) {
+		return text
+	}
+	return stripCodexToolProtocolArtifacts(text, requestCtx, true)
+}
+
+func isUnparsedCodexToolTail(text string, requestCtx KiroRequestContext) bool {
+	for _, marker := range codexToolMarkers(requestCtx) {
+		if strings.HasPrefix(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func splitCompleteEmbeddedToolText(text string) (complete string, pending string) {
+	return splitCompleteEmbeddedToolTextForRequest(text, KiroRequestContext{})
+}
+
+func splitCompleteEmbeddedToolTextForRequest(text string, requestCtx KiroRequestContext) (complete string, pending string) {
 	searchFrom := 0
 	for {
-		idx := strings.Index(text[searchFrom:], embeddedToolCallPrefix)
-		if idx == -1 {
+		idx, ok := nextEmbeddedToolCallStartForRequest(text, searchFrom, requestCtx)
+		if !ok {
 			return text, ""
 		}
-		idx += searchFrom
-		_, _, end, ok := parseEmbeddedToolCallAt(text, idx)
+		_, _, end, ok := parseEmbeddedToolCallAtForRequest(text, idx, requestCtx)
 		if !ok {
 			return text[:idx], text[idx:]
 		}
@@ -4158,7 +4292,11 @@ func splitCompleteEmbeddedToolText(text string) (complete string, pending string
 }
 
 func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
-	if !strings.Contains(text, embeddedToolCallPrefix) {
+	return parseEmbeddedToolCallsForRequest(text, KiroRequestContext{})
+}
+
+func parseEmbeddedToolCallsForRequest(text string, requestCtx KiroRequestContext) (string, []KiroToolUse) {
+	if !strings.Contains(text, embeddedToolCallPrefix) && !hasCodexToolMarker(text, requestCtx) {
 		return text, nil
 	}
 	var (
@@ -4167,14 +4305,13 @@ func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
 		index    int
 	)
 	for index < len(text) {
-		start := strings.Index(text[index:], embeddedToolCallPrefix)
-		if start == -1 {
+		start, ok := nextEmbeddedToolCallStartForRequest(text, index, requestCtx)
+		if !ok {
 			_, _ = builder.WriteString(text[index:])
 			break
 		}
-		start += index
 		_, _ = builder.WriteString(text[index:start])
-		tool, _, end, ok := parseEmbeddedToolCallAt(text, start)
+		tool, _, end, ok := parseEmbeddedToolCallAtForRequest(text, start, requestCtx)
 		if !ok {
 			_, _ = builder.WriteString(text[start:])
 			break
@@ -4186,6 +4323,13 @@ func parseEmbeddedToolCalls(text string) (string, []KiroToolUse) {
 }
 
 func parseEmbeddedToolCallAt(text string, start int) (KiroToolUse, int, int, bool) {
+	return parseEmbeddedToolCallAtForRequest(text, start, KiroRequestContext{})
+}
+
+func parseEmbeddedToolCallAtForRequest(text string, start int, requestCtx KiroRequestContext) (KiroToolUse, int, int, bool) {
+	if tool, end, ok := parseCodexToolCallAt(text, start, requestCtx); ok {
+		return tool, start, end, true
+	}
 	if start < 0 || start >= len(text) || !strings.HasPrefix(text[start:], embeddedToolCallPrefix) {
 		return KiroToolUse{}, 0, 0, false
 	}
@@ -4221,6 +4365,151 @@ func parseEmbeddedToolCallAt(text string, start int) (KiroToolUse, int, int, boo
 	rawJSON := text[jsonStart : jsonEnd+1]
 	tool := finalizeRawToolUse("toolu_"+GenerateToolUseID(), toolName, rawJSON)
 	return tool, start, end + 1, true
+}
+
+func nextEmbeddedToolCallStartForRequest(text string, from int, requestCtx KiroRequestContext) (int, bool) {
+	if from < 0 {
+		from = 0
+	}
+	if from >= len(text) {
+		return 0, false
+	}
+	best := -1
+	if idx := strings.Index(text[from:], embeddedToolCallPrefix); idx >= 0 {
+		best = from + idx
+	}
+	for _, marker := range codexToolMarkers(requestCtx) {
+		if idx := indexCodexToolMarker(text, from, marker); idx >= 0 && (best < 0 || idx < best) {
+			best = idx
+		}
+		// Preserve a marker split across upstream content events.
+		maxPrefix := len(marker) - 1
+		if remaining := len(text) - from; maxPrefix > remaining {
+			maxPrefix = remaining
+		}
+		minPrefix := codexToolMarkerMinPrefix(marker)
+		for length := maxPrefix; length >= minPrefix; length-- {
+			idx := len(text) - length
+			if idx >= from && strings.HasPrefix(marker, text[idx:]) && validCodexToolMarkerStart(text, idx) && (best < 0 || idx < best) {
+				best = idx
+				break
+			}
+		}
+	}
+	return best, best >= 0
+}
+
+func codexToolMarkers(requestCtx KiroRequestContext) []string {
+	if len(requestCtx.ToolNameMap) == 0 {
+		return nil
+	}
+	markers := make([]string, 0, len(requestCtx.ToolNameMap)*2)
+	for _, original := range requestCtx.ToolNameMap {
+		if !strings.Contains(original, "__") {
+			continue
+		}
+		qualified := strings.ReplaceAll(original, "__", ".")
+		markers = append(markers, ".assistant to="+qualified, "assistant to="+qualified, "="+qualified+" to="+qualified)
+	}
+	return markers
+}
+
+func indexCodexToolMarker(text string, from int, marker string) int {
+	for from < len(text) {
+		idx := strings.Index(text[from:], marker)
+		if idx < 0 {
+			return -1
+		}
+		idx += from
+		if validCodexToolMarkerStart(text, idx) && validCodexToolMarkerEnd(text, idx+len(marker)) {
+			return idx
+		}
+		from = idx + 1
+	}
+	return -1
+}
+
+func validCodexToolMarkerStart(text string, start int) bool {
+	if start <= 0 {
+		return true
+	}
+	previous := text[start-1]
+	if previous == '.' || previous == '>' {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:start])
+	return unicode.IsSpace(r)
+}
+
+func validCodexToolMarkerEnd(text string, end int) bool {
+	if end >= len(text) {
+		return true
+	}
+	next := text[end]
+	return next == '{' || next == '(' || unicode.IsSpace(rune(next))
+}
+
+func codexToolMarkerMinPrefix(marker string) int {
+	searchFrom := 0
+	if strings.HasPrefix(marker, ".") {
+		searchFrom = 1
+	}
+	if dot := strings.IndexByte(marker[searchFrom:], '.'); dot >= 0 {
+		return searchFrom + dot + 1
+	}
+	return len(marker)
+}
+
+func hasCodexToolMarker(text string, requestCtx KiroRequestContext) bool {
+	for _, marker := range codexToolMarkers(requestCtx) {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseCodexToolCallAt(text string, start int, requestCtx KiroRequestContext) (KiroToolUse, int, bool) {
+	if start < 0 || start >= len(text) {
+		return KiroToolUse{}, 0, false
+	}
+	matchedMarker := ""
+	mappedName := ""
+	for mapped, original := range requestCtx.ToolNameMap {
+		if !strings.Contains(original, "__") {
+			continue
+		}
+		qualified := strings.ReplaceAll(original, "__", ".")
+		for _, marker := range []string{".assistant to=" + qualified, "assistant to=" + qualified, "=" + qualified + " to=" + qualified} {
+			if strings.HasPrefix(text[start:], marker) && validCodexToolMarkerEnd(text, start+len(marker)) {
+				matchedMarker = marker
+				mappedName = mapped
+				break
+			}
+		}
+		if matchedMarker != "" {
+			break
+		}
+	}
+	if matchedMarker == "" {
+		return KiroToolUse{}, 0, false
+	}
+	jsonSearchStart := start + len(matchedMarker)
+	jsonStartRel := strings.IndexByte(text[jsonSearchStart:], '{')
+	if jsonStartRel < 0 || jsonStartRel > 1024 {
+		return KiroToolUse{}, 0, false
+	}
+	jsonStart := jsonSearchStart + jsonStartRel
+	jsonEnd := findMatchingJSONBracket(text, jsonStart)
+	if jsonEnd < 0 {
+		return KiroToolUse{}, 0, false
+	}
+	rawJSON := text[jsonStart : jsonEnd+1]
+	tool := finalizeRawToolUse("toolu_"+GenerateToolUseID(), mappedName, rawJSON)
+	if !isEmittableToolUse(tool) {
+		return KiroToolUse{}, 0, false
+	}
+	return tool, jsonEnd + 1, true
 }
 
 func findMatchingJSONBracket(text string, start int) int {
