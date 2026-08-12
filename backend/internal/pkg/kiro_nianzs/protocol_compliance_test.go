@@ -228,6 +228,7 @@ func TestAnthropicProtocolComplianceClaudeCodeResponseHints(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, buildResult.Context.EmitProtocolPing)
+	require.True(t, buildResult.Context.ReportUsageIterations)
 	require.True(t, buildResult.Context.ReportContextManagement)
 
 	stream := bytes.NewBuffer(nil)
@@ -248,6 +249,7 @@ func TestAnthropicProtocolComplianceClaudeCodeResponseHints(t *testing.T) {
 	events := parseAnthropicSSEProtocolEvents(t, out.String())
 	require.GreaterOrEqual(t, len(events), 6)
 	require.Equal(t, "message_start", events[0].name)
+	require.Equal(t, int64(1), events[0].data.Get("message.usage.output_tokens").Int())
 	require.Equal(t, "content_block_start", events[1].name)
 	require.Equal(t, "ping", events[2].name)
 	pingCount := 0
@@ -261,6 +263,13 @@ func TestAnthropicProtocolComplianceClaudeCodeResponseHints(t *testing.T) {
 	require.Equal(t, "message_delta", messageDelta.name)
 	require.True(t, messageDelta.data.Get("context_management.applied_edits").IsArray())
 	require.Equal(t, int64(0), messageDelta.data.Get("context_management.applied_edits.#").Int())
+	require.False(t, messageDelta.data.Get("usage.cache_creation").Exists())
+	require.True(t, messageDelta.data.Get("usage.iterations").IsArray())
+	require.Equal(t, int64(1), messageDelta.data.Get("usage.iterations.#").Int())
+	require.Equal(t, "message", messageDelta.data.Get("usage.iterations.0.type").String())
+	require.True(t, messageDelta.data.Get("usage.iterations.0.cache_creation").Exists())
+	require.Equal(t, messageDelta.data.Get("usage.input_tokens").Int(), messageDelta.data.Get("usage.iterations.0.input_tokens").Int())
+	require.Equal(t, messageDelta.data.Get("usage.output_tokens").Int(), messageDelta.data.Get("usage.iterations.0.output_tokens").Int())
 }
 
 func TestBuildKiroPayloadProtocolResponseHintsRequireExactBetaTokens(t *testing.T) {
@@ -272,6 +281,7 @@ func TestBuildKiroPayloadProtocolResponseHintsRequireExactBetaTokens(t *testing.
 	)
 	require.NoError(t, err)
 	require.False(t, buildResult.Context.EmitProtocolPing)
+	require.False(t, buildResult.Context.ReportUsageIterations)
 	require.False(t, buildResult.Context.ReportContextManagement)
 }
 

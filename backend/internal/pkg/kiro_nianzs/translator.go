@@ -117,6 +117,10 @@ type KiroRequestContext struct {
 	// context edits applied by this adapter. Kiro does not apply Anthropic
 	// context edits, so the response is the truthful empty applied_edits list.
 	ReportContextManagement bool
+	// ReportUsageIterations mirrors the per-model-turn accounting returned to
+	// Claude Code clients. Keep the cache TTL breakdown inside the iteration;
+	// the terminal aggregate only carries the public aggregate token fields.
+	ReportUsageIterations bool
 	// StripImplicitThinking keeps provider-only chain-of-thought out of a
 	// response when the client did not request Anthropic thinking blocks. It is
 	// deliberately separate from ThinkingEnabled: parsing hidden Kiro tags must
@@ -415,6 +419,7 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
 	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
+	requestCtx.ReportUsageIterations = requestCtx.EmitProtocolPing
 	requestCtx.ReportContextManagement = anthropicBetaHeaderContains(headers, "context-management-2025-06-27")
 	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
@@ -653,9 +658,15 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if requestCtx.CacheEmulationUsage != nil {
 			startUsage = mergeKiroCacheEmulationUsage(startUsage, requestCtx.CacheEmulationUsage)
 		}
+		startOutputTokens := 0
+		if requestCtx.ReportUsageIterations {
+			// Claude Code's current Messages stream starts with a positive output
+			// token seed; the authoritative count still arrives in message_delta.
+			startOutputTokens = 1
+		}
 		usageMap := map[string]any{
 			"input_tokens":  startUsage.InputTokens,
-			"output_tokens": 0,
+			"output_tokens": startOutputTokens,
 			"service_tier":  "standard",
 			"inference_geo": "not_available",
 		}
@@ -1521,7 +1532,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
 	}
-	addKiroCacheUsageFields(finalUsageMap, usage)
+	if requestCtx.ReportUsageIterations {
+		finalUsageMap["iterations"] = []any{kiroUsageIteration(usage)}
+	}
 	messageDelta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
@@ -4869,4 +4882,16 @@ func addKiroCacheUsageFields(usageMap map[string]any, usage Usage) {
 		"ephemeral_5m_input_tokens": usage.CacheCreation5mInputTokens,
 		"ephemeral_1h_input_tokens": usage.CacheCreation1hInputTokens,
 	}
+}
+
+func kiroUsageIteration(usage Usage) map[string]any {
+	iteration := map[string]any{
+		"type":                        "message",
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+	}
+	addKiroCacheUsageFields(iteration, usage)
+	return iteration
 }
