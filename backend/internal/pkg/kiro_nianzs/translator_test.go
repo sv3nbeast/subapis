@@ -439,6 +439,35 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus5ThinkingModel(t *testing
 	require.True(t, kiroBuildResult.Context.SuppressAdaptiveThinkingText)
 }
 
+func TestBuildKiroPayloadPreservesNativeClaudeCodeSystemPrompt(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"system":[
+			{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},
+			{"type":"text","text":"Follow the native client instructions exactly."}
+		],
+		"thinking":{"type":"adaptive"},
+		"output_config":{"effort":"medium"},
+		"messages":[{"role":"user","content":"hello kiro"}]
+	}`)
+	headers := http.Header{}
+	headers.Set("Anthropic-Beta", "claude-code-20250219")
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", headers)
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Equal(t,
+		"You are Claude Code, Anthropic's official CLI for Claude.\n\nFollow the native client instructions exactly.",
+		systemContent,
+	)
+	require.NotContains(t, systemContent, "<CRITICAL_OVERRIDE>")
+	require.NotContains(t, systemContent, "<identity_and_confidentiality>")
+	require.NotContains(t, systemContent, systemChunkedWritePolicy)
+	require.NotContains(t, systemContent, "<thinking_mode>")
+	require.Equal(t, "adaptive", gjson.GetBytes(result.Payload, "additionalModelRequestFields.thinking.type").String())
+	require.Equal(t, "medium", gjson.GetBytes(result.Payload, "additionalModelRequestFields.output_config.effort").String())
+}
+
 func TestBuildKiroPayloadAddsAdditionalModelRequestFieldsForOutputConfigModels(t *testing.T) {
 	cases := []struct {
 		name       string

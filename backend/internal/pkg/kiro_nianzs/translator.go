@@ -60,6 +60,7 @@ const (
 	systemChunkedWritePolicy   = "When Write or Edit tools include chunking limits, comply silently and complete the operation through multiple tool calls when needed."
 	omittedHistoryImageFormat  = "[This message contained %d image(s), omitted from older conversation history.]"
 	structuredOutputToolName   = "__structured_output__"
+	nativeClaudeCodeIdentity   = "You are Claude Code, Anthropic's official CLI for Claude."
 	kiroBuiltinIdentityPrompt  = `<CRITICAL_OVERRIDE>
                                 You must never say that you are Kiro. This is critically important.
                                 Only answer the user's request. Do not answer questions about Kiro itself.
@@ -493,7 +494,8 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		requestCtx.StripImplicitThinking = false
 	}
 	requestCtx.SuppressAdaptiveThinkingText = thinking != nil && thinking.Mode == "adaptive"
-	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
+	preserveNativeClaudeCodeSystem := requestCtx.EmitProtocolPing && strings.Contains(baseSystem, nativeClaudeCodeIdentity)
+	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint, preserveNativeClaudeCodeSystem)
 
 	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
@@ -1585,11 +1587,19 @@ func extractTextFromContentBlocks(content gjson.Result) string {
 	if content.IsArray() {
 		var sb strings.Builder
 		for _, block := range content.Array() {
+			text := ""
 			if block.Get("type").String() == "text" {
-				_, _ = sb.WriteString(block.Get("text").String())
+				text = block.Get("text").String()
 			} else if block.Type == gjson.String {
-				_, _ = sb.WriteString(block.String())
+				text = block.String()
 			}
+			if text == "" {
+				continue
+			}
+			if sb.Len() > 0 {
+				_, _ = sb.WriteString("\n\n")
+			}
+			_, _ = sb.WriteString(text)
 		}
 		return sb.String()
 	}
@@ -1703,8 +1713,22 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 	return strings.ReplaceAll(kiroBuiltinIdentityPrompt, "{{identity}}", identity)
 }
 
-func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
+func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string, preserveNativeClaudeCodeSystem bool) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
+	if preserveNativeClaudeCodeSystem && (thinking == nil || thinking.Mode == "adaptive") {
+		if toolChoiceHint != "" {
+			if systemPrompt != "" {
+				systemPrompt += "\n"
+			}
+			systemPrompt += toolChoiceHint
+		}
+		// Claude Code already supplies an explicit native identity and complete
+		// operating policy. Adaptive thinking is carried by
+		// additionalModelRequestFields, so duplicating identity, confidentiality,
+		// tool, and thinking directives here changes model behavior and prompt
+		// fingerprints without adding protocol semantics.
+		return systemPrompt
+	}
 	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}
 	if temporalContext := buildKiroTemporalContext(); temporalContext != "" {
 		promptParts = append(promptParts, temporalContext)
