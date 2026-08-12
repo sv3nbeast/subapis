@@ -386,10 +386,25 @@ func TestNianzsModernClaudeInputAccountingMatchesProviderBaseline(t *testing.T) 
 	require.Len(t, tools, 1)
 	require.Equal(t, 28, nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0]))
 	require.Equal(t, 417, nianzsCountModernClaudeToolDefinitionTokens(tools[0]))
-	require.Equal(t, 464, nianzsEstimateKiroInputTokens(context.Background(), body))
+	require.Equal(t, 463, nianzsEstimateKiroInputTokens(context.Background(), body))
 
 	legacyBody := bytes.Replace(body, []byte(`claude-opus-5`), []byte(`claude-sonnet-4-6`), 1)
 	require.Equal(t, 188, nianzsEstimateKiroInputTokens(context.Background(), legacyBody))
+}
+
+func TestNianzsModernClaudeHighEntropyMessageUsesProviderFraming(t *testing.T) {
+	messages := []any{map[string]any{
+		"role":    "user",
+		"content": strings.Repeat("请分析以下协议合规性并严格返回结果：测试编号2025-01。", 20),
+	}}
+	sanitized, imageTokens := nianzsSanitizeKiroImagesForTokenEstimate(context.Background(), messages)
+	canonical, err := nianzsCanonicalJSON(sanitized)
+	require.NoError(t, err)
+	legacy := anthropictokenizer.CountTokens(string(canonical)) + imageTokens + nianzsKiroTokensPerMessage
+	modern := anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + nianzsKiroTokensPerMessage
+	require.Greater(t, modern, legacy*2)
+	want := max(nianzsScaleModernClaudeTokens(modern, nianzsModernClaudeHighEntropyScaleNum, nianzsModernClaudeHighEntropyScaleDen)-nianzsModernClaudeMessageFramingTokens, legacy)
+	require.Equal(t, want, nianzsCountModernClaudeMessagesTokens(context.Background(), messages))
 }
 
 func TestNianzsModernClaudeCacheStopsAtExplicitSystemBreakpoint(t *testing.T) {

@@ -51,6 +51,9 @@ const (
 	nianzsModernClaudeToolEnvelopeTokens     = 337
 	nianzsModernClaudeCachedToolBoundaryNum  = 5
 	nianzsModernClaudeCachedToolBoundaryDen  = 2
+	nianzsModernClaudeHighEntropyScaleNum    = 955
+	nianzsModernClaudeHighEntropyScaleDen    = 1000
+	nianzsModernClaudeMessageFramingTokens   = 4
 )
 
 type nianzsKiroCacheEmulationUsage struct {
@@ -1153,7 +1156,22 @@ func nianzsCountModernClaudeMessagesTokens(ctx context.Context, messages []any) 
 	if err != nil {
 		return len(messages) * nianzsKiroTokensPerMessage
 	}
-	return anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + len(messages)*nianzsKiroTokensPerMessage
+	legacy := anthropictokenizer.CountTokens(string(canonical)) + imageTokens + len(messages)*nianzsKiroTokensPerMessage
+	modern := anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + len(messages)*nianzsKiroTokensPerMessage
+	// Claude Code's nonce-heavy metadata is the main case where the modern
+	// tokenizer is several times larger than the legacy vocabulary. Provider
+	// usage is consistently just below the raw modern estimate because the
+	// Messages framing is not tokenized as client JSON. Keep ordinary prose on
+	// the established estimate and only trim this high-entropy branch.
+	if modern > legacy*2 {
+		adjusted := nianzsScaleModernClaudeTokens(
+			modern,
+			nianzsModernClaudeHighEntropyScaleNum,
+			nianzsModernClaudeHighEntropyScaleDen,
+		) - nianzsModernClaudeMessageFramingTokens
+		return max(adjusted, legacy)
+	}
+	return legacy
 }
 
 func nianzsCountModernClaudeInputTokensFromPayload(ctx context.Context, payload map[string]any, model string) int {
