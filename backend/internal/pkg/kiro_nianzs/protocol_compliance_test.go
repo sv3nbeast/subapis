@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -64,6 +65,10 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 	serverToolIDs := make(map[string]struct{})
 	for i, event := range events[1:] {
 		switch event.name {
+		case "ping":
+			// Anthropic permits keepalive pings between any two protocol
+			// events. They neither open nor close a content block.
+			require.Equal(t, "ping", event.data.Get("type").String())
 		case "content_block_start":
 			require.Equal(t, int64(-1), openIndex, "content blocks must not overlap")
 			require.Equal(t, nextIndex, event.data.Get("index").Int(), "content block indices must be contiguous")
@@ -210,6 +215,64 @@ func TestAnthropicProtocolComplianceThinkingTextStream(t *testing.T) {
 	})
 	require.NoError(t, err)
 	requireAnthropicSSEProtocolLifecycle(t, out.String())
+	require.NotContains(t, out.String(), "event: ping")
+	require.NotContains(t, out.String(), `"context_management"`)
+}
+
+func TestAnthropicProtocolComplianceClaudeCodeResponseHints(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("Anthropic-Beta", "claude-code-20250219, context-management-2025-06-27")
+	buildResult, err := BuildKiroPayloadWithContext(
+		[]byte(`{"model":"claude-opus-4-8","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`),
+		"claude-opus-4-8", "", "AI_EDITOR", headers,
+	)
+	require.NoError(t, err)
+	require.True(t, buildResult.Context.EmitProtocolPing)
+	require.True(t, buildResult.Context.ReportContextManagement)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "hello"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stopReason": "end_turn"},
+	}))
+
+	requestCtx := buildResult.Context
+	requestCtx.RequireTerminalEvent = true
+	var out bytes.Buffer
+	_, err = StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-4-8", 4, requestCtx)
+	require.NoError(t, err)
+	requireAnthropicSSEProtocolLifecycle(t, out.String())
+
+	events := parseAnthropicSSEProtocolEvents(t, out.String())
+	require.GreaterOrEqual(t, len(events), 6)
+	require.Equal(t, "message_start", events[0].name)
+	require.Equal(t, "content_block_start", events[1].name)
+	require.Equal(t, "ping", events[2].name)
+	pingCount := 0
+	for _, event := range events {
+		if event.name == "ping" {
+			pingCount++
+		}
+	}
+	require.Equal(t, 1, pingCount)
+	messageDelta := events[len(events)-2]
+	require.Equal(t, "message_delta", messageDelta.name)
+	require.True(t, messageDelta.data.Get("context_management.applied_edits").IsArray())
+	require.Equal(t, int64(0), messageDelta.data.Get("context_management.applied_edits.#").Int())
+}
+
+func TestBuildKiroPayloadProtocolResponseHintsRequireExactBetaTokens(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("Anthropic-Beta", "claude-code-20250219-rev2,context-management-2025-06-27-rev2")
+	buildResult, err := BuildKiroPayloadWithContext(
+		[]byte(`{"model":"claude-opus-4-8","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`),
+		"claude-opus-4-8", "", "AI_EDITOR", headers,
+	)
+	require.NoError(t, err)
+	require.False(t, buildResult.Context.EmitProtocolPing)
+	require.False(t, buildResult.Context.ReportContextManagement)
 }
 
 func TestAnthropicProtocolComplianceWebSearchServerBlocks(t *testing.T) {

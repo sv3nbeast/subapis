@@ -94,11 +94,14 @@ func (w *nianzsKiroStreamChunkCollector) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func nianzsBufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int) ([][]byte, *nianzskiro.StreamResult, error) {
+func nianzsBufferKiroAnthropicStream(ctx context.Context, body io.Reader, responseModel string, inputTokens int, requestCtx nianzskiro.KiroRequestContext) ([][]byte, *nianzskiro.StreamResult, error) {
 	collector := &nianzsKiroStreamChunkCollector{}
-	result, err := nianzskiro.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, nianzskiro.KiroRequestContext{
-		RequireTerminalEvent: true,
-	})
+	// The outer WebSearch stream owns message_start and the single protocol
+	// ping. Preserve terminal response hints from the real upstream request,
+	// but prevent a second ping from appearing after the server-tool blocks.
+	requestCtx.EmitProtocolPing = false
+	requestCtx.RequireTerminalEvent = true
+	result, err := nianzskiro.StreamEventStreamAsAnthropicWithContext(ctx, body, collector, responseModel, inputTokens, requestCtx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -166,6 +169,11 @@ func nianzsWriteAnthropicMessageStart(w io.Writer, msgID, model string, inputTok
 	return err
 }
 
+func nianzsWriteAnthropicPing(w io.Writer) error {
+	_, err := io.WriteString(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	return err
+}
+
 func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, plan *nianzsKiroCacheEmulationPlan,
 ) error {
@@ -188,6 +196,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	nextContentBlockIndex := 0
 	webSearchRequests := 0
 	searches := make([]nianzskiro.SearchIndicator, 0, 2)
+	emitProtocolPing := anthropicBetaTokensContains(getHeaderRaw(headers, "Anthropic-Beta"), "claude-code-20250219")
 
 	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
 		return err
@@ -197,8 +206,15 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		// Match Claude's direct server-tool stream: expose the server_tool_use
 		// immediately, then perform the MCP network request, and emit its paired
 		// result. This preserves both protocol order and first-visible latency.
-		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchToolUseEvents(query, currentToolUseID, nextContentBlockIndex)); err != nil {
-			return err
+		for chunkIndex, chunk := range nianzskiro.GenerateSearchToolUseEvents(query, currentToolUseID, nextContentBlockIndex) {
+			if _, err := w.Write(chunk); err != nil {
+				return err
+			}
+			if iteration == 0 && chunkIndex == 0 && emitProtocolPing {
+				if err := nianzsWriteAnthropicPing(w); err != nil {
+					return err
+				}
+			}
 		}
 		nextContentBlockIndex++
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
@@ -236,7 +252,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 			}
 		}
 
-		resp, _, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		resp, requestCtx, err := s.executeKiroUpstreamNianzs(ctx, account, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
 			return err
 		}
@@ -245,7 +261,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		}
 		chunks, _, streamErr := func() ([][]byte, *nianzskiro.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
-			return nianzsBufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
+			return nianzsBufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens, requestCtx)
 		}()
 		if streamErr != nil {
 			return streamErr

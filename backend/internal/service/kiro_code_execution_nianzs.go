@@ -523,6 +523,7 @@ func (s *GatewayService) streamKiroCodeExecutionAsAnthropicNianzs(
 		}
 		requestCtx.EstimatedInputTokens = inputTokens
 		requestCtx.RequireTerminalEvent = true
+		requestCtx.EmitProtocolPing = turn == 0 && requestCtx.EmitProtocolPing
 		turnWriter := newNianzsKiroCodeExecutionTurnWriter(ctx, w, runner, nextIndex, executionCount, priorUsage, turn == 0)
 		streamResult, streamErr := func() (*nianzskiro.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()

@@ -108,6 +108,15 @@ type ParseResult struct {
 type KiroRequestContext struct {
 	ToolNameMap     map[string]string
 	ThinkingEnabled bool
+	// EmitProtocolPing mirrors the Claude Messages streaming keepalive frame
+	// for Claude Code clients. The translator emits it exactly once, immediately
+	// after the first content_block_start, so multi-turn server tools cannot
+	// create duplicate pings in one downstream message.
+	EmitProtocolPing bool
+	// ReportContextManagement tells the terminal message_delta to describe the
+	// context edits applied by this adapter. Kiro does not apply Anthropic
+	// context edits, so the response is the truthful empty applied_edits list.
+	ReportContextManagement bool
 	// StripImplicitThinking keeps provider-only chain-of-thought out of a
 	// response when the client did not request Anthropic thinking blocks. It is
 	// deliberately separate from ThinkingEnabled: parsing hidden Kiro tags must
@@ -405,6 +414,8 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
+	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
+	requestCtx.ReportContextManagement = anthropicBetaHeaderContains(headers, "context-management-2025-06-27")
 	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
 	if mt := gjson.GetBytes(claudeBody, "max_tokens"); mt.Exists() {
@@ -548,6 +559,18 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	return &KiroBuildResult{Payload: payloadBytes, Context: requestCtx}, nil
 }
 
+func anthropicBetaHeaderContains(headers http.Header, token string) bool {
+	if headers == nil || token == "" {
+		return false
+	}
+	for _, part := range strings.Split(headers.Get("Anthropic-Beta"), ",") {
+		if strings.TrimSpace(part) == token {
+			return true
+		}
+	}
+	return false
+}
+
 func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, requestCtx KiroRequestContext) (*ParseResult, error) {
 	content, toolUses, usage, stopReason, reasoningArtifacts, err := parseEventStream(body, requestCtx.RequireTerminalEvent)
 	if err != nil {
@@ -603,14 +626,23 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	currentMessageID := ""
 	var outputTextBuf strings.Builder
 	sawCompletionEvidence := false
+	protocolPingSent := false
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n")
-		return err
+		if _, err = io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n"); err != nil {
+			return err
+		}
+		if event == "content_block_start" && requestCtx.EmitProtocolPing && !protocolPingSent {
+			if _, err = io.WriteString(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
+				return err
+			}
+			protocolPingSent = true
+		}
+		return nil
 	}
 	ensureMessageStart := func() error {
 		if messageStartSent {
@@ -1490,7 +1522,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
 	}
 	addKiroCacheUsageFields(finalUsageMap, usage)
-	if err := writeEvent("message_delta", map[string]any{
+	messageDelta := map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{
 			"stop_details":  nil,
@@ -1498,7 +1530,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			"stop_sequence": nullableStopSequence(stopSequenceMatched),
 		},
 		"usage": finalUsageMap,
-	}); err != nil {
+	}
+	if requestCtx.ReportContextManagement {
+		messageDelta["context_management"] = map[string]any{"applied_edits": []any{}}
+	}
+	if err := writeEvent("message_delta", messageDelta); err != nil {
 		return nil, err
 	}
 	if err := writeEvent("message_stop", map[string]any{"type": "message_stop"}); err != nil {

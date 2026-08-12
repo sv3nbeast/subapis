@@ -419,8 +419,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		}
 		pr, pw := io.Pipe()
-		headers := make(http.Header)
-		headers.Set("Content-Type", "text/event-stream")
+		wrappedHeaders := make(http.Header)
+		wrappedHeaders.Set("Content-Type", "text/event-stream")
 		go func() {
 			streamErr := s.streamKiroWebSearchAsAnthropicNianzs(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
 			if streamErr != nil {
@@ -431,7 +431,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		}()
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     headers,
+			Header:     wrappedHeaders,
 			Body:       pr,
 		}, inputTokens, nil
 	}
