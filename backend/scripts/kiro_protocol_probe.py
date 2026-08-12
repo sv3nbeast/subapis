@@ -174,6 +174,12 @@ def validate_web_result_content(content: Any) -> tuple[int, str | None]:
     return 0, str(error_code)
 
 
+def validate_web_result_caller(block: dict[str, Any]) -> None:
+    caller = block.get("caller")
+    require(isinstance(caller, dict), "web-search result caller is missing")
+    require(caller.get("type") == "direct", "web-search result caller is not direct")
+
+
 def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     first = events[0]
     require(first.name == "message_start", "message_start is not the first event")
@@ -196,7 +202,11 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
     result_count = 0
     result_errors: list[str] = []
     client_web_search_tool_uses = 0
-    text_before_first_server_tool = False
+    first_content_block_type = ""
+    cited_text_blocks = 0
+    citation_deltas_before_text = 0
+    open_text_has_citations = False
+    open_text_seen_delta = False
     message_delta_count = 0
     message_stop_count = 0
     stop_reason = ""
@@ -212,24 +222,30 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
             block = data.get("content_block")
             require(isinstance(block, dict), "content_block_start has no block")
             open_type = str(block.get("type", ""))
+            if not first_content_block_type:
+                first_content_block_type = open_type
             require(open_type in {
                 "text", "thinking", "tool_use", "server_tool_use",
                 "web_search_tool_result", "code_execution_tool_result",
             }, f"unknown content block type: {open_type!r}")
             last_delta = ""
             json_fragments = []
+            open_text_has_citations = False
+            open_text_seen_delta = False
             if open_type == "server_tool_use":
                 tool_id = str(block.get("id", ""))
                 require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
                 server_tool_ids.add(tool_id)
-            elif open_type == "text" and not server_tool_ids:
-                text_before_first_server_tool = True
+            elif open_type == "text" and "citations" in block:
+                require(block.get("citations") == [], "cited text block must start with citations: []")
+                open_text_has_citations = True
             elif open_type == "tool_use":
                 if str(block.get("name", "")).lower() in {
                     "web_search", "web_search_20250305", "remote_web_search", "google_search",
                 }:
                     client_web_search_tool_uses += 1
             elif open_type == "web_search_tool_result":
+                validate_web_result_caller(block)
                 tool_id = str(block.get("tool_use_id", ""))
                 require(tool_id in server_tool_ids, "web-search result is not paired with a preceding server tool")
                 result_tool_ids.add(tool_id)
@@ -246,6 +262,8 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
             if open_type == "text":
                 require(delta_type in {"text_delta", "citations_delta"}, f"invalid text delta: {delta_type}")
                 if delta_type == "citations_delta":
+                    require(open_text_has_citations, "citation delta belongs to a text block without citations: []")
+                    require(not open_text_seen_delta, "citation delta arrived after cited text")
                     citation = delta.get("citation")
                     require(isinstance(citation, dict), "citation payload is missing")
                     require(citation.get("type") == "web_search_result_location", "invalid citation type")
@@ -254,6 +272,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
                     require(bool(citation.get("cited_text")), "citation text is empty")
                     opaque_base64(citation.get("encrypted_index"), "encrypted_index")
                     citations += 1
+                    citation_deltas_before_text += 1
+                else:
+                    open_text_seen_delta = True
             elif open_type == "thinking":
                 require(delta_type in {"thinking_delta", "signature_delta"}, f"invalid thinking delta: {delta_type}")
                 if delta_type == "signature_delta":
@@ -271,6 +292,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
             require(data.get("index") == open_index, "content stop index mismatch")
             if open_type == "thinking":
                 require(last_delta == "signature_delta", "thinking signature is not the last delta")
+            if open_type == "text" and open_text_has_citations:
+                require(last_delta == "text_delta", "cited text block must end with text")
+                cited_text_blocks += 1
             if open_type in {"tool_use", "server_tool_use"} and json_fragments:
                 try:
                     parsed_input = json.loads("".join(json_fragments))
@@ -308,7 +332,9 @@ def validate_sse(events: list[SSEEvent]) -> dict[str, Any]:
         "web_search_errors": result_errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "citations": citations,
-        "text_before_first_server_tool": text_before_first_server_tool,
+        "first_content_block_type": first_content_block_type,
+        "cited_text_blocks": cited_text_blocks,
+        "citation_deltas_before_text": citation_deltas_before_text,
         "signature_values": signatures,
     }
 
@@ -334,18 +360,19 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     client_web_search_tool_uses = 0
     citations = 0
-    text_before_first_server_tool = False
+    first_content_block_type = ""
     for block in payload["content"]:
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
+        if not first_content_block_type:
+            first_content_block_type = str(block_type or "")
         if block_type == "server_tool_use":
             tool_id = str(block.get("id", ""))
             require(tool_id.startswith("srvtoolu_"), "server tool ID does not start with srvtoolu_")
             server_ids.add(tool_id)
-        elif block_type == "text" and not server_ids:
-            text_before_first_server_tool = True
         elif block_type == "web_search_tool_result":
+            validate_web_result_caller(block)
             tool_id = str(block.get("tool_use_id", ""))
             require(tool_id in server_ids, "web-search result is not paired")
             result_ids.add(tool_id)
@@ -369,7 +396,7 @@ def validate_nonstream_web_search(payload: dict[str, Any]) -> dict[str, Any]:
         "web_search_errors": errors,
         "client_web_search_tool_uses": client_web_search_tool_uses,
         "citations": citations,
-        "text_before_first_server_tool": text_before_first_server_tool,
+        "first_content_block_type": first_content_block_type,
     })
     return facts
 
@@ -457,7 +484,10 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         require(facts["citations"] > 0, "web-search answer has no citations")
         require(facts["client_web_search_tool_uses"] == 0, "response leaked an internal web-search tool_use")
         require(facts["stop_reason"] == "end_turn", "max_uses=1 response did not finish with end_turn")
-        require(facts["text_before_first_server_tool"], "response omitted pre-search decision text")
+        require(facts["first_content_block_type"] == "server_tool_use", "web-search response does not start with server_tool_use")
+        if stream:
+            require(facts["cited_text_blocks"] > 0, "web-search response has no cited text block")
+            require(facts["citation_deltas_before_text"] == facts["citations"], "not every citation arrived before cited text")
         return facts
 
     def web_search_claude_code_stream() -> dict[str, Any]:
@@ -483,7 +513,9 @@ def run_probe(client: Client, model: str) -> list[dict[str, Any]]:
         require(facts["web_search_results"] > 0, "Claude Code shape returned no results")
         require(facts["citations"] > 0, "Claude Code shape has no citations")
         require(facts["client_web_search_tool_uses"] == 0, "Claude Code shape leaked an internal web-search tool_use")
-        require(facts["text_before_first_server_tool"], "Claude Code shape omitted pre-search decision text")
+        require(facts["first_content_block_type"] == "server_tool_use", "Claude Code shape does not start with server_tool_use")
+        require(facts["cited_text_blocks"] > 0, "Claude Code shape has no cited text block")
+        require(facts["citation_deltas_before_text"] == facts["citations"], "Claude Code citations did not precede cited text")
         require(facts["stop_reason"] == "end_turn", "Claude Code shape did not finish with end_turn")
         return facts
 

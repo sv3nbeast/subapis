@@ -8,13 +8,14 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestGenerateSearchDecisionEventsPrecedesServerToolUse(t *testing.T) {
-	events := GenerateSearchDecisionEvents("golang concurrency", 3)
+func TestGenerateSearchToolUseEventsStartsWithDirectServerTool(t *testing.T) {
+	events := GenerateSearchToolUseEvents("golang concurrency", "srvtoolu_test", 3)
 	require.Len(t, events, 3)
-	require.Equal(t, "text", gjson.Get(extractSSEDataForTest(t, events[0]), "content_block.type").String())
+	require.Equal(t, "server_tool_use", gjson.Get(extractSSEDataForTest(t, events[0]), "content_block.type").String())
+	require.Equal(t, "srvtoolu_test", gjson.Get(extractSSEDataForTest(t, events[0]), "content_block.id").String())
 	require.Equal(t, int64(3), gjson.Get(extractSSEDataForTest(t, events[0]), "index").Int())
-	require.Equal(t, "text_delta", gjson.Get(extractSSEDataForTest(t, events[1]), "delta.type").String())
-	require.Contains(t, gjson.Get(extractSSEDataForTest(t, events[1]), "delta.text").String(), "golang concurrency")
+	require.Equal(t, "input_json_delta", gjson.Get(extractSSEDataForTest(t, events[1]), "delta.type").String())
+	require.JSONEq(t, `{"query":"golang concurrency"}`, gjson.Get(extractSSEDataForTest(t, events[1]), "delta.partial_json").String())
 	require.Equal(t, "content_block_stop", gjson.Get(extractSSEDataForTest(t, events[2]), "type").String())
 }
 
@@ -33,6 +34,7 @@ func TestGenerateSearchIndicatorEvents_UsesInputJSONDelta(t *testing.T) {
 	require.Contains(t, string(events[1]), `"{\"query\":\"golang concurrency\"}"`)
 	require.Contains(t, string(events[3]), `"type":"web_search_tool_result"`)
 	require.Contains(t, string(events[3]), `"tool_use_id":"srvtoolu_test"`)
+	require.Equal(t, "direct", gjson.Get(extractSSEDataForTest(t, events[3]), "content_block.caller.type").String())
 	opaqueContent := gjson.Get(extractSSEDataForTest(t, events[3]), "content_block.content.0.encrypted_content").String()
 	require.NotEmpty(t, opaqueContent)
 	require.NotEqual(t, "result snippet", opaqueContent)
@@ -50,6 +52,7 @@ func TestGenerateSearchIndicatorEvents_PairsSearchResultWithServerToolUse(t *tes
 	require.Equal(t, "server_tool_use", toolUse.Get("content_block.type").String())
 	require.Equal(t, "web_search_tool_result", toolResult.Get("content_block.type").String())
 	require.Equal(t, toolUse.Get("content_block.id").String(), toolResult.Get("content_block.tool_use_id").String())
+	require.Equal(t, "direct", toolResult.Get("content_block.caller.type").String())
 }
 
 func TestGenerateSearchIndicatorEvents_UsesOfficialErrorContentShape(t *testing.T) {
@@ -60,6 +63,7 @@ func TestGenerateSearchIndicatorEvents_UsesOfficialErrorContentShape(t *testing.
 	toolResult := gjson.Parse(extractSSEDataForTest(t, events[3]))
 	require.Equal(t, "web_search_tool_result", toolResult.Get("content_block.type").String())
 	require.Equal(t, "srvtoolu_error", toolResult.Get("content_block.tool_use_id").String())
+	require.Equal(t, "direct", toolResult.Get("content_block.caller.type").String())
 	require.Equal(t, "web_search_tool_result_error", toolResult.Get("content_block.content.type").String())
 	require.Equal(t, WebSearchErrorTooManyRequests, toolResult.Get("content_block.content.error_code").String())
 }
@@ -188,8 +192,10 @@ func TestFinalizeWebSearchSSEChunksAddsOfficialCitationDeltaBeforeTextStop(t *te
 	require.NotContains(t, wire, `"type":"message_start"`)
 	require.Contains(t, wire, `"index":4`)
 	require.Contains(t, wire, `"type":"citations_delta"`)
+	require.Contains(t, wire, `"citations":[]`)
 	require.Contains(t, wire, `"type":"web_search_result_location"`)
 	require.Contains(t, wire, `"url":"https://go.dev"`)
+	require.Less(t, strings.Index(wire, `"type":"citations_delta"`), strings.Index(wire, `"type":"text_delta"`))
 	require.Less(t, strings.Index(wire, `"type":"citations_delta"`), strings.Index(wire, `"type":"content_block_stop"`))
 	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 	require.Equal(t, int64(1), gjson.Get(extractSSEDataForTest(t, finalized[len(finalized)-2]), "usage.server_tool_use.web_search_requests").Int())

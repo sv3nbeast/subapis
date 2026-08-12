@@ -179,12 +179,15 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 	if err := nianzsWriteAnthropicMessageStart(w, "", requestModel, inputTokens, plan.result()); err != nil {
 		return err
 	}
-	if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchDecisionEvents(query, nextContentBlockIndex)); err != nil {
-		return err
-	}
-	nextContentBlockIndex++
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
+		// Match Claude's direct server-tool stream: expose the server_tool_use
+		// immediately, then perform the MCP network request, and emit its paired
+		// result. This preserves both protocol order and first-visible latency.
+		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchToolUseEvents(query, currentToolUseID, nextContentBlockIndex)); err != nil {
+			return err
+		}
+		nextContentBlockIndex++
 		s.prefetchKiroWebSearchDescriptionNianzs(ctx, account, token)
 
 		results, nextToken, mcpErr := s.callKiroWebSearchMCPNianzs(ctx, account, token, query)
@@ -205,10 +208,10 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 			ErrorCode: resultErrorCode,
 		})
 
-		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchIndicatorEventsWithError(query, currentToolUseID, results, resultErrorCode, nextContentBlockIndex)); err != nil {
+		if err := nianzsWriteSSEChunks(w, nianzskiro.GenerateSearchToolResultEvents(currentToolUseID, results, resultErrorCode, nextContentBlockIndex)); err != nil {
 			return err
 		}
-		nextContentBlockIndex += 2
+		nextContentBlockIndex++
 
 		currentBody, err = nianzskiro.InjectToolResultsClaude(currentBody, currentToolUseID, query, results)
 		if err != nil {

@@ -13,28 +13,52 @@ type BufferedStreamResult struct {
 	WebSearchToolUseIndex int
 }
 
-// GenerateSearchDecisionEvents emits the client-visible decision to search
-// before the server_tool_use block. Anthropic's server-tool responses expose
-// this as an ordinary text block, and Claude Code keeps it as commentary in
-// the WebSearch tool result. Keeping it separate also lets the streaming path
-// flush meaningful output before the MCP network call begins.
-func GenerateSearchDecisionEvents(query string, index int) [][]byte {
-	text := "I'll search the web for " + strings.TrimSpace(query) + "."
+func GenerateSearchToolUseEvents(query, toolUseID string, index int) [][]byte {
+	inputJSON, _ := json.Marshal(map[string]string{"query": query})
 	events := []map[string]any{
 		{
 			"type":  "content_block_start",
 			"index": index,
 			"content_block": map[string]any{
-				"type": "text",
-				"text": "",
+				"type":  "server_tool_use",
+				"id":    toolUseID,
+				"name":  "web_search",
+				"input": map[string]any{},
 			},
 		},
 		{
 			"type":  "content_block_delta",
 			"index": index,
 			"delta": map[string]any{
-				"type": "text_delta",
-				"text": text,
+				"type":         "input_json_delta",
+				"partial_json": string(inputJSON),
+			},
+		},
+		{
+			"type":  "content_block_stop",
+			"index": index,
+		},
+	}
+
+	result := make([][]byte, 0, len(events))
+	for _, event := range events {
+		eventType, _ := event["type"].(string)
+		payload, _ := json.Marshal(event)
+		result = append(result, []byte("event: "+eventType+"\ndata: "+string(payload)+"\n\n"))
+	}
+	return result
+}
+
+func GenerateSearchToolResultEvents(toolUseID string, results *WebSearchResults, errorCode string, index int) [][]byte {
+	events := []map[string]any{
+		{
+			"type":  "content_block_start",
+			"index": index,
+			"content_block": map[string]any{
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"caller":      map[string]any{"type": "direct"},
+				"content":     buildWebSearchToolResultContent(results, errorCode),
 			},
 		},
 		{
@@ -57,54 +81,8 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 }
 
 func GenerateSearchIndicatorEventsWithError(query, toolUseID string, results *WebSearchResults, errorCode string, startIndex int) [][]byte {
-	searchContent := buildWebSearchToolResultContent(results, errorCode)
-
-	inputJSON, _ := json.Marshal(map[string]string{"query": query})
-
-	events := []map[string]any{
-		{
-			"type":  "content_block_start",
-			"index": startIndex,
-			"content_block": map[string]any{
-				"type":  "server_tool_use",
-				"id":    toolUseID,
-				"name":  "web_search",
-				"input": map[string]any{},
-			},
-		},
-		{
-			"type":  "content_block_delta",
-			"index": startIndex,
-			"delta": map[string]any{
-				"type":         "input_json_delta",
-				"partial_json": string(inputJSON),
-			},
-		},
-		{
-			"type":  "content_block_stop",
-			"index": startIndex,
-		},
-		{
-			"type":  "content_block_start",
-			"index": startIndex + 1,
-			"content_block": map[string]any{
-				"type":        "web_search_tool_result",
-				"tool_use_id": toolUseID,
-				"content":     searchContent,
-			},
-		},
-		{
-			"type":  "content_block_stop",
-			"index": startIndex + 1,
-		},
-	}
-
-	result := make([][]byte, 0, len(events))
-	for _, event := range events {
-		eventType, _ := event["type"].(string)
-		payload, _ := json.Marshal(event)
-		result = append(result, []byte("event: "+eventType+"\ndata: "+string(payload)+"\n\n"))
-	}
+	result := GenerateSearchToolUseEvents(query, toolUseID, startIndex)
+	result = append(result, GenerateSearchToolResultEvents(toolUseID, results, errorCode, startIndex+1)...)
 	return result
 }
 
@@ -266,9 +244,9 @@ func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests in
 }
 
 // FinalizeWebSearchSSEChunks rewrites the final Kiro turn into the already-open
-// Anthropic stream and appends citation deltas to its final text block. Search
-// results are server-side data, so official Anthropic streams always expose
-// citations even when the model rendered ordinary Markdown links.
+// Anthropic stream and attaches citation deltas to its final text block.
+// Claude begins a cited text block with citations:[] and emits citation deltas
+// before the text they qualify, so preserve that ordering here.
 func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, searches []SearchIndicator) [][]byte {
 	adjusted := make([][]byte, 0, len(chunks)+4)
 	for _, chunk := range chunks {
@@ -290,22 +268,47 @@ func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, 
 	result := make([][]byte, 0, len(adjusted)+len(citations))
 	inserted := false
 	for _, chunk := range adjusted {
-		if !inserted && isSSEContentBlockStop(chunk, textIndex) {
-			for _, citation := range citations {
-				result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
-					"type":  "content_block_delta",
-					"index": textIndex,
-					"delta": map[string]any{
-						"type":     "citations_delta",
-						"citation": citation,
-					},
-				}))
+		if !inserted {
+			if citedStart, ok := addCitationsToSSETextBlockStart(chunk, textIndex); ok {
+				result = append(result, citedStart)
+				for _, citation := range citations {
+					result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": textIndex,
+						"delta": map[string]any{
+							"type":     "citations_delta",
+							"citation": citation,
+						},
+					}))
+				}
+				inserted = true
+				continue
 			}
-			inserted = true
 		}
 		result = append(result, chunk)
 	}
 	return result
+}
+
+func addCitationsToSSETextBlockStart(chunk []byte, index int) ([]byte, bool) {
+	payload := firstSSEJSONPayload(chunk)
+	if len(payload) == 0 {
+		return nil, false
+	}
+	var event map[string]any
+	if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_start" {
+		return nil, false
+	}
+	idx, ok := event["index"].(float64)
+	if !ok || int(idx) != index {
+		return nil, false
+	}
+	block, _ := event["content_block"].(map[string]any)
+	if blockType, _ := block["type"].(string); blockType != "text" {
+		return nil, false
+	}
+	block["citations"] = []any{}
+	return marshalSSEEvent("content_block_start", event), true
 }
 
 func finalSSETextBlock(chunks [][]byte) (int, string) {

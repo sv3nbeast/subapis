@@ -57,6 +57,8 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 	openIndex := int64(-1)
 	openType := ""
 	lastDeltaType := ""
+	openCitedText := false
+	openTextSeen := false
 	messageDeltaCount := 0
 	messageStopCount := 0
 	serverToolIDs := make(map[string]struct{})
@@ -68,14 +70,23 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			openIndex = nextIndex
 			nextIndex++
 			openType = event.data.Get("content_block.type").String()
+			openCitedText = false
+			openTextSeen = false
 			require.Contains(t, []string{"text", "thinking", "tool_use", "server_tool_use", "web_search_tool_result", "code_execution_tool_result"}, openType)
 			switch openType {
+			case "text":
+				if event.data.Get("content_block.citations").Exists() {
+					require.True(t, event.data.Get("content_block.citations").IsArray())
+					require.Equal(t, int64(0), event.data.Get("content_block.citations.#").Int())
+					openCitedText = true
+				}
 			case "server_tool_use":
 				toolID := event.data.Get("content_block.id").String()
 				require.True(t, strings.HasPrefix(toolID, "srvtoolu_"), "server tool ID must use Anthropic namespace")
 				require.Equal(t, "web_search", event.data.Get("content_block.name").String())
 				serverToolIDs[toolID] = struct{}{}
 			case "web_search_tool_result":
+				require.Equal(t, "direct", event.data.Get("content_block.caller.type").String())
 				toolID := event.data.Get("content_block.tool_use_id").String()
 				_, paired := serverToolIDs[toolID]
 				require.True(t, paired, "web-search result must reference a preceding server tool use")
@@ -90,12 +101,16 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			case "text":
 				require.Contains(t, []string{"text_delta", "citations_delta"}, deltaType)
 				if deltaType == "citations_delta" {
+					require.True(t, openCitedText, "citation delta requires citations: [] on content_block_start")
+					require.False(t, openTextSeen, "citation delta must precede the cited text")
 					citation := event.data.Get("delta.citation")
 					require.Equal(t, "web_search_result_location", citation.Get("type").String())
 					require.NotEmpty(t, citation.Get("url").String())
 					require.NotEmpty(t, citation.Get("title").String())
 					require.NotEmpty(t, citation.Get("cited_text").String())
 					requireBase64OpaqueValue(t, citation.Get("encrypted_index").String())
+				} else {
+					openTextSeen = true
 				}
 			case "thinking":
 				require.Contains(t, []string{"thinking_delta", "signature_delta"}, deltaType)
@@ -113,6 +128,9 @@ func requireAnthropicSSEProtocolLifecycle(t *testing.T, wire string) {
 			require.Equal(t, openIndex, event.data.Get("index").Int())
 			if openType == "thinking" {
 				require.Equal(t, "signature_delta", lastDeltaType, "thinking signature must be the final delta before block stop")
+			}
+			if openCitedText {
+				require.Equal(t, "text_delta", lastDeltaType, "cited text block must end with text")
 			}
 			openIndex = -1
 			openType = ""
@@ -209,8 +227,10 @@ func TestAnthropicProtocolComplianceWebSearchServerBlocks(t *testing.T) {
 
 	requireAnthropicSSEProtocolLifecycle(t, wire.String())
 	events := parseAnthropicSSEProtocolEvents(t, wire.String())
+	require.Equal(t, "server_tool_use", events[1].data.Get("content_block.type").String())
 	require.Equal(t, "srvtoolu_protocol", events[1].data.Get("content_block.id").String())
 	require.Equal(t, "srvtoolu_protocol", events[4].data.Get("content_block.tool_use_id").String())
+	require.Equal(t, "direct", events[4].data.Get("content_block.caller.type").String())
 	require.NotEmpty(t, events[4].data.Get("content_block.content.0.encrypted_content").String())
 }
 

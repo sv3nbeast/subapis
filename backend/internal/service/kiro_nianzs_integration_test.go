@@ -528,8 +528,10 @@ func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testin
 	require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
 	require.Contains(t, wire, `"type":"server_tool_use"`)
 	require.Contains(t, wire, `"type":"web_search_tool_result"`)
+	require.Contains(t, wire, `"caller":{"type":"direct"}`)
 	require.Contains(t, wire, `"text":"Use goroutines and channels."`)
 	require.Contains(t, wire, `"type":"citations_delta"`)
+	require.Contains(t, wire, `"citations":[]`)
 	require.Contains(t, wire, `"type":"web_search_result_location"`)
 	var serverToolUseID, resultToolUseID string
 	for _, event := range nianzsSSEPayloadsByType(wire, "content_block_start") {
@@ -580,16 +582,15 @@ func TestNianzsMessagesWebSearchNonStreamingPairsResultAndReportsUsage(t *testin
 	require.False(t, result.Stream)
 	require.Len(t, upstream.requests, 2)
 	response := recorder.Body.String()
-	require.Equal(t, "text", gjson.Get(response, "content.0.type").String())
-	require.Contains(t, gjson.Get(response, "content.0.text").String(), "golang concurrency")
-	require.Equal(t, "server_tool_use", gjson.Get(response, "content.1.type").String())
-	require.Equal(t, "web_search_tool_result", gjson.Get(response, "content.2.type").String())
-	require.Equal(t, gjson.Get(response, "content.1.id").String(), gjson.Get(response, "content.2.tool_use_id").String())
+	require.Equal(t, "server_tool_use", gjson.Get(response, "content.0.type").String())
+	require.Equal(t, "web_search_tool_result", gjson.Get(response, "content.1.type").String())
+	require.Equal(t, "direct", gjson.Get(response, "content.1.caller.type").String())
+	require.Equal(t, gjson.Get(response, "content.0.id").String(), gjson.Get(response, "content.1.tool_use_id").String())
 	require.Equal(t, int64(1), gjson.Get(response, "usage.server_tool_use.web_search_requests").Int())
-	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.3.text").String())
-	require.Equal(t, "web_search_result_location", gjson.Get(response, "content.3.citations.0.type").String())
-	require.Equal(t, "https://go.dev", gjson.Get(response, "content.3.citations.0.url").String())
-	require.NotEmpty(t, gjson.Get(response, "content.3.citations.0.encrypted_index").String())
+	require.Equal(t, "Use goroutines and channels.", gjson.Get(response, "content.2.text").String())
+	require.Equal(t, "web_search_result_location", gjson.Get(response, "content.2.citations.0.type").String())
+	require.Equal(t, "https://go.dev", gjson.Get(response, "content.2.citations.0.url").String())
+	require.NotEmpty(t, gjson.Get(response, "content.2.citations.0.encrypted_index").String())
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
 }
@@ -727,9 +728,9 @@ func TestNianzsMessagesWebSearchMultipleIterationsKeepOneTerminalAndPairedBlocks
 		require.True(t, strings.HasPrefix(id, "srvtoolu_"), "server tool ID must use Anthropic namespace: %s", id)
 	}
 	// The private Kiro refinement tool_use is consumed by the adapter. The
-	// client sees decision text, two server-tool pairs, and final text at 0..5.
-	require.Len(t, indices, 6, "search decision, two search pairs, and final text must use distinct indices")
-	for index := int64(0); index < 6; index++ {
+	// client sees two server-tool pairs and final text at contiguous 0..4.
+	require.Len(t, indices, 5, "two search pairs and final text must use distinct indices")
+	for index := int64(0); index < 5; index++ {
 		require.True(t, indices[index], "client-visible content indices must be contiguous; missing %d", index)
 	}
 	messageDeltas := nianzsSSEPayloadsByType(wire, "message_delta")
