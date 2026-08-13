@@ -937,6 +937,10 @@ type GatewayConfig struct {
 	// ClaudeCodeMimicry: Claude Code 上游复原配置。不同于 aux_compat，这里控制
 	// 非 Claude CLI 客户端转 Anthropic OAuth/SetupToken 时的上游伪装行为。
 	ClaudeCodeMimicry GatewayClaudeCodeMimicryConfig `mapstructure:"claude_code_mimicry"`
+	// AnthropicStableCanary is the deliberately small, single-owner strict
+	// identity canary. It is independent from the legacy OAuth mimicry path and
+	// remains disabled unless every binding is explicitly configured.
+	AnthropicStableCanary GatewayAnthropicStableCanaryConfig `mapstructure:"anthropic_stable_canary"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -1082,6 +1086,20 @@ type GatewayClaudeCodeSyntheticCompanionConfig struct {
 	TimeoutSeconds int `mapstructure:"timeout_seconds"`
 	// FailOpen: companion 失败不影响用户主请求。
 	FailOpen bool `mapstructure:"fail_open"`
+}
+
+// GatewayAnthropicStableCanaryConfig binds one exact OAuth account to one
+// Claude-Code-only group and one owner. The account is kept out of the normal
+// scheduler and generic credential refresh paths while this feature is active.
+// A future multi-user implementation must use a separate generation/session
+// coordinator; it must not broaden these fields in place.
+type GatewayAnthropicStableCanaryConfig struct {
+	Enabled      bool  `mapstructure:"enabled"`
+	GroupID      int64 `mapstructure:"group_id"`
+	AccountID    int64 `mapstructure:"account_id"`
+	OwnerUserID  int64 `mapstructure:"owner_user_id"`
+	APIKeyID     int64 `mapstructure:"api_key_id"`
+	MaxBodyBytes int64 `mapstructure:"max_body_bytes"`
 }
 
 // GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
@@ -1862,6 +1880,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
 	cfg.Gateway.ClaudeCodeAuxCompat.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeAuxCompat.Mode))
 	cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode))
+	if cfg.Gateway.AnthropicStableCanary.MaxBodyBytes <= 0 {
+		cfg.Gateway.AnthropicStableCanary.MaxBodyBytes = 64 << 20
+	}
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
@@ -2335,6 +2356,12 @@ func setDefaults() {
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.min_interval_seconds", 0)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.timeout_seconds", 5)
 	viper.SetDefault("gateway.claude_code_mimicry.synthetic_companion.fail_open", true)
+	viper.SetDefault("gateway.anthropic_stable_canary.enabled", false)
+	viper.SetDefault("gateway.anthropic_stable_canary.group_id", int64(0))
+	viper.SetDefault("gateway.anthropic_stable_canary.account_id", int64(0))
+	viper.SetDefault("gateway.anthropic_stable_canary.owner_user_id", int64(0))
+	viper.SetDefault("gateway.anthropic_stable_canary.api_key_id", int64(0))
+	viper.SetDefault("gateway.anthropic_stable_canary.max_body_bytes", int64(64<<20))
 	viper.SetDefault("gateway.tls_fingerprint.default_enabled_for_anthropic_oauth", true)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
@@ -3121,6 +3148,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ClaudeCodeMimicry.SyntheticCompanion.TimeoutSeconds <= 0 {
 		return fmt.Errorf("gateway.claude_code_mimicry.synthetic_companion.timeout_seconds must be positive")
+	}
+	if c.Gateway.AnthropicStableCanary.Enabled {
+		if c.Gateway.AnthropicStableCanary.GroupID <= 0 || c.Gateway.AnthropicStableCanary.AccountID <= 0 {
+			return fmt.Errorf("gateway.anthropic_stable_canary.group_id and account_id must be positive when canary is enabled")
+		}
+		if c.Gateway.AnthropicStableCanary.OwnerUserID <= 0 || c.Gateway.AnthropicStableCanary.APIKeyID <= 0 {
+			return fmt.Errorf("gateway.anthropic_stable_canary.owner_user_id and api_key_id must be positive when canary is enabled")
+		}
+		if c.Gateway.AnthropicStableCanary.MaxBodyBytes <= 0 || c.Gateway.AnthropicStableCanary.MaxBodyBytes > 64<<20 {
+			return fmt.Errorf("gateway.anthropic_stable_canary.max_body_bytes must be between 1 and 67108864")
+		}
 	}
 	if c.Gateway.ImageConcurrency.MaxConcurrentRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_concurrent_requests must be non-negative")

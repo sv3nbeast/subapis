@@ -64,6 +64,8 @@ var (
 		SetGrokCredentialErrorIfMatch(context.Context, int64, service.GrokCredentialMutationSnapshot, string) (bool, error)
 		SetGrokCredentialTempUnschedulableIfMatch(context.Context, int64, service.GrokCredentialMutationSnapshot, time.Time, string) (bool, error)
 	} = (*accountRepository)(nil)
+	_ service.AnthropicStableCanaryStateRepository = (*accountRepository)(nil)
+	_ service.AnthropicStableCanaryLeaseRepository = (*accountRepository)(nil)
 )
 
 var schedulerNeutralExtraKeyPrefixes = []string{
@@ -105,6 +107,9 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
 	if account == nil {
 		return service.ErrAccountNilInput
+	}
+	if account.HasAnthropicStableCanaryManagedFields() {
+		return service.ErrAnthropicStableCanaryReserved
 	}
 
 	builder := r.client.Account.Create().
@@ -179,6 +184,9 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
+	if account.HasAnthropicStableCanaryManagedFields() {
+		return service.ErrAnthropicStableCanaryReserved
+	}
 	tx, err := r.client.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
 		return err
@@ -193,6 +201,11 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	groupIDs := make([]int64, 0, len(groups))
 	for _, group := range groups {
 		groupIDs = append(groupIDs, group.GroupID)
+	}
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(groupIDs) {
+		if err := lockAnthropicStableCanaryGroupMutation(ctx, txClient, groupID); err != nil {
+			return err
+		}
 	}
 	account.GroupIDs = groupIDs
 	txRepo := newAccountRepositoryWithSQL(txClient, txClient, r.schedulerCache)
@@ -393,14 +406,23 @@ func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]i
 }
 
 func (r *accountRepository) Update(ctx context.Context, account *service.Account) error {
+	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+		return service.ErrAnthropicStableCanaryReserved
+	}
 	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier)
 }
 
 func (r *accountRepository) UpdateWithAccountBillingSettings(ctx context.Context, account *service.Account, probeEnabled, rateSyncEnabled *bool, rateMultiplier *float64) error {
+	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+		return service.ErrAnthropicStableCanaryReserved
+	}
 	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier)
 }
 
 func (r *accountRepository) UpdateWithUpstreamBillingProbeEnabled(ctx context.Context, account *service.Account, enabled bool) error {
+	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+		return service.ErrAnthropicStableCanaryReserved
+	}
 	return r.updateAccount(ctx, account, &enabled, nil, account.RateMultiplier)
 }
 
@@ -588,7 +610,8 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'upstream_billing_probe',
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot'
+			extra -> 'ollama_cloud_usage_snapshot',
+			`+anthropicStableCanaryManagedSQL+`
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -604,14 +627,18 @@ func lockAndMergeAccountProbeExtra(
 		return nil, service.ErrAccountNotFound
 	}
 
-	var identityUnchanged, ollamaGroupIdentityUnchanged, ollamaProxyIdentityUnchanged bool
+	var identityUnchanged, ollamaGroupIdentityUnchanged, ollamaProxyIdentityUnchanged, stableCanaryManaged bool
 	var currentEnabled, currentRateSyncEnabled, currentSnapshot, currentOllamaSession, currentOllamaAutoRefresh, currentOllamaSnapshot []byte
 	if err := rows.Scan(&identityUnchanged, &ollamaGroupIdentityUnchanged, &ollamaProxyIdentityUnchanged,
-		&currentEnabled, &currentRateSyncEnabled, &currentSnapshot, &currentOllamaSession, &currentOllamaAutoRefresh, &currentOllamaSnapshot); err != nil {
+		&currentEnabled, &currentRateSyncEnabled, &currentSnapshot, &currentOllamaSession, &currentOllamaAutoRefresh, &currentOllamaSnapshot,
+		&stableCanaryManaged); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if stableCanaryManaged {
+		return nil, service.ErrAnthropicStableCanaryReserved
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
@@ -731,6 +758,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			client = tx.Client()
 		}
 	}
+	managedWritePredicate := ""
+	if !service.AnthropicStableCanaryRefreshAuthorized(ctx, id) {
+		managedWritePredicate = " AND NOT (" + anthropicStableCanaryManagedSQL + ")"
+	}
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
 		SET credentials = $1::jsonb,
@@ -751,7 +782,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL`+managedWritePredicate+`
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -761,6 +792,15 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		return err
 	}
 	if affected == 0 {
+		if managedWritePredicate != "" {
+			reserved, checkErr := isAnthropicStableCanaryReserved(ctx, client, id)
+			if checkErr != nil {
+				return checkErr
+			}
+			if reserved {
+				return service.ErrAnthropicStableCanaryReserved
+			}
+		}
 		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -795,6 +835,9 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 	} else {
 		// 已处于外部事务中（ErrTxStarted），复用当前 client
 		txClient = r.client
+	}
+	if err := lockAnthropicStableCanaryMutationAccount(ctx, txClient, id); err != nil {
+		return err
 	}
 
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id)).Exec(ctx); err != nil {
@@ -1384,14 +1427,24 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 }
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
+	affected, err := r.client.Account.Update().
+		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate()).
 		SetStatus(service.StatusError).
 		SetErrorMessage(errorMsg).
 		SetSchedulable(false).
 		Save(ctx)
 	if err != nil {
 		return err
+	}
+	if affected == 0 {
+		reserved, checkErr := isAnthropicStableCanaryReserved(ctx, r.sql, id)
+		if checkErr != nil {
+			return checkErr
+		}
+		if reserved {
+			return service.ErrAnthropicStableCanaryReserved
+		}
+		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue set error failed: account=%d err=%v", id, err)
@@ -1833,14 +1886,24 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 }
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
+	affected, err := r.client.Account.Update().
+		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate()).
 		SetStatus(service.StatusActive).
 		SetErrorMessage("").
 		SetSchedulable(true).
 		Save(ctx)
 	if err != nil {
 		return err
+	}
+	if affected == 0 {
+		reserved, checkErr := isAnthropicStableCanaryReserved(ctx, r.sql, id)
+		if checkErr != nil {
+			return checkErr
+		}
+		if reserved {
+			return service.ErrAnthropicStableCanaryReserved
+		}
+		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear error failed: account=%d err=%v", id, err)
@@ -1850,7 +1913,29 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
-	_, err := r.client.AccountGroup.Create().
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	var err error
+	if contextTx == nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+		return err
+	}
+	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
+		return err
+	}
+	_, err = client.AccountGroup.Create().
 		SetAccountID(accountID).
 		SetGroupID(groupID).
 		SetPriority(priority).
@@ -1859,14 +1944,42 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 		return err
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue add to group failed: account=%d group=%d err=%v", accountID, groupID, err)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
 	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	r.syncSchedulerAccountSnapshot(baseCtx, accountID)
 	return nil
 }
 
 func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, groupID int64) error {
-	_, err := r.client.AccountGroup.Delete().
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	var err error
+	if contextTx == nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+		return err
+	}
+	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
+		return err
+	}
+	_, err = client.AccountGroup.Delete().
 		Where(
 			dbaccountgroup.AccountIDEQ(accountID),
 			dbaccountgroup.GroupIDEQ(groupID),
@@ -1876,9 +1989,15 @@ func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, grou
 		return err
 	}
 	payload := buildSchedulerGroupPayload([]int64{groupID})
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue remove from group failed: account=%d group=%d err=%v", accountID, groupID, err)
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
 	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	r.syncSchedulerAccountSnapshot(baseCtx, accountID)
 	return nil
 }
 
@@ -1900,58 +2019,60 @@ func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]s
 }
 
 func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
-	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	var err error
+	if contextTx == nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+	existingGroupIDs, err := loadAccountGroupIDsWithClient(ctx, client, accountID)
 	if err != nil {
 		return err
 	}
-	// 使用事务保证删除旧绑定与创建新绑定的原子性
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	var txClient *dbent.Client
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
-	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
-	}
-
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
-		return err
-	}
-
-	if len(groupIDs) == 0 {
-		if tx != nil {
-			return tx.Commit()
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(existingGroupIDs, groupIDs) {
+		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+			return err
 		}
-		return nil
 	}
-
-	builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
-	for i, groupID := range groupIDs {
-		builders = append(builders, txClient.AccountGroup.Create().
-			SetAccountID(accountID).
-			SetGroupID(groupID).
-			SetPriority(i+1),
-		)
-	}
-
-	if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
 		return err
 	}
-
+	if _, err := client.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
+		return err
+	}
+	if len(groupIDs) > 0 {
+		builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
+		for i, groupID := range groupIDs {
+			builders = append(builders, client.AccountGroup.Create().
+				SetAccountID(accountID).
+				SetGroupID(groupID).
+				SetPriority(i+1),
+			)
+		}
+		if _, err := client.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+			return err
+		}
+	}
+	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
+		return err
+	}
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
-	payload := buildSchedulerGroupPayload(mergeGroupIDs(existingGroupIDs, groupIDs))
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountGroupsChanged, &accountID, nil, payload); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue bind groups failed: account=%d err=%v", accountID, err)
-	}
+	r.syncSchedulerAccountSnapshot(baseCtx, accountID)
 	return nil
 }
 
@@ -2571,12 +2692,28 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
+	predicates := []dbpredicate.Account{dbaccount.IDEQ(id)}
+	if schedulable {
+		predicates = append(predicates, anthropicStableCanaryNotManagedPredicate())
+	}
+	affected, err := r.client.Account.Update().
+		Where(predicates...).
 		SetSchedulable(schedulable).
 		Save(ctx)
 	if err != nil {
 		return err
+	}
+	if affected == 0 {
+		if schedulable {
+			reserved, checkErr := isAnthropicStableCanaryReserved(ctx, r.sql, id)
+			if checkErr != nil {
+				return checkErr
+			}
+			if reserved {
+				return service.ErrAnthropicStableCanaryReserved
+			}
+		}
+		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue schedulable change failed: account=%d err=%v", id, err)
@@ -2627,6 +2764,9 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if len(updates) == 0 {
 		return nil
 	}
+	if service.AnthropicStableCanaryExtraUpdateTouchesManagedFields(updates) {
+		return service.ErrAnthropicStableCanaryReserved
+	}
 	payload, err := json.Marshal(updates)
 	if err != nil {
 		return err
@@ -2653,7 +2793,8 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 	}
 	result, err := client.ExecContext(ctx,
-		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
+		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() "+
+			"WHERE id = $2 AND deleted_at IS NULL AND NOT ("+anthropicStableCanaryManagedSQL+")",
 		string(payload), id)
 	if err != nil {
 		return err
@@ -2663,6 +2804,13 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 		return err
 	}
 	if affected == 0 {
+		reserved, checkErr := isAnthropicStableCanaryReserved(ctx, client, id)
+		if checkErr != nil {
+			return checkErr
+		}
+		if reserved {
+			return service.ErrAnthropicStableCanaryReserved
+		}
 		return service.ErrAccountNotFound
 	}
 	if durableSchedulerChange {
@@ -2731,6 +2879,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	canaryGuard := service.AnthropicStableCanaryAccountBulkUpdateTouchesManagedFields(&updates)
 
 	setClauses := make([]string, 0, 8)
 	args := make([]any, 0, 8)
@@ -2861,12 +3010,17 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
+	idsPlaceholder := "$" + itoa(idx)
+	whereClause := " WHERE id = ANY(" + idsPlaceholder + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
 	idx++
 	if updates.ProbeEnabled != nil {
 		whereClause += " AND type = $" + itoa(idx)
 		args = append(args, service.AccountTypeAPIKey)
+	}
+	if canaryGuard {
+		managedSQL := strings.ReplaceAll(anthropicStableCanaryManagedSQL, "extra", "stable_guard.extra")
+		whereClause += " AND NOT EXISTS (SELECT 1 FROM accounts AS stable_guard WHERE stable_guard.id = ANY(" + idsPlaceholder + ") AND stable_guard.deleted_at IS NULL AND (" + managedSQL + "))"
 	}
 	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 
@@ -2895,6 +3049,17 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return 0, err
+	}
+	if canaryGuard && rows == 0 {
+		for _, id := range ids {
+			reserved, checkErr := isAnthropicStableCanaryReserved(ctx, exec, id)
+			if checkErr != nil {
+				return 0, checkErr
+			}
+			if reserved {
+				return 0, service.ErrAnthropicStableCanaryReserved
+			}
+		}
 	}
 	if updates.ProbeEnabled != nil {
 		expectedRows := int64(0)
@@ -3199,7 +3364,14 @@ func uniquePositiveInt64s(ids []int64) []int64 {
 }
 
 func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
-	entries, err := r.client.AccountGroup.
+	return loadAccountGroupIDsWithClient(ctx, r.client, accountID)
+}
+
+func loadAccountGroupIDsWithClient(ctx context.Context, client *dbent.Client, accountID int64) ([]int64, error) {
+	if client == nil {
+		return nil, service.ErrAccountNotFound
+	}
+	entries, err := client.AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
 		All(ctx)
@@ -3651,12 +3823,20 @@ func (r *accountRepository) ResetQuotaUsed(ctx context.Context, id int64) error 
 func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID int64) error {
 	res, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts SET proxy_id=proxy_fallback_origin_id, proxy_fallback_origin_id=NULL, updated_at=NOW()
-		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL`, accountID)
+		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL
+			AND NOT (`+anthropicStableCanaryManagedSQL+`)`, accountID)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		reserved, checkErr := isAnthropicStableCanaryReserved(ctx, r.sql, accountID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if reserved {
+			return service.ErrAnthropicStableCanaryReserved
+		}
 		return service.ErrAccountNotInFallback
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &accountID, nil, nil); err != nil {

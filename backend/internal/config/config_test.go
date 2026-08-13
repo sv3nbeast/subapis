@@ -2090,6 +2090,66 @@ func TestLoad_DefaultGatewayUsageRecordConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_DefaultAnthropicStableCanaryIsOff(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.AnthropicStableCanary.Enabled)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.GroupID)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.AccountID)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.OwnerUserID)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.APIKeyID)
+	require.Equal(t, int64(64<<20), cfg.Gateway.AnthropicStableCanary.MaxBodyBytes)
+}
+
+func TestLoad_AnthropicStableCanaryEnvironmentBinding(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED", "true")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID", "101")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID", "202")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_OWNER_USER_ID", "303")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_API_KEY_ID", "404")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES", "1048576")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, GatewayAnthropicStableCanaryConfig{
+		Enabled: true, GroupID: 101, AccountID: 202, OwnerUserID: 303, APIKeyID: 404, MaxBodyBytes: 1048576,
+	}, cfg.Gateway.AnthropicStableCanary)
+}
+
+func TestValidateAnthropicStableCanaryRequiresCompleteBinding(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	base, err := Load()
+	require.NoError(t, err)
+	base.Gateway.AnthropicStableCanary = GatewayAnthropicStableCanaryConfig{
+		Enabled: true, GroupID: 1, AccountID: 2, OwnerUserID: 3, APIKeyID: 4, MaxBodyBytes: 64 << 20,
+	}
+	require.NoError(t, base.Validate())
+
+	tests := []struct {
+		name    string
+		mutate  func(*GatewayAnthropicStableCanaryConfig)
+		wantErr string
+	}{
+		{name: "group", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.GroupID = 0 }, wantErr: "group_id and account_id"},
+		{name: "account", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.AccountID = 0 }, wantErr: "group_id and account_id"},
+		{name: "owner", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.OwnerUserID = 0 }, wantErr: "owner_user_id and api_key_id"},
+		{name: "api key", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.APIKeyID = 0 }, wantErr: "owner_user_id and api_key_id"},
+		{name: "body", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.MaxBodyBytes = 64<<20 + 1 }, wantErr: "max_body_bytes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := *base
+			cfg.Gateway.AnthropicStableCanary = base.Gateway.AnthropicStableCanary
+			tt.mutate(&cfg.Gateway.AnthropicStableCanary)
+			err := cfg.Validate()
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	cfg, err := Load()

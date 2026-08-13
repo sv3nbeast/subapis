@@ -3309,6 +3309,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if input == nil {
 		return nil, ErrAccountNilInput
 	}
+	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
+		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -3467,8 +3470,14 @@ func (s *adminServiceImpl) upsertExistingGrokOAuthAccount(ctx context.Context, i
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateAnthropicStableCanaryAdminUpdate(account, input); err != nil {
 		return nil, err
 	}
 	var normalizedExtra map[string]any
@@ -3802,6 +3811,19 @@ func (s *adminServiceImpl) ReauthorizeGrokOAuthAccountIfUnchanged(
 
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(updates) {
+		return fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
+	}
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if account.HasAnthropicStableCanaryManagedFields() {
+		return fmt.Errorf("%w: generic extra updates cannot modify a reserved canary", ErrAnthropicStableCanaryReserved)
+	}
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(updates, UpstreamBillingProbeExtraKey)
@@ -3828,6 +3850,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
 	if input == nil {
 		return nil, infraerrors.BadRequest("INVALID_BULK_ACCOUNT_UPDATE", "bulk account update input is required")
+	}
+	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
+		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -3863,12 +3888,20 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	canaryProtectedUpdate := anthropicStableCanaryBulkUpdateTouchesManagedFields(input)
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil || canaryProtectedUpdate {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if canaryProtectedUpdate {
+		for _, account := range cachedTargets {
+			if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+				return nil, fmt.Errorf("%w: bulk updates cannot modify a reserved canary", ErrAnthropicStableCanaryReserved)
+			}
+		}
 	}
 	if raw, ok := input.Extra[openAILongContextBillingEnabledKey]; ok {
 		for _, account := range cachedTargets {

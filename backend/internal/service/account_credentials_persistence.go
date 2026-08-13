@@ -31,6 +31,9 @@ func persistAccountCredentials(ctx context.Context, repo AccountRepository, acco
 			"account_id", account.ID, "parent_id", *account.ParentAccountID)
 		return nil
 	}
+	if account.HasAnthropicStableCanaryManagedFields() && !AnthropicStableCanaryRefreshAuthorized(ctx, account.ID) {
+		return ErrAnthropicStableCanaryOutboundBlocked
+	}
 
 	account.Credentials = shallowCopyMap(credentials)
 	if updater, ok := any(repo).(accountCredentialsUpdater); ok {

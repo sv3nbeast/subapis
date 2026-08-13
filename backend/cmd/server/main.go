@@ -5,8 +5,10 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,7 +21,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -59,10 +63,19 @@ func main() {
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
+	stableCanaryAction := flag.String("anthropic-stable-canary-action", "", "inspect, enable, or disable one configured stable canary")
+	stableCanaryProfile := flag.String("anthropic-stable-canary-profile", service.AnthropicStableIngressProfileCLI211222V1, "reviewed capture profile (enable only)")
+	stableCanaryExecute := flag.Bool("anthropic-stable-canary-execute", false, "commit enable/disable after validation; default is dry-run")
 	flag.Parse()
 
 	if *showVersion {
 		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		return
+	}
+	if strings.TrimSpace(*stableCanaryAction) != "" {
+		if err := runAnthropicStableCanaryLifecycle(*stableCanaryAction, *stableCanaryProfile, *stableCanaryExecute); err != nil {
+			log.Fatalf("Anthropic stable canary lifecycle failed: %v", err)
+		}
 		return
 	}
 
@@ -92,6 +105,33 @@ func main() {
 
 	// Normal server mode
 	runMainServer()
+}
+
+func runAnthropicStableCanaryLifecycle(action, profile string, execute bool) error {
+	cfg, err := config.LoadForBootstrap()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	db, err := repository.OpenAnthropicStableCanaryLifecycleDB(cfg)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := repository.RunAnthropicStableCanaryLifecycle(ctx, db, repository.AnthropicStableCanaryLifecycleInput{
+		Action: repository.AnthropicStableCanaryLifecycleAction(action), Config: cfg.Gateway.AnthropicStableCanary,
+		Profile: profile, Execute: execute,
+	})
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout, string(payload))
+	return err
 }
 
 func runSetupServer() {

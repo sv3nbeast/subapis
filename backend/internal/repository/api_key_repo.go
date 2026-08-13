@@ -48,7 +48,39 @@ func (r *apiKeyRepository) activeQuery() *dbent.APIKeyQuery {
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
-	builder := r.client.APIKey.Create().
+	if key == nil {
+		return errors.New("API key input is nil")
+	}
+	if key.GroupID == nil {
+		return r.createWithClient(ctx, clientFromContext(ctx, r.client), key)
+	}
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, *key.GroupID); err != nil {
+		return err
+	}
+	if err := r.createWithClient(ctx, client, key); err != nil {
+		return err
+	}
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
+}
+
+func (r *apiKeyRepository) createWithClient(ctx context.Context, client *dbent.Client, key *service.APIKey) error {
+	builder := client.APIKey.Create().
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
@@ -262,12 +294,63 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fiel
 		return nil
 	}
 
+	if key == nil {
+		return errors.New("API key input is nil")
+	}
+	if !fields.GroupID {
+		return r.updateWithClient(ctx, clientFromContext(ctx, r.client), key, fields)
+	}
+
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+	initial, err := client.APIKey.Query().Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).Only(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrAPIKeyNotFound, nil)
+	}
+	oldGroupIDs := apiKeyGroupIDSlice(initial.GroupID)
+	newGroupIDs := apiKeyGroupIDSlice(key.GroupID)
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(oldGroupIDs, newGroupIDs) {
+		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+			return err
+		}
+	}
+	lockedQuery := client.APIKey.Query().Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil())
+	if client.Driver().Dialect() != dialect.SQLite {
+		lockedQuery = lockedQuery.ForUpdate()
+	}
+	locked, err := lockedQuery.Only(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrAPIKeyNotFound, nil)
+	}
+	if !sameNullableInt64(initial.GroupID, locked.GroupID) {
+		return errors.New("API key group changed concurrently; retry the update")
+	}
+	if err := r.updateWithClient(ctx, client, key, fields); err != nil {
+		return err
+	}
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
+}
+
+func (r *apiKeyRepository) updateWithClient(ctx context.Context, client *dbent.Client, key *service.APIKey, fields service.APIKeyUpdateFields) error {
 	// 使用原子操作：将软删除检查与更新合并到同一语句，避免竞态条件。
 	// 之前的实现先检查 Exist 再 UpdateOneID，若在两步之间发生软删除，
 	// 则会更新已删除的记录。
 	// 这里选择 Update().Where()，确保只有未软删除记录能被更新。
 	// 同时显式设置 updated_at，避免二次查询带来的并发可见性问题。
-	client := clientFromContext(ctx, r.client)
 	now := time.Now()
 	builder := client.APIKey.Update().
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
@@ -359,33 +442,7 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fiel
 }
 
 func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
-	// 存在唯一键约束 生成tombstone key 用来释放原key，长度远小于 128，满足 schema 限制
-	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
-	// 显式软删除：避免依赖 Hook 行为，确保 deleted_at 一定被设置。
-	affected, err := r.client.APIKey.Update().
-		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
-		SetKey(tombstoneKey).
-		SetDeletedAt(time.Now()).
-		Save(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return service.ErrAPIKeyNotFound
-		}
-		return err
-	}
-	if affected == 0 {
-		exists, err := r.client.APIKey.Query().
-			Where(apikey.IDEQ(id)).
-			Exist(mixins.SkipSoftDelete(ctx))
-		if err != nil {
-			return err
-		}
-		if exists {
-			return nil
-		}
-		return service.ErrAPIKeyNotFound
-	}
-	return nil
+	return r.DeleteWithAudit(ctx, id)
 }
 
 // DeleteWithAudit keeps the legacy method name for rolling-upgrade compatibility.
@@ -393,19 +450,40 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 // material. Tombstoning releases the unique key value for safe reuse.
 func (r *apiKeyRepository) DeleteWithAudit(ctx context.Context, id int64) error {
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
-
-	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-		return r.deleteWithTombstone(ctx, existingTx.Client(), id, tombstoneKey)
-	}
-
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-	exec := r.client
-	if err == nil {
+	contextTx := dbent.TxFromContext(ctx)
+	exec := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return err
+		}
 		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
 		exec = tx.Client()
+	}
+	current, loadErr := exec.APIKey.Query().Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).Only(ctx)
+	if loadErr != nil && !dbent.IsNotFound(loadErr) {
+		return loadErr
+	}
+	if loadErr == nil && current.GroupID != nil {
+		if err := lockAnthropicStableCanaryGroupMutation(ctx, exec, *current.GroupID); err != nil {
+			return err
+		}
+	}
+	if loadErr == nil && current.GroupID != nil {
+		lockedQuery := exec.APIKey.Query().Where(apikey.IDEQ(id), apikey.DeletedAtIsNil())
+		if exec.Driver().Dialect() != dialect.SQLite {
+			lockedQuery = lockedQuery.ForUpdate()
+		}
+		locked, err := lockedQuery.Only(ctx)
+		if err != nil {
+			return translatePersistenceError(err, service.ErrAPIKeyNotFound, nil)
+		}
+		if !sameNullableInt64(current.GroupID, locked.GroupID) {
+			return errors.New("API key group changed concurrently; retry the delete")
+		}
 	}
 
 	if err := r.deleteWithTombstone(ctx, exec, id, tombstoneKey); err != nil {
@@ -421,7 +499,7 @@ func (r *apiKeyRepository) DeleteWithAudit(ctx context.Context, id int64) error 
 func (r *apiKeyRepository) deleteWithTombstone(ctx context.Context, exec *dbent.Client, id int64, tombstoneKey string) error {
 	res, err := exec.ExecContext(ctx, `
 		UPDATE api_keys
-		SET key = $1, deleted_at = NOW(), updated_at = NOW()
+		SET key = $1, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $2 AND deleted_at IS NULL`, tombstoneKey, id)
 	if err != nil {
 		return err
@@ -432,7 +510,7 @@ func (r *apiKeyRepository) deleteWithTombstone(ctx context.Context, exec *dbent.
 	}
 	if affected == 0 {
 		// 并发/重复删除:记录已存在(已软删)则幂等返回 nil(defer 回滚空事务),否则 NotFound。
-		exists, existErr := r.client.APIKey.Query().
+		exists, existErr := exec.APIKey.Query().
 			Where(apikey.IDEQ(id)).
 			Exist(mixins.SkipSoftDelete(ctx))
 		if existErr != nil {
@@ -732,6 +810,38 @@ func apiKeyVisibleToUserPredicate() predicate.APIKey {
 }
 
 func (r *apiKeyRepository) EnsureWebChatKey(ctx context.Context, userID, groupID int64, groupName, key string) (*service.APIKey, bool, error) {
+	if r.client == nil {
+		return r.ensureWebChatKeyWithSQL(ctx, r.sql, userID, groupID, groupName, key)
+	}
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+		return nil, false, err
+	}
+	result, created, err := r.ensureWebChatKeyWithSQL(ctx, client, userID, groupID, groupName, key)
+	if err != nil {
+		return nil, false, err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+	}
+	return result, created, nil
+}
+
+func (r *apiKeyRepository) ensureWebChatKeyWithSQL(ctx context.Context, exec sqlExecutor, userID, groupID int64, groupName, key string) (*service.APIKey, bool, error) {
 	name := strings.TrimSpace(groupName)
 	if name == "" {
 		name = fmt.Sprintf("Group %d", groupID)
@@ -739,7 +849,7 @@ func (r *apiKeyRepository) EnsureWebChatKey(ctx context.Context, userID, groupID
 	name = "Web Chat / " + name
 
 	var existing service.APIKey
-	if err := scanSingleRow(ctx, r.sql, `
+	if err := scanSingleRow(ctx, exec, `
 		SELECT id, user_id, key, name, group_id, status, source, is_hidden, quota, quota_used,
 		       rate_limit_5h, rate_limit_1d, rate_limit_7d, created_at, updated_at
 		FROM api_keys
@@ -772,7 +882,7 @@ func (r *apiKeyRepository) EnsureWebChatKey(ctx context.Context, userID, groupID
 	}
 
 	var created service.APIKey
-	if err := scanSingleRow(ctx, r.sql, `
+	if err := scanSingleRow(ctx, exec, `
 		INSERT INTO api_keys (
 			user_id, key, name, group_id, status, source, is_hidden,
 			ip_whitelist, ip_blacklist,
@@ -826,21 +936,84 @@ func (r *apiKeyRepository) EnsureWebChatKey(ctx context.Context, userID, groupID
 
 // ClearGroupIDByGroupID 将指定分组的所有 API Key 的 group_id 设为 nil
 func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID int64) (int64, error) {
-	n, err := r.client.APIKey.Update().
+	contextTx := dbent.TxFromContext(ctx)
+	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+		return 0, err
+	}
+	n, err := client.APIKey.Update().
 		Where(apikey.GroupIDEQ(groupID), apikey.DeletedAtIsNil()).
 		ClearGroupID().
 		Save(ctx)
-	return int64(n), err
+	if err != nil {
+		return 0, err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+	}
+	return int64(n), nil
 }
 
 // UpdateGroupIDByUserAndGroup 将用户下绑定 oldGroupID 的所有 Key 迁移到 newGroupID
 func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (int64, error) {
+	contextTx := dbent.TxFromContext(ctx)
 	client := clientFromContext(ctx, r.client)
+	var tx *dbent.Tx
+	if contextTx == nil {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		ctx = dbent.NewTxContext(ctx, tx)
+		client = tx.Client()
+	}
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs([]int64{oldGroupID, newGroupID}) {
+		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
+			return 0, err
+		}
+	}
 	n, err := client.APIKey.Update().
 		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
 		SetGroupID(newGroupID).
 		Save(ctx)
-	return int64(n), err
+	if err != nil {
+		return 0, err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+	}
+	return int64(n), nil
+}
+
+func apiKeyGroupIDSlice(groupID *int64) []int64 {
+	if groupID == nil || *groupID <= 0 {
+		return nil
+	}
+	return []int64{*groupID}
+}
+
+func sameNullableInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // CountByGroupID 获取分组的 API Key 数量

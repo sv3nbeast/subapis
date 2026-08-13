@@ -217,6 +217,13 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
+	// A stable-canary enrollment is a hard reservation, independent of the
+	// process feature switch. If the switch is disabled or the process restarts,
+	// the credential must remain quarantined instead of falling back to a legacy
+	// scheduler/identity path.
+	if a == nil || a.HasAnthropicStableCanaryManagedFields() {
+		return false
+	}
 	if !a.IsActive() || !a.Schedulable {
 		return false
 	}

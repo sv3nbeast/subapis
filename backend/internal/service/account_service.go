@@ -219,6 +219,9 @@ func NewAccountService(accountRepo AccountRepository, groupRepo GroupRepository)
 
 // Create 创建账号
 func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (*Account, error) {
+	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(req.Extra) {
+		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
+	}
 	// 验证分组是否存在（如果指定了分组）
 	if len(req.GroupIDs) > 0 {
 		if err := s.validateGroupIDsExist(ctx, req.GroupIDs); err != nil {
@@ -314,6 +317,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get account: %w", err)
+	}
+	if err := validateAnthropicStableCanaryAccountServiceUpdate(account, req); err != nil {
+		return nil, err
 	}
 
 	// 更新字段

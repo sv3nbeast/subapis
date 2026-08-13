@@ -44,7 +44,7 @@ func (r *ClaudeTokenRefresher) CacheKey(account *Account) string {
 // 此处与手动刷新入口（account.IsOAuth()）保持一致，实际是否刷新由 NeedsRefresh
 // 基于 expires_at 门控，并在分布式锁保护下执行，不会造成过度刷新。
 func (r *ClaudeTokenRefresher) CanRefresh(account *Account) bool {
-	return account.Platform == PlatformAnthropic && account.IsOAuth()
+	return account != nil && !account.HasAnthropicStableCanaryManagedFields() && account.Platform == PlatformAnthropic && account.IsOAuth()
 }
 
 // NeedsRefresh 检查token是否需要刷新
@@ -60,6 +60,9 @@ func (r *ClaudeTokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 // Refresh 执行token刷新
 // 保留原有credentials中的所有字段，只更新token相关字段
 func (r *ClaudeTokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
+	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+		return nil, ErrAnthropicStableCanaryOutboundBlocked
+	}
 	tokenInfo, err := r.oauthService.RefreshAccountToken(ctx, account)
 	if err != nil {
 		return nil, err

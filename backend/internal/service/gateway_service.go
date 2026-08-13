@@ -1032,6 +1032,10 @@ type GatewayService struct {
 	balanceNotifyService       *BalanceNotifyService
 	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
 	userPlatformQuotaRepo      UserPlatformQuotaRepository
+	// anthropicStableCanary is an in-process D1 coordinator. It is deliberately
+	// not shared with the normal scheduler or the unfinished multi-user V1
+	// admission state.
+	anthropicStableCanary *anthropicStableCanaryRuntime
 }
 
 func (s *GatewayService) SetCompositeResolver(resolver *CompositeRouteResolver) {
@@ -1125,6 +1129,7 @@ func NewGatewayService(
 		balanceNotifyService:       balanceNotifyService,
 		claudeCodeCompanionProbe:   NewClaudeCodeCompanionProbeService(httpUpstream),
 		userPlatformQuotaRepo:      userPlatformQuotaRepo,
+		anthropicStableCanary:      newAnthropicStableCanaryRuntime(),
 	}
 	if provider, ok := kiroCooldownStore.(nianzsKiroCooldownStoreProvider); ok {
 		svc.nianzsKiroCooldownStore = provider.NianzsKiroCooldownStore()
@@ -6966,6 +6971,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	startTime := time.Now()
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
+	}
+	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
+		return nil, fmt.Errorf("%w: managed account reached generic messages forwarder", ErrAnthropicStableCanaryOutboundBlocked)
 	}
 	nativeOAuthPassthrough := s.shouldUseAnthropicOAuthNativePassthrough(ctx, c, account, parsed)
 	if !nativeOAuthPassthrough {

@@ -220,6 +220,7 @@ func NewGatewayHandler(
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
+	requestStartedAt := time.Now()
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -230,6 +231,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		return
+	}
+	// The stable canary owns the raw request body. Route it before the generic
+	// parser, billing-header stripping, model mapping, and OAuth mimicry path can
+	// mutate the request identity.
+	if h.tryAnthropicStableCanaryMessages(c, apiKey, subject, requestStartedAt) {
 		return
 	}
 	reqLog := requestLogger(
@@ -2280,6 +2287,13 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
+		return
+	}
+	// D1 intentionally exposes only the captured /v1/messages wire profile.
+	// Never let count_tokens for the reserved group fall through to the legacy
+	// OAuth path and create a second upstream identity.
+	if apiKey.GroupID != nil && h.gatewayService.IsAnthropicStableCanaryGroup(apiKey.GroupID) {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Not found")
 		return
 	}
 	reqLog := requestLogger(
