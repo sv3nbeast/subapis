@@ -148,10 +148,19 @@ var KiroNativeGPTModels = [...]string{
 	KiroNativeGPTLunaModel,
 }
 
+// KiroNativeGPTAliases are public model names that use the OpenAI Responses
+// Kiro bridge while being translated to a native Kiro GPT model upstream.
+// Keep aliases separate from KiroNativeGPTModels: the latter is the canonical
+// upstream model family used for scheduling and pricing.
+var KiroNativeGPTAliases = map[string]string{
+	"codex-auto-review": KiroNativeGPTLunaModel,
+}
+
 var DefaultKiroModelMapping = map[string]string{
 	KiroNativeGPTModel:                    KiroNativeGPTModel,
 	KiroNativeGPTTerraModel:               KiroNativeGPTTerraModel,
 	KiroNativeGPTLunaModel:                KiroNativeGPTLunaModel,
+	"codex-auto-review":                   KiroNativeGPTLunaModel,
 	"claude-opus-5":                       "claude-opus-5",
 	"claude-opus-5-thinking":              "claude-opus-5",
 	"claude-sonnet-5":                     "claude-sonnet-5",

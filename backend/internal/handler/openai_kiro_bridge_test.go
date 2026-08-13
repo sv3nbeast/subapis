@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -80,6 +81,13 @@ func TestOpenAIKiroBridgeEndpointScope(t *testing.T) {
 				require.False(t, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformGrok, model), model)
 			}
 			require.False(t, isOpenAIKiroBridgeChatRequest(c, service.PlatformOpenAI, "gpt-5.4"))
+			require.Equal(t, tt.responses, isOpenAIKiroBridgeResponsesRequest(c, service.PlatformOpenAI, "codex-auto-review"))
+			require.Equal(t, tt.chat, isOpenAIKiroBridgeChatRequest(c, service.PlatformOpenAI, "codex-auto-review"))
 		})
 	}
+}
+
+func TestOpenAIKiroBridgeModelResolvesPublicAlias(t *testing.T) {
+	require.Equal(t, domain.KiroNativeGPTLunaModel, openAIKiroBridgeModel("codex-auto-review", service.ChannelMappingResult{}))
+	require.Equal(t, domain.KiroNativeGPTLunaModel, openAIKiroBridgeModel(" codex-auto-review ", service.ChannelMappingResult{}))
 }

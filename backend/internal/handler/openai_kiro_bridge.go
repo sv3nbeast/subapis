@@ -11,10 +11,14 @@ import (
 )
 
 func openAIKiroBridgeModel(requestedModel string, mapping service.ChannelMappingResult) string {
+	candidate := strings.TrimSpace(requestedModel)
 	if mapping.Mapped {
-		return strings.TrimSpace(mapping.MappedModel)
+		candidate = strings.TrimSpace(mapping.MappedModel)
 	}
-	return strings.TrimSpace(requestedModel)
+	if canonical, ok := service.ResolveOpenAIKiroBridgeModel(candidate); ok {
+		return canonical
+	}
+	return candidate
 }
 
 func isOpenAIKiroBridgeResponsesRequest(c *gin.Context, requestPlatform string, model string) bool {

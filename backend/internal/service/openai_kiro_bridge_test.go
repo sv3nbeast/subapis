@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/stretchr/testify/require"
 )
@@ -59,6 +60,9 @@ func bridgeTestAccount(id int64, platform string, priority int, groupID int64) A
 
 func TestAccountOpenAIKiroBridgeEligibilityRequiresEveryGate(t *testing.T) {
 	base := bridgeTestAccount(1, PlatformKiro, 1, 7)
+	require.True(t, IsOpenAIKiroBridgeModel("codex-auto-review"))
+	require.Equal(t, domain.KiroNativeGPTLunaModel, mustResolveOpenAIKiroBridgeModel(t, "codex-auto-review"))
+	require.True(t, base.IsEligibleForOpenAIKiroBridge("codex-auto-review"))
 	for _, model := range OpenAIKiroBridgeModels {
 		require.True(t, base.IsEligibleForOpenAIKiroBridge(model), model)
 	}
@@ -99,6 +103,13 @@ func TestAccountOpenAIKiroBridgeEligibilityRequiresEveryGate(t *testing.T) {
 			require.False(t, account.IsEligibleForOpenAIKiroBridge(model))
 		})
 	}
+}
+
+func mustResolveOpenAIKiroBridgeModel(t *testing.T, model string) string {
+	t.Helper()
+	resolved, ok := ResolveOpenAIKiroBridgeModel(model)
+	require.True(t, ok, model)
+	return resolved
 }
 
 func TestSelectAccountWithSchedulerForKiroBridgeUsesSharedPriority(t *testing.T) {

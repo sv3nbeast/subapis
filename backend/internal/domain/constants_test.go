@@ -83,6 +83,17 @@ func TestDefaultKiroModelMapping_DefaultsNativeGPTFamily(t *testing.T) {
 	}
 }
 
+func TestDefaultKiroModelMapping_DefaultsCodexAutoReviewToLuna(t *testing.T) {
+	t.Parallel()
+
+	if got, ok := DefaultKiroModelMapping["codex-auto-review"]; !ok || got != KiroNativeGPTLunaModel {
+		t.Fatalf("unexpected default Kiro codex-auto-review mapping: got %q exists=%v want %q", got, ok, KiroNativeGPTLunaModel)
+	}
+	if got, ok := KiroNativeGPTAliases["codex-auto-review"]; !ok || got != KiroNativeGPTLunaModel {
+		t.Fatalf("unexpected Kiro GPT bridge alias: got %q exists=%v want %q", got, ok, KiroNativeGPTLunaModel)
+	}
+}
+
 func TestDefaultKiroModelMapping_ContainsClaude45ShortAliases(t *testing.T) {
 	t.Parallel()
 

@@ -52,6 +52,18 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5')
   })
 
+  it('Kiro 模型列表和预设映射包含 Codex Auto Review Luna 别名', () => {
+    expect(getModelsByPlatform('kiro')).toEqual(expect.arrayContaining([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'codex-auto-review'
+    ]))
+    expect(getPresetMappingsByPlatform('kiro')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'codex-auto-review', to: 'gpt-5.6-luna' })
+    ]))
+  })
+
   it('Claude 和 Kiro 模型列表及预设映射包含 Opus 5', () => {
     for (const platform of ['claude', 'kiro']) {
       expect(getModelsByPlatform(platform)).toContain('claude-opus-5')

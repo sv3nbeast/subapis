@@ -434,14 +434,34 @@ const OpenAIKiroBridgeModel = domain.KiroNativeGPTModel
 
 var OpenAIKiroBridgeModels = domain.KiroNativeGPTModels
 
-func IsOpenAIKiroBridgeModel(model string) bool {
+// ResolveOpenAIKiroBridgeModel returns the canonical Kiro GPT model used by
+// the bridge for a public model name. Native names resolve to themselves;
+// public aliases resolve to their configured Kiro native target.
+func ResolveOpenAIKiroBridgeModel(model string) (string, bool) {
 	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", false
+	}
 	for _, supported := range OpenAIKiroBridgeModels {
 		if model == supported {
-			return true
+			return model, true
 		}
 	}
-	return false
+	canonical, ok := domain.KiroNativeGPTAliases[model]
+	if !ok {
+		return "", false
+	}
+	for _, supported := range OpenAIKiroBridgeModels {
+		if canonical == supported {
+			return canonical, true
+		}
+	}
+	return "", false
+}
+
+func IsOpenAIKiroBridgeModel(model string) bool {
+	_, ok := ResolveOpenAIKiroBridgeModel(model)
+	return ok
 }
 
 // IsOpenAIKiroBridgeEnabled is the account-level opt-in for serving OpenAI groups.
@@ -453,16 +473,18 @@ func (a *Account) IsOpenAIKiroBridgeEnabled() bool {
 	return enabled
 }
 
-// SupportsOpenAIKiroBridgeModel requires Kiro's native GPT model to resolve to
-// itself. Platform defaults cover existing and future Kiro accounts while an
-// explicit account or wildcard override remains authoritative.
+// SupportsOpenAIKiroBridgeModel requires the requested native model (or public
+// alias) to resolve to the canonical Kiro GPT target. Platform defaults cover
+// existing and future Kiro accounts while an explicit account or wildcard
+// override remains authoritative.
 func (a *Account) SupportsOpenAIKiroBridgeModel(model string) bool {
 	model = strings.TrimSpace(model)
-	if a == nil || !IsOpenAIKiroBridgeModel(model) {
+	canonical, ok := ResolveOpenAIKiroBridgeModel(model)
+	if a == nil || !ok {
 		return false
 	}
 	mapped, matched := a.ResolveMappedModel(model)
-	return matched && strings.TrimSpace(mapped) == model
+	return matched && strings.TrimSpace(mapped) == canonical
 }
 
 func (a *Account) IsEligibleForOpenAIKiroBridge(model string) bool {
@@ -960,20 +982,26 @@ func ensureKiroNativeGPTDefaults(mapping map[string]string) {
 		return
 	}
 	for _, model := range domain.KiroNativeGPTModels {
-		if _, exists := mapping[model]; exists {
-			continue
-		}
-		matched := false
-		for pattern := range mapping {
-			if matchWildcard(pattern, model) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			mapping[model] = model
+		ensureKiroDefaultMapping(mapping, model, model)
+	}
+	for alias, canonical := range domain.KiroNativeGPTAliases {
+		ensureKiroDefaultMapping(mapping, alias, canonical)
+	}
+}
+
+func ensureKiroDefaultMapping(mapping map[string]string, model, target string) {
+	if mapping == nil || model == "" || target == "" {
+		return
+	}
+	if _, exists := mapping[model]; exists {
+		return
+	}
+	for pattern := range mapping {
+		if matchWildcard(pattern, model) {
+			return
 		}
 	}
+	mapping[model] = target
 }
 
 func ensureKiroVersionAlias(mapping map[string]string, alias, canonical string) {

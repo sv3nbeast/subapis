@@ -90,6 +90,10 @@ const antigravityModels = [
 ]
 
 const kiroModels = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'codex-auto-review',
   'claude-sonnet-5',
   'claude-opus-5',
   'claude-opus-5-thinking',
@@ -394,6 +398,7 @@ const antigravityPresetMappings = [
 ]
 
 const kiroPresetMappings = [
+  { label: 'Codex Auto Review→Luna', from: 'codex-auto-review', to: 'gpt-5.6-luna', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-300' },
   { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },
   { label: 'Opus 5 Thinking', from: 'claude-opus-5-thinking', to: 'claude-opus-5', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300' },

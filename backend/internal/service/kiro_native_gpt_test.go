@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	claudepkg "github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -382,6 +383,67 @@ func TestForwardAsResponsesKiroUsesNativeGPTModel(t *testing.T) {
 	require.Equal(t, "native gpt responses ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 	require.Equal(t, kiroNativeGPTTestModel, result.Model)
 	require.Equal(t, kiroNativeGPTTestModel, result.UpstreamModel)
+}
+
+func TestForwardAsResponsesKiroResolvesCodexAutoReviewAliasToLuna(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			resetKiroResponsesHistoryStoreForTest()
+			body := []byte(fmt.Sprintf(`{"model":"codex-auto-review","input":[{"type":"input_text","text":"hello codex review"}],"stream":%t}`, stream))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			svc, upstream, account := newKiroNativeGPTTestRuntime(t, "codex review ok")
+
+			result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+				Body:  NewRequestBodyRef(body),
+				Model: "codex-auto-review",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, domain.KiroNativeGPTLunaModel, gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+			require.Equal(t, "codex-auto-review", result.Model)
+			require.Equal(t, domain.KiroNativeGPTLunaModel, result.UpstreamModel)
+			if stream {
+				require.Contains(t, rec.Body.String(), "event: response.completed")
+			} else {
+				require.Equal(t, "codex review ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
+			}
+		})
+	}
+}
+
+func TestForwardAsChatCompletionsKiroResolvesCodexAutoReviewAliasToLuna(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"codex-auto-review","messages":[{"role":"user","content":"hello codex review"}],"stream":%t}`, stream))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			svc, upstream, account := newKiroNativeGPTTestRuntime(t, "codex review chat ok")
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+				Body:  NewRequestBodyRef(body),
+				Model: "codex-auto-review",
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, domain.KiroNativeGPTLunaModel, gjson.GetBytes(upstream.lastBody, "conversationState.currentMessage.userInputMessage.modelId").String())
+			require.Equal(t, "codex-auto-review", result.Model)
+			require.Equal(t, domain.KiroNativeGPTLunaModel, result.UpstreamModel)
+			if stream {
+				require.Contains(t, rec.Body.String(), "data: [DONE]")
+			} else {
+				require.Equal(t, "codex review chat ok", gjson.Get(rec.Body.String(), "choices.0.message.content").String())
+			}
+		})
+	}
 }
 
 func TestForwardAsResponsesKiroFutureClaudeCallMarkerRetries(t *testing.T) {
