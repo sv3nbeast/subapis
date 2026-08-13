@@ -64,8 +64,9 @@ var (
 		SetGrokCredentialErrorIfMatch(context.Context, int64, service.GrokCredentialMutationSnapshot, string) (bool, error)
 		SetGrokCredentialTempUnschedulableIfMatch(context.Context, int64, service.GrokCredentialMutationSnapshot, time.Time, string) (bool, error)
 	} = (*accountRepository)(nil)
-	_ service.AnthropicStableCanaryStateRepository = (*accountRepository)(nil)
-	_ service.AnthropicStableCanaryLeaseRepository = (*accountRepository)(nil)
+	_ service.AnthropicStableCanaryStateRepository          = (*accountRepository)(nil)
+	_ service.AnthropicStableCanaryLeaseRepository          = (*accountRepository)(nil)
+	_ service.AnthropicStableCanarySessionBindingRepository = (*accountRepository)(nil)
 )
 
 var schedulerNeutralExtraKeyPrefixes = []string{

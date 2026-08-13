@@ -1091,15 +1091,30 @@ type GatewayClaudeCodeSyntheticCompanionConfig struct {
 // GatewayAnthropicStableCanaryConfig binds one exact OAuth account to one
 // Claude-Code-only group and one owner. The account is kept out of the normal
 // scheduler and generic credential refresh paths while this feature is active.
-// A future multi-user implementation must use a separate generation/session
-// coordinator; it must not broaden these fields in place.
+// Shared mode remains an explicitly allow-listed extension of the same isolated
+// account and uses a durable session-owner coordinator; it never broadens D1
+// unless SharedUsers is separately enabled.
 type GatewayAnthropicStableCanaryConfig struct {
-	Enabled      bool  `mapstructure:"enabled"`
-	GroupID      int64 `mapstructure:"group_id"`
-	AccountID    int64 `mapstructure:"account_id"`
-	OwnerUserID  int64 `mapstructure:"owner_user_id"`
-	APIKeyID     int64 `mapstructure:"api_key_id"`
-	MaxBodyBytes int64 `mapstructure:"max_body_bytes"`
+	Enabled     bool  `mapstructure:"enabled"`
+	GroupID     int64 `mapstructure:"group_id"`
+	AccountID   int64 `mapstructure:"account_id"`
+	OwnerUserID int64 `mapstructure:"owner_user_id"`
+	APIKeyID    int64 `mapstructure:"api_key_id"`
+	// SharedUsers is an explicit D2 opt-in. When true, the dedicated group may
+	// serve multiple authenticated users; each session is durably bound to its
+	// first owner and the account remains serialized at concurrency one.
+	SharedUsers bool `mapstructure:"shared_users"`
+	// SharedAPIKeyIDs is the complete canary allow-list. Merely assigning an
+	// arbitrary key to the group never grants access to the shared account.
+	SharedAPIKeyIDs []int64 `mapstructure:"shared_api_key_ids"`
+	// SessionGeneration is an explicit, monotonically increasing policy
+	// generation. It must be bumped when the allow-list, account, or routing
+	// secret is intentionally changed; old session tombstones remain isolated.
+	SessionGeneration int64 `mapstructure:"session_generation"`
+	// SessionHMACKey is a purpose-separated secret used only to persist opaque
+	// session ownership keys. It must remain stable across deployments.
+	SessionHMACKey string `mapstructure:"session_hmac_key" json:"-" yaml:"-"`
+	MaxBodyBytes   int64  `mapstructure:"max_body_bytes"`
 }
 
 // GatewayOpenAIHTTP2Config OpenAI HTTP 上游协议配置。
@@ -1783,6 +1798,16 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	// 环境变量支持
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	for _, key := range []string{
+		"gateway.anthropic_stable_canary.shared_users",
+		"gateway.anthropic_stable_canary.shared_api_key_ids",
+		"gateway.anthropic_stable_canary.session_generation",
+		"gateway.anthropic_stable_canary.session_hmac_key",
+	} {
+		if err := viper.BindEnv(key); err != nil {
+			return nil, fmt.Errorf("bind %s: %w", key, err)
+		}
+	}
 	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
 		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
 	}
@@ -1880,6 +1905,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
 	cfg.Gateway.ClaudeCodeAuxCompat.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeAuxCompat.Mode))
 	cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode = strings.ToLower(strings.TrimSpace(cfg.Gateway.ClaudeCodeMimicry.SyntheticCompanion.Mode))
+	cfg.Gateway.AnthropicStableCanary.SessionHMACKey = strings.TrimSpace(cfg.Gateway.AnthropicStableCanary.SessionHMACKey)
 	if cfg.Gateway.AnthropicStableCanary.MaxBodyBytes <= 0 {
 		cfg.Gateway.AnthropicStableCanary.MaxBodyBytes = 64 << 20
 	}
@@ -2361,6 +2387,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.anthropic_stable_canary.account_id", int64(0))
 	viper.SetDefault("gateway.anthropic_stable_canary.owner_user_id", int64(0))
 	viper.SetDefault("gateway.anthropic_stable_canary.api_key_id", int64(0))
+	viper.SetDefault("gateway.anthropic_stable_canary.session_generation", int64(0))
 	viper.SetDefault("gateway.anthropic_stable_canary.max_body_bytes", int64(64<<20))
 	viper.SetDefault("gateway.tls_fingerprint.default_enabled_for_anthropic_oauth", true)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
@@ -3153,7 +3180,20 @@ func (c *Config) Validate() error {
 		if c.Gateway.AnthropicStableCanary.GroupID <= 0 || c.Gateway.AnthropicStableCanary.AccountID <= 0 {
 			return fmt.Errorf("gateway.anthropic_stable_canary.group_id and account_id must be positive when canary is enabled")
 		}
-		if c.Gateway.AnthropicStableCanary.OwnerUserID <= 0 || c.Gateway.AnthropicStableCanary.APIKeyID <= 0 {
+		if c.Gateway.AnthropicStableCanary.SharedUsers {
+			if c.Gateway.AnthropicStableCanary.OwnerUserID != 0 || c.Gateway.AnthropicStableCanary.APIKeyID != 0 {
+				return fmt.Errorf("gateway.anthropic_stable_canary.owner_user_id and api_key_id must be zero in shared_users mode")
+			}
+			if err := validateAnthropicStableCanarySharedAPIKeyIDs(c.Gateway.AnthropicStableCanary.SharedAPIKeyIDs); err != nil {
+				return err
+			}
+			if c.Gateway.AnthropicStableCanary.SessionGeneration <= 0 {
+				return fmt.Errorf("gateway.anthropic_stable_canary.session_generation must be positive in shared_users mode")
+			}
+			if len(strings.TrimSpace(c.Gateway.AnthropicStableCanary.SessionHMACKey)) < 32 {
+				return fmt.Errorf("gateway.anthropic_stable_canary.session_hmac_key must contain at least 32 characters in shared_users mode")
+			}
+		} else if c.Gateway.AnthropicStableCanary.OwnerUserID <= 0 || c.Gateway.AnthropicStableCanary.APIKeyID <= 0 {
 			return fmt.Errorf("gateway.anthropic_stable_canary.owner_user_id and api_key_id must be positive when canary is enabled")
 		}
 		if c.Gateway.AnthropicStableCanary.MaxBodyBytes <= 0 || c.Gateway.AnthropicStableCanary.MaxBodyBytes > 64<<20 {
@@ -3587,6 +3627,23 @@ func (c *Config) Validate() error {
 	}
 	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
 		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
+	}
+	return nil
+}
+
+func validateAnthropicStableCanarySharedAPIKeyIDs(values []int64) error {
+	if len(values) == 0 || len(values) > 32 {
+		return fmt.Errorf("gateway.anthropic_stable_canary.shared_api_key_ids must contain between 1 and 32 ids in shared_users mode")
+	}
+	seen := make(map[int64]struct{}, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			return fmt.Errorf("gateway.anthropic_stable_canary.shared_api_key_ids must contain only positive ids")
+		}
+		if _, ok := seen[value]; ok {
+			return fmt.Errorf("gateway.anthropic_stable_canary.shared_api_key_ids must not contain duplicates")
+		}
+		seen[value] = struct{}{}
 	}
 	return nil
 }

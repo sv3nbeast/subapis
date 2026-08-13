@@ -157,8 +157,8 @@ var (
 )
 
 // AnthropicStableIngressRequest is a zero-copy view over the inbound body.
-// RawBody is never modified. PatchDevice is reserved for the later reviewed
-// multi-user coordinator and is deliberately not used by the D1 canary.
+// RawBody is never modified. PatchDevice is used only by reviewed shared mode;
+// the D1 canary still rejects a different device without rewriting it.
 type AnthropicStableIngressRequest struct {
 	RawBody       []byte
 	ProfileID     string
@@ -307,7 +307,7 @@ func ParseAnthropicStableIngressProfile(
 	return result, nil
 }
 
-// PatchDevice prepares the fixed-device body needed by a future multi-user
+// PatchDevice prepares the fixed-device body used by the reviewed shared
 // coordinator. Both identifiers are exactly 64 lowercase hex characters, so
 // all bytes outside the identifier retain their original offsets and values.
 func (r *AnthropicStableIngressRequest) PatchDevice(deviceID string) ([]byte, error) {

@@ -46,8 +46,7 @@ func (h *GatewayHandler) tryAnthropicStableCanaryMessages(c *gin.Context, apiKey
 		requestStartedAt = time.Now()
 	}
 	ctx := c.Request.Context()
-	if !h.gatewayService.AnthropicStableCanaryOwnerAllowed(subject.UserID) ||
-		!h.gatewayService.AnthropicStableCanaryAPIKeyAllowed(apiKey.ID) {
+	if !h.gatewayService.AnthropicStableCanaryPrincipalAllowed(subject.UserID, apiKey) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", "This Claude Code canary is restricted to its registered user")
 		return true
 	}
@@ -121,7 +120,7 @@ func (h *GatewayHandler) tryAnthropicStableCanaryMessages(c *gin.Context, apiKey
 		h.errorResponse(c, status, code, message)
 		return true
 	}
-	result, forwardErr := h.gatewayService.ForwardAnthropicStableCanaryRaw(ctx, c, account, body, requestStartedAt)
+	result, forwardErr := h.gatewayService.ForwardAnthropicStableCanaryRaw(ctx, c, account, body, subject.UserID, requestStartedAt)
 	service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(requestStartedAt).Milliseconds())
 	if result != nil {
 		if result.FirstTokenMs != nil {

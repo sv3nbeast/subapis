@@ -24,9 +24,13 @@ const stableCanaryHandlerBeta = "interleaved-thinking-2025-05-14,redact-thinking
 
 type stableCanaryHandlerAccountRepo struct {
 	service.AccountRepository
-	account     *service.Account
-	getCalls    int
-	listByGroup int
+	account          *service.Account
+	getCalls         int
+	listByGroup      int
+	sessionOwner     int64
+	sessionClaims    int
+	sessionErr       error
+	sessionSupported bool
 }
 
 func (r *stableCanaryHandlerAccountRepo) AcquireAnthropicStableCanaryLease(context.Context, int64) (func() error, error) {
@@ -47,6 +51,25 @@ func (r *stableCanaryHandlerAccountRepo) ListByGroup(_ context.Context, groupID 
 		return nil, nil
 	}
 	return []service.Account{*r.account}, nil
+}
+
+func (r *stableCanaryHandlerAccountRepo) ClaimAnthropicStableCanarySession(
+	_ context.Context,
+	groupID, accountID, generation, ownerUserID int64,
+	sessionHash, keyFingerprint, policyFingerprint string,
+) error {
+	_ = groupID
+	_ = accountID
+	_ = generation
+	_ = sessionHash
+	_ = keyFingerprint
+	_ = policyFingerprint
+	r.sessionClaims++
+	r.sessionOwner = ownerUserID
+	if !r.sessionSupported {
+		return service.ErrAnthropicStableCanarySessionBindingUnavailable
+	}
+	return r.sessionErr
 }
 
 type stableCanaryHandlerGroupRepo struct {
@@ -262,6 +285,92 @@ func TestGatewayHandlerMessages_AnthropicStableCanaryRejectsOtherOwnerKeyBeforeB
 	require.Zero(t, accountRepo.getCalls)
 	require.Zero(t, accountRepo.listByGroup)
 	require.Zero(t, groupRepo.getCalls)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableSharedBindingUnavailableBeforeEgress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, groupRepo, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	canary := &h.cfg.Gateway.AnthropicStableCanary
+	canary.OwnerUserID = 0
+	canary.APIKeyID = 0
+	canary.SharedUsers = true
+	canary.SharedAPIKeyIDs = []int64{apiKey.ID}
+	canary.SessionGeneration = 1
+	canary.SessionHMACKey = strings.Repeat("h", 32)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", bytes.NewReader(body))
+	setStableCanaryHandlerProfile(c.Request)
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	h.Messages(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "temporarily unavailable")
+	require.NotContains(t, recorder.Body.String(), "session binding")
+	require.GreaterOrEqual(t, accountRepo.getCalls, 1)
+	require.GreaterOrEqual(t, groupRepo.getCalls, 1)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableSharedModePatchesDeviceAndBindsUserBeforeEgress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var upstreamCalls int
+	var upstreamBody []byte
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		upstreamBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"shared-handler\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer upstream.Close()
+
+	originalTransport := http.DefaultTransport
+	targetAddress := strings.TrimPrefix(upstream.URL, "https://")
+	dialer := &net.Dialer{}
+	transport := originalTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // test-only capture server
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, targetAddress)
+	}
+	http.DefaultTransport = transport
+	t.Cleanup(func() {
+		transport.CloseIdleConnections()
+		http.DefaultTransport = originalTransport
+	})
+
+	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	accountRepo.sessionSupported = true
+	clientDevice := strings.Repeat("b", 64)
+	body = []byte(strings.Replace(string(body), strings.Repeat("a", 64), clientDevice, 1))
+	canary := &h.cfg.Gateway.AnthropicStableCanary
+	canary.OwnerUserID = 0
+	canary.APIKeyID = 0
+	canary.SharedUsers = true
+	canary.SharedAPIKeyIDs = []int64{apiKey.ID}
+	canary.SessionGeneration = 1
+	canary.SessionHMACKey = strings.Repeat("h", 32)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", bytes.NewReader(body))
+	setStableCanaryHandlerProfile(c.Request)
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	h.Messages(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "no-cache", recorder.Header().Get("Cache-Control"))
+	require.Equal(t, "keep-alive", recorder.Header().Get("Connection"))
+	require.Equal(t, "no", recorder.Header().Get("X-Accel-Buffering"))
+	require.Equal(t, 1, upstreamCalls)
+	expectedBody := strings.Replace(string(body), clientDevice, accountRepo.account.AnthropicStableCanaryDeviceID(), 1)
+	require.Equal(t, expectedBody, string(upstreamBody))
+	require.Equal(t, 1, accountRepo.sessionClaims)
+	require.Equal(t, subject.UserID, accountRepo.sessionOwner)
+	require.NotContains(t, recorder.Body.String(), "session binding")
 }
 
 func TestGatewayHandlerMessages_AnthropicStableCanaryRejectsProfileBeforeAccountRead(t *testing.T) {

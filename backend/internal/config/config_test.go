@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2099,7 +2100,76 @@ func TestLoad_DefaultAnthropicStableCanaryIsOff(t *testing.T) {
 	require.Zero(t, cfg.Gateway.AnthropicStableCanary.AccountID)
 	require.Zero(t, cfg.Gateway.AnthropicStableCanary.OwnerUserID)
 	require.Zero(t, cfg.Gateway.AnthropicStableCanary.APIKeyID)
+	require.False(t, cfg.Gateway.AnthropicStableCanary.SharedUsers)
+	require.Empty(t, cfg.Gateway.AnthropicStableCanary.SharedAPIKeyIDs)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.SessionGeneration)
+	require.Empty(t, cfg.Gateway.AnthropicStableCanary.SessionHMACKey)
 	require.Equal(t, int64(64<<20), cfg.Gateway.AnthropicStableCanary.MaxBodyBytes)
+}
+
+func TestLoad_AnthropicStableCanarySharedUsersEnvironmentBinding(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED", "true")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID", "101")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID", "202")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_USERS", "true")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS", "404,405")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_GENERATION", "1")
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY", strings.Repeat("s", 32))
+	t.Setenv("GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES", "1048576")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.AnthropicStableCanary.SharedUsers)
+	require.Equal(t, []int64{404, 405}, cfg.Gateway.AnthropicStableCanary.SharedAPIKeyIDs)
+	require.Equal(t, int64(1), cfg.Gateway.AnthropicStableCanary.SessionGeneration)
+	require.Equal(t, strings.Repeat("s", 32), cfg.Gateway.AnthropicStableCanary.SessionHMACKey)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.OwnerUserID)
+	require.Zero(t, cfg.Gateway.AnthropicStableCanary.APIKeyID)
+}
+
+func TestValidateAnthropicStableCanarySharedUsersFailsClosed(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	base, err := Load()
+	require.NoError(t, err)
+	base.Gateway.AnthropicStableCanary = GatewayAnthropicStableCanaryConfig{
+		Enabled: true, GroupID: 1, AccountID: 2, SharedUsers: true,
+		SharedAPIKeyIDs: []int64{4, 5}, SessionGeneration: 1,
+		SessionHMACKey: strings.Repeat("s", 32), MaxBodyBytes: 64 << 20,
+	}
+	require.NoError(t, base.Validate())
+
+	tests := []struct {
+		name    string
+		mutate  func(*GatewayAnthropicStableCanaryConfig)
+		wantErr string
+	}{
+		{name: "legacy owner", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.OwnerUserID = 3 }, wantErr: "must be zero"},
+		{name: "empty keys", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.SharedAPIKeyIDs = nil }, wantErr: "between 1 and 32"},
+		{name: "duplicate keys", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.SharedAPIKeyIDs = []int64{4, 4} }, wantErr: "duplicates"},
+		{name: "generation", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.SessionGeneration = 0 }, wantErr: "session_generation"},
+		{name: "short hmac", mutate: func(c *GatewayAnthropicStableCanaryConfig) { c.SessionHMACKey = "short" }, wantErr: "at least 32"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := *base
+			cfg.Gateway.AnthropicStableCanary = base.Gateway.AnthropicStableCanary
+			cfg.Gateway.AnthropicStableCanary.SharedAPIKeyIDs = append([]int64(nil), base.Gateway.AnthropicStableCanary.SharedAPIKeyIDs...)
+			tt.mutate(&cfg.Gateway.AnthropicStableCanary)
+			require.ErrorContains(t, cfg.Validate(), tt.wantErr)
+		})
+	}
+}
+
+func TestAnthropicStableCanarySessionHMACKeyIsNotJSONSerialized(t *testing.T) {
+	cfg := GatewayAnthropicStableCanaryConfig{
+		SharedUsers: true, SharedAPIKeyIDs: []int64{4}, SessionGeneration: 1, SessionHMACKey: strings.Repeat("s", 32),
+	}
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), cfg.SessionHMACKey)
+	require.NotContains(t, string(raw), "SessionHMACKey")
 }
 
 func TestLoad_AnthropicStableCanaryEnvironmentBinding(t *testing.T) {

@@ -29,11 +29,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const anthropicStableCanaryModeName = "canary"
+const (
+	anthropicStableCanaryModeName       = "canary"
+	anthropicStableCanarySharedModeName = "canary_shared"
+)
 
 const anthropicStableCanaryDurableBlockTimeout = 2 * time.Second
 
 const anthropicStableCanaryRefreshTimeout = 30 * time.Second
+
+// Session ownership is a safety gate, not an unbounded request queue. A
+// database outage must fail closed within a short, explicit budget instead of
+// consuming the entire client TTFT window before any upstream byte is sent.
+const anthropicStableCanarySessionClaimTimeout = 2 * time.Second
 
 // The reference claude-gateway selects its OAuth Bearer branch from the raw
 // access-token prefix (strings.HasPrefix(token, "sk-ant-oat")).  Stable mode
@@ -405,8 +413,16 @@ func (s *GatewayService) anthropicStableCanaryConfig() (config.GatewayAnthropicS
 		return config.GatewayAnthropicStableCanaryConfig{}, errAnthropicStableCanaryDisabled
 	}
 	canary := s.cfg.Gateway.AnthropicStableCanary
-	if canary.GroupID <= 0 || canary.AccountID <= 0 || canary.OwnerUserID <= 0 || canary.APIKeyID <= 0 {
+	if canary.GroupID <= 0 || canary.AccountID <= 0 {
 		return config.GatewayAnthropicStableCanaryConfig{}, fmt.Errorf("%w: group/account binding is incomplete", errAnthropicStableCanaryDisabled)
+	}
+	if canary.SharedUsers {
+		if canary.OwnerUserID != 0 || canary.APIKeyID != 0 || len(canary.SharedAPIKeyIDs) == 0 ||
+			canary.SessionGeneration <= 0 || len(strings.TrimSpace(canary.SessionHMACKey)) < 32 {
+			return config.GatewayAnthropicStableCanaryConfig{}, fmt.Errorf("%w: shared binding is invalid", errAnthropicStableCanaryDisabled)
+		}
+	} else if canary.OwnerUserID <= 0 || canary.APIKeyID <= 0 {
+		return config.GatewayAnthropicStableCanaryConfig{}, fmt.Errorf("%w: owner/key binding is incomplete", errAnthropicStableCanaryDisabled)
 	}
 	if canary.MaxBodyBytes <= 0 || canary.MaxBodyBytes > AnthropicStableIngressMaxBodyBytes {
 		return config.GatewayAnthropicStableCanaryConfig{}, fmt.Errorf("%w: max body size is invalid", errAnthropicStableCanaryDisabled)
@@ -571,6 +587,10 @@ func stableCanaryFailMessage(err error) string {
 	// Do not expose account flags, device identifiers, proxy details, or token
 	// refresh internals to API callers. The detailed cause remains in logs.
 	switch {
+	case errors.Is(err, ErrAnthropicStableCanarySessionOwnerConflict):
+		return "This Claude Code session belongs to another user"
+	case errors.Is(err, ErrAnthropicStableCanarySessionBindingUnavailable):
+		return "The Claude Code session is temporarily unavailable"
 	case errors.Is(err, ErrAnthropicStableIngressNotClaudeCode),
 		errors.Is(err, ErrAnthropicStableIngressMalformed),
 		errors.Is(err, ErrAnthropicStableIngressDuplicateKey):
@@ -789,10 +809,9 @@ type anthropicStableCanaryRefreshResponse struct {
 }
 
 // refreshAnthropicStableCanaryToken performs the only credential mutation that
-// the D1 canary permits. The per-account runtime slot is held by the caller,
-// so two requests cannot refresh the same reserved account concurrently. This
-// is intentionally a D1 coordinator; multi-user rollout must replace it with
-// the persistent session/binding coordinator rather than weakening the guard.
+// stable mode permits. The per-account runtime slot and cross-process lease are
+// held by the caller, so D1 and shared D2 cannot refresh the reserved account
+// concurrently.
 func (s *GatewayService) refreshAnthropicStableCanaryToken(
 	ctx context.Context,
 	account *Account,
@@ -972,6 +991,7 @@ func (s *GatewayService) ForwardAnthropicStableCanaryRaw(
 	c *gin.Context,
 	account *Account,
 	rawBody []byte,
+	ownerUserID int64,
 	startTime time.Time,
 ) (*ForwardResult, error) {
 	if c == nil || c.Request == nil || c.Writer == nil {
@@ -1056,17 +1076,37 @@ func (s *GatewayService) ForwardAnthropicStableCanaryRaw(
 	if !AnthropicStableIngressProfilesEquivalent(ingress.ProfileID, account.AnthropicStableCanaryProfileID()) {
 		return nil, s.stableCanaryReject(c, http.StatusServiceUnavailable, errAnthropicStableCanaryAccountInvalid)
 	}
-	// D1 is a same-installation canary. A different device must be rejected
-	// before any upstream request; rewriting it would no longer reproduce the
-	// known-good local claude-gateway request byte for byte.
-	if ingress.InboundDevice != account.AnthropicStableCanaryDeviceID() {
+	upstreamBody := rawBody
+	if canary.SharedUsers {
+		upstreamBody, err = ingress.PatchDevice(account.AnthropicStableCanaryDeviceID())
+		if err != nil {
+			return nil, s.stableCanaryReject(c, http.StatusBadRequest, err)
+		}
+	} else if ingress.InboundDevice != account.AnthropicStableCanaryDeviceID() {
+		// D1 remains a same-installation canary and does not patch body bytes.
 		return nil, s.stableCanaryReject(c, http.StatusBadRequest, ErrAnthropicStableIngressDevicePatch)
 	}
-	upstreamBody := rawBody
+	claimCtx, claimCancel := context.WithTimeout(ctx, anthropicStableCanarySessionClaimTimeout)
+	defer claimCancel()
+	if err := s.ClaimAnthropicStableCanarySession(claimCtx, canary.GroupID, ownerUserID, ingress.SessionID); err != nil {
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, ErrAnthropicStableCanarySessionOwnerConflict) {
+			status = http.StatusConflict
+		}
+		return nil, s.stableCanaryReject(c, status, err)
+	}
 	setOpsAnthropicRequestShape(c, ingress.Stream, ingress.Stream, "stable_canary", "")
 	if c != nil {
-		c.Set("anthropic_passthrough_mode", anthropicStableCanaryModeName)
+		mode := anthropicStableCanaryModeName
+		if canary.SharedUsers {
+			mode = anthropicStableCanarySharedModeName
+			c.Set("anthropic_stable_session_generation", canary.SessionGeneration)
+		}
+		c.Set("anthropic_passthrough_mode", mode)
 		c.Set("anthropic_passthrough_fallback", "")
+	}
+	if c != nil {
+		loggerFromStableCanary(c, account, ingress)
 	}
 	authorizedCtx := withAnthropicStableCanaryMessageAuthorization(ctx, account.ID)
 	if err := enforceAnthropicStableCanaryOutbound(authorizedCtx, account, anthropicStableCanaryMessagesOperation); err != nil {
@@ -1080,10 +1120,6 @@ func (s *GatewayService) ForwardAnthropicStableCanaryRaw(
 	if err != nil {
 		return nil, err
 	}
-	if c != nil {
-		loggerFromStableCanary(c, account, ingress)
-	}
-
 	var resp *http.Response
 	for attempt := 0; attempt < 2; attempt++ {
 		request, buildErr := BuildAnthropicStableMessageRequest(ctx, AnthropicStableMessagesOriginV1, header, upstreamBody, token)
@@ -1142,6 +1178,12 @@ func (s *GatewayService) ForwardAnthropicStableCanaryRaw(
 	var downstream *stableCanaryResponseWriter
 	if c != nil {
 		writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		// These are gateway delivery controls, not upstream identity changes.
+		// Without them a reverse proxy may buffer the otherwise byte-for-byte SSE
+		// body and turn a valid upstream first token into a delayed client event.
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("X-Accel-Buffering", "no")
 		downstream = &stableCanaryResponseWriter{ctx: c, status: resp.StatusCode}
 	}
 	result := &ForwardResult{RequestID: resp.Header.Get("x-request-id"), Model: ingress.Model, Stream: ingress.Stream, UpstreamModel: ingress.Model, Duration: time.Since(startTime)}
@@ -1241,6 +1283,18 @@ func loggerFromStableCanary(c *gin.Context, account *Account, ingress *Anthropic
 		return
 	}
 	sessionHash := HashAnthropicStableCanarySessionID(ingress.SessionID)
-	logger.LegacyPrintf("service.gateway", "[Anthropic Stable Canary] account=%d model=%s stream=%v session_hash=%s anthropic_passthrough_mode=canary",
-		account.ID, ingress.Model, ingress.Stream, shortSessionHash(sessionHash))
+	mode := anthropicStableCanaryModeName
+	generation := int64(0)
+	if c != nil {
+		if value, ok := c.Get("anthropic_passthrough_mode"); ok {
+			if text, ok := value.(string); ok && text != "" {
+				mode = text
+			}
+		}
+		if value, ok := c.Get("anthropic_stable_session_generation"); ok {
+			generation, _ = value.(int64)
+		}
+	}
+	logger.LegacyPrintf("service.gateway", "[Anthropic Stable Canary] account=%d model=%s stream=%v session_hash=%s generation=%d anthropic_passthrough_mode=%s",
+		account.ID, ingress.Model, ingress.Stream, shortSessionHash(sessionHash), generation, mode)
 }

@@ -91,13 +91,30 @@ type stableCanaryTestFixture struct {
 
 type stableCanaryRefreshRepoStub struct {
 	AccountRepository
-	account *Account
-	updates int
-	blocked int
+	account           *Account
+	updates           int
+	blocked           int
+	sessionOwner      int64
+	sessionHash       string
+	keyFingerprint    string
+	policyFingerprint string
+	sessionErr        error
 }
 
 func (r *stableCanaryRefreshRepoStub) AcquireAnthropicStableCanaryLease(context.Context, int64) (func() error, error) {
 	return func() error { return nil }, nil
+}
+
+func (r *stableCanaryRefreshRepoStub) ClaimAnthropicStableCanarySession(
+	_ context.Context,
+	_, _, _, ownerUserID int64,
+	sessionHash, keyFingerprint, policyFingerprint string,
+) error {
+	r.sessionOwner = ownerUserID
+	r.sessionHash = sessionHash
+	r.keyFingerprint = keyFingerprint
+	r.policyFingerprint = policyFingerprint
+	return r.sessionErr
 }
 
 type stableCanaryReloadRepoStub struct {
@@ -272,13 +289,75 @@ func TestAnthropicStableCanaryRawEntryPreservesWireAndStatus(t *testing.T) {
 		}, nil
 	}))
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, http.StatusCreated, fixture.rec.Code)
 	require.Equal(t, rawSSE, fixture.rec.Body.String())
 	require.Equal(t, "msg_raw", result.RequestID, "SSE message id is the side-channel request id when present")
 	require.NotNil(t, result.FirstTokenMs, "the first semantic text delta must define client-visible TTFT")
+}
+
+func TestAnthropicStableCanarySharedModePatchesOnlyDeviceAndClaimsOwner(t *testing.T) {
+	const rawSSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_shared\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	var fixture *stableCanaryTestFixture
+	var upstreamBody []byte
+	fixture = newStableCanaryTestFixture(t, stableCanaryRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var err error
+		upstreamBody, err = io.ReadAll(req.Body)
+		require.NoError(t, err)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(rawSSE)), Request: req}, nil
+	}))
+	clientDevice := strings.Repeat("b", 64)
+	fixture.body = []byte(strings.Replace(string(fixture.body), strings.Repeat("a", 64), clientDevice, 1))
+	fixture.ctx.Request.Body = io.NopCloser(bytes.NewReader(fixture.body))
+	fixture.service.cfg.Gateway.AnthropicStableCanary.OwnerUserID = 0
+	fixture.service.cfg.Gateway.AnthropicStableCanary.APIKeyID = 0
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SharedUsers = true
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SharedAPIKeyIDs = []int64{91, 92}
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SessionGeneration = 1
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SessionHMACKey = "0123456789abcdef0123456789abcdef"
+	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
+
+	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, 1002, time.Now())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	expected := strings.Replace(string(fixture.body), clientDevice, fixture.account.AnthropicStableCanaryDeviceID(), 1)
+	require.Equal(t, expected, string(upstreamBody))
+	require.Len(t, upstreamBody, len(fixture.body))
+	repo := fixture.service.accountRepo.(*stableCanaryRefreshRepoStub)
+	require.Equal(t, int64(1002), repo.sessionOwner)
+	require.Len(t, repo.sessionHash, 64)
+	require.Len(t, repo.keyFingerprint, 64)
+	require.Len(t, repo.policyFingerprint, 64)
+	mode, _ := fixture.ctx.Get("anthropic_passthrough_mode")
+	require.Equal(t, anthropicStableCanarySharedModeName, mode)
+	generation, _ := fixture.ctx.Get("anthropic_stable_session_generation")
+	require.Equal(t, int64(1), generation)
+}
+
+func TestAnthropicStableCanarySharedModeRejectsOwnerConflictBeforeEgress(t *testing.T) {
+	requests := 0
+	fixture := newStableCanaryTestFixture(t, stableCanaryRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected upstream request")
+	}))
+	fixture.service.cfg.Gateway.AnthropicStableCanary.OwnerUserID = 0
+	fixture.service.cfg.Gateway.AnthropicStableCanary.APIKeyID = 0
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SharedUsers = true
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SharedAPIKeyIDs = []int64{91, 92}
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SessionGeneration = 1
+	fixture.service.cfg.Gateway.AnthropicStableCanary.SessionHMACKey = "0123456789abcdef0123456789abcdef"
+	repo := fixture.service.accountRepo.(*stableCanaryRefreshRepoStub)
+	repo.sessionErr = ErrAnthropicStableCanarySessionOwnerConflict
+	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
+
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, 1002, time.Now())
+
+	require.ErrorIs(t, err, ErrAnthropicStableCanarySessionOwnerConflict)
+	require.Zero(t, requests)
+	require.Equal(t, http.StatusConflict, fixture.rec.Code)
 }
 
 func TestAnthropicStableCanaryDoesNotCountProtocolEnvelopeAsFirstToken(t *testing.T) {
@@ -296,7 +375,7 @@ func TestAnthropicStableCanaryDoesNotCountProtocolEnvelopeAsFirstToken(t *testin
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.NoError(t, err)
@@ -315,7 +394,7 @@ func TestAnthropicStableCanaryRejectsNonStreamingBeforeUpstream(t *testing.T) {
 	fixture.ctx.Request.Body = io.NopCloser(bytes.NewReader(fixture.body))
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 
 	require.ErrorIs(t, err, ErrAnthropicStableIngressMalformed)
 	require.Zero(t, requests)
@@ -358,7 +437,7 @@ func TestAnthropicStableCanaryRejectsChannelPolicyThatWouldChangeOrDenyRawModel(
 			strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-				context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+				context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 			)
 
 			require.ErrorIs(t, err, tt.wantErr)
@@ -383,7 +462,7 @@ func TestAnthropicStableCanaryDownstreamWriteFailureIsClientDisconnectOnly(t *te
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.Error(t, err)
@@ -409,7 +488,7 @@ func TestAnthropicStableCanaryMarksClientCancellationWithoutRetry(t *testing.T) 
 	}))
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(ctx, fixture.ctx, fixture.account, fixture.body, time.Now())
+	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(ctx, fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, result)
@@ -439,7 +518,7 @@ func TestAnthropicStableCanaryReloadsCredentialsAfterAccountQueue(t *testing.T) 
 	fixture.service.accountRepo = repo
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, &stale, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, &stale, fixture.body, int64(9101), time.Now())
 
 	require.Error(t, err)
 	require.Equal(t, "Bearer sk-ant-oat-fresh-token", authorization)
@@ -543,7 +622,7 @@ func TestAnthropicStableCanaryReturnsRedirectWithoutFollowOrReplay(t *testing.T)
 	}))
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 
 	require.Error(t, err)
 	require.Equal(t, 1, requests)
@@ -588,7 +667,7 @@ func TestAnthropicStableCanaryDoesNotRetrySecondUnauthorized(t *testing.T) {
 	}))
 	fixture.service.accountRepo = &stableCanaryRefreshRepoStub{account: fixture.account}
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 	require.Error(t, err)
 	require.Equal(t, 3, requests, "one message, one refresh and one replay; a second 401 must not start another request")
 	require.Equal(t, http.StatusUnauthorized, fixture.rec.Code)
@@ -600,7 +679,7 @@ func TestAnthropicStableCanaryDoesNotRetrySecondUnauthorized(t *testing.T) {
 	nextContext.Request = fixture.ctx.Request.Clone(context.Background())
 	nextContext.Request.Body = io.NopCloser(bytes.NewReader(fixture.body))
 	strictStableCanaryProfileHeader(nextContext, AnthropicStableIngressProfileCLI211222V1)
-	_, nextErr := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), nextContext, fixture.account, fixture.body, time.Now())
+	_, nextErr := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), nextContext, fixture.account, fixture.body, int64(9101), time.Now())
 	require.Error(t, nextErr)
 	require.Equal(t, 3, requests, "paused credential must not produce another upstream request")
 	require.Equal(t, http.StatusServiceUnavailable, nextRecorder.Code)
@@ -620,7 +699,7 @@ func TestAnthropicStableCanaryDoesNotRetryNonUnauthorizedStatus(t *testing.T) {
 				}, nil
 			}))
 			strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 			require.Error(t, err)
 			require.Equal(t, 1, requests, "only an explicit 401 may start the refresh/replay sequence")
 			require.Equal(t, status, fixture.rec.Code)
@@ -646,7 +725,7 @@ func TestAnthropicStableCanaryAcceptsCLIAndSDKCLIWithinCapturedFamily(t *testing
 	}))
 	fixture.account.Extra[AnthropicStableCanaryProfileExtraKey] = AnthropicStableIngressProfileSDKCLI211222V1
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 	require.NoError(t, err)
 	require.Equal(t, 1, requests)
 	require.Equal(t, http.StatusOK, fixture.rec.Code)
@@ -660,7 +739,7 @@ func TestAnthropicStableCanaryRejectsUnknownPersistedProfileBeforeUpstream(t *te
 	}))
 	fixture.account.Extra[AnthropicStableCanaryProfileExtraKey] = "claude_cli_2_1_223_unreviewed"
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 	require.Error(t, err)
 	require.Zero(t, requests, "an unreviewed persisted identity must fail before egress")
 	require.Equal(t, http.StatusServiceUnavailable, fixture.rec.Code)
@@ -682,7 +761,7 @@ func TestAnthropicStableCanaryRejectsDifferentDeviceBeforeUpstream(t *testing.T)
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.ErrorIs(t, err, ErrAnthropicStableIngressDevicePatch)
@@ -716,7 +795,7 @@ func TestAnthropicStableCanaryRejectsInvalidAccountIsolationBeforeUpstream(t *te
 			}))
 			tt.mutate(fixture)
 			strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+			_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 			require.Error(t, err)
 			require.Zero(t, requests)
 		})
@@ -764,7 +843,7 @@ func TestAnthropicStableCanary401RefreshUsesDedicatedWireAndReplaysOnce(t *testi
 	}))
 	fixture.service.accountRepo = &stableCanaryRefreshRepoStub{account: fixture.account}
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
-	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, requests, 3, "one message, one refresh and one replay")
@@ -797,7 +876,7 @@ func TestAnthropicStableCanaryCallerCancellationDoesNotPauseCredential(t *testin
 	fixture.service.accountRepo = refreshRepo
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(ctx, fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(ctx, fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, refreshRepo.blocked, "caller cancellation is not credential evidence")
@@ -827,7 +906,7 @@ func TestAnthropicStableCanaryAmbiguousRefreshTimeoutDurablyPausesCredential(t *
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.Error(t, err)
@@ -861,7 +940,7 @@ func TestAnthropicStableCanaryCallerCancellationCannotHideAmbiguousRefresh(t *te
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		ctx, fixture.ctx, fixture.account, fixture.body, time.Now(),
+		ctx, fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.ErrorIs(t, err, context.Canceled)
@@ -885,7 +964,7 @@ func TestAnthropicStableCanaryTruncatedStreamRecordsBoundedOpsEvidence(t *testin
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	result, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.ErrorIs(t, err, ErrAnthropicStableResponseTruncated)
@@ -927,7 +1006,7 @@ func TestAnthropicStableCanaryTransientRefreshFailureDoesNotPauseCredential(t *t
 	fixture.service.accountRepo = refreshRepo
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
-	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now())
+	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now())
 
 	require.Error(t, err)
 	require.Equal(t, http.StatusServiceUnavailable, fixture.rec.Code)
@@ -962,7 +1041,7 @@ func TestAnthropicStableCanaryUnexpectedRefresh2xxDurablyPausesCredential(t *tes
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	_, err := fixture.service.ForwardAnthropicStableCanaryRaw(
-		context.Background(), fixture.ctx, fixture.account, fixture.body, time.Now(),
+		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
 	require.Error(t, err)

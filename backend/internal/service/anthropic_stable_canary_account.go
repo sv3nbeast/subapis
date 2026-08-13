@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// D1 canary account metadata is intentionally independent from the unfinished
-// multi-user stable-identity schema. These JSON keys are managed only by a
+// Stable canary account metadata is intentionally independent from the broader
+// stable-identity executor. These JSON keys are managed only by a
 // controlled operator enrollment procedure; ordinary account APIs must reject
 // attempts to create or alter them.
 const (

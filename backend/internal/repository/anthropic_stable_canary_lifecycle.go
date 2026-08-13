@@ -39,7 +39,10 @@ type AnthropicStableCanaryLifecycleResult struct {
 	GroupID                int64                                `json:"group_id"`
 	AccountID              int64                                `json:"account_id"`
 	OwnerUserID            int64                                `json:"owner_user_id"`
-	APIKeyID               int64                                `json:"api_key_id"`
+	APIKeyID               int64                                `json:"api_key_id,omitempty"`
+	SharedUsers            bool                                 `json:"shared_users"`
+	SharedAPIKeyCount      int                                  `json:"shared_api_key_count,omitempty"`
+	SessionBindingCount    int64                                `json:"session_binding_count,omitempty"`
 	Profile                string                               `json:"profile,omitempty"`
 	EnrolledBefore         bool                                 `json:"enrolled_before"`
 	EnrolledAfter          bool                                 `json:"enrolled_after"`
@@ -107,8 +110,18 @@ func RunAnthropicStableCanaryLifecycle(
 		return nil, fmt.Errorf("unsupported stable canary lifecycle action %q", input.Action)
 	}
 	canary := input.Config
-	if canary.GroupID <= 0 || canary.AccountID <= 0 || canary.OwnerUserID <= 0 || canary.APIKeyID <= 0 {
-		return nil, errors.New("stable canary group/account/owner/api-key ids must be configured")
+	if canary.GroupID <= 0 || canary.AccountID <= 0 {
+		return nil, errors.New("stable canary group/account ids must be configured")
+	}
+	if input.Action != AnthropicStableCanaryLifecycleDisable {
+		if canary.SharedUsers {
+			if canary.OwnerUserID != 0 || canary.APIKeyID != 0 || len(canary.SharedAPIKeyIDs) == 0 ||
+				canary.SessionGeneration <= 0 || strings.TrimSpace(canary.SessionHMACKey) == "" {
+				return nil, errors.New("stable canary shared-user binding is incomplete")
+			}
+		} else if canary.OwnerUserID <= 0 || canary.APIKeyID <= 0 {
+			return nil, errors.New("stable canary owner/api-key ids must be configured")
+		}
 	}
 	if input.Action == AnthropicStableCanaryLifecycleEnable {
 		if canary.Enabled {
@@ -198,9 +211,21 @@ func RunAnthropicStableCanaryLifecycle(
 	result := &AnthropicStableCanaryLifecycleResult{
 		Action: input.Action, GroupID: canary.GroupID, AccountID: canary.AccountID,
 		OwnerUserID: canary.OwnerUserID, APIKeyID: canary.APIKeyID,
+		SharedUsers: canary.SharedUsers, SharedAPIKeyCount: len(canary.SharedAPIKeyIDs),
 		Profile: account.AnthropicStableCanaryProfileID(), EnrolledBefore: enrolled,
 		EnrolledAfter: enrolled, BlockedBefore: account.IsAnthropicStableCanaryBlocked(),
 		PreviousSchedulable: previousSchedulable,
+	}
+	if canary.SharedUsers && input.Action != AnthropicStableCanaryLifecycleDisable {
+		if err := validateAnthropicStableLifecycleSharedSessionState(ctx, tx, canary); err != nil {
+			return nil, err
+		}
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM anthropic_stable_canary_sessions
+			WHERE group_id = $1 AND account_id = $2 AND generation = $3
+		`, canary.GroupID, canary.AccountID, canary.SessionGeneration).Scan(&result.SessionBindingCount); err != nil {
+			return nil, fmt.Errorf("count stable canary session bindings: %w", err)
+		}
 	}
 
 	switch input.Action {
@@ -262,6 +287,39 @@ func RunAnthropicStableCanaryLifecycle(
 		result.Executed = true
 	}
 	return result, nil
+}
+
+func validateAnthropicStableLifecycleSharedSessionState(
+	ctx context.Context,
+	tx *sql.Tx,
+	canary config.GatewayAnthropicStableCanaryConfig,
+) error {
+	fingerprint, err := service.FingerprintAnthropicStableCanarySessionKey(canary.SessionHMACKey)
+	if err != nil {
+		return err
+	}
+	policyFingerprint, err := service.FingerprintAnthropicStableCanarySharedPolicy(canary.SharedAPIKeyIDs)
+	if err != nil {
+		return err
+	}
+	var existingAccountID int64
+	var existingFingerprint, existingPolicyFingerprint string
+	err = tx.QueryRowContext(ctx, `
+		SELECT account_id, key_fingerprint, policy_fingerprint
+		FROM anthropic_stable_canary_session_keys
+		WHERE group_id = $1 AND generation = $2
+		FOR UPDATE
+	`, canary.GroupID, canary.SessionGeneration).Scan(&existingAccountID, &existingFingerprint, &existingPolicyFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock stable canary session key state: %w", err)
+	}
+	if existingAccountID != canary.AccountID || existingFingerprint != fingerprint || existingPolicyFingerprint != policyFingerprint {
+		return errors.New("stable canary shared session key/account/policy does not match persisted state")
+	}
+	return nil
 }
 
 func loadAnthropicStableLifecycleGroup(ctx context.Context, tx *sql.Tx, id int64) (*anthropicStableLifecycleGroup, error) {
@@ -365,6 +423,46 @@ func validateAnthropicStableLifecycleAPIKey(
 ) error {
 	now := time.Now()
 	active := make([]anthropicStableLifecycleAPIKey, 0, len(keys))
+	if canary.SharedUsers {
+		allowed := make(map[int64]struct{}, len(canary.SharedAPIKeyIDs))
+		for _, id := range canary.SharedAPIKeyIDs {
+			if id <= 0 {
+				return errors.New("stable canary shared API key allow-list is invalid")
+			}
+			if _, exists := allowed[id]; exists {
+				return errors.New("stable canary shared API key allow-list contains duplicates")
+			}
+			allowed[id] = struct{}{}
+		}
+		seen := make(map[int64]struct{}, len(allowed))
+		for _, key := range keys {
+			_, selected := allowed[key.ID]
+			isActive := key.Status == service.StatusAPIKeyActive && (!key.ExpiresAt.Valid || key.ExpiresAt.Time.After(now))
+			if isActive {
+				active = append(active, key)
+			}
+			if !selected {
+				if isActive && requireActive {
+					return errors.New("stable canary group contains an active API key outside the shared allow-list")
+				}
+				continue
+			}
+			if key.UserID <= 0 || !key.GroupID.Valid || key.GroupID.Int64 != canary.GroupID {
+				return errors.New("stable canary shared API key ownership is invalid")
+			}
+			if requireActive && (!isActive || key.UserStatus != service.StatusActive) {
+				return errors.New("stable canary shared API key or owner is inactive")
+			}
+			if requireUnused && key.LastUsedAt.Valid {
+				return errors.New("stable canary enrollment requires dedicated API keys that have never been used")
+			}
+			seen[key.ID] = struct{}{}
+		}
+		if len(seen) != len(allowed) || (requireActive && len(active) != len(allowed)) {
+			return errors.New("stable canary shared API key allow-list does not match the dedicated group")
+		}
+		return nil
+	}
 	var configured *anthropicStableLifecycleAPIKey
 	for _, key := range keys {
 		if key.ID == canary.APIKeyID {
