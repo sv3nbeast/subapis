@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // observeAntigravityGeminiSSELine records the upstream response model while
@@ -32,6 +33,12 @@ func (s *AntigravityGatewayService) observeAntigravityGeminiSSELine(c *gin.Conte
 		return
 	}
 	raw := []byte(payload)
+	// The outer declaration is authoritative when present. Unwrapping first
+	// would discard it and incorrectly attribute the nested model to the stream.
+	if model := strings.TrimSpace(gjson.GetBytes(raw, "modelVersion").String()); model != "" {
+		observer.ObserveGemini(raw)
+		return
+	}
 	if inner, err := s.unwrapV1InternalResponse(raw); err == nil && len(inner) > 0 {
 		raw = inner
 	}

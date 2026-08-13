@@ -81,6 +81,7 @@ type Account struct {
 	modelMappingCacheRawPtr         uintptr
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
+	modelMappingCacheRuntimeVersion uint64
 
 	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
 	headerOverrideCache               map[string]string
@@ -741,6 +742,7 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
+	runtimeVersion := xai.RuntimeModelMappingVersion()
 	credentialsPtr := mapPtr(a.Credentials)
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
 	rawPtr := mapPtr(rawMapping)
@@ -751,7 +753,8 @@ func (a *Account) GetModelMapping() map[string]string {
 	if a.modelMappingCacheReady &&
 		a.modelMappingCacheCredentialsPtr == credentialsPtr &&
 		a.modelMappingCacheRawPtr == rawPtr &&
-		a.modelMappingCacheRawLen == rawLen {
+		a.modelMappingCacheRawLen == rawLen &&
+		a.modelMappingCacheRuntimeVersion == runtimeVersion {
 		rawSig = modelMappingSignature(rawMapping)
 		rawSigReady = true
 		if a.modelMappingCacheRawSig == rawSig {
@@ -770,6 +773,7 @@ func (a *Account) GetModelMapping() map[string]string {
 	a.modelMappingCacheRawPtr = rawPtr
 	a.modelMappingCacheRawLen = rawLen
 	a.modelMappingCacheRawSig = rawSig
+	a.modelMappingCacheRuntimeVersion = runtimeVersion
 	return mapping
 }
 
@@ -1550,6 +1554,25 @@ func (a *Account) GetGrokBaseURL() string {
 		return baseURL
 	}
 	return xai.DefaultBaseURL
+}
+
+func (a *Account) GetGrokBaseURLOr(defaultBaseURL string) string {
+	if a == nil || !a.IsGrok() {
+		return ""
+	}
+	defaultBaseURL = strings.TrimRight(strings.TrimSpace(defaultBaseURL), "/")
+	if defaultBaseURL == "" {
+		if a.IsGrokOAuth() {
+			defaultBaseURL = xai.DefaultCLIBaseURL
+		} else {
+			defaultBaseURL = xai.DefaultBaseURL
+		}
+	}
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
+	if baseURL == "" {
+		return defaultBaseURL
+	}
+	return strings.TrimRight(baseURL, "/")
 }
 
 func (a *Account) GetGrokMediaBaseURL() string {

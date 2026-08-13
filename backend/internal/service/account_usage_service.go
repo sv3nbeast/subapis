@@ -240,6 +240,7 @@ type UsageInfo struct {
 	GrokLocalUsageMonthly  *WindowStats         `json:"grok_local_usage_monthly,omitempty"`
 	GrokBilling            *xai.BillingSnapshot `json:"grok_billing,omitempty"`
 	GrokBillingState       string               `json:"grok_billing_state,omitempty"`
+	ThirtyDay              *UsageProgress       `json:"thirty_day,omitempty"`
 
 	// Antigravity 账号级信息
 	SubscriptionTier    string `json:"subscription_tier,omitempty"`     // 归一化订阅等级: FREE/PRO/ULTRA/UNKNOWN
@@ -582,6 +583,54 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 	return nil, fmt.Errorf("account type %s does not support usage query", account.Type)
 }
 
+func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []int64, force bool) (map[int64]*UsageInfo, map[int64]string, error) {
+	uniqueIDs := make([]int64, 0, len(accountIDs))
+	seen := make(map[int64]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if accountID > 0 {
+			if _, ok := seen[accountID]; !ok {
+				seen[accountID] = struct{}{}
+				uniqueIDs = append(uniqueIDs, accountID)
+			}
+		}
+	}
+	usageByAccount := make(map[int64]*UsageInfo, len(uniqueIDs))
+	errorsByAccount := make(map[int64]string)
+	if len(uniqueIDs) == 0 {
+		return usageByAccount, errorsByAccount, nil
+	}
+	accounts, err := s.accountRepo.GetByIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get accounts failed: %w", err)
+	}
+	accountsByID := make(map[int64]*Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			accountsByID[account.ID] = account
+		}
+	}
+	for _, accountID := range uniqueIDs {
+		account := accountsByID[accountID]
+		if account == nil {
+			errorsByAccount[accountID] = ErrAccountNotFound.Error()
+			continue
+		}
+		var usage *UsageInfo
+		var usageErr error
+		if account.IsAnthropicOAuthOrSetupToken() {
+			usage, usageErr = s.getPassiveUsageForAccount(ctx, account)
+		} else {
+			usage, usageErr = s.GetUsage(ctx, accountID, force)
+		}
+		if usageErr != nil {
+			errorsByAccount[accountID] = usageErr.Error()
+			continue
+		}
+		usageByAccount[accountID] = usage
+	}
+	return usageByAccount, errorsByAccount, nil
+}
+
 // GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo，不调用外部 API。
 // 仅适用于 Anthropic OAuth / SetupToken 账号。
 func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int64) (*UsageInfo, error) {
@@ -597,7 +646,11 @@ func (s *AccountUsageService) GetPassiveUsage(ctx context.Context, accountID int
 		return s.getKiroUsage(ctx, account, "passive", false)
 	}
 
-	if !account.IsAnthropicOAuthOrSetupToken() {
+	return s.getPassiveUsageForAccount(ctx, account)
+}
+
+func (s *AccountUsageService) getPassiveUsageForAccount(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if account == nil || !account.IsAnthropicOAuthOrSetupToken() {
 		return nil, fmt.Errorf("passive usage only supported for Anthropic OAuth/SetupToken accounts")
 	}
 

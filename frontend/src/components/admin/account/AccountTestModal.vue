@@ -41,13 +41,28 @@
         </span>
       </div>
 
-      <div class="space-y-1.5">
+      <!-- Grok: mode first, then optional model / mode params -->
+      <div v-if="isGrokAccount" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.grok.testMode') }}
+        </label>
+        <Select
+          v-model="grokTestMode"
+          :options="grokTestModeOptions"
+          :disabled="status === 'connecting'"
+        />
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.grok.testModeHint') }}
+        </p>
+      </div>
+
+      <div v-if="showModelSelect" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.selectTestModel') }}
         </label>
         <Select
           v-model="selectedModelId"
-          :options="availableModels"
+          :options="modelOptionsForMode"
           :disabled="loadingModels || status === 'connecting'"
           value-key="id"
           label-key="display_name"
@@ -55,15 +70,100 @@
         />
       </div>
 
-      <div v-if="supportsGeminiImageTest" class="space-y-1.5">
+      <div v-if="supportsPromptInput" class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
-          :label="t('admin.accounts.geminiImagePromptLabel')"
-          :placeholder="t('admin.accounts.geminiImagePromptPlaceholder')"
-          :hint="t('admin.accounts.geminiImageTestHint')"
+          :label="promptInputLabel"
+          :placeholder="promptInputPlaceholder"
+          :hint="promptInputHint"
           :disabled="status === 'connecting'"
           rows="3"
         />
+      </div>
+
+      <div v-if="isOpenAIAccount" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.openai.testMode') }}
+        </label>
+        <Select v-model="testMode" :options="openAITestModeOptions" :disabled="status === 'connecting'" />
+      </div>
+      <p
+        v-else-if="isGrokAccount && promptInputHint"
+        class="text-xs text-gray-500 dark:text-gray-400"
+      >
+        {{ promptInputHint }}
+      </p>
+
+      <!-- Optional media uploads for real generation / transcription -->
+      <div v-if="supportsImageUpload" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ imageUploadLabel }}
+        </label>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm shrink-0"
+            :disabled="status === 'connecting'"
+            @click="imageFileInput?.click()"
+          >
+            {{ t('admin.accounts.grok.chooseImageFile') }}
+          </button>
+          <span class="min-w-0 truncate text-xs text-gray-500 dark:text-gray-400">
+            {{
+              uploadImageName
+                ? t('common.selectedFile', { name: uploadImageName })
+                : t('common.noFileSelected')
+            }}
+          </span>
+          <input
+            ref="imageFileInput"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            class="hidden"
+            :disabled="status === 'connecting'"
+            @change="onImageFileChange"
+          />
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ imageUploadHint }}</p>
+        <div v-if="uploadImagePreview" class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-500">
+          <img
+            :src="uploadImagePreview"
+            :alt="t('admin.accounts.grok.uploadPreviewAlt')"
+            class="max-h-40 w-full object-contain bg-gray-50 dark:bg-dark-700"
+          />
+        </div>
+      </div>
+
+      <div v-if="supportsAudioUpload" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.grok.audioUploadLabel') }}
+        </label>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm shrink-0"
+            :disabled="status === 'connecting'"
+            @click="audioFileInput?.click()"
+          >
+            {{ t('admin.accounts.grok.chooseAudioFile') }}
+          </button>
+          <span class="min-w-0 truncate text-xs text-gray-500 dark:text-gray-400">
+            {{
+              uploadAudioName
+                ? t('common.selectedFile', { name: uploadAudioName })
+                : t('common.noFileSelected')
+            }}
+          </span>
+          <input
+            ref="audioFileInput"
+            type="file"
+            accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm"
+            class="hidden"
+            :disabled="status === 'connecting'"
+            @change="onAudioFileChange"
+          />
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.grok.audioUploadHint') }}</p>
       </div>
 
       <!-- Terminal Output -->
@@ -166,10 +266,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="!canStartTest"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId
+            !canStartTest
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -249,7 +349,79 @@ const loadingModels = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
 const testMode = ref<'default' | 'compact'>('default')
+const grokTestMode = ref<'text' | 'image' | 'video' | 'search' | 'tts' | 'stt' | 'realtime'>('text')
+const uploadImageDataURL = ref('')
+const uploadImagePreview = ref('')
+const uploadImageName = ref('')
+const uploadAudioDataURL = ref('')
+const uploadAudioName = ref('')
+const imageFileInput = ref<HTMLInputElement | null>(null)
+const audioFileInput = ref<HTMLInputElement | null>(null)
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const isGrokAccount = computed(() => props.account?.platform === 'grok')
+const openAITestModeOptions = computed(() => [
+  { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
+  { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
+])
+const grokTestModeOptions = computed(() => [
+  { value: 'text', label: t('admin.accounts.grok.testModeText') },
+  { value: 'image', label: t('admin.accounts.grok.testModeImage') },
+  { value: 'video', label: t('admin.accounts.grok.testModeVideo') },
+  { value: 'search', label: t('admin.accounts.grok.testModeSearch') },
+  { value: 'tts', label: t('admin.accounts.grok.testModeTTS') },
+  { value: 'stt', label: t('admin.accounts.grok.testModeSTT') },
+  { value: 'realtime', label: t('admin.accounts.grok.testModeRealtime') }
+])
+const supportsOpenAIImageTest = computed(() => selectedModelId.value.toLowerCase().startsWith('gpt-image-') && isOpenAIAccount.value)
+const isGrokImageModel = (id: string) => id.toLowerCase() === 'grok-imagine' || id.toLowerCase() === 'grok-imagine-edit' || id.toLowerCase().startsWith('grok-imagine-image')
+const isGrokVideoModel = (id: string) => id.toLowerCase().startsWith('grok-imagine-video') || id.toLowerCase().startsWith('grok-video')
+const isGrokTextModel = (id: string) => !isGrokImageModel(id) && !isGrokVideoModel(id)
+const supportsGrokImageTest = computed(() => isGrokAccount.value && grokTestMode.value === 'image')
+const supportsImageTest = computed(() => supportsGeminiImageTest.value || supportsOpenAIImageTest.value || supportsGrokImageTest.value)
+const showModelSelect = computed(() => !isGrokAccount.value || ['text', 'image', 'video'].includes(grokTestMode.value))
+const modelOptionsForMode = computed(() => {
+  if (!isGrokAccount.value) return availableModels.value
+  if (grokTestMode.value === 'image') return availableModels.value.filter((m) => isGrokImageModel(m.id))
+  if (grokTestMode.value === 'video') return availableModels.value.filter((m) => isGrokVideoModel(m.id))
+  if (grokTestMode.value === 'text') return availableModels.value.filter((m) => isGrokTextModel(m.id))
+  return []
+})
+const supportsPromptInput = computed(() => !isGrokAccount.value ? supportsImageTest.value : ['image', 'video', 'search', 'tts'].includes(grokTestMode.value))
+const supportsImageUpload = computed(() => isGrokAccount.value && ['image', 'video'].includes(grokTestMode.value))
+const supportsAudioUpload = computed(() => isGrokAccount.value && grokTestMode.value === 'stt')
+const imageUploadLabel = computed(() => grokTestMode.value === 'video' ? t('admin.accounts.grok.videoFirstFrameLabel') : t('admin.accounts.grok.imageUploadLabel'))
+const imageUploadHint = computed(() => grokTestMode.value === 'video' ? t('admin.accounts.grok.videoFirstFrameHint') : t('admin.accounts.grok.imageUploadHint'))
+const promptInputLabel = computed(() => supportsGrokImageTest.value ? t('admin.accounts.grok.imagePromptLabel') : t('admin.accounts.testPrompt'))
+const promptInputPlaceholder = computed(() => supportsGrokImageTest.value ? t('admin.accounts.grok.imagePromptPlaceholder') : t('admin.accounts.testPrompt'))
+const promptInputHint = computed(() => supportsGrokImageTest.value ? t('admin.accounts.grok.imagePromptHint') : '')
+const canStartTest = computed(() => status.value !== 'connecting' && (showModelSelect.value ? selectedModelId.value !== '' : true))
+
+const readFileAsDataURL = (file: File, onLoaded: (dataURL: string) => void) => {
+  const reader = new FileReader()
+  reader.onload = () => {
+    if (typeof reader.result === 'string') onLoaded(reader.result)
+  }
+  reader.readAsDataURL(file)
+}
+
+const onImageFileChange = (event: Event) => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  uploadImageName.value = file.name
+  readFileAsDataURL(file, (dataURL) => {
+    uploadImageDataURL.value = dataURL
+    uploadImagePreview.value = dataURL
+  })
+}
+
+const onAudioFileChange = (event: Event) => {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  uploadAudioName.value = file.name
+  readFileAsDataURL(file, (dataURL) => {
+    uploadAudioDataURL.value = dataURL
+  })
+}
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
@@ -293,14 +465,51 @@ const sortTestModels = (models: ClaudeModel[]) => {
 }
 
 // Load available models when modal opens
+const applyDefaultPromptForMode = () => {
+  if (!supportsPromptInput.value) return
+  if (testPrompt.value.trim()) return
+  if (grokTestMode.value === 'video') {
+    testPrompt.value = t('admin.accounts.videoPromptDefault')
+  } else if (grokTestMode.value === 'image' || supportsImageTest.value) {
+    testPrompt.value = t('admin.accounts.imagePromptDefault')
+  } else if (grokTestMode.value === 'search') {
+    testPrompt.value = t('admin.accounts.grok.searchQueryDefault')
+  } else if (grokTestMode.value === 'tts') {
+    testPrompt.value = t('admin.accounts.grok.ttsTextDefault')
+  }
+}
+
+const pickDefaultModelForMode = () => {
+  const opts = modelOptionsForMode.value
+  if (!opts.length) {
+    selectedModelId.value = ''
+    return
+  }
+  if (opts.some((m) => m.id === selectedModelId.value)) return
+  if (grokTestMode.value === 'text') {
+    const preferred =
+      opts.find((m) => m.id.includes('grok-4.5')) ||
+      opts.find((m) => m.id === 'grok') ||
+      opts[0]
+    selectedModelId.value = preferred.id
+    return
+  }
+  selectedModelId.value = opts[0].id
+}
+
 watch(
   () => props.show,
   async (newVal) => {
     if (newVal && props.account) {
       testPrompt.value = ''
       testMode.value = 'default'
+      grokTestMode.value = 'text'
       resetState()
       await loadAvailableModels()
+	if (isGrokAccount.value && grokTestMode.value !== 'text') {
+        pickDefaultModelForMode()
+        applyDefaultPromptForMode()
+      }
     } else {
       abortStream()
     }
@@ -379,12 +588,17 @@ const scrollToBottom = async () => {
 }
 
 const startTest = async () => {
-  if (!props.account || !selectedModelId.value) return
+  if (!props.account || !canStartTest.value) return
 
   resetState()
   status.value = 'connecting'
   addLine(t('admin.accounts.startingTestForAccount', { name: props.account.name }), 'text-blue-400')
   addLine(t('admin.accounts.testAccountTypeLabel', { type: props.account.type }), 'text-gray-400')
+  if (isGrokAccount.value) {
+    const modeLabel =
+      grokTestModeOptions.value.find((o) => o.value === grokTestMode.value)?.label || grokTestMode.value
+    addLine(t('admin.accounts.grok.selectedTestMode', { mode: modeLabel }), 'text-gray-400')
+  }
   addLine('', 'text-gray-300')
 
   abortStream()
@@ -395,13 +609,34 @@ const startTest = async () => {
     const requestBody: {
       model_id: string
       prompt: string
-      mode?: 'default' | 'compact'
+      mode?: string
+      image_data_url?: string
+      audio_data_url?: string
     } = {
       model_id: selectedModelId.value,
       prompt: supportsGeminiImageTest.value ? testPrompt.value.trim() : ''
     }
     if (isOpenAIAccount.value) {
       requestBody.mode = testMode.value
+    }
+    if (isGrokAccount.value && grokTestMode.value !== 'text') {
+      // Non-text Grok probes use explicit mode. Text keeps the legacy request
+      // shape so older admin clients and the test endpoint remain compatible.
+      requestBody.mode = grokTestMode.value
+      if (
+        grokTestMode.value === 'search' ||
+        grokTestMode.value === 'tts' ||
+        grokTestMode.value === 'stt' ||
+        grokTestMode.value === 'realtime'
+      ) {
+        requestBody.model_id = ''
+      }
+      if (uploadImageDataURL.value && (grokTestMode.value === 'image' || grokTestMode.value === 'video')) {
+        requestBody.image_data_url = uploadImageDataURL.value
+      }
+      if (uploadAudioDataURL.value && grokTestMode.value === 'stt') {
+        requestBody.audio_data_url = uploadAudioDataURL.value
+      }
     }
 
     // Use the configured API base; EventSource does not support POST.
@@ -425,7 +660,7 @@ const startTest = async () => {
 
     const reader = response.body?.getReader()
     if (!reader) {
-      throw new Error('No response body')
+      throw new Error(t('admin.accounts.grok.noResponseBody'))
     }
 
     const decoder = new TextDecoder()
@@ -459,9 +694,9 @@ const startTest = async () => {
       return
     }
     status.value = 'error'
-    const msg = error instanceof Error ? error.message : 'Unknown error'
+    const msg = error instanceof Error ? error.message : t('common.unknownError')
     errorMessage.value = msg
-    addLine(`Error: ${msg}`, 'text-red-400')
+    addLine(t('admin.accounts.errorPrefix', { message: msg }), 'text-red-400')
   }
 }
 
@@ -472,6 +707,8 @@ const handleEvent = (event: {
   success?: boolean
   error?: string
   image_url?: string
+  audio_url?: string
+  video_url?: string
   mime_type?: string
 }) => {
   switch (event.type) {
@@ -512,13 +749,13 @@ const handleEvent = (event: {
         status.value = 'success'
       } else {
         status.value = 'error'
-        errorMessage.value = event.error || 'Test failed'
+        errorMessage.value = event.error || t('admin.accounts.testFailed')
       }
       break
 
     case 'error':
       status.value = 'error'
-      errorMessage.value = event.error || 'Unknown error'
+      errorMessage.value = event.error || t('common.unknownError')
       if (streamingContent.value) {
         addLine(streamingContent.value, 'text-green-300')
         streamingContent.value = ''

@@ -46,9 +46,9 @@ export default {
       add: '新增节点', edit: '编辑节点', empty: '尚未配置审计节点。', node: '节点', model: '模型', limits: '超时 / 单片上限', credential: '凭据与探测',
       configured: 'API Key 已配置', missing: '未配置 API Key', invalid: 'API Key 无法解密，请重新输入', probe: '连接测试', probing: '探测中…',
       probeProgress: '配置校验 ✓ · 请求已发送 · 等待服务响应…', probeResult: '配置校验 ✓ · 请求 ✓ · HTTP {http} · {status} · {latency} ms',
-      name: '节点名称', id: '稳定节点 ID', baseUrl: '基础地址', apiKey: 'API 密钥', keepSecret: '留空以保留已保存的 API 密钥', reenterSecret: '已保存的 API 密钥无法解密（加密密钥已变更），请重新输入',
+      name: '节点名称', id: '稳定节点 ID', baseUrl: 'Base URL', apiKey: 'API Key', keepSecret: '留空以保留已保存的 API Key', reenterSecret: '已保存的 API Key 无法解密（加密密钥已变更），请重新输入',
       secretHint: '明文只在本次编辑内存中存在；保存成功后会立即清除。', clearSecret: '显式清除已保存的 API Key', timeout: '总超时（毫秒）', inputLimit: '单片 Unicode 字符上限',
-      toggleNode: '切换节点 {name}', deleteConfirm: '从草稿中删除节点“{name}”？保存配置后生效。',
+      toggleNode: '切换节点 {name}', deleteConfirmTitle: '删除节点？', deleteConfirm: '从草稿中删除节点“{name}”？保存配置后生效。',
     },
     policy: {
       title: '审计策略', description: '配置适用分组、九类输入风险、Worker 与队列边界。', scope: '适用范围', allGroups: '全部分组', selectedGroups: '指定分组',
@@ -82,7 +82,7 @@ export default {
       evidence: '脱敏证据',
       score: '分数',
       categories: '分类', model: '模型', stage: '请求阶段', noRisks: '本事件没有派生风险摘要。',
-      requestId: '请求 ID', promptHash: '提示词 SHA-256',
+      requestId: '请求 ID', promptHash: 'Prompt SHA-256',
       technical: {
         scanner: '扫描器', policy: '策略', guardEndpoint: 'Guard 节点', config: '配置版本',
         chunks: '分片数', latency: '耗时', protocol: '协议',

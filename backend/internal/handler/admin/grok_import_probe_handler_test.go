@@ -4,6 +4,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,6 +69,10 @@ func (grokImportOAuthClientStub) PollDeviceAuthorization(context.Context, string
 
 func (grokImportOAuthClientStub) RefreshToken(context.Context, string, string, string, string, string) (*xai.TokenResponse, error) {
 	return &xai.TokenResponse{AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresIn: 3600}, nil
+}
+
+func (grokImportOAuthClientStub) LoginWithPassword(context.Context, string, string, string) (*service.GrokPasswordLoginResult, error) {
+	return nil, errors.New("unexpected password login")
 }
 
 func (grokImportOAuthClientStub) ConvertSSOToBuild(context.Context, string, string) (*xai.TokenResponse, error) {

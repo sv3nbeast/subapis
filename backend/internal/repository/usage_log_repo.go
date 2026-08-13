@@ -30,6 +30,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// usageLogSuccessFilterUL excludes zero-cost failure placeholders from
+// analytical aggregates while retaining successful per-call/per-image rows.
+const usageLogSuccessFilterUL = "ul.actual_cost > 0"
+
 var usageLogInsertColumns = [...]string{
 	"user_id",
 	"api_key_id",

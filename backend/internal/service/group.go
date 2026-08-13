@@ -60,7 +60,21 @@ type Group struct {
 	VideoPrice480P               *float64
 	VideoPrice720P               *float64
 	VideoPrice1080P              *float64
-	WebSearchPricePerCall        *float64
+	// VideoModelPrices is optional per-model-family per-second pricing.
+	VideoModelPrices      map[string]map[string]float64
+	WebSearchPricePerCall *float64
+
+	// 搜索工具显式定价（per 1k calls）。
+	SearchPricePer1k *float64
+	// Grok Voice 显式定价（分组级，不按文本 RateMultiplier）。
+	AudioRealtimePricePerMin     *float64
+	AudioTTSPricePerMillionChars *float64
+	AudioSTTPricePerHour         *float64
+
+	// ModelPricing overrides channel and built-in prices for matching models.
+	// Token intervals are selected only when LongContextPricingEnabled is true.
+	LongContextPricingEnabled bool
+	ModelPricing              []ChannelModelPricing
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
@@ -417,6 +431,30 @@ func (g *Group) GetVideoPrice(resolution string) *float64 {
 	}
 }
 
+// GetVideoPriceForModel prefers VideoModelPrices for the model family, then flat columns.
+func (g *Group) GetVideoPriceForModel(model, resolution string) *float64 {
+	if g == nil {
+		return nil
+	}
+	if price := LookupVideoModelPrice(g.VideoModelPrices, model, resolution); price != nil {
+		return price
+	}
+	return g.GetVideoPrice(resolution)
+}
+
+// VideoPriceConfig builds billing config including optional per-model map.
+func (g *Group) VideoPriceConfig() *VideoPriceConfig {
+	if g == nil {
+		return nil
+	}
+	return &VideoPriceConfig{
+		Price480P:   g.VideoPrice480P,
+		Price720P:   g.VideoPrice720P,
+		Price1080P:  g.VideoPrice1080P,
+		ModelPrices: NormalizeVideoModelPrices(g.VideoModelPrices),
+	}
+}
+
 // IsGroupContextValid reports whether a group from context has the fields required for routing decisions.
 func IsGroupContextValid(group *Group) bool {
 	if group == nil {
@@ -662,4 +700,12 @@ func profitControlPlatformSupported(platform string) bool {
 	default:
 		return false
 	}
+}
+
+// GetSearchPricePer1k returns explicit search/tool price per 1k calls if configured.
+func (g *Group) GetSearchPricePer1k() *float64 {
+	if g == nil {
+		return nil
+	}
+	return g.SearchPricePer1k
 }

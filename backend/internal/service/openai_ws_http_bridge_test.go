@@ -290,7 +290,7 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridge(t *testing.T)
 
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Equal(t, xai.CLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, xai.CLIUserAgentDefault, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, xai.CLIClientVersion, upstream.lastReq.Header.Get(xai.CLIClientVersionHdr))
 	require.Equal(t, xai.CLIClientIdentifier, upstream.lastReq.Header.Get(xai.CLIClientIDHdr))
 	require.Equal(t, xai.CLITokenAuthHeader, upstream.lastReq.Header.Get(xai.CLITokenAuthHdr))

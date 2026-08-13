@@ -24,7 +24,6 @@ import (
 const (
 	grokComposerImageBridgeVisionModel     = "grok-build-0.1"
 	grokComposerImageBridgeMaxOutputTokens = 512
-	grokUpstreamUserAgent                  = "sub2api-grok/1.0"
 	// Keep the legacy service-level alias in lockstep with the shared xAI CLI
 	// transport headers used by OAuth probes and Grok forwarding.
 	grokCLIVersion                   = xai.CLIClientVersion
@@ -187,6 +186,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
+	searchCount := 0
+	imageCount := 0
+	var imageOutputSizes []string
 	if reqStream {
 		maxLineSize := defaultMaxLineSize
 		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
@@ -203,6 +205,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		responseID = strings.TrimSpace(streamResult.responseID)
+		searchCount = streamResult.searchCount
+		imageCount = streamResult.imageCount
+		imageOutputSizes = streamResult.imageOutputSizes
 	} else {
 		nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 		if err != nil {
@@ -210,6 +215,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		}
 		usage = nonStreamResult.usage
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
+		searchCount = nonStreamResult.searchCount
+		imageCount = nonStreamResult.imageCount
+		imageOutputSizes = nonStreamResult.imageOutputSizes
 	}
 	s.commitGrokUpstreamSuccess(ctx, account, resp.Header, resp.StatusCode)
 
@@ -217,7 +225,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = &OpenAIUsage{}
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:        firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
 		UpstreamEndpoint: OpenAIUpstreamEndpointResponses,
 		ResponseID:       responseID,
@@ -230,14 +238,26 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		ResponseHeaders:  resp.Header.Clone(),
 		Duration:         time.Since(startTime),
 		FirstTokenMs:     firstTokenMs,
-	}, nil
+		ImageCount:       imageCount,
+		ImageOutputSizes: imageOutputSizes,
+	}
+	if searchCount > 0 {
+		result.SearchCount = searchCount
+	}
+	return result, nil
 }
 
 func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("invalid json request body")
 	}
-	out, err := sjson.SetBytes(body, "model", upstreamModel)
+	// sjson may reuse the input backing array; keep the caller's request bytes
+	// unchanged because the same body can be inspected for billing/retry paths.
+	out, err := sjson.SetBytes(append([]byte(nil), body...), "model", upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	out, err = normalizeGrokResponsesReasoningEffort(out, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +271,16 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	}
 	if strings.EqualFold(upstreamModel, "grok-4.5") {
 		for _, unsupportedField := range []string{"presence_penalty", "presencePenalty", "frequency_penalty", "frequencyPenalty", "stop"} {
+			if gjson.GetBytes(out, unsupportedField).Exists() {
+				out, err = sjson.DeleteBytes(out, unsupportedField)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if grokModelRejectsLogprobs(upstreamModel) {
+		for _, unsupportedField := range []string{"logprobs", "top_logprobs"} {
 			if gjson.GetBytes(out, unsupportedField).Exists() {
 				out, err = sjson.DeleteBytes(out, unsupportedField)
 				if err != nil {
@@ -540,6 +570,142 @@ func grokJSONText(value any) string {
 	return fmt.Sprint(value)
 }
 
+// xAI's Grok 4.20 family and newer models do not support OpenAI's logprobs
+// fields. Remove them before egress instead of forwarding a request the
+// upstream rejects. Older Grok models retain the fields for compatibility.
+func grokModelRejectsLogprobs(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = strings.TrimSpace(model[slash+1:])
+	}
+	return strings.HasPrefix(model, "grok-4.20")
+}
+
+func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) ([]byte, error) {
+	if !grokModelRejectsReasoningEffort(upstreamModel) {
+		return body, nil
+	}
+
+	out := body
+	for _, field := range []string{"reasoning", "reasoning_effort", "reasoningEffort"} {
+		if !gjson.GetBytes(out, field).Exists() {
+			continue
+		}
+		var err error
+		out, err = sjson.DeleteBytes(out, field)
+		if err != nil {
+			return nil, fmt.Errorf("remove unsupported Grok Composer %s: %w", field, err)
+		}
+	}
+	return out, nil
+}
+
+func grokModelRejectsReasoningEffort(model string) bool {
+	model = strings.TrimSpace(strings.ToLower(model))
+	if slash := strings.LastIndex(model, "/"); slash >= 0 {
+		model = strings.TrimSpace(model[slash+1:])
+	}
+	switch model {
+	case "grok-composer", "grok-composer-2.5-fast", "composer-2.5":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeGrokResponsesReasoningEffort(body []byte, upstreamModel string) ([]byte, error) {
+	supportsEffort := grokSupportsReasoningEffort(upstreamModel)
+	out := body
+	var err error
+	for _, field := range []string{"reasoning.effort", "reasoning_effort"} {
+		value := gjson.GetBytes(out, field)
+		if !value.Exists() {
+			continue
+		}
+		normalized, keep := normalizeGrokReasoningEffortValue(value.String())
+		if !supportsEffort || !keep {
+			out, err = sjson.DeleteBytes(out, field)
+		} else {
+			out, err = sjson.SetBytes(out, field, normalized)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("normalize Grok reasoning field %s: %w", field, err)
+		}
+	}
+	if camel := gjson.GetBytes(out, "reasoningEffort"); camel.Exists() {
+		normalized, keep := normalizeGrokReasoningEffortValue(camel.String())
+		out, err = sjson.DeleteBytes(out, "reasoningEffort")
+		if err != nil {
+			return nil, fmt.Errorf("remove Grok reasoningEffort: %w", err)
+		}
+		if supportsEffort && keep && !gjson.GetBytes(out, "reasoning_effort").Exists() {
+			out, err = sjson.SetBytes(out, "reasoning_effort", normalized)
+			if err != nil {
+				return nil, fmt.Errorf("set Grok reasoning_effort: %w", err)
+			}
+		}
+	}
+	if reasoning := gjson.GetBytes(out, "reasoning"); reasoning.Exists() && reasoning.IsObject() && len(reasoning.Map()) == 0 {
+		out, err = sjson.DeleteBytes(out, "reasoning")
+		if err != nil {
+			return nil, fmt.Errorf("remove empty Grok reasoning: %w", err)
+		}
+	}
+	return out, nil
+}
+
+func normalizeGrokChatReasoningEffort(body []byte, upstreamModel string) ([]byte, error) {
+	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
+	if raw == "" {
+		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoningEffort").String())
+	}
+	normalized, keep := normalizeGrokReasoningEffortValue(raw)
+	keep = keep && grokSupportsReasoningEffort(upstreamModel)
+	out := body
+	var err error
+	if gjson.GetBytes(out, "reasoningEffort").Exists() {
+		out, err = sjson.DeleteBytes(out, "reasoningEffort")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !keep {
+		if gjson.GetBytes(out, "reasoning_effort").Exists() {
+			out, err = sjson.DeleteBytes(out, "reasoning_effort")
+		}
+		return out, err
+	}
+	out, err = sjson.SetBytes(out, "reasoning_effort", normalized)
+	return out, err
+}
+
+func normalizeGrokReasoningEffortValue(raw string) (string, bool) {
+	value := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(raw)))
+	switch value {
+	case "none", "low", "medium", "high":
+		return value, true
+	case "minimal":
+		return "low", true
+	case "xhigh", "extrahigh", "max", "ultra":
+		return "high", true
+	default:
+		return "", false
+	}
+}
+
+func grokSupportsReasoningEffort(model string) bool {
+	model = strings.ToLower(xai.StripGrokProviderPrefix(strings.TrimSpace(model)))
+	switch model {
+	case xai.DefaultTextModel, "grok-4.5-latest", "grok-4.6", "grok-4.6-latest",
+		"grok-4.3", "grok-4.3-latest",
+		"grok-3-mini", "grok-3-mini-fast", "grok-4.20-0309-reasoning",
+		"grok-4.20-reasoning", "grok-4.20-multi-agent-0309":
+		return true
+	default:
+		return false
+	}
+}
+
 var grokResponsesUnsupportedRecursiveFields = map[string]struct{}{
 	"external_web_access": {},
 }
@@ -614,15 +780,30 @@ func sanitizeGrokResponsesTools(body []byte) ([]byte, error) {
 
 	rawTools := tools.Array()
 	filteredTools := make([]json.RawMessage, 0, len(rawTools))
+	toolsChanged := false
 	for _, tool := range rawTools {
 		toolType := strings.TrimSpace(tool.Get("type").String())
 		if _, ok := grokResponsesSupportedToolTypes[toolType]; ok {
-			filteredTools = append(filteredTools, json.RawMessage(tool.Raw))
+			raw := json.RawMessage(tool.Raw)
+			if toolType == "function" && (!tool.Get("parameters").Exists() || tool.Get("parameters").Type == gjson.Null) {
+				var payload map[string]any
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					return nil, err
+				}
+				payload["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
+				encoded, err := json.Marshal(payload)
+				if err != nil {
+					return nil, err
+				}
+				raw = encoded
+				toolsChanged = true
+			}
+			filteredTools = append(filteredTools, raw)
 		}
 	}
 
 	var err error
-	if len(filteredTools) != len(rawTools) {
+	if len(filteredTools) != len(rawTools) || toolsChanged {
 		if len(filteredTools) == 0 {
 			body, err = sjson.DeleteBytes(body, "tools")
 		} else {
@@ -1233,4 +1414,90 @@ func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *
 		defer cancel()
 		_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
 	}
+}
+
+// parseGrokQuotaSnapshot preserves an observation timestamp for 429 responses
+// even when xAI omits quota headers.
+func parseGrokQuotaSnapshot(headers http.Header, statusCode int, now time.Time) *xai.QuotaSnapshot {
+	snapshot := xai.ParseQuotaHeaders(headers, statusCode)
+	if snapshot == nil && statusCode == http.StatusTooManyRequests {
+		return &xai.QuotaSnapshot{StatusCode: statusCode, UpdatedAt: now.UTC().Format(time.RFC3339)}
+	}
+	return snapshot
+}
+
+// grokTeamRateLimitModelContextKey carries the upstream model for team/model cooldowns.
+type grokTeamRateLimitModelContextKey struct{}
+
+func withGrokTeamRateLimitModel(ctx context.Context, model string) context.Context {
+	model = strings.TrimSpace(model)
+	if model == "" || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, grokTeamRateLimitModelContextKey{}, model)
+}
+
+func grokRequestedModelFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	model, _ := ctx.Value(grokTeamRateLimitModelContextKey{}).(string)
+	return strings.TrimSpace(model)
+}
+
+func isGrokSpendingLimitError(responseBody []byte) bool {
+	if len(responseBody) == 0 {
+		return false
+	}
+	code := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "code").String(),
+		gjson.GetBytes(responseBody, "error.code").String(),
+	)))
+	if code == "personal-team-blocked:spending-limit" {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		gjson.GetBytes(responseBody, "error").String(),
+		gjson.GetBytes(responseBody, "error.message").String(),
+		gjson.GetBytes(responseBody, "message").String(),
+	)))
+	return strings.Contains(message, "spending limit") || strings.Contains(message, "run out of credits")
+}
+
+func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Account, resetAt time.Time) {
+	if s == nil || account == nil {
+		return
+	}
+	now := time.Now()
+	resetAt = normalizeGrokRateLimitResetAt(account, resetAt, now)
+	runtimeUntil := resetAt
+	if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(runtimeUntil) {
+		runtimeUntil = *account.TempUnschedulableUntil
+	}
+	s.BlockAccountScheduling(account, runtimeUntil, "429")
+	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
+	if model := grokRequestedModelFromCtx(ctx); model != "" {
+		markGrokTeamModelRateLimit(account, model, resolveGrokTeamRateLimitUntil(resetAt, now))
+	}
+}
+
+func isGrokHeavyTransientModel(requestedModel string) bool {
+	model := strings.ToLower(strings.TrimSpace(xai.ResolveGrokTextResponsesModelID(requestedModel)))
+	return strings.Contains(model, "multi-agent")
+}
+
+func persistGrokTransientModelCooldown(account *Account, decision GrokUpstreamFailureDecision) bool {
+	if account == nil {
+		return false
+	}
+	model := strings.TrimSpace(decision.Model)
+	if model == "" || !isGrokHeavyTransientModel(model) {
+		return false
+	}
+	cooldown := decision.Cooldown
+	if cooldown <= 0 {
+		cooldown = 3 * time.Minute
+	}
+	markGrokModelTransientBlock(account.ID, model, time.Now().Add(cooldown))
+	return true
 }

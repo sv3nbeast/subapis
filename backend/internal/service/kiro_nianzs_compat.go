@@ -40,14 +40,6 @@ func adaptKiroAccountForNianzs(account *Account) *Account {
 	return &adapted
 }
 
-// filterGrokFreeQuotaAccountsForGateway is referenced by the source-faithful
-// nianzs scheduler, but nianzs scheduling is selected only for Kiro groups in
-// this integration. Keeping the unrelated Grok branch fail-open preserves the
-// pinned scheduler's behavior when no Grok free-quota gate is configured.
-func (s *GatewayService) filterGrokFreeQuotaAccountsForGateway(_ context.Context, accounts []Account) []Account {
-	return accounts
-}
-
 // isStickyAccountUpstreamRestricted is present in the pinned nianzs scheduler
 // and composed from restriction helpers already carried by this production
 // baseline.

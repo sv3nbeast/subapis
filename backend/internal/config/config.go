@@ -1024,6 +1024,39 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+
+	// Grok: Grok/xAI gateway scheduling and free-tier soft-gate settings.
+	Grok GatewayGrokConfig `mapstructure:"grok"`
+}
+
+// GatewayGrokConfig holds Grok-specific gateway scheduling knobs.
+//
+// Free-quota soft gate keys (gateway.grok.*):
+//   - free_quota_soft_gate_enabled: enable local rolling-window scheduling guard for
+//     OAuth accounts whose subscription_tier/plan_type is explicitly "free".
+//     Default true is safe only because free-tier detection is strict (unknown/paid fail open).
+//   - free_quota_token_limit: nominal rolling-window token allowance.
+//   - free_quota_soft_gate_percent: stop new scheduling before the nominal limit (1-100).
+//   - free_quota_window_hours: local usage rolling window length in hours.
+//   - free_quota_stats_cache_seconds: cache TTL for free-tier usage stats
+//     (hot path never blocks on DB; misses fail open and refresh in background).
+type GatewayGrokConfig struct {
+	// PasswordAuthEnabled controls the optional password-to-SSO OAuth flow.
+	// It defaults to false and must be explicitly enabled by the operator.
+	// When true, POST /admin/grok/oauth/password is functional (not ignored).
+	PasswordAuthEnabled bool `mapstructure:"password_auth_enabled"`
+	// FreeQuotaSoftGateEnabled enables a local rolling-window scheduling guard
+	// for explicitly free Grok OAuth accounts only.
+	FreeQuotaSoftGateEnabled bool `mapstructure:"free_quota_soft_gate_enabled"`
+	// FreeQuotaTokenLimit is the nominal rolling-window allowance.
+	FreeQuotaTokenLimit int64 `mapstructure:"free_quota_token_limit"`
+	// FreeQuotaSoftGatePercent stops new scheduling before the nominal limit.
+	FreeQuotaSoftGatePercent int `mapstructure:"free_quota_soft_gate_percent"`
+	// FreeQuotaWindowHours controls the local rolling usage window.
+	FreeQuotaWindowHours int `mapstructure:"free_quota_window_hours"`
+	// FreeQuotaStatsCacheSeconds is the soft-gate stats cache TTL. Hot path never
+	// waits on usage_logs; misses fail open and refresh asynchronously.
+	FreeQuotaStatsCacheSeconds int `mapstructure:"free_quota_stats_cache_seconds"`
 }
 
 type GatewayClaudeCodeAuxCompatConfig struct {
@@ -2372,6 +2405,15 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.failure_threshold", 2)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.window_seconds", 60)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.ttl_seconds", 600)
+	// Grok free-tier local soft gate (scheduler-only; admin QueryQuota does not use this).
+	// Enabled by default because free detection requires an explicit free tier marker.
+	viper.SetDefault("gateway.grok.free_quota_soft_gate_enabled", true)
+	viper.SetDefault("gateway.grok.password_auth_enabled", false)
+	// Free soft-gate nominal limit: 500k tokens / rolling 24h (operator policy).
+	viper.SetDefault("gateway.grok.free_quota_token_limit", int64(500_000))
+	viper.SetDefault("gateway.grok.free_quota_soft_gate_percent", 95)
+	viper.SetDefault("gateway.grok.free_quota_window_hours", 24)
+	viper.SetDefault("gateway.grok.free_quota_stats_cache_seconds", 60)
 	viper.SetDefault("gateway.image_concurrency.enabled", false)
 	viper.SetDefault("gateway.image_concurrency.max_concurrent_requests", 0)
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)

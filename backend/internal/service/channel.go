@@ -20,7 +20,7 @@ const (
 // IsValid 检查 BillingMode 是否为合法值
 func (m BillingMode) IsValid() bool {
 	switch m {
-	case BillingModeToken, BillingModePerRequest, BillingModeImage, "":
+	case BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo, "":
 		return true
 	}
 	return false
@@ -39,6 +39,10 @@ const (
 	BillingModelSourceRequested     = "requested"
 	BillingModelSourceUpstream      = "upstream"
 	BillingModelSourceChannelMapped = "channel_mapped"
+	// BillingModelSourceResponse bills by a trusted model declaration observed
+	// in the successful upstream response. It is deliberately distinct from
+	// "upstream", which means the model sent to the provider.
+	BillingModelSourceResponse = "response_model"
 )
 
 // Channel 渠道实体

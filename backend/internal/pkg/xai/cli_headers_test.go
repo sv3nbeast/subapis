@@ -32,7 +32,7 @@ func TestApplyCLIChatProxyHeadersOnlyForCLIHost(t *testing.T) {
 	require.Equal(t, CLIClientIdentifier, cliReq.Header.Get(CLIClientIDHdr))
 	require.Equal(t, CLITokenAuthHeader, cliReq.Header.Get(CLITokenAuthHdr))
 	require.Equal(t, CLIAuthenticatorValue, cliReq.Header.Get(CLIAuthenticatorHdr))
-	require.Equal(t, CLIUserAgent, cliReq.Header.Get("User-Agent"))
+	require.Equal(t, CLIUserAgentDefault, cliReq.Header.Get("User-Agent"))
 	require.Equal(t, "tui", cliReq.Header.Get("x-grok-client-surface"))
 	require.Len(t, cliReq.Header.Get("x-grok-agent-id"), 32)
 	require.Len(t, cliReq.Header.Get("x-grok-session-id"), 36)
@@ -60,7 +60,7 @@ func TestApplyCLIChatProxyHeadersOnlyForCLIHost(t *testing.T) {
 }
 
 func TestCLIChatProxyUserAgent(t *testing.T) {
-	require.Equal(t, CLIUserAgent, CLIChatProxyUserAgent(DefaultCLIBaseURL, "sub2api-grok/1.0"))
+	require.Equal(t, CLIUserAgentDefault, CLIChatProxyUserAgent(DefaultCLIBaseURL, "sub2api-grok/1.0"))
 	require.Equal(t, "sub2api-grok/1.0", CLIChatProxyUserAgent(DefaultBaseURL, "sub2api-grok/1.0"))
 	require.Equal(t, "custom", CLIChatProxyUserAgent(DefaultBaseURL, "custom"))
 	require.Equal(t, "sub2api-grok/1.0", CLIChatProxyUserAgent(DefaultBaseURL, ""))

@@ -39,14 +39,22 @@ type BillingProductUsage struct {
 }
 
 // BillingConfig is the nested config object from /v1/billing responses.
+// Weekly (`?format=credits`) and monthly (`/billing`) share this shape; absolute
+// money fields typically appear on the credits (prepaid/on-demand) or monthly
+// (limit/used) responses.
 type BillingConfig struct {
-	CurrentPeriod      *BillingPeriod        `json:"currentPeriod,omitempty"`
-	CreditUsagePercent *float64              `json:"creditUsagePercent,omitempty"`
-	ProductUsage       []BillingProductUsage `json:"productUsage,omitempty"`
-	MonthlyLimit       json.RawMessage       `json:"monthlyLimit,omitempty"`
-	Used               json.RawMessage       `json:"used,omitempty"`
-	BillingPeriodStart string                `json:"billingPeriodStart,omitempty"`
-	BillingPeriodEnd   string                `json:"billingPeriodEnd,omitempty"`
+	CurrentPeriod        *BillingPeriod        `json:"currentPeriod,omitempty"`
+	CreditUsagePercent   *float64              `json:"creditUsagePercent,omitempty"`
+	ProductUsage         []BillingProductUsage `json:"productUsage,omitempty"`
+	MonthlyLimit         json.RawMessage       `json:"monthlyLimit,omitempty"`
+	Used                 json.RawMessage       `json:"used,omitempty"`
+	OnDemandCap          json.RawMessage       `json:"onDemandCap,omitempty"`
+	OnDemandUsed         json.RawMessage       `json:"onDemandUsed,omitempty"`
+	PrepaidBalance       json.RawMessage       `json:"prepaidBalance,omitempty"`
+	IsUnifiedBillingUser bool                  `json:"isUnifiedBillingUser,omitempty"`
+	TopUpMethod          string                `json:"topUpMethod,omitempty"`
+	BillingPeriodStart   string                `json:"billingPeriodStart,omitempty"`
+	BillingPeriodEnd     string                `json:"billingPeriodEnd,omitempty"`
 }
 
 // BillingPayload is the top-level body from /v1/billing.
@@ -137,7 +145,7 @@ func ApplyCLIBillingHeaders(req *http.Request, accessToken string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(CLITokenAuthHdr, CLITokenAuthHeader)
 	req.Header.Set(CLIClientVersionHdr, CLIClientVersion)
-	req.Header.Set("User-Agent", CLIUserAgent)
+	req.Header.Set("User-Agent", CLIUserAgentDefault)
 }
 
 // ParseBillingPayload unmarshals a billing API response body.
@@ -306,12 +314,6 @@ func BuildBillingSummary(config *BillingConfig) *BillingSummary {
 	if config.CurrentPeriod != nil {
 		periodStart = strings.TrimSpace(config.CurrentPeriod.Start)
 		periodEnd = strings.TrimSpace(config.CurrentPeriod.End)
-	}
-	if periodStart == "" {
-		periodStart = strings.TrimSpace(config.BillingPeriodStart)
-	}
-	if periodEnd == "" {
-		periodEnd = strings.TrimSpace(config.BillingPeriodEnd)
 	}
 
 	products := make([]BillingProductSummary, 0, len(config.ProductUsage))

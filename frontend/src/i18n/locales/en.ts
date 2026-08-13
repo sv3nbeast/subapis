@@ -1,4 +1,10 @@
 import { mergeLocaleMessages } from '../mergeLocaleMessages'
+import landingMessages from './en/landing'
+import commonMessages from './en/common'
+import dashboardMessages from './en/dashboard'
+import channelMonitorV2Messages from './en/channelMonitorV2'
+import adminMessages from './en/admin'
+import miscMessages from './en/misc'
 import upstreamSupplement from './en/upstreamSupplement'
 import adminAuditMessages from './en/admin/audit'
 import adminPromptAuditMessages from './en/admin/promptAudit'
@@ -9301,11 +9307,18 @@ const baseMessages = {
 }
 
 export default mergeLocaleMessages(
+  landingMessages,
+  commonMessages,
+  dashboardMessages,
+  channelMonitorV2Messages,
+  miscMessages,
   upstreamSupplement,
   baseMessages,
   batchImageMessages,
   {
     admin: mergeLocaleMessages(
+      baseMessages.admin,
+      adminMessages,
       adminAuditMessages,
       adminPromptAuditMessages,
       adminSettingsMessages,

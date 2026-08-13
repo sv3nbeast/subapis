@@ -24,9 +24,79 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/websearch"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/imroc/req/v3"
 	"golang.org/x/sync/singleflight"
+	"sync"
 )
+
+const (
+	GrokDefaultBaseURLModeAPI     = "api"
+	GrokDefaultBaseURLModeUSEast1 = "us-east-1"
+	GrokDefaultBaseURLModeUSWest2 = "us-west-2"
+	GrokDefaultBaseURLModeEUWest1 = "eu-west-1"
+	GrokDefaultBaseURLModeCLI     = "cli"
+)
+
+func normalizeGrokDefaultBaseURLMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case GrokDefaultBaseURLModeAPI:
+		return GrokDefaultBaseURLModeAPI
+	case GrokDefaultBaseURLModeUSEast1:
+		return GrokDefaultBaseURLModeUSEast1
+	case GrokDefaultBaseURLModeUSWest2:
+		return GrokDefaultBaseURLModeUSWest2
+	case GrokDefaultBaseURLModeEUWest1:
+		return GrokDefaultBaseURLModeEUWest1
+	case GrokDefaultBaseURLModeCLI:
+		return GrokDefaultBaseURLModeCLI
+	default:
+		return GrokDefaultBaseURLModeCLI
+	}
+}
+
+func GrokBaseURLForMode(mode string) string {
+	switch normalizeGrokDefaultBaseURLMode(mode) {
+	case GrokDefaultBaseURLModeAPI:
+		return xai.DefaultBaseURL
+	case GrokDefaultBaseURLModeUSEast1:
+		return xai.DefaultUSEast1BaseURL
+	case GrokDefaultBaseURLModeUSWest2:
+		return xai.DefaultUSWest2BaseURL
+	case GrokDefaultBaseURLModeEUWest1:
+		return xai.DefaultEUWest1BaseURL
+	default:
+		return xai.DefaultCLIBaseURL
+	}
+}
+
+func (s *SettingService) GetGrokDefaultBaseURLMode(ctx context.Context) string {
+	if s == nil || s.settingRepo == nil {
+		return GrokDefaultBaseURLModeCLI
+	}
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
+	defer cancel()
+	raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyGrokDefaultBaseURLMode)
+	if err != nil {
+		return GrokDefaultBaseURLModeCLI
+	}
+	return normalizeGrokDefaultBaseURLMode(raw)
+}
+
+func (s *SettingService) GetGrokDefaultBaseURL(ctx context.Context) string {
+	return GrokBaseURLForMode(s.GetGrokDefaultBaseURLMode(ctx))
+}
+
+func (s *SettingService) ResolveGrokBaseURL(ctx context.Context, account *Account) string {
+	def := xai.DefaultCLIBaseURL
+	if s != nil {
+		def = s.GetGrokDefaultBaseURL(ctx)
+	}
+	if account == nil {
+		return def
+	}
+	return account.GetGrokBaseURLOr(def)
+}
 
 var (
 	ErrRegistrationDisabled   = infraerrors.Forbidden("REGISTRATION_DISABLED", "registration is currently disabled")
@@ -217,6 +287,9 @@ type SettingService struct {
 	// instance owns its own cache, no shared package-level state.
 	openAIQuotaAutoPauseSettingsCache atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
 	openAIQuotaAutoPauseSettingsSF    singleflight.Group
+
+	channelMonitorRuntimeListenersMu sync.Mutex
+	channelMonitorRuntimeListeners   []func()
 }
 
 type ProviderDefaultGrantSettings struct {
@@ -1404,22 +1477,46 @@ func parseProxyAutoSelectLimit(raw string, fallback int) int {
 // consumed by the runner and user-facing handlers.
 type ChannelMonitorRuntime struct {
 	Enabled                bool
+	Mode                   string
 	DefaultIntervalSeconds int
+	HideThroughput         bool
+}
+
+func normalizeChannelMonitorMode(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), ChannelMonitorModeV2) {
+		return ChannelMonitorModeV2
+	}
+	return ChannelMonitorModeV1
+}
+
+func (r ChannelMonitorRuntime) ActiveProbesAllowed() bool {
+	return r.Enabled && (r.Mode == "" || r.Mode == ChannelMonitorModeV1)
+}
+
+func (r ChannelMonitorRuntime) PassiveAggregationAllowed() bool {
+	return r.Enabled && r.Mode == ChannelMonitorModeV2
 }
 
 // GetChannelMonitorRuntime reads the channel monitor feature flags directly from
 // the settings store. Fail-open: on error returns Enabled=true with the default interval.
 func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMonitorRuntime {
+	if s == nil || s.settingRepo == nil {
+		return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV1, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
+	}
 	vals, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyChannelMonitorEnabled,
+		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
+		SettingKeyChannelMonitorHideThroughput,
 	})
 	if err != nil {
-		return ChannelMonitorRuntime{Enabled: true, DefaultIntervalSeconds: channelMonitorIntervalFallback}
+		return ChannelMonitorRuntime{Enabled: true, Mode: ChannelMonitorModeV1, DefaultIntervalSeconds: channelMonitorIntervalFallback, HideThroughput: true}
 	}
 	return ChannelMonitorRuntime{
 		Enabled:                !isFalseSettingValue(vals[SettingKeyChannelMonitorEnabled]),
+		Mode:                   normalizeChannelMonitorMode(vals[SettingKeyChannelMonitorMode]),
 		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
+		HideThroughput:         !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
 	}
 }
 
@@ -2038,6 +2135,52 @@ func (s *SettingService) SetOnUpdateCallback(callback func()) {
 	s.onUpdate = callback
 }
 
+// SubscribeChannelMonitorRuntime registers a listener that is invoked after
+// settings are successfully persisted (and process caches refreshed).
+// Used by ChannelMonitorRunner / ChannelMonitorV2Aggregator for immediate
+// mode flips without waiting for poll intervals.
+func (s *SettingService) SubscribeChannelMonitorRuntime(listener func()) (unsubscribe func()) {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+	s.channelMonitorRuntimeListenersMu.Lock()
+	s.channelMonitorRuntimeListeners = append(s.channelMonitorRuntimeListeners, listener)
+	idx := len(s.channelMonitorRuntimeListeners) - 1
+	s.channelMonitorRuntimeListenersMu.Unlock()
+	return func() {
+		s.channelMonitorRuntimeListenersMu.Lock()
+		defer s.channelMonitorRuntimeListenersMu.Unlock()
+		if idx < 0 || idx >= len(s.channelMonitorRuntimeListeners) {
+			return
+		}
+		s.channelMonitorRuntimeListeners[idx] = nil
+	}
+}
+
+func (s *SettingService) notifyChannelMonitorRuntimeListeners() {
+	if s == nil {
+		return
+	}
+	s.channelMonitorRuntimeListenersMu.Lock()
+	listeners := make([]func(), 0, len(s.channelMonitorRuntimeListeners))
+	for _, l := range s.channelMonitorRuntimeListeners {
+		if l != nil {
+			listeners = append(listeners, l)
+		}
+	}
+	s.channelMonitorRuntimeListenersMu.Unlock()
+	for _, l := range listeners {
+		func(fn func()) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					_ = recovered // keep settings path healthy
+				}
+			}()
+			fn()
+		}(l)
+	}
+}
+
 // SetVersion sets the application version for injection into public settings
 func (s *SettingService) SetVersion(version string) {
 	s.version = version
@@ -2120,7 +2263,9 @@ type PublicSettingsInjectionPayload struct {
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
 	// that hid the "可用渠道" menu on page refresh.
 	ChannelMonitorEnabled                 bool    `json:"channel_monitor_enabled"`
+	ChannelMonitorMode                    string  `json:"channel_monitor_mode"`
 	ChannelMonitorDefaultIntervalSeconds  int     `json:"channel_monitor_default_interval_seconds"`
+	ChannelMonitorHideThroughput          bool    `json:"channel_monitor_hide_throughput"`
 	AvailableChannelsEnabled              bool    `json:"available_channels_enabled"`
 	ModelPlazaEnabled                     bool    `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth                 bool    `json:"model_plaza_require_auth"`
@@ -2204,7 +2349,9 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		BalanceLowNotifyRechargeURL:      settings.BalanceLowNotifyRechargeURL,
 
 		ChannelMonitorEnabled:                 settings.ChannelMonitorEnabled,
+		ChannelMonitorMode:                    settings.ChannelMonitorMode,
 		ChannelMonitorDefaultIntervalSeconds:  settings.ChannelMonitorDefaultIntervalSeconds,
+		ChannelMonitorHideThroughput:          settings.ChannelMonitorHideThroughput,
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
 		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
@@ -3021,6 +3168,17 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		}
 		updates[SettingKeyDefaultPlatformQuotas] = string(blob)
 	}
+	if settings.AccountSchedulingThresholds != nil {
+		normalized, err := validateAndNormalizeAccountSchedulingThresholds(settings.AccountSchedulingThresholds)
+		if err != nil {
+			return nil, err
+		}
+		blob, err := json.Marshal(normalized)
+		if err != nil {
+			return nil, fmt.Errorf("marshal account scheduling thresholds: %w", err)
+		}
+		updates[SettingKeyAccountSchedulingThresholds] = string(blob)
+	}
 
 	updates[SettingKeyAllowUserViewErrorRequests] = strconv.FormatBool(settings.AllowUserViewErrorRequests)
 
@@ -3515,6 +3673,16 @@ func (s *SettingService) GetRegistrationEmailSuffixWhitelist(ctx context.Context
 	return ParseRegistrationEmailSuffixWhitelist(value)
 }
 
+// IsRegistrationEmailDomainQuotaEnabled checks whether non-whitelisted domains
+// may register one account when a suffix whitelist is configured.
+func (s *SettingService) IsRegistrationEmailDomainQuotaEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEmailDomainQuotaEnabled)
+	return err == nil && value == "true"
+}
+
 // GetRegistrationEmailSuffixBlacklist returns normalized registration email suffix blacklist.
 func (s *SettingService) GetRegistrationEmailSuffixBlacklist(ctx context.Context) []string {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyRegistrationEmailSuffixBlacklist)
@@ -3998,6 +4166,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind: "false",
 		SettingKeyForceEmailOnThirdPartySignup:              "false",
 		SettingKeyDefaultPlatformQuotas:                     "{}",
+		SettingKeyAccountSchedulingThresholds:               `{"openai":100,"anthropic":100,"grok":100}`,
 		SettingKeySMTPPort:                                  "587",
 		SettingKeySMTPUseTLS:                                "false",
 		// Model fallback defaults
@@ -4703,6 +4872,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			slog.Warn("[Setting] parseSettings: unmarshal default_platform_quotas failed", "error", err)
 		} else {
 			result.DefaultPlatformQuotas = parsed
+		}
+	}
+	result.AccountSchedulingThresholds = defaultAccountSchedulingThresholds()
+	if raw := strings.TrimSpace(settings[SettingKeyAccountSchedulingThresholds]); raw != "" {
+		if thresholds, err := parseAccountSchedulingThresholdsSetting(raw); err == nil {
+			result.AccountSchedulingThresholds = thresholds
+		} else {
+			slog.Warn("[Setting] parseSettings: unmarshal account_scheduling_thresholds failed", "error", err)
 		}
 	}
 

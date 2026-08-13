@@ -2840,3 +2840,42 @@ b6997eea2 修复（anthropic）：clamp Opus 5 xhigh without thinking
 - 验证：`git diff --check`、全包编译、`go test ./... -run '^$'` 通过；流中断/读错误/零 usage/failover 边界、API Key 透传、Responses failover、终端事件、Responses→Anthropic、路由护栏及 `-race` 聚焦测试通过。
 - 网关审阅：静态生命周期检查未见冲突标记、提前释放或新增预首 token 阻塞；生产 TTFT 与真实缓存连续性尚无可比遥测，生产发布前仍需按发布流程做 canary 验证。
 - 补充：`GOPROXY=https://goproxy.cn,direct go test ./... -count=1` 完整运行仍未全绿，失败集中于同步前已存在的混合测试断言漂移（Codex UA、OpenAI 流/紧凑模式、usage-log 列与参数、订阅仓储桩等）；本次流中断部分 usage 的直接回归与 `-race` 用例均通过，未借机改写这些本地业务语义。
+
+## 2026-08-13 官方同步融合复核（隔离 worktree，未发布）
+
+- 同步 worktree：`/tmp/sub2api-official-sync-20260813`
+- 融合分支：`codex/official-sync-review-20260813`
+- 本地发布基线：`8561189bdac142a47e5d71ffcd725bfdcd0fd046`
+- 官方目标：`origin/main` @ `0e82efe48951cb7da1f8554639afdeab05bf16b8`
+- 共同祖先：`cc67b1aca1d3b590609abef2fcd3a6ca31c5c651`
+- 官方增量：222 个提交（含功能、修复、测试、文档与依赖更新）；融合采用 `-X ours` 后逐文件恢复本地业务契约并补入官方意图。
+
+### 本批次已吸收的主要官方能力
+
+- **Grok 账号与媒体链路**：SSO/密码授权、Turnstile 验证、Cookie/SSO 隔离、密码重授权、模型映射、免费额度软门禁、媒体/语音/搜索路由与计费、模型级配额和 OAuth 会话共享；管理端账号测试、创建账号及 ReAuth 入口同步补齐。
+- **OpenAI/Codex 网关**：池账号认证失败重试后再切号、确定性 4xx 透传、Responses/Chat usage 多形态解析、原生进度与可见输出 TTFT 区分、空完成流 failover、容量降载恢复、路由提示、模型/端点限制诊断，以及搜索计费的强制记账入口。
+- **协议兼容与审计**：Responses 到 Anthropic 的非法 content block 清理、reasoning alias、上游响应模型审计、Antigravity 外层 `modelVersion` 保留、WebSocket 终态和预输出 failover 契约。
+- **Channel Monitor V2**：被动聚合表、分层留存、隐私默认值、模式开关/路由门控、管理端设置与用户端 Ops 风格展示；旧 V1 通过 feature flag 保留可回退入口。
+- **前端运营配置**：分组模型/长上下文/视频价格表单、Grok 用量和套餐展示、批量用量刷新、OAuth 授权入口、国际化拆分及中文词条完整性。
+
+### 本地兼容修复与有意保留
+
+- 保留本地 Kiro/Nianzs 兼容链、首语义超时和分阶段网络观测，不被官方 Kiro 实现覆盖。
+- 保留本地 Grok 调度阈值、sticky/re-auth 分轨、token 轮换保护、免费额度安全门禁及 SubAPIs 品牌文案。
+- 保留本地 Anthropic 流中断部分 usage 记账、Claude CLI/Opus 5 兼容、订阅额度与 prompt-cache 模拟语义。
+- `ChannelStatusView` 恢复为 V1/V2 feature flag 外壳，避免官方 V2 文件覆盖旧用户入口。
+- locale 合并顺序显式以本地 base 为底、拆分模块为上层，确保原有本地词条和动态 key 不被英文回退覆盖。
+
+### 最终门禁结果
+
+- 前端：`pnpm run typecheck`、`pnpm run build` 通过；完整 Vitest **268 个文件 / 1691 个测试全部通过**。
+- 前端契约与 locale：账号、分组利润、验证码、首页、locale completeness/parity/compile/module integration 全部通过（17 个文件 / 159 个测试）。测试中的 jsdom 网络噪声和不完整 mock 警告不影响断言结果。
+- 后端：`go test ./... -count=1`、目标网关 `-race` 测试、`go build ./...` 全部通过。
+- 格式：`git diff --check`、Go `gofmt -d` 无输出；基线至候选未发现前端删除文件。
+- 网关回归审阅：`PASS`。stream terminal/EOF/failover、cache-hit/recreate、usage 记账和首可见输出路径均有直接测试；成功路径无新增等待，软失败重试仅发生在首字节前。
+
+### 发布状态
+
+- 本轮只完成隔离 worktree 的同步与验证，**没有修改生产、没有推送 `sv3nbeast/main`、没有执行 promote**。
+- `frontend/pnpm-lock.yaml` 有一次本地 `pnpm install` 产生的未暂存解析差异，未纳入同步结论；发布前应单独清理或确认是否需要更新锁文件。
+- 后续如需提升到 `main` 或发布生产，必须重新执行三线状态核验、提交候选、生产发布与 canary 回归，不能直接使用本隔离 worktree 的未提交状态。

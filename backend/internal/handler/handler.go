@@ -57,6 +57,7 @@ type Handlers struct {
 	Subscription         *SubscriptionHandler
 	Announcement         *AnnouncementHandler
 	ChannelMonitor       *ChannelMonitorUserHandler
+	ChannelMonitorV2     *ChannelMonitorV2Handler
 	PublicChannelMonitor *ChannelMonitorUserHandler
 	Admin                *AdminHandlers
 	Gateway              *GatewayHandler

@@ -15,7 +15,7 @@ const (
 	//   426 Your Grok CLI version (none) is outdated...
 	CLIClientVersion      = "0.2.118"
 	CLIClientIdentifier   = "grok-shell"
-	CLIUserAgent          = "grok-shell/0.2.118 (linux; x86_64)"
+	CLIUserAgentDefault   = "grok-shell/0.2.118 (linux; x86_64)"
 	CLIAuthenticatorHdr   = "x-authenticateresponse"
 	CLIAuthenticatorValue = "authenticate-response"
 	CLIClientVersionHdr   = "x-grok-client-version"
@@ -106,7 +106,7 @@ func ApplyCLIChatProxyHeaders(req *http.Request, baseURL string, metadata ...CLI
 	}
 	// Override generic gateway UA; CLI proxy validates version via these headers
 	// and also accepts a grok-shell User-Agent.
-	req.Header.Set("User-Agent", CLIUserAgent)
+	req.Header.Set("User-Agent", CLIUserAgentDefault)
 }
 
 func loadCLIClientIdentity(accountID int64) cliClientIdentity {
@@ -152,7 +152,7 @@ func randomCLIUUID() string {
 // CLI proxy; otherwise it returns fallback (or the default gateway UA).
 func CLIChatProxyUserAgent(baseURL, fallback string) string {
 	if IsCLIChatProxyBaseURL(baseURL) {
-		return CLIUserAgent
+		return CLIUserAgentDefault
 	}
 	if strings.TrimSpace(fallback) != "" {
 		return fallback

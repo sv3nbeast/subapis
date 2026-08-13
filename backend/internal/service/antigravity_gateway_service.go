@@ -2742,6 +2742,7 @@ func WithForwardGeminiSession(groupID int64, sessionHash string) ForwardGeminiOp
 
 func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
 	startTime := time.Now()
+	beginUpstreamResponseModelObservation(c)
 	forwardOpts := forwardGeminiOptions{}
 	for _, apply := range options {
 		if apply != nil {
@@ -2920,6 +2921,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 							normalizeAntigravityCompressedResponse(fallbackResp)
 							_ = resp.Body.Close()
 							resp = fallbackResp
+							billingModel = fallbackModel
+							if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+								observer.Observe(fallbackModel, true)
+							}
 						} else if fallbackResp != nil {
 							_ = fallbackResp.Body.Close()
 						}
@@ -3153,16 +3158,18 @@ handleSuccess:
 	}
 
 	return &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
-		ImageCount:       imageCount,
-		ImageSize:        imageSize,
+		RequestID:                     requestID,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 billingModel,
+		Stream:                        stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		ImageCount:                    imageCount,
+		ImageSize:                     imageSize,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
 	}, nil
 }
 
@@ -4052,6 +4059,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				if u := extractGeminiUsage(inner); u != nil {
 					usage = u
 				}
+				if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+					observer.ObserveGemini(inner)
+				}
 				var parsed map[string]any
 				if json.Unmarshal(inner, &parsed) == nil {
 					// Check for MALFORMED_FUNCTION_CALL
@@ -4217,6 +4227,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 			if firstTokenMs == nil {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
+			}
+			if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+				observer.ObserveGemini(inner)
 			}
 
 			last = parsed

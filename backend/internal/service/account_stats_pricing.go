@@ -24,6 +24,7 @@ func resolveAccountStatsCost(
 	tokens UsageTokens,
 	requestCount int,
 	totalCost float64,
+	serviceTier string,
 ) *float64 {
 	if channelService == nil || strings.TrimSpace(upstreamModel) == "" {
 		return nil
@@ -47,7 +48,7 @@ func resolveAccountStatsCost(
 	}
 
 	if billingService != nil {
-		return tryAccountStatsModelFilePricing(billingService, upstreamModel, tokens)
+		return tryAccountStatsModelFilePricing(billingService, upstreamModel, tokens, serviceTier)
 	}
 	return nil
 }
@@ -75,13 +76,15 @@ func tryAccountStatsCustomRules(
 	return nil
 }
 
-func tryAccountStatsModelFilePricing(billingService *BillingService, model string, tokens UsageTokens) *float64 {
+func tryAccountStatsModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
 	pricing, err := billingService.GetModelPricing(model)
 	if err != nil || pricing == nil {
 		return nil
 	}
-	if billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
-		breakdown, err := billingService.CalculateCost(model, tokens, 1)
+	normalizedTier := normalizeBillingServiceTier(serviceTier)
+	if normalizedTier == "priority" || normalizedTier == "flex" ||
+		billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
+		breakdown, err := billingService.CalculateCostWithServiceTier(model, tokens, 1, normalizedTier)
 		if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
 			return nil
 		}
@@ -274,6 +277,10 @@ func applyAccountStatsCost(
 	if usageLog != nil && usageLog.ImageCount > 0 {
 		requestCount = usageLog.ImageCount
 	}
+	serviceTier := ""
+	if usageLog != nil && usageLog.ServiceTier != nil {
+		serviceTier = *usageLog.ServiceTier
+	}
 	usageLog.AccountStatsCost = resolveAccountStatsCost(
 		ctx,
 		cs,
@@ -284,5 +291,6 @@ func applyAccountStatsCost(
 		tokens,
 		requestCount,
 		totalCost,
+		serviceTier,
 	)
 }

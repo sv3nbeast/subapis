@@ -44,7 +44,8 @@ const (
 	// maxSameAccountRetries 同账号重试次数上限（针对 RetryableOnSameAccount 错误）
 	maxSameAccountRetries = 3
 	// sameAccountRetryDelay 同账号重试间隔
-	sameAccountRetryDelay = 500 * time.Millisecond
+	sameAccountRetryDelay      = 500 * time.Millisecond
+	maxRequestScopedRetryDelay = 8 * time.Second
 	// anthropicSoftRateLimitRetryCount 同一请求对 Claude 软 429 只允许一次
 	anthropicSoftRateLimitRetryCount = 1
 	// anthropicSoftRateLimitMaxAccounts limits a request-scoped/reset-less 429
@@ -69,6 +70,20 @@ const (
 	kiro429DecisionExclude       = "exclude_account"
 	kiro429DecisionExhausted     = "exhausted"
 )
+
+func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryCount int) time.Duration {
+	if failoverErr == nil || !failoverErr.RequestScopedTransient || retryCount <= 1 {
+		return sameAccountRetryDelay
+	}
+	delay := sameAccountRetryDelay
+	for i := 1; i < retryCount; i++ {
+		if delay >= maxRequestScopedRetryDelay/2 {
+			return maxRequestScopedRetryDelay
+		}
+		delay *= 2
+	}
+	return delay
+}
 
 const profitVetoExhaustedMessage = "No available accounts: all candidates rejected by group profit control"
 
@@ -266,13 +281,14 @@ func (s *FailoverState) HandleFailoverError(
 	// 同账号重试：对 RetryableOnSameAccount 的临时性错误，先在同一账号上重试
 	if failoverErr.RetryableOnSameAccount && s.SameAccountRetryCount[accountID] < maxSameAccountRetries {
 		s.SameAccountRetryCount[accountID]++
+		retryDelay := sameAccountRetryDelayFor(failoverErr, s.SameAccountRetryCount[accountID])
 		logger.FromContext(ctx).Warn("gateway.failover_same_account_retry",
 			zap.Int64("account_id", accountID),
 			zap.Int("upstream_status", failoverErr.StatusCode),
 			zap.Int("same_account_retry_count", s.SameAccountRetryCount[accountID]),
 			zap.Int("same_account_retry_max", maxSameAccountRetries),
 		)
-		if !sleepWithContext(ctx, sameAccountRetryDelay) {
+		if !sleepWithContext(ctx, retryDelay) {
 			return FailoverCanceled
 		}
 		return FailoverContinue

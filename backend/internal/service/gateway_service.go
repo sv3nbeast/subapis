@@ -603,6 +603,13 @@ type GatewayCache interface {
 	DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error
 }
 
+type grokVideoBillingCache interface {
+	SetGrokVideoPendingBilling(ctx context.Context, key string, payload []byte, ttl time.Duration) error
+	GetGrokVideoPendingBilling(ctx context.Context, key string) ([]byte, error)
+	ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	ReleaseGrokVideoBilled(ctx context.Context, key string) error
+}
+
 // KiroCachePersistenceStore 是 GatewayCache 的可选窄扩展接口，用于把 Kiro
 // cache emulation 的 prefix fingerprint 持久化到外部缓存（如 Redis）。
 //
@@ -742,6 +749,11 @@ type ClaudeUsage struct {
 }
 
 // ForwardResult 转发结果
+type AudioUsage struct {
+	Mode            string  // realtime | tts | stt
+	DurationOrUnits float64 // minutes / million-chars / hours
+}
+
 type ForwardResult struct {
 	RequestID       string
 	ResponseID      string
@@ -769,6 +781,8 @@ type ForwardResult struct {
 	ImageOutputSizes   []string
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
+	SearchCount        int
+	AudioUsage         *AudioUsage
 }
 
 type UpstreamFailureKind string
@@ -5754,6 +5768,15 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 		accessToken, err := s.droidTokenProvider.GetAccessToken(ctx, account)
 		if err != nil {
 			return "", "", err
+		}
+		return accessToken, "oauth", nil
+	}
+
+	// Grok OAuth: prefer access_token from credentials (background refresher keeps it warm).
+	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth {
+		accessToken := account.GetGrokAccessToken()
+		if accessToken == "" {
+			return "", "", errors.New("grok access_token not found in credentials")
 		}
 		return accessToken, "oauth", nil
 	}
@@ -12361,6 +12384,12 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 			},
 			1,
 			totalCost,
+			func() string {
+				if usageLog.ServiceTier != nil {
+					return *usageLog.ServiceTier
+				}
+				return ""
+			}(),
 		)
 	}
 

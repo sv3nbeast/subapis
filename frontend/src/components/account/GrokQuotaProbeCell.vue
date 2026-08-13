@@ -39,9 +39,14 @@ import { adminAPI } from '@/api/admin'
 import type { GrokQuotaProbeResult } from '@/api/admin/grok'
 import type { Account } from '@/types'
 
-const props = defineProps<{
-  account: Account
-}>()
+const props = withDefaults(
+  defineProps<{
+    account: Account
+    /** When true, only show the probe button (+ errors). No duplicate weekly summary. */
+    compact?: boolean
+  }>(),
+  { compact: false }
+)
 
 const emit = defineEmits<{
   (e: 'updated', result: GrokQuotaProbeResult): void

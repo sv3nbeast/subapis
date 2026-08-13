@@ -290,6 +290,7 @@ export interface PublicSettings {
   email_verify_enabled: boolean
   force_email_on_third_party_signup: boolean
   registration_email_suffix_whitelist: string[]
+  registration_email_domain_quota_enabled?: boolean
   promo_code_enabled: boolean
   password_reset_enabled: boolean
   invitation_code_enabled: boolean
@@ -345,7 +346,11 @@ export interface PublicSettings {
   account_quota_notify_enabled: boolean
   balance_low_notify_threshold: number
   channel_monitor_enabled: boolean
+  /** Exclusive mode: v1 active probes or v2 passive aggregation. Default v2. */
+  channel_monitor_mode?: 'v1' | 'v2'
   channel_monitor_default_interval_seconds: number
+  /** When true, user monitor hides RPM/TPM so scale cannot be reverse-estimated. */
+  channel_monitor_hide_throughput?: boolean
   available_channels_enabled: boolean
 	public_model_market_enabled: boolean
 	public_model_market_reference_usd_cny_rate: number
@@ -617,6 +622,8 @@ export type KnownGroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravit
 // to work with template profiles before the frontend is released again.
 export type GroupPlatform = KnownGroupPlatform | 'composite' | (string & {})
 
+export type VideoModelPrices = Record<string, Record<string, number>>
+
 export type SubscriptionType = 'standard' | 'subscription'
 
 export interface SubscriptionModelUsage {
@@ -654,6 +661,7 @@ export interface Group {
   weekly_limit_usd: number | null
   monthly_limit_usd: number | null
   model_quota_ratios: Record<string, number>
+  long_context_pricing_enabled?: boolean
   // 图片生成计费配置
   allow_image_generation: boolean
   allow_batch_image_generation: boolean
@@ -670,6 +678,11 @@ export interface Group {
   video_price_720p: number | null
   video_price_1080p: number | null
   web_search_price_per_call: number | null
+  // Grok Voice 显式定价（分组级）
+  search_price_per_1k: number | null
+  audio_realtime_price_per_min: number | null
+  audio_tts_price_per_million_chars: number | null
+  audio_stt_price_per_hour: number | null
   // 高峰时段倍率配置
   peak_rate_enabled: boolean
   peak_start: string
@@ -701,6 +714,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
+  video_model_prices?: VideoModelPrices
   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
   // 仅管理员可见：与 rate_multiplier 相乘即可反推上游成本上限，不得下放到 Group。
   profit_control_enabled: boolean
@@ -1101,6 +1116,9 @@ export interface TempUnschedulableState {
   matched_keyword: string
   rule_index: number
   error_message: string
+  trigger_count?: number
+  trigger_threshold?: number
+  trigger_window_minutes?: number
 }
 
 export interface TempUnschedulableStatus {
@@ -1416,6 +1434,7 @@ export interface AccountUsageInfo {
   seven_day: UsageProgress | null
   seven_day_sonnet: UsageProgress | null
   seven_day_fable?: UsageProgress | null
+  thirty_day?: UsageProgress | null
   gemini_shared_daily?: UsageProgress | null
   gemini_pro_daily?: UsageProgress | null
   gemini_flash_daily?: UsageProgress | null

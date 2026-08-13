@@ -138,12 +138,15 @@
         :show-help="isAnthropic"
         :show-proxy-warning="isAnthropic"
         :show-cookie-option="isAnthropic"
+        :show-refresh-token-option="isOpenAI || isAntigravity || isGrok"
+        :show-sso-option="isGrok"
+        :show-email-password-option="false"
         :show-device-option="isGrok"
         :show-manual-option="true"
         :device-user-code="grokOAuth.deviceUserCode.value"
         :device-verification-url="grokOAuth.deviceVerificationUrl.value"
         :device-status="grokOAuth.deviceStatus.value"
-        :initial-input-method="isGrok ? 'device' : 'manual'"
+        :initial-input-method="grokInitialInputMethod"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
         :platform="currentOAuthPlatform"
@@ -152,6 +155,8 @@
         @update:input-method="handleOAuthInputMethodChange"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
+        @validate-refresh-token="handleGrokValidateRefreshToken"
+        @import-sso="handleGrokImportSSO"
       />
 
     </div>
@@ -292,6 +297,17 @@ const isKiroExternalIDPAccount = computed(
   () => isKiro.value && kiroAuthMethod.value === 'external_idp'
 )
 
+/** Prefer a refresh token when available; otherwise use the SSO cookie flow. */
+const grokInitialInputMethod = computed<AuthInputMethod>(() => {
+  if (!isGrok.value) return 'manual'
+  const credentials = (props.account?.credentials || {}) as Record<string, unknown>
+  const hasRefreshToken =
+    (typeof credentials.refresh_token === 'string' && credentials.refresh_token.trim() !== '') ||
+    (typeof credentials.has_refresh_token === 'boolean' && credentials.has_refresh_token)
+  if (hasRefreshToken) return 'refresh_token'
+  return 'sso_cookie'
+})
+
 // Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.authUrl.value
@@ -330,10 +346,14 @@ const currentError = computed(() => {
   return claudeOAuth.error.value
 })
 
-// Computed
+// Computed — footer "complete auth" only for code-exchange flows, not SSO/password/RT.
 const isManualInputMethod = computed(() => {
   if (isGrok.value) {
-    return oauthFlowRef.value?.inputMethod === 'manual'
+    const method = oauthFlowRef.value?.inputMethod
+    if (method === 'sso_cookie' || method === 'refresh_token' || method === 'email_password') {
+      return false
+    }
+    return method === 'manual'
   }
   return (
     isOpenAILike.value ||
@@ -781,6 +801,81 @@ const handleCookieAuth = async (sessionKey: string) => {
       error.response?.data?.detail || t('admin.accounts.oauth.cookieAuthFailed')
   } finally {
     claudeOAuth.loading.value = false
+  }
+}
+
+/** Apply Grok Build OAuth tokens onto the existing account (never store password/SSO). */
+const applyGrokReauthTokenInfo = async (tokenInfo: {
+  access_token?: string
+  refresh_token?: string
+  email?: string
+  [key: string]: unknown
+}) => {
+  if (!props.account) return
+  const credentials = grokOAuth.buildCredentials(tokenInfo as any)
+  const extra = grokOAuth.buildExtraInfo(tokenInfo as any)
+  const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+    type: 'oauth',
+    credentials,
+    extra
+  })
+  appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+  emit('reauthorized', updatedAccount)
+  handleClose()
+}
+
+/** Re-auth with a single SSO cookie → Build OAuth (not batch create). */
+const handleGrokImportSSO = async (ssoInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const ssoToken = ssoInput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  if (!ssoToken) return
+
+  grokOAuth.loading.value = true
+  grokOAuth.error.value = ''
+  try {
+    const tokenInfo = await grokOAuth.validateSSOToken(ssoToken, props.account.proxy_id)
+    if (!tokenInfo) return
+    await applyGrokReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    grokOAuth.error.value =
+      error.response?.data?.detail ||
+      error.message ||
+      t('admin.accounts.oauth.grok.failedToValidateSSO', 'Failed to validate Grok SSO')
+    appStore.showError(grokOAuth.error.value)
+  } finally {
+    grokOAuth.loading.value = false
+  }
+}
+
+/** Re-auth with a single refresh token. */
+const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const refreshToken = refreshTokenInput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  if (!refreshToken) {
+    grokOAuth.error.value = t('admin.accounts.oauth.grok.pleaseEnterRefreshToken')
+    return
+  }
+
+  grokOAuth.loading.value = true
+  grokOAuth.error.value = ''
+  try {
+    const tokenInfo = await grokOAuth.validateRefreshToken(refreshToken, props.account.proxy_id)
+    if (!tokenInfo) return
+    await applyGrokReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    grokOAuth.error.value =
+      error.response?.data?.detail ||
+      error.message ||
+      t('admin.accounts.oauth.grok.failedToValidateRT')
+    appStore.showError(grokOAuth.error.value)
+  } finally {
+    grokOAuth.loading.value = false
   }
 }
 </script>

@@ -767,12 +767,7 @@ describe('AccountUsageCell', () => {
 
     const wrapper = mount(AccountUsageCell, {
       props: {
-        account: makeAccount({
-          id: 3861,
-          platform: 'grok',
-          type: 'oauth',
-          extra: {}
-        })
+        account: makeAccount({ id: 3861, platform: 'grok', type: 'oauth', extra: {} })
       },
       global: {
         stubs: {
@@ -780,14 +775,12 @@ describe('AccountUsageCell', () => {
             props: ['label', 'utilization', 'resetsAt', 'color'],
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
           },
-          AccountQuotaInfo: true,
-          GrokQuotaProbeCell: true
+          AccountQuotaInfo: true
         }
       }
     })
 
     await flushPromises()
-
     expect(getUsage).toHaveBeenCalledWith(3861)
     expect(wrapper.text()).toContain('4 req')
     expect(wrapper.text()).toContain('1.2K')
@@ -1049,7 +1042,6 @@ describe('AccountUsageCell', () => {
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
           AccountQuotaInfo: true,
-          GrokQuotaProbeCell: true
         }
       }
     })
@@ -1093,7 +1085,6 @@ describe('AccountUsageCell', () => {
             template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
           },
           AccountQuotaInfo: true,
-          GrokQuotaProbeCell: true
         }
       }
     })
