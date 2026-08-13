@@ -1257,26 +1257,38 @@ func init() {
 	group.DefaultKiroEndpointMode = groupDescKiroEndpointMode.Default.(string)
 	// group.KiroEndpointModeValidator is a validator for the "kiro_endpoint_mode" field. It is called by the builders before save.
 	group.KiroEndpointModeValidator = groupDescKiroEndpointMode.Validators[0].(func(string) error)
+	// groupDescKiroAnthropicFallbackEnabled is the schema descriptor for kiro_anthropic_fallback_enabled field.
+	groupDescKiroAnthropicFallbackEnabled := groupFields[66].Descriptor()
+	// group.DefaultKiroAnthropicFallbackEnabled holds the default value on creation for the kiro_anthropic_fallback_enabled field.
+	group.DefaultKiroAnthropicFallbackEnabled = groupDescKiroAnthropicFallbackEnabled.Default.(bool)
+	// groupDescKiroAnthropicFallbackFirstSemanticTimeoutSeconds is the schema descriptor for kiro_anthropic_fallback_first_semantic_timeout_seconds field.
+	groupDescKiroAnthropicFallbackFirstSemanticTimeoutSeconds := groupFields[67].Descriptor()
+	// group.DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds holds the default value on creation for the kiro_anthropic_fallback_first_semantic_timeout_seconds field.
+	group.DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds = groupDescKiroAnthropicFallbackFirstSemanticTimeoutSeconds.Default.(int)
+	// groupDescKiroAnthropicFallbackMaxAnthropicAttempts is the schema descriptor for kiro_anthropic_fallback_max_anthropic_attempts field.
+	groupDescKiroAnthropicFallbackMaxAnthropicAttempts := groupFields[68].Descriptor()
+	// group.DefaultKiroAnthropicFallbackMaxAnthropicAttempts holds the default value on creation for the kiro_anthropic_fallback_max_anthropic_attempts field.
+	group.DefaultKiroAnthropicFallbackMaxAnthropicAttempts = groupDescKiroAnthropicFallbackMaxAnthropicAttempts.Default.(int)
 	// groupDescMaxReasoningEffort is the schema descriptor for max_reasoning_effort field.
-	groupDescMaxReasoningEffort := groupFields[66].Descriptor()
+	groupDescMaxReasoningEffort := groupFields[69].Descriptor()
 	// group.DefaultMaxReasoningEffort holds the default value on creation for the max_reasoning_effort field.
 	group.DefaultMaxReasoningEffort = groupDescMaxReasoningEffort.Default.(string)
 	// group.MaxReasoningEffortValidator is a validator for the "max_reasoning_effort" field. It is called by the builders before save.
 	group.MaxReasoningEffortValidator = groupDescMaxReasoningEffort.Validators[0].(func(string) error)
 	// groupDescReasoningEffortMappings is the schema descriptor for reasoning_effort_mappings field.
-	groupDescReasoningEffortMappings := groupFields[67].Descriptor()
+	groupDescReasoningEffortMappings := groupFields[70].Descriptor()
 	// group.DefaultReasoningEffortMappings holds the default value on creation for the reasoning_effort_mappings field.
 	group.DefaultReasoningEffortMappings = groupDescReasoningEffortMappings.Default.([]domain.ReasoningEffortMapping)
 	// groupDescProfitControlEnabled is the schema descriptor for profit_control_enabled field.
-	groupDescProfitControlEnabled := groupFields[68].Descriptor()
+	groupDescProfitControlEnabled := groupFields[71].Descriptor()
 	// group.DefaultProfitControlEnabled holds the default value on creation for the profit_control_enabled field.
 	group.DefaultProfitControlEnabled = groupDescProfitControlEnabled.Default.(bool)
 	// groupDescProfitMinMargin is the schema descriptor for profit_min_margin field.
-	groupDescProfitMinMargin := groupFields[69].Descriptor()
+	groupDescProfitMinMargin := groupFields[72].Descriptor()
 	// group.DefaultProfitMinMargin holds the default value on creation for the profit_min_margin field.
 	group.DefaultProfitMinMargin = groupDescProfitMinMargin.Default.(float64)
 	// groupDescProfitSafetyBuffer is the schema descriptor for profit_safety_buffer field.
-	groupDescProfitSafetyBuffer := groupFields[70].Descriptor()
+	groupDescProfitSafetyBuffer := groupFields[73].Descriptor()
 	// group.DefaultProfitSafetyBuffer holds the default value on creation for the profit_safety_buffer field.
 	group.DefaultProfitSafetyBuffer = groupDescProfitSafetyBuffer.Default.(float64)
 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()

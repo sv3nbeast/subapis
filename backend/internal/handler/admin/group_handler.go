@@ -153,14 +153,17 @@ type CreateGroupRequest struct {
 	MaxReasoningEffort      string                           `json:"max_reasoning_effort"`
 	ReasoningEffortMappings []service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）
-	KiroCacheEmulationEnabled       bool     `json:"kiro_cache_emulation_enabled"`
-	KiroAutoStickyEnabled           *bool    `json:"kiro_auto_sticky_enabled"`
-	KiroStickySessionTTLSeconds     *int     `json:"kiro_sticky_session_ttl_seconds"`
-	KiroCacheEmulationRatio         *float64 `json:"kiro_cache_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroCacheEmulationMode          *string  `json:"kiro_cache_emulation_mode" binding:"omitempty,oneof=uniform independent"`
-	KiroCacheCreationEmulationRatio *float64 `json:"kiro_cache_creation_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroCacheReadEmulationRatio     *float64 `json:"kiro_cache_read_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroEndpointMode                *string  `json:"kiro_endpoint_mode"`
+	KiroCacheEmulationEnabled                        bool     `json:"kiro_cache_emulation_enabled"`
+	KiroAutoStickyEnabled                            *bool    `json:"kiro_auto_sticky_enabled"`
+	KiroStickySessionTTLSeconds                      *int     `json:"kiro_sticky_session_ttl_seconds"`
+	KiroCacheEmulationRatio                          *float64 `json:"kiro_cache_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroCacheEmulationMode                           *string  `json:"kiro_cache_emulation_mode" binding:"omitempty,oneof=uniform independent"`
+	KiroCacheCreationEmulationRatio                  *float64 `json:"kiro_cache_creation_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroCacheReadEmulationRatio                      *float64 `json:"kiro_cache_read_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroEndpointMode                                 *string  `json:"kiro_endpoint_mode"`
+	KiroAnthropicFallbackEnabled                     bool     `json:"kiro_anthropic_fallback_enabled"`
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds int      `json:"kiro_anthropic_fallback_first_semantic_timeout_seconds"`
+	KiroAnthropicFallbackMaxAnthropicAttempts        int      `json:"kiro_anthropic_fallback_max_anthropic_attempts"`
 	// 从指定分组复制账号（创建后自动绑定）
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
 }
@@ -225,14 +228,17 @@ type UpdateGroupRequest struct {
 	MaxReasoningEffort      *string                           `json:"max_reasoning_effort"`
 	ReasoningEffortMappings *[]service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
 	// Kiro 模拟缓存配置（仅 kiro 平台生效）；nil 表示未提供不改动
-	KiroCacheEmulationEnabled       *bool    `json:"kiro_cache_emulation_enabled"`
-	KiroAutoStickyEnabled           *bool    `json:"kiro_auto_sticky_enabled"`
-	KiroStickySessionTTLSeconds     *int     `json:"kiro_sticky_session_ttl_seconds"`
-	KiroCacheEmulationRatio         *float64 `json:"kiro_cache_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroCacheEmulationMode          *string  `json:"kiro_cache_emulation_mode" binding:"omitempty,oneof=uniform independent"`
-	KiroCacheCreationEmulationRatio *float64 `json:"kiro_cache_creation_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroCacheReadEmulationRatio     *float64 `json:"kiro_cache_read_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
-	KiroEndpointMode                *string  `json:"kiro_endpoint_mode"`
+	KiroCacheEmulationEnabled                        *bool    `json:"kiro_cache_emulation_enabled"`
+	KiroAutoStickyEnabled                            *bool    `json:"kiro_auto_sticky_enabled"`
+	KiroStickySessionTTLSeconds                      *int     `json:"kiro_sticky_session_ttl_seconds"`
+	KiroCacheEmulationRatio                          *float64 `json:"kiro_cache_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroCacheEmulationMode                           *string  `json:"kiro_cache_emulation_mode" binding:"omitempty,oneof=uniform independent"`
+	KiroCacheCreationEmulationRatio                  *float64 `json:"kiro_cache_creation_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroCacheReadEmulationRatio                      *float64 `json:"kiro_cache_read_emulation_ratio" binding:"omitempty,gte=0,lte=1"`
+	KiroEndpointMode                                 *string  `json:"kiro_endpoint_mode"`
+	KiroAnthropicFallbackEnabled                     *bool    `json:"kiro_anthropic_fallback_enabled"`
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds *int     `json:"kiro_anthropic_fallback_first_semantic_timeout_seconds"`
+	KiroAnthropicFallbackMaxAnthropicAttempts        *int     `json:"kiro_anthropic_fallback_max_anthropic_attempts"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
 }
@@ -549,7 +555,10 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		KiroCacheCreationEmulationRatio: req.KiroCacheCreationEmulationRatio,
 		KiroCacheReadEmulationRatio:     req.KiroCacheReadEmulationRatio,
 		KiroEndpointMode:                req.KiroEndpointMode,
-		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
+		KiroAnthropicFallbackEnabled:    req.KiroAnthropicFallbackEnabled,
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: req.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
+		KiroAnthropicFallbackMaxAnthropicAttempts:        req.KiroAnthropicFallbackMaxAnthropicAttempts,
+		CopyAccountsFromGroupIDs:                         req.CopyAccountsFromGroupIDs,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -679,7 +688,10 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		KiroCacheCreationEmulationRatio: req.KiroCacheCreationEmulationRatio,
 		KiroCacheReadEmulationRatio:     req.KiroCacheReadEmulationRatio,
 		KiroEndpointMode:                req.KiroEndpointMode,
-		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
+		KiroAnthropicFallbackEnabled:    req.KiroAnthropicFallbackEnabled,
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: req.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
+		KiroAnthropicFallbackMaxAnthropicAttempts:        req.KiroAnthropicFallbackMaxAnthropicAttempts,
+		CopyAccountsFromGroupIDs:                         req.CopyAccountsFromGroupIDs,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

@@ -840,6 +840,25 @@
           </div>
         </div>
 
+        <div v-if="createForm.platform === 'anthropic' && createForm.subscription_type === 'subscription'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium">{{ t("admin.groups.kiroAnthropicFallback.title") }}</h4>
+          <p class="input-hint mb-3">{{ t("admin.groups.kiroAnthropicFallback.description") }}</p>
+          <label class="flex items-center gap-2 mb-4">
+            <input v-model="createForm.kiro_anthropic_fallback_enabled" type="checkbox" />
+            <span>{{ t("admin.groups.kiroAnthropicFallback.enabled") }}</span>
+          </label>
+          <div v-if="createForm.kiro_anthropic_fallback_enabled" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="input-label">{{ t("admin.groups.kiroAnthropicFallback.timeout") }}</label>
+              <input v-model.number="createForm.kiro_anthropic_fallback_first_semantic_timeout_seconds" type="number" min="5" max="110" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.kiroAnthropicFallback.attempts") }}</label>
+              <input v-model.number="createForm.kiro_anthropic_fallback_max_anthropic_attempts" type="number" min="1" max="3" class="input" />
+            </div>
+          </div>
+        </div>
+
         <!-- 图片生成计费配置 -->
         <div
           v-if="supportsImagePricingPlatform(createForm.platform)"
@@ -2611,6 +2630,25 @@
                 :label="t('admin.groups.kiroCache.readRatio')"
               />
               <p class="input-hint sm:col-span-2">{{ t("admin.groups.kiroCache.independentRatioHint") }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="editForm.platform === 'anthropic' && editForm.subscription_type === 'subscription'" class="border-t pt-4">
+          <h4 class="mb-2 font-medium">{{ t("admin.groups.kiroAnthropicFallback.title") }}</h4>
+          <p class="input-hint mb-3">{{ t("admin.groups.kiroAnthropicFallback.description") }}</p>
+          <label class="flex items-center gap-2 mb-4">
+            <input v-model="editForm.kiro_anthropic_fallback_enabled" type="checkbox" />
+            <span>{{ t("admin.groups.kiroAnthropicFallback.enabled") }}</span>
+          </label>
+          <div v-if="editForm.kiro_anthropic_fallback_enabled" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="input-label">{{ t("admin.groups.kiroAnthropicFallback.timeout") }}</label>
+              <input v-model.number="editForm.kiro_anthropic_fallback_first_semantic_timeout_seconds" type="number" min="5" max="110" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.kiroAnthropicFallback.attempts") }}</label>
+              <input v-model.number="editForm.kiro_anthropic_fallback_max_anthropic_attempts" type="number" min="1" max="3" class="input" />
             </div>
           </div>
         </div>
@@ -4758,6 +4796,9 @@ const createForm = reactive({
   kiro_cache_creation_emulation_ratio: 1,
   kiro_cache_read_emulation_ratio: 1,
   kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_anthropic_fallback_enabled: false,
+  kiro_anthropic_fallback_first_semantic_timeout_seconds: 90,
+  kiro_anthropic_fallback_max_anthropic_attempts: 2,
   // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -5081,6 +5122,9 @@ const editForm = reactive({
   kiro_cache_creation_emulation_ratio: 1,
   kiro_cache_read_emulation_ratio: 1,
   kiro_endpoint_mode: "q" as "q" | "krs" | "auto",
+  kiro_anthropic_fallback_enabled: false,
+  kiro_anthropic_fallback_first_semantic_timeout_seconds: 90,
+  kiro_anthropic_fallback_max_anthropic_attempts: 2,
 	  // 模型路由开关
 	  model_routing_enabled: false,
 	  models_list_config: createModelsListState() as ModelsListState,
@@ -5503,6 +5547,9 @@ const closeCreateModal = () => {
   createForm.kiro_cache_creation_emulation_ratio = 1;
   createForm.kiro_cache_read_emulation_ratio = 1;
   createForm.kiro_endpoint_mode = "q";
+  createForm.kiro_anthropic_fallback_enabled = false;
+  createForm.kiro_anthropic_fallback_first_semantic_timeout_seconds = 90;
+  createForm.kiro_anthropic_fallback_max_anthropic_attempts = 2;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   Object.assign(createForm.models_list_config, createModelsListState());
   createForm.mcp_xml_inject = true;
@@ -5658,6 +5705,11 @@ const handleCreateGroup = async () => {
         requestData.kiro_sticky_session_ttl_seconds,
       );
     }
+    if (requestData.platform !== "anthropic" || requestData.subscription_type !== "subscription") {
+      requestData.kiro_anthropic_fallback_enabled = false;
+      requestData.kiro_anthropic_fallback_first_semantic_timeout_seconds = 90;
+      requestData.kiro_anthropic_fallback_max_anthropic_attempts = 2;
+    }
     resetDisabledBatchImagePricing(requestData);
     requestData.batch_image_discount_multiplier = normalizeRateMultiplier(
       requestData.batch_image_discount_multiplier,
@@ -5782,6 +5834,11 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.kiro_cache_read_emulation_ratio =
     group.kiro_cache_read_emulation_ratio ?? group.kiro_cache_emulation_ratio ?? 1;
   editForm.kiro_endpoint_mode = group.kiro_endpoint_mode ?? "q";
+  editForm.kiro_anthropic_fallback_enabled = group.kiro_anthropic_fallback_enabled ?? false;
+  editForm.kiro_anthropic_fallback_first_semantic_timeout_seconds =
+    group.kiro_anthropic_fallback_first_semantic_timeout_seconds ?? 90;
+  editForm.kiro_anthropic_fallback_max_anthropic_attempts =
+    group.kiro_anthropic_fallback_max_anthropic_attempts ?? 2;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   Object.assign(
     editForm.models_list_config,
@@ -5909,6 +5966,11 @@ const handleUpdateGroup = async () => {
       payload.kiro_sticky_session_ttl_seconds = normalizeKiroStickyTTLSeconds(
         payload.kiro_sticky_session_ttl_seconds,
       );
+    }
+    if (payload.platform !== "anthropic" || payload.subscription_type !== "subscription") {
+      payload.kiro_anthropic_fallback_enabled = false;
+      payload.kiro_anthropic_fallback_first_semantic_timeout_seconds = 90;
+      payload.kiro_anthropic_fallback_max_anthropic_attempts = 2;
     }
     resetDisabledBatchImagePricing(payload);
     payload.batch_image_discount_multiplier = normalizeRateMultiplier(

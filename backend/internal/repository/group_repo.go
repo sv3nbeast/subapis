@@ -94,6 +94,9 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetKiroCacheCreationEmulationRatio(groupIn.KiroCacheCreationEmulationRatio).
 		SetKiroCacheReadEmulationRatio(groupIn.KiroCacheReadEmulationRatio).
 		SetKiroEndpointMode(groupIn.KiroEndpointMode).
+		SetKiroAnthropicFallbackEnabled(groupIn.KiroAnthropicFallbackEnabled).
+		SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(groupIn.KiroAnthropicFallbackFirstSemanticTimeoutSeconds).
+		SetKiroAnthropicFallbackMaxAnthropicAttempts(groupIn.KiroAnthropicFallbackMaxAnthropicAttempts).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).
@@ -277,6 +280,9 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetKiroCacheCreationEmulationRatio(groupIn.KiroCacheCreationEmulationRatio).
 		SetKiroCacheReadEmulationRatio(groupIn.KiroCacheReadEmulationRatio).
 		SetKiroEndpointMode(groupIn.KiroEndpointMode).
+		SetKiroAnthropicFallbackEnabled(groupIn.KiroAnthropicFallbackEnabled).
+		SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(groupIn.KiroAnthropicFallbackFirstSemanticTimeoutSeconds).
+		SetKiroAnthropicFallbackMaxAnthropicAttempts(groupIn.KiroAnthropicFallbackMaxAnthropicAttempts).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).

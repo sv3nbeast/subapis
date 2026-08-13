@@ -245,7 +245,7 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 	rawReader, rawWriter := io.Pipe()
 	clientReader, clientWriter := io.Pipe()
 	ready := make(chan error, 1)
-	gateDone := startKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
+	gateDone := startKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytesForRequest(streamCtx, groupID), s.kiroSemanticGateMaxLineSize(), ready)
 
 	requestID := kiropkg.NewClaudeRequestID()
 	accountID := int64(0)

@@ -28,6 +28,22 @@ func TestKiroCacheEmulationGroupDefaultsAndNonKiro(t *testing.T) {
 	}
 }
 
+func TestKiroAnthropicFallbackLogicalUsageDoesNotDependOnProviderAccount(t *testing.T) {
+	resetKiroCacheTracker()
+	svc := &GatewayService{}
+	group := &Group{ID: 21, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeSubscription, KiroAnthropicFallbackEnabled: true}
+	ctx := WithKiroCacheBillingIdentity(context.Background(), group.ID, 77, "logical-session")
+	body := kiroCacheRequestBody("fallback logical", false)
+	first := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, group, body, "claude-sonnet-4-6", 2000)
+	if first == nil || first.CacheCreationTokens == 0 || first.CacheReadTokens != 0 {
+		t.Fatalf("unexpected first logical usage: %+v", first)
+	}
+	second := svc.BuildKiroAnthropicFallbackLogicalUsage(ctx, group, body, "claude-sonnet-4-6", 2000)
+	if second == nil || second.CacheReadTokens == 0 || second.CacheCreationTokens != 0 {
+		t.Fatalf("unexpected second logical usage: %+v", second)
+	}
+}
+
 func TestKiroCacheEmulationUsesSnapshotGroupWithoutRepo(t *testing.T) {
 	resetKiroCacheTracker()
 	svc := &GatewayService{}

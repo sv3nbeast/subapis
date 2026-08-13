@@ -1275,6 +1275,62 @@ func (_u *GroupUpdate) SetNillableKiroEndpointMode(v *string) *GroupUpdate {
 	return _u
 }
 
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (_u *GroupUpdate) SetKiroAnthropicFallbackEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetKiroAnthropicFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroAnthropicFallbackEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackEnabled(*v)
+	}
+	return _u
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (_u *GroupUpdate) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpdate {
+	_u.mutation.ResetKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	_u.mutation.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(*v)
+	}
+	return _u
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds value to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (_u *GroupUpdate) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpdate {
+	_u.mutation.AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	return _u
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (_u *GroupUpdate) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpdate {
+	_u.mutation.ResetKiroAnthropicFallbackMaxAnthropicAttempts()
+	_u.mutation.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableKiroAnthropicFallbackMaxAnthropicAttempts(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackMaxAnthropicAttempts(*v)
+	}
+	return _u
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds value to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (_u *GroupUpdate) AddKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpdate {
+	_u.mutation.AddKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	return _u
+}
+
 // SetMaxReasoningEffort sets the "max_reasoning_effort" field.
 func (_u *GroupUpdate) SetMaxReasoningEffort(v string) *GroupUpdate {
 	_u.mutation.SetMaxReasoningEffort(v)
@@ -2078,6 +2134,21 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.KiroEndpointMode(); ok {
 		_spec.SetField(group.FieldKiroEndpointMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackEnabled(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackFirstSemanticTimeoutSeconds(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKiroAnthropicFallbackFirstSemanticTimeoutSeconds(); ok {
+		_spec.AddField(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackMaxAnthropicAttempts(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKiroAnthropicFallbackMaxAnthropicAttempts(); ok {
+		_spec.AddField(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.MaxReasoningEffort(); ok {
 		_spec.SetField(group.FieldMaxReasoningEffort, field.TypeString, value)
@@ -3657,6 +3728,62 @@ func (_u *GroupUpdateOne) SetNillableKiroEndpointMode(v *string) *GroupUpdateOne
 	return _u
 }
 
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (_u *GroupUpdateOne) SetKiroAnthropicFallbackEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetKiroAnthropicFallbackEnabled(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroAnthropicFallbackEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackEnabled(*v)
+	}
+	return _u
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (_u *GroupUpdateOne) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpdateOne {
+	_u.mutation.ResetKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	_u.mutation.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(*v)
+	}
+	return _u
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds value to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (_u *GroupUpdateOne) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpdateOne {
+	_u.mutation.AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	return _u
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (_u *GroupUpdateOne) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpdateOne {
+	_u.mutation.ResetKiroAnthropicFallbackMaxAnthropicAttempts()
+	_u.mutation.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	return _u
+}
+
+// SetNillableKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableKiroAnthropicFallbackMaxAnthropicAttempts(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetKiroAnthropicFallbackMaxAnthropicAttempts(*v)
+	}
+	return _u
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds value to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (_u *GroupUpdateOne) AddKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpdateOne {
+	_u.mutation.AddKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	return _u
+}
+
 // SetMaxReasoningEffort sets the "max_reasoning_effort" field.
 func (_u *GroupUpdateOne) SetMaxReasoningEffort(v string) *GroupUpdateOne {
 	_u.mutation.SetMaxReasoningEffort(v)
@@ -4490,6 +4617,21 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.KiroEndpointMode(); ok {
 		_spec.SetField(group.FieldKiroEndpointMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackEnabled(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackFirstSemanticTimeoutSeconds(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKiroAnthropicFallbackFirstSemanticTimeoutSeconds(); ok {
+		_spec.AddField(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.KiroAnthropicFallbackMaxAnthropicAttempts(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKiroAnthropicFallbackMaxAnthropicAttempts(); ok {
+		_spec.AddField(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.MaxReasoningEffort(); ok {
 		_spec.SetField(group.FieldMaxReasoningEffort, field.TypeString, value)

@@ -154,6 +154,12 @@ const (
 	FieldKiroCacheReadEmulationRatio = "kiro_cache_read_emulation_ratio"
 	// FieldKiroEndpointMode holds the string denoting the kiro_endpoint_mode field in the database.
 	FieldKiroEndpointMode = "kiro_endpoint_mode"
+	// FieldKiroAnthropicFallbackEnabled holds the string denoting the kiro_anthropic_fallback_enabled field in the database.
+	FieldKiroAnthropicFallbackEnabled = "kiro_anthropic_fallback_enabled"
+	// FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds holds the string denoting the kiro_anthropic_fallback_first_semantic_timeout_seconds field in the database.
+	FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds = "kiro_anthropic_fallback_first_semantic_timeout_seconds"
+	// FieldKiroAnthropicFallbackMaxAnthropicAttempts holds the string denoting the kiro_anthropic_fallback_max_anthropic_attempts field in the database.
+	FieldKiroAnthropicFallbackMaxAnthropicAttempts = "kiro_anthropic_fallback_max_anthropic_attempts"
 	// FieldMaxReasoningEffort holds the string denoting the max_reasoning_effort field in the database.
 	FieldMaxReasoningEffort = "max_reasoning_effort"
 	// FieldReasoningEffortMappings holds the string denoting the reasoning_effort_mappings field in the database.
@@ -308,6 +314,9 @@ var Columns = []string{
 	FieldKiroCacheCreationEmulationRatio,
 	FieldKiroCacheReadEmulationRatio,
 	FieldKiroEndpointMode,
+	FieldKiroAnthropicFallbackEnabled,
+	FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds,
+	FieldKiroAnthropicFallbackMaxAnthropicAttempts,
 	FieldMaxReasoningEffort,
 	FieldReasoningEffortMappings,
 	FieldProfitControlEnabled,
@@ -466,6 +475,12 @@ var (
 	DefaultKiroEndpointMode string
 	// KiroEndpointModeValidator is a validator for the "kiro_endpoint_mode" field. It is called by the builders before save.
 	KiroEndpointModeValidator func(string) error
+	// DefaultKiroAnthropicFallbackEnabled holds the default value on creation for the "kiro_anthropic_fallback_enabled" field.
+	DefaultKiroAnthropicFallbackEnabled bool
+	// DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds holds the default value on creation for the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+	DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds int
+	// DefaultKiroAnthropicFallbackMaxAnthropicAttempts holds the default value on creation for the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+	DefaultKiroAnthropicFallbackMaxAnthropicAttempts int
 	// DefaultMaxReasoningEffort holds the default value on creation for the "max_reasoning_effort" field.
 	DefaultMaxReasoningEffort string
 	// MaxReasoningEffortValidator is a validator for the "max_reasoning_effort" field. It is called by the builders before save.
@@ -796,6 +811,21 @@ func ByKiroCacheReadEmulationRatio(opts ...sql.OrderTermOption) OrderOption {
 // ByKiroEndpointMode orders the results by the kiro_endpoint_mode field.
 func ByKiroEndpointMode(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldKiroEndpointMode, opts...).ToFunc()
+}
+
+// ByKiroAnthropicFallbackEnabled orders the results by the kiro_anthropic_fallback_enabled field.
+func ByKiroAnthropicFallbackEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKiroAnthropicFallbackEnabled, opts...).ToFunc()
+}
+
+// ByKiroAnthropicFallbackFirstSemanticTimeoutSeconds orders the results by the kiro_anthropic_fallback_first_semantic_timeout_seconds field.
+func ByKiroAnthropicFallbackFirstSemanticTimeoutSeconds(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, opts...).ToFunc()
+}
+
+// ByKiroAnthropicFallbackMaxAnthropicAttempts orders the results by the kiro_anthropic_fallback_max_anthropic_attempts field.
+func ByKiroAnthropicFallbackMaxAnthropicAttempts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKiroAnthropicFallbackMaxAnthropicAttempts, opts...).ToFunc()
 }
 
 // ByMaxReasoningEffort orders the results by the max_reasoning_effort field.

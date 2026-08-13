@@ -3418,6 +3418,13 @@ const baseMessages = {
         readRatio: '缓存读取比例',
         independentRatioHint: '独立控制缓存创建 token 与缓存读取 token 的模拟比例。'
       },
+      kiroAnthropicFallback: {
+        title: 'Kiro 首选，Claude 备用',
+        description: '仅对 Anthropic 订阅分组生效。Kiro 在首个语义输出前失败时切换 Claude，不会尝试其他 Kiro 账号；两种平台分别保持会话粘滞，用户计费按一次逻辑请求结算。',
+        enabled: '启用 Kiro 失败自动切换 Claude',
+        timeout: 'Kiro 首个语义输出超时（秒）',
+        attempts: 'Claude 备用最多尝试账号数'
+      },
       copyAccounts: {
         title: '从分组复制账号',
         tooltip: '选择一个或多个相同平台的分组，创建后会自动将这些分组的所有账号绑定到新分组（去重）。',

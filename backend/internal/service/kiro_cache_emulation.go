@@ -151,6 +151,55 @@ func (s *GatewayService) buildKiroCacheEmulationUsageWithContext(ctx context.Con
 	return result
 }
 
+// BuildKiroAnthropicFallbackLogicalUsage classifies the successful Claude
+// response against the same logical prompt fingerprint used by Kiro. It does
+// not inspect or mutate either provider's real cache; it only provides the
+// single user-facing billing view for a Kiro->Claude fallback request.
+func (s *GatewayService) BuildKiroAnthropicFallbackLogicalUsage(ctx context.Context, group *Group, body []byte, model string, inputTokens int) *UsageTokens {
+	if group == nil || !group.EffectiveKiroAnthropicFallbackEnabled() || len(body) == 0 || inputTokens <= 0 {
+		return nil
+	}
+	profile, ok := buildKiroCacheProfile(body, model, inputTokens)
+	if !ok {
+		return nil
+	}
+	identity, ok := kiroCacheBillingIdentityFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	match := globalKiroCacheTracker.match(ctx, identity.stableKey, identity.cacheKey, profile, s.kiroCachePersistenceStore())
+	matchedTokens := resultMatchedTokens(match)
+	last := profile.lastCacheableBreakpoint()
+	if last == nil {
+		return nil
+	}
+	cacheable := min(last.cumulativeTokens, profile.totalInputTokens)
+	creation := max(cacheable-matchedTokens, 0)
+	creation5m, creation1h := profile.ttlBreakdown(matchedTokens)
+	usage := &kiroCacheEmulationUsage{
+		InputTokens:                max(inputTokens-matchedTokens-creation, 0),
+		CacheReadInputTokens:       matchedTokens,
+		CacheCreationInputTokens:   creation,
+		CacheCreation5mInputTokens: creation5m,
+		CacheCreation1hInputTokens: creation1h,
+		pendingCommit: &kiroCachePendingCommit{
+			identities:           []kiroCacheIdentity{identity},
+			profile:              profile,
+			inputTokens:          inputTokens,
+			ratio:                1,
+			initialMatchedTokens: matchedTokens,
+		},
+	}
+	s.commitKiroCacheEmulationUsage(ctx, usage)
+	return &UsageTokens{
+		InputTokens:           usage.InputTokens,
+		CacheReadTokens:       usage.CacheReadInputTokens,
+		CacheCreationTokens:   usage.CacheCreationInputTokens,
+		CacheCreation5mTokens: usage.CacheCreation5mInputTokens,
+		CacheCreation1hTokens: usage.CacheCreation1hInputTokens,
+	}
+}
+
 // commitKiroCacheEmulationUsage publishes cache fingerprints only after the
 // upstream response has completed successfully. HTTP 429/5xx responses, empty
 // streams, parse failures and abandoned retries must not warm the simulated
@@ -269,8 +318,12 @@ func withKiroCacheBillingIdentity(ctx context.Context, groupID, apiKeyID int64, 
 	return context.WithValue(ctx, kiroCacheBillingScopeContextKey{}, identity)
 }
 
+func WithKiroCacheBillingIdentity(ctx context.Context, groupID, apiKeyID int64, sessionHash string) context.Context {
+	return withKiroCacheBillingIdentity(ctx, groupID, apiKeyID, sessionHash)
+}
+
 func (s *GatewayService) withKiroCacheBillingScopeForParsed(ctx context.Context, parsed *ParsedRequest) context.Context {
-	if parsed == nil || parsed.SessionContext == nil || !s.kiroResilienceEnforced(parsed.GroupID) {
+	if parsed == nil || parsed.SessionContext == nil || (!s.kiroResilienceEnforced(parsed.GroupID) && !KiroAnthropicFallbackPolicyFromContext(ctx).Enabled) {
 		return ctx
 	}
 	if _, ok := kiroCacheBillingIdentityFromContext(ctx); ok {

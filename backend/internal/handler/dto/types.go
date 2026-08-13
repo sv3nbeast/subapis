@@ -149,16 +149,19 @@ type Group struct {
 	RequirePrivacySet bool `json:"require_privacy_set"`
 
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
-	KiroCacheEmulationEnabled       bool    `json:"kiro_cache_emulation_enabled"`
-	KiroAutoStickyEnabled           bool    `json:"kiro_auto_sticky_enabled"`
-	KiroStickySessionTTLSeconds     int     `json:"kiro_sticky_session_ttl_seconds"`
-	KiroCacheEmulationRatio         float64 `json:"kiro_cache_emulation_ratio"`
-	KiroCacheEmulationMode          string  `json:"kiro_cache_emulation_mode"`
-	KiroCacheCreationEmulationRatio float64 `json:"kiro_cache_creation_emulation_ratio"`
-	KiroCacheReadEmulationRatio     float64 `json:"kiro_cache_read_emulation_ratio"`
-	KiroEndpointMode                string  `json:"kiro_endpoint_mode"`
-	GrokChatUpstreamMode            string  `json:"grok_chat_upstream_mode"`
-	GrokChatResponsesGrayPercent    int     `json:"grok_chat_responses_gray_percent"`
+	KiroCacheEmulationEnabled                        bool    `json:"kiro_cache_emulation_enabled"`
+	KiroAutoStickyEnabled                            bool    `json:"kiro_auto_sticky_enabled"`
+	KiroStickySessionTTLSeconds                      int     `json:"kiro_sticky_session_ttl_seconds"`
+	KiroCacheEmulationRatio                          float64 `json:"kiro_cache_emulation_ratio"`
+	KiroCacheEmulationMode                           string  `json:"kiro_cache_emulation_mode"`
+	KiroCacheCreationEmulationRatio                  float64 `json:"kiro_cache_creation_emulation_ratio"`
+	KiroCacheReadEmulationRatio                      float64 `json:"kiro_cache_read_emulation_ratio"`
+	KiroEndpointMode                                 string  `json:"kiro_endpoint_mode"`
+	KiroAnthropicFallbackEnabled                     bool    `json:"kiro_anthropic_fallback_enabled"`
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds int     `json:"kiro_anthropic_fallback_first_semantic_timeout_seconds"`
+	KiroAnthropicFallbackMaxAnthropicAttempts        int     `json:"kiro_anthropic_fallback_max_anthropic_attempts"`
+	GrokChatUpstreamMode                             string  `json:"grok_chat_upstream_mode"`
+	GrokChatResponsesGrayPercent                     int     `json:"grok_chat_responses_gray_percent"`
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`

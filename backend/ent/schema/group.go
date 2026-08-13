@@ -312,6 +312,15 @@ func (Group) Fields() []ent.Field {
 			MaxLen(16).
 			Default("q").
 			Comment("Kiro endpoint 模式：q、krs、auto（仅 kiro 分组生效）"),
+		field.Bool("kiro_anthropic_fallback_enabled").
+			Default(false).
+			Comment("Kiro 首选、Claude 备用（仅 Anthropic 订阅分组生效）"),
+		field.Int("kiro_anthropic_fallback_first_semantic_timeout_seconds").
+			Default(90).
+			Comment("Kiro 首个语义输出超时后切换 Claude 的秒数（5-110）"),
+		field.Int("kiro_anthropic_fallback_max_anthropic_attempts").
+			Default(2).
+			Comment("Claude 备用阶段最多尝试账号数（1-3）"),
 
 		// OpenAI/Codex 请求的推理强度上限（空字符串表示不限制）。
 		field.String("max_reasoning_effort").

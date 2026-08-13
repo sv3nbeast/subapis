@@ -594,7 +594,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
-					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
+					if account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) && isAccountConcurrencyWaitTimeout(err) {
 						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 							applyKiroBudgetExhaustedRetryAfter(c)
 							h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
@@ -611,7 +611,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 				// Slot acquired: no longer waiting in queue.
 				releaseWait()
-				deferKiroMigration := account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced &&
+				deferKiroMigration := account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
 					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
 				if !deferKiroMigration {
 					if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionKey, account.ID); err != nil {
@@ -784,6 +784,20 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		fallbackGroupID = apiKey.Group.FallbackGroupIDOnInvalidRequest
 	}
 	fallbackUsed := false
+	kiroAnthropicFallbackPolicy := service.KiroAnthropicFallbackPolicyForGroup(apiKey.Group)
+	kiroAnthropicFallbackEnabled := kiroAnthropicFallbackPolicy.Enabled
+	kiroAnthropicFallbackPhase := false
+	kiroAnthropicFallbackSessionKey := ""
+	if kiroAnthropicFallbackEnabled && sessionHash != "" {
+		kiroAnthropicFallbackSessionKey = "anthropic-fallback:" + sessionHash
+	}
+	if kiroAnthropicFallbackEnabled {
+		ctx := service.WithKiroAnthropicFallbackPolicy(c.Request.Context(), kiroAnthropicFallbackPolicy)
+		ctx = service.WithKiroCacheBillingIdentity(ctx, derefGroupID(apiKey.GroupID), apiKey.ID, sessionHash)
+		ctx = service.WithPrefetchedStickySession(ctx, 0, 0, h.metadataBridgeEnabled())
+		ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformKiro)
+		c.Request = c.Request.WithContext(ctx)
+	}
 
 	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
@@ -795,8 +809,52 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	for {
 		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
 		fs.KiroResilienceEnforced = h.gatewayService.KiroResilienceEnforced(currentAPIKey.GroupID)
+		fs.KiroAnthropicFallbackEnabled = kiroAnthropicFallbackEnabled
+		fs.KiroAnthropicFallbackActive = kiroAnthropicFallbackPhase
+		fs.KiroAnthropicFallbackUsed = fallbackUsed
+		if kiroAnthropicFallbackPhase {
+			fs.KiroResilienceEnforced = false
+		}
 		c.Request = c.Request.WithContext(service.WithModelCapacityRetryState(c.Request.Context(), fs.ModelCapacityRetryState, h.metadataBridgeEnabled()))
 		retryWithFallback := false
+		switchToAnthropicFallback := func(reason string) bool {
+			if !kiroAnthropicFallbackEnabled || kiroAnthropicFallbackPhase || fallbackUsed || kiroAnthropicFallbackSessionKey == "" {
+				return false
+			}
+			kiroAnthropicFallbackPhase = true
+			fallbackUsed = true
+			fs.KiroAnthropicFallbackActive = true
+			fs.KiroAnthropicFallbackUsed = true
+			fs.KiroAttempted = true
+			fs.KiroResilienceEnforced = false
+			fs.FailedAccountIDs = make(map[int64]struct{})
+			fs.SameAccountRetryCount = make(map[int64]int)
+			fs.AnthropicSoft429Retries = make(map[int64]int)
+			fs.AnthropicSoft429Accounts = make(map[int64]struct{})
+			fs.SwitchCount = 0
+			fs.ForceAccountID = 0
+			fs.LastFailoverErr = nil
+			fs.LastNonRateLimitErr = nil
+			fs.MaxSwitches = kiroAnthropicFallbackPolicy.MaxAnthropicAttempts - 1
+			if fs.MaxSwitches < 0 {
+				fs.MaxSwitches = 0
+			}
+			sessionKey = kiroAnthropicFallbackSessionKey
+			sessionBoundAccountID, _ = h.gatewayService.GetCachedSessionAccountID(c.Request.Context(), currentAPIKey.GroupID, sessionKey)
+			hasBoundSession = sessionBoundAccountID > 0
+			ctx := service.WithKiroAnthropicFallbackPolicy(c.Request.Context(), kiroAnthropicFallbackPolicy)
+			ctx = service.WithKiroCacheBillingIdentity(ctx, derefGroupID(currentAPIKey.GroupID), currentAPIKey.ID, sessionHash)
+			ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformAnthropic)
+			ctx = service.WithPrefetchedStickySession(ctx, 0, 0, h.metadataBridgeEnabled())
+			c.Request = c.Request.WithContext(ctx)
+			platform = service.PlatformAnthropic
+			reqLog.Warn("gateway.kiro_anthropic_fallback_started",
+				zap.String("reason", reason),
+				zap.String("session_key", sessionKey),
+				zap.Int64("fallback_sticky_account_id", sessionBoundAccountID),
+			)
+			return true
+		}
 
 		for {
 			attemptParsedReq, err := parsedReq.CloneForBody(body)
@@ -817,6 +875,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
 				if len(fs.FailedAccountIDs) == 0 {
+					if switchToAnthropicFallback("kiro_account_selection_failed") {
+						continue
+					}
 					if cls := classifySelectionError(err); cls.Handled {
 						applySelectionErrorMonitoringClassification(c, cls)
 						h.handleStreamingAwareError(c, cls.StatusCode, cls.ErrorType, cls.Message, streamStarted)
@@ -912,6 +973,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 3. 获取账号并发槽位
 			if budgetErr := prepareKiroAccountAttempt(c, h.gatewayService, currentAPIKey.GroupID, account); budgetErr != nil {
+				if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_resilience_budget_exhausted") {
+					if selection.Acquired && selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					continue
+				}
 				if selection.Acquired && selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -926,6 +993,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.String("platform", platform),
 					)
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_no_slot_no_wait_plan") {
+						continue
+					}
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
 					return
 				}
@@ -938,6 +1008,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_account_wait_queue_full") {
+						continue
+					}
 					h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", streamStarted)
 					return
 				}
@@ -953,6 +1026,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 				waitTimeout, budgetErr := kiroAccountWaitTimeout(h.gatewayService, c.Request.Context(), currentAPIKey.GroupID, account, selection.WaitPlan.Timeout)
 				if budgetErr != nil {
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_account_wait_budget_exhausted") {
+						releaseWait()
+						continue
+					}
 					releaseWait()
 					applyKiroBudgetExhaustedRetryAfter(c)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", clientUpstreamTemporarilyUnavailableMessage, streamStarted)
@@ -969,6 +1046,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_account_slot_wait_failed") {
+						continue
+					}
 					if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && isAccountConcurrencyWaitTimeout(err) {
 						if _, remainingErr := h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), time.Nanosecond); remainingErr != nil {
 							applyKiroBudgetExhaustedRetryAfter(c)
@@ -990,7 +1070,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.String("session_key", sessionKey),
 					zap.Int64("account_id", account.ID),
 				)
-				deferKiroMigration := account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced &&
+				deferKiroMigration := account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
 					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
 				if !deferKiroMigration {
 					if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
@@ -999,7 +1079,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 			// 账号槽位/等待计数需要在超时或断开时安全回收
-			if account.Platform == service.PlatformKiro && h.gatewayService.KiroResilienceEnforced(currentAPIKey.GroupID) {
+			if account.Platform == service.PlatformKiro && (h.gatewayService.KiroResilienceEnforced(currentAPIKey.GroupID) || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) {
 				accountReleaseFunc = wrapReleaseOnce(accountReleaseFunc)
 			} else {
 				accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
@@ -1009,10 +1089,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			var queueRelease func()
 			umqMode := h.getUserMsgQueueMode(account, attemptParsedReq)
 			umqWaitTimeout := h.cfg.Gateway.UserMessageQueue.WaitTimeout()
-			if account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced {
+			if account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) {
 				var budgetErr error
 				umqWaitTimeout, budgetErr = h.gatewayService.KiroWaitTimeoutWithinBudget(c.Request.Context(), umqWaitTimeout)
 				if budgetErr != nil {
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_user_queue_budget_exhausted") {
+						if accountReleaseFunc != nil {
+							accountReleaseFunc()
+						}
+						continue
+					}
 					if accountReleaseFunc != nil {
 						accountReleaseFunc()
 					}
@@ -1038,6 +1124,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					)
 					if accountReleaseFunc != nil {
 						accountReleaseFunc()
+					}
+					if account.Platform == service.PlatformKiro && !c.Writer.Written() && switchToAnthropicFallback("kiro_user_message_queue_failed") {
+						continue
 					}
 					var umqErr *UserMsgQueueAcquireError
 					if errors.As(qErr, &umqErr) && umqErr.RetryableOnAnotherAccount() && !c.Writer.Written() {
@@ -1272,6 +1361,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)
 						return
 					}
+					if account.Platform == service.PlatformKiro && switchToAnthropicFallback("kiro_upstream_failure") {
+						continue
+					}
 					if service.ShouldPreferDifferentEmailDomainSuffixForFailover(account.Platform, failoverErr) {
 						fs.RecordAvoidEmailDomainSuffix(account.EmailDomainSuffix())
 					}
@@ -1301,6 +1393,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						markClientClosedRequest(c)
 						return
 					}
+				}
+				if account.Platform == service.PlatformKiro && c.Writer.Size() == writerSizeBeforeForward && switchToAnthropicFallback("kiro_forward_error") {
+					continue
 				}
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
@@ -1344,7 +1439,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			//   下次请求粘性账号恢复后仍可命中
 			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries() ||
 				selection.DeferStickyMigration ||
-				(account.Platform == service.PlatformKiro && fs.KiroResilienceEnforced && !selection.PreserveStickyBinding)) {
+				(account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) && !selection.PreserveStickyBinding)) {
 				stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
 				if err := h.gatewayService.BindStickySession(stateCtx, currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -1391,6 +1486,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 			forceCacheBilling := fs.ForceCacheBilling
+			var logicalFallbackUsage *service.UsageTokens
+			if kiroAnthropicFallbackEnabled && (account.Platform == service.PlatformKiro || (kiroAnthropicFallbackPhase && account.Platform == service.PlatformAnthropic)) {
+				inputTokens := result.Usage.InputTokens + result.Usage.CacheCreationInputTokens + result.Usage.CacheReadInputTokens
+				logicalFallbackUsage = h.gatewayService.BuildKiroAnthropicFallbackLogicalUsage(
+					c.Request.Context(), apiKey.Group, body, reqModel, inputTokens,
+				)
+			}
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
 			sessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
@@ -1408,6 +1510,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					SessionID:          sessionID,
 					RequestPayloadHash: requestPayloadHash,
 					ForceCacheBilling:  forceCacheBilling,
+					BillableUsage:      logicalFallbackUsage,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				}); err != nil {

@@ -707,6 +707,9 @@ export interface Group {
   kiro_cache_creation_emulation_ratio: number
   kiro_cache_read_emulation_ratio: number
   kiro_endpoint_mode: 'q' | 'krs' | 'auto'
+  kiro_anthropic_fallback_enabled: boolean
+  kiro_anthropic_fallback_first_semantic_timeout_seconds: number
+  kiro_anthropic_fallback_max_anthropic_attempts: number
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number
   created_at: string
@@ -925,6 +928,9 @@ export interface CreateGroupRequest {
   kiro_cache_creation_emulation_ratio?: number
   kiro_cache_read_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
+  kiro_anthropic_fallback_enabled?: boolean
+  kiro_anthropic_fallback_first_semantic_timeout_seconds?: number
+  kiro_anthropic_fallback_max_anthropic_attempts?: number
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number
   // 从指定分组复制账号
@@ -989,6 +995,9 @@ export interface UpdateGroupRequest {
   kiro_cache_creation_emulation_ratio?: number
   kiro_cache_read_emulation_ratio?: number
   kiro_endpoint_mode?: 'q' | 'krs' | 'auto'
+  kiro_anthropic_fallback_enabled?: boolean
+  kiro_anthropic_fallback_first_semantic_timeout_seconds?: number
+  kiro_anthropic_fallback_max_anthropic_attempts?: number
   grok_chat_upstream_mode?: 'raw' | 'responses' | 'gray'
   grok_chat_responses_gray_percent?: number
   copy_accounts_from_group_ids?: number[]

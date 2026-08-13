@@ -3424,6 +3424,13 @@ const baseMessages = {
         readRatio: 'Cache read ratio',
         independentRatioHint: 'Control simulated cache creation and cache read tokens independently.'
       },
+      kiroAnthropicFallback: {
+        title: 'Kiro first, Claude fallback',
+        description: 'Only applies to Anthropic subscription groups. If Kiro fails before the first semantic output, switch to Claude without trying another Kiro account. Kiro and Claude keep separate sticky sessions and the user is billed once for the logical request.',
+        enabled: 'Enable automatic Claude fallback after Kiro failure',
+        timeout: 'Kiro first semantic timeout (seconds)',
+        attempts: 'Maximum Claude fallback accounts'
+      },
       copyAccounts: {
         title: 'Copy Accounts from Groups',
         tooltip:

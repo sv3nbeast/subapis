@@ -21956,140 +21956,145 @@ func (m *ErrorPassthroughRuleMutation) ResetEdge(name string) error {
 // GroupMutation represents an operation that mutates the Group nodes in the graph.
 type GroupMutation struct {
 	config
-	op                                      Op
-	typ                                     string
-	id                                      *int64
-	created_at                              *time.Time
-	updated_at                              *time.Time
-	deleted_at                              *time.Time
-	name                                    *string
-	description                             *string
-	rate_multiplier                         *float64
-	addrate_multiplier                      *float64
-	peak_rate_enabled                       *bool
-	peak_start                              *string
-	peak_end                                *string
-	peak_rate_multiplier                    *float64
-	addpeak_rate_multiplier                 *float64
-	is_exclusive                            *bool
-	status                                  *string
-	duplicate_operation_id                  *string
-	platform                                *string
-	subscription_type                       *string
-	daily_limit_usd                         *float64
-	adddaily_limit_usd                      *float64
-	weekly_limit_usd                        *float64
-	addweekly_limit_usd                     *float64
-	monthly_limit_usd                       *float64
-	addmonthly_limit_usd                    *float64
-	model_quota_ratios                      *map[string]float64
-	default_validity_days                   *int
-	adddefault_validity_days                *int
-	allow_image_generation                  *bool
-	allow_batch_image_generation            *bool
-	image_rate_independent                  *bool
-	image_rate_multiplier                   *float64
-	addimage_rate_multiplier                *float64
-	image_price_1k                          *float64
-	addimage_price_1k                       *float64
-	image_price_2k                          *float64
-	addimage_price_2k                       *float64
-	image_price_4k                          *float64
-	addimage_price_4k                       *float64
-	batch_image_discount_multiplier         *float64
-	addbatch_image_discount_multiplier      *float64
-	batch_image_hold_multiplier             *float64
-	addbatch_image_hold_multiplier          *float64
-	video_rate_independent                  *bool
-	video_rate_multiplier                   *float64
-	addvideo_rate_multiplier                *float64
-	video_price_480p                        *float64
-	addvideo_price_480p                     *float64
-	video_price_720p                        *float64
-	addvideo_price_720p                     *float64
-	video_price_1080p                       *float64
-	addvideo_price_1080p                    *float64
-	video_model_prices                      *map[string]map[string]float64
-	web_search_price_per_call               *float64
-	addweb_search_price_per_call            *float64
-	search_price_per_1k                     *float64
-	addsearch_price_per_1k                  *float64
-	audio_realtime_price_per_min            *float64
-	addaudio_realtime_price_per_min         *float64
-	audio_tts_price_per_million_chars       *float64
-	addaudio_tts_price_per_million_chars    *float64
-	audio_stt_price_per_hour                *float64
-	addaudio_stt_price_per_hour             *float64
-	long_context_pricing_enabled            *bool
-	model_pricing                           *json.RawMessage
-	appendmodel_pricing                     json.RawMessage
-	claude_code_only                        *bool
-	fallback_group_id                       *int64
-	addfallback_group_id                    *int64
-	fallback_group_id_on_invalid_request    *int64
-	addfallback_group_id_on_invalid_request *int64
-	model_routing                           *map[string][]int64
-	model_routing_enabled                   *bool
-	mcp_xml_inject                          *bool
-	supported_model_scopes                  *[]string
-	appendsupported_model_scopes            []string
-	sort_order                              *int
-	addsort_order                           *int
-	allow_messages_dispatch                 *bool
-	allow_live                              *bool
-	allow_non_stream_messages               *bool
-	require_oauth_only                      *bool
-	require_privacy_set                     *bool
-	default_mapped_model                    *string
-	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
-	models_list_config                      *domain.GroupModelsListConfig
-	grok_chat_upstream_mode                 *string
-	grok_chat_responses_gray_percent        *int
-	addgrok_chat_responses_gray_percent     *int
-	rpm_limit                               *int
-	addrpm_limit                            *int
-	kiro_cache_emulation_enabled            *bool
-	kiro_auto_sticky_enabled                *bool
-	kiro_sticky_session_ttl_seconds         *int
-	addkiro_sticky_session_ttl_seconds      *int
-	kiro_cache_emulation_ratio              *float64
-	addkiro_cache_emulation_ratio           *float64
-	kiro_cache_emulation_mode               *string
-	kiro_cache_creation_emulation_ratio     *float64
-	addkiro_cache_creation_emulation_ratio  *float64
-	kiro_cache_read_emulation_ratio         *float64
-	addkiro_cache_read_emulation_ratio      *float64
-	kiro_endpoint_mode                      *string
-	max_reasoning_effort                    *string
-	reasoning_effort_mappings               *[]domain.ReasoningEffortMapping
-	appendreasoning_effort_mappings         []domain.ReasoningEffortMapping
-	profit_control_enabled                  *bool
-	profit_min_margin                       *float64
-	addprofit_min_margin                    *float64
-	profit_safety_buffer                    *float64
-	addprofit_safety_buffer                 *float64
-	clearedFields                           map[string]struct{}
-	api_keys                                map[int64]struct{}
-	removedapi_keys                         map[int64]struct{}
-	clearedapi_keys                         bool
-	redeem_codes                            map[int64]struct{}
-	removedredeem_codes                     map[int64]struct{}
-	clearedredeem_codes                     bool
-	subscriptions                           map[int64]struct{}
-	removedsubscriptions                    map[int64]struct{}
-	clearedsubscriptions                    bool
-	usage_logs                              map[int64]struct{}
-	removedusage_logs                       map[int64]struct{}
-	clearedusage_logs                       bool
-	accounts                                map[int64]struct{}
-	removedaccounts                         map[int64]struct{}
-	clearedaccounts                         bool
-	allowed_users                           map[int64]struct{}
-	removedallowed_users                    map[int64]struct{}
-	clearedallowed_users                    bool
-	done                                    bool
-	oldValue                                func(context.Context) (*Group, error)
-	predicates                              []predicate.Group
+	op                                                        Op
+	typ                                                       string
+	id                                                        *int64
+	created_at                                                *time.Time
+	updated_at                                                *time.Time
+	deleted_at                                                *time.Time
+	name                                                      *string
+	description                                               *string
+	rate_multiplier                                           *float64
+	addrate_multiplier                                        *float64
+	peak_rate_enabled                                         *bool
+	peak_start                                                *string
+	peak_end                                                  *string
+	peak_rate_multiplier                                      *float64
+	addpeak_rate_multiplier                                   *float64
+	is_exclusive                                              *bool
+	status                                                    *string
+	duplicate_operation_id                                    *string
+	platform                                                  *string
+	subscription_type                                         *string
+	daily_limit_usd                                           *float64
+	adddaily_limit_usd                                        *float64
+	weekly_limit_usd                                          *float64
+	addweekly_limit_usd                                       *float64
+	monthly_limit_usd                                         *float64
+	addmonthly_limit_usd                                      *float64
+	model_quota_ratios                                        *map[string]float64
+	default_validity_days                                     *int
+	adddefault_validity_days                                  *int
+	allow_image_generation                                    *bool
+	allow_batch_image_generation                              *bool
+	image_rate_independent                                    *bool
+	image_rate_multiplier                                     *float64
+	addimage_rate_multiplier                                  *float64
+	image_price_1k                                            *float64
+	addimage_price_1k                                         *float64
+	image_price_2k                                            *float64
+	addimage_price_2k                                         *float64
+	image_price_4k                                            *float64
+	addimage_price_4k                                         *float64
+	batch_image_discount_multiplier                           *float64
+	addbatch_image_discount_multiplier                        *float64
+	batch_image_hold_multiplier                               *float64
+	addbatch_image_hold_multiplier                            *float64
+	video_rate_independent                                    *bool
+	video_rate_multiplier                                     *float64
+	addvideo_rate_multiplier                                  *float64
+	video_price_480p                                          *float64
+	addvideo_price_480p                                       *float64
+	video_price_720p                                          *float64
+	addvideo_price_720p                                       *float64
+	video_price_1080p                                         *float64
+	addvideo_price_1080p                                      *float64
+	video_model_prices                                        *map[string]map[string]float64
+	web_search_price_per_call                                 *float64
+	addweb_search_price_per_call                              *float64
+	search_price_per_1k                                       *float64
+	addsearch_price_per_1k                                    *float64
+	audio_realtime_price_per_min                              *float64
+	addaudio_realtime_price_per_min                           *float64
+	audio_tts_price_per_million_chars                         *float64
+	addaudio_tts_price_per_million_chars                      *float64
+	audio_stt_price_per_hour                                  *float64
+	addaudio_stt_price_per_hour                               *float64
+	long_context_pricing_enabled                              *bool
+	model_pricing                                             *json.RawMessage
+	appendmodel_pricing                                       json.RawMessage
+	claude_code_only                                          *bool
+	fallback_group_id                                         *int64
+	addfallback_group_id                                      *int64
+	fallback_group_id_on_invalid_request                      *int64
+	addfallback_group_id_on_invalid_request                   *int64
+	model_routing                                             *map[string][]int64
+	model_routing_enabled                                     *bool
+	mcp_xml_inject                                            *bool
+	supported_model_scopes                                    *[]string
+	appendsupported_model_scopes                              []string
+	sort_order                                                *int
+	addsort_order                                             *int
+	allow_messages_dispatch                                   *bool
+	allow_live                                                *bool
+	allow_non_stream_messages                                 *bool
+	require_oauth_only                                        *bool
+	require_privacy_set                                       *bool
+	default_mapped_model                                      *string
+	messages_dispatch_model_config                            *domain.OpenAIMessagesDispatchModelConfig
+	models_list_config                                        *domain.GroupModelsListConfig
+	grok_chat_upstream_mode                                   *string
+	grok_chat_responses_gray_percent                          *int
+	addgrok_chat_responses_gray_percent                       *int
+	rpm_limit                                                 *int
+	addrpm_limit                                              *int
+	kiro_cache_emulation_enabled                              *bool
+	kiro_auto_sticky_enabled                                  *bool
+	kiro_sticky_session_ttl_seconds                           *int
+	addkiro_sticky_session_ttl_seconds                        *int
+	kiro_cache_emulation_ratio                                *float64
+	addkiro_cache_emulation_ratio                             *float64
+	kiro_cache_emulation_mode                                 *string
+	kiro_cache_creation_emulation_ratio                       *float64
+	addkiro_cache_creation_emulation_ratio                    *float64
+	kiro_cache_read_emulation_ratio                           *float64
+	addkiro_cache_read_emulation_ratio                        *float64
+	kiro_endpoint_mode                                        *string
+	kiro_anthropic_fallback_enabled                           *bool
+	kiro_anthropic_fallback_first_semantic_timeout_seconds    *int
+	addkiro_anthropic_fallback_first_semantic_timeout_seconds *int
+	kiro_anthropic_fallback_max_anthropic_attempts            *int
+	addkiro_anthropic_fallback_max_anthropic_attempts         *int
+	max_reasoning_effort                                      *string
+	reasoning_effort_mappings                                 *[]domain.ReasoningEffortMapping
+	appendreasoning_effort_mappings                           []domain.ReasoningEffortMapping
+	profit_control_enabled                                    *bool
+	profit_min_margin                                         *float64
+	addprofit_min_margin                                      *float64
+	profit_safety_buffer                                      *float64
+	addprofit_safety_buffer                                   *float64
+	clearedFields                                             map[string]struct{}
+	api_keys                                                  map[int64]struct{}
+	removedapi_keys                                           map[int64]struct{}
+	clearedapi_keys                                           bool
+	redeem_codes                                              map[int64]struct{}
+	removedredeem_codes                                       map[int64]struct{}
+	clearedredeem_codes                                       bool
+	subscriptions                                             map[int64]struct{}
+	removedsubscriptions                                      map[int64]struct{}
+	clearedsubscriptions                                      bool
+	usage_logs                                                map[int64]struct{}
+	removedusage_logs                                         map[int64]struct{}
+	clearedusage_logs                                         bool
+	accounts                                                  map[int64]struct{}
+	removedaccounts                                           map[int64]struct{}
+	clearedaccounts                                           bool
+	allowed_users                                             map[int64]struct{}
+	removedallowed_users                                      map[int64]struct{}
+	clearedallowed_users                                      bool
+	done                                                      bool
+	oldValue                                                  func(context.Context) (*Group, error)
+	predicates                                                []predicate.Group
 }
 
 var _ ent.Mutation = (*GroupMutation)(nil)
@@ -25607,6 +25612,154 @@ func (m *GroupMutation) ResetKiroEndpointMode() {
 	m.kiro_endpoint_mode = nil
 }
 
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (m *GroupMutation) SetKiroAnthropicFallbackEnabled(b bool) {
+	m.kiro_anthropic_fallback_enabled = &b
+}
+
+// KiroAnthropicFallbackEnabled returns the value of the "kiro_anthropic_fallback_enabled" field in the mutation.
+func (m *GroupMutation) KiroAnthropicFallbackEnabled() (r bool, exists bool) {
+	v := m.kiro_anthropic_fallback_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKiroAnthropicFallbackEnabled returns the old "kiro_anthropic_fallback_enabled" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldKiroAnthropicFallbackEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKiroAnthropicFallbackEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKiroAnthropicFallbackEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKiroAnthropicFallbackEnabled: %w", err)
+	}
+	return oldValue.KiroAnthropicFallbackEnabled, nil
+}
+
+// ResetKiroAnthropicFallbackEnabled resets all changes to the "kiro_anthropic_fallback_enabled" field.
+func (m *GroupMutation) ResetKiroAnthropicFallbackEnabled() {
+	m.kiro_anthropic_fallback_enabled = nil
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (m *GroupMutation) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(i int) {
+	m.kiro_anthropic_fallback_first_semantic_timeout_seconds = &i
+	m.addkiro_anthropic_fallback_first_semantic_timeout_seconds = nil
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSeconds returns the value of the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field in the mutation.
+func (m *GroupMutation) KiroAnthropicFallbackFirstSemanticTimeoutSeconds() (r int, exists bool) {
+	v := m.kiro_anthropic_fallback_first_semantic_timeout_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds returns the old "kiro_anthropic_fallback_first_semantic_timeout_seconds" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds: %w", err)
+	}
+	return oldValue.KiroAnthropicFallbackFirstSemanticTimeoutSeconds, nil
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds i to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (m *GroupMutation) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(i int) {
+	if m.addkiro_anthropic_fallback_first_semantic_timeout_seconds != nil {
+		*m.addkiro_anthropic_fallback_first_semantic_timeout_seconds += i
+	} else {
+		m.addkiro_anthropic_fallback_first_semantic_timeout_seconds = &i
+	}
+}
+
+// AddedKiroAnthropicFallbackFirstSemanticTimeoutSeconds returns the value that was added to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field in this mutation.
+func (m *GroupMutation) AddedKiroAnthropicFallbackFirstSemanticTimeoutSeconds() (r int, exists bool) {
+	v := m.addkiro_anthropic_fallback_first_semantic_timeout_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetKiroAnthropicFallbackFirstSemanticTimeoutSeconds resets all changes to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (m *GroupMutation) ResetKiroAnthropicFallbackFirstSemanticTimeoutSeconds() {
+	m.kiro_anthropic_fallback_first_semantic_timeout_seconds = nil
+	m.addkiro_anthropic_fallback_first_semantic_timeout_seconds = nil
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (m *GroupMutation) SetKiroAnthropicFallbackMaxAnthropicAttempts(i int) {
+	m.kiro_anthropic_fallback_max_anthropic_attempts = &i
+	m.addkiro_anthropic_fallback_max_anthropic_attempts = nil
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttempts returns the value of the "kiro_anthropic_fallback_max_anthropic_attempts" field in the mutation.
+func (m *GroupMutation) KiroAnthropicFallbackMaxAnthropicAttempts() (r int, exists bool) {
+	v := m.kiro_anthropic_fallback_max_anthropic_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKiroAnthropicFallbackMaxAnthropicAttempts returns the old "kiro_anthropic_fallback_max_anthropic_attempts" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldKiroAnthropicFallbackMaxAnthropicAttempts(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKiroAnthropicFallbackMaxAnthropicAttempts is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKiroAnthropicFallbackMaxAnthropicAttempts requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKiroAnthropicFallbackMaxAnthropicAttempts: %w", err)
+	}
+	return oldValue.KiroAnthropicFallbackMaxAnthropicAttempts, nil
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds i to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (m *GroupMutation) AddKiroAnthropicFallbackMaxAnthropicAttempts(i int) {
+	if m.addkiro_anthropic_fallback_max_anthropic_attempts != nil {
+		*m.addkiro_anthropic_fallback_max_anthropic_attempts += i
+	} else {
+		m.addkiro_anthropic_fallback_max_anthropic_attempts = &i
+	}
+}
+
+// AddedKiroAnthropicFallbackMaxAnthropicAttempts returns the value that was added to the "kiro_anthropic_fallback_max_anthropic_attempts" field in this mutation.
+func (m *GroupMutation) AddedKiroAnthropicFallbackMaxAnthropicAttempts() (r int, exists bool) {
+	v := m.addkiro_anthropic_fallback_max_anthropic_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetKiroAnthropicFallbackMaxAnthropicAttempts resets all changes to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (m *GroupMutation) ResetKiroAnthropicFallbackMaxAnthropicAttempts() {
+	m.kiro_anthropic_fallback_max_anthropic_attempts = nil
+	m.addkiro_anthropic_fallback_max_anthropic_attempts = nil
+}
+
 // SetMaxReasoningEffort sets the "max_reasoning_effort" field.
 func (m *GroupMutation) SetMaxReasoningEffort(s string) {
 	m.max_reasoning_effort = &s
@@ -26200,7 +26353,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 74)
+	fields := make([]string, 0, 77)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -26408,6 +26561,15 @@ func (m *GroupMutation) Fields() []string {
 	if m.kiro_endpoint_mode != nil {
 		fields = append(fields, group.FieldKiroEndpointMode)
 	}
+	if m.kiro_anthropic_fallback_enabled != nil {
+		fields = append(fields, group.FieldKiroAnthropicFallbackEnabled)
+	}
+	if m.kiro_anthropic_fallback_first_semantic_timeout_seconds != nil {
+		fields = append(fields, group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds)
+	}
+	if m.kiro_anthropic_fallback_max_anthropic_attempts != nil {
+		fields = append(fields, group.FieldKiroAnthropicFallbackMaxAnthropicAttempts)
+	}
 	if m.max_reasoning_effort != nil {
 		fields = append(fields, group.FieldMaxReasoningEffort)
 	}
@@ -26569,6 +26731,12 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.KiroCacheReadEmulationRatio()
 	case group.FieldKiroEndpointMode:
 		return m.KiroEndpointMode()
+	case group.FieldKiroAnthropicFallbackEnabled:
+		return m.KiroAnthropicFallbackEnabled()
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		return m.KiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		return m.KiroAnthropicFallbackMaxAnthropicAttempts()
 	case group.FieldMaxReasoningEffort:
 		return m.MaxReasoningEffort()
 	case group.FieldReasoningEffortMappings:
@@ -26726,6 +26894,12 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldKiroCacheReadEmulationRatio(ctx)
 	case group.FieldKiroEndpointMode:
 		return m.OldKiroEndpointMode(ctx)
+	case group.FieldKiroAnthropicFallbackEnabled:
+		return m.OldKiroAnthropicFallbackEnabled(ctx)
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		return m.OldKiroAnthropicFallbackFirstSemanticTimeoutSeconds(ctx)
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		return m.OldKiroAnthropicFallbackMaxAnthropicAttempts(ctx)
 	case group.FieldMaxReasoningEffort:
 		return m.OldMaxReasoningEffort(ctx)
 	case group.FieldReasoningEffortMappings:
@@ -27228,6 +27402,27 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetKiroEndpointMode(v)
 		return nil
+	case group.FieldKiroAnthropicFallbackEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKiroAnthropicFallbackEnabled(v)
+		return nil
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+		return nil
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+		return nil
 	case group.FieldMaxReasoningEffort:
 		v, ok := value.(string)
 		if !ok {
@@ -27361,6 +27556,12 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addkiro_cache_read_emulation_ratio != nil {
 		fields = append(fields, group.FieldKiroCacheReadEmulationRatio)
 	}
+	if m.addkiro_anthropic_fallback_first_semantic_timeout_seconds != nil {
+		fields = append(fields, group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds)
+	}
+	if m.addkiro_anthropic_fallback_max_anthropic_attempts != nil {
+		fields = append(fields, group.FieldKiroAnthropicFallbackMaxAnthropicAttempts)
+	}
 	if m.addprofit_min_margin != nil {
 		fields = append(fields, group.FieldProfitMinMargin)
 	}
@@ -27435,6 +27636,10 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedKiroCacheCreationEmulationRatio()
 	case group.FieldKiroCacheReadEmulationRatio:
 		return m.AddedKiroCacheReadEmulationRatio()
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		return m.AddedKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		return m.AddedKiroAnthropicFallbackMaxAnthropicAttempts()
 	case group.FieldProfitMinMargin:
 		return m.AddedProfitMinMargin()
 	case group.FieldProfitSafetyBuffer:
@@ -27657,6 +27862,20 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddKiroCacheReadEmulationRatio(v)
+		return nil
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+		return nil
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddKiroAnthropicFallbackMaxAnthropicAttempts(v)
 		return nil
 	case group.FieldProfitMinMargin:
 		v, ok := value.(float64)
@@ -28040,6 +28259,15 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldKiroEndpointMode:
 		m.ResetKiroEndpointMode()
+		return nil
+	case group.FieldKiroAnthropicFallbackEnabled:
+		m.ResetKiroAnthropicFallbackEnabled()
+		return nil
+	case group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds:
+		m.ResetKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+		return nil
+	case group.FieldKiroAnthropicFallbackMaxAnthropicAttempts:
+		m.ResetKiroAnthropicFallbackMaxAnthropicAttempts()
 		return nil
 	case group.FieldMaxReasoningEffort:
 		m.ResetMaxReasoningEffort()

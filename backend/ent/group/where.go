@@ -365,6 +365,21 @@ func KiroEndpointMode(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldKiroEndpointMode, v))
 }
 
+// KiroAnthropicFallbackEnabled applies equality check predicate on the "kiro_anthropic_fallback_enabled" field. It's identical to KiroAnthropicFallbackEnabledEQ.
+func KiroAnthropicFallbackEnabled(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackEnabled, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSeconds applies equality check predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field. It's identical to KiroAnthropicFallbackFirstSemanticTimeoutSecondsEQ.
+func KiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttempts applies equality check predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field. It's identical to KiroAnthropicFallbackMaxAnthropicAttemptsEQ.
+func KiroAnthropicFallbackMaxAnthropicAttempts(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
 // MaxReasoningEffort applies equality check predicate on the "max_reasoning_effort" field. It's identical to MaxReasoningEffortEQ.
 func MaxReasoningEffort(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldMaxReasoningEffort, v))
@@ -2873,6 +2888,96 @@ func KiroEndpointModeEqualFold(v string) predicate.Group {
 // KiroEndpointModeContainsFold applies the ContainsFold predicate on the "kiro_endpoint_mode" field.
 func KiroEndpointModeContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldKiroEndpointMode, v))
+}
+
+// KiroAnthropicFallbackEnabledEQ applies the EQ predicate on the "kiro_anthropic_fallback_enabled" field.
+func KiroAnthropicFallbackEnabledEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackEnabled, v))
+}
+
+// KiroAnthropicFallbackEnabledNEQ applies the NEQ predicate on the "kiro_anthropic_fallback_enabled" field.
+func KiroAnthropicFallbackEnabledNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldKiroAnthropicFallbackEnabled, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsEQ applies the EQ predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsNEQ applies the NEQ predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsIn applies the In predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, vs...))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsNotIn applies the NotIn predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, vs...))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsGT applies the GT predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsGTE applies the GTE predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsLT applies the LT predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackFirstSemanticTimeoutSecondsLTE applies the LTE predicate on the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func KiroAnthropicFallbackFirstSemanticTimeoutSecondsLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsEQ applies the EQ predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsNEQ applies the NEQ predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsIn applies the In predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldKiroAnthropicFallbackMaxAnthropicAttempts, vs...))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsNotIn applies the NotIn predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldKiroAnthropicFallbackMaxAnthropicAttempts, vs...))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsGT applies the GT predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsGTE applies the GTE predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsLT applies the LT predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
+}
+
+// KiroAnthropicFallbackMaxAnthropicAttemptsLTE applies the LTE predicate on the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func KiroAnthropicFallbackMaxAnthropicAttemptsLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldKiroAnthropicFallbackMaxAnthropicAttempts, v))
 }
 
 // MaxReasoningEffortEQ applies the EQ predicate on the "max_reasoning_effort" field.

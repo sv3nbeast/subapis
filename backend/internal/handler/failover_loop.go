@@ -94,30 +94,35 @@ var anthropicSoftRateLimitRetryDelay = service.AnthropicSoftRateLimitRetryDelay(
 
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
-	SwitchCount              int
-	MaxSwitches              int
-	FailedAccountIDs         map[int64]struct{}
-	SameAccountRetryCount    map[int64]int
-	AnthropicSoft429Retries  map[int64]int
-	AnthropicSoft429Accounts map[int64]struct{}
-	Kiro429RetryCount        map[int64]int
-	Kiro429SoftExcludedIDs   map[int64]struct{}
-	Kiro429LastSoftExcluded  int64
-	PreSemanticTimeoutCount  int
-	AvoidEmailDomainSuffixes map[string]struct{}
-	ModelCapacityRetryState  *service.ModelCapacityRetryState
-	LastFailoverErr          *service.UpstreamFailoverError
-	LastNonRateLimitErr      *service.UpstreamFailoverError
-	ForceAccountID           int64
-	ForceCacheBilling        bool
-	KiroResilienceEnforced   bool
-	KiroAttempted            bool
-	KiroWaitReselectUsed     bool
-	hasBoundSession          bool
-	earliestKiroRetryAt      time.Time
-	lastNonRateLimitWasKiro  bool
-	profitVetoedAccountIDs   map[int64]struct{}
-	profitVetoCount          int
+	SwitchCount                  int
+	MaxSwitches                  int
+	FailedAccountIDs             map[int64]struct{}
+	SameAccountRetryCount        map[int64]int
+	AnthropicSoft429Retries      map[int64]int
+	AnthropicSoft429Accounts     map[int64]struct{}
+	Kiro429RetryCount            map[int64]int
+	Kiro429SoftExcludedIDs       map[int64]struct{}
+	Kiro429LastSoftExcluded      int64
+	PreSemanticTimeoutCount      int
+	AvoidEmailDomainSuffixes     map[string]struct{}
+	ModelCapacityRetryState      *service.ModelCapacityRetryState
+	LastFailoverErr              *service.UpstreamFailoverError
+	LastNonRateLimitErr          *service.UpstreamFailoverError
+	ForceAccountID               int64
+	ForceCacheBilling            bool
+	KiroResilienceEnforced       bool
+	KiroAttempted                bool
+	KiroAnthropicFallbackEnabled bool
+	KiroAnthropicFallbackActive  bool
+	KiroAnthropicFallbackUsed    bool
+	AnthropicFallbackAttempts    int
+	FallbackSessionKey           string
+	KiroWaitReselectUsed         bool
+	hasBoundSession              bool
+	earliestKiroRetryAt          time.Time
+	lastNonRateLimitWasKiro      bool
+	profitVetoedAccountIDs       map[int64]struct{}
+	profitVetoCount              int
 }
 
 // NewFailoverState 创建 failover 状态

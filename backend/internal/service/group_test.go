@@ -168,3 +168,24 @@ func TestGroup_EffectiveKiroEndpointMode(t *testing.T) {
 	require.Equal(t, KiroEndpointModeAuto, (&Group{Platform: PlatformKiro, KiroEndpointMode: " auto "}).EffectiveKiroEndpointMode())
 	require.Equal(t, KiroEndpointModeQ, (&Group{Platform: PlatformKiro, KiroEndpointMode: "bogus"}).EffectiveKiroEndpointMode())
 }
+
+func TestGroup_EffectiveKiroAnthropicFallbackRequiresSubscriptionAnthropic(t *testing.T) {
+	group := &Group{
+		Platform:                     PlatformAnthropic,
+		SubscriptionType:             SubscriptionTypeSubscription,
+		KiroAnthropicFallbackEnabled: true,
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: 1,
+		KiroAnthropicFallbackMaxAnthropicAttempts:        9,
+	}
+	require.True(t, group.EffectiveKiroAnthropicFallbackEnabled())
+	require.Equal(t, MinKiroAnthropicFallbackFirstSemanticTimeoutSeconds, group.EffectiveKiroAnthropicFallbackFirstSemanticTimeoutSeconds())
+	require.Equal(t, MaxKiroAnthropicFallbackMaxAnthropicAttempts, group.EffectiveKiroAnthropicFallbackMaxAnthropicAttempts())
+
+	nonSubscription := *group
+	nonSubscription.SubscriptionType = SubscriptionTypeStandard
+	require.False(t, nonSubscription.EffectiveKiroAnthropicFallbackEnabled())
+
+	kiro := *group
+	kiro.Platform = PlatformKiro
+	require.False(t, kiro.EffectiveKiroAnthropicFallbackEnabled())
+}

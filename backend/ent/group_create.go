@@ -948,6 +948,48 @@ func (_c *GroupCreate) SetNillableKiroEndpointMode(v *string) *GroupCreate {
 	return _c
 }
 
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (_c *GroupCreate) SetKiroAnthropicFallbackEnabled(v bool) *GroupCreate {
+	_c.mutation.SetKiroAnthropicFallbackEnabled(v)
+	return _c
+}
+
+// SetNillableKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableKiroAnthropicFallbackEnabled(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetKiroAnthropicFallbackEnabled(*v)
+	}
+	return _c
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (_c *GroupCreate) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupCreate {
+	_c.mutation.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	return _c
+}
+
+// SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(*v)
+	}
+	return _c
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (_c *GroupCreate) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupCreate {
+	_c.mutation.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	return _c
+}
+
+// SetNillableKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableKiroAnthropicFallbackMaxAnthropicAttempts(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetKiroAnthropicFallbackMaxAnthropicAttempts(*v)
+	}
+	return _c
+}
+
 // SetMaxReasoningEffort sets the "max_reasoning_effort" field.
 func (_c *GroupCreate) SetMaxReasoningEffort(v string) *GroupCreate {
 	_c.mutation.SetMaxReasoningEffort(v)
@@ -1327,6 +1369,18 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultKiroEndpointMode
 		_c.mutation.SetKiroEndpointMode(v)
 	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackEnabled(); !ok {
+		v := group.DefaultKiroAnthropicFallbackEnabled
+		_c.mutation.SetKiroAnthropicFallbackEnabled(v)
+	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackFirstSemanticTimeoutSeconds(); !ok {
+		v := group.DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds
+		_c.mutation.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackMaxAnthropicAttempts(); !ok {
+		v := group.DefaultKiroAnthropicFallbackMaxAnthropicAttempts
+		_c.mutation.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	}
 	if _, ok := _c.mutation.MaxReasoningEffort(); !ok {
 		v := group.DefaultMaxReasoningEffort
 		_c.mutation.SetMaxReasoningEffort(v)
@@ -1567,6 +1621,15 @@ func (_c *GroupCreate) check() error {
 		if err := group.KiroEndpointModeValidator(v); err != nil {
 			return &ValidationError{Name: "kiro_endpoint_mode", err: fmt.Errorf(`ent: validator failed for field "Group.kiro_endpoint_mode": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackEnabled(); !ok {
+		return &ValidationError{Name: "kiro_anthropic_fallback_enabled", err: errors.New(`ent: missing required field "Group.kiro_anthropic_fallback_enabled"`)}
+	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackFirstSemanticTimeoutSeconds(); !ok {
+		return &ValidationError{Name: "kiro_anthropic_fallback_first_semantic_timeout_seconds", err: errors.New(`ent: missing required field "Group.kiro_anthropic_fallback_first_semantic_timeout_seconds"`)}
+	}
+	if _, ok := _c.mutation.KiroAnthropicFallbackMaxAnthropicAttempts(); !ok {
+		return &ValidationError{Name: "kiro_anthropic_fallback_max_anthropic_attempts", err: errors.New(`ent: missing required field "Group.kiro_anthropic_fallback_max_anthropic_attempts"`)}
 	}
 	if _, ok := _c.mutation.MaxReasoningEffort(); !ok {
 		return &ValidationError{Name: "max_reasoning_effort", err: errors.New(`ent: missing required field "Group.max_reasoning_effort"`)}
@@ -1890,6 +1953,18 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.KiroEndpointMode(); ok {
 		_spec.SetField(group.FieldKiroEndpointMode, field.TypeString, value)
 		_node.KiroEndpointMode = value
+	}
+	if value, ok := _c.mutation.KiroAnthropicFallbackEnabled(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackEnabled, field.TypeBool, value)
+		_node.KiroAnthropicFallbackEnabled = value
+	}
+	if value, ok := _c.mutation.KiroAnthropicFallbackFirstSemanticTimeoutSeconds(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, field.TypeInt, value)
+		_node.KiroAnthropicFallbackFirstSemanticTimeoutSeconds = value
+	}
+	if value, ok := _c.mutation.KiroAnthropicFallbackMaxAnthropicAttempts(); ok {
+		_spec.SetField(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, field.TypeInt, value)
+		_node.KiroAnthropicFallbackMaxAnthropicAttempts = value
 	}
 	if value, ok := _c.mutation.MaxReasoningEffort(); ok {
 		_spec.SetField(group.FieldMaxReasoningEffort, field.TypeString, value)
@@ -3174,6 +3249,54 @@ func (u *GroupUpsert) SetKiroEndpointMode(v string) *GroupUpsert {
 // UpdateKiroEndpointMode sets the "kiro_endpoint_mode" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateKiroEndpointMode() *GroupUpsert {
 	u.SetExcluded(group.FieldKiroEndpointMode)
+	return u
+}
+
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (u *GroupUpsert) SetKiroAnthropicFallbackEnabled(v bool) *GroupUpsert {
+	u.Set(group.FieldKiroAnthropicFallbackEnabled, v)
+	return u
+}
+
+// UpdateKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateKiroAnthropicFallbackEnabled() *GroupUpsert {
+	u.SetExcluded(group.FieldKiroAnthropicFallbackEnabled)
+	return u
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsert) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsert {
+	u.Set(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v)
+	return u
+}
+
+// UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds() *GroupUpsert {
+	u.SetExcluded(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds)
+	return u
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds v to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsert) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsert {
+	u.Add(group.FieldKiroAnthropicFallbackFirstSemanticTimeoutSeconds, v)
+	return u
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsert) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsert {
+	u.Set(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, v)
+	return u
+}
+
+// UpdateKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateKiroAnthropicFallbackMaxAnthropicAttempts() *GroupUpsert {
+	u.SetExcluded(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts)
+	return u
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds v to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsert) AddKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsert {
+	u.Add(group.FieldKiroAnthropicFallbackMaxAnthropicAttempts, v)
 	return u
 }
 
@@ -4589,6 +4712,62 @@ func (u *GroupUpsertOne) SetKiroEndpointMode(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateKiroEndpointMode() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateKiroEndpointMode()
+	})
+}
+
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (u *GroupUpsertOne) SetKiroAnthropicFallbackEnabled(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackEnabled(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateKiroAnthropicFallbackEnabled() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackEnabled()
+	})
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsertOne) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	})
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds v to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsertOne) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	})
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsertOne) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	})
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds v to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsertOne) AddKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateKiroAnthropicFallbackMaxAnthropicAttempts() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackMaxAnthropicAttempts()
 	})
 }
 
@@ -6182,6 +6361,62 @@ func (u *GroupUpsertBulk) SetKiroEndpointMode(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateKiroEndpointMode() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateKiroEndpointMode()
+	})
+}
+
+// SetKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field.
+func (u *GroupUpsertBulk) SetKiroAnthropicFallbackEnabled(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackEnabled(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackEnabled sets the "kiro_anthropic_fallback_enabled" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateKiroAnthropicFallbackEnabled() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackEnabled()
+	})
+}
+
+// SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsertBulk) SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	})
+}
+
+// AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds adds v to the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field.
+func (u *GroupUpsertBulk) AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddKiroAnthropicFallbackFirstSemanticTimeoutSeconds(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds sets the "kiro_anthropic_fallback_first_semantic_timeout_seconds" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	})
+}
+
+// SetKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsertBulk) SetKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	})
+}
+
+// AddKiroAnthropicFallbackMaxAnthropicAttempts adds v to the "kiro_anthropic_fallback_max_anthropic_attempts" field.
+func (u *GroupUpsertBulk) AddKiroAnthropicFallbackMaxAnthropicAttempts(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddKiroAnthropicFallbackMaxAnthropicAttempts(v)
+	})
+}
+
+// UpdateKiroAnthropicFallbackMaxAnthropicAttempts sets the "kiro_anthropic_fallback_max_anthropic_attempts" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateKiroAnthropicFallbackMaxAnthropicAttempts() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateKiroAnthropicFallbackMaxAnthropicAttempts()
 	})
 }
 

@@ -1224,7 +1224,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if resilienceEnforced {
 		translatedReader, translatorWriter = io.Pipe()
 		ready = make(chan error, 1)
-		gateDone = startKiroFirstSemanticGate(streamCtx, translatedReader, pw, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
+		gateDone = startKiroFirstSemanticGate(streamCtx, translatedReader, pw, s.kiroPreSemanticBufferBytesForRequest(streamCtx, groupID), s.kiroSemanticGateMaxLineSize(), ready)
 	}
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")

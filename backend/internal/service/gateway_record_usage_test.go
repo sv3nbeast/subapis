@@ -118,6 +118,50 @@ func TestGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T) {
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
 }
 
+func TestGatewayServiceRecordUsage_LogicalFallbackBillingDoesNotRewriteProviderUsage(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	result := &ForwardResult{
+		RequestID: "gateway_logical_fallback_billing",
+		Usage: ClaudeUsage{
+			InputTokens:              100,
+			OutputTokens:             7,
+			CacheCreationInputTokens: 9000,
+			CacheReadInputTokens:     1000,
+		},
+		Model:    "claude-sonnet-4-6",
+		Duration: time.Second,
+	}
+	actualBefore := result.Usage
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: result,
+		APIKey: &APIKey{
+			ID:      501,
+			GroupID: i64p(601),
+			Group: &Group{
+				ID:               601,
+				Platform:         PlatformAnthropic,
+				SubscriptionType: SubscriptionTypeSubscription,
+			},
+		},
+		User:    &User{ID: 601},
+		Account: &Account{ID: 701, Platform: PlatformAnthropic},
+		BillableUsage: &UsageTokens{
+			InputTokens:         0,
+			CacheReadTokens:     10000,
+			CacheCreationTokens: 0,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, actualBefore, result.Usage, "logical billing must not mutate provider usage used by account statistics")
+	require.NotNil(t, usageRepo.lastLog)
+	require.Zero(t, usageRepo.lastLog.InputTokens)
+	require.Equal(t, 10000, usageRepo.lastLog.CacheReadTokens)
+	require.Zero(t, usageRepo.lastLog.CacheCreationTokens)
+}
+
 func TestGatewayServiceRecordUsage_BillingFingerprintIncludesRequestPayloadHash(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}

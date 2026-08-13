@@ -233,13 +233,16 @@ func groupFromServiceBase(g *service.Group) Group {
 		KiroCacheCreationEmulationRatio: g.EffectiveKiroCacheCreationEmulationRatio(),
 		KiroCacheReadEmulationRatio:     g.EffectiveKiroCacheReadEmulationRatio(),
 		KiroEndpointMode:                g.EffectiveKiroEndpointMode(),
-		GrokChatUpstreamMode:            g.EffectiveGrokChatUpstreamMode(),
-		GrokChatResponsesGrayPercent:    g.EffectiveGrokChatResponsesGrayPercent(),
-		RPMLimit:                        g.RPMLimit,
-		MaxReasoningEffort:              g.MaxReasoningEffort,
-		ReasoningEffortMappings:         g.ReasoningEffortMappings,
-		CreatedAt:                       g.CreatedAt,
-		UpdatedAt:                       g.UpdatedAt,
+		KiroAnthropicFallbackEnabled:    g.EffectiveKiroAnthropicFallbackEnabled(),
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: g.EffectiveKiroAnthropicFallbackFirstSemanticTimeoutSeconds(),
+		KiroAnthropicFallbackMaxAnthropicAttempts:        g.EffectiveKiroAnthropicFallbackMaxAnthropicAttempts(),
+		GrokChatUpstreamMode:                             g.EffectiveGrokChatUpstreamMode(),
+		GrokChatResponsesGrayPercent:                     g.EffectiveGrokChatResponsesGrayPercent(),
+		RPMLimit:                                         g.RPMLimit,
+		MaxReasoningEffort:                               g.MaxReasoningEffort,
+		ReasoningEffortMappings:                          g.ReasoningEffortMappings,
+		CreatedAt:                                        g.CreatedAt,
+		UpdatedAt:                                        g.UpdatedAt,
 	}
 }
 

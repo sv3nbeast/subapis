@@ -919,6 +919,10 @@ func (s *GatewayService) kiroResilienceEnforced(groupID *int64) bool {
 	return s.kiroResilienceMode(groupID) == config.KiroResilienceModeEnforce
 }
 
+func (s *GatewayService) kiroResilienceEnforcedForContext(ctx context.Context, groupID *int64) bool {
+	return s.kiroResilienceEnforced(groupID) || KiroAnthropicFallbackPolicyFromContext(ctx).Enabled
+}
+
 func (s *GatewayService) kiroResilienceObserved(groupID *int64) bool {
 	if s.useNianzsKiroEngine(groupID) {
 		return false
@@ -937,7 +941,7 @@ func (s *GatewayService) StartKiroResilienceTracking(ctx context.Context, groupI
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.kiroResilienceEnforced(groupID) && !KiroGPTTimeoutsDisabled(ctx) {
+	if s.kiroResilienceEnforcedForContext(ctx, groupID) && !KiroGPTTimeoutsDisabled(ctx) {
 		return s.startKiroResilienceAttemptBudget(ctx, groupID), nil
 	}
 	if KiroGPTTimeoutsDisabled(ctx) {
@@ -968,12 +972,15 @@ func (s *GatewayService) startKiroResilienceAttemptBudget(ctx context.Context, g
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.kiroResilienceEnforced(groupID) || KiroGPTTimeoutsDisabled(ctx) {
+	if !s.kiroResilienceEnforcedForContext(ctx, groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return ctx
 	}
 	duration := time.Duration(s.cfg.Gateway.KiroResilience.FailoverBudgetSeconds) * time.Second
 	if duration <= 0 {
 		duration = 105 * time.Second
+	}
+	if policy := KiroAnthropicFallbackPolicyFromContext(ctx); policy.Enabled && policy.FirstSemanticTimeout > 0 && duration > policy.FirstSemanticTimeout+5*time.Second {
+		duration = policy.FirstSemanticTimeout + 5*time.Second
 	}
 	return context.WithValue(ctx, kiroResilienceBudgetContextKey{}, &kiroResilienceBudget{duration: duration})
 }
@@ -1139,7 +1146,7 @@ func (s *GatewayService) StartKiroResilienceBudget(ctx context.Context, groupID 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.kiroResilienceEnforced(groupID) || KiroGPTTimeoutsDisabled(ctx) {
+	if !s.kiroResilienceEnforcedForContext(ctx, groupID) || KiroGPTTimeoutsDisabled(ctx) {
 		return ctx, nil
 	}
 	budget, _ := ctx.Value(kiroResilienceBudgetContextKey{}).(*kiroResilienceBudget)
@@ -1147,6 +1154,9 @@ func (s *GatewayService) StartKiroResilienceBudget(ctx context.Context, groupID 
 		duration := time.Duration(s.cfg.Gateway.KiroResilience.FailoverBudgetSeconds) * time.Second
 		if duration <= 0 {
 			duration = 105 * time.Second
+		}
+		if policy := KiroAnthropicFallbackPolicyFromContext(ctx); policy.Enabled && policy.FirstSemanticTimeout > 0 && duration > policy.FirstSemanticTimeout+5*time.Second {
+			duration = policy.FirstSemanticTimeout + 5*time.Second
 		}
 		budget = &kiroResilienceBudget{duration: duration}
 		ctx = context.WithValue(ctx, kiroResilienceBudgetContextKey{}, budget)
@@ -1292,7 +1302,13 @@ func (s *GatewayService) kiroResponseHeaderTimeoutForRequest(ctx context.Context
 	if KiroGPTTimeoutsDisabled(ctx) {
 		return 0
 	}
-	return s.kiroResponseHeaderTimeoutForInput(groupID, payloadInputTokens)
+	base := s.kiroResponseHeaderTimeoutForInput(groupID, payloadInputTokens)
+	if base <= 0 {
+		if policy := KiroAnthropicFallbackPolicyFromContext(ctx); policy.Enabled && policy.FirstSemanticTimeout > 5*time.Second {
+			return policy.FirstSemanticTimeout - 5*time.Second
+		}
+	}
+	return base
 }
 
 func (s *GatewayService) kiroFirstSemanticTimeout(groupID *int64) time.Duration {
@@ -1325,6 +1341,9 @@ func (s *GatewayService) kiroFirstSemanticTimeoutForRequest(ctx context.Context,
 	if KiroGPTTimeoutsDisabled(ctx) {
 		return 0
 	}
+	if policy := KiroAnthropicFallbackPolicyFromContext(ctx); policy.Enabled && policy.FirstSemanticTimeout > 0 {
+		return policy.FirstSemanticTimeout
+	}
 	return s.kiroFirstSemanticTimeoutForInput(groupID, inputTokens)
 }
 
@@ -1336,6 +1355,16 @@ func (s *GatewayService) kiroPreSemanticBufferBytes(groupID *int64) int {
 		return size
 	}
 	return 256 * 1024
+}
+
+func (s *GatewayService) kiroPreSemanticBufferBytesForRequest(ctx context.Context, groupID *int64) int {
+	if s.kiroResilienceEnforcedForContext(ctx, groupID) {
+		if size := s.cfg.Gateway.KiroResilience.PreSemanticBufferBytes; size > 0 {
+			return size
+		}
+		return 256 * 1024
+	}
+	return 0
 }
 
 func (s *GatewayService) kiroSemanticGateMaxLineSize() int {

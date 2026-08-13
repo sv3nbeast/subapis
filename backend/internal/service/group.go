@@ -118,14 +118,17 @@ type Group struct {
 	ReasoningEffortMappings []ReasoningEffortMapping
 
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）。
-	KiroCacheEmulationEnabled       bool
-	KiroAutoStickyEnabled           bool
-	KiroStickySessionTTLSeconds     int
-	KiroCacheEmulationRatio         float64
-	KiroCacheEmulationMode          string
-	KiroCacheCreationEmulationRatio float64
-	KiroCacheReadEmulationRatio     float64
-	KiroEndpointMode                string
+	KiroCacheEmulationEnabled                        bool
+	KiroAutoStickyEnabled                            bool
+	KiroStickySessionTTLSeconds                      int
+	KiroCacheEmulationRatio                          float64
+	KiroCacheEmulationMode                           string
+	KiroCacheCreationEmulationRatio                  float64
+	KiroCacheReadEmulationRatio                      float64
+	KiroEndpointMode                                 string
+	KiroAnthropicFallbackEnabled                     bool
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds int
+	KiroAnthropicFallbackMaxAnthropicAttempts        int
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -295,6 +298,64 @@ func (g *Group) EffectiveKiroEndpointMode() string {
 	}
 }
 
+const (
+	DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds = 90
+	MinKiroAnthropicFallbackFirstSemanticTimeoutSeconds     = 5
+	MaxKiroAnthropicFallbackFirstSemanticTimeoutSeconds     = 110
+	DefaultKiroAnthropicFallbackMaxAnthropicAttempts        = 2
+	MinKiroAnthropicFallbackMaxAnthropicAttempts            = 1
+	MaxKiroAnthropicFallbackMaxAnthropicAttempts            = 3
+)
+
+func (g *Group) EffectiveKiroAnthropicFallbackEnabled() bool {
+	return g != nil && g.Platform == PlatformAnthropic && g.SubscriptionType == SubscriptionTypeSubscription && g.KiroAnthropicFallbackEnabled
+}
+func (g *Group) EffectiveKiroAnthropicFallbackFirstSemanticTimeoutSeconds() int {
+	if g == nil || !g.EffectiveKiroAnthropicFallbackEnabled() {
+		return 0
+	}
+	v := g.KiroAnthropicFallbackFirstSemanticTimeoutSeconds
+	if v <= 0 {
+		v = DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds
+	}
+	if v < MinKiroAnthropicFallbackFirstSemanticTimeoutSeconds {
+		return MinKiroAnthropicFallbackFirstSemanticTimeoutSeconds
+	}
+	if v > MaxKiroAnthropicFallbackFirstSemanticTimeoutSeconds {
+		return MaxKiroAnthropicFallbackFirstSemanticTimeoutSeconds
+	}
+	return v
+}
+func (g *Group) EffectiveKiroAnthropicFallbackMaxAnthropicAttempts() int {
+	if g == nil || !g.EffectiveKiroAnthropicFallbackEnabled() {
+		return 0
+	}
+	v := g.KiroAnthropicFallbackMaxAnthropicAttempts
+	if v <= 0 {
+		v = DefaultKiroAnthropicFallbackMaxAnthropicAttempts
+	}
+	if v < MinKiroAnthropicFallbackMaxAnthropicAttempts {
+		return MinKiroAnthropicFallbackMaxAnthropicAttempts
+	}
+	if v > MaxKiroAnthropicFallbackMaxAnthropicAttempts {
+		return MaxKiroAnthropicFallbackMaxAnthropicAttempts
+	}
+	return v
+}
+func normalizeKiroAnthropicFallbackFields(g *Group) {
+	if g == nil {
+		return
+	}
+	if !g.EffectiveKiroAnthropicFallbackEnabled() {
+		g.KiroAnthropicFallbackEnabled = false
+		g.KiroAnthropicFallbackFirstSemanticTimeoutSeconds = DefaultKiroAnthropicFallbackFirstSemanticTimeoutSeconds
+		g.KiroAnthropicFallbackMaxAnthropicAttempts = DefaultKiroAnthropicFallbackMaxAnthropicAttempts
+		return
+	}
+	g.KiroAnthropicFallbackFirstSemanticTimeoutSeconds = g.EffectiveKiroAnthropicFallbackFirstSemanticTimeoutSeconds()
+	g.KiroAnthropicFallbackMaxAnthropicAttempts = g.EffectiveKiroAnthropicFallbackMaxAnthropicAttempts()
+}
+
 func normalizeKiroEndpointFields(g *Group) {
 	if g == nil {
 		return
@@ -330,6 +391,7 @@ func normalizeGatewayNonStreamMessagesFields(g *Group) {
 func NormalizeGroupRuntimeFields(g *Group) {
 	normalizeKiroCacheEmulationFields(g)
 	normalizeKiroEndpointFields(g)
+	normalizeKiroAnthropicFallbackFields(g)
 	normalizeGatewayNonStreamMessagesFields(g)
 	normalizeGrokChatUpstreamFields(g)
 }

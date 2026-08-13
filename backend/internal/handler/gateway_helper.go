@@ -342,7 +342,7 @@ func prepareKiroAccountAttempt(c *gin.Context, gatewayService *service.GatewaySe
 }
 
 func kiroAccountWaitTimeout(gatewayService *service.GatewayService, ctx context.Context, groupID *int64, account *service.Account, configured time.Duration) (time.Duration, error) {
-	if gatewayService == nil || account == nil || account.Platform != service.PlatformKiro || !gatewayService.KiroResilienceEnforced(groupID) {
+	if gatewayService == nil || account == nil || account.Platform != service.PlatformKiro || (!gatewayService.KiroResilienceEnforced(groupID) && !service.KiroAnthropicFallbackPolicyFromContext(ctx).Enabled) {
 		return configured, nil
 	}
 	return gatewayService.KiroWaitTimeoutWithinBudget(ctx, configured)

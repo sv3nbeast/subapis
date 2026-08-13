@@ -282,14 +282,17 @@ type CreateGroupInput struct {
 	MaxReasoningEffort      string
 	ReasoningEffortMappings []ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效）
-	KiroCacheEmulationEnabled       bool
-	KiroAutoStickyEnabled           *bool
-	KiroStickySessionTTLSeconds     *int
-	KiroCacheEmulationRatio         *float64
-	KiroCacheEmulationMode          *string
-	KiroCacheCreationEmulationRatio *float64
-	KiroCacheReadEmulationRatio     *float64
-	KiroEndpointMode                *string
+	KiroCacheEmulationEnabled                        bool
+	KiroAutoStickyEnabled                            *bool
+	KiroStickySessionTTLSeconds                      *int
+	KiroCacheEmulationRatio                          *float64
+	KiroCacheEmulationMode                           *string
+	KiroCacheCreationEmulationRatio                  *float64
+	KiroCacheReadEmulationRatio                      *float64
+	KiroEndpointMode                                 *string
+	KiroAnthropicFallbackEnabled                     bool
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds int
+	KiroAnthropicFallbackMaxAnthropicAttempts        int
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
 	CopyAccountsFromGroupIDs []int64
 }
@@ -355,14 +358,17 @@ type UpdateGroupInput struct {
 	MaxReasoningEffort      *string
 	ReasoningEffortMappings *[]ReasoningEffortMapping
 	// Kiro 模拟缓存配置（仅 Kiro 平台生效），nil 表示未提供不改动。
-	KiroCacheEmulationEnabled       *bool
-	KiroAutoStickyEnabled           *bool
-	KiroStickySessionTTLSeconds     *int
-	KiroCacheEmulationRatio         *float64
-	KiroCacheEmulationMode          *string
-	KiroCacheCreationEmulationRatio *float64
-	KiroCacheReadEmulationRatio     *float64
-	KiroEndpointMode                *string
+	KiroCacheEmulationEnabled                        *bool
+	KiroAutoStickyEnabled                            *bool
+	KiroStickySessionTTLSeconds                      *int
+	KiroCacheEmulationRatio                          *float64
+	KiroCacheEmulationMode                           *string
+	KiroCacheCreationEmulationRatio                  *float64
+	KiroCacheReadEmulationRatio                      *float64
+	KiroEndpointMode                                 *string
+	KiroAnthropicFallbackEnabled                     *bool
+	KiroAnthropicFallbackFirstSemanticTimeoutSeconds *int
+	KiroAnthropicFallbackMaxAnthropicAttempts        *int
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64
 }
@@ -2484,6 +2490,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		KiroCacheCreationEmulationRatio: kiroCacheCreationEmulationRatio,
 		KiroCacheReadEmulationRatio:     kiroCacheReadEmulationRatio,
 		KiroEndpointMode:                kiroEndpointMode,
+		KiroAnthropicFallbackEnabled:    input.KiroAnthropicFallbackEnabled,
+		KiroAnthropicFallbackFirstSemanticTimeoutSeconds: input.KiroAnthropicFallbackFirstSemanticTimeoutSeconds,
+		KiroAnthropicFallbackMaxAnthropicAttempts:        input.KiroAnthropicFallbackMaxAnthropicAttempts,
 	}
 	if err := normalizeAdminGroupReasoningPolicy(group); err != nil {
 		return nil, err
@@ -2865,6 +2874,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.KiroEndpointMode != nil {
 		group.KiroEndpointMode = *input.KiroEndpointMode
+	}
+	if input.KiroAnthropicFallbackEnabled != nil {
+		group.KiroAnthropicFallbackEnabled = *input.KiroAnthropicFallbackEnabled
+	}
+	if input.KiroAnthropicFallbackFirstSemanticTimeoutSeconds != nil {
+		group.KiroAnthropicFallbackFirstSemanticTimeoutSeconds = *input.KiroAnthropicFallbackFirstSemanticTimeoutSeconds
+	}
+	if input.KiroAnthropicFallbackMaxAnthropicAttempts != nil {
+		group.KiroAnthropicFallbackMaxAnthropicAttempts = *input.KiroAnthropicFallbackMaxAnthropicAttempts
 	}
 	if err := normalizeAdminGroupReasoningPolicy(group); err != nil {
 		return nil, err

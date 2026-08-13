@@ -11653,6 +11653,7 @@ type RecordUsageInput struct {
 	SessionID          string             // 客户端显式会话标识，仅用于用量行关联
 	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
+	BillableUsage      *UsageTokens       // 可选：逻辑缓存计费覆盖；Result.Usage 保留真实上游用量
 	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
 	QuotaPlatform      string             // user×platform 配额计量平台；未设置时回退到 APIKey 关联分组平台
 
@@ -12206,6 +12207,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		SessionID:          input.SessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
+		BillableUsage:      input.BillableUsage,
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
 		ChannelUsageFields: input.ChannelUsageFields,
@@ -12229,6 +12231,7 @@ type RecordUsageLongContextInput struct {
 	LongContextThreshold  int                // 长上下文阈值（如 200000）
 	LongContextMultiplier float64            // 超出阈值部分的倍率（如 2.0）
 	ForceCacheBilling     bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
+	BillableUsage         *UsageTokens       // 可选：逻辑缓存计费覆盖；真实上游用量仍保留用于账号统计
 	APIKeyService         APIKeyQuotaUpdater // API Key 配额服务（可选）
 	QuotaPlatform         string             // user×platform 配额计量平台；未设置时回退到 APIKey 关联分组平台
 
@@ -12251,6 +12254,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		SessionID:          input.SessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
+		BillableUsage:      input.BillableUsage,
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
 		ChannelUsageFields: input.ChannelUsageFields,
@@ -12275,6 +12279,7 @@ type recordUsageCoreInput struct {
 	SessionID          string
 	RequestPayloadHash string
 	ForceCacheBilling  bool
+	BillableUsage      *UsageTokens
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string
 	ChannelUsageFields
@@ -12284,6 +12289,7 @@ type recordUsageCoreInput struct {
 // LongContextThreshold > 0 时 Token 计费回退走 CalculateCostWithLongContext。
 func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsageCoreInput, opts *recordUsageOpts) error {
 	result := input.Result
+	actualUsage := result.Usage
 	apiKey := input.APIKey
 	user := input.User
 	account := input.Account
@@ -12291,7 +12297,20 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 强制缓存计费：将 input_tokens 转为 cache_read_input_tokens
 	// 用于粘性会话切换时的特殊计费处理
-	if input.ForceCacheBilling && result.Usage.InputTokens > 0 {
+	if input.BillableUsage != nil {
+		resultCopy := *result
+		resultCopy.Usage = ClaudeUsage{
+			InputTokens:              input.BillableUsage.InputTokens,
+			OutputTokens:             actualUsage.OutputTokens,
+			CacheCreationInputTokens: input.BillableUsage.CacheCreationTokens,
+			CacheReadInputTokens:     input.BillableUsage.CacheReadTokens,
+			CacheCreation5mTokens:    input.BillableUsage.CacheCreation5mTokens,
+			CacheCreation1hTokens:    input.BillableUsage.CacheCreation1hTokens,
+			ImageOutputTokens:        actualUsage.ImageOutputTokens,
+			KiroCredits:              actualUsage.KiroCredits,
+		}
+		result = &resultCopy
+	} else if input.ForceCacheBilling && result.Usage.InputTokens > 0 {
 		logger.LegacyPrintf("service.gateway", "force_cache_billing: %d input_tokens → cache_read_input_tokens (account=%d)",
 			result.Usage.InputTokens, account.ID)
 		result.Usage.CacheReadInputTokens += result.Usage.InputTokens
@@ -12384,11 +12403,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 			*apiKey.GroupID,
 			upstreamModel,
 			UsageTokens{
-				InputTokens:         result.Usage.InputTokens,
-				OutputTokens:        result.Usage.OutputTokens,
-				CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-				CacheReadTokens:     result.Usage.CacheReadInputTokens,
-				ImageOutputTokens:   result.Usage.ImageOutputTokens,
+				InputTokens:         actualUsage.InputTokens,
+				OutputTokens:        actualUsage.OutputTokens,
+				CacheCreationTokens: actualUsage.CacheCreationInputTokens,
+				CacheReadTokens:     actualUsage.CacheReadInputTokens,
+				ImageOutputTokens:   actualUsage.ImageOutputTokens,
 			},
 			1,
 			totalCost,
