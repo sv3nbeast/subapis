@@ -13,6 +13,8 @@ mkdir -p "${FAKE_BIN}" "${DEPLOY_DIR}"
 touch "${DEPLOY_DIR}/docker-compose.yml"
 
 cat > "${MOCK_ENV_FILE}" <<'EOF'
+ANTIGRAVITY_USER_AGENT_VERSION=1.23.2
+ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=true
 GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=true
 GATEWAY_FIRST_SEMANTIC_TIMEOUT=50
 GATEWAY_KIRO_RESILIENCE_MODE=enforce
@@ -27,7 +29,11 @@ cat > "${FAKE_BIN}/docker" <<'EOF'
 set -euo pipefail
 
 if [[ "$1" == "inspect" && "$2" == "sub2api" && "${3:-}" == "--format" ]]; then
-  cat "${MOCK_ENV_FILE}"
+  if [[ "${4:-}" == *"Config.Env"* ]]; then
+    cat "${MOCK_ENV_FILE}"
+  else
+    printf 'test-image\n'
+  fi
   exit 0
 fi
 if [[ "$1" == "inspect" && "$2" == "sub2api" ]]; then
@@ -47,7 +53,11 @@ if [[ "$1" == "compose" ]]; then
   exit 0
 fi
 if [[ "$1" == "exec" && "$3" == "printenv" ]]; then
-  sed -n "s/^${4}=//p" "${MOCK_ENV_FILE}"
+  value="$(sed -n "s/^${4}=//p" "${MOCK_ENV_FILE}" | head -n1)"
+  if [[ -z "${value}" ]]; then
+    exit 1
+  fi
+  printf '%s\n' "${value}"
   exit 0
 fi
 if [[ "$1" == "exec" ]]; then
@@ -72,10 +82,91 @@ run_rebuild() {
     IMAGE_TAG="test-timeout-preservation" \
     DEPLOY_DIR="${DEPLOY_DIR}" \
     SKIP_BUILD=1 \
-    bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null
+    bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh"
 }
 
 run_rebuild
+
+grep -Fq -- 'required: false' "${DEPLOY_DIR}/docker-compose.override.yml"
+if grep -Fq -- 'GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=' "${DEPLOY_DIR}/docker-compose.override.yml"; then
+  echo "stable canary runtime settings leaked into the generated override" >&2
+  exit 1
+fi
+
+STABLE_ENV_FILE="${TMP_DIR}/anthropic-stable-canary.env"
+cat > "${STABLE_ENV_FILE}" <<'EOF'
+GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=false
+GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID=700
+GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID=701
+GATEWAY_ANTHROPIC_STABLE_CANARY_OWNER_USER_ID=0
+GATEWAY_ANTHROPIC_STABLE_CANARY_API_KEY_ID=0
+GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_USERS=true
+GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS=702
+GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_GENERATION=1
+GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY=0123456789abcdef0123456789abcdef
+GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES=67108864
+ANTHROPIC_STABLE_CANARY_DEVICE_ID=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ANTHROPIC_STABLE_CANARY_PROFILE=claude_cli_2_1_222_v1
+EOF
+chmod 600 "${STABLE_ENV_FILE}"
+printf 'GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=false\n' >> "${MOCK_ENV_FILE}"
+PATH="${FAKE_BIN}:${PATH}" \
+  MOCK_ENV_FILE="${MOCK_ENV_FILE}" \
+  IMAGE_TAG="test-stable-configured" \
+  DEPLOY_DIR="${DEPLOY_DIR}" \
+  ANTHROPIC_STABLE_CANARY_ENV_FILE="${STABLE_ENV_FILE}" \
+  SKIP_BUILD=1 \
+  bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null
+grep -Fq -- "path: ${STABLE_ENV_FILE}" "${DEPLOY_DIR}/docker-compose.override.yml"
+
+replace_env_line() {
+  local file="$1" key="$2" value="$3"
+  awk -v key="${key}" -v value="${value}" '
+    index($0, key "=") == 1 { print key "=" value; next }
+    { print }
+  ' "${file}" > "${file}.tmp"
+  mv "${file}.tmp" "${file}"
+}
+
+cp "${STABLE_ENV_FILE}" "${TMP_DIR}/duplicate-stable-ids.env"
+replace_env_line "${TMP_DIR}/duplicate-stable-ids.env" GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS 702,702
+chmod 600 "${TMP_DIR}/duplicate-stable-ids.env"
+if PATH="${FAKE_BIN}:${PATH}" \
+  MOCK_ENV_FILE="${MOCK_ENV_FILE}" \
+  IMAGE_TAG="test-duplicate-stable-ids" \
+  DEPLOY_DIR="${DEPLOY_DIR}" \
+  ANTHROPIC_STABLE_CANARY_ENV_FILE="${TMP_DIR}/duplicate-stable-ids.env" \
+  SKIP_BUILD=1 \
+  bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null 2>&1; then
+  echo "duplicate stable canary API key IDs were accepted" >&2
+  exit 1
+fi
+
+cp "${STABLE_ENV_FILE}" "${TMP_DIR}/short-stable-hmac.env"
+replace_env_line "${TMP_DIR}/short-stable-hmac.env" GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY short
+chmod 600 "${TMP_DIR}/short-stable-hmac.env"
+if PATH="${FAKE_BIN}:${PATH}" \
+  MOCK_ENV_FILE="${MOCK_ENV_FILE}" \
+  IMAGE_TAG="test-short-stable-hmac" \
+  DEPLOY_DIR="${DEPLOY_DIR}" \
+  ANTHROPIC_STABLE_CANARY_ENV_FILE="${TMP_DIR}/short-stable-hmac.env" \
+  SKIP_BUILD=1 \
+  bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null 2>&1; then
+  echo "short stable canary HMAC was accepted" >&2
+  exit 1
+fi
+
+printf '\nUNKNOWN_KEY=1\n' >> "${STABLE_ENV_FILE}"
+if PATH="${FAKE_BIN}:${PATH}" \
+  MOCK_ENV_FILE="${MOCK_ENV_FILE}" \
+  IMAGE_TAG="test-invalid-stable-config" \
+  DEPLOY_DIR="${DEPLOY_DIR}" \
+  ANTHROPIC_STABLE_CANARY_ENV_FILE="${STABLE_ENV_FILE}" \
+  SKIP_BUILD=1 \
+  bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null 2>&1; then
+  echo "unknown stable canary env key was accepted" >&2
+  exit 1
+fi
 
 for expected in \
   'GATEWAY_FIRST_SEMANTIC_TIMEOUT=50' \

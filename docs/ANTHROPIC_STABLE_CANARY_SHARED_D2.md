@@ -71,3 +71,49 @@ or secret; treat generation numbers as append-only deployment epochs.
 Never enable D2 with an existing production-shared account or key. D1/D2/D3
 observation remains sequential: 20 sessions / 2 hours, then 24 hours, then
 48-72 hours for A/B/C shared traffic.
+
+## Operator Workflow
+
+Production keeps the canary env file outside the source tree at
+`/root/sub2api-deploy/anthropic-stable-canary.env`. The release compose override
+loads it only when the file exists, and the file must remain root-owned with
+mode `600`. The file contains policy and identifiers only; OAuth credentials
+stay in the database.
+
+Use a reviewed template similar to the following, replacing every placeholder
+with a dedicated resource value:
+
+```text
+GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=false
+GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID=<dedicated-group-id>
+GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID=<dedicated-oauth-account-id>
+GATEWAY_ANTHROPIC_STABLE_CANARY_OWNER_USER_ID=0
+GATEWAY_ANTHROPIC_STABLE_CANARY_API_KEY_ID=0
+GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_USERS=true
+GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS=<dedicated-api-key-id>
+GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_GENERATION=1
+GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY=<random-secret-at-least-32-chars>
+GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES=67108864
+ANTHROPIC_STABLE_CANARY_DEVICE_ID=<reviewed-lowercase-64-hex-device-id>
+ANTHROPIC_STABLE_CANARY_PROFILE=claude_cli_2_1_222_v1
+```
+
+The host-side guard validates the file and calls the lifecycle CLI without
+printing secret values. All mutating actions require `--execute`:
+
+```bash
+chmod 600 /root/sub2api-deploy/anthropic-stable-canary.env
+scripts/manage-anthropic-stable-canary.sh preflight
+scripts/manage-anthropic-stable-canary.sh enroll
+scripts/manage-anthropic-stable-canary.sh enroll --execute
+scripts/manage-anthropic-stable-canary.sh start --execute
+scripts/manage-anthropic-stable-canary.sh report --hours 2
+scripts/manage-anthropic-stable-canary.sh stop --execute
+scripts/manage-anthropic-stable-canary.sh retire --execute
+```
+
+`stop` disables traffic while retaining session tombstones. Use `retire` only
+when the account and group are permanently removed from the canary. Do not use
+the existing shared production account or any account already marked banned or
+unschedulable for this workflow; provision a disposable OAuth account and
+dedicated API keys first.

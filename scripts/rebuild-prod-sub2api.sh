@@ -44,6 +44,10 @@ Environment variables:
   SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS
                                    Optional comma-separated user IDs for redacted Kiro event diagnostics.
                                    When unset, preserve the running container value.
+  ANTHROPIC_STABLE_CANARY_ENV_FILE  Root-only env file managed by
+                                   manage-anthropic-stable-canary.sh. Default:
+                                   DEPLOY_DIR/anthropic-stable-canary.env.
+                                   When absent, stable mode remains unconfigured.
   SERVICE_NAME                     Compose service name. Default: sub2api
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
@@ -80,6 +84,7 @@ KIRO_FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_KIRO_RESILIENCE_FIRST_SEMANTIC_TI
 KIRO_FAILOVER_BUDGET_SECONDS="${GATEWAY_KIRO_RESILIENCE_FAILOVER_BUDGET_SECONDS:-}"
 FIRST_SEMANTIC_TIMEOUT_SECONDS="${GATEWAY_FIRST_SEMANTIC_TIMEOUT:-50}"
 KIRO_EVENT_DIAGNOSTICS_USER_IDS="${SUB2API_KIRO_EVENT_DIAGNOSTICS_USER_IDS:-}"
+ANTHROPIC_STABLE_CANARY_ENV_FILE="${ANTHROPIC_STABLE_CANARY_ENV_FILE:-${DEPLOY_DIR}/anthropic-stable-canary.env}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -94,6 +99,122 @@ fi
 
 require_cmd docker
 require_cmd sed
+
+file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
+if [[ ! "${ANTHROPIC_STABLE_CANARY_ENV_FILE}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo "Anthropic stable canary env path must be an absolute path without spaces" >&2
+  exit 1
+fi
+
+validate_stable_canary_env_file() {
+  local file="$1"
+  awk '
+    /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+    !/^[A-Za-z_][A-Za-z0-9_]*=[^[:cntrl:]]*$/ { bad = 1; next }
+    {
+      key = $0
+      sub(/=.*/, "", key)
+      count[key]++
+      if (key != "GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_OWNER_USER_ID" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_API_KEY_ID" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_USERS" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_GENERATION" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY" &&
+          key != "GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES" &&
+          key != "ANTHROPIC_STABLE_CANARY_DEVICE_ID" &&
+          key != "ANTHROPIC_STABLE_CANARY_PROFILE") bad = 1
+    }
+    END {
+      if (count["GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED"] != 1) bad = 1
+      for (key in count) if (count[key] != 1) bad = 1
+      exit bad
+    }
+  ' "${file}"
+}
+
+validate_stable_canary_values() {
+  local file="$1"
+  local enabled group account owner api_key shared_users shared_keys generation hmac max_body device profile
+  env_value_from_file() {
+    local wanted="$1"
+    awk -v wanted="${wanted}" '
+      { prefix = wanted "="; if (index($0, prefix) == 1) { print substr($0, length(prefix) + 1); exit } }
+    ' "${file}"
+  }
+  enabled="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED)"
+  [[ "${enabled}" == "true" || "${enabled}" == "false" ]] || return 1
+  group="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID)"
+  account="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_ACCOUNT_ID)"
+  [[ "${group}" =~ ^[1-9][0-9]*$ && "${account}" =~ ^[1-9][0-9]*$ ]] || return 1
+  owner="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_OWNER_USER_ID)"
+  api_key="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_API_KEY_ID)"
+  shared_users="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_USERS)"
+  shared_users="${shared_users:-false}"
+  [[ "${owner}" =~ ^[0-9]+$ && "${api_key}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${shared_users}" == "true" || "${shared_users}" == "false" ]] || return 1
+  shared_keys="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_SHARED_API_KEY_IDS)"
+  if [[ "${shared_users}" == "true" ]]; then
+    [[ "${owner}" == "0" && "${api_key}" == "0" ]] || return 1
+    [[ "${shared_keys}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || return 1
+    local -a ids
+    local id seen=,
+    IFS=',' read -r -a ids <<< "${shared_keys}"
+    ((${#ids[@]} >= 1 && ${#ids[@]} <= 32)) || return 1
+    for id in "${ids[@]}"; do
+      case "${seen}" in *",${id},"*) return 1 ;; esac
+      seen="${seen}${id},"
+    done
+    generation="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_GENERATION)"
+    hmac="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_SESSION_HMAC_KEY)"
+    [[ "${generation}" =~ ^[1-9][0-9]*$ ]] || return 1
+    [[ ${#hmac} -ge 32 ]] || return 1
+  else
+    [[ "${owner}" =~ ^[1-9][0-9]*$ && "${api_key}" =~ ^[1-9][0-9]*$ ]] || return 1
+  fi
+  max_body="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES)"
+  max_body="${max_body:-67108864}"
+  [[ "${max_body}" =~ ^[1-9][0-9]*$ ]] && ((10#${max_body} <= 67108864)) || return 1
+  device="$(env_value_from_file ANTHROPIC_STABLE_CANARY_DEVICE_ID)"
+  profile="$(env_value_from_file ANTHROPIC_STABLE_CANARY_PROFILE)"
+  [[ "${device}" =~ ^[0-9a-f]{64}$ && "${profile}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+}
+
+STABLE_CANARY_CONFIG_STATE="unconfigured"
+if [[ -L "${ANTHROPIC_STABLE_CANARY_ENV_FILE}" ]]; then
+  echo "Anthropic stable canary env path must not be a symlink" >&2
+  exit 1
+fi
+if [[ -e "${ANTHROPIC_STABLE_CANARY_ENV_FILE}" ]]; then
+  if [[ ! -f "${ANTHROPIC_STABLE_CANARY_ENV_FILE}" || -L "${ANTHROPIC_STABLE_CANARY_ENV_FILE}" ]]; then
+    echo "Anthropic stable canary env path must be a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [[ "$(file_mode "${ANTHROPIC_STABLE_CANARY_ENV_FILE}")" != "600" ]]; then
+    echo "Anthropic stable canary env file must have mode 600" >&2
+    exit 1
+  fi
+  if ! validate_stable_canary_env_file "${ANTHROPIC_STABLE_CANARY_ENV_FILE}"; then
+    echo "Anthropic stable canary env file contains invalid, unknown, duplicate, or missing enabled entries" >&2
+    exit 1
+  fi
+  if ! validate_stable_canary_values "${ANTHROPIC_STABLE_CANARY_ENV_FILE}"; then
+    echo "Anthropic stable canary env file contains invalid policy values" >&2
+    exit 1
+  fi
+  STABLE_CANARY_CONFIG_STATE="configured"
+fi
+STABLE_CANARY_ENV_FILE_YAML=$'    env_file:\n      - path: '"${ANTHROPIC_STABLE_CANARY_ENV_FILE}"$'\n        required: false'
 
 case "${UI_V2_ROLLOUT_MODE}" in
   off|preview|percentage|full) ;;
@@ -228,6 +349,8 @@ if [[ "${KIRO_RESILIENCE_MODE}" == "enforce" ]]; then
   fi
 fi
 
+echo "Anthropic stable canary: ${STABLE_CANARY_CONFIG_STATE} (values redacted)"
+
 KIRO_RESILIENCE_ENV=""
 if [[ -n "${KIRO_RESILIENCE_MODE}" ]]; then
   KIRO_RESILIENCE_ENV+="      - GATEWAY_KIRO_RESILIENCE_MODE=${KIRO_RESILIENCE_MODE}"$'\n'
@@ -283,6 +406,7 @@ cat > "${OVERRIDE_FILE}" <<EOF
 services:
   ${SERVICE_NAME}:
     image: ${IMAGE_REF}
+${STABLE_CANARY_ENV_FILE_YAML}
     environment:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
@@ -331,6 +455,21 @@ docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_USER_AGENT_VERSION
 docker exec "${CONTAINER_ID}" printenv ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO
 echo "--- OpenAI Kiro bridge env ---"
 docker exec "${CONTAINER_ID}" printenv GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED
+echo "--- Anthropic stable canary env ---"
+if [[ "${STABLE_CANARY_CONFIG_STATE}" == "configured" ]]; then
+  stable_canary_enabled="$(docker exec "${CONTAINER_ID}" printenv GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED)"
+  if [[ "${stable_canary_enabled}" != "true" && "${stable_canary_enabled}" != "false" ]]; then
+    echo "GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED must be true or false" >&2
+    exit 1
+  fi
+  printf 'GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=%s\n' "${stable_canary_enabled}"
+else
+  if docker exec "${CONTAINER_ID}" printenv GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED >/dev/null 2>&1; then
+    echo "Stable canary env unexpectedly survived without the root-only env file" >&2
+    exit 1
+  fi
+  echo "unconfigured"
+fi
 
 assert_container_env() {
   local name="$1"
