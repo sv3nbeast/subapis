@@ -156,6 +156,20 @@ if PATH="${FAKE_BIN}:${PATH}" \
   exit 1
 fi
 
+cp "${STABLE_ENV_FILE}" "${TMP_DIR}/unknown-stable-profile.env"
+replace_env_line "${TMP_DIR}/unknown-stable-profile.env" ANTHROPIC_STABLE_CANARY_PROFILE unknown_profile
+chmod 600 "${TMP_DIR}/unknown-stable-profile.env"
+if PATH="${FAKE_BIN}:${PATH}" \
+  MOCK_ENV_FILE="${MOCK_ENV_FILE}" \
+  IMAGE_TAG="test-unknown-stable-profile" \
+  DEPLOY_DIR="${DEPLOY_DIR}" \
+  ANTHROPIC_STABLE_CANARY_ENV_FILE="${TMP_DIR}/unknown-stable-profile.env" \
+  SKIP_BUILD=1 \
+  bash "${SCRIPT_DIR}/rebuild-prod-sub2api.sh" >/dev/null 2>&1; then
+  echo "unknown stable canary profile was accepted" >&2
+  exit 1
+fi
+
 printf '\nUNKNOWN_KEY=1\n' >> "${STABLE_ENV_FILE}"
 if PATH="${FAKE_BIN}:${PATH}" \
   MOCK_ENV_FILE="${MOCK_ENV_FILE}" \

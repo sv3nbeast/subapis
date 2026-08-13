@@ -187,6 +187,13 @@ validate_max_body_bytes() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]] && ((10#$1 <= 67108864))
 }
 
+known_profile() {
+  case "$1" in
+    claude_cli_2_1_222_v1|claude_sdk_cli_2_1_222_v1|claude_cli_custom_base_v1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 CANARY_ENABLED="$(env_value GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED)" || die "missing stable canary enabled setting"
 case "${CANARY_ENABLED}" in true|false) ;; *) die "stable canary enabled must be true or false" ;; esac
 GROUP_ID="$(env_value GATEWAY_ANTHROPIC_STABLE_CANARY_GROUP_ID)" || die "missing stable canary group id"
@@ -218,11 +225,16 @@ if [[ "${ACTION}" != "retire" ]]; then
   fi
 
   [[ "${DEVICE_ID}" =~ ^[0-9a-f]{64}$ ]] || die "device id must be reviewed lowercase 64-hex"
-  [[ "${PROFILE}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "stable canary profile contains unsupported characters"
+  known_profile "${PROFILE}" || die "stable canary profile is not a reviewed capture"
 fi
 MAX_BODY_BYTES="$(optional_env_value GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES)"
 MAX_BODY_BYTES="${MAX_BODY_BYTES:-67108864}"
-validate_max_body_bytes "${MAX_BODY_BYTES}" || die "max body bytes must be between 1 and 67108864"
+if [[ "${ACTION}" != "retire" ]]; then
+  validate_max_body_bytes "${MAX_BODY_BYTES}" || die "max body bytes must be between 1 and 67108864"
+  if [[ -n "${SESSION_GENERATION}" ]]; then
+    positive_int "${SESSION_GENERATION}" || die "session generation must be positive when configured"
+  fi
+fi
 [[ "${REPORT_HOURS}" =~ ^[1-9][0-9]*$ ]] && ((REPORT_HOURS <= 720)) || die "hours must be 1..720"
 
 run_compose() {

@@ -150,6 +150,14 @@ if run_manager_with_env_file "${TMP_DIR}/short-hmac.env" preflight >/dev/null 2>
   exit 1
 fi
 
+cp "${ENV_FILE}" "${TMP_DIR}/unknown-profile.env"
+replace_env_line "${TMP_DIR}/unknown-profile.env" ANTHROPIC_STABLE_CANARY_PROFILE unknown_profile
+chmod 600 "${TMP_DIR}/unknown-profile.env"
+if run_manager_with_env_file "${TMP_DIR}/unknown-profile.env" preflight >/dev/null 2>&1; then
+  echo "unknown stable canary profile was accepted" >&2
+  exit 1
+fi
+
 chmod 644 "${ENV_FILE}"
 if run_manager preflight >/dev/null 2>&1; then
   echo "insecure canary env mode was accepted" >&2

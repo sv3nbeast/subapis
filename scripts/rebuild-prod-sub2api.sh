@@ -146,6 +146,12 @@ validate_stable_canary_env_file() {
 validate_stable_canary_values() {
   local file="$1"
   local enabled group account owner api_key shared_users shared_keys generation hmac max_body device profile
+  known_profile() {
+    case "$1" in
+      claude_cli_2_1_222_v1|claude_sdk_cli_2_1_222_v1|claude_cli_custom_base_v1) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
   env_value_from_file() {
     local wanted="$1"
     awk -v wanted="${wanted}" '
@@ -182,12 +188,16 @@ validate_stable_canary_values() {
   else
     [[ "${owner}" =~ ^[1-9][0-9]*$ && "${api_key}" =~ ^[1-9][0-9]*$ ]] || return 1
   fi
+  if [[ -n "${generation}" ]]; then
+    [[ "${generation}" =~ ^[1-9][0-9]*$ ]] || return 1
+  fi
   max_body="$(env_value_from_file GATEWAY_ANTHROPIC_STABLE_CANARY_MAX_BODY_BYTES)"
   max_body="${max_body:-67108864}"
   [[ "${max_body}" =~ ^[1-9][0-9]*$ ]] && ((10#${max_body} <= 67108864)) || return 1
   device="$(env_value_from_file ANTHROPIC_STABLE_CANARY_DEVICE_ID)"
   profile="$(env_value_from_file ANTHROPIC_STABLE_CANARY_PROFILE)"
-  [[ "${device}" =~ ^[0-9a-f]{64}$ && "${profile}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "${device}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  known_profile "${profile}" || return 1
 }
 
 STABLE_CANARY_CONFIG_STATE="unconfigured"
