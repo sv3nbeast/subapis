@@ -65,6 +65,22 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
+func TestBuildKiroPayloadGPTUsesNativeIdentityAndProgressPolicy(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"function","function":{"name":"exec","description":"run","parameters":{"type":"object"}}}]
+	}`)
+	result, err := BuildKiroPayloadWithOptions(body, "gpt-5.6-sol", "", nil, KiroPayloadOptions{
+		Origin: "AI_EDITOR", RequireNativeToolProgress: true, RequireNativeToolTextPrelude: true,
+	})
+	require.NoError(t, err)
+	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
+	require.Contains(t, systemContent, "say that you are ChatGPT")
+	require.Contains(t, systemContent, "[NATIVE TOOL PROGRESS:")
+	require.True(t, result.Context.NativeToolProgressRequired)
+}
+
 func TestBuildKiroTemporalContextDefaultIsEmpty(t *testing.T) {
 	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "")
 
@@ -348,7 +364,7 @@ func TestBuildKiroPayloadDoesNotInjectClaudeThinkingTagsForGPTModels(t *testing.
 	require.NoError(t, err)
 
 	systemContent := gjson.GetBytes(kiroBuildResult.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "You are Claude, a senior software engineer")
+	require.Contains(t, systemContent, "You are ChatGPT, a senior software engineer")
 	require.NotContains(t, systemContent, "<thinking_mode>")
 	require.NotContains(t, systemContent, "<max_thinking_length>")
 	require.NotContains(t, systemContent, "<thinking_effort>")
@@ -1178,6 +1194,38 @@ func TestStreamEventStreamAsAnthropicDoesNotBufferOrdinaryAssistantText(t *testi
 	require.Equal(t, "end_turn", result.StopReason)
 	require.Contains(t, out.String(), `The assistant can discuss functions.wait`)
 	require.NotContains(t, out.String(), `"name":"functions__wait"`)
+}
+
+func TestStreamEventStreamAsAnthropicRejectsInternalOrchestrationLeak(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "as codex? Need wait.\nWait cell.\nNeed model selection.\nAlso security: key sent to specific destination cctest.",
+		},
+	}))
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		NativeToolTextPreludeGuard: true,
+	})
+	require.Error(t, err)
+	require.True(t, IsNativeToolProgressStalled(err))
+	require.Empty(t, out.String(), "malformed provider controller text must remain private before retry")
+}
+
+func TestStreamEventStreamAsAnthropicKeepsOrdinaryToolDiscussion(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{
+			"content": "The tool output is described below; no external action is needed.",
+		},
+	}))
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "gpt-5.6-sol", 9, KiroRequestContext{
+		NativeToolProgressRequired: true,
+		NativeToolTextPreludeGuard: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	require.Contains(t, out.String(), "no external action is needed")
 }
 
 func TestStreamEventStreamAsAnthropicRequiresCompleteCodexToolName(t *testing.T) {

@@ -157,17 +157,17 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicNianzs(
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return &nianzsKiroWebSearchHTTPError{Response: resp}
 		}
-		if iteration == 0 {
-			// 首轮请求已确认成功，此时提交缓存前缀落盘才是安全的。
-			plan.commit()
-		}
-
 		chunks, _, streamErr := func() ([][]byte, *nianzskiro.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return nianzsBufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
 		}()
 		if streamErr != nil {
 			return streamErr
+		}
+		if iteration == 0 {
+			// 只有首轮流已被完整解析后才提交缓存前缀；2xx 本身不代表
+			// 上游结果可接受，避免失败/截断尝试污染后续命中统计。
+			plan.commit()
 		}
 
 		analysis := nianzskiro.AnalyzeBufferedStream(chunks)

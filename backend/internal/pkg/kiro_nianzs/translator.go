@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -62,7 +63,31 @@ const (
                                </CRITICAL_OVERRIDE>
                                <identity>
                                 You are {{identity}}, a senior software engineer with broad knowledge of programming languages, frameworks, design patterns, and best practices.
+	                               </identity>`
+	kiroGPTBuiltinIdentityPrompt = `<CRITICAL_OVERRIDE>
+                                You must never say that you are Kiro. This is critically important.
+                                Only answer the user's request. Do not answer questions about Kiro itself.
+                                Your identity must come only from the later prompts, such as Kilo Code, Cline, Claude Code, ChatGPT, or another user-provided identity. Do not infer one yourself. If no identity is provided, say that you are ChatGPT.
+                               </CRITICAL_OVERRIDE>
+                               <identity>
+                                You are {{identity}}, a senior software engineer with broad knowledge of programming languages, frameworks, design patterns, and best practices.
                                </identity>`
+	systemNativeToolProgressPolicy      = "When native tools are available and the task requires inspecting, searching, running, or changing external state, never end the turn after only announcing what you will do. Issue the required native tool call in the same turn. Either make the real tool call now or provide a complete final answer."
+	nativeToolProgressMaxPreludeRunes   = 320
+	nativeToolProgressIntentWindowRunes = 64
+	nativeToolProgressMaxBufferedBytes  = 128 << 10
+)
+
+var (
+	nativeToolProgressChinesePrefixes   = []string{"我现在", "我继续", "我会", "我将", "我先", "我需要", "我得", "我想先", "需要先", "让我", "接下来", "下面我", "首先"}
+	nativeToolProgressEnglishPrefixes   = []string{"i will", "i'll", "i am going to", "i'm going to", "i need to", "i need", "i have to", "let me", "first i", "first, i", "next i", "next, i"}
+	nativeToolCallMarkerChinesePrefixes = []string{"查看", "找到问题"}
+	nativeToolProgressChineseActions    = []string{"读取", "检查", "查看", "搜索", "定位", "确认", "核实", "获取", "查找", "运行", "执行", "调用", "排查", "打开", "扫描", "追踪", "检索", "修改", "编辑"}
+	nativeToolProgressNegations         = []string{"无法", "不能", "无需", "不需要", "没有权限", "未提供", "can't", "cannot", "unable to", "do not have access", "don't have access", "not "}
+	nativeToolProgressToolTerms         = []string{"工具", "终端", "文件搜索", "文件读取", "文件访问", "工作区", "仓库", "tool", "terminal", "file search", "file read", "file tools", "workspace", "repository"}
+	nativeToolProgressRefusalTerms      = []string{"阻塞", "不可用", "没有提供", "未提供", "没有权限", "无法", "不能", "blocked", "unavailable", "not available", "no ", "cannot", "can't", "unable", "do not have", "don't have"}
+	nativeToolProgressRefusalPrefixes   = []string{"当前任务仍被", "当前任务被", "本会话没有", "本会话未", "the current task", "this session", "i cannot", "i can't", "unable to", "no terminal", "no file"}
+	nativeToolProgressCompletionTerms   = []string{"已完成", "已经完成", "执行完成", "扫描结果", "结果如下", "completed", "results:"}
 )
 
 var (
@@ -104,14 +129,32 @@ type ParseResult struct {
 	StopReason   string
 }
 
+type NativeToolProgressStalledError struct{ KiroCredits float64 }
+
+func (e *NativeToolProgressStalledError) Error() string {
+	return "empty kiro event stream: native tool progress stalled after prelude"
+}
+
+func IsNativeToolProgressStalled(err error) bool {
+	var target *NativeToolProgressStalledError
+	return errors.As(err, &target)
+}
+
 type KiroRequestContext struct {
-	ToolNameMap              map[string]string
-	ThinkingEnabled          bool
-	CacheEmulationUsage      *Usage
-	StructuredOutputToolName string
-	StructuredOutputUserHint string
-	StopSequences            []string
-	MaxOutputTokens          int
+	ToolNameMap                  map[string]string
+	ThinkingEnabled              bool
+	NativeToolProgressRequired   bool
+	NativeToolCallMarkerRequired bool
+	NativeToolCallRequired       bool
+	NativeToolTextPreludeGuard   bool
+	PriorAttemptKiroCredits      float64
+	CacheEmulationUsage          *Usage
+	StructuredOutputToolName     string
+	StructuredOutputUserHint     string
+	StopSequences                []string
+	MaxOutputTokens              int
+	BodyAttempt                  int
+	RequireTerminalEvent         bool
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -125,6 +168,13 @@ type KiroRequestContext struct {
 type KiroBuildResult struct {
 	Payload []byte
 	Context KiroRequestContext
+}
+
+type KiroPayloadOptions struct {
+	Origin                       string
+	RequireNativeToolProgress    bool
+	RequireNativeToolCallMarker  bool
+	RequireNativeToolTextPrelude bool
 }
 
 type KiroPayload struct {
@@ -392,7 +442,15 @@ func clampFloat(value, minValue, maxValue float64) float64 {
 }
 
 func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin string, headers http.Header) (*KiroBuildResult, error) {
+	return BuildKiroPayloadWithOptions(claudeBody, modelID, profileArn, headers, KiroPayloadOptions{Origin: origin})
+}
+
+func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
 	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
+	origin := strings.TrimSpace(options.Origin)
+	if origin == "" {
+		origin = "AI_EDITOR"
+	}
 	outputCap := kiroMaxOutputTokensForModel(firstNonEmptyString(gjson.GetBytes(claudeBody, "model").String(), modelID))
 	var maxTokens int64
 	if mt := gjson.GetBytes(claudeBody, "max_tokens"); mt.Exists() {
@@ -442,7 +500,11 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	}
 	requestCtx.StopSequences = extractClaudeStopSequences(claudeBody)
 	structuredOutputTool, structuredOutputHint := buildStructuredOutputTool(claudeBody, &requestCtx)
-	toolChoiceHint := joinPromptHints(extractClaudeToolChoiceHint(claudeBody, &requestCtx), structuredOutputHint)
+	toolChoiceHint := joinPromptHints(
+		extractClaudeToolChoiceHint(claudeBody, &requestCtx),
+		buildKiroNativeToolProgressHint(claudeBody, structuredOutputTool != nil, modelID, options.RequireNativeToolTextPrelude),
+		structuredOutputHint,
+	)
 	baseSystem := extractSystemPrompt(claudeBody)
 	if inlineSystem != "" {
 		if strings.TrimSpace(baseSystem) != "" {
@@ -455,7 +517,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 		thinking = nil
 		requestCtx.ThinkingEnabled = false
 	}
-	systemPrompt := buildInjectedSystemPrompt(baseSystem, thinking, toolChoiceHint)
+	systemPrompt := buildInjectedSystemPromptForModel(modelID, baseSystem, thinking, toolChoiceHint)
 
 	history, currentUserMsg, currentToolResults := processMessages(filteredMessages, modelID, normalizeOrigin(origin), &requestCtx)
 	history = prependSystemHistory(history, systemPrompt, modelID, normalizeOrigin(origin))
@@ -470,6 +532,10 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 	currentToolResults, orphanedToolUseIDs := validateToolPairing(history, currentToolResults)
 	removeOrphanedToolUses(history, orphanedToolUseIDs)
 	kiroTools = appendMissingPlaceholderTools(kiroTools, collectHistoryToolNames(history))
+	requestCtx.NativeToolProgressRequired = options.RequireNativeToolProgress && len(kiroTools) > 0
+	requestCtx.NativeToolCallMarkerRequired = requestCtx.NativeToolProgressRequired && options.RequireNativeToolCallMarker
+	requestCtx.NativeToolCallRequired = requestCtx.NativeToolProgressRequired && hasForcedClaudeToolChoice(claudeBody)
+	requestCtx.NativeToolTextPreludeGuard = requestCtx.NativeToolProgressRequired && options.RequireNativeToolTextPrelude
 	if currentUserMsg != nil {
 		if len(currentUserMsg.Images) > 0 && strings.TrimSpace(currentUserMsg.Content) == "" {
 			currentUserMsg.Content = " "
@@ -539,6 +605,12 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
+	if requestCtx.PriorAttemptKiroCredits > 0 {
+		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
+	}
+	if requestCtx.NativeToolProgressRequired && len(toolUses) == 0 && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, content) {
+		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+	}
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
@@ -586,14 +658,66 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	stripThinkingLeadingNewline := false
 	currentMessageID := ""
 	var outputTextBuf strings.Builder
+	nativeToolProgressGuard := requestCtx.NativeToolProgressRequired
+	nativeToolEmitted := false
+	streamOutputReleased := !nativeToolProgressGuard
+	var bufferedStreamOutput bytes.Buffer
+	var visibleTextBuf strings.Builder
+	releaseStreamOutput := func() error {
+		if streamOutputReleased {
+			return nil
+		}
+		if bufferedStreamOutput.Len() > 0 {
+			if _, err := io.Copy(w, &bufferedStreamOutput); err != nil {
+				return err
+			}
+		}
+		streamOutputReleased = true
+		return nil
+	}
 
 	writeEvent := func(event string, data any) error {
 		payload, err := json.Marshal(data)
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n")
+		block := "event: " + event + "\ndata: " + string(payload) + "\n\n"
+		if !streamOutputReleased && nativeToolProgressGuard && bufferedStreamOutput.Len()+len(block) > nativeToolProgressMaxBufferedBytes {
+			if requestCtx.NativeToolCallRequired {
+				return &NativeToolProgressStalledError{}
+			}
+			nativeToolProgressGuard = false
+			if err := releaseStreamOutput(); err != nil {
+				return err
+			}
+		}
+		dst := io.Writer(w)
+		if !streamOutputReleased {
+			dst = &bufferedStreamOutput
+		}
+		_, err = io.WriteString(dst, block)
 		return err
+	}
+	evaluateNativeToolProgress := func() error {
+		if !nativeToolProgressGuard || nativeToolEmitted {
+			return nil
+		}
+		if requestCtx.NativeToolCallRequired {
+			return nil
+		}
+		text := visibleTextBuf.String()
+		if !requestCtx.NativeToolTextPreludeGuard {
+			if strings.TrimSpace(text) == "" {
+				return nil
+			}
+			nativeToolProgressGuard = false
+			return releaseStreamOutput()
+		}
+		if shouldHoldKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, text) {
+			return nil
+		}
+		nativeToolProgressGuard = false
+		return releaseStreamOutput()
 	}
 	ensureMessageStart := func() error {
 		if messageStartSent {
@@ -740,7 +864,11 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 		emittedToolContents[contentKey] = true
 		toolBlockEmitted = true
+		nativeToolEmitted = true
 		_, _ = outputTextBuf.WriteString(inputJSON)
+		if err := releaseStreamOutput(); err != nil {
+			return err
+		}
 		if stopReason == "" {
 			stopReason = "tool_use"
 		}
@@ -859,14 +987,20 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 		}
 		_, _ = outputTextBuf.WriteString(text)
-		return writeEvent("content_block_delta", map[string]any{
+		if requestCtx.NativeToolProgressRequired {
+			_, _ = visibleTextBuf.WriteString(text)
+		}
+		if err := writeEvent("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": contentBlockIndex,
 			"delta": map[string]any{
 				"type": "text_delta",
 				"text": text,
 			},
-		})
+		}); err != nil {
+			return err
+		}
+		return evaluateNativeToolProgress()
 	}
 	emitTextDelta := func(text string, allowWhitespace bool) error {
 		if stopSequenceMatched != "" {
@@ -963,6 +1097,10 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return err
 		}
 		toolBlockEmitted = true
+		nativeToolEmitted = true
+		if err := releaseStreamOutput(); err != nil {
+			return err
+		}
 		return nil
 	}
 	flushPendingAssistantText := func() error {
@@ -1297,6 +1435,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if err := flushTextStopBuffer(); err != nil {
 		return nil, err
 	}
+	if requestCtx.NativeToolProgressRequired && !nativeToolEmitted && nativeToolProgressGuard && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, visibleTextBuf.String()) {
+		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+	}
 	// 移除"thinking-only 强制 max_tokens"误判分支
 	// 仅有 thinking 块、无 text 输出不代表截断,opus 4.8 思考密集场景常见
 	// 真正的截断由上游 ContentLengthExceededException 异常帧设置 stop_reason
@@ -1315,6 +1456,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	if requestCtx.PriorAttemptKiroCredits > 0 {
+		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
 	}
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
@@ -1336,6 +1480,9 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 	}
 	if err := ensureMessageStart(); err != nil {
+		return nil, err
+	}
+	if err := releaseStreamOutput(); err != nil {
 		return nil, err
 	}
 	finalUsageMap := map[string]any{
@@ -1498,8 +1645,18 @@ func renderKiroBuiltinIdentityPrompt(identity string) string {
 }
 
 func buildInjectedSystemPrompt(systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
+	return buildInjectedSystemPromptForModel("", systemPrompt, thinking, toolChoiceHint)
+}
+
+func buildInjectedSystemPromptForModel(modelID, systemPrompt string, thinking *thinkingDirective, toolChoiceHint string) string {
 	systemPrompt = strings.TrimSpace(systemPrompt)
-	promptParts := []string{renderKiroBuiltinIdentityPrompt("")}
+	identityPrompt := kiroBuiltinIdentityPrompt
+	identity := "Claude"
+	if IsKiroGPTModel(modelID) {
+		identityPrompt = kiroGPTBuiltinIdentityPrompt
+		identity = "ChatGPT"
+	}
+	promptParts := []string{strings.ReplaceAll(identityPrompt, "{{identity}}", identity)}
 	if temporalContext := buildKiroTemporalContext(); temporalContext != "" {
 		promptParts = append(promptParts, temporalContext)
 	}
@@ -1708,6 +1865,248 @@ func joinPromptHints(hints ...string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+func buildKiroNativeToolProgressHint(claudeBody []byte, hasSyntheticTool bool, modelID string, enabled bool) string {
+	if !enabled || !IsKiroGPTModel(modelID) || isToolChoiceNone(claudeBody) {
+		return ""
+	}
+	tools := gjson.GetBytes(claudeBody, "tools")
+	if !hasSyntheticTool && (!tools.Exists() || !tools.IsArray() || len(tools.Array()) == 0) {
+		return ""
+	}
+	return "[NATIVE TOOL PROGRESS: " + systemNativeToolProgressPolicy + "]"
+}
+
+func normalizeKiroNativeToolProgressText(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+}
+
+func hasKiroNativeToolProgressPrefix(text string) bool {
+	for _, prefix := range nativeToolProgressChinesePrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	for _, prefix := range nativeToolProgressEnglishPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKiroNativeToolProgressAction(text string) bool {
+	for _, action := range nativeToolProgressChineseActions {
+		if strings.Contains(text, action) {
+			return true
+		}
+	}
+	for _, token := range strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) }) {
+		switch token {
+		case "read", "reading", "inspect", "inspecting", "check", "checking", "search", "searching", "locate", "locating", "run", "running", "execute", "executing", "call", "calling", "open", "opening", "scan", "scanning", "trace", "tracing", "investigate", "investigating", "edit", "editing", "modify", "modifying":
+			return true
+		}
+	}
+	return false
+}
+
+func hasKiroNativeToolProgressBlockingNegation(text string) bool {
+	actionIndex := len(text)
+	for _, action := range nativeToolProgressChineseActions {
+		if idx := strings.Index(text, action); idx >= 0 && idx < actionIndex {
+			actionIndex = idx
+		}
+	}
+	for _, action := range []string{"read", "inspect", "check", "search", "locate", "run", "execute", "call", "open", "scan", "trace", "investigate", "edit", "modify"} {
+		if idx := strings.Index(text, action); idx >= 0 && idx < actionIndex {
+			actionIndex = idx
+		}
+	}
+	for _, negation := range nativeToolProgressNegations {
+		if idx := strings.Index(text, negation); idx >= 0 && idx < actionIndex {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeKiroNativeToolPrelude(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes || hasKiroNativeToolProgressBlockingNegation(normalized) {
+		return false
+	}
+	return hasKiroNativeToolProgressPrefix(normalized) && hasKiroNativeToolProgressAction(normalized)
+}
+
+func mayBecomeKiroNativeToolPrelude(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" {
+		return true
+	}
+	if utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	if looksLikeKiroNativeToolPrelude(normalized) {
+		return true
+	}
+	if hasKiroNativeToolProgressBlockingNegation(normalized) {
+		return false
+	}
+	for _, prefix := range nativeToolProgressChinesePrefixes {
+		if strings.HasPrefix(prefix, normalized) || (strings.HasPrefix(normalized, prefix) && utf8.RuneCountInString(normalized) <= nativeToolProgressIntentWindowRunes) {
+			return true
+		}
+	}
+	for _, prefix := range nativeToolProgressEnglishPrefixes {
+		if strings.HasPrefix(prefix, normalized) || (strings.HasPrefix(normalized, prefix) && utf8.RuneCountInString(normalized) <= nativeToolProgressIntentWindowRunes) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeKiroNativeToolCallMarker(text string) bool {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if strings.EqualFold(trimmed, "call") {
+		return true
+	}
+	if last := strings.LastIndexByte(trimmed, '\n'); last >= 0 {
+		return strings.EqualFold(strings.TrimSpace(trimmed[last+1:]), "call")
+	}
+	return false
+}
+
+func mayBecomeKiroNativeToolCallMarkerPrelude(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	for _, prefix := range nativeToolCallMarkerChinesePrefixes {
+		if strings.HasPrefix(prefix, normalized) || strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeKiroNativeToolRefusal(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	hasToolTerm := false
+	for _, term := range nativeToolProgressToolTerms {
+		if strings.Contains(normalized, term) {
+			hasToolTerm = true
+			break
+		}
+	}
+	if !hasToolTerm {
+		return false
+	}
+	for _, term := range nativeToolProgressRefusalTerms {
+		if term == "no " {
+			continue
+		}
+		if strings.Contains(normalized, term) {
+			return true
+		}
+	}
+	for _, capability := range []string{"no tool", "no terminal", "no file", "no workspace", "no repository"} {
+		if strings.Contains(normalized, capability) {
+			return true
+		}
+	}
+	return false
+}
+
+func mayBecomeKiroNativeToolRefusal(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	for _, prefix := range nativeToolProgressRefusalPrefixes {
+		if strings.HasPrefix(prefix, normalized) || strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeKiroNativeToolIntent(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	hasToolTerm := false
+	for _, term := range nativeToolProgressToolTerms {
+		if strings.Contains(normalized, term) {
+			hasToolTerm = true
+			break
+		}
+	}
+	if !hasToolTerm {
+		return false
+	}
+	for _, term := range nativeToolProgressCompletionTerms {
+		if strings.Contains(normalized, term) {
+			return false
+		}
+	}
+	if hasKiroNativeToolProgressBlockingNegation(normalized) {
+		return false
+	}
+	return hasKiroNativeToolProgressAction(normalized)
+}
+
+func looksLikeKiroNativeToolProgressFailure(text string) bool {
+	return looksLikeKiroNativeToolPrelude(text) || looksLikeKiroNativeToolRefusal(text) || looksLikeKiroNativeToolIntent(text)
+}
+
+// looksLikeKiroNativeToolOrchestrationLeak identifies the provider's internal
+// console/controller transcript when it is returned as assistant text. It is
+// deliberately structural: at least two control markers must be present, and
+// the check only runs for a request that already declared native tools.
+func looksLikeKiroNativeToolOrchestrationLeak(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressMaxPreludeRunes {
+		return false
+	}
+	markers := 0
+	for _, marker := range []string{"need wait", "wait cell", "need model selection", "as codex", "key sent to", "specific destination", "security:", "for cell", "model selection"} {
+		if strings.Contains(normalized, marker) {
+			markers++
+		}
+	}
+	return markers >= 2
+}
+
+func mayBecomeKiroNativeToolOrchestrationLeak(text string) bool {
+	normalized := normalizeKiroNativeToolProgressText(text)
+	if normalized == "" || utf8.RuneCountInString(normalized) > nativeToolProgressIntentWindowRunes {
+		return false
+	}
+	for _, prefix := range []string{"as codex", "need wait", "wait cell", "need model selection", "also security", "security:"} {
+		if strings.HasPrefix(prefix, normalized) || strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldHoldKiroNativeToolProgress(requireCallMarker bool, text string) bool {
+	if requireCallMarker {
+		return looksLikeKiroNativeToolCallMarker(text) || mayBecomeKiroNativeToolCallMarkerPrelude(text) || looksLikeKiroNativeToolProgressFailure(text) || mayBecomeKiroNativeToolPrelude(text)
+	}
+	return looksLikeKiroNativeToolProgressFailure(text) || looksLikeKiroNativeToolOrchestrationLeak(text) || mayBecomeKiroNativeToolOrchestrationLeak(text) || mayBecomeKiroNativeToolPrelude(text) || mayBecomeKiroNativeToolRefusal(text)
+}
+
+func shouldRetryKiroNativeToolProgress(requireCallMarker bool, text string) bool {
+	if requireCallMarker {
+		return strings.TrimSpace(text) != "" && (looksLikeKiroNativeToolCallMarker(text) || looksLikeKiroNativeToolProgressFailure(text) || mayBecomeKiroNativeToolCallMarkerPrelude(text) || mayBecomeKiroNativeToolPrelude(text) || mayBecomeKiroNativeToolRefusal(text))
+	}
+	return looksLikeKiroNativeToolProgressFailure(text) || looksLikeKiroNativeToolOrchestrationLeak(text) || mayBecomeKiroNativeToolOrchestrationLeak(text)
 }
 
 func buildStructuredOutputTool(claudeBody []byte, requestCtx *KiroRequestContext) (*KiroToolWrapper, string) {

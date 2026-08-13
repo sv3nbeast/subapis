@@ -41,6 +41,13 @@ const (
 	nianzsKiroRetryMaxDelay  = 2 * time.Second
 )
 
+const nianzsKiroNativeToolProgressRetryInstruction = "[INTERNAL NATIVE TOOL RETRY: The previous attempt ended after announcing tool-backed work without making a tool call. Do not repeat the announcement. Call one of the available native tools now.]"
+
+type nianzsKiroUpstreamRequestOptions struct {
+	NativeToolProgressRetry bool
+	ConversationRetryNonce  string
+}
+
 var nianzsKiroRetrySleep = sleepWithContext
 
 func nianzsKiroRetryBackoffDelay(attempt int) time.Duration {
@@ -84,6 +91,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
 	}
+	configureKiroNativeToolProgressGuard(parsed, mappedModel, hasKiroNativeToolProgressInput(body), IsOpenAIKiroBridgeModel(originalModel))
 	logger.L().Debug("gateway forward_kiro_messages: request prepared",
 		zap.Int64("account_id", account.ID),
 		zap.String("auth_method", strings.TrimSpace(account.GetCredential("auth_method"))),
@@ -245,19 +253,47 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, body)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsageNianzs(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	cachePlan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	requestCtx.EstimatedInputTokens = inputTokens
-	parseResult, err := nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"type": "error",
-			"error": gin.H{
-				"type":    "api_error",
-				"message": "Failed to parse Kiro upstream response",
-			},
+	priorKiroCredits := 0.0
+	var parseResult *nianzskiro.ParseResult
+	for attempt := 0; ; attempt++ {
+		requestCtx.PriorAttemptKiroCredits = priorKiroCredits
+		parseResult, err = nianzskiro.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
+		_ = resp.Body.Close()
+		if err == nil {
+			cachePlan.commit()
+			break
+		}
+		if attempt > 0 || !nianzskiro.IsNativeToolProgressStalled(err) {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "api_error",
+					"message": "Failed to parse Kiro upstream response",
+				},
+			})
+			return nil, err
+		}
+		priorKiroCredits = nativeToolProgressCredits(err)
+		retryNonce := nianzsBuildKiroNativeToolRetryNonce(account, nianzsBuildKiroRequestID(resp), attempt+1)
+		resp, requestCtx, err = s.executeKiroUpstreamWithParsedOptionsNianzs(ctx, account, parsed, body, mappedModel, originalModel, token, c.Request.Header, nianzsKiroUpstreamRequestOptions{
+			NativeToolProgressRetry: true,
+			ConversationRetryNonce:  retryNonce,
 		})
-		return nil, err
+		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if err == nil {
+				err = fmt.Errorf("kiro native tool progress retry returned status %d", resp.StatusCode)
+			}
+			return nil, err
+		}
+		requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+		requestCtx.EstimatedInputTokens = inputTokens
 	}
 
 	c.Header("Content-Type", "application/json")
@@ -319,7 +355,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		}, inputTokens, nil
 	}
 
-	resp, requestCtx, err := s.executeKiroUpstreamWithParsedNianzs(upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers)
+	resp, requestCtx, err := s.executeKiroUpstreamWithParsedOptionsNianzs(upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, nianzsKiroUpstreamRequestOptions{})
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
@@ -334,8 +370,8 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	if plan == nil {
 		plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 	}
-	// 请求已确认成功(2xx)，此时提交缓存前缀落盘才是安全的。
-	plan.commit()
+	// 仅在 translator 确认完整终态后提交缓存前缀；2xx 本身不代表上游
+	// 生成已被接受，内部编排泄漏/截断仍可能需要丢弃并重试。
 	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
 
 	pr, pw := io.Pipe()
@@ -346,18 +382,40 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	wrappedHeaders.Set("request-id", claudeReqID)
 
 	go func() {
-		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, resp.Body, pw, requestModel, inputTokens, requestCtx)
-		if streamErr != nil {
-			// Do not inject an upstream SSE error frame here. The production
-			// downstream handler intentionally parses provider error events as
-			// internal errors and would suppress that frame. Propagating the pipe
-			// error lets it preserve the correct boundary: fail over before any
-			// client write, or emit exactly one client-visible error after output.
-			_ = pw.CloseWithError(streamErr)
-			return
+		currentResp := resp
+		currentRequestCtx := requestCtx
+		nativeRetryUsed := false
+		for attempt := 0; ; attempt++ {
+			currentRequestCtx.BodyAttempt = attempt
+			_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, currentResp.Body, pw, requestModel, inputTokens, currentRequestCtx)
+			_ = currentResp.Body.Close()
+			if streamErr == nil {
+				plan.commit()
+				_ = pw.Close()
+				return
+			}
+			if !nianzskiro.IsNativeToolProgressStalled(streamErr) || nativeRetryUsed {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			nativeRetryUsed = true
+			retryNonce := nianzsBuildKiroNativeToolRetryNonce(account, nianzsBuildKiroRequestID(currentResp), attempt+1)
+			nextResp, nextCtx, retryErr := s.executeKiroUpstreamWithParsedOptionsNianzs(upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, nianzsKiroUpstreamRequestOptions{
+				NativeToolProgressRetry: true,
+				ConversationRetryNonce:  retryNonce,
+			})
+			if retryErr != nil || nextResp == nil || nextResp.StatusCode < 200 || nextResp.StatusCode >= 300 {
+				if nextResp != nil {
+					_ = nextResp.Body.Close()
+				}
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			currentResp = nextResp
+			currentRequestCtx = nextCtx
+			currentRequestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
+			currentRequestCtx.PriorAttemptKiroCredits = nativeToolProgressCredits(streamErr)
 		}
-		_ = pw.Close()
 	}()
 
 	return &http.Response{
@@ -372,6 +430,10 @@ func (s *GatewayService) executeKiroUpstreamNianzs(ctx context.Context, account 
 }
 
 func (s *GatewayService) executeKiroUpstreamWithParsedNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, nianzskiro.KiroRequestContext, error) {
+	return s.executeKiroUpstreamWithParsedOptionsNianzs(ctx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, nianzsKiroUpstreamRequestOptions{})
+}
+
+func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, options nianzsKiroUpstreamRequestOptions) (*http.Response, nianzskiro.KiroRequestContext, error) {
 	var requestCtx nianzskiro.KiroRequestContext
 	mode := nianzsKiroEndpointModeForRequest(account, parsed)
 	// KRS/Auto 模式：确保 profileArn 已解析（已有值时零开销，仅为安全兜底）
@@ -400,7 +462,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedNianzs(ctx context.Context
 		if endpoint.Name == "KiroRuntime" {
 			profileArn = nianzsKiroResolveProfileArnForKRS(account)
 		}
-		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn)
+		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, options)
 		if err != nil {
 			return nil, requestCtx, err
 		}
@@ -505,7 +567,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedNianzs(ctx context.Context
 						} else {
 							profileArn = ""
 						}
-						buildResult, err = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn)
+						buildResult, err = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, options)
 						if err != nil {
 							return nil, requestCtx, err
 						}
@@ -605,12 +667,20 @@ func nianzsKiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) s
 
 // buildKiroPayloadForAccountWithArnNianzs 使用显式 profileArn 构建 Kiro 请求 payload。
 // auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
-func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string) (*nianzskiro.KiroBuildResult, error) {
+func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
 	anthropicBody = nianzsPrepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := nianzskiro.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	requireNativeToolProgress := parsed != nil && parsed.KiroNativeToolProgressRequired
+	requireNativeToolCallMarker := parsed != nil && parsed.KiroNativeToolCallMarkerRequired
+	requireNativeToolTextPrelude := parsed != nil && parsed.KiroNativeToolTextPreludeGuard
+	buildResult, err := nianzskiro.BuildKiroPayloadWithOptions(anthropicBody, modelID, profileArn, headers, nianzskiro.KiroPayloadOptions{
+		Origin:                       "AI_EDITOR",
+		RequireNativeToolProgress:    requireNativeToolProgress,
+		RequireNativeToolCallMarker:  requireNativeToolCallMarker,
+		RequireNativeToolTextPrelude: requireNativeToolTextPrelude,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -618,6 +688,12 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Con
 		if next, setErr := sjson.SetBytes(buildResult.Payload, "conversationState.conversationId", stableID); setErr == nil {
 			buildResult.Payload = next
 		}
+	}
+	if options.ConversationRetryNonce != "" {
+		buildResult.Payload = nianzsApplyKiroConversationRetryNonce(buildResult.Payload, options.ConversationRetryNonce)
+	}
+	if options.NativeToolProgressRetry {
+		buildResult.Payload = nianzsApplyKiroNativeToolProgressRetryInstruction(buildResult.Payload)
 	}
 	return buildResult, nil
 }
@@ -718,6 +794,64 @@ func nianzsHashKiroLogString(value string) string {
 		return ""
 	}
 	return strconv.FormatUint(xxhash.Sum64String(value), 36)
+}
+
+func nativeToolProgressCredits(err error) float64 {
+	var stalled *nianzskiro.NativeToolProgressStalledError
+	if errors.As(err, &stalled) && stalled != nil {
+		return stalled.KiroCredits
+	}
+	return 0
+}
+
+func nianzsBuildKiroNativeToolRetryNonce(account *Account, requestID string, attempt int) string {
+	accountID := int64(0)
+	if account != nil {
+		accountID = account.ID
+	}
+	return strings.Join([]string{
+		"account:" + strconv.FormatInt(accountID, 10),
+		"request:" + strings.TrimSpace(requestID),
+		"attempt:" + strconv.Itoa(attempt),
+		"ts:" + strconv.FormatInt(time.Now().UnixNano(), 10),
+	}, "|")
+}
+
+func nianzsApplyKiroConversationRetryNonce(payload []byte, nonce string) []byte {
+	if strings.TrimSpace(nonce) == "" || len(payload) == 0 {
+		return payload
+	}
+	conversationID := strings.TrimSpace(gjson.GetBytes(payload, "conversationState.conversationId").String())
+	continuationID := strings.TrimSpace(gjson.GetBytes(payload, "conversationState.agentContinuationId").String())
+	payloadHash := strconv.FormatUint(xxhash.Sum64(payload), 36)
+	retryConversationID := generateSessionUUID(strings.Join([]string{
+		"kiro-conversation-body-retry-v1", conversationID, continuationID, payloadHash, strings.TrimSpace(nonce),
+	}, "|"))
+	next, err := sjson.SetBytes(payload, "conversationState.conversationId", retryConversationID)
+	if err != nil {
+		return payload
+	}
+	return next
+}
+
+func nianzsApplyKiroNativeToolProgressRetryInstruction(payload []byte) []byte {
+	if len(payload) == 0 || len(gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()) == 0 {
+		return payload
+	}
+	const contentPath = "conversationState.currentMessage.userInputMessage.content"
+	content := strings.TrimSpace(gjson.GetBytes(payload, contentPath).String())
+	if strings.Contains(content, nianzsKiroNativeToolProgressRetryInstruction) {
+		return payload
+	}
+	if content != "" {
+		content += "\n\n"
+	}
+	content += nianzsKiroNativeToolProgressRetryInstruction
+	next, err := sjson.SetBytes(payload, contentPath, content)
+	if err != nil {
+		return payload
+	}
+	return next
 }
 
 func nianzsPrepareKiroPayloadBodyForRequestModel(anthropicBody []byte, requestModel string) []byte {

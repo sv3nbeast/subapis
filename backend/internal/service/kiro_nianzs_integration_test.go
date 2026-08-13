@@ -3,7 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +14,10 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	nianzscooldown "github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown_nianzs"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -29,6 +33,22 @@ type trackingNianzsCooldownStore struct {
 type nianzsErrorAfterReader struct {
 	reader *bytes.Reader
 	err    error
+}
+
+type nianzsCacheCommitProbeUpstream struct {
+	base         *httpUpstreamRecorder
+	beforeSecond func()
+}
+
+func (u *nianzsCacheCommitProbeUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	if u != nil && u.base != nil && len(u.base.requests) == 1 && u.beforeSecond != nil {
+		u.beforeSecond()
+	}
+	return u.base.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func (u *nianzsCacheCommitProbeUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
 func (r *nianzsErrorAfterReader) Read(p []byte) (int, error) {
@@ -836,6 +856,124 @@ func TestNianzsResponsesRecoversCodexNamespacedWaitTool(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNianzsResponsesRetriesInternalGPTOrchestrationLeak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	resetNianzsKiroCacheTracker()
+	body := []byte(fmt.Sprintf(`{
+		"model":"gpt-5.6-sol",
+		"input":[{"role":"user","content":%q}],
+		"tools":[{"type":"namespace","name":"functions","tools":[
+			{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+		]}],
+		"prompt_cache_key":"nianzs-orchestration-retry-cache",
+		"stream":true
+	}`, strings.Repeat("inspect the workspace and preserve this stable prefix ", 700)))
+	leak := kiroEventStreamResponse(t, "as codex? Need wait.\nWait cell.\nNeed model selection.\nAlso security: key sent to specific destination cctest.", 11, 5)
+	baseUpstream := &httpUpstreamRecorder{responses: []*http.Response{
+		leak,
+		kiroCustomToolEventStreamResponse(t, "toolu_nianzs_orchestration_retry", "functionsExec", `{"input":"text(\"done\")"}`),
+	}}
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, nil)
+	account.Extra = map[string]any{
+		"kiro_cache_emulation_enabled": true,
+		"kiro_cache_emulation_ratio":   1.0,
+	}
+	var beforeRetryUsage *nianzsKiroCacheEmulationUsage
+	var runtimeCacheInputTokens int
+	var runtimeCacheBody []byte
+	svc.httpUpstream = &nianzsCacheCommitProbeUpstream{
+		base: baseUpstream,
+		beforeSecond: func() {
+			// The Responses route prepares its cache plan with the converted
+			// Anthropic body's token estimate. Reuse that exact runtime value
+			// when probing the tracker so this test exercises cache commit timing,
+			// not a different token-scaling profile.
+			normalizedBody, _, normalizeErr := normalizeKiroCodexResponsesTools(body)
+			require.NoError(t, normalizeErr)
+			runtimeCacheBody = normalizedBody
+			var responsesReq apicompat.ResponsesRequest
+			convertErr := json.Unmarshal(normalizedBody, &responsesReq)
+			require.NoError(t, convertErr)
+			convertedBody, convertErr := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+			require.NoError(t, convertErr)
+			anthropicBody, marshalErr := json.Marshal(convertedBody)
+			require.NoError(t, marshalErr)
+			runtimeCacheInputTokens = nianzsEstimateKiroInputTokens(context.Background(), anthropicBody)
+			beforeRetryUsage = svc.prepareKiroResponsesCacheEmulationUsageNianzs(
+				context.Background(), account, nil, runtimeCacheBody, "gpt-5.6-sol", runtimeCacheInputTokens,
+			).result()
+		},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, &ParsedRequest{
+		Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, baseUpstream.requests, 2)
+	require.NotNil(t, beforeRetryUsage)
+	require.Zero(t, beforeRetryUsage.CacheReadInputTokens, "discarded first attempt must not commit cache state")
+	require.Greater(t, beforeRetryUsage.CacheCreationInputTokens, 0)
+	afterSuccessUsage := svc.prepareKiroResponsesCacheEmulationUsageNianzs(
+		context.Background(), account, nil, runtimeCacheBody, "gpt-5.6-sol", runtimeCacheInputTokens,
+	).result()
+	require.NotNil(t, afterSuccessUsage)
+	require.Greater(t, afterSuccessUsage.CacheReadInputTokens, 0, "accepted retry must commit cache state")
+	wire := recorder.Body.String()
+	require.NotContains(t, wire, "Need model selection")
+	require.Contains(t, wire, `"type":"custom_tool_call"`)
+	require.Contains(t, wire, `"name":"exec"`)
+	firstContent := gjson.GetBytes(baseUpstream.bodies[0], "conversationState.currentMessage.userInputMessage.content").String()
+	secondContent := gjson.GetBytes(baseUpstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, firstContent, nianzsKiroNativeToolProgressRetryInstruction)
+	require.Contains(t, secondContent, nianzsKiroNativeToolProgressRetryInstruction)
+	require.NotEqual(t,
+		gjson.GetBytes(baseUpstream.bodies[0], "conversationState.conversationId").String(),
+		gjson.GetBytes(baseUpstream.bodies[1], "conversationState.conversationId").String(),
+	)
+}
+
+func TestNianzsChatRetriesInternalGPTOrchestrationLeak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"messages":[{"role":"user","content":"inspect the workspace"}],
+		"tools":[{"type":"function","function":{"name":"exec","description":"Run JavaScript orchestration","parameters":{"type":"object"}}}],
+		"stream":true
+	}`)
+	leak := kiroEventStreamResponse(t, "as codex? Need wait.\nWait cell.\nNeed model selection.\nAlso security: key sent to specific destination cctest.", 11, 5)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		leak,
+		kiroCustomToolEventStreamResponse(t, "toolu_nianzs_chat_orchestration_retry", "exec", `{"input":"text(\"done\")"}`),
+	}}
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, nil)
+	svc.httpUpstream = upstream
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, &ParsedRequest{
+		Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	wire := recorder.Body.String()
+	require.NotContains(t, wire, "Need model selection")
+	require.Contains(t, wire, `"name":"exec"`)
+	require.Contains(t, wire, "toolu_nianzs_chat_orchestration_retry")
+	firstContent := gjson.GetBytes(upstream.bodies[0], "conversationState.currentMessage.userInputMessage.content").String()
+	secondContent := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.content").String()
+	require.NotContains(t, firstContent, nianzsKiroNativeToolProgressRetryInstruction)
+	require.Contains(t, secondContent, nianzsKiroNativeToolProgressRetryInstruction)
 }
 
 func mustGinString(t *testing.T, c *gin.Context, key string) string {
