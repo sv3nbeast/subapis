@@ -66,9 +66,66 @@ func TestNormalizeKiroCodexResponsesToolsConvertsHistoryWithoutDeclarations(t *t
 	require.Zero(t, metadata.DeclaredToolCount)
 	require.Zero(t, metadata.ForwardedToolCount)
 	require.Equal(t, "function_call", gjson.GetBytes(normalized, "input.0.type").String())
+	require.Equal(t, "exec", gjson.GetBytes(normalized, "input.0.name").String())
+	require.False(t, gjson.GetBytes(normalized, "input.0.namespace").Exists())
 	require.JSONEq(t, `{"input":"text(\"hello\")"}`, gjson.GetBytes(normalized, "input.0.arguments").String())
 	require.False(t, gjson.GetBytes(normalized, "input.0.input").Exists())
 	require.Equal(t, "function_call_output", gjson.GetBytes(normalized, "input.1.type").String())
+}
+
+func TestNormalizeKiroCodexResponsesToolsRequalifiesNamespacedCustomHistory(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"previous_response_id":"resp_exec",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"inspect the repository"}]},
+			{"type":"additional_tools","tools":[
+				{"type":"namespace","name":"functions","tools":[
+					{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+				]}
+			]},
+			{"type":"custom_tool_call","call_id":"call_exec","namespace":"functions","name":"exec","input":"text(\"hello\")"},
+			{"type":"custom_tool_call_output","call_id":"call_exec","output":"hello"}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, metadata.DeclaredToolCount)
+	require.Equal(t, 1, metadata.ForwardedToolCount)
+	require.Contains(t, metadata.CustomToolNames, "functions__exec")
+	require.Equal(t, "functions__exec", gjson.GetBytes(normalized, "tools.0.name").String())
+	require.Equal(t, "function_call", gjson.GetBytes(normalized, "input.1.type").String())
+	require.Equal(t, "functions__exec", gjson.GetBytes(normalized, "input.1.name").String())
+	require.False(t, gjson.GetBytes(normalized, "input.1.namespace").Exists())
+	require.JSONEq(t, `{"input":"text(\"hello\")"}`, gjson.GetBytes(normalized, "input.1.arguments").String())
+	require.Equal(t, "function_call_output", gjson.GetBytes(normalized, "input.2.type").String())
+}
+
+func TestNormalizeKiroCodexResponsesToolsRequalifiesNamespacedFunctionHistory(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"function_call","call_id":"call_read","namespace":"codex_app","name":"read_thread_terminal","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_read","output":"ready"},
+			{"type":"additional_tools","tools":[
+				{"type":"namespace","name":"codex_app","tools":[
+					{"type":"function","name":"read_thread_terminal","description":"Read terminal output","parameters":{"type":"object","properties":{}}}
+				]}
+			]}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, metadata.DeclaredToolCount)
+	require.Equal(t, 1, metadata.ForwardedToolCount)
+	require.Empty(t, metadata.CustomToolNames)
+	require.Equal(t, "codex_app__read_thread_terminal", gjson.GetBytes(normalized, "tools.0.name").String())
+	require.Equal(t, "function_call", gjson.GetBytes(normalized, "input.0.type").String())
+	require.Equal(t, "codex_app__read_thread_terminal", gjson.GetBytes(normalized, "input.0.name").String())
+	require.False(t, gjson.GetBytes(normalized, "input.0.namespace").Exists())
+	require.Equal(t, "{}", gjson.GetBytes(normalized, "input.0.arguments").String())
 }
 
 func TestNormalizeKiroCodexResponsesToolsPromotesCodexLiteToolChoiceNoneToAuto(t *testing.T) {

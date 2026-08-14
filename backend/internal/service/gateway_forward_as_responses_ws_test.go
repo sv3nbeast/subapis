@@ -247,98 +247,134 @@ func TestForwardAsResponsesWebSocketTurnCoalescesInterleavedTextReasoningAndTool
 }
 
 func TestProxyResponsesWebSocketFromClientKiroBridgeContinuesCustomToolTurn(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	resetKiroResponsesHistoryStoreForTest()
-	kiroSvc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
-	upstream.resp = nil
-	upstream.responses = []*http.Response{
-		kiroCustomToolEventStreamResponse(t, "toolu_ws_exec", "exec", `{"input":"text(\"workspace\")"}`),
-		kiroEventStreamResponse(t, "second turn complete", 13, 4),
-	}
-
-	openAISvc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
-	hooks := &OpenAIWSIngressHooks{
-		BridgeTurn: func(
-			ctx context.Context,
-			c *gin.Context,
-			account *Account,
-			payload []byte,
-			turn int,
-			writeClientMessage func([]byte) error,
-		) (*OpenAIForwardResult, error) {
-			parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(payload), "responses")
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			gatewayResult, forwardErr := kiroSvc.ForwardAsResponsesWebSocketTurn(ctx, c, account, payload, parsed, turn == 1, writeClientMessage)
-			if gatewayResult == nil {
-				return nil, forwardErr
-			}
-			return &OpenAIForwardResult{
-				RequestID:  gatewayResult.RequestID,
-				ResponseID: gatewayResult.ResponseID,
-				Model:      gatewayResult.Model,
-				Stream:     gatewayResult.Stream,
-			}, forwardErr
+	tests := []struct {
+		name            string
+		firstPayload    string
+		kiroToolName    string
+		clientNamespace string
+	}{
+		{
+			name:         "legacy custom tool without namespace",
+			firstPayload: strings.TrimSpace(string(kiroNativeGPTToolRequestBody())),
+			kiroToolName: "exec",
+		},
+		{
+			name: "namespaced custom tool",
+			firstPayload: `{
+				"model":"gpt-5.6-sol",
+				"input":[
+					{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]},
+					{"type":"additional_tools","tools":[
+						{"type":"namespace","name":"functions","tools":[
+							{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+						]}
+					]}
+				],
+				"stream":true
+			}`,
+			kiroToolName:    "functionsExec",
+			clientNamespace: "functions",
 		},
 	}
 
-	errCh := make(chan error, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, acceptErr := coderws.Accept(w, r, nil)
-		if acceptErr != nil {
-			errCh <- acceptErr
-			return
-		}
-		defer func() { _ = conn.CloseNow() }()
-		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
-		_, firstMessage, readErr := conn.Read(readCtx)
-		cancelRead()
-		if readErr != nil {
-			errCh <- readErr
-			return
-		}
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = r.Clone(r.Context())
-		errCh <- openAISvc.ProxyResponsesWebSocketFromClient(r.Context(), c, conn, account, "", firstMessage, hooks)
-	}))
-	defer server.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			resetKiroResponsesHistoryStoreForTest()
+			kiroSvc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+			upstream.resp = nil
+			upstream.responses = []*http.Response{
+				kiroCustomToolEventStreamResponse(t, "toolu_ws_exec", tt.kiroToolName, `{"input":"text(\"workspace\")"}`),
+				kiroCustomToolEventStreamResponse(t, "toolu_ws_exec_again", tt.kiroToolName, `{"input":"text(\"again\")"}`),
+			}
 
-	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
-	client, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	cancelDial()
-	require.NoError(t, err)
-	defer func() { _ = client.CloseNow() }()
+			openAISvc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+			hooks := &OpenAIWSIngressHooks{
+				BridgeTurn: func(
+					ctx context.Context,
+					c *gin.Context,
+					account *Account,
+					payload []byte,
+					turn int,
+					writeClientMessage func([]byte) error,
+				) (*OpenAIForwardResult, error) {
+					parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(payload), "responses")
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					gatewayResult, forwardErr := kiroSvc.ForwardAsResponsesWebSocketTurn(ctx, c, account, payload, parsed, turn == 1, writeClientMessage)
+					if gatewayResult == nil {
+						return nil, forwardErr
+					}
+					return &OpenAIForwardResult{
+						RequestID:  gatewayResult.RequestID,
+						ResponseID: gatewayResult.ResponseID,
+						Model:      gatewayResult.Model,
+						Stream:     gatewayResult.Stream,
+					}, forwardErr
+				},
+			}
 
-	firstPayload := strings.TrimSpace(string(kiroNativeGPTToolRequestBody()))
-	writeWSMessage(t, client, firstPayload)
-	firstEvents := readWSResponsesTurn(t, client)
-	require.Equal(t, 1, countWSResponseTerminals(firstEvents))
-	firstResponseID := responseIDFromWSEvents(firstEvents)
-	require.NotEmpty(t, firstResponseID)
-	require.True(t, wsEventsContainType(firstEvents, "response.output_item.done"))
+			errCh := make(chan error, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, acceptErr := coderws.Accept(w, r, nil)
+				if acceptErr != nil {
+					errCh <- acceptErr
+					return
+				}
+				defer func() { _ = conn.CloseNow() }()
+				readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+				_, firstMessage, readErr := conn.Read(readCtx)
+				cancelRead()
+				if readErr != nil {
+					errCh <- readErr
+					return
+				}
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = r.Clone(r.Context())
+				errCh <- openAISvc.ProxyResponsesWebSocketFromClient(r.Context(), c, conn, account, "", firstMessage, hooks)
+			}))
+			defer server.Close()
 
-	writeWSMessage(t, client, `{
-		"type":"response.create",
-		"model":"gpt-5.6-sol",
-		"previous_response_id":"`+firstResponseID+`",
-		"input":[{"type":"custom_tool_call_output","call_id":"toolu_ws_exec","output":"workspace ok"}],
-		"stream":true
-	}`)
-	secondEvents := readWSResponsesTurn(t, client)
-	require.Equal(t, 1, countWSResponseTerminals(secondEvents))
-	require.True(t, wsEventsContainText(secondEvents, "second turn complete"))
+			dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+			client, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			cancelDial()
+			require.NoError(t, err)
+			defer func() { _ = client.CloseNow() }()
 
-	require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
-	select {
-	case proxyErr := <-errCh:
-		require.NoError(t, proxyErr)
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for Kiro websocket bridge to close")
+			writeWSMessage(t, client, tt.firstPayload)
+			firstEvents := readWSResponsesTurn(t, client)
+			require.Equal(t, 1, countWSResponseTerminals(firstEvents))
+			firstResponseID := responseIDFromWSEvents(firstEvents)
+			require.NotEmpty(t, firstResponseID)
+			requireWSCustomToolDone(t, firstEvents, "toolu_ws_exec", tt.clientNamespace, `text("workspace")`)
+
+			writeWSMessage(t, client, `{
+				"type":"response.create",
+				"model":"gpt-5.6-sol",
+				"previous_response_id":"`+firstResponseID+`",
+				"input":[{"type":"custom_tool_call_output","call_id":"toolu_ws_exec","output":"workspace ok"}],
+				"stream":true
+			}`)
+			secondEvents := readWSResponsesTurn(t, client)
+			require.Equal(t, 1, countWSResponseTerminals(secondEvents))
+			requireWSCustomToolDone(t, secondEvents, "toolu_ws_exec_again", tt.clientNamespace, `text("again")`)
+
+			require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+			select {
+			case proxyErr := <-errCh:
+				require.NoError(t, proxyErr)
+			case <-time.After(3 * time.Second):
+				t.Fatal("timed out waiting for Kiro websocket bridge to close")
+			}
+
+			require.Len(t, upstream.bodies, 2)
+			assertKiroCodexToolCycle(t, upstream.bodies[1], "toolu_ws_exec", tt.kiroToolName, `text("workspace")`, "workspace ok")
+			tools := gjson.GetBytes(upstream.bodies[1], "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Array()
+			require.Len(t, tools, 1, "continuation must not inject a placeholder for the same logical tool")
+			require.Equal(t, tt.kiroToolName, tools[0].Get("toolSpecification.name").String())
+		})
 	}
-
-	require.Len(t, upstream.bodies, 2)
-	assertKiroCodexToolCycle(t, upstream.bodies[1], "toolu_ws_exec", "exec", `text("workspace")`, "workspace ok")
 }
 
 func TestForwardAsResponsesWebSocketTurnPreservesPreviousResponseAcrossConnections(t *testing.T) {
@@ -629,4 +665,20 @@ func wsEventsContainText(events [][]byte, expected string) bool {
 		}
 	}
 	return false
+}
+
+func requireWSCustomToolDone(t *testing.T, events [][]byte, callID, namespace, input string) {
+	t.Helper()
+	for _, event := range events {
+		if gjson.GetBytes(event, "type").String() != "response.output_item.done" ||
+			gjson.GetBytes(event, "item.call_id").String() != callID {
+			continue
+		}
+		require.Equal(t, "custom_tool_call", gjson.GetBytes(event, "item.type").String())
+		require.Equal(t, "exec", gjson.GetBytes(event, "item.name").String())
+		require.Equal(t, namespace, gjson.GetBytes(event, "item.namespace").String())
+		require.Equal(t, input, gjson.GetBytes(event, "item.input").String())
+		return
+	}
+	t.Fatalf("missing completed custom tool call %s", callID)
 }

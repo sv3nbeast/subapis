@@ -87,9 +87,16 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 func normalizeKiroCodexToolHistoryItem(item map[string]any) (map[string]any, bool) {
 	typ := strings.TrimSpace(stringValue(item["type"]))
 	switch typ {
+	case "function_call":
+		normalized := cloneStringAnyMap(item)
+		if !qualifyKiroCodexToolHistoryName(normalized) {
+			return item, false
+		}
+		return normalized, true
 	case "custom_tool_call":
 		normalized := cloneStringAnyMap(item)
 		normalized["type"] = "function_call"
+		qualifyKiroCodexToolHistoryName(normalized)
 		if input, ok := item["input"].(string); ok {
 			normalized["arguments"] = mustJSONText(map[string]any{kiroCodexCustomToolInputField: input})
 		}
@@ -102,6 +109,21 @@ func normalizeKiroCodexToolHistoryItem(item map[string]any) (map[string]any, boo
 	default:
 		return item, false
 	}
+}
+
+func qualifyKiroCodexToolHistoryName(item map[string]any) bool {
+	// Codex 0.147+ exposes namespace children to the client as separate
+	// namespace/name fields. Kiro history and declarations must use the same
+	// flattened identity or the translator will inject a second placeholder
+	// tool for the client-visible short name on continuation turns.
+	namespace := strings.TrimSpace(stringValue(item["namespace"]))
+	name := strings.TrimSpace(stringValue(item["name"]))
+	if namespace == "" || name == "" {
+		return false
+	}
+	item["name"] = joinKiroCodexToolNamespace(namespace, name)
+	delete(item, "namespace")
+	return true
 }
 
 func mustJSONText(value any) string {
