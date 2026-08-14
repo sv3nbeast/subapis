@@ -692,6 +692,7 @@ func TestAnthropicStableIdentitySessionScopeSeparatesAccountsAndReenrollment(t *
 func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *testing.T) {
 	const apiKeyID = int64(91)
 	const ownerUserID = int64(1002)
+	const clientBeta = "new-client-beta,reordered-client-beta"
 	const rawSSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-stable\",\"usage\":{\"input_tokens\":2}}}\n\n" +
 		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
@@ -715,6 +716,8 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 	clientDevice := strings.Repeat("b", 64)
 	fixture.body = bytes.Replace(fixture.body, []byte(strings.Repeat("a", 64)), []byte(clientDevice), 1)
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
+	fixture.ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.223 (external, cli)")
+	fixture.ctx.Request.Header.Set("anthropic-beta", clientBeta)
 
 	result, err := fixture.service.ForwardAnthropicStableIdentityRaw(
 		context.Background(), fixture.ctx, fixture.account, route, fixture.body, apiKeyID, ownerUserID, time.Now(),
@@ -728,7 +731,7 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 	require.Len(t, upstreamBody, len(fixture.body), "device patch must not re-encode or reorder JSON")
 	require.Equal(t, AnthropicStableMessagesOriginV1+AnthropicStableMessagesPath, upstreamURL)
 	require.Equal(t, "Bearer "+fixture.account.GetCredential("access_token"), upstreamHeader.Get("Authorization"))
-	require.Equal(t, stableCanaryHandlerBetaForServiceTest()+","+AnthropicStableOAuthBetaV1, upstreamHeader.Get("anthropic-beta"))
+	require.Equal(t, clientBeta+","+AnthropicStableOAuthBetaV1, upstreamHeader.Get("anthropic-beta"))
 	require.Equal(t, AnthropicStableIngressAPIVersionV1, upstreamHeader.Get("anthropic-version"))
 	require.Empty(t, upstreamHeader.Get("User-Agent"), "the dedicated Go transport owns its User-Agent")
 	require.Empty(t, upstreamHeader.Get("x-app"))

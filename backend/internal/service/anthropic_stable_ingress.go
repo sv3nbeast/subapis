@@ -102,10 +102,11 @@ func anthropicStableIngressFamilyID(profileID string) string {
 	}
 }
 
-// AnthropicStableIngressProfilesEquivalent compares persisted profile labels
-// by one captured Claude Code installation family. The cli and sdk-cli UAs are
-// exact request variants from the same 2.1.222 binary, not separate devices or
-// sessions. Exact UA/beta admission still happens before this account check.
+// AnthropicStableIngressProfilesEquivalent compares persisted transport-policy
+// labels. The cli, sdk-cli and durable custom-base labels all use the same
+// claude-gateway-style outbound construction. D1 still performs exact capture
+// admission; the shared identity scheduler admits native client upgrades under
+// this stable outbound family.
 func AnthropicStableIngressProfilesEquivalent(left, right string) bool {
 	left = anthropicStableIngressFamilyID(left)
 	right = anthropicStableIngressFamilyID(right)
@@ -139,11 +140,24 @@ func DetectAnthropicStableIngressProfile(userAgent, anthropicBeta string) string
 	return ""
 }
 
-// LooksLikeAnthropicStableClaudeCode is intentionally broader than Detect:
-// it recognizes the Claude CLI product token without admitting the request to
-// the strict executor. Selected stable routes use it to fail a new/unreviewed
-// Claude Code version closed instead of silently falling back to a different
-// account through the generic scheduler.
+// DetectAnthropicStableIdentityIngressProfile recognizes the native Claude
+// Code client family used by the shared stable-identity scheduler. Unlike the
+// capture-backed canary detector above, it deliberately does not pin a client
+// version or anthropic-beta value: the reference claude-gateway rebuilds the
+// outbound HTTP request, forwards the client's beta/version headers and lets
+// Anthropic negotiate those features.
+func DetectAnthropicStableIdentityIngressProfile(userAgent string) string {
+	if !claudeStableIdentityUserAgentPattern.MatchString(strings.TrimSpace(userAgent)) {
+		return ""
+	}
+	return AnthropicStableIngressProfileClaudeCLICustomBaseV1
+}
+
+// LooksLikeAnthropicStableClaudeCode is intentionally broader than either
+// admission detector: it recognizes the Claude CLI product token so managed
+// groups do not silently fall back to a generic account. The shared identity
+// detector then validates the native cli/sdk-cli form without pinning a
+// version, while the D1 canary detector retains its exact capture policy.
 func LooksLikeAnthropicStableClaudeCode(userAgent string) bool {
 	return claudeStableUserAgentPattern.MatchString(strings.TrimSpace(userAgent))
 }
@@ -153,8 +167,9 @@ var (
 	// The body profile below remains the authoritative signal; this check only
 	// prevents accidentally routing an arbitrary SDK request into the strict
 	// executor.
-	claudeStableUserAgentPattern = regexp.MustCompile(`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+(?:\s|$)`)
-	claudeStableUUIDPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	claudeStableUserAgentPattern         = regexp.MustCompile(`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+(?:\s|$)`)
+	claudeStableIdentityUserAgentPattern = regexp.MustCompile(`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, (?:cli|sdk-cli)\)$`)
+	claudeStableUUIDPattern              = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 var (
@@ -313,6 +328,34 @@ func ParseAnthropicStableIngressProfile(
 	// Preserve the caller's persisted label for audit/account comparison while
 	// validating against the canonical finite cohort above.
 	result.ProfileID = strings.TrimSpace(profileID)
+	return result, nil
+}
+
+// ParseAnthropicStableIdentityIngress is the shared scheduler's native Claude
+// Code admission boundary. It retains the structural checks needed for safe
+// multi-user session binding and equal-length device replacement, but it does
+// not use the client version, anthropic-beta or anthropic-version as a feature
+// allow-list. Those headers are preserved by BuildAnthropicStableMessageRequest
+// and the OAuth beta is appended only when absent.
+func ParseAnthropicStableIdentityIngress(
+	method, path, rawQuery, contentEncoding, userAgent, xApp, sessionHeader string,
+	body []byte,
+) (*AnthropicStableIngressRequest, error) {
+	profileID := DetectAnthropicStableIdentityIngressProfile(userAgent)
+	if profileID == "" || rawQuery != AnthropicStableIngressQueryV1 || xApp != AnthropicStableIngressXAppV1 {
+		return nil, fmt.Errorf("%w: native Claude Code identity mismatch", ErrAnthropicStableIngressNotClaudeCode)
+	}
+	result, err := ParseAnthropicStableIngress(method, path, contentEncoding, userAgent, body)
+	if err != nil {
+		return nil, err
+	}
+	if sessionHeader != result.SessionID {
+		return nil, fmt.Errorf("%w: session header does not match body", ErrAnthropicStableIngressMalformed)
+	}
+	if !result.HasStream || !result.Stream || !result.HasMaxTokens {
+		return nil, fmt.Errorf("%w: native Claude Code requires stream=true and max_tokens", ErrAnthropicStableIngressMalformed)
+	}
+	result.ProfileID = profileID
 	return result, nil
 }
 

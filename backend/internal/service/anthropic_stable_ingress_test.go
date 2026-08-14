@@ -201,6 +201,73 @@ func TestAnthropicStableIngressSDKCLI211222AcceptsOnlyCapturedVariants(t *testin
 	))
 }
 
+func TestAnthropicStableIdentityIngressAcceptsNativeClientVersionsWithoutBetaAdmission(t *testing.T) {
+	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
+	for _, userAgent := range []string{
+		"claude-cli/2.1.222 (external, cli)",
+		"claude-cli/2.1.223 (external, cli)",
+		"claude-cli/3.0.0 (external, sdk-cli)",
+	} {
+		t.Run(userAgent, func(t *testing.T) {
+			require.Equal(t, AnthropicStableIngressProfileClaudeCLICustomBaseV1,
+				DetectAnthropicStableIdentityIngressProfile(userAgent))
+			result, err := ParseAnthropicStableIdentityIngress(
+				http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
+				userAgent, AnthropicStableIngressXAppV1, stableTestSession, body,
+			)
+			require.NoError(t, err)
+			require.Equal(t, AnthropicStableIngressProfileClaudeCLICustomBaseV1, result.ProfileID)
+		})
+	}
+
+	for _, userAgent := range []string{
+		"claude-cli/2.1.223",
+		"claude-cli/2.1.223 (external, desktop)",
+		"anthropic-sdk-go/1.0",
+	} {
+		require.Empty(t, DetectAnthropicStableIdentityIngressProfile(userAgent))
+	}
+}
+
+func TestAnthropicStableIdentityIngressDoesNotInspectFeatureHeaders(t *testing.T) {
+	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
+	userAgent := "claude-cli/2.1.222 (external, cli)"
+
+	// anthropic-beta and anthropic-version are intentionally absent from this
+	// parser's inputs. The shared identity route preserves them at request-build
+	// time rather than treating feature negotiation as client admission.
+	result, err := ParseAnthropicStableIdentityIngress(
+		http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
+		userAgent, AnthropicStableIngressXAppV1, stableTestSession, body,
+	)
+	require.NoError(t, err)
+	require.Equal(t, stableTestSession, result.SessionID)
+}
+
+func TestAnthropicStableIdentityIngressRetainsSessionAndNativeShapeGuards(t *testing.T) {
+	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
+	userAgent := "claude-cli/2.1.223 (external, cli)"
+
+	_, err := ParseAnthropicStableIdentityIngress(
+		http.MethodPost, "/v1/messages", "beta=true&extra=1", "identity",
+		userAgent, AnthropicStableIngressXAppV1, stableTestSession, body,
+	)
+	require.ErrorIs(t, err, ErrAnthropicStableIngressNotClaudeCode)
+
+	_, err = ParseAnthropicStableIdentityIngress(
+		http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
+		userAgent, AnthropicStableIngressXAppV1, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", body,
+	)
+	require.ErrorIs(t, err, ErrAnthropicStableIngressMalformed)
+
+	nonStreaming := []byte(strings.Replace(string(body), `"stream":true`, `"stream":false`, 1))
+	_, err = ParseAnthropicStableIdentityIngress(
+		http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
+		userAgent, AnthropicStableIngressXAppV1, stableTestSession, nonStreaming,
+	)
+	require.ErrorIs(t, err, ErrAnthropicStableIngressMalformed)
+}
+
 func TestAnthropicStableIngressAcceptsDurableCustomBaseAlias(t *testing.T) {
 	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
 	profile := anthropicStableIngressProfiles[AnthropicStableIngressProfileCLI211222V1]

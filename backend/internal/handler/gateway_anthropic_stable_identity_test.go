@@ -111,29 +111,47 @@ func TestGatewayHandlerMessages_AnthropicStableIdentityUsesCurrentGroupPool(t *t
 	require.Equal(t, 2, accountRepo.getCalls, "stable entry reloads once before and once under its account lease")
 }
 
-func TestGatewayHandlerMessages_AnthropicStableIdentityRejectsUnreviewedClaudeVersionBeforeBodyRead(t *testing.T) {
+func TestGatewayHandlerMessages_AnthropicStableIdentityAcceptsNativeVersionAndBetaVariants(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h, accountRepo, _, apiKey, subject, _ := newStableCanaryHandlerFixture(t)
-	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
-	body := &stableCanaryUnreadBody{}
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
-	c.Request.Body = body
-	c.Request.ContentLength = -1
-	setStableCanaryHandlerProfile(c.Request)
-	c.Request.Header.Set("User-Agent", "claude-cli/2.8.4 (external, cli)")
-	setStableCanaryHandlerContext(c, apiKey, subject)
+	for _, tc := range []struct {
+		name      string
+		userAgent string
+		beta      string
+	}{
+		{
+			name:      "same version with a new feature cohort",
+			userAgent: "claude-cli/2.1.222 (external, cli)",
+			beta:      "target-request-new-beta,reordered-client-beta",
+		},
+		{
+			name:      "native client version upgrade",
+			userAgent: "claude-cli/2.1.223 (external, cli)",
+			beta:      "new-client-beta,reordered-client-beta",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+			convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", bytes.NewReader(body))
+			setStableCanaryHandlerProfile(c.Request)
+			c.Request.Header.Set("User-Agent", tc.userAgent)
+			c.Request.Header.Set("anthropic-beta", tc.beta)
+			setStableCanaryHandlerContext(c, apiKey, subject)
 
-	h.Messages(c)
+			h.Messages(c)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	require.Contains(t, recorder.Body.String(), "not approved")
-	require.Zero(t, body.reads, "an unreviewed Claude version must fail before any body or credential is consumed")
-	require.Zero(t, accountRepo.getCalls)
+			require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+			require.Contains(t, recorder.Body.String(), "session is temporarily unavailable")
+			require.Equal(t, 1, accountRepo.sessionClaims,
+				"native Claude Code traffic must reach stable session routing instead of a finite profile allow-list")
+			require.Equal(t, 2, accountRepo.getCalls)
+		})
+	}
 }
 
-func TestGatewayHandlerCountTokens_AnthropicStableIdentityRejectsUnreviewedClaudeVersionBeforeBodyRead(t *testing.T) {
+func TestGatewayHandlerCountTokens_AnthropicStableIdentityAcceptsNativeVersionWithoutReadingBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, accountRepo, _, apiKey, subject, _ := newStableCanaryHandlerFixture(t)
 	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
@@ -144,13 +162,14 @@ func TestGatewayHandlerCountTokens_AnthropicStableIdentityRejectsUnreviewedClaud
 	c.Request.Body = body
 	c.Request.ContentLength = -1
 	setStableCanaryHandlerProfile(c.Request)
-	c.Request.Header.Set("User-Agent", "claude-cli/2.8.4 (external, cli)")
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.223 (external, sdk-cli)")
+	c.Request.Header.Set("anthropic-beta", "new-client-beta")
 	setStableCanaryHandlerContext(c, apiKey, subject)
 
 	h.CountTokens(c)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	require.Contains(t, recorder.Body.String(), "not approved")
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "not_found_error")
 	require.Zero(t, body.reads)
 	require.Zero(t, accountRepo.getCalls)
 }

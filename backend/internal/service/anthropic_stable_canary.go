@@ -579,11 +579,38 @@ func parseAnthropicStableCanaryIngress(c *gin.Context, body []byte) (*AnthropicS
 	)
 }
 
+// parseAnthropicStableIdentityIngress keeps the shared stable scheduler
+// compatible with native Claude Code upgrades. The capture-backed D1 canary
+// above remains exact; shared identity admission validates the native client
+// shape and session/device invariants without pinning feature beta strings.
+func parseAnthropicStableIdentityIngress(c *gin.Context, body []byte) (*AnthropicStableIngressRequest, error) {
+	if c == nil || c.Request == nil || c.Request.URL == nil || !stableCanaryContentTypeIsJSON(c) {
+		return nil, ErrAnthropicStableIngressMalformed
+	}
+	header := stableCanaryIngressHeaders(c)
+	return ParseAnthropicStableIdentityIngress(
+		c.Request.Method,
+		c.Request.URL.Path,
+		c.Request.URL.RawQuery,
+		c.GetHeader("Content-Encoding"),
+		header.Get("User-Agent"),
+		header.Get("x-app"),
+		header.Get("X-Claude-Code-Session-Id"),
+		body,
+	)
+}
+
 // InspectAnthropicStableCanaryIngress validates a raw request without invoking
 // ParseGatewayRequest. The handler uses it only to learn stream/model shape
 // before acquiring ordinary user billing/concurrency gates.
 func InspectAnthropicStableCanaryIngress(c *gin.Context, body []byte) (*AnthropicStableIngressRequest, error) {
 	return parseAnthropicStableCanaryIngress(c, body)
+}
+
+// InspectAnthropicStableIdentityIngress validates a raw shared-scheduler
+// request without invoking ParseGatewayRequest or mutating the request body.
+func InspectAnthropicStableIdentityIngress(c *gin.Context, body []byte) (*AnthropicStableIngressRequest, error) {
+	return parseAnthropicStableIdentityIngress(c, body)
 }
 
 func stableCanaryFailMessage(err error) string {

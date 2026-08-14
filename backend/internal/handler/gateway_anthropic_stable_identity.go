@@ -39,17 +39,17 @@ func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, a
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity group is unavailable")
 		return true
 	}
-	if service.DetectAnthropicStableIngressProfile(c.GetHeader("User-Agent"), c.GetHeader("anthropic-beta")) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This Claude Code version is not approved for the configured stable identity")
+	if service.DetectAnthropicStableIdentityIngressProfile(c.GetHeader("User-Agent")) == "" {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request does not use a supported Claude Code client identity")
 		return true
 	}
 	h.errorResponse(c, http.StatusNotFound, "not_found_error", "Not found")
 	return true
 }
 
-// tryAnthropicStableIdentityMessages handles an exact capture-backed Claude
-// Code request whenever the authenticated group contains at least one stable
-// account. Non-Claude clients continue through the existing scheduler.
+// tryAnthropicStableIdentityMessages handles a native Claude Code request
+// whenever the authenticated group contains at least one stable account.
+// Non-Claude clients continue through the existing scheduler.
 func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	c *gin.Context,
 	apiKey *service.APIKey,
@@ -77,12 +77,12 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity group is unavailable")
 		return true
 	}
-	profileID := service.DetectAnthropicStableIngressProfile(c.GetHeader("User-Agent"), c.GetHeader("anthropic-beta"))
+	profileID := service.DetectAnthropicStableIdentityIngressProfile(c.GetHeader("User-Agent"))
 	if profileID == "" {
-		// A managed group must never drift to a generic account just because the
-		// local Claude Code binary was upgraded before its wire profile was
-		// reviewed. Non-Claude clients still fall through unchanged above.
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This Claude Code version is not approved for the configured stable identity")
+		// A managed group must never drift to a generic account when a malformed
+		// Claude-looking identity reaches the stable route. Native cli/sdk-cli
+		// versions remain compatible without a finite version or beta allow-list.
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request does not use a supported Claude Code client identity")
 		return true
 	}
 	if requestStartedAt.IsZero() {
@@ -103,13 +103,13 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return true
 	}
-	ingress, err := service.InspectAnthropicStableCanaryIngress(c, body)
+	ingress, err := service.InspectAnthropicStableIdentityIngress(c, body)
 	if err != nil {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request is not a supported Claude Code /v1/messages request")
 		return true
 	}
-	// The exact strict path is the only branch allowed to consume the body. A
-	// profile match with a malformed body is an explicit client error, not a
+	// The native stable path is the only branch allowed to consume the body. A
+	// recognized client with a malformed body is an explicit client error, not a
 	// reason to retry through the compatibility translator.
 	setOpsRequestContext(c, ingress.Model, ingress.Stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(ingress.Stream, false)))

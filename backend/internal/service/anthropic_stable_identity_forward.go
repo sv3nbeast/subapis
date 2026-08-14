@@ -125,7 +125,7 @@ func (s *GatewayService) ForwardAnthropicStableIdentityRaw(
 		return nil, stableIdentityReject(c, http.StatusServiceUnavailable, errAnthropicStableIdentityInvalid)
 	}
 	header := stableCanaryIngressHeaders(c)
-	ingress, err := parseAnthropicStableCanaryIngress(c, rawBody)
+	ingress, err := parseAnthropicStableIdentityIngress(c, rawBody)
 	if err != nil {
 		return nil, stableIdentityReject(c, http.StatusBadRequest, err)
 	}
