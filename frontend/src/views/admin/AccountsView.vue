@@ -309,7 +309,26 @@
               <AccountStatusIndicator :account="row" @show-temp-unsched="handleShowTempUnsched" />
             </template>
             <template #cell-schedulable="{ row }">
+              <div
+                v-if="getStableSchedulingState(row)"
+                :data-test="`stable-scheduling-${row.id}`"
+                :data-state="getStableSchedulingState(row)"
+                :class="[
+                  'inline-flex min-h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-1 text-[11px] font-semibold leading-none',
+                  getStableSchedulingBadgeClass(row)
+                ]"
+                :title="t('admin.accounts.stableSchedulableHint')"
+                :aria-label="getStableSchedulingLabel(row)"
+              >
+                <span
+                  class="h-1.5 w-1.5 shrink-0 rounded-full"
+                  :class="getStableSchedulingDotClass(row)"
+                  aria-hidden="true"
+                />
+                <span>{{ getStableSchedulingLabel(row) }}</span>
+              </div>
               <button
+                v-else
                 @click="handleToggleSchedulable(row)"
                 :disabled="togglingSchedulable === row.id"
                 class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-dark-800"
@@ -2579,7 +2598,55 @@ const confirmDelete = async () => {
   }
 }
 
+type StableSchedulingState = 'active' | 'paused' | 'blocked'
+
+const getStableSchedulingState = (account: Account): StableSchedulingState | null => {
+  if (account.platform !== 'anthropic' || (account.type !== 'oauth' && account.type !== 'setup-token')) return null
+  if (account.anthropic_stable_identity_enabled !== true) return null
+  if (account.anthropic_stable_identity_blocked === true) return 'blocked'
+  if (account.anthropic_stable_identity_state === 'paused') return 'paused'
+  if (account.anthropic_stable_identity_state === 'off') return null
+  return 'active'
+}
+
+const getStableSchedulingLabel = (account: Account) => {
+  switch (getStableSchedulingState(account)) {
+    case 'blocked':
+      return t('admin.accounts.stableSchedulableBlocked')
+    case 'paused':
+      return t('admin.accounts.stableSchedulablePaused')
+    default:
+      return t('admin.accounts.stableSchedulableActive')
+  }
+}
+
+const getStableSchedulingBadgeClass = (account: Account) => {
+  switch (getStableSchedulingState(account)) {
+    case 'blocked':
+      return 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/80 dark:bg-red-950/40 dark:text-red-300'
+    case 'paused':
+      return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/80 dark:bg-amber-950/40 dark:text-amber-300'
+    default:
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/80 dark:bg-emerald-950/40 dark:text-emerald-300'
+  }
+}
+
+const getStableSchedulingDotClass = (account: Account) => {
+  switch (getStableSchedulingState(account)) {
+    case 'blocked':
+      return 'bg-red-500 dark:bg-red-400'
+    case 'paused':
+      return 'bg-amber-500 dark:bg-amber-400'
+    default:
+      return 'bg-emerald-500 dark:bg-emerald-400'
+  }
+}
+
 const handleToggleSchedulable = async (a: Account) => {
+  if (getStableSchedulingState(a)) {
+    appStore.showInfo(t('admin.accounts.stableSchedulableHint'))
+    return
+  }
   const nextSchedulable = !a.schedulable
   togglingSchedulable.value = a.id
   try {

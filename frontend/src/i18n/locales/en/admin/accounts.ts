@@ -96,6 +96,11 @@ export default {
       schedulableEnabled: 'Scheduling enabled',
       schedulableDisabled: 'Scheduling disabled',
       failedToToggleSchedulable: 'Failed to toggle scheduling status',
+      stableSchedulableActive: 'Stable scheduling',
+      stableSchedulablePaused: 'Stable scheduling paused',
+      stableSchedulableBlocked: 'Stable scheduling blocked',
+      stableSchedulableHint:
+        'This account is managed by the stable identity scheduler. Use the stable mode switch in the account editor to control scheduling.',
       groupCountTotal: '{count} groups total',
       baseUrlOptional: 'Base URL (optional)',
       bulkRefreshTokenConfirm: 'Refresh the token of {count} selected account(s)?',

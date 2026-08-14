@@ -239,6 +239,12 @@ type Account struct {
 
 	Schedulable bool `json:"schedulable"`
 
+	// Anthropic 稳定身份由专用调度器管理，底层 Schedulable 会固定为 false。
+	// 这里只暴露前端展示所需的安全状态，不返回 device、profile 或阻断原因。
+	AnthropicStableIdentityEnabled bool   `json:"anthropic_stable_identity_enabled,omitempty"`
+	AnthropicStableIdentityState   string `json:"anthropic_stable_identity_state,omitempty"`
+	AnthropicStableIdentityBlocked bool   `json:"anthropic_stable_identity_blocked,omitempty"`
+
 	RateLimitedAt    *time.Time `json:"rate_limited_at"`
 	RateLimitResetAt *time.Time `json:"rate_limit_reset_at"`
 	OverloadUntil    *time.Time `json:"overload_until"`

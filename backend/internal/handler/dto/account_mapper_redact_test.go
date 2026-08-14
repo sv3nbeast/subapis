@@ -100,3 +100,41 @@ func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	require.Nil(t, got.Credentials)
 	require.Nil(t, got.CredentialsStatus)
 }
+
+func TestAccountFromServiceShallow_ExposesOnlySafeStableIdentitySchedulingState(t *testing.T) {
+	deviceID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	src := &service.Account{
+		ID: 2550, Name: "stable", Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
+		Extra: map[string]any{
+			service.AnthropicStableIdentityEnabledExtraKey:       true,
+			service.AnthropicStableIdentityStateExtraKey:         service.AnthropicStableIdentityStatePaused,
+			service.AnthropicStableIdentityBlockedExtraKey:       true,
+			service.AnthropicStableIdentityBlockedReasonExtraKey: "private upstream reason",
+			service.AnthropicStableIdentityDeviceIDExtraKey:      deviceID,
+			"ordinary": "kept",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.True(t, got.AnthropicStableIdentityEnabled)
+	require.Equal(t, service.AnthropicStableIdentityStatePaused, got.AnthropicStableIdentityState)
+	require.True(t, got.AnthropicStableIdentityBlocked)
+	require.Equal(t, "kept", got.Extra["ordinary"])
+	for _, key := range []string{
+		service.AnthropicStableIdentityEnabledExtraKey,
+		service.AnthropicStableIdentityStateExtraKey,
+		service.AnthropicStableIdentityBlockedExtraKey,
+		service.AnthropicStableIdentityBlockedReasonExtraKey,
+		service.AnthropicStableIdentityDeviceIDExtraKey,
+	} {
+		require.NotContains(t, got.Extra, key)
+	}
+
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"anthropic_stable_identity_enabled":true`)
+	require.Contains(t, string(raw), `"anthropic_stable_identity_state":"paused"`)
+	require.Contains(t, string(raw), `"anthropic_stable_identity_blocked":true`)
+	require.NotContains(t, string(raw), deviceID)
+	require.NotContains(t, string(raw), "private upstream reason")
+}

@@ -1279,6 +1279,11 @@ export interface Account {
 
   // Rate limit & scheduling fields
   schedulable: boolean
+  // Stable identity accounts are managed by a dedicated scheduler while the
+  // legacy schedulable field remains false.
+  anthropic_stable_identity_enabled?: boolean
+  anthropic_stable_identity_state?: 'active' | 'paused' | 'off'
+  anthropic_stable_identity_blocked?: boolean
   rate_limited_at: string | null
   rate_limit_reset_at: string | null
   overload_until: string | null
