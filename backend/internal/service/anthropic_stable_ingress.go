@@ -139,6 +139,15 @@ func DetectAnthropicStableIngressProfile(userAgent, anthropicBeta string) string
 	return ""
 }
 
+// LooksLikeAnthropicStableClaudeCode is intentionally broader than Detect:
+// it recognizes the Claude CLI product token without admitting the request to
+// the strict executor. Selected stable routes use it to fail a new/unreviewed
+// Claude Code version closed instead of silently falling back to a different
+// account through the generic scheduler.
+func LooksLikeAnthropicStableClaudeCode(userAgent string) bool {
+	return claudeStableUserAgentPattern.MatchString(strings.TrimSpace(userAgent))
+}
+
 var (
 	// Claude Code sends a product/version token followed by an optional comment.
 	// The body profile below remains the authoritative signal; this check only

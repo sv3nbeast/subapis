@@ -222,6 +222,9 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(req.Extra) {
 		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
+	if AnthropicStableIdentityExtraUpdateTouchesManagedFields(req.Extra) {
+		return nil, ErrAnthropicStableIdentityManaged
+	}
 	// 验证分组是否存在（如果指定了分组）
 	if len(req.GroupIDs) > 0 {
 		if err := s.validateGroupIDsExist(ctx, req.GroupIDs); err != nil {
@@ -342,7 +345,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		delete(extra, OllamaCloudUsageSessionExtraKey)
 		delete(extra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(extra, OllamaCloudUsageSnapshotExtraKey)
-		account.Extra = extra
+		account.Extra = preserveAnthropicStableIdentityManagedExtra(account.Extra, extra)
 	}
 
 	if req.ProxyID != nil {
@@ -393,7 +396,8 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	// 绑定分组
-	if req.GroupIDs != nil {
+	if req.GroupIDs != nil && !(account.HasAnthropicStableIdentityManagedFields() &&
+		sameStableIdentityIDSet(*req.GroupIDs, account.GroupIDs)) {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *req.GroupIDs); err != nil {
 			return nil, fmt.Errorf("bind groups: %w", err)
 		}

@@ -112,6 +112,9 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	if account.HasAnthropicStableCanaryManagedFields() {
 		return service.ErrAnthropicStableCanaryReserved
 	}
+	if account.HasAnthropicStableIdentityManagedFields() {
+		return service.ErrAnthropicStableIdentityManaged
+	}
 
 	builder := r.client.Account.Create().
 		SetName(account.Name).
@@ -187,6 +190,9 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	}
 	if account.HasAnthropicStableCanaryManagedFields() {
 		return service.ErrAnthropicStableCanaryReserved
+	}
+	if account.HasAnthropicStableIdentityManagedFields() {
+		return service.ErrAnthropicStableIdentityManaged
 	}
 	tx, err := r.client.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
@@ -612,7 +618,10 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
 			extra -> 'ollama_cloud_usage_snapshot',
-			`+anthropicStableCanaryManagedSQL+`
+			`+anthropicStableCanaryManagedSQL+`,
+			`+anthropicStableIdentityManagedSQL+`,
+			COALESCE(extra ->> '`+service.AnthropicStableIdentityUpdatedAtExtraKey+`', ''),
+			updated_at
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -628,11 +637,14 @@ func lockAndMergeAccountProbeExtra(
 		return nil, service.ErrAccountNotFound
 	}
 
-	var identityUnchanged, ollamaGroupIdentityUnchanged, ollamaProxyIdentityUnchanged, stableCanaryManaged bool
+	var identityUnchanged, ollamaGroupIdentityUnchanged, ollamaProxyIdentityUnchanged bool
+	var stableCanaryManaged, stableIdentityManaged bool
+	var stableIdentityUpdatedAt string
+	var databaseUpdatedAt time.Time
 	var currentEnabled, currentRateSyncEnabled, currentSnapshot, currentOllamaSession, currentOllamaAutoRefresh, currentOllamaSnapshot []byte
 	if err := rows.Scan(&identityUnchanged, &ollamaGroupIdentityUnchanged, &ollamaProxyIdentityUnchanged,
 		&currentEnabled, &currentRateSyncEnabled, &currentSnapshot, &currentOllamaSession, &currentOllamaAutoRefresh, &currentOllamaSnapshot,
-		&stableCanaryManaged); err != nil {
+		&stableCanaryManaged, &stableIdentityManaged, &stableIdentityUpdatedAt, &databaseUpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
@@ -640,6 +652,17 @@ func lockAndMergeAccountProbeExtra(
 	}
 	if stableCanaryManaged {
 		return nil, service.ErrAnthropicStableCanaryReserved
+	}
+	if service.AnthropicStableIdentityMutationAuthorized(ctx, account.ID) {
+		if account.UpdatedAt.IsZero() || !databaseUpdatedAt.Equal(account.UpdatedAt) {
+			return nil, service.ErrAnthropicStableIdentityConflict
+		}
+	} else {
+		inputManaged := account.HasAnthropicStableIdentityManagedFields()
+		if inputManaged != stableIdentityManaged ||
+			(inputManaged && strings.TrimSpace(stableIdentityUpdatedAt) != account.AnthropicStableIdentityUpdatedAt()) {
+			return nil, service.ErrAnthropicStableIdentityManaged
+		}
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
@@ -761,7 +784,8 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 	}
 	managedWritePredicate := ""
 	if !service.AnthropicStableCanaryRefreshAuthorized(ctx, id) {
-		managedWritePredicate = " AND NOT (" + anthropicStableCanaryManagedSQL + ")"
+		managedWritePredicate = " AND NOT (" + anthropicStableCanaryManagedSQL + ")" +
+			" AND NOT (" + anthropicStableIdentityManagedSQL + ")"
 	}
 	result, err := client.ExecContext(ctx, `
 		UPDATE accounts
@@ -800,6 +824,13 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			}
 			if reserved {
 				return service.ErrAnthropicStableCanaryReserved
+			}
+			managed, managedErr := isAnthropicStableIdentityManaged(ctx, client, id)
+			if managedErr != nil {
+				return managedErr
+			}
+			if managed {
+				return service.ErrAnthropicStableIdentityManaged
 			}
 		}
 		return service.ErrAccountNotFound
@@ -1429,7 +1460,7 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
 	affected, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate()).
+		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate(), anthropicStableIdentityNotManagedPredicate()).
 		SetStatus(service.StatusError).
 		SetErrorMessage(errorMsg).
 		SetSchedulable(false).
@@ -1444,6 +1475,13 @@ func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg str
 		}
 		if reserved {
 			return service.ErrAnthropicStableCanaryReserved
+		}
+		managed, managedErr := isAnthropicStableIdentityManaged(ctx, r.sql, id)
+		if managedErr != nil {
+			return managedErr
+		}
+		if managed {
+			return service.ErrAnthropicStableIdentityManaged
 		}
 		return service.ErrAccountNotFound
 	}
@@ -1888,7 +1926,7 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 	affected, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate()).
+		Where(dbaccount.IDEQ(id), anthropicStableCanaryNotManagedPredicate(), anthropicStableIdentityNotManagedPredicate()).
 		SetStatus(service.StatusActive).
 		SetErrorMessage("").
 		SetSchedulable(true).
@@ -1903,6 +1941,13 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 		}
 		if reserved {
 			return service.ErrAnthropicStableCanaryReserved
+		}
+		managed, managedErr := isAnthropicStableIdentityManaged(ctx, r.sql, id)
+		if managedErr != nil {
+			return managedErr
+		}
+		if managed {
+			return service.ErrAnthropicStableIdentityManaged
 		}
 		return service.ErrAccountNotFound
 	}
@@ -2040,13 +2085,23 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	if err != nil {
 		return err
 	}
-	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(existingGroupIDs, groupIDs) {
+	expectedGroupIDs, compareExpectedGroups := service.AnthropicStableIdentityExpectedGroupIDs(ctx, accountID)
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(existingGroupIDs, groupIDs, expectedGroupIDs) {
 		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 			return err
 		}
 	}
 	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
 		return err
+	}
+	if compareExpectedGroups {
+		currentGroupIDs, loadErr := loadAccountGroupIDsWithClient(ctx, client, accountID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !sameOrderedAccountGroupIDs(currentGroupIDs, expectedGroupIDs) {
+			return service.ErrAnthropicStableIdentityConflict
+		}
 	}
 	if _, err := client.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
 		return err
@@ -2075,6 +2130,18 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	}
 	r.syncSchedulerAccountSnapshot(baseCtx, accountID)
 	return nil
+}
+
+func sameOrderedAccountGroupIDs(left, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Account, error) {
@@ -2695,7 +2762,7 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
 	predicates := []dbpredicate.Account{dbaccount.IDEQ(id)}
 	if schedulable {
-		predicates = append(predicates, anthropicStableCanaryNotManagedPredicate())
+		predicates = append(predicates, anthropicStableCanaryNotManagedPredicate(), anthropicStableIdentityNotManagedPredicate())
 	}
 	affected, err := r.client.Account.Update().
 		Where(predicates...).
@@ -2712,6 +2779,13 @@ func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedu
 			}
 			if reserved {
 				return service.ErrAnthropicStableCanaryReserved
+			}
+			managed, managedErr := isAnthropicStableIdentityManaged(ctx, r.sql, id)
+			if managedErr != nil {
+				return managedErr
+			}
+			if managed {
+				return service.ErrAnthropicStableIdentityManaged
 			}
 		}
 		return service.ErrAccountNotFound
@@ -2767,6 +2841,10 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	}
 	if service.AnthropicStableCanaryExtraUpdateTouchesManagedFields(updates) {
 		return service.ErrAnthropicStableCanaryReserved
+	}
+	if service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(updates) &&
+		!service.AnthropicStableIdentityMutationAuthorized(ctx, id) {
+		return service.ErrAnthropicStableIdentityManaged
 	}
 	payload, err := json.Marshal(updates)
 	if err != nil {
@@ -3375,6 +3453,7 @@ func loadAccountGroupIDsWithClient(ctx context.Context, client *dbent.Client, ac
 	entries, err := client.AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
+		Order(dbent.Asc(dbaccountgroup.FieldPriority), dbent.Asc(dbaccountgroup.FieldGroupID)).
 		All(ctx)
 	if err != nil {
 		return nil, err
@@ -3504,7 +3583,8 @@ func itoa(v int) string {
 // FindByExtraField finds accounts by key-value pairs in the extra field.
 // Uses PostgreSQL JSONB @> operator for efficient queries (requires GIN index).
 func (r *accountRepository) FindByExtraField(ctx context.Context, key string, value any) ([]service.Account, error) {
-	accounts, err := r.client.Account.Query().
+	client := clientFromContext(ctx, r.client)
+	accounts, err := client.Account.Query().
 		Where(
 			dbaccount.DeletedAtIsNil(),
 			func(s *entsql.Selector) {
@@ -3825,7 +3905,8 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 	res, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts SET proxy_id=proxy_fallback_origin_id, proxy_fallback_origin_id=NULL, updated_at=NOW()
 		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL
-			AND NOT (`+anthropicStableCanaryManagedSQL+`)`, accountID)
+			AND NOT (`+anthropicStableCanaryManagedSQL+`)
+			AND NOT (`+anthropicStableIdentityManagedSQL+`)`, accountID)
 	if err != nil {
 		return err
 	}
@@ -3837,6 +3918,13 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 		}
 		if reserved {
 			return service.ErrAnthropicStableCanaryReserved
+		}
+		managed, managedErr := isAnthropicStableIdentityManaged(ctx, r.sql, accountID)
+		if managedErr != nil {
+			return managedErr
+		}
+		if managed {
+			return service.ErrAnthropicStableIdentityManaged
 		}
 		return service.ErrAccountNotInFallback
 	}

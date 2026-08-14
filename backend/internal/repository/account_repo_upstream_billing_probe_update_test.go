@@ -81,8 +81,8 @@ func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed"}).
-					AddRow(tt.identityUnchanged, false, true, tt.databaseEnabled, nil, tt.databaseSnapshot, nil, nil, nil, false))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed", "stable_identity_managed", "stable_identity_updated_at", "database_updated_at"}).
+					AddRow(tt.identityUnchanged, false, true, tt.databaseEnabled, nil, tt.databaseSnapshot, nil, nil, nil, false, false, "", time.Unix(1, 0)))
 
 			account := &service.Account{
 				ID:          27,
@@ -172,8 +172,8 @@ func TestLockAndMergeAccountProbeExtraNeverInfersProbeFromRateSync(t *testing.T)
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(31), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed"}).
-					AddRow(true, false, true, tt.databaseEnabled, tt.databaseRateSync, nil, nil, nil, nil, false))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed", "stable_identity_managed", "stable_identity_updated_at", "database_updated_at"}).
+					AddRow(true, false, true, tt.databaseEnabled, tt.databaseRateSync, nil, nil, nil, nil, false, false, "", time.Unix(1, 0)))
 
 			account := &service.Account{
 				ID:          31,
@@ -211,8 +211,8 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed"}).
-					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed", "stable_identity_managed", "stable_identity_updated_at", "database_updated_at"}).
+					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false, false, "", time.Unix(1, 0)))
 
 			account := &service.Account{
 				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
@@ -251,7 +251,8 @@ func TestLockAndMergeAccountProbeExtraRejectsStaleSnapshotOfReservedCanary(t *te
 		WillReturnRows(sqlmock.NewRows([]string{
 			"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled",
 			"snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed",
-		}).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, true))
+			"stable_identity_managed", "stable_identity_updated_at", "database_updated_at",
+		}).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, true, false, "", time.Unix(1, 0)))
 	stale := &service.Account{
 		ID: 37, Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "sk-ant-oat-stale"}, Extra: map[string]any{},
@@ -261,6 +262,108 @@ func TestLockAndMergeAccountProbeExtraRejectsStaleSnapshotOfReservedCanary(t *te
 
 	require.ErrorIs(t, err, service.ErrAnthropicStableCanaryReserved)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestLockAndMergeAccountProbeExtraRejectsStaleStableIdentitySnapshots(t *testing.T) {
+	tests := []struct {
+		name              string
+		inputExtra        map[string]any
+		databaseManaged   bool
+		databaseUpdatedAt string
+	}{
+		{
+			name:              "configuration committed after ordinary edit loaded",
+			inputExtra:        map[string]any{},
+			databaseManaged:   true,
+			databaseUpdatedAt: "2026-08-14T09:01:00Z",
+		},
+		{
+			name: "lifecycle revision changed after ordinary edit loaded",
+			inputExtra: map[string]any{
+				service.AnthropicStableIdentityEnabledExtraKey:   true,
+				service.AnthropicStableIdentityUpdatedAtExtraKey: "2026-08-14T09:00:00Z",
+			},
+			databaseManaged:   true,
+			databaseUpdatedAt: "2026-08-14T09:01:00Z",
+		},
+		{
+			name: "disable committed after ordinary edit loaded",
+			inputExtra: map[string]any{
+				service.AnthropicStableIdentityEnabledExtraKey:   true,
+				service.AnthropicStableIdentityUpdatedAtExtraKey: "2026-08-14T09:00:00Z",
+			},
+			databaseManaged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+			t.Cleanup(func() { _ = client.Close() })
+
+			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
+				WithArgs(int64(41), service.PlatformAnthropic, service.AccountTypeOAuth, `{"access_token":"sk-ant-oat-stale"}`, nil).
+				WillReturnRows(sqlmock.NewRows([]string{
+					"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled",
+					"snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed",
+					"stable_identity_managed", "stable_identity_updated_at", "database_updated_at",
+				}).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, false, tt.databaseManaged, tt.databaseUpdatedAt, time.Unix(1, 0)))
+			stale := &service.Account{
+				ID: 41, Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "sk-ant-oat-stale"}, Extra: tt.inputExtra,
+			}
+
+			_, err = lockAndMergeAccountProbeExtra(context.Background(), client, stale, nil, nil)
+
+			require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestLockAndMergeAccountProbeExtraAllowsCurrentStableIdentitySnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	const updatedAt = "2026-08-14T09:01:00Z"
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
+		WithArgs(int64(43), service.PlatformAnthropic, service.AccountTypeOAuth, `{"access_token":"sk-ant-oat-current"}`, nil).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled",
+			"snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed",
+			"stable_identity_managed", "stable_identity_updated_at", "database_updated_at",
+		}).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, false, true, updatedAt, time.Unix(1, 0)))
+	account := &service.Account{
+		ID: 43, Platform: service.PlatformAnthropic, Type: service.AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "sk-ant-oat-current"},
+		Extra: map[string]any{
+			service.AnthropicStableIdentityEnabledExtraKey:   true,
+			service.AnthropicStableIdentityUpdatedAtExtraKey: updatedAt,
+		},
+	}
+
+	got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
+
+	require.NoError(t, err)
+	require.Equal(t, true, got[service.AnthropicStableIdentityEnabledExtraKey])
+	require.Equal(t, updatedAt, got[service.AnthropicStableIdentityUpdatedAtExtraKey])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateExtraRejectsStableIdentityManagedFieldsWithoutLifecycleAuthorization(t *testing.T) {
+	repo := newAccountRepositoryWithSQL(nil, &recordingSQLExecutor{}, nil)
+
+	err := repo.UpdateExtra(context.Background(), 43, map[string]any{
+		service.AnthropicStableIdentityStateExtraKey: service.AnthropicStableIdentityStatePaused,
+	})
+
+	require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
 }
 
 func TestUpdateExtraExplicitProbeDisableRemovesSnapshot(t *testing.T) {
@@ -395,8 +498,8 @@ func TestUpdateWithAccountBillingSettingsRollsBackWhenOutboxFails(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed"}).
-			AddRow(true, false, true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`), nil, nil, nil, false))
+		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "stable_canary_managed", "stable_identity_managed", "stable_identity_updated_at", "database_updated_at"}).
+			AddRow(true, false, true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`), nil, nil, nil, false, false, "", time.Unix(1, 0)))
 	mock.ExpectExec(`(?s)UPDATE .*accounts.*SET.*WHERE .*id.*`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT .* FROM "accounts" WHERE "id" = \$1`).

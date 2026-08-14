@@ -221,7 +221,7 @@ func (a *Account) IsSchedulable() bool {
 	// process feature switch. If the switch is disabled or the process restarts,
 	// the credential must remain quarantined instead of falling back to a legacy
 	// scheduler/identity path.
-	if a == nil || a.HasAnthropicStableCanaryManagedFields() {
+	if a == nil || a.HasAnthropicStableCanaryManagedFields() || a.HasAnthropicStableIdentityManagedFields() {
 		return false
 	}
 	if !a.IsActive() || !a.Schedulable {

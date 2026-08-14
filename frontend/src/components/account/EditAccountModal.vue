@@ -1633,7 +1633,11 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxySelector
+          v-model="form.proxy_id"
+          :proxies="proxies"
+          :disabled="anthropicStableIdentityManaged"
+        />
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -1644,6 +1648,7 @@
             type="number"
             min="1"
             class="input"
+            :disabled="anthropicStableIdentityManaged"
             @input="form.concurrency = Math.max(1, form.concurrency || 1)"
           />
         </div>
@@ -2029,9 +2034,10 @@
             type="button"
             role="switch"
             :aria-checked="anthropicOAuthPassthroughEnabled"
-            @click="anthropicOAuthPassthroughEnabled = !anthropicOAuthPassthroughEnabled"
+            :disabled="anthropicStableIdentityManaged"
+            @click="!anthropicStableIdentityManaged && (anthropicOAuthPassthroughEnabled = !anthropicOAuthPassthroughEnabled)"
             :class="[
-              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              'relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
               anthropicOAuthPassthroughEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
             ]"
           >
@@ -2044,6 +2050,15 @@
           </button>
         </div>
       </div>
+
+      <AnthropicStableIdentityPanel
+        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        :account="account"
+        :groups="groups"
+        :oauth-passthrough-enabled="anthropicOAuthPassthroughEnabled"
+        @changed="emit('updated', $event)"
+        @status-change="anthropicStableIdentityManaged = $event.enabled"
+      />
 
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
@@ -2789,7 +2804,11 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div>
           <label class="input-label">{{ t('common.status') }}</label>
-          <Select v-model="form.status" :options="statusOptions" />
+          <Select
+            v-model="form.status"
+            :options="statusOptions"
+            :disabled="anthropicStableIdentityManaged"
+          />
         </div>
 
         <!-- Mixed Scheduling (read-only in edit mode) -->
@@ -2874,6 +2893,7 @@
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
         :openai-kiro-bridge-enabled="openAIKiroBridgeEnabled"
+        :disabled="anthropicStableIdentityManaged"
         data-tour="account-form-groups"
       />
     </form>
@@ -2940,6 +2960,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import AnthropicStableIdentityPanel from '@/components/account/AnthropicStableIdentityPanel.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
@@ -3179,6 +3200,7 @@ const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inhe
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicOAuthPassthroughEnabled = ref(false)
+const anthropicStableIdentityManaged = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -4083,6 +4105,9 @@ watch(
       return
     }
     if (!wasShow || newAccount !== previousAccount) {
+      if (!wasShow || newAccount.id !== previousAccount?.id) {
+        anthropicStableIdentityManaged.value = false
+      }
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
     }

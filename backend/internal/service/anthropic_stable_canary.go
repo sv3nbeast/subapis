@@ -261,6 +261,9 @@ func validateAnthropicStableCanaryAdminUpdate(account *Account, input *UpdateAcc
 	if input == nil {
 		return nil
 	}
+	if err := validateAnthropicStableIdentityAdminUpdate(account, input); err != nil {
+		return err
+	}
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
 		return fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
@@ -271,6 +274,9 @@ func validateAnthropicStableCanaryAdminUpdate(account *Account, input *UpdateAcc
 }
 
 func validateAnthropicStableCanaryAccountServiceUpdate(account *Account, input UpdateAccountRequest) error {
+	if err := validateAnthropicStableIdentityAccountServiceUpdate(account, input); err != nil {
+		return err
+	}
 	if input.Extra != nil && AnthropicStableCanaryExtraUpdateTouchesManagedFields(*input.Extra) {
 		return fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
@@ -660,6 +666,15 @@ func (r *anthropicStableCanaryRuntime) blockReason(accountID int64) string {
 	return r.blocked[accountID]
 }
 
+func (r *anthropicStableCanaryRuntime) clearBlock(accountID int64) {
+	if r == nil || accountID <= 0 {
+		return
+	}
+	r.mu.Lock()
+	delete(r.blocked, accountID)
+	r.mu.Unlock()
+}
+
 // blockAnthropicStableCanary records the local fail-closed state first, then
 // persists the same finite reason code when the concrete repository supports
 // the optional D1 state extension. Memory is authoritative for the current
@@ -716,12 +731,41 @@ func (s *GatewayService) anthropicStableCanaryHTTPClient(account *Account) (*htt
 		return nil, errors.New("stable canary runtime is not configured")
 	}
 	key := fmt.Sprintf("%d", account.ID)
+	identityPrefix := ""
+	if account.HasAnthropicStableIdentityManagedFields() {
+		deviceID := account.AnthropicStableIdentityDeviceID()
+		generation := account.AnthropicStableIdentityGeneration()
+		if generation <= 0 || !IsValidAnthropicStableIdentityDeviceID(deviceID) {
+			return nil, errors.New("stable identity transport generation is invalid")
+		}
+		identityPrefix = fmt.Sprintf("identity:%d:", account.ID)
+		key = fmt.Sprintf("%s%d:%s", identityPrefix, generation, deviceID[:12])
+	}
 	s.anthropicStableCanary.mu.Lock()
 	if client := s.anthropicStableCanary.clients[key]; client != nil {
 		s.anthropicStableCanary.mu.Unlock()
 		return client, nil
 	}
+	// A generation/device transition must never reuse the previous identity's
+	// idle TCP/TLS pool. Cross-process lifecycle serialization guarantees no
+	// old-generation upstream request is active when the new generation commits;
+	// keying and pruning here applies that boundary independently on every
+	// gateway instance when it next observes the route.
+	staleClients := make([]*http.Client, 0)
+	if identityPrefix != "" {
+		for existingKey, existingClient := range s.anthropicStableCanary.clients {
+			if strings.HasPrefix(existingKey, identityPrefix) && existingKey != key {
+				delete(s.anthropicStableCanary.clients, existingKey)
+				if existingClient != nil {
+					staleClients = append(staleClients, existingClient)
+				}
+			}
+		}
+	}
 	s.anthropicStableCanary.mu.Unlock()
+	for _, staleClient := range staleClients {
+		staleClient.CloseIdleConnections()
+	}
 
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok || transport == nil {
@@ -953,12 +997,23 @@ func stableCanaryFirstSemanticOutput(start time.Time, metrics AnthropicStableRes
 }
 
 func (s *GatewayService) writeAnthropicStableCanaryUpstreamError(c *gin.Context, resp *http.Response, account *Account, model string) error {
+	return s.writeAnthropicStableUpstreamError(c, resp, account, model, "anthropic_stable_canary_http_error", "stable canary")
+}
+
+func (s *GatewayService) writeAnthropicStableUpstreamError(
+	c *gin.Context,
+	resp *http.Response,
+	account *Account,
+	model string,
+	kind string,
+	label string,
+) error {
 	if resp == nil {
-		return errors.New("stable canary upstream response is empty")
+		return fmt.Errorf("%s upstream response is empty", label)
 	}
 	body, readErr := stableCanaryReadBody(resp, 64<<20)
 	if readErr != nil {
-		return fmt.Errorf("read stable canary upstream error: %w", readErr)
+		return fmt.Errorf("read %s upstream error: %w", label, readErr)
 	}
 	if c != nil {
 		writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -977,10 +1032,10 @@ func (s *GatewayService) writeAnthropicStableCanaryUpstreamError(c *gin.Context,
 		UpstreamStatusCode: resp.StatusCode,
 		UpstreamRequestID:  resp.Header.Get("x-request-id"),
 		Passthrough:        true,
-		Kind:               "anthropic_stable_canary_http_error",
+		Kind:               kind,
 		Message:            message,
 	})
-	return fmt.Errorf("stable canary upstream status %d", resp.StatusCode)
+	return fmt.Errorf("%s upstream status %d", label, resp.StatusCode)
 }
 
 // ForwardAnthropicStableCanaryRaw is the handler-facing strict entry. It never

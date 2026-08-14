@@ -27,6 +27,32 @@ import type {
   OllamaCloudUsageState
 } from '@/types'
 
+export interface AnthropicStableIdentityStatus {
+  account_id: number
+  enabled: boolean
+  state: 'active' | 'paused' | 'off'
+  blocked: boolean
+  blocked_reason?: string
+  group_ids: number[]
+  api_key_ids: number[]
+  generation: number
+  profile_id: string
+  device_fingerprint?: string
+  device_configured: boolean
+  concurrency: number
+  schedulable: boolean
+  previous_schedulable?: boolean
+  requires_restart: boolean
+  configured_at?: string
+  updated_at?: string
+}
+
+export interface AnthropicStableIdentityConfigureRequest {
+  group_ids: number[]
+  api_key_ids?: number[]
+  profile_id?: string
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -996,6 +1022,45 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
   return data
 }
 
+export async function getAnthropicStableIdentity(id: number): Promise<AnthropicStableIdentityStatus> {
+  const { data } = await apiClient.get<AnthropicStableIdentityStatus>(
+    `/admin/accounts/${id}/anthropic-stable-identity`
+  )
+  return data
+}
+
+export async function configureAnthropicStableIdentity(
+  id: number,
+  input: AnthropicStableIdentityConfigureRequest
+): Promise<AnthropicStableIdentityStatus> {
+  const { data } = await apiClient.put<AnthropicStableIdentityStatus>(
+    `/admin/accounts/${id}/anthropic-stable-identity`,
+    input
+  )
+  return data
+}
+
+export async function pauseAnthropicStableIdentity(id: number): Promise<AnthropicStableIdentityStatus> {
+  const { data } = await apiClient.post<AnthropicStableIdentityStatus>(
+    `/admin/accounts/${id}/anthropic-stable-identity/pause`
+  )
+  return data
+}
+
+export async function resumeAnthropicStableIdentity(id: number): Promise<AnthropicStableIdentityStatus> {
+  const { data } = await apiClient.post<AnthropicStableIdentityStatus>(
+    `/admin/accounts/${id}/anthropic-stable-identity/resume`
+  )
+  return data
+}
+
+export async function disableAnthropicStableIdentity(id: number): Promise<AnthropicStableIdentityStatus> {
+  const { data } = await apiClient.delete<AnthropicStableIdentityStatus>(
+    `/admin/accounts/${id}/anthropic-stable-identity`
+  )
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -1056,7 +1121,12 @@ export const accountsAPI = {
   saveOllamaCloudUsageSession,
   deleteOllamaCloudUsageSession,
   setOllamaCloudUsageAutoRefresh,
-  refreshOllamaCloudUsage
+  refreshOllamaCloudUsage,
+  getAnthropicStableIdentity,
+  configureAnthropicStableIdentity,
+  pauseAnthropicStableIdentity,
+  resumeAnthropicStableIdentity,
+  disableAnthropicStableIdentity
 }
 
 export default accountsAPI

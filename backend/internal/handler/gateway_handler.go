@@ -239,6 +239,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	if h.tryAnthropicStableCanaryMessages(c, apiKey, subject, requestStartedAt) {
 		return
 	}
+	// Account-scoped stable identity routes are opt-in and keyed by an existing
+	// group/API-key pair. Non-enrolled clients continue unchanged through the
+	// generic OAuth mimicry path.
+	if h.tryAnthropicStableIdentityMessages(c, apiKey, subject, requestStartedAt) {
+		return
+	}
 	reqLog := requestLogger(
 		c,
 		"handler.gateway.messages",
@@ -2397,6 +2403,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// OAuth path and create a second upstream identity.
 	if apiKey.GroupID != nil && h.gatewayService.IsAnthropicStableCanaryGroup(apiKey.GroupID) {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Not found")
+		return
+	}
+	if h.tryAnthropicStableIdentityCountTokens(c, apiKey) {
 		return
 	}
 	reqLog := requestLogger(

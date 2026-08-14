@@ -185,6 +185,7 @@ func ProvideAdminAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
+	gatewayService *service.GatewayService,
 ) *admin.AccountHandler {
 	h := admin.ProvideAccountHandler(
 		adminService,
@@ -205,6 +206,7 @@ func ProvideAdminAccountHandler(
 	)
 	h.SetKiroOAuthService(kiroOAuthService)
 	h.SetGrokAccountRefresher(grokTokenProvider)
+	h.SetAnthropicStableIdentityGateway(gatewayService)
 	return h
 }
 

@@ -132,6 +132,44 @@ const anthropicStableCanaryManagedSQL = `COALESCE(extra, '{}'::jsonb) ?| ARRAY[`
 	`'` + service.AnthropicStableCanaryBlockedReasonExtraKey + `',` +
 	`'` + service.AnthropicStableCanaryBlockedAtExtraKey + `']`
 
+// Keep this predicate aligned with service.anthropicStableIdentityManagedExtraKeys.
+// It deliberately treats partial metadata as managed so a stale generic edit
+// cannot erase an interrupted or future-version lifecycle record.
+const anthropicStableIdentityManagedSQL = `COALESCE(extra, '{}'::jsonb) ?| ARRAY[` +
+	`'` + service.AnthropicStableIdentityEnabledExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityStateExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityDeviceIDExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityPreviousSchedulableExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityPreviousConcurrencyExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityPreviousGroupIDsExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityProfileExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityGroupIDsExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityAPIKeyIDsExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityAPIKeyGroupIDsExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityGenerationExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityCreatedAtExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityUpdatedAtExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityBlockedExtraKey + `',` +
+	`'` + service.AnthropicStableIdentityBlockedReasonExtraKey + `']`
+
+var anthropicStableIdentityManagedExtraKeys = [...]string{
+	service.AnthropicStableIdentityEnabledExtraKey,
+	service.AnthropicStableIdentityStateExtraKey,
+	service.AnthropicStableIdentityDeviceIDExtraKey,
+	service.AnthropicStableIdentityPreviousSchedulableExtraKey,
+	service.AnthropicStableIdentityPreviousConcurrencyExtraKey,
+	service.AnthropicStableIdentityPreviousGroupIDsExtraKey,
+	service.AnthropicStableIdentityProfileExtraKey,
+	service.AnthropicStableIdentityGroupIDsExtraKey,
+	service.AnthropicStableIdentityAPIKeyIDsExtraKey,
+	service.AnthropicStableIdentityAPIKeyGroupIDsExtraKey,
+	service.AnthropicStableIdentityGenerationExtraKey,
+	service.AnthropicStableIdentityCreatedAtExtraKey,
+	service.AnthropicStableIdentityUpdatedAtExtraKey,
+	service.AnthropicStableIdentityBlockedExtraKey,
+	service.AnthropicStableIdentityBlockedReasonExtraKey,
+}
+
 // BlockAnthropicStableCanary is the only generic-repository mutation allowed
 // for a reserved D1 account. It records a finite pause code without changing
 // credentials, scheduler status, group membership, or the stored device.
@@ -225,6 +263,42 @@ func isAnthropicStableCanaryReserved(ctx context.Context, exec sqlExecutor, id i
 	return false, nil
 }
 
+func isAnthropicStableIdentityManaged(ctx context.Context, exec sqlExecutor, id int64) (bool, error) {
+	if exec == nil {
+		return false, service.ErrAccountNotFound
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT extra
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	var rawExtra []byte
+	if err := rows.Scan(&rawExtra); err != nil {
+		return false, err
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if len(rawExtra) == 0 {
+		return false, nil
+	}
+	var extra map[string]any
+	if err := json.Unmarshal(rawExtra, &extra); err != nil {
+		return false, fmt.Errorf("decode account extra while checking stable identity reservation: %w", err)
+	}
+	return service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(extra), nil
+}
+
 func lockAnthropicStableCanaryMutationAccount(ctx context.Context, client *dbent.Client, id int64) error {
 	if client == nil || id <= 0 {
 		return service.ErrAccountNotFound
@@ -239,6 +313,10 @@ func lockAnthropicStableCanaryMutationAccount(ctx context.Context, client *dbent
 	}
 	if service.AnthropicStableCanaryExtraUpdateTouchesManagedFields(row.Extra) {
 		return service.ErrAnthropicStableCanaryReserved
+	}
+	if service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(row.Extra) &&
+		!service.AnthropicStableIdentityMutationAuthorized(ctx, id) {
+		return service.ErrAnthropicStableIdentityManaged
 	}
 	return nil
 }
@@ -276,6 +354,33 @@ func lockAnthropicStableCanaryGroupMutation(ctx context.Context, client *dbent.C
 	return nil
 }
 
+// rejectAnthropicStableIdentityGroupDestruction protects the rollback anchor
+// without freezing ordinary policy edits on a shared existing group. Stable
+// identity accounts may coexist with other accounts, so rate/name/model changes
+// remain available; deleting the group or all of its memberships requires the
+// operator to reconfigure/disable stable mode first.
+func rejectAnthropicStableIdentityGroupDestruction(ctx context.Context, client *dbent.Client, groupID int64) error {
+	if client == nil || groupID <= 0 {
+		return service.ErrGroupNotFound
+	}
+	accounts, err := client.Account.Query().
+		Where(
+			dbaccount.DeletedAtIsNil(),
+			dbaccount.HasGroupsWith(dbgroup.IDEQ(groupID), dbgroup.DeletedAtIsNil()),
+		).
+		Select(dbaccount.FieldID, dbaccount.FieldExtra).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, account := range accounts {
+		if service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(account.Extra) {
+			return service.ErrAnthropicStableIdentityManaged
+		}
+	}
+	return nil
+}
+
 func sortedUniqueAnthropicStableGroupIDs(values ...[]int64) []int64 {
 	seen := make(map[int64]struct{})
 	for _, ids := range values {
@@ -294,10 +399,18 @@ func sortedUniqueAnthropicStableGroupIDs(values ...[]int64) []int64 {
 }
 
 func anthropicStableCanaryNotManagedPredicate() dbpredicate.Account {
+	return anthropicStableManagedExtraNotPresentPredicate(anthropicStableCanaryManagedExtraKeys[:])
+}
+
+func anthropicStableIdentityNotManagedPredicate() dbpredicate.Account {
+	return anthropicStableManagedExtraNotPresentPredicate(anthropicStableIdentityManagedExtraKeys[:])
+}
+
+func anthropicStableManagedExtraNotPresentPredicate(keys []string) dbpredicate.Account {
 	return dbpredicate.Account(func(selector *entsql.Selector) {
 		column := selector.C(dbaccount.FieldExtra)
-		managed := make([]*entsql.Predicate, 0, len(anthropicStableCanaryManagedExtraKeys))
-		for _, key := range anthropicStableCanaryManagedExtraKeys {
+		managed := make([]*entsql.Predicate, 0, len(keys))
+		for _, key := range keys {
 			key := key
 			managed = append(managed, entsql.P(func(builder *entsql.Builder) {
 				switch builder.Dialect() {

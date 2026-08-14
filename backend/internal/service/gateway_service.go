@@ -1036,6 +1036,11 @@ type GatewayService struct {
 	// not shared with the normal scheduler or the unfinished multi-user V1
 	// admission state.
 	anthropicStableCanary *anthropicStableCanaryRuntime
+	// anthropicStableIdentityRoutes is a short-lived, deny-by-default route
+	// directory for account-scoped stable identity enrollments. It is separate
+	// from the process-wide canary config so an enrolled account can live in an
+	// existing group without changing that group's ordinary scheduler policy.
+	anthropicStableIdentityRoutes *anthropicStableIdentityRouteDirectory
 }
 
 func (s *GatewayService) SetCompositeResolver(resolver *CompositeRouteResolver) {
@@ -1092,44 +1097,45 @@ func NewGatewayService(
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
 
 	svc := &GatewayService{
-		accountRepo:                accountRepo,
-		groupRepo:                  groupRepo,
-		usageLogRepo:               usageLogRepo,
-		usageBillingRepo:           usageBillingRepo,
-		userRepo:                   userRepo,
-		userSubRepo:                userSubRepo,
-		userGroupRateRepo:          userGroupRateRepo,
-		cache:                      cache,
-		digestStore:                digestStore,
-		cfg:                        cfg,
-		schedulerSnapshot:          schedulerSnapshot,
-		concurrencyService:         concurrencyService,
-		billingService:             billingService,
-		rateLimitService:           rateLimitService,
-		billingCacheService:        billingCacheService,
-		identityService:            identityService,
-		httpUpstream:               httpUpstream,
-		deferredService:            deferredService,
-		claudeTokenProvider:        claudeTokenProvider,
-		kiroTokenProvider:          kiroTokenProvider,
-		droidTokenProvider:         droidTokenProvider,
-		kiroCooldownStore:          kiroCooldownStore,
-		sessionLimitCache:          sessionLimitCache,
-		rpmCache:                   rpmCache,
-		modelCapacityCooldownCache: modelCapacityCooldownCache,
-		userGroupRateCache:         gocache.New(userGroupRateTTL, time.Minute),
-		settingService:             settingService,
-		modelsListCache:            gocache.New(modelsListTTL, time.Minute),
-		modelsListCacheTTL:         modelsListTTL,
-		kiroModelLimitsCache:       newKiroModelLimitsCache(),
-		responseHeaderFilter:       compileResponseHeaderFilter(cfg),
-		tlsFPProfileService:        tlsFPProfileService,
-		channelService:             channelService,
-		resolver:                   resolver,
-		balanceNotifyService:       balanceNotifyService,
-		claudeCodeCompanionProbe:   NewClaudeCodeCompanionProbeService(httpUpstream),
-		userPlatformQuotaRepo:      userPlatformQuotaRepo,
-		anthropicStableCanary:      newAnthropicStableCanaryRuntime(),
+		accountRepo:                   accountRepo,
+		groupRepo:                     groupRepo,
+		usageLogRepo:                  usageLogRepo,
+		usageBillingRepo:              usageBillingRepo,
+		userRepo:                      userRepo,
+		userSubRepo:                   userSubRepo,
+		userGroupRateRepo:             userGroupRateRepo,
+		cache:                         cache,
+		digestStore:                   digestStore,
+		cfg:                           cfg,
+		schedulerSnapshot:             schedulerSnapshot,
+		concurrencyService:            concurrencyService,
+		billingService:                billingService,
+		rateLimitService:              rateLimitService,
+		billingCacheService:           billingCacheService,
+		identityService:               identityService,
+		httpUpstream:                  httpUpstream,
+		deferredService:               deferredService,
+		claudeTokenProvider:           claudeTokenProvider,
+		kiroTokenProvider:             kiroTokenProvider,
+		droidTokenProvider:            droidTokenProvider,
+		kiroCooldownStore:             kiroCooldownStore,
+		sessionLimitCache:             sessionLimitCache,
+		rpmCache:                      rpmCache,
+		modelCapacityCooldownCache:    modelCapacityCooldownCache,
+		userGroupRateCache:            gocache.New(userGroupRateTTL, time.Minute),
+		settingService:                settingService,
+		modelsListCache:               gocache.New(modelsListTTL, time.Minute),
+		modelsListCacheTTL:            modelsListTTL,
+		kiroModelLimitsCache:          newKiroModelLimitsCache(),
+		responseHeaderFilter:          compileResponseHeaderFilter(cfg),
+		tlsFPProfileService:           tlsFPProfileService,
+		channelService:                channelService,
+		resolver:                      resolver,
+		balanceNotifyService:          balanceNotifyService,
+		claudeCodeCompanionProbe:      NewClaudeCodeCompanionProbeService(httpUpstream),
+		userPlatformQuotaRepo:         userPlatformQuotaRepo,
+		anthropicStableCanary:         newAnthropicStableCanaryRuntime(),
+		anthropicStableIdentityRoutes: newAnthropicStableIdentityRouteDirectory(),
 	}
 	if provider, ok := kiroCooldownStore.(nianzsKiroCooldownStoreProvider); ok {
 		svc.nianzsKiroCooldownStore = provider.NianzsKiroCooldownStore()
@@ -6974,6 +6980,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	if account != nil && account.HasAnthropicStableCanaryManagedFields() {
 		return nil, fmt.Errorf("%w: managed account reached generic messages forwarder", ErrAnthropicStableCanaryOutboundBlocked)
+	}
+	if account != nil && account.HasAnthropicStableIdentityManagedFields() {
+		return nil, fmt.Errorf("%w: managed account reached generic messages forwarder", ErrAnthropicStableIdentityOutboundBlocked)
 	}
 	nativeOAuthPassthrough := s.shouldUseAnthropicOAuthNativePassthrough(ctx, c, account, parsed)
 	if !nativeOAuthPassthrough {

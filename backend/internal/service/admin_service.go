@@ -3330,6 +3330,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
 		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
+	if AnthropicStableIdentityExtraUpdateTouchesManagedFields(input.Extra) {
+		return nil, ErrAnthropicStableIdentityManaged
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -3599,7 +3602,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
-		account.Extra = normalizedExtra
+		account.Extra = preserveAnthropicStableIdentityManagedExtra(account.Extra, normalizedExtra)
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
 			// 清除 AICredits 限流 key
@@ -3784,7 +3787,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	// 绑定分组
-	if input.GroupIDs != nil {
+	if input.GroupIDs != nil && !(account.HasAnthropicStableIdentityManagedFields() &&
+		sameStableIdentityIDSet(*input.GroupIDs, account.GroupIDs)) {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
 			return nil, err
 		}
@@ -3835,12 +3839,22 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(updates) {
 		return fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
 	}
+	if AnthropicStableIdentityExtraUpdateTouchesManagedFields(updates) {
+		return ErrAnthropicStableIdentityManaged
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	if account.HasAnthropicStableCanaryManagedFields() {
 		return fmt.Errorf("%w: generic extra updates cannot modify a reserved canary", ErrAnthropicStableCanaryReserved)
+	}
+	if account.HasAnthropicStableIdentityManagedFields() {
+		candidate := *account
+		candidate.Extra = mergeAnthropicStableIdentityExtra(account.Extra, updates)
+		if err := ValidateAnthropicStableIdentityAccount(&candidate); err != nil {
+			return fmt.Errorf("%w: %v", ErrAnthropicStableIdentityManaged, err)
+		}
 	}
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
@@ -3871,6 +3885,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if AnthropicStableCanaryExtraUpdateTouchesManagedFields(input.Extra) {
 		return nil, fmt.Errorf("%w: enrollment fields require the dedicated canary lifecycle", ErrAnthropicStableCanaryReserved)
+	}
+	if AnthropicStableIdentityExtraUpdateTouchesManagedFields(input.Extra) {
+		return nil, ErrAnthropicStableIdentityManaged
 	}
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -3907,7 +3924,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
 	canaryProtectedUpdate := anthropicStableCanaryBulkUpdateTouchesManagedFields(input)
-	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil || canaryProtectedUpdate {
+	stableIdentityProtectedUpdate := anthropicStableIdentityBulkUpdateTouchesProtectedFields(input)
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil || canaryProtectedUpdate || stableIdentityProtectedUpdate {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -3918,6 +3936,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		for _, account := range cachedTargets {
 			if account != nil && account.HasAnthropicStableCanaryManagedFields() {
 				return nil, fmt.Errorf("%w: bulk updates cannot modify a reserved canary", ErrAnthropicStableCanaryReserved)
+			}
+		}
+	}
+	if stableIdentityProtectedUpdate {
+		for _, account := range cachedTargets {
+			if account != nil && account.HasAnthropicStableIdentityManagedFields() {
+				return nil, ErrAnthropicStableIdentityManaged
 			}
 		}
 	}
@@ -4257,6 +4282,15 @@ func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorM
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	if schedulable {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if account.HasAnthropicStableIdentityManagedFields() {
+			return nil, ErrAnthropicStableIdentityManaged
+		}
+	}
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}

@@ -44,6 +44,11 @@ type grokAccountCredentialRefresher interface {
 	ForceRefreshAccountForAdmin(context.Context, *service.Account) (*service.Account, error)
 }
 
+type anthropicStableIdentityGatewayControl interface {
+	InvalidateAnthropicStableIdentityRoutes()
+	ClearAnthropicStableIdentityRuntimeBlock(accountID int64)
+}
+
 // NewOAuthHandler creates a new OAuth handler
 func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 	return &OAuthHandler{
@@ -72,6 +77,8 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	stableIdentityGateway   anthropicStableIdentityGatewayControl
+	stableIdentityMu        sync.Mutex
 }
 
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
@@ -80,6 +87,12 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+func (h *AccountHandler) SetAnthropicStableIdentityGateway(gateway anthropicStableIdentityGatewayControl) {
+	if h != nil {
+		h.stableIdentityGateway = gateway
+	}
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1219,6 +1232,9 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if account.IsCredentialShadow() {
 		return nil, "", infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH",
 			"cannot refresh spark shadow account; its credentials are managed by the parent account")
+	}
+	if account.HasAnthropicStableIdentityManagedFields() {
+		return nil, "", service.ErrAnthropicStableIdentityManaged
 	}
 
 	var newCredentials map[string]any

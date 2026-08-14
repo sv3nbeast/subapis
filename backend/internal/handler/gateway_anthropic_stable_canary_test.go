@@ -53,6 +53,13 @@ func (r *stableCanaryHandlerAccountRepo) ListByGroup(_ context.Context, groupID 
 	return []service.Account{*r.account}, nil
 }
 
+func (r *stableCanaryHandlerAccountRepo) FindByExtraField(_ context.Context, key string, value any) ([]service.Account, error) {
+	if key != service.AnthropicStableIdentityEnabledExtraKey || value != true || r.account == nil {
+		return nil, nil
+	}
+	return []service.Account{*r.account}, nil
+}
+
 func (r *stableCanaryHandlerAccountRepo) ClaimAnthropicStableCanarySession(
 	_ context.Context,
 	groupID, accountID, generation, ownerUserID int64,

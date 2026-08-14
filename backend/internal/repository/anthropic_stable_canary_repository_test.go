@@ -191,6 +191,43 @@ func TestAnthropicStableReservationRejectsIdentityAndMembershipMutation(t *testi
 	require.ErrorIs(t, fixture.groups.Delete(ctx, fixture.groupID), service.ErrAnthropicStableCanaryReserved)
 }
 
+func TestAnthropicStableIdentityReservationRejectsGenericMembershipAndDelete(t *testing.T) {
+	ctx := context.Background()
+	apiKeys, client := newAPIKeyRepoSQLite(t)
+	group, err := client.Group.Create().
+		SetName("existing-anthropic-group").
+		SetPlatform(service.PlatformAnthropic).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	account, err := client.Account.Create().
+		SetName("stable-identity-managed-account").
+		SetPlatform(service.PlatformAnthropic).
+		SetType(service.AccountTypeOAuth).
+		SetStatus(service.StatusActive).
+		SetSchedulable(false).
+		SetConcurrency(1).
+		SetCredentials(map[string]any{
+			"access_token": "sk-ant-oat-stable-identity",
+		}).
+		SetExtra(map[string]any{
+			service.AnthropicStableIdentityEnabledExtraKey: true,
+		}).
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.AccountGroup.Create().SetAccountID(account.ID).SetGroupID(group.ID).SetPriority(1).Save(ctx)
+	require.NoError(t, err)
+
+	repo := newAccountRepositoryWithSQL(client, apiKeys.sql, nil)
+	groups := newGroupRepositoryWithSQL(client, apiKeys.sql)
+	require.ErrorIs(t, repo.BindGroups(ctx, account.ID, []int64{group.ID}), service.ErrAnthropicStableIdentityManaged)
+	require.ErrorIs(t, repo.Delete(ctx, account.ID), service.ErrAnthropicStableIdentityManaged)
+	_, err = groups.DeleteAccountGroupsByGroupID(ctx, group.ID)
+	require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
+	_, err = groups.DeleteCascade(ctx, group.ID)
+	require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
+}
+
 func TestAnthropicStableReservationStateGuardWorksOnSQLite(t *testing.T) {
 	fixture := newAnthropicStableRepositoryFixture(t)
 	ctx := context.Background()

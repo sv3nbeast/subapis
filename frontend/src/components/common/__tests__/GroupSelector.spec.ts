@@ -164,4 +164,28 @@ describe('GroupSelector mixed scheduling filtering', () => {
     expect(wrapper.text()).toContain('OpenAI')
     expect(wrapper.text()).not.toContain('Claude AWS')
   })
+
+  it('does not change managed group membership while disabled', async () => {
+    const wrapper = mount(GroupSelector, {
+      props: {
+        modelValue: [1],
+        groups,
+        platform: 'anthropic',
+        mixedScheduling: false,
+        searchable: false,
+        disabled: true
+      },
+      global: {
+        stubs: {
+          GroupBadge: GroupBadgeStub,
+          Icon: IconStub
+        }
+      }
+    })
+
+    const checkbox = wrapper.get('input[type="checkbox"]')
+    expect(checkbox.attributes('disabled')).toBeDefined()
+    await checkbox.setValue(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
 })
