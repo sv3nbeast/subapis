@@ -6,7 +6,8 @@ package service
 // environment configuration and one isolated group. Stable identity mode is
 // the operator-facing extension: an OAuth/SetupToken account is enrolled with
 // one account-level switch and automatically participates in every current
-// Anthropic group membership. The metadata lives on the account so it survives
+// Anthropic group membership. Its device and selected static proxy are captured
+// as one transport generation. The metadata lives on the account so it survives
 // restarts and does not require a deployment-specific env file.
 
 import (
@@ -104,6 +105,7 @@ const (
 	AnthropicStableIdentityAPIKeyIDsExtraKey           = "anthropic_stable_identity_api_key_ids"
 	AnthropicStableIdentityAPIKeyGroupIDsExtraKey      = "anthropic_stable_identity_api_key_group_ids"
 	AnthropicStableIdentityGenerationExtraKey          = "anthropic_stable_identity_generation"
+	AnthropicStableIdentityTransportHashExtraKey       = "anthropic_stable_identity_transport_hash"
 	AnthropicStableIdentityCreatedAtExtraKey           = "anthropic_stable_identity_created_at"
 	AnthropicStableIdentityUpdatedAtExtraKey           = "anthropic_stable_identity_updated_at"
 	AnthropicStableIdentityBlockedExtraKey             = "anthropic_stable_identity_blocked"
@@ -135,6 +137,7 @@ var anthropicStableIdentityManagedExtraKeys = [...]string{
 	AnthropicStableIdentityAPIKeyIDsExtraKey,
 	AnthropicStableIdentityAPIKeyGroupIDsExtraKey,
 	AnthropicStableIdentityGenerationExtraKey,
+	AnthropicStableIdentityTransportHashExtraKey,
 	AnthropicStableIdentityCreatedAtExtraKey,
 	AnthropicStableIdentityUpdatedAtExtraKey,
 	AnthropicStableIdentityBlockedExtraKey,
@@ -351,8 +354,8 @@ func ValidateAnthropicStableIdentityAccount(account *Account) error {
 	if account.Status != StatusActive {
 		return errors.New("stable identity requires an active account")
 	}
-	if account.ProxyID != nil || account.Proxy != nil || account.ProxyFallbackOriginID != nil {
-		return errors.New("stable identity does not support an account proxy")
+	if err := ValidateAnthropicStableIdentityProxy(account); err != nil {
+		return err
 	}
 	if account.ParentAccountID != nil || account.HasAnthropicStableCanaryManagedFields() {
 		return errors.New("stable identity requires an independent account outside the static canary")
@@ -404,6 +407,13 @@ func ValidateAnthropicStableIdentityEnrolledAccount(account *Account) error {
 	if _, ok := account.AnthropicStableIdentityPreviousConcurrency(); !ok {
 		return errors.New("stable identity concurrency rollback state is incomplete")
 	}
+	expectedTransportHash, err := ExpectedAnthropicStableIdentityTransportHash(account)
+	if err != nil {
+		return err
+	}
+	if !anthropicStableIdentityTransportSnapshotMatches(account, expectedTransportHash) {
+		return errors.New("stable identity proxy configuration changed; disable and re-enroll the account")
+	}
 	return nil
 }
 
@@ -420,7 +430,7 @@ func validateAnthropicStableIdentityAdminUpdate(account *Account, input *UpdateA
 	if !anthropicStableIdentityManagedExtraMatches(account.Extra, input.Extra) {
 		return ErrAnthropicStableIdentityManaged
 	}
-	if (input.ProxyID != nil && *input.ProxyID != 0) ||
+	if (input.ProxyID != nil && !sameAnthropicStableIdentityProxyID(account.ProxyID, *input.ProxyID)) ||
 		(input.Type != "" && input.Type != account.Type) ||
 		(input.Concurrency != nil && *input.Concurrency != 1) ||
 		(input.Status != "" && input.Status != StatusActive) {
@@ -463,12 +473,20 @@ func validateAnthropicStableIdentityAccountServiceUpdate(account *Account, input
 	if input.Extra != nil && !anthropicStableIdentityManagedExtraMatches(account.Extra, *input.Extra) {
 		return ErrAnthropicStableIdentityManaged
 	}
-	if input.Credentials != nil || input.ProxyID != nil ||
+	if input.Credentials != nil ||
+		(input.ProxyID != nil && !sameAnthropicStableIdentityProxyID(account.ProxyID, *input.ProxyID)) ||
 		(input.Concurrency != nil && *input.Concurrency != 1) ||
 		(input.Status != nil && *input.Status != StatusActive) {
 		return ErrAnthropicStableIdentityManaged
 	}
 	return nil
+}
+
+func sameAnthropicStableIdentityProxyID(current *int64, requested int64) bool {
+	if requested <= 0 {
+		return current == nil
+	}
+	return current != nil && *current == requested
 }
 
 // anthropicStableIdentityManagedExtraMatches accepts a full-object admin PUT

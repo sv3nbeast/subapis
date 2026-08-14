@@ -765,8 +765,15 @@ func (s *GatewayService) anthropicStableCanaryHTTPClient(account *Account) (*htt
 		if generation <= 0 || !IsValidAnthropicStableIdentityDeviceID(deviceID) {
 			return nil, errors.New("stable identity transport generation is invalid")
 		}
+		transportHash, err := ExpectedAnthropicStableIdentityTransportHash(account)
+		if err != nil {
+			return nil, err
+		}
+		if !anthropicStableIdentityTransportSnapshotMatches(account, transportHash) {
+			return nil, errors.New("stable identity proxy configuration changed; disable and re-enroll the account")
+		}
 		identityPrefix = fmt.Sprintf("identity:%d:", account.ID)
-		key = fmt.Sprintf("%s%d:%s", identityPrefix, generation, deviceID[:12])
+		key = fmt.Sprintf("%s%d:%s:%s", identityPrefix, generation, deviceID[:12], transportHash[:12])
 	}
 	s.anthropicStableCanary.mu.Lock()
 	if client := s.anthropicStableCanary.clients[key]; client != nil {
@@ -799,7 +806,14 @@ func (s *GatewayService) anthropicStableCanaryHTTPClient(account *Account) (*htt
 		return nil, errors.New("default HTTP transport is unavailable")
 	}
 	clone := transport.Clone()
-	clone.Proxy = nil
+	if account.HasAnthropicStableIdentityManagedFields() {
+		if err := configureAnthropicStableIdentityTransport(clone, account); err != nil {
+			clone.CloseIdleConnections()
+			return nil, err
+		}
+	} else {
+		clone.Proxy = nil
+	}
 	client := &http.Client{
 		Transport: clone,
 	}

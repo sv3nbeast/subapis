@@ -38,6 +38,10 @@ export interface AnthropicStableIdentityStatus {
   profile_id: string
   device_fingerprint?: string
   device_configured: boolean
+  proxy_id?: number
+  proxy_name?: string
+  proxy_configured: boolean
+  transport_fingerprint?: string
   concurrency: number
   schedulable: boolean
   previous_schedulable?: boolean

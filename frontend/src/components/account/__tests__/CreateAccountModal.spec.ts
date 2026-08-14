@@ -1,6 +1,7 @@
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Proxy } from '@/types'
 
 const {
   createAccountMock,
@@ -84,9 +85,9 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `,
 })
 
-function mountModal() {
+function mountModal(proxies: Proxy[] = []) {
   return mount(CreateAccountModal, {
-    props: { show: true, proxies: [], groups: [] },
+    props: { show: true, proxies, groups: [] },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
@@ -278,6 +279,35 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(stableToggle.attributes('aria-checked')).toBe('true')
     expect(passthroughToggle.attributes('aria-checked')).toBe('false')
     expect(passthroughToggle.attributes()).toHaveProperty('disabled')
+  })
+
+  it('keeps the selected account proxy when stable mode is enabled', async () => {
+    const wrapper = mountModal([
+      {
+        id: 901,
+        name: 'fixed-residential',
+        status: 'active',
+        protocol: 'socks5',
+        host: 'proxy.example',
+        port: 1080,
+        username: 'resident-user',
+        expires_at: null,
+        fallback_mode: 'none',
+        expiry_warn_days: 0,
+        created_at: '2026-08-15T00:00:00Z',
+        updated_at: '2026-08-15T00:00:00Z',
+      },
+    ])
+    await selectButtonByText(wrapper, 'admin.accounts.claudeCode')
+
+    const proxySelector = wrapper.findComponent({ name: 'ProxySelector' })
+    proxySelector.vm.$emit('update:modelValue', 901)
+    await wrapper.vm.$nextTick()
+    expect(proxySelector.props('modelValue')).toBe(901)
+
+    await wrapper.get('[data-testid="create-anthropic-stable-identity-toggle"]').trigger('click')
+
+    expect(proxySelector.props('modelValue')).toBe(901)
   })
 
   it('antigravity upstream 创建默认携带上游倍率探测开关', async () => {

@@ -390,7 +390,8 @@ type CreateAccountInput struct {
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
 	// AnthropicStableIdentity atomically creates an Anthropic OAuth/SetupToken
-	// account already fenced from the generic scheduler with one fixed device.
+	// account fenced from the generic scheduler with one fixed device and its
+	// currently selected static proxy.
 	AnthropicStableIdentity bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
@@ -3391,6 +3392,16 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 	if input.AnthropicStableIdentity {
+		if account.ProxyID != nil {
+			if s.proxyRepo == nil {
+				return nil, errors.New("stable identity proxy lookup is unavailable")
+			}
+			proxy, proxyErr := s.proxyRepo.GetByID(ctx, *account.ProxyID)
+			if proxyErr != nil {
+				return nil, proxyErr
+			}
+			account.Proxy = proxy
+		}
 		if err := prepareAnthropicStableIdentityAccountForCreate(account, groupIDs); err != nil {
 			return nil, err
 		}
@@ -4587,6 +4598,12 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 }
 
 func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *UpdateProxyInput) (*Proxy, error) {
+	// Serialize proxy-row changes with stable identity enrollment in this
+	// process. Cross-process or out-of-band mutations are still fenced by the
+	// runtime transport snapshot before every upstream request.
+	anthropicStableIdentityAdminMu.Lock()
+	defer anthropicStableIdentityAdminMu.Unlock()
+
 	// 校验：backup_proxy_id 不能是自身
 	if input.BackupProxyID != nil && *input.BackupProxyID == id {
 		return nil, infraerrors.BadRequest("PROXY_BACKUP_SELF", "backup proxy cannot be itself")
@@ -4608,6 +4625,7 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	originalProxy := *proxy
 
 	if input.Name != "" {
 		proxy.Name = input.Name
@@ -4636,6 +4654,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy.BackupProxyID = input.BackupProxyID
 	proxy.ExpiryWarnDays = input.ExpiryWarnDays
 
+	if err := s.ensureAnthropicStableIdentityProxyUpdateAllowed(ctx, &originalProxy, proxy); err != nil {
+		return nil, err
+	}
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}

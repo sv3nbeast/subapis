@@ -58,6 +58,7 @@ const offStatus = {
   generation: 0,
   profile_id: '',
   device_configured: false,
+  proxy_configured: false,
   concurrency: 4,
   schedulable: true,
   requires_restart: false
@@ -71,6 +72,10 @@ const onStatus = {
   generation: 1,
   device_fingerprint: 'abcdef123456',
   device_configured: true,
+  proxy_id: 901,
+  proxy_name: 'fixed-residential',
+  proxy_configured: true,
+  transport_fingerprint: '0123456789ab',
   concurrency: 1,
   schedulable: false
 }
@@ -103,6 +108,7 @@ describe('AnthropicStableIdentityPanel', () => {
     expect(getAccountMock).toHaveBeenCalledWith(81)
     expect(toggle.attributes('aria-checked')).toBe('true')
     expect(wrapper.text()).toContain('abcdef123456')
+    expect(wrapper.text()).toContain('fixed-residential')
   })
 
   it('disables stable mode from the same switch', async () => {

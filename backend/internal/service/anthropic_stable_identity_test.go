@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -116,6 +117,35 @@ type stableIdentityAdminGroupRepo struct {
 	groups map[int64]*Group
 }
 
+type stableIdentityProxyRepo struct {
+	ProxyRepository
+	proxy       *Proxy
+	summaries   []ProxyAccountSummary
+	updateCalls int
+}
+
+func (r *stableIdentityProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error) {
+	if r.proxy == nil || r.proxy.ID != id {
+		return nil, ErrProxyNotFound
+	}
+	copyProxy := *r.proxy
+	return &copyProxy, nil
+}
+
+func (r *stableIdentityProxyRepo) Update(_ context.Context, proxy *Proxy) error {
+	copyProxy := *proxy
+	r.proxy = &copyProxy
+	r.updateCalls++
+	return nil
+}
+
+func (r *stableIdentityProxyRepo) ListAccountSummariesByProxyID(_ context.Context, proxyID int64) ([]ProxyAccountSummary, error) {
+	if r.proxy == nil || r.proxy.ID != proxyID {
+		return nil, ErrProxyNotFound
+	}
+	return append([]ProxyAccountSummary(nil), r.summaries...), nil
+}
+
 func (r *stableIdentityAdminGroupRepo) GetByID(_ context.Context, id int64) (*Group, error) {
 	group := r.groups[id]
 	if group == nil {
@@ -198,6 +228,20 @@ func newStableIdentityAccountForTest(accountID int64, groupIDs []int64) *Account
 	}
 }
 
+func attachStableIdentityProxyForTest(t *testing.T, account *Account, protocol string) *Proxy {
+	t.Helper()
+	proxy := &Proxy{
+		ID: 901, Name: "fixed-residential", Protocol: protocol, Host: "proxy.example.test", Port: 1080,
+		Username: "resident-user", Password: "resident-pass", Status: StatusActive, FallbackMode: FallbackModeNone,
+	}
+	account.ProxyID = &proxy.ID
+	account.Proxy = proxy
+	hash, err := ExpectedAnthropicStableIdentityTransportHash(account)
+	require.NoError(t, err)
+	account.Extra[AnthropicStableIdentityTransportHashExtraKey] = hash
+	return proxy
+}
+
 func stableIdentityTestConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.JWT.Secret = strings.Repeat("s", 48)
@@ -256,6 +300,43 @@ func TestAnthropicStableIdentityAccountIsCreatedAtomicallyAlreadyFenced(t *testi
 	require.True(t, ok)
 	require.Equal(t, 6, previousConcurrency)
 	require.NoError(t, ValidateAnthropicStableIdentityEnrolledAccount(created))
+}
+
+func TestAnthropicStableIdentityAccountIsCreatedWithSelectedStaticProxy(t *testing.T) {
+	repo := &stableIdentityAdminAccountRepo{}
+	groupRepo := &stableIdentityAdminGroupRepo{groups: map[int64]*Group{
+		11: {ID: 11, Name: "Claude latest", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	proxy := &Proxy{
+		ID: 901, Name: "fixed-residential", Protocol: "socks5", Host: "proxy.example.test", Port: 1080,
+		Username: "resident-user", Password: "resident-pass", Status: StatusActive, FallbackMode: FallbackModeNone,
+	}
+	proxyRepo := &stableIdentityProxyRepo{proxy: proxy}
+	admin := &adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo, groupRepo: groupRepo, proxyRepo: proxyRepo}
+
+	created, err := admin.CreateAccount(context.Background(), &CreateAccountInput{
+		Name: "created-stable-proxy", Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "sk-ant-oat-static-proxy-create",
+			"refresh_token": "static-proxy-refresh",
+		},
+		ProxyID:                 &proxy.ID,
+		Concurrency:             6,
+		GroupIDs:                []int64{11},
+		AnthropicStableIdentity: true,
+		SkipMixedChannelCheck:   true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, proxy.ID, *created.ProxyID)
+	require.Equal(t, proxy.ID, created.Proxy.ID)
+	require.NotEmpty(t, created.AnthropicStableIdentityTransportHash())
+	require.NoError(t, ValidateAnthropicStableIdentityEnrolledAccount(created))
+	status := anthropicStableIdentityStatusFromAccount(created)
+	require.True(t, status.ProxyConfigured)
+	require.Equal(t, proxy.ID, *status.ProxyID)
+	require.Equal(t, proxy.Name, status.ProxyName)
+	require.Len(t, status.TransportFingerprint, 12)
 }
 
 func TestAnthropicStableIdentityCreateUsesPlatformDefaultGroupWithoutExtraStableRoutingConfig(t *testing.T) {
@@ -454,6 +535,70 @@ func TestAnthropicStableIdentityAccountValidationAndGenericFence(t *testing.T) {
 		"the lifecycle marker must never authorize a different managed account")
 }
 
+func TestAnthropicStableIdentityStaticProxyValidationFailsClosed(t *testing.T) {
+	account := newStableIdentityAccountForTest(47, []int64{11})
+	proxy := attachStableIdentityProxyForTest(t, account, "socks5")
+	require.NoError(t, ValidateAnthropicStableIdentityEnrolledAccount(account))
+
+	originalPassword := proxy.Password
+	proxy.Password = "rotated-outside-lifecycle"
+	require.ErrorContains(t, ValidateAnthropicStableIdentityEnrolledAccount(account), "proxy configuration changed")
+	proxy.Password = originalPassword
+
+	proxy.FallbackMode = FallbackModeDirect
+	require.ErrorContains(t, ValidateAnthropicStableIdentityAccount(account), "fallback must be disabled")
+	proxy.FallbackMode = FallbackModeNone
+
+	backupID := int64(902)
+	proxy.BackupProxyID = &backupID
+	require.ErrorContains(t, ValidateAnthropicStableIdentityAccount(account), "backup must be empty")
+	proxy.BackupProxyID = nil
+
+	expired := time.Now().Add(-time.Minute)
+	proxy.ExpiresAt = &expired
+	require.ErrorContains(t, ValidateAnthropicStableIdentityAccount(account), "proxy is expired")
+}
+
+func TestAnthropicStableIdentityProxyRowIsLockedWhileManaged(t *testing.T) {
+	account := newStableIdentityAccountForTest(48, []int64{11})
+	proxy := attachStableIdentityProxyForTest(t, account, "http")
+	accountRepo := &stableIdentityAdminAccountRepo{account: account}
+	proxyRepo := &stableIdentityProxyRepo{
+		proxy:     proxy,
+		summaries: []ProxyAccountSummary{{ID: account.ID, Name: account.Name, Platform: account.Platform, Type: account.Type}},
+	}
+	admin := &adminServiceImpl{accountRepo: accountRepo, proxyRepo: proxyRepo}
+
+	_, err := admin.UpdateProxy(context.Background(), proxy.ID, &UpdateProxyInput{
+		Host: "different-proxy.example.test", FallbackMode: FallbackModeNone,
+	})
+	require.ErrorIs(t, err, ErrAnthropicStableIdentityManaged)
+	require.Equal(t, 0, proxyRepo.updateCalls)
+
+	updated, err := admin.UpdateProxy(context.Background(), proxy.ID, &UpdateProxyInput{
+		Name: "renamed-fixed-residential", FallbackMode: FallbackModeNone,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "renamed-fixed-residential", updated.Name)
+	require.Equal(t, 1, proxyRepo.updateCalls)
+}
+
+func TestAnthropicStableIdentityConfigureDoesNotAdoptProxyDrift(t *testing.T) {
+	account := newStableIdentityAccountForTest(50, []int64{11})
+	proxy := attachStableIdentityProxyForTest(t, account, "http")
+	repo := &stableIdentityAdminAccountRepo{account: account}
+	groupRepo := &stableIdentityAdminGroupRepo{groups: map[int64]*Group{
+		11: {ID: 11, Name: "Claude latest", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	admin := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
+	proxy.Password = "out-of-band-password-change"
+
+	_, err := admin.ConfigureAnthropicStableIdentity(context.Background(), account.ID, &AnthropicStableIdentityConfigureInput{})
+
+	require.ErrorContains(t, err, "disable stable mode and re-enroll")
+	require.Equal(t, 0, repo.updates)
+}
+
 func TestAnthropicStableIdentityAdminGuardAllowsLiveGroupMembershipOnly(t *testing.T) {
 	account := newStableIdentityAccountForTest(42, []int64{11, 12})
 	addedGroups := []int64{11, 12, 13}
@@ -479,6 +624,17 @@ func TestAnthropicStableIdentityAdminGuardAllowsLiveGroupMembershipOnly(t *testi
 		"group membership authorization must not unlock identity fields")
 }
 
+func TestAnthropicStableIdentityAdminGuardAllowsEchoingOnlyThePinnedProxy(t *testing.T) {
+	account := newStableIdentityAccountForTest(43, []int64{11})
+	proxy := attachStableIdentityProxyForTest(t, account, "http")
+
+	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{ProxyID: &proxy.ID}))
+	clearProxy := int64(0)
+	require.ErrorIs(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{ProxyID: &clearProxy}), ErrAnthropicStableIdentityManaged)
+	otherProxy := int64(902)
+	require.ErrorIs(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{ProxyID: &otherProxy}), ErrAnthropicStableIdentityManaged)
+}
+
 func TestAnthropicStableIdentityTransportChangesWithIdentityGeneration(t *testing.T) {
 	account := newStableIdentityAccountForTest(46, []int64{11})
 	svc := &GatewayService{anthropicStableCanary: newAnthropicStableCanaryRuntime()}
@@ -494,6 +650,40 @@ func TestAnthropicStableIdentityTransportChangesWithIdentityGeneration(t *testin
 	require.NotNil(t, second)
 	require.NotSame(t, first, second, "a new fixed identity must not inherit the previous TCP/TLS pool")
 	require.Len(t, svc.anthropicStableCanary.clients, 1, "obsolete identity transports must not accumulate")
+}
+
+func TestAnthropicStableIdentityHTTPAndSOCKSProxyTransportArePinned(t *testing.T) {
+	for _, protocol := range []string{"http", "socks5"} {
+		t.Run(protocol, func(t *testing.T) {
+			account := newStableIdentityAccountForTest(49, []int64{11})
+			proxy := attachStableIdentityProxyForTest(t, account, protocol)
+			svc := &GatewayService{anthropicStableCanary: newAnthropicStableCanaryRuntime()}
+
+			client, err := svc.anthropicStableCanaryHTTPClient(account)
+			require.NoError(t, err)
+			transport, ok := client.Transport.(*http.Transport)
+			require.True(t, ok)
+			if protocol == "http" {
+				require.NotNil(t, transport.Proxy)
+				request := &http.Request{URL: mustParseStableIdentityTestURL(t, AnthropicStableMessagesOriginV1)}
+				proxyURL, proxyErr := transport.Proxy(request)
+				require.NoError(t, proxyErr)
+				require.Equal(t, proxy.EffectiveProtocol(), proxyURL.Scheme)
+				require.Equal(t, proxy.Host, proxyURL.Hostname())
+				require.Equal(t, proxy.Username, proxyURL.User.Username())
+			} else {
+				require.Nil(t, transport.Proxy)
+				require.NotNil(t, transport.DialContext)
+			}
+		})
+	}
+}
+
+func mustParseStableIdentityTestURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+	return parsed
 }
 
 func newStableIdentityPoolService(repo *stableIdentityDirectoryRepo) *GatewayService {
@@ -644,6 +834,11 @@ func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTes
 		AnthropicStableIdentityBlockedExtraKey:             false,
 		AnthropicStableIdentityBlockedReasonExtraKey:       "",
 	}
+	if fixture.account.ProxyID != nil {
+		transportHash, hashErr := ExpectedAnthropicStableIdentityTransportHash(fixture.account)
+		require.NoError(t, hashErr)
+		fixture.account.Extra[AnthropicStableIdentityTransportHashExtraKey] = transportHash
+	}
 	fixture.service.cfg.JWT.Secret = strings.Repeat("j", 48)
 	route, err := stableIdentityRouteFromAccount(fixture.service.cfg, *fixture.account)
 	require.NoError(t, err)
@@ -652,7 +847,9 @@ func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTes
 	// cache key before this helper replaces the account metadata. Move it to the
 	// generation-bound identity key so tests can never reach the real network.
 	legacyKey := fmt.Sprintf("%d", fixture.account.ID)
-	identityKey := fmt.Sprintf("identity:%d:%d:%s", fixture.account.ID, route.Generation, route.DeviceID[:12])
+	transportHash, err := ExpectedAnthropicStableIdentityTransportHash(fixture.account)
+	require.NoError(t, err)
+	identityKey := fmt.Sprintf("identity:%d:%d:%s:%s", fixture.account.ID, route.Generation, route.DeviceID[:12], transportHash[:12])
 	fixture.service.anthropicStableCanary.mu.Lock()
 	client := fixture.service.anthropicStableCanary.clients[legacyKey]
 	if client == nil {
@@ -712,6 +909,7 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 			Body:       io.NopCloser(strings.NewReader(rawSSE)), Request: req,
 		}, nil
 	}))
+	attachStableIdentityProxyForTest(t, fixture.account, "http")
 	route := convertStableCanaryFixtureToIdentity(t, fixture, apiKeyID)
 	clientDevice := strings.Repeat("b", 64)
 	fixture.body = bytes.Replace(fixture.body, []byte(strings.Repeat("a", 64)), []byte(clientDevice), 1)

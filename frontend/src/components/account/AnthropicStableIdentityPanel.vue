@@ -60,7 +60,7 @@
 
     <div
       v-if="enabled"
-      class="grid grid-cols-3 border-t border-gray-200 dark:border-dark-600"
+      class="grid grid-cols-2 border-t border-gray-200 dark:border-dark-600 sm:grid-cols-4"
     >
       <div class="border-r border-gray-200 px-4 py-3 dark:border-dark-600 sm:px-5">
         <p class="text-[11px] text-gray-500 dark:text-gray-400">
@@ -72,13 +72,21 @@
       </div>
       <div class="border-r border-gray-200 px-4 py-3 dark:border-dark-600 sm:px-5">
         <p class="text-[11px] text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.anthropic.stableIdentity.fixedProxy') }}
+        </p>
+        <p class="mt-1 truncate text-xs font-medium text-gray-950 dark:text-white" :title="fixedProxyLabel">
+          {{ fixedProxyLabel }}
+        </p>
+      </div>
+      <div class="border-t border-gray-200 px-4 py-3 dark:border-dark-600 sm:border-r sm:border-t-0 sm:px-5">
+        <p class="text-[11px] text-gray-500 dark:text-gray-400">
           {{ t('admin.accounts.anthropic.stableIdentity.generation') }}
         </p>
         <p class="mt-1 text-xs font-semibold tabular-nums text-gray-950 dark:text-white">
           {{ status?.generation || 0 }}
         </p>
       </div>
-      <div class="px-4 py-3 sm:px-5">
+      <div class="border-t border-gray-200 px-4 py-3 dark:border-dark-600 sm:border-t-0 sm:px-5">
         <p class="text-[11px] text-gray-500 dark:text-gray-400">
           {{ t('admin.accounts.anthropic.stableIdentity.groups') }}
         </p>
@@ -132,6 +140,11 @@ const actionError = ref('')
 let loadRevision = 0
 
 const enabled = computed(() => status.value?.enabled === true)
+
+const fixedProxyLabel = computed(() => {
+  if (!status.value?.proxy_configured) return t('admin.accounts.anthropic.stableIdentity.directEgress')
+  return status.value.proxy_name || `#${status.value.proxy_id}`
+})
 
 const statusLabel = computed(() => {
   if (loading.value) return t('common.loading')

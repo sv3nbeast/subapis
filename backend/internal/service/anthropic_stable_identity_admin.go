@@ -49,22 +49,26 @@ type AnthropicStableIdentityConfigureInput struct {
 // AnthropicStableIdentityStatus is redacted. GroupIDs are derived from current
 // account membership rather than duplicated lifecycle metadata.
 type AnthropicStableIdentityStatus struct {
-	AccountID           int64   `json:"account_id"`
-	Enabled             bool    `json:"enabled"`
-	State               string  `json:"state"`
-	Blocked             bool    `json:"blocked"`
-	BlockedReason       string  `json:"blocked_reason,omitempty"`
-	GroupIDs            []int64 `json:"group_ids"`
-	Generation          int64   `json:"generation"`
-	ProfileID           string  `json:"profile_id"`
-	DeviceFingerprint   string  `json:"device_fingerprint,omitempty"`
-	DeviceConfigured    bool    `json:"device_configured"`
-	Concurrency         int     `json:"concurrency"`
-	Schedulable         bool    `json:"schedulable"`
-	PreviousSchedulable *bool   `json:"previous_schedulable,omitempty"`
-	RequiresRestart     bool    `json:"requires_restart"`
-	ConfiguredAt        string  `json:"configured_at,omitempty"`
-	UpdatedAt           string  `json:"updated_at,omitempty"`
+	AccountID            int64   `json:"account_id"`
+	Enabled              bool    `json:"enabled"`
+	State                string  `json:"state"`
+	Blocked              bool    `json:"blocked"`
+	BlockedReason        string  `json:"blocked_reason,omitempty"`
+	GroupIDs             []int64 `json:"group_ids"`
+	Generation           int64   `json:"generation"`
+	ProfileID            string  `json:"profile_id"`
+	DeviceFingerprint    string  `json:"device_fingerprint,omitempty"`
+	DeviceConfigured     bool    `json:"device_configured"`
+	ProxyID              *int64  `json:"proxy_id,omitempty"`
+	ProxyName            string  `json:"proxy_name,omitempty"`
+	ProxyConfigured      bool    `json:"proxy_configured"`
+	TransportFingerprint string  `json:"transport_fingerprint,omitempty"`
+	Concurrency          int     `json:"concurrency"`
+	Schedulable          bool    `json:"schedulable"`
+	PreviousSchedulable  *bool   `json:"previous_schedulable,omitempty"`
+	RequiresRestart      bool    `json:"requires_restart"`
+	ConfiguredAt         string  `json:"configured_at,omitempty"`
+	UpdatedAt            string  `json:"updated_at,omitempty"`
 }
 
 var anthropicStableIdentityAdminMu sync.Mutex
@@ -136,6 +140,16 @@ func (s *adminServiceImpl) ConfigureAnthropicStableIdentity(ctx context.Context,
 	if !IsValidAnthropicStableIdentityDeviceID(deviceID) {
 		return nil, fmt.Errorf("%w: device id must be a 32-byte lowercase hex value", ErrAnthropicStableIdentityInvalid)
 	}
+	transportHash, err := ExpectedAnthropicStableIdentityTransportHash(account)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAnthropicStableIdentityInvalid, err)
+	}
+	if account.IsAnthropicStableIdentityEnabled() {
+		storedTransportHash := account.AnthropicStableIdentityTransportHash()
+		if storedTransportHash != "" && storedTransportHash != transportHash {
+			return nil, fmt.Errorf("%w: proxy configuration changed; disable stable mode and re-enroll the account", ErrAnthropicStableIdentityInvalid)
+		}
+	}
 
 	// PUT is idempotent. A browser retry must not rotate identity. Old releases
 	// stored group/key selectors; their presence intentionally triggers one
@@ -146,6 +160,7 @@ func (s *adminServiceImpl) ConfigureAnthropicStableIdentity(ctx context.Context,
 		account.Concurrency == 1 && !account.Schedulable &&
 		account.AnthropicStableIdentityDeviceID() == deviceID &&
 		AnthropicStableIngressProfilesEquivalent(account.AnthropicStableIdentityProfileID(), profileID) &&
+		anthropicStableIdentityTransportSnapshotMatches(account, transportHash) &&
 		!hasAnthropicStableIdentityLegacyRoutingMetadata(account.Extra) {
 		return anthropicStableIdentityStatusFromAccount(account), nil
 	}
@@ -181,6 +196,7 @@ func (s *adminServiceImpl) ConfigureAnthropicStableIdentity(ctx context.Context,
 		AnthropicStableIdentityPreviousConcurrencyExtraKey: previousConcurrency,
 		AnthropicStableIdentityProfileExtraKey:             profileID,
 		AnthropicStableIdentityGenerationExtraKey:          generation,
+		AnthropicStableIdentityTransportHashExtraKey:       transportHash,
 		AnthropicStableIdentityCreatedAtExtraKey:           configuredAt,
 		AnthropicStableIdentityUpdatedAtExtraKey:           now,
 		AnthropicStableIdentityBlockedExtraKey:             false,
@@ -359,6 +375,10 @@ func prepareAnthropicStableIdentityAccountForCreate(account *Account, groupIDs [
 	}
 	previousSchedulable := account.Schedulable
 	previousConcurrency := account.Concurrency
+	transportHash, err := ExpectedAnthropicStableIdentityTransportHash(account)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAnthropicStableIdentityInvalid, err)
+	}
 	now := stableIdentityNow()
 	account.Extra = mergeAnthropicStableIdentityExtra(removeAnthropicStableIdentityManagedExtra(account.Extra), map[string]any{
 		AnthropicStableIdentityEnabledExtraKey:             true,
@@ -368,6 +388,7 @@ func prepareAnthropicStableIdentityAccountForCreate(account *Account, groupIDs [
 		AnthropicStableIdentityPreviousConcurrencyExtraKey: previousConcurrency,
 		AnthropicStableIdentityProfileExtraKey:             AnthropicStableIngressProfileCLI211222V1,
 		AnthropicStableIdentityGenerationExtraKey:          int64(1),
+		AnthropicStableIdentityTransportHashExtraKey:       transportHash,
 		AnthropicStableIdentityCreatedAtExtraKey:           now,
 		AnthropicStableIdentityUpdatedAtExtraKey:           now,
 		AnthropicStableIdentityBlockedExtraKey:             false,
@@ -477,23 +498,40 @@ func anthropicStableIdentityStatusFromAccount(account *Account) *AnthropicStable
 	if len(device) >= 12 {
 		fingerprint = device[:12]
 	}
+	transportFingerprint := account.AnthropicStableIdentityTransportHash()
+	if transportFingerprint == "" {
+		if expected, err := ExpectedAnthropicStableIdentityTransportHash(account); err == nil {
+			transportFingerprint = expected
+		}
+	}
+	if len(transportFingerprint) > 12 {
+		transportFingerprint = transportFingerprint[:12]
+	}
+	proxyName := ""
+	if account.Proxy != nil {
+		proxyName = strings.TrimSpace(account.Proxy.Name)
+	}
 	return &AnthropicStableIdentityStatus{
-		AccountID:           account.ID,
-		Enabled:             account.IsAnthropicStableIdentityEnabled(),
-		State:               account.AnthropicStableIdentityState(),
-		Blocked:             account.IsAnthropicStableIdentityBlocked(),
-		BlockedReason:       account.AnthropicStableIdentityBlockedReason(),
-		GroupIDs:            currentAnthropicStableIdentityMembershipIDs(account),
-		Generation:          account.AnthropicStableIdentityGeneration(),
-		ProfileID:           account.AnthropicStableIdentityProfileID(),
-		DeviceFingerprint:   fingerprint,
-		DeviceConfigured:    IsValidAnthropicStableIdentityDeviceID(device),
-		Concurrency:         account.Concurrency,
-		Schedulable:         account.Schedulable,
-		PreviousSchedulable: previousPtr,
-		RequiresRestart:     false,
-		ConfiguredAt:        stableIdentityExtraString(account.Extra, AnthropicStableIdentityCreatedAtExtraKey),
-		UpdatedAt:           stableIdentityExtraString(account.Extra, AnthropicStableIdentityUpdatedAtExtraKey),
+		AccountID:            account.ID,
+		Enabled:              account.IsAnthropicStableIdentityEnabled(),
+		State:                account.AnthropicStableIdentityState(),
+		Blocked:              account.IsAnthropicStableIdentityBlocked(),
+		BlockedReason:        account.AnthropicStableIdentityBlockedReason(),
+		GroupIDs:             currentAnthropicStableIdentityMembershipIDs(account),
+		Generation:           account.AnthropicStableIdentityGeneration(),
+		ProfileID:            account.AnthropicStableIdentityProfileID(),
+		DeviceFingerprint:    fingerprint,
+		DeviceConfigured:     IsValidAnthropicStableIdentityDeviceID(device),
+		ProxyID:              account.ProxyID,
+		ProxyName:            proxyName,
+		ProxyConfigured:      account.ProxyID != nil && account.Proxy != nil,
+		TransportFingerprint: transportFingerprint,
+		Concurrency:          account.Concurrency,
+		Schedulable:          account.Schedulable,
+		PreviousSchedulable:  previousPtr,
+		RequiresRestart:      false,
+		ConfiguredAt:         stableIdentityExtraString(account.Extra, AnthropicStableIdentityCreatedAtExtraKey),
+		UpdatedAt:            stableIdentityExtraString(account.Extra, AnthropicStableIdentityUpdatedAtExtraKey),
 	}
 }
 

@@ -787,9 +787,11 @@ export default {
         stableIdentity: {
           title: '稳定身份模式',
           description:
-            '固定该 OAuth/SetupToken 账号的设备身份与上游请求链路。只需开启此开关，账号会自动加入当前所属分组的稳定调度；不同用户和会话仍保持独立。',
+            '固定该 OAuth/SetupToken 账号的设备身份、当前静态代理与上游请求链路。只需开启此开关，账号会自动加入当前所属分组的稳定调度；不同用户和会话仍保持独立。',
           createDescription:
-            '开启后账号将以稳定模式原子创建，并自动加入当前所属分组的稳定调度；不同用户和会话仍保持独立。',
+            '开启后账号将以稳定模式原子创建，并锁定创建时选择的静态代理；不同用户和会话仍保持独立。',
+          proxyCaptureHint: '创建时当前选择的代理将被固定到此身份；代理故障时不会自动切换或回退直连。',
+          proxyLockedHint: '稳定模式正在固定使用此代理。需要更换时，请先关闭稳定模式，保存新代理后再重新开启。',
           statusActive: '运行中',
           statusPaused: '已暂停',
           statusBlocked: '已阻断',
@@ -797,6 +799,8 @@ export default {
           blockedTitle: '账号已进入保护状态',
           blockedFallback: '上游凭据或身份校验失败，请先检查账号后再恢复。',
           device: '设备指纹',
+          fixedProxy: '固定出口',
+          directEgress: '服务器直连',
           generation: '身份代次',
           groups: '当前分组',
           noGroups: '请先选择至少一个有效的 Anthropic 分组',

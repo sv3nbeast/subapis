@@ -713,9 +713,11 @@ export default {
         stableIdentity: {
           title: 'Stable identity mode',
           description:
-            'Pins this OAuth/SetupToken account to one device identity and upstream request path. This single switch automatically enrolls it in stable routing for its current groups, while users and sessions remain isolated.',
+            'Pins this OAuth/SetupToken account to one device identity, its current static proxy, and one upstream request path. This single switch enrolls it in stable routing for its current groups, while users and sessions remain isolated.',
           createDescription:
-            'Creates the account atomically in stable mode and automatically enrolls it in stable routing for its current groups, while users and sessions remain isolated.',
+            'Creates the account atomically in stable mode and pins the static proxy selected at creation, while users and sessions remain isolated.',
+          proxyCaptureHint: 'The selected proxy is pinned to this identity. Proxy failures never trigger automatic switching or direct fallback.',
+          proxyLockedHint: 'Stable mode currently pins this proxy. Disable stable mode, save the new proxy, then re-enable it to rotate safely.',
           statusActive: 'Active',
           statusPaused: 'Paused',
           statusBlocked: 'Blocked',
@@ -723,6 +725,8 @@ export default {
           blockedTitle: 'Account protection is active',
           blockedFallback: 'The upstream credential or identity check failed. Inspect the account before resuming.',
           device: 'Device fingerprint',
+          fixedProxy: 'Fixed egress',
+          directEgress: 'Server direct',
           generation: 'Identity generation',
           groups: 'Current groups',
           noGroups: 'Select at least one active Anthropic group first',

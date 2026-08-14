@@ -82,6 +82,7 @@ func TestAccountHandlerCreateForwardsOneSwitchStableIdentityFlag(t *testing.T) {
 		"type":                              "oauth",
 		"credentials":                       map[string]any{"access_token": "sk-ant-oat-test", "refresh_token": "refresh"},
 		"group_ids":                         []int64{11},
+		"proxy_id":                          int64(901),
 		"anthropic_stable_identity_enabled": true,
 		"concurrency":                       4,
 	}
@@ -96,4 +97,6 @@ func TestAccountHandlerCreateForwardsOneSwitchStableIdentityFlag(t *testing.T) {
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].AnthropicStableIdentity)
 	require.Equal(t, []int64{11}, adminSvc.createdAccounts[0].GroupIDs)
+	require.NotNil(t, adminSvc.createdAccounts[0].ProxyID)
+	require.Equal(t, int64(901), *adminSvc.createdAccounts[0].ProxyID)
 }

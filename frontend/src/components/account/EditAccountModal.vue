@@ -1638,6 +1638,9 @@
           :proxies="proxies"
           :disabled="anthropicStableIdentityManaged"
         />
+        <p v-if="anthropicStableIdentityManaged" class="input-hint">
+          {{ t('admin.accounts.anthropic.stableIdentity.proxyLockedHint') }}
+        </p>
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">

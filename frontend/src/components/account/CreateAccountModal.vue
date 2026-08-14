@@ -3260,6 +3260,9 @@
           :proxies="proxies"
           :account-counts="proxyAccountCountsForSelector"
         />
+        <p v-if="anthropicStableIdentityEnabled" class="input-hint">
+          {{ t('admin.accounts.anthropic.stableIdentity.proxyCaptureHint') }}
+        </p>
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -4907,7 +4910,6 @@ const toggleAnthropicStableIdentityCreate = () => {
   // request/transport overrides instead of asking the operator to coordinate
   // several unrelated switches manually.
   anthropicOAuthPassthroughEnabled.value = false
-  form.proxy_id = null
   tlsFingerprintEnabled.value = false
   tlsFingerprintProfileId.value = null
   sessionIdMaskingEnabled.value = false

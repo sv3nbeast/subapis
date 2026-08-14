@@ -111,6 +111,7 @@ func TestAccountFromServiceShallow_ExposesOnlySafeStableIdentitySchedulingState(
 			service.AnthropicStableIdentityBlockedExtraKey:       true,
 			service.AnthropicStableIdentityBlockedReasonExtraKey: "private upstream reason",
 			service.AnthropicStableIdentityDeviceIDExtraKey:      deviceID,
+			service.AnthropicStableIdentityTransportHashExtraKey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			"ordinary": "kept",
 		},
 	}
@@ -126,6 +127,7 @@ func TestAccountFromServiceShallow_ExposesOnlySafeStableIdentitySchedulingState(
 		service.AnthropicStableIdentityBlockedExtraKey,
 		service.AnthropicStableIdentityBlockedReasonExtraKey,
 		service.AnthropicStableIdentityDeviceIDExtraKey,
+		service.AnthropicStableIdentityTransportHashExtraKey,
 	} {
 		require.NotContains(t, got.Extra, key)
 	}
@@ -137,4 +139,5 @@ func TestAccountFromServiceShallow_ExposesOnlySafeStableIdentitySchedulingState(
 	require.Contains(t, string(raw), `"anthropic_stable_identity_blocked":true`)
 	require.NotContains(t, string(raw), deviceID)
 	require.NotContains(t, string(raw), "private upstream reason")
+	require.NotContains(t, string(raw), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 }
