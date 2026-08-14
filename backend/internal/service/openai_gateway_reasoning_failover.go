@@ -77,7 +77,9 @@ func isOpenAIEncryptedReasoningInputItem(item any) bool {
 		return false
 	}
 	itemType, _ := inputItem["type"].(string)
-	if strings.TrimSpace(itemType) != "reasoning" {
+	switch strings.TrimSpace(itemType) {
+	case "reasoning", "compaction", "compaction_summary":
+	default:
 		return false
 	}
 	_, encrypted := inputItem["encrypted_content"]

@@ -286,15 +286,18 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 		if b.Type != "thinking" {
 			continue
 		}
-		sig := strings.TrimSpace(b.Signature)
+		rawSig := b.Signature
+		sig := strings.TrimSpace(rawSig)
 		// Only replay provider ciphertext. Skip GPT/Codex-style gAAAA blobs and
 		// empty placeholders — xAI returns 400 on decrypt for foreign signatures.
 		if sig == "" || strings.HasPrefix(sig, "gAAAA") {
 			continue
 		}
 		items = append(items, ResponsesInputItem{
-			Type:             "reasoning",
-			EncryptedContent: sig,
+			Type: "reasoning",
+			// encrypted_content is opaque provider state. Use the trimmed value
+			// only for validation; the wire value must remain byte-for-byte raw.
+			EncryptedContent: rawSig,
 		})
 	}
 

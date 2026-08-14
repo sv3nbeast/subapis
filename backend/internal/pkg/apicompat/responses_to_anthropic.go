@@ -365,7 +365,11 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "thinking"
-		state.PendingThinkingSignature = strings.TrimSpace(evt.Item.EncryptedContent)
+		if strings.TrimSpace(evt.Item.EncryptedContent) != "" {
+			state.PendingThinkingSignature = evt.Item.EncryptedContent
+		} else {
+			state.PendingThinkingSignature = ""
+		}
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
@@ -572,8 +576,8 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 		return resToAnthHandleWebSearchDone(evt, state)
 	}
 	if evt.Item.Type == "reasoning" {
-		if sig := strings.TrimSpace(evt.Item.EncryptedContent); sig != "" {
-			state.PendingThinkingSignature = sig
+		if strings.TrimSpace(evt.Item.EncryptedContent) != "" {
+			state.PendingThinkingSignature = evt.Item.EncryptedContent
 		}
 	}
 
@@ -707,11 +711,11 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 
 	var events []AnthropicStreamEvent
 	if state.CurrentBlockType == "thinking" {
-		if sig := strings.TrimSpace(state.PendingThinkingSignature); sig != "" {
+		if strings.TrimSpace(state.PendingThinkingSignature) != "" {
 			events = append(events, AnthropicStreamEvent{
 				Type:  "content_block_delta",
 				Index: &idx,
-				Delta: &AnthropicDelta{Type: "signature_delta", Signature: sig},
+				Delta: &AnthropicDelta{Type: "signature_delta", Signature: state.PendingThinkingSignature},
 			})
 		}
 		state.PendingThinkingSignature = ""

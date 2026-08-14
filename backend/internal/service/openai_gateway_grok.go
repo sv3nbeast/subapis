@@ -75,6 +75,15 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		}
 		return nil, err
 	}
+	// xAI does not expose a native compact endpoint on every Grok deployment.
+	// Keep the existing Responses transport, but synthesize the compact turn
+	// before egress and convert its result back to the Responses compact shape.
+	if isOpenAIResponsesCompactPath(c) {
+		patchedBody, err = buildGrokCompactRequestBody(patchedBody)
+		if err != nil {
+			return nil, err
+		}
+	}
 	setGrokResponsesClientToolMapping(c, clientToolMapping)
 
 	token, _, err := s.getRequestCredential(ctx, c, account)
@@ -111,6 +120,39 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	}
+	// A compaction/reasoning blob is bound to the xAI response/cache identity
+	// that produced it. If a client replays stale state, recover once by sending
+	// the visible conversation without that opaque item.
+	if resp.StatusCode == http.StatusBadRequest {
+		firstBody := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		if isGrokInvalidEncryptedContentResponse(resp.StatusCode, firstBody) {
+			retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(patchedBody)
+			if trimErr != nil {
+				return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+			}
+			if changed {
+				retryReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, retryBody, token)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				resp, err = s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+				SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+				if err != nil {
+					return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+				}
+				patchedBody = retryBody
+				logger.FromContext(ctx).Info("grok.responses_invalid_encrypted_content_retry",
+					zap.Int64("account_id", account.ID),
+					zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(firstBody), 240)),
+				)
+			} else {
+				resp.Body = io.NopCloser(bytes.NewReader(firstBody))
+			}
+		} else {
+			resp.Body = io.NopCloser(bytes.NewReader(firstBody))
+		}
 	}
 
 	// Codex can replay Responses output items (most notably `reasoning` items and
@@ -297,6 +339,13 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The gateway returns synthetic compaction items for /responses/compact.
+	// Convert those items back to the reasoning shape xAI accepts when the
+	// client replays the compact result on a later Responses turn.
+	out, err = convertOpenAICompactInputsForGrok(out)
+	if err != nil {
+		return nil, err
+	}
 	out, err = sanitizeGrokResponsesTools(out)
 	if err != nil {
 		return nil, err
@@ -371,6 +420,188 @@ func isGrokModelInputSchemaError(body []byte) bool {
 	)))
 	return strings.Contains(message, "failed to deserialize") &&
 		strings.Contains(message, "modelinput")
+}
+
+// isGrokInvalidEncryptedContentResponse recognizes xAI's encrypted reasoning
+// and compaction replay failures. xAI has emitted several envelopes over time;
+// the compaction error notably does not mention the JSON field name, only that
+// the blob was decoded/modified.
+func isGrokInvalidEncryptedContentResponse(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+
+	code := strings.TrimSpace(gjson.GetBytes(body, "code").String())
+	if code == "" {
+		code = strings.TrimSpace(gjson.GetBytes(body, "error.code").String())
+	}
+	message := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	if message == "" {
+		message = strings.TrimSpace(string(body))
+	}
+	normalized := strings.ToLower(message)
+	if strings.EqualFold(code, "invalid_encrypted_content") {
+		return true
+	}
+	if code != "" && !strings.EqualFold(code, "invalid-argument") {
+		return false
+	}
+	if strings.Contains(normalized, "compaction blob") {
+		return strings.Contains(normalized, "decode") || strings.Contains(normalized, "unmodified")
+	}
+	return strings.Contains(normalized, "encrypted_content") &&
+		(strings.Contains(normalized, "decrypt") ||
+			strings.Contains(normalized, "unmodified") ||
+			strings.Contains(normalized, "verify"))
+}
+
+// requestHasGrokEncryptedContent reports whether an outbound Responses body
+// contains provider-owned opaque state that can be removed for one recovery
+// attempt. Compaction items are included because xAI rejects the whole item if
+// its blob was produced under another account/cache identity.
+func requestHasGrokEncryptedContent(body []byte) bool {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return false
+	}
+	items := input.Array()
+	if input.IsObject() {
+		items = []gjson.Result{input}
+	}
+	for _, item := range items {
+		typ := strings.TrimSpace(item.Get("type").String())
+		if typ != "reasoning" && typ != "compaction" && typ != "compaction_summary" {
+			continue
+		}
+		if encrypted := item.Get("encrypted_content"); encrypted.Exists() &&
+			encrypted.Type != gjson.Null && strings.TrimSpace(encrypted.String()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// trimGrokInvalidEncryptedContentRetryBody removes only provider-owned opaque
+// state. Visible messages and tool calls remain intact for the retry.
+func trimGrokInvalidEncryptedContentRetryBody(body []byte) ([]byte, bool, error) {
+	if !requestHasGrokEncryptedContent(body) {
+		return body, false, nil
+	}
+	var requestBody map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&requestBody); err != nil {
+		return nil, false, err
+	}
+	if !trimOpenAIEncryptedReasoningItems(requestBody) {
+		return body, false, nil
+	}
+	retryBody, err := marshalOpenAIUpstreamJSON(requestBody)
+	if err != nil {
+		return nil, false, err
+	}
+	return retryBody, true, nil
+}
+
+// stripAnthropicThinkingSignatures removes provider-owned thinking signatures
+// from a Claude Messages history before a Grok account switch. A signature is
+// account/cache-bound opaque state; retaining it for a different account can
+// make an otherwise valid visible conversation fail again with HTTP 400.
+func stripAnthropicThinkingSignatures(body []byte) ([]byte, bool) {
+	if len(body) == 0 || !bytes.Contains(body, []byte(`"signature"`)) {
+		return body, false
+	}
+	var requestBody map[string]any
+	if err := json.Unmarshal(body, &requestBody); err != nil {
+		return body, false
+	}
+	messages, ok := requestBody["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		return body, false
+	}
+	changed := false
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok || grokCompactStringValue(block["type"]) != "thinking" {
+				continue
+			}
+			if _, exists := block["signature"]; exists {
+				delete(block, "signature")
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return body, false
+	}
+	stripped, err := json.Marshal(requestBody)
+	if err != nil {
+		return body, false
+	}
+	return stripped, true
+}
+
+// HasGrokAnthropicThinkingSignatures reports whether a Messages request carries
+// an opaque provider signature. It is used before account selection so the
+// scheduler can enforce strict sticky routing for this request.
+func HasGrokAnthropicThinkingSignatures(body []byte) bool {
+	_, changed := stripAnthropicThinkingSignatures(body)
+	return changed
+}
+
+// StripGrokAnthropicThinkingSignatures removes provider-owned state before a
+// request is intentionally moved to another Grok credential. The original
+// request body is never mutated.
+func StripGrokAnthropicThinkingSignatures(body []byte) ([]byte, bool) {
+	return stripAnthropicThinkingSignatures(body)
+}
+
+// HasGrokEncryptedState reports whether a Responses request carries an opaque
+// reasoning/compaction blob that is only safe on its producing account.
+func HasGrokEncryptedState(body []byte) bool {
+	return requestHasGrokEncryptedContent(body)
+}
+
+// StripGrokEncryptedStateForRouting drops encrypted reasoning/compaction items
+// before a deliberate account move. Visible messages and tool calls remain.
+func StripGrokEncryptedStateForRouting(body []byte) ([]byte, bool, error) {
+	if !requestHasGrokEncryptedContent(body) {
+		return body, false, nil
+	}
+	var requestBody map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&requestBody); err != nil {
+		return body, false, err
+	}
+	if !dropOpenAIEncryptedReasoningInputItems(requestBody) {
+		return body, false, nil
+	}
+	stripped, err := marshalOpenAIUpstreamJSON(requestBody)
+	if err != nil {
+		return body, false, err
+	}
+	return stripped, true, nil
+}
+
+type grokEncryptedContentStripRetriedKey struct{}
+
+func markGrokEncryptedContentStripRetried(ctx context.Context) context.Context {
+	return context.WithValue(ctx, grokEncryptedContentStripRetriedKey{}, true)
+}
+
+func grokEncryptedContentStripRetried(ctx context.Context) bool {
+	retried, _ := ctx.Value(grokEncryptedContentStripRetriedKey{}).(bool)
+	return retried
 }
 
 func grokContextWindowClientMessage(upstreamMessage string) string {

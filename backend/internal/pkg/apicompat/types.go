@@ -275,32 +275,34 @@ type ResponsesInputItem struct {
 
 func (item *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 	var aux struct {
-		Type       string          `json:"type,omitempty"`
-		Role       string          `json:"role,omitempty"`
-		Content    json.RawMessage `json:"content,omitempty"`
-		Text       string          `json:"text,omitempty"`
-		CallID     string          `json:"call_id,omitempty"`
-		ToolCallID string          `json:"tool_call_id,omitempty"`
-		Name       string          `json:"name,omitempty"`
-		Arguments  json.RawMessage `json:"arguments,omitempty"`
-		ID         string          `json:"id,omitempty"`
-		Output     json.RawMessage `json:"output,omitempty"`
-		ImageURL   string          `json:"image_url,omitempty"`
+		Type             string          `json:"type,omitempty"`
+		Role             string          `json:"role,omitempty"`
+		Content          json.RawMessage `json:"content,omitempty"`
+		Text             string          `json:"text,omitempty"`
+		EncryptedContent string          `json:"encrypted_content,omitempty"`
+		CallID           string          `json:"call_id,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+		Name             string          `json:"name,omitempty"`
+		Arguments        json.RawMessage `json:"arguments,omitempty"`
+		ID               string          `json:"id,omitempty"`
+		Output           json.RawMessage `json:"output,omitempty"`
+		ImageURL         string          `json:"image_url,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 
 	*item = ResponsesInputItem{
-		Type:       aux.Type,
-		Role:       aux.Role,
-		Content:    aux.Content,
-		Text:       aux.Text,
-		CallID:     aux.CallID,
-		ToolCallID: aux.ToolCallID,
-		Name:       aux.Name,
-		ID:         aux.ID,
-		ImageURL:   aux.ImageURL,
+		Type:             aux.Type,
+		Role:             aux.Role,
+		Content:          aux.Content,
+		Text:             aux.Text,
+		EncryptedContent: aux.EncryptedContent,
+		CallID:           aux.CallID,
+		ToolCallID:       aux.ToolCallID,
+		Name:             aux.Name,
+		ID:               aux.ID,
+		ImageURL:         aux.ImageURL,
 	}
 	output := bytes.TrimSpace(aux.Output)
 	if len(output) == 0 || bytes.Equal(output, []byte("null")) {

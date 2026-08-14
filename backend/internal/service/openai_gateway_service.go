@@ -1529,15 +1529,25 @@ func explicitOpenAISessionID(c *gin.Context, body []byte) string {
 	return sessionID
 }
 
-// explicitOpenAIRequestSessionID extends common session signals with Grok's
-// native conversation header for Grok-authenticated requests only. This avoids
-// unrelated X-Grok-Conv-Id headers changing non-Grok session affinity.
+// explicitOpenAIRequestSessionID extends common session signals with Claude
+// Code's stable session identity and Grok's native conversation header for
+// Grok-authenticated requests only. This avoids unrelated Grok headers changing
+// non-Grok session affinity.
 func explicitOpenAIRequestSessionID(c *gin.Context, body []byte) string {
 	if c == nil {
 		return ""
 	}
 
-	sessionID := explicitOpenAIHeaderSessionID(c)
+	sessionID := ""
+	if isGrokRequestContext(c) {
+		// Claude Code's session header/metadata is the routing identity for the
+		// entire Messages conversation. Prefer it over the content-derived
+		// fallback so Grok encrypted state remains on the account that produced it.
+		sessionID = extractClaudeCodeSessionID(c, body)
+	}
+	if sessionID == "" {
+		sessionID = explicitOpenAIHeaderSessionID(c)
+	}
 	if sessionID == "" && isGrokRequestContext(c) {
 		sessionID = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
@@ -7569,6 +7579,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
 		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, correctToolCalls)
+	}
+	if account != nil && account.IsGrok() && isOpenAIResponsesCompactPath(c) {
+		body, err = convertGrokResponseToOpenAICompact(body)
+		if err != nil {
+			return nil, fmt.Errorf("convert Grok compact response: %w", err)
+		}
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)

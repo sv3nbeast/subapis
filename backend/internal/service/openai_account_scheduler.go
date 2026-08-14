@@ -562,14 +562,17 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		return nil, openAIStickyFallbackNone, nil
 	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
-	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape {
-		slog.Info("sticky_escape_triggered",
-			"account_id", accountID,
-			"reason", reason,
-			"error_rate", errorRate,
-			"ttft", ttft,
-		)
-		return nil, openAIStickyFallbackPreserve, nil
+	strictEncryptedState := OpenAIEncryptedStateAffinity(ctx)
+	if !strictEncryptedState {
+		if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape {
+			slog.Info("sticky_escape_triggered",
+				"account_id", accountID,
+				"reason", reason,
+				"error_rate", errorRate,
+				"ttft", ttft,
+			)
+			return nil, openAIStickyFallbackPreserve, nil
+		}
 	}
 	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 	if acquireErr == nil && result != nil && result.Acquired {
@@ -585,7 +588,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
 		kiroBusyEscape := req.AllowKiroBridge && account.Platform == PlatformKiro && s.service.kiroBridgeService != nil && s.service.kiroBridgeService.KiroResilienceEnforced(req.GroupID)
-		if (escapeCfg.enabled || kiroBusyEscape) && acquireErr == nil && result != nil && !result.Acquired {
+		if !strictEncryptedState && (escapeCfg.enabled || kiroBusyEscape) && acquireErr == nil && result != nil && !result.Acquired {
 			errorRate, ttft, _ := s.stats.snapshot(accountID)
 			slog.Info("sticky_escape_triggered",
 				"account_id", accountID,

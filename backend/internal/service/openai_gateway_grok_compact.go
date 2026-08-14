@@ -41,7 +41,17 @@ func buildGrokCompactRequestBody(body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	input = append(input, map[string]any{
+	// compaction_trigger is a gateway/client control item, not a valid xAI
+	// ModelInput variant. Strip it before sending the synthetic summary turn.
+	filtered := make([]any, 0, len(input)+1)
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if ok && strings.TrimSpace(grokCompactStringValue(item["type"])) == "compaction_trigger" {
+			continue
+		}
+		filtered = append(filtered, raw)
+	}
+	input = append(filtered, map[string]any{
 		"type": "message",
 		"role": "user",
 		"content": []any{map[string]any{
@@ -108,11 +118,12 @@ func convertOpenAICompactInputsForGrok(body []byte) ([]byte, error) {
 			continue
 		}
 		changed = true
-		if encrypted := strings.TrimSpace(grokCompactStringValue(item["encrypted_content"])); encrypted != "" {
+		rawEncrypted := grokCompactStringValue(item["encrypted_content"])
+		if strings.TrimSpace(rawEncrypted) != "" {
 			converted = append(converted, map[string]any{
 				"type":              "reasoning",
 				"summary":           []any{},
-				"encrypted_content": encrypted,
+				"encrypted_content": rawEncrypted,
 			})
 		}
 		if summary := compactSummaryText(item["summary"]); summary != "" {
@@ -156,8 +167,8 @@ func convertGrokResponseToOpenAICompact(body []byte) ([]byte, error) {
 		}
 		switch strings.TrimSpace(grokCompactStringValue(item["type"])) {
 		case "reasoning":
-			if value := strings.TrimSpace(grokCompactStringValue(item["encrypted_content"])); value != "" {
-				encrypted = value
+			if rawValue := grokCompactStringValue(item["encrypted_content"]); strings.TrimSpace(rawValue) != "" {
+				encrypted = rawValue
 			}
 		case "message":
 			if content, ok := item["content"].([]any); ok {

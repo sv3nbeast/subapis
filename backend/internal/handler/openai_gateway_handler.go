@@ -457,6 +457,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Get subscription info (may be nil)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	if requestPlatform == service.PlatformGrok && service.HasGrokEncryptedState(forwardBody) {
+		c.Request = c.Request.WithContext(service.WithOpenAIEncryptedStateAffinity(c.Request.Context()))
+	}
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
@@ -640,7 +643,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if switchCount > 0 {
 			forwardCtx = service.WithAccountSwitchCount(forwardCtx, switchCount, false)
 		}
-		result, err := h.forwardOpenAIResponses(forwardCtx, c, account, forwardBody, kiroBridgeParsed)
+		attemptBody := forwardBody
+		if account.Platform == service.PlatformGrok && (switchCount > 0 || !scheduleDecision.StickySessionHit) {
+			if sanitized, changed, sanitizeErr := service.StripGrokEncryptedStateForRouting(attemptBody); sanitizeErr != nil {
+				reqLog.Warn("openai.grok_encrypted_state_sanitize_failed", zap.Int64("account_id", account.ID), zap.Error(sanitizeErr))
+			} else if changed {
+				attemptBody = sanitized
+				reqLog.Info("openai.grok_encrypted_state_stripped_before_account_attempt",
+					zap.Int64("account_id", account.ID),
+					zap.Int("switch_count", switchCount),
+					zap.Bool("sticky_session_hit", scheduleDecision.StickySessionHit),
+				)
+			}
+		}
+		result, err := h.forwardOpenAIResponses(forwardCtx, c, account, attemptBody, kiroBridgeParsed)
 		releaseAccountSlotAfterForward(accountReleaseFunc, err)
 		cyberBlockKeyHTTP := ""
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -1144,6 +1160,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 	sessionHash, promptCacheKey = resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel, body)
+	if requestPlatform == service.PlatformGrok && service.HasGrokAnthropicThinkingSignatures(body) {
+		c.Request = c.Request.WithContext(service.WithOpenAIEncryptedStateAffinity(c.Request.Context()))
+	}
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatAnthropic) {
 		return
 	}
@@ -1226,7 +1245,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		account := selection.Account
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_messages.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
-		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, acquired, slotErr := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
@@ -1244,6 +1262,16 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		defaultMappedModel := strings.TrimSpace(effectiveMappedModel)
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
+		if account.Platform == service.PlatformGrok && (switchCount > 0 || !scheduleDecision.StickySessionHit) {
+			if sanitized, changed := service.StripGrokAnthropicThinkingSignatures(forwardBody); changed {
+				forwardBody = sanitized
+				reqLog.Info("openai_messages.grok_thinking_signatures_stripped_before_account_attempt",
+					zap.Int64("account_id", account.ID),
+					zap.Int("switch_count", switchCount),
+					zap.Bool("sticky_session_hit", scheduleDecision.StickySessionHit),
+				)
+			}
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		releaseAccountSlotAfterForward(accountReleaseFunc, err)

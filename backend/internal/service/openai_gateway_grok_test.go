@@ -1161,6 +1161,84 @@ func TestForwardAsAnthropicForGrokUsesXAIResponses(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "ok")
 }
 
+func TestForwardAsAnthropicForGrokRetriesCompactionBlobWithoutEncryptedReasoning(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"grok","max_tokens":32,"stream":false,"messages":[` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"prior","signature":"opaque-compaction-blob"}]},` +
+		`{"role":"user","content":"continue"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	account := &Account{
+		ID: 56, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"base_url":     xai.DefaultCLIBaseURL,
+		},
+	}
+	repo := &grokQuotaAccountRepo{
+		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+			accountsByID: map[int64]*Account{56: account},
+		},
+	}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}}`)),
+		},
+		openAICompatSSECompletedResponse("resp_grok_compaction_retry", "grok-4.3"),
+	}}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "opaque-compaction-blob", gjson.GetBytes(upstream.bodies[0], "input.0.encrypted_content").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.#(encrypted_content)").Exists())
+	require.Contains(t, recorder.Body.String(), `"type":"message"`)
+}
+
+func TestIsGrokInvalidEncryptedContentResponseRecognizesCompactionBlob(t *testing.T) {
+	require.True(t, isGrokInvalidEncryptedContentResponse(http.StatusBadRequest, []byte(`{"error":{"message":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}}`)))
+	require.True(t, isGrokInvalidEncryptedContentResponse(http.StatusBadRequest, []byte(`{"error":{"code":"invalid-argument","message":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}}`)))
+	require.False(t, isGrokInvalidEncryptedContentResponse(http.StatusBadRequest, []byte(`{"error":{"message":"invalid model parameter"}}`)))
+	require.False(t, isGrokInvalidEncryptedContentResponse(http.StatusBadRequest, []byte(`{"error":{"message":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."},"code":"other"}`)))
+}
+
+func TestStripAnthropicThinkingSignaturesOnlyTouchesThinkingBlocks(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"prior","signature":"opaque"},{"type":"text","text":"answer","signature":"keep"}]},{"role":"user","content":"continue"}]}`)
+	stripped, changed := stripAnthropicThinkingSignatures(body)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(stripped, "messages.0.content.0.signature").Exists())
+	require.Equal(t, "keep", gjson.GetBytes(stripped, "messages.0.content.1.signature").String())
+	require.Equal(t, "continue", gjson.GetBytes(stripped, "messages.1.content").String())
+}
+
+func TestGrokEncryptedStateRoutingDropsOpaqueItemsBeforeAccountMove(t *testing.T) {
+	body := []byte(`{"model":"grok-4.5","input":[` +
+		`{"type":"compaction","id":"cmp_old","encrypted_content":"opaque-compact"},` +
+		`{"type":"reasoning","id":"rs_old","encrypted_content":"opaque-reasoning"},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}` +
+		`]}`)
+
+	require.True(t, HasGrokEncryptedState(body))
+	stripped, changed, err := StripGrokEncryptedStateForRouting(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, HasGrokEncryptedState(stripped))
+	require.Equal(t, "message", gjson.GetBytes(stripped, "input.0.type").String())
+	require.Contains(t, string(stripped), "continue")
+}
+
 func TestHandleGrokAccountUpstreamErrorTempUnschedulesReadinessStates(t *testing.T) {
 	tests := []struct {
 		name            string

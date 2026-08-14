@@ -1,3 +1,5 @@
+//go:build unit
+
 package service
 
 import (
@@ -175,6 +177,58 @@ func TestGrokCompactPromptCacheIdentityPreservesPreNormalizedSeed(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, compactIdentity, compactRequest.Header.Get("x-grok-conv-id"))
 	require.Equal(t, compactRequest.Header.Get("x-grok-conv-id"), continuationRequest.Header.Get("x-grok-conv-id"))
+}
+
+func TestForwardGrokResponsesCompactSynthesizesAndReturnsCompactionItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	body := []byte(`{"model":"grok-4.5","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"history"}]},{"type":"compaction_trigger"}]}`)
+
+	account := &Account{
+		ID: 57, Name: "grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "access-token",
+			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"base_url":     xai.DefaultCLIBaseURL,
+		},
+	}
+	repo := &grokQuotaAccountRepo{
+		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+			accountsByID: map[int64]*Account{57: account},
+		},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"reasoning","encrypted_content":"opaque-reasoning"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<summary>history summary</summary>"}]}],"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:               rawChatCompletionsTestConfig(),
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.forwardGrokResponses(context.Background(), c, account, body, "grok-4.5", false, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "compaction", gjson.Get(recorder.Body.String(), "output.0.type").String())
+	require.Equal(t, "opaque-reasoning", gjson.Get(recorder.Body.String(), "output.0.encrypted_content").String())
+	require.Contains(t, string(upstream.lastBody), grokCompactSummaryPrompt)
+	require.NotContains(t, string(upstream.lastBody), "compaction_trigger")
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+}
+
+func TestPatchGrokResponsesBodyConvertsCompactionContinuation(t *testing.T) {
+	body := []byte(`{"model":"grok-4.5","input":[{"type":"compaction","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"keep this"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	patched, err := patchGrokResponsesBody(body, "grok-4.5")
+	require.NoError(t, err)
+	require.Equal(t, "reasoning", gjson.GetBytes(patched, "input.0.type").String())
+	require.Equal(t, "opaque", gjson.GetBytes(patched, "input.0.encrypted_content").String())
+	require.Equal(t, "<conversation_summary>\nkeep this\n</conversation_summary>", gjson.GetBytes(patched, "input.1.content.0.text").String())
+	require.Equal(t, "continue", gjson.GetBytes(patched, "input.2.content.0.text").String())
 }
 
 func TestForwardGrokResponsesCodexModelInputCompatRetryDefault(t *testing.T) {

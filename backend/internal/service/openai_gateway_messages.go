@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -303,8 +304,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Override session_id with a deterministic UUID derived from the isolated
 	// session key, ensuring different API keys produce different upstream sessions.
+	isolatedSessionID := ""
 	if promptCacheKey != "" {
-		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+		isolatedSessionID = generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
 		upstreamReq.Header.Set("session_id", isolatedSessionID)
 		if upstreamReq.Header.Get("conversation_id") != "" {
 			upstreamReq.Header.Set("conversation_id", isolatedSessionID)
@@ -334,26 +336,69 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
-			return nil, newOpenAIClientCanceledError(err)
-		}
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
-	}
-	if account.Platform == PlatformGrok {
-		resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
-			retryCtx, releaseRetryCtx := detachUpstreamContext(ctx)
-			defer releaseRetryCtx()
-			retryReq, buildErr := buildGrokResponsesRequest(retryCtx, c, account, responsesBody, refreshedToken)
-			if buildErr != nil {
-				return nil, buildErr
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if account.Platform != PlatformGrok {
+				break
 			}
-			return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
-		})
+			retryCtx, releaseRetryCtx := detachUpstreamContext(ctx)
+			retryReq, buildErr := buildGrokResponsesRequest(retryCtx, c, account, responsesBody, token)
+			releaseRetryCtx()
+			if buildErr != nil {
+				return nil, fmt.Errorf("build Grok encrypted-content retry request: %w", buildErr)
+			}
+			if isolatedSessionID != "" {
+				retryReq.Header.Set("session_id", isolatedSessionID)
+			}
+			upstreamReq = retryReq
+		}
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
+			if shouldTreatOpenAIRequestErrorAsClientCanceled(ctx, err) {
+				return nil, newOpenAIClientCanceledError(err)
+			}
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
+		if attempt == 0 && account.Platform == PlatformGrok {
+			resp, _, err = s.retryGrokAfterCredentialRefresh(ctx, account, resp, func(refreshedToken string) (*http.Response, error) {
+				retryCtx, releaseRetryCtx := detachUpstreamContext(ctx)
+				defer releaseRetryCtx()
+				retryReq, buildErr := buildGrokResponsesRequest(retryCtx, c, account, responsesBody, refreshedToken)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				if isolatedSessionID != "" {
+					retryReq.Header.Set("session_id", isolatedSessionID)
+				}
+				return s.httpUpstream.Do(retryReq, proxyURL, account.ID, account.Concurrency)
+			})
+			if err != nil {
+				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+			}
+		}
+		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
+			break
+		}
+		firstBody := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		if !isGrokInvalidEncryptedContentResponse(resp.StatusCode, firstBody) {
+			resp.Body = io.NopCloser(strings.NewReader(string(firstBody)))
+			break
+		}
+		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(responsesBody)
+		if trimErr != nil {
+			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+		}
+		if !changed {
+			resp.Body = io.NopCloser(strings.NewReader(string(firstBody)))
+			break
+		}
+		responsesBody = retryBody
+		logger.L().Info("openai messages: retrying after stripping invalid Grok encrypted_content",
+			zap.Int64("account_id", account.ID),
+			zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(firstBody), 240)),
+		)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -385,6 +430,20 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				zap.String("upstream_model", upstreamModel),
 			)
 			return s.ForwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+		}
+		// A signature produced by one Grok account is not portable to another
+		// account. If the encrypted-content retry above still failed, make one
+		// client-history retry without those opaque thinking signatures before
+		// allowing the normal account failover loop to expose the 400.
+		if account.Platform == PlatformGrok &&
+			isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) &&
+			!grokEncryptedContentStripRetried(ctx) {
+			if strippedBody, changed := stripAnthropicThinkingSignatures(body); changed {
+				logger.L().Info("openai messages: stripping thinking signatures for Grok retry",
+					zap.Int64("account_id", account.ID),
+				)
+				return s.ForwardAsAnthropic(markGrokEncryptedContentStripRetried(ctx), c, account, strippedBody, promptCacheKey, defaultMappedModel)
+			}
 		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr

@@ -413,6 +413,28 @@ func TestOpenAIGatewayService_ClientSessionHeaderPriority(t *testing.T) {
 	require.Equal(t, "body-session", svc.ExtractSessionID(c, body))
 }
 
+func TestOpenAIGatewayService_GrokClaudeCodeSessionPinsAcrossContentChanges(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/messages", nil)
+	c.Set("api_key", &APIKey{ID: 902, Group: &Group{Platform: PlatformGrok}})
+	c.Request.Header.Set(claudeCodeSessionHeader, "claude-session-stable")
+
+	svc := &OpenAIGatewayService{}
+	first := svc.GenerateSessionHash(c, []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"first"}]}`))
+	second := svc.GenerateSessionHash(c, []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"different later turn"}]}`))
+	require.NotEmpty(t, first)
+	require.Equal(t, first, second)
+
+	c.Request.Header.Del(claudeCodeSessionHeader)
+	meta := []byte(`{"model":"grok-4.5","metadata":{"user_id":"claude_session_abc123"},"messages":[{"role":"user","content":"turn"}]}`)
+	metaHash := svc.GenerateSessionHash(c, meta)
+	metaLater := svc.GenerateSessionHash(c, []byte(`{"model":"grok-4.5","metadata":{"user_id":"claude_session_abc123"},"messages":[{"role":"user","content":"later"}]}`))
+	require.NotEmpty(t, metaHash)
+	require.Equal(t, metaHash, metaLater)
+}
+
 func TestOpenAIGatewayService_ClientSessionHeadersIgnorePerRequestIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
