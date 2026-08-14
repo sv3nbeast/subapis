@@ -3,11 +3,11 @@ package service
 // Account-scoped stable identity metadata.
 //
 // The original stable canary is intentionally tied to one process-wide
-// environment configuration and one isolated group.  Stable identity mode is
-// the operator-facing extension: an OAuth/SetupToken account may be enrolled
-// in one or more existing Anthropic groups and only explicitly selected API
-// keys enter the strict Claude Code path. The metadata lives on the account so
-// it survives restarts and does not require a deployment-specific env file.
+// environment configuration and one isolated group. Stable identity mode is
+// the operator-facing extension: an OAuth/SetupToken account is enrolled with
+// one account-level switch and automatically participates in every current
+// Anthropic group membership. The metadata lives on the account so it survives
+// restarts and does not require a deployment-specific env file.
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,8 @@ import (
 )
 
 type anthropicStableIdentityMutationAuthorizationKey struct{}
-type anthropicStableIdentityExpectedGroupIDsKey struct{}
+type anthropicStableIdentityGroupMutationAuthorizationKey struct{}
+type anthropicStableIdentityCreateAuthorizationKey struct{}
 
 // withAnthropicStableIdentityMutationAuthorization is deliberately private to
 // the dedicated lifecycle. Repository mutation guards can verify the marker,
@@ -47,34 +49,47 @@ func AnthropicStableIdentityMutationAuthorized(ctx context.Context, accountID in
 	return authorizedID == accountID
 }
 
-// withAnthropicStableIdentityExpectedGroupIDs attaches the exact ordered group
-// snapshot captured before a lifecycle mutation. BindGroups verifies it after
-// locking the account row, preventing a concurrent ordinary membership edit
-// from being silently overwritten by configure/reconfigure/disable.
-func withAnthropicStableIdentityExpectedGroupIDs(ctx context.Context, accountID int64, groupIDs []int64) context.Context {
+// WithAnthropicStableIdentityGroupMutationAuthorization lets the ordinary
+// account editor change only group membership while stable mode is enabled.
+// Group membership is now the live source of pool membership, so it must stay
+// editable without granting access to credentials, device identity, scheduler
+// reservation, or other protected account fields.
+func WithAnthropicStableIdentityGroupMutationAuthorization(ctx context.Context, accountID int64) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, anthropicStableIdentityExpectedGroupIDsKey{}, struct {
-		accountID int64
-		groupIDs  []int64
-	}{accountID: accountID, groupIDs: append([]int64(nil), groupIDs...)})
+	return context.WithValue(ctx, anthropicStableIdentityGroupMutationAuthorizationKey{}, accountID)
 }
 
-// AnthropicStableIdentityExpectedGroupIDs exposes the lifecycle snapshot only
-// to repository guards. Callers receive a copy and cannot mutate context state.
-func AnthropicStableIdentityExpectedGroupIDs(ctx context.Context, accountID int64) ([]int64, bool) {
+// AnthropicStableIdentityGroupMutationAuthorized is consumed only by the
+// repository's BindGroups guard.
+func AnthropicStableIdentityGroupMutationAuthorized(ctx context.Context, accountID int64) bool {
 	if ctx == nil || accountID <= 0 {
-		return nil, false
+		return false
 	}
-	value, ok := ctx.Value(anthropicStableIdentityExpectedGroupIDsKey{}).(struct {
-		accountID int64
-		groupIDs  []int64
-	})
-	if !ok || value.accountID != accountID {
-		return nil, false
+	authorizedID, _ := ctx.Value(anthropicStableIdentityGroupMutationAuthorizationKey{}).(int64)
+	return authorizedID == accountID
+}
+
+// withAnthropicStableIdentityCreateAuthorization is used only while a new
+// account and its memberships are created in one database transaction. The
+// account has no ID yet, so this marker is intentionally separate from the
+// ID-scoped lifecycle authorization used for later mutations.
+func withAnthropicStableIdentityCreateAuthorization(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return append([]int64(nil), value.groupIDs...), true
+	return context.WithValue(ctx, anthropicStableIdentityCreateAuthorizationKey{}, true)
+}
+
+// AnthropicStableIdentityCreateAuthorized is consumed by repository create
+// guards; callers outside this package cannot manufacture the private marker.
+func AnthropicStableIdentityCreateAuthorized(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	authorized, _ := ctx.Value(anthropicStableIdentityCreateAuthorizationKey{}).(bool)
+	return authorized
 }
 
 const (
@@ -389,27 +404,6 @@ func ValidateAnthropicStableIdentityEnrolledAccount(account *Account) error {
 	if _, ok := account.AnthropicStableIdentityPreviousConcurrency(); !ok {
 		return errors.New("stable identity concurrency rollback state is incomplete")
 	}
-	if _, ok := account.AnthropicStableIdentityPreviousGroupIDs(); !ok {
-		return errors.New("stable identity group rollback state is incomplete")
-	}
-	groups, err := normalizeStableIdentityIDs(account.AnthropicStableIdentityGroupIDs())
-	if err != nil {
-		return err
-	}
-	keys, err := normalizeStableIdentityIDs(account.AnthropicStableIdentityAPIKeyIDs())
-	if err != nil {
-		return err
-	}
-	mapping := account.AnthropicStableIdentityAPIKeyGroupIDs()
-	if len(mapping) != len(keys) {
-		return errors.New("stable identity API-key route mapping is incomplete")
-	}
-	for _, keyID := range keys {
-		groupID := mapping[keyID]
-		if groupID <= 0 || !containsStableIdentityID(groups, groupID) || !accountBelongsToGroup(account, groupID) {
-			return errors.New("stable identity API-key route mapping is inconsistent")
-		}
-	}
 	return nil
 }
 
@@ -417,11 +411,14 @@ func validateAnthropicStableIdentityAdminUpdate(account *Account, input *UpdateA
 	if input == nil {
 		return nil
 	}
-	if AnthropicStableIdentityExtraUpdateTouchesManagedFields(input.Extra) {
-		return ErrAnthropicStableIdentityManaged
-	}
 	if account == nil || !account.HasAnthropicStableIdentityManagedFields() {
+		if AnthropicStableIdentityExtraUpdateTouchesManagedFields(input.Extra) {
+			return ErrAnthropicStableIdentityManaged
+		}
 		return nil
+	}
+	if !anthropicStableIdentityManagedExtraMatches(account.Extra, input.Extra) {
+		return ErrAnthropicStableIdentityManaged
 	}
 	if (input.ProxyID != nil && *input.ProxyID != 0) ||
 		(input.Type != "" && input.Type != account.Type) ||
@@ -443,13 +440,9 @@ func validateAnthropicStableIdentityAdminUpdate(account *Account, input *UpdateA
 			return fmt.Errorf("%w: %v", ErrAnthropicStableIdentityManaged, err)
 		}
 	}
-	if input.GroupIDs != nil && !sameStableIdentityIDSet(*input.GroupIDs, account.GroupIDs) {
-		// Group membership is part of the captured rollback state.  Letting an
-		// ordinary edit add a group would make Disable silently discard that
-		// later edit; removing a group could reopen a selected route elsewhere.
-		// Reconfigure through the dedicated lifecycle instead.
-		return ErrAnthropicStableIdentityManaged
-	}
+	// Group membership remains editable. It is the authoritative, dynamically
+	// refreshed source of stable-pool membership and is never rolled back when
+	// stable mode is disabled.
 	if input.Extra != nil {
 		candidate := *account
 		candidate.Extra = preserveAnthropicStableIdentityManagedExtra(account.Extra, input.Extra)
@@ -461,21 +454,42 @@ func validateAnthropicStableIdentityAdminUpdate(account *Account, input *UpdateA
 }
 
 func validateAnthropicStableIdentityAccountServiceUpdate(account *Account, input UpdateAccountRequest) error {
-	if input.Extra != nil && AnthropicStableIdentityExtraUpdateTouchesManagedFields(*input.Extra) {
-		return ErrAnthropicStableIdentityManaged
-	}
 	if account == nil || !account.HasAnthropicStableIdentityManagedFields() {
+		if input.Extra != nil && AnthropicStableIdentityExtraUpdateTouchesManagedFields(*input.Extra) {
+			return ErrAnthropicStableIdentityManaged
+		}
 		return nil
+	}
+	if input.Extra != nil && !anthropicStableIdentityManagedExtraMatches(account.Extra, *input.Extra) {
+		return ErrAnthropicStableIdentityManaged
 	}
 	if input.Credentials != nil || input.ProxyID != nil ||
 		(input.Concurrency != nil && *input.Concurrency != 1) ||
 		(input.Status != nil && *input.Status != StatusActive) {
 		return ErrAnthropicStableIdentityManaged
 	}
-	if input.GroupIDs != nil && !sameStableIdentityIDSet(*input.GroupIDs, account.GroupIDs) {
-		return ErrAnthropicStableIdentityManaged
-	}
 	return nil
+}
+
+// anthropicStableIdentityManagedExtraMatches accepts a full-object admin PUT
+// that echoes the current redacted account.extra, while still rejecting any
+// attempt to inject or change lifecycle-owned values. The write path replaces
+// these keys with the authoritative stored copy after this comparison.
+func anthropicStableIdentityManagedExtraMatches(current, incoming map[string]any) bool {
+	if incoming == nil {
+		return true
+	}
+	for _, key := range anthropicStableIdentityManagedExtraKeys {
+		incomingValue, provided := incoming[key]
+		if !provided {
+			continue
+		}
+		currentValue, exists := current[key]
+		if !exists || !reflect.DeepEqual(currentValue, incomingValue) {
+			return false
+		}
+	}
+	return true
 }
 
 func preserveAnthropicStableIdentityManagedExtra(current, replacement map[string]any) map[string]any {
@@ -496,7 +510,7 @@ func anthropicStableIdentityBulkUpdateTouchesProtectedFields(input *BulkUpdateAc
 		return false
 	}
 	return input.ProxyID != nil || input.Concurrency != nil || input.Status != "" ||
-		input.Schedulable != nil || input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0
+		input.Schedulable != nil || len(input.Credentials) > 0 || len(input.Extra) > 0
 }
 
 func normalizeStableIdentityIDs(values []int64) ([]int64, error) {

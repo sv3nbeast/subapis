@@ -33,6 +33,14 @@ type stableCanaryHandlerAccountRepo struct {
 	sessionSupported bool
 }
 
+func (r *stableCanaryHandlerAccountRepo) ResolveAnthropicStableIdentitySessionRoute(
+	_ context.Context,
+	candidate service.AnthropicStableIdentitySessionRouteBinding,
+) (*service.AnthropicStableIdentitySessionRouteBinding, error) {
+	copyBinding := candidate
+	return &copyBinding, nil
+}
+
 func (r *stableCanaryHandlerAccountRepo) AcquireAnthropicStableCanaryLease(context.Context, int64) (func() error, error) {
 	return func() error { return nil }, nil
 }

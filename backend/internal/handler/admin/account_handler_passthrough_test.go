@@ -66,3 +66,34 @@ func TestAccountHandler_Create_AnthropicAPIKeyPassthroughExtraForwarded(t *testi
 	require.NotNil(t, created.Extra)
 	require.Equal(t, true, created.Extra["anthropic_passthrough"])
 }
+
+func TestAccountHandlerCreateForwardsOneSwitchStableIdentityFlag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	adminSvc := newStubAdminService()
+	handler := NewAccountHandler(
+		adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	router := gin.New()
+	router.POST("/api/v1/admin/accounts", handler.Create)
+
+	body := map[string]any{
+		"name":                              "stable-oauth",
+		"platform":                          "anthropic",
+		"type":                              "oauth",
+		"credentials":                       map[string]any{"access_token": "sk-ant-oat-test", "refresh_token": "refresh"},
+		"group_ids":                         []int64{11},
+		"anthropic_stable_identity_enabled": true,
+		"concurrency":                       4,
+	}
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.True(t, adminSvc.createdAccounts[0].AnthropicStableIdentity)
+	require.Equal(t, []int64{11}, adminSvc.createdAccounts[0].GroupIDs)
+}

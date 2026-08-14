@@ -392,9 +392,6 @@ func (r *groupRepository) Delete(ctx context.Context, id int64) error {
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, id); err != nil {
 		return err
 	}
-	if err := rejectAnthropicStableIdentityGroupDestruction(ctx, client, id); err != nil {
-		return err
-	}
 	_, err = client.Group.Delete().Where(group.IDEQ(id)).Exec(ctx)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrGroupNotFound, nil)
@@ -797,9 +794,6 @@ func (r *groupRepository) DeleteAccountGroupsByGroupID(ctx context.Context, grou
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 		return 0, err
 	}
-	if err := rejectAnthropicStableIdentityGroupDestruction(ctx, client, groupID); err != nil {
-		return 0, err
-	}
 	res, err := client.ExecContext(ctx, "DELETE FROM account_groups WHERE group_id = $1", groupID)
 	if err != nil {
 		return 0, err
@@ -839,9 +833,6 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 	// err 为 dbent.ErrTxStarted 时，复用当前 client 参与同一事务。
 
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, txClient, id); err != nil {
-		return nil, err
-	}
-	if err := rejectAnthropicStableIdentityGroupDestruction(ctx, txClient, id); err != nil {
 		return nil, err
 	}
 

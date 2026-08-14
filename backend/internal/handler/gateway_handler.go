@@ -239,9 +239,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	if h.tryAnthropicStableCanaryMessages(c, apiKey, subject, requestStartedAt) {
 		return
 	}
-	// Account-scoped stable identity routes are opt-in and keyed by an existing
-	// group/API-key pair. Non-enrolled clients continue unchanged through the
-	// generic OAuth mimicry path.
+	// Account-scoped stable identity routes are opt-in at the account level and
+	// derive their pool from the authenticated group's current memberships.
+	// Non-enrolled clients continue unchanged through OAuth mimicry.
 	if h.tryAnthropicStableIdentityMessages(c, apiKey, subject, requestStartedAt) {
 		return
 	}

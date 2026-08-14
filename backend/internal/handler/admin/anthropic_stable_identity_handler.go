@@ -9,13 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type anthropicStableIdentityConfigureRequest struct {
-	GroupIDs  []int64 `json:"group_ids" binding:"required,min=1"`
-	APIKeyIDs []int64 `json:"api_key_ids"`
-	ProfileID string  `json:"profile_id"`
-	DeviceID  string  `json:"device_id"`
-}
-
 func (h *AccountHandler) anthropicStableIdentityAdmin(c *gin.Context) (service.AnthropicStableIdentityAdminService, int64, bool) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || accountID <= 0 {
@@ -55,24 +48,18 @@ func (h *AccountHandler) GetAnthropicStableIdentity(c *gin.Context) {
 	response.Success(c, status)
 }
 
-// ConfigureAnthropicStableIdentity enrolls the account into selected existing
-// groups. It never creates a group and never replaces unrelated memberships.
+// ConfigureAnthropicStableIdentity enables the account-level switch. Current
+// Anthropic group membership is derived automatically; request-body routing
+// selectors from older frontends are intentionally ignored.
 // PUT /api/v1/admin/accounts/:id/anthropic-stable-identity
 func (h *AccountHandler) ConfigureAnthropicStableIdentity(c *gin.Context) {
 	admin, accountID, ok := h.anthropicStableIdentityAdmin(c)
 	if !ok {
 		return
 	}
-	var req anthropicStableIdentityConfigureRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid stable identity configuration: "+err.Error())
-		return
-	}
 	h.stableIdentityMu.Lock()
 	defer h.stableIdentityMu.Unlock()
-	status, err := admin.ConfigureAnthropicStableIdentity(c.Request.Context(), accountID, &service.AnthropicStableIdentityConfigureInput{
-		GroupIDs: req.GroupIDs, APIKeyIDs: req.APIKeyIDs, ProfileID: req.ProfileID, DeviceID: req.DeviceID,
-	})
+	status, err := admin.ConfigureAnthropicStableIdentity(c.Request.Context(), accountID, &service.AnthropicStableIdentityConfigureInput{})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -81,20 +68,20 @@ func (h *AccountHandler) ConfigureAnthropicStableIdentity(c *gin.Context) {
 	response.Success(c, status)
 }
 
-// PauseAnthropicStableIdentity keeps the reservation but stops all selected
-// native routes until an explicit resume.
+// PauseAnthropicStableIdentity keeps the reservation but stops all native
+// routes for the account's current groups until an explicit resume.
 func (h *AccountHandler) PauseAnthropicStableIdentity(c *gin.Context) {
 	h.mutateAnthropicStableIdentity(c, "pause")
 }
 
-// ResumeAnthropicStableIdentity revalidates group/API-key bindings and clears
-// a finite runtime block before reopening the native route.
+// ResumeAnthropicStableIdentity revalidates current group membership and
+// clears a finite runtime block before reopening the native route.
 func (h *AccountHandler) ResumeAnthropicStableIdentity(c *gin.Context) {
 	h.mutateAnthropicStableIdentity(c, "resume")
 }
 
-// DisableAnthropicStableIdentity atomically restores the captured scheduler,
-// concurrency and group membership state.
+// DisableAnthropicStableIdentity restores captured scheduler/concurrency state
+// and deliberately leaves current group membership unchanged.
 func (h *AccountHandler) DisableAnthropicStableIdentity(c *gin.Context) {
 	h.mutateAnthropicStableIdentity(c, "disable")
 }

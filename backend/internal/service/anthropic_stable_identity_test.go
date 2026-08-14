@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,12 +18,127 @@ import (
 
 type stableIdentityDirectoryRepo struct {
 	AccountRepository
+	mu       sync.Mutex
 	accounts []Account
 	err      error
 	calls    int
+	bindings map[string]AnthropicStableIdentitySessionRouteBinding
+}
+
+type stableIdentityAdminAccountRepo struct {
+	AccountRepository
+	account *Account
+	creates int
+	binds   int
+	updates int
+}
+
+func cloneStableIdentityAdminTestAccount(account *Account) *Account {
+	if account == nil {
+		return nil
+	}
+	copyAccount := *account
+	copyAccount.GroupIDs = append([]int64(nil), account.GroupIDs...)
+	copyAccount.Extra = shallowCopyMap(account.Extra)
+	copyAccount.Credentials = shallowCopyMap(account.Credentials)
+	return &copyAccount
+}
+
+func (r *stableIdentityAdminAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	if r.account == nil || r.account.ID != id {
+		return nil, ErrAccountNotFound
+	}
+	return cloneStableIdentityAdminTestAccount(r.account), nil
+}
+
+func (r *stableIdentityAdminAccountRepo) Update(ctx context.Context, account *Account) error {
+	if account == nil || !AnthropicStableIdentityMutationAuthorized(ctx, account.ID) {
+		return ErrAnthropicStableIdentityManaged
+	}
+	r.account = cloneStableIdentityAdminTestAccount(account)
+	r.updates++
+	return nil
+}
+
+func (r *stableIdentityAdminAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if r.account == nil || r.account.ID != id || !AnthropicStableIdentityMutationAuthorized(ctx, id) {
+		return ErrAnthropicStableIdentityManaged
+	}
+	if r.account.Extra == nil {
+		r.account.Extra = make(map[string]any)
+	}
+	for key, value := range updates {
+		r.account.Extra[key] = value
+	}
+	r.updates++
+	return nil
+}
+
+func (r *stableIdentityAdminAccountRepo) CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error {
+	if account == nil || !AnthropicStableIdentityCreateAuthorized(ctx) {
+		return ErrAnthropicStableIdentityManaged
+	}
+	if account.ID <= 0 {
+		account.ID = 40
+	}
+	account.GroupIDs = make([]int64, 0, len(groups))
+	account.AccountGroups = make([]AccountGroup, 0, len(groups))
+	for _, binding := range groups {
+		binding.AccountID = account.ID
+		account.GroupIDs = append(account.GroupIDs, binding.GroupID)
+		account.AccountGroups = append(account.AccountGroups, binding)
+	}
+	r.account = cloneStableIdentityAdminTestAccount(account)
+	r.account.AccountGroups = append([]AccountGroup(nil), account.AccountGroups...)
+	r.creates++
+	return nil
+}
+
+func (r *stableIdentityAdminAccountRepo) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
+	if r.account == nil || r.account.ID != accountID || !AnthropicStableIdentityGroupMutationAuthorized(ctx, accountID) {
+		return ErrAnthropicStableIdentityManaged
+	}
+	r.account.GroupIDs = append([]int64(nil), groupIDs...)
+	r.binds++
+	return nil
+}
+
+func (r *stableIdentityAdminAccountRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
+	return nil, nil
+}
+
+func (r *stableIdentityAdminAccountRepo) AcquireAnthropicStableCanaryLease(context.Context, int64) (func() error, error) {
+	return func() error { return nil }, nil
+}
+
+type stableIdentityAdminGroupRepo struct {
+	GroupRepository
+	groups map[int64]*Group
+}
+
+func (r *stableIdentityAdminGroupRepo) GetByID(_ context.Context, id int64) (*Group, error) {
+	group := r.groups[id]
+	if group == nil {
+		return nil, ErrGroupNotFound
+	}
+	copyGroup := *group
+	return &copyGroup, nil
+}
+
+func (r *stableIdentityAdminGroupRepo) ListActiveByPlatform(_ context.Context, platform string) ([]Group, error) {
+	groups := make([]Group, 0, len(r.groups))
+	for _, group := range r.groups {
+		if group == nil || !group.IsActive() || group.Platform != platform {
+			continue
+		}
+		groups = append(groups, *group)
+	}
+	return groups, nil
 }
 
 func (r *stableIdentityDirectoryRepo) FindByExtraField(_ context.Context, key string, value any) ([]Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls++
 	requireStableIdentityDirectoryQuery(key, value)
 	if r.err != nil {
@@ -31,13 +147,32 @@ func (r *stableIdentityDirectoryRepo) FindByExtraField(_ context.Context, key st
 	return append([]Account(nil), r.accounts...), nil
 }
 
+func (r *stableIdentityDirectoryRepo) ResolveAnthropicStableIdentitySessionRoute(
+	_ context.Context,
+	candidate AnthropicStableIdentitySessionRouteBinding,
+) (*AnthropicStableIdentitySessionRouteBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bindings == nil {
+		r.bindings = make(map[string]AnthropicStableIdentitySessionRouteBinding)
+	}
+	key := fmt.Sprintf("%d:%s", candidate.GroupID, candidate.SessionHash)
+	bound, exists := r.bindings[key]
+	if !exists {
+		bound = candidate
+		r.bindings[key] = bound
+	}
+	copyBinding := bound
+	return &copyBinding, nil
+}
+
 func requireStableIdentityDirectoryQuery(key string, value any) {
 	if key != AnthropicStableIdentityEnabledExtraKey || value != true {
 		panic("unexpected stable identity directory query")
 	}
 }
 
-func newStableIdentityAccountForTest(accountID int64, groupIDs, keyIDs []int64, keyGroups map[int64]int64) *Account {
+func newStableIdentityAccountForTest(accountID int64, groupIDs []int64) *Account {
 	device := strings.Repeat("a", 64)
 	return &Account{
 		ID: accountID, Name: "stable-identity-test", Platform: PlatformAnthropic,
@@ -53,11 +188,7 @@ func newStableIdentityAccountForTest(accountID int64, groupIDs, keyIDs []int64, 
 			AnthropicStableIdentityDeviceIDExtraKey:            device,
 			AnthropicStableIdentityPreviousSchedulableExtraKey: true,
 			AnthropicStableIdentityPreviousConcurrencyExtraKey: 4,
-			AnthropicStableIdentityPreviousGroupIDsExtraKey:    append([]int64(nil), groupIDs...),
 			AnthropicStableIdentityProfileExtraKey:             AnthropicStableIngressProfileCLI211222V1,
-			AnthropicStableIdentityGroupIDsExtraKey:            append([]int64(nil), groupIDs...),
-			AnthropicStableIdentityAPIKeyIDsExtraKey:           append([]int64(nil), keyIDs...),
-			AnthropicStableIdentityAPIKeyGroupIDsExtraKey:      stableIdentityKeyGroupJSON(keyGroups),
 			AnthropicStableIdentityGenerationExtraKey:          int64(1),
 			AnthropicStableIdentityCreatedAtExtraKey:           "2026-08-14T00:00:00Z",
 			AnthropicStableIdentityUpdatedAtExtraKey:           "2026-08-14T00:00:00Z",
@@ -73,8 +204,232 @@ func stableIdentityTestConfig() *config.Config {
 	return cfg
 }
 
+func newStableIdentityAdminFixture() (*adminServiceImpl, *stableIdentityAdminAccountRepo) {
+	accountRepo := &stableIdentityAdminAccountRepo{account: &Account{
+		ID: 40, Name: "one-switch-stable-account", Platform: PlatformAnthropic,
+		Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 4,
+		GroupIDs: []int64{12, 11},
+		Credentials: map[string]any{
+			"access_token":  "sk-ant-oat-one-switch-test",
+			"refresh_token": "one-switch-refresh-token",
+		},
+		Extra: map[string]any{"operator_note": "preserve-me"},
+	}}
+	groupRepo := &stableIdentityAdminGroupRepo{groups: map[int64]*Group{
+		11: {ID: 11, Name: "Claude latest", Platform: PlatformAnthropic, Status: StatusActive},
+		12: {ID: 12, Name: "Claude history", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	return &adminServiceImpl{accountRepo: accountRepo, groupRepo: groupRepo}, accountRepo
+}
+
+func TestAnthropicStableIdentityAccountIsCreatedAtomicallyAlreadyFenced(t *testing.T) {
+	repo := &stableIdentityAdminAccountRepo{}
+	groupRepo := &stableIdentityAdminGroupRepo{groups: map[int64]*Group{
+		11: {ID: 11, Name: "Claude latest", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	admin := &adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo, groupRepo: groupRepo}
+
+	created, err := admin.CreateAccount(context.Background(), &CreateAccountInput{
+		Name: "created-stable", Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "sk-ant-oat-atomic-create",
+			"refresh_token": "atomic-create-refresh",
+		},
+		Extra:                   map[string]any{"operator_note": "preserve-me"},
+		Concurrency:             6,
+		GroupIDs:                []int64{11},
+		AnthropicStableIdentity: true,
+		SkipMixedChannelCheck:   true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.creates)
+	require.Equal(t, created.ID, repo.account.ID)
+	require.True(t, created.IsAnthropicStableIdentityEnabled())
+	require.False(t, created.Schedulable)
+	require.Equal(t, 1, created.Concurrency)
+	require.Equal(t, []int64{11}, created.GroupIDs)
+	require.Equal(t, "preserve-me", created.Extra["operator_note"])
+	previousSchedulable, ok := created.AnthropicStableIdentityPreviousSchedulable()
+	require.True(t, ok)
+	require.True(t, previousSchedulable)
+	previousConcurrency, ok := created.AnthropicStableIdentityPreviousConcurrency()
+	require.True(t, ok)
+	require.Equal(t, 6, previousConcurrency)
+	require.NoError(t, ValidateAnthropicStableIdentityEnrolledAccount(created))
+}
+
+func TestAnthropicStableIdentityCreateUsesPlatformDefaultGroupWithoutExtraStableRoutingConfig(t *testing.T) {
+	repo := &stableIdentityAdminAccountRepo{}
+	groupRepo := &stableIdentityAdminGroupRepo{groups: map[int64]*Group{
+		11: {ID: 11, Name: PlatformAnthropic + "-default", Platform: PlatformAnthropic, Status: StatusActive},
+	}}
+	admin := &adminServiceImpl{accountRepo: repo, accountDuplicateRepo: repo, groupRepo: groupRepo}
+
+	created, err := admin.CreateAccount(context.Background(), &CreateAccountInput{
+		Name: "default-group-stable", Platform: PlatformAnthropic, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "sk-ant-oat-default-group-create",
+			"refresh_token": "default-group-refresh",
+		},
+		Concurrency:             3,
+		AnthropicStableIdentity: true,
+		SkipMixedChannelCheck:   true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{11}, created.GroupIDs)
+	require.True(t, created.IsAnthropicStableIdentityEnabled())
+	require.False(t, created.Schedulable)
+	require.Equal(t, 1, created.Concurrency)
+}
+
+func TestAnthropicStableIdentityOneSwitchUsesLiveGroupsAndDisableDoesNotRollThemBack(t *testing.T) {
+	admin, repo := newStableIdentityAdminFixture()
+	deviceID := strings.Repeat("d", 64)
+
+	status, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: deviceID,
+	})
+	require.NoError(t, err)
+	require.True(t, status.Enabled)
+	require.Equal(t, []int64{11, 12}, status.GroupIDs)
+	require.Equal(t, int64(1), status.Generation)
+	require.False(t, status.Schedulable)
+	require.Equal(t, 1, status.Concurrency)
+	require.Equal(t, "preserve-me", repo.account.Extra["operator_note"])
+	require.False(t, hasAnthropicStableIdentityLegacyRoutingMetadata(repo.account.Extra))
+	require.Equal(t, []int64{12, 11}, repo.account.GroupIDs, "enabling must not rewrite ordinary group membership")
+	require.Equal(t, 1, repo.updates)
+
+	// A retried PUT is idempotent and does not rotate the fixed identity.
+	retried, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: deviceID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, status.Generation, retried.Generation)
+	require.Equal(t, 1, repo.updates)
+
+	// Group administration stays live while the identity is reserved.
+	repo.account.GroupIDs = []int64{12}
+	disabled, err := admin.DisableAnthropicStableIdentity(context.Background(), repo.account.ID)
+	require.NoError(t, err)
+	require.False(t, disabled.Enabled)
+	require.True(t, disabled.Schedulable)
+	require.Equal(t, 4, disabled.Concurrency)
+	require.Equal(t, []int64{12}, repo.account.GroupIDs, "disabling must keep the current group set")
+	require.Equal(t, "preserve-me", repo.account.Extra["operator_note"])
+}
+
+func TestAnthropicStableIdentityOneSwitchAtomicallyReplacesOAuthPassthrough(t *testing.T) {
+	admin, repo := newStableIdentityAdminFixture()
+	repo.account.Extra["anthropic_oauth_passthrough"] = true
+
+	status, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: strings.Repeat("c", 64),
+	})
+
+	require.NoError(t, err)
+	require.True(t, status.Enabled)
+	require.True(t, repo.account.IsAnthropicStableIdentityEnabled())
+	require.False(t, repo.account.IsAnthropicOAuthPassthroughEnabled())
+	_, exists := repo.account.Extra["anthropic_oauth_passthrough"]
+	require.False(t, exists, "the mutually exclusive legacy mode must be removed in the stable-mode write")
+	require.Equal(t, 1, repo.updates)
+}
+
+func TestAnthropicStableIdentityDisableBlockedAccountDoesNotRestoreGenericScheduling(t *testing.T) {
+	admin, repo := newStableIdentityAdminFixture()
+	_, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: strings.Repeat("b", 64),
+	})
+	require.NoError(t, err)
+	repo.account.Extra[AnthropicStableIdentityBlockedExtraKey] = true
+	repo.account.Extra[AnthropicStableIdentityBlockedReasonExtraKey] = anthropicStableCanaryBlockReasonCredentialRejected
+
+	status, err := admin.DisableAnthropicStableIdentity(context.Background(), repo.account.ID)
+
+	require.NoError(t, err)
+	require.False(t, status.Enabled)
+	require.False(t, status.Schedulable)
+	require.False(t, repo.account.Schedulable, "a rejected credential must require manual recovery")
+	require.Equal(t, 4, repo.account.Concurrency)
+}
+
+func TestAnthropicStableIdentityOrdinaryEditCanChangeOnlyLiveGroupsAndEchoManagedExtra(t *testing.T) {
+	admin, repo := newStableIdentityAdminFixture()
+	_, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: strings.Repeat("f", 64),
+	})
+	require.NoError(t, err)
+	updatesBefore := repo.updates
+
+	groups := []int64{11}
+	concurrency := 1
+	clearProxy := int64(0)
+	updated, err := admin.UpdateAccount(context.Background(), repo.account.ID, &UpdateAccountInput{
+		Name:                  "renamed-with-live-group",
+		Extra:                 shallowCopyMap(repo.account.Extra),
+		ProxyID:               &clearProxy,
+		Concurrency:           &concurrency,
+		Status:                StatusActive,
+		GroupIDs:              &groups,
+		SkipMixedChannelCheck: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "renamed-with-live-group", updated.Name)
+	require.Equal(t, []int64{11}, updated.GroupIDs)
+	require.Equal(t, 1, repo.binds)
+	require.Equal(t, updatesBefore+1, repo.updates)
+	require.True(t, updated.IsAnthropicStableIdentityEnabled())
+	require.Equal(t, strings.Repeat("f", 64), updated.AnthropicStableIdentityDeviceID())
+
+	tamperedExtra := shallowCopyMap(updated.Extra)
+	tamperedExtra[AnthropicStableIdentityDeviceIDExtraKey] = strings.Repeat("0", 64)
+	_, err = admin.UpdateAccount(context.Background(), repo.account.ID, &UpdateAccountInput{Extra: tamperedExtra})
+	require.ErrorIs(t, err, ErrAnthropicStableIdentityManaged)
+}
+
+func TestAnthropicStableIdentityConfigureMigratesLegacySelectorsOnce(t *testing.T) {
+	admin, repo := newStableIdentityAdminFixture()
+	deviceID := strings.Repeat("e", 64)
+	repo.account.Schedulable = false
+	repo.account.Concurrency = 1
+	repo.account.Extra = map[string]any{
+		"operator_note":                                    "preserve-me",
+		AnthropicStableIdentityEnabledExtraKey:             true,
+		AnthropicStableIdentityStateExtraKey:               AnthropicStableIdentityStateActive,
+		AnthropicStableIdentityDeviceIDExtraKey:            deviceID,
+		AnthropicStableIdentityPreviousSchedulableExtraKey: true,
+		AnthropicStableIdentityPreviousConcurrencyExtraKey: 4,
+		AnthropicStableIdentityPreviousGroupIDsExtraKey:    []int64{11},
+		AnthropicStableIdentityProfileExtraKey:             AnthropicStableIngressProfileCLI211222V1,
+		AnthropicStableIdentityGroupIDsExtraKey:            []int64{11},
+		AnthropicStableIdentityAPIKeyIDsExtraKey:           []int64{91},
+		AnthropicStableIdentityAPIKeyGroupIDsExtraKey:      map[string]any{"91": int64(11)},
+		AnthropicStableIdentityGenerationExtraKey:          int64(1),
+		AnthropicStableIdentityCreatedAtExtraKey:           "2026-08-01T00:00:00Z",
+		AnthropicStableIdentityUpdatedAtExtraKey:           "2026-08-01T00:00:00Z",
+		AnthropicStableIdentityBlockedExtraKey:             false,
+		AnthropicStableIdentityBlockedReasonExtraKey:       "",
+	}
+
+	status, err := admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: deviceID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), status.Generation)
+	require.False(t, hasAnthropicStableIdentityLegacyRoutingMetadata(repo.account.Extra))
+	require.Equal(t, "preserve-me", repo.account.Extra["operator_note"])
+	require.Equal(t, 1, repo.updates)
+
+	_, err = admin.ConfigureAnthropicStableIdentity(context.Background(), repo.account.ID, &AnthropicStableIdentityConfigureInput{
+		DeviceID: deviceID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.updates, "the migrated representation must become idempotent")
+}
+
 func TestAnthropicStableIdentityAccountValidationAndGenericFence(t *testing.T) {
-	account := newStableIdentityAccountForTest(41, []int64{11}, []int64{101}, map[int64]int64{101: 11})
+	account := newStableIdentityAccountForTest(41, []int64{11})
 	require.True(t, account.IsAnthropicStableIdentityEnabled())
 	require.NoError(t, ValidateAnthropicStableIdentityEnrolledAccount(account))
 	require.False(t, account.IsSchedulable(), "managed credentials must never enter the generic scheduler")
@@ -99,21 +454,15 @@ func TestAnthropicStableIdentityAccountValidationAndGenericFence(t *testing.T) {
 		"the lifecycle marker must never authorize a different managed account")
 }
 
-func TestAnthropicStableIdentityAdminGuardKeepsCapturedGroupRollbackExact(t *testing.T) {
-	account := newStableIdentityAccountForTest(42, []int64{11, 12}, []int64{101}, map[int64]int64{101: 11})
-	sameGroups := []int64{12, 11}
-	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{GroupIDs: &sameGroups}))
+func TestAnthropicStableIdentityAdminGuardAllowsLiveGroupMembershipOnly(t *testing.T) {
+	account := newStableIdentityAccountForTest(42, []int64{11, 12})
+	addedGroups := []int64{11, 12, 13}
+	removedGroups := []int64{11}
+	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{GroupIDs: &addedGroups}))
+	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{GroupIDs: &removedGroups}))
 
-	addedGroup := []int64{11, 12, 13}
-	require.ErrorIs(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{GroupIDs: &addedGroup}), ErrAnthropicStableIdentityManaged)
-	removedGroup := []int64{11}
-	require.ErrorIs(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{GroupIDs: &removedGroup}), ErrAnthropicStableIdentityManaged)
 	clearProxy := int64(0)
-	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{ProxyID: &clearProxy}),
-		"the edit form's proxy_id=0 representation is a semantic no-op for a proxy-free managed account")
-
-	// The ordinary edit form always echoes a redacted credential object. A
-	// semantic no-op must not make name/notes edits impossible while managed.
+	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{ProxyID: &clearProxy}))
 	require.NoError(t, validateAnthropicStableIdentityAdminUpdate(account, &UpdateAccountInput{Credentials: map[string]any{
 		"expires_at": account.Credentials["expires_at"],
 	}}))
@@ -124,43 +473,14 @@ func TestAnthropicStableIdentityAdminGuardKeepsCapturedGroupRollbackExact(t *tes
 		"model_mapping": map[string]any{"claude-opus-5": "claude-sonnet-4-6"},
 	}}), ErrAnthropicStableIdentityManaged)
 
-	require.Equal(t, []int64{11, 12, 13}, unionAnthropicStableIdentityGroups([]int64{11, 12}, []int64{12, 13}),
-		"lifecycle configuration must add selected existing groups without replacing captured original membership")
-	require.Equal(t, []int64{11, 13}, unionAnthropicStableIdentityGroups([]int64{11}, []int64{13}),
-		"reconfiguration uses the captured original groups, so a previously managed group can be deselected")
-}
-
-func TestAnthropicStableIdentityRollbackGroupsPreserveOrderAndCapturedEmptyState(t *testing.T) {
-	account := newStableIdentityAccountForTest(45, []int64{11, 12}, []int64{101}, map[int64]int64{101: 11})
-	account.Extra[AnthropicStableIdentityPreviousGroupIDsExtraKey] = []any{float64(12), float64(11)}
-	groups, captured := account.AnthropicStableIdentityPreviousGroupIDs()
-	require.True(t, captured)
-	require.Equal(t, []int64{12, 11}, groups, "rollback must retain account-group priority order")
-
-	account.Extra[AnthropicStableIdentityPreviousGroupIDsExtraKey] = []any{}
-	groups, captured = account.AnthropicStableIdentityPreviousGroupIDs()
-	require.True(t, captured, "an originally ungrouped account must not be mistaken for missing rollback metadata")
-	require.Empty(t, groups)
-
-	delete(account.Extra, AnthropicStableIdentityPreviousGroupIDsExtraKey)
-	_, captured = account.AnthropicStableIdentityPreviousGroupIDs()
-	require.False(t, captured)
-	require.ErrorContains(t, ValidateAnthropicStableIdentityEnrolledAccount(account), "rollback state")
-}
-
-func TestAnthropicStableIdentityRouteOwnershipRejectsASecondAccountOnTheSameExistingKey(t *testing.T) {
-	owner := newStableIdentityAccountForTest(43, []int64{11}, []int64{101}, map[int64]int64{101: 11})
-
-	err := validateAnthropicStableIdentityRouteOwnership(44, map[int64]int64{101: 11}, []Account{*owner})
-	require.ErrorIs(t, err, ErrAnthropicStableIdentityConflict)
-	require.NoError(t, validateAnthropicStableIdentityRouteOwnership(43, map[int64]int64{101: 11}, []Account{*owner}),
-		"reconfiguring the current account must retain its own exact route")
-	require.NoError(t, validateAnthropicStableIdentityRouteOwnership(44, map[int64]int64{102: 11}, []Account{*owner}),
-		"different API keys in the same existing group remain independently assignable")
+	groupAuthorized := WithAnthropicStableIdentityGroupMutationAuthorization(context.Background(), account.ID)
+	require.True(t, AnthropicStableIdentityGroupMutationAuthorized(groupAuthorized, account.ID))
+	require.False(t, AnthropicStableIdentityMutationAuthorized(groupAuthorized, account.ID),
+		"group membership authorization must not unlock identity fields")
 }
 
 func TestAnthropicStableIdentityTransportChangesWithIdentityGeneration(t *testing.T) {
-	account := newStableIdentityAccountForTest(46, []int64{11}, []int64{101}, map[int64]int64{101: 11})
+	account := newStableIdentityAccountForTest(46, []int64{11})
 	svc := &GatewayService{anthropicStableCanary: newAnthropicStableCanaryRuntime()}
 
 	first, err := svc.anthropicStableCanaryHTTPClient(account)
@@ -176,97 +496,140 @@ func TestAnthropicStableIdentityTransportChangesWithIdentityGeneration(t *testin
 	require.Len(t, svc.anthropicStableCanary.clients, 1, "obsolete identity transports must not accumulate")
 }
 
-func TestAnthropicStableIdentityRouteDirectoryUsesExactExistingGroupAndAPIKeyPairs(t *testing.T) {
-	account := newStableIdentityAccountForTest(51, []int64{11, 12}, []int64{101, 102}, map[int64]int64{101: 11, 102: 12})
-	repo := &stableIdentityDirectoryRepo{accounts: []Account{*account}}
-	svc := &GatewayService{
+func newStableIdentityPoolService(repo *stableIdentityDirectoryRepo) *GatewayService {
+	return &GatewayService{
 		cfg:                           stableIdentityTestConfig(),
 		accountRepo:                   repo,
 		anthropicStableIdentityRoutes: newAnthropicStableIdentityRouteDirectory(),
 	}
+}
 
-	route, found, err := svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 101)
+func TestAnthropicStableIdentityGroupPoolKeepsSessionSticky(t *testing.T) {
+	first := newStableIdentityAccountForTest(51, []int64{11, 12})
+	second := newStableIdentityAccountForTest(52, []int64{11})
+	second.Extra[AnthropicStableIdentityDeviceIDExtraKey] = strings.Repeat("b", 64)
+	repo := &stableIdentityDirectoryRepo{accounts: []Account{*first, *second}}
+	svc := newStableIdentityPoolService(repo)
+
+	managed, err := svc.HasAnthropicStableIdentityGroup(context.Background(), 11)
+	require.NoError(t, err)
+	require.True(t, managed)
+	managed, err = svc.HasAnthropicStableIdentityGroup(context.Background(), 12)
+	require.NoError(t, err)
+	require.True(t, managed)
+	managed, err = svc.HasAnthropicStableIdentityGroup(context.Background(), 99)
+	require.NoError(t, err)
+	require.False(t, managed)
+
+	route, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 1001, "session-a")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, int64(51), route.AccountID)
-	require.Equal(t, int64(11), route.GroupID)
+	require.Contains(t, []int64{51, 52}, route.AccountID)
 
-	route, found, err = svc.LookupAnthropicStableIdentityRoute(context.Background(), 12, 102)
+	again, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 1001, "session-a")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, int64(12), route.GroupID)
-
-	// A selected key cannot be cross-producted into another selected group and
-	// cannot fall through to generic routing when the tuple is inconsistent.
-	route, found, err = svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 102)
-	require.Nil(t, route)
-	require.True(t, found)
-	require.ErrorIs(t, err, errAnthropicStableIdentityRouteUnavailable)
-
-	route, found, err = svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 999)
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Nil(t, route)
+	require.Equal(t, route.AccountID, again.AccountID)
+	require.Equal(t, route.KeyFingerprint, again.KeyFingerprint)
 	require.Equal(t, 1, repo.calls)
 }
 
-func TestAnthropicStableIdentityRouteDirectoryFailsAmbiguousExistingGroupRouteClosed(t *testing.T) {
-	first := newStableIdentityAccountForTest(53, []int64{11}, []int64{101}, map[int64]int64{101: 11})
-	second := newStableIdentityAccountForTest(54, []int64{11}, []int64{101}, map[int64]int64{101: 11})
-	repo := &stableIdentityDirectoryRepo{accounts: []Account{*first, *second}}
-	svc := &GatewayService{
-		cfg:                           stableIdentityTestConfig(),
-		accountRepo:                   repo,
-		anthropicStableIdentityRoutes: newAnthropicStableIdentityRouteDirectory(),
-	}
+func TestAnthropicStableIdentitySameClientSessionIsIsolatedByUser(t *testing.T) {
+	account := newStableIdentityAccountForTest(53, []int64{11})
+	repo := &stableIdentityDirectoryRepo{accounts: []Account{*account}}
+	svc := newStableIdentityPoolService(repo)
 
-	route, found, err := svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 101)
-	require.Nil(t, route)
+	_, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 2001, "same-session")
+	require.NoError(t, err)
 	require.True(t, found)
-	require.ErrorContains(t, err, "ambiguous")
+	_, found, err = svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 2002, "same-session")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, repo.bindings, 2, "different users must never share a durable conversation binding")
 }
 
-func TestAnthropicStableIdentityRouteDirectoryKeepsManagedKeysFailClosedOnRefreshFailure(t *testing.T) {
-	account := newStableIdentityAccountForTest(52, []int64{11}, []int64{101}, map[int64]int64{101: 11})
-	repo := &stableIdentityDirectoryRepo{accounts: []Account{*account}}
-	svc := &GatewayService{
-		cfg:                           stableIdentityTestConfig(),
-		accountRepo:                   repo,
-		anthropicStableIdentityRoutes: newAnthropicStableIdentityRouteDirectory(),
-	}
+func TestAnthropicStableIdentityExistingSessionNeverSwitchesAfterPoolChange(t *testing.T) {
+	first := newStableIdentityAccountForTest(54, []int64{11})
+	second := newStableIdentityAccountForTest(55, []int64{11})
+	second.Extra[AnthropicStableIdentityDeviceIDExtraKey] = strings.Repeat("b", 64)
+	repo := &stableIdentityDirectoryRepo{accounts: []Account{*first, *second}}
+	svc := newStableIdentityPoolService(repo)
 
-	_, found, err := svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 101)
+	bound, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 3001, "sticky-session")
 	require.NoError(t, err)
 	require.True(t, found)
 
+	repo.mu.Lock()
+	if bound.AccountID == first.ID {
+		repo.accounts = []Account{*second}
+	} else {
+		repo.accounts = []Account{*first}
+	}
+	repo.mu.Unlock()
+	svc.InvalidateAnthropicStableIdentityRoutes()
+
+	route, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 3001, "sticky-session")
+	require.Nil(t, route)
+	require.True(t, found)
+	require.ErrorIs(t, err, errAnthropicStableIdentityRouteUnavailable)
+}
+
+func TestAnthropicStableIdentityReenrollmentFingerprintInvalidatesOldSession(t *testing.T) {
+	account := newStableIdentityAccountForTest(56, []int64{11})
+	repo := &stableIdentityDirectoryRepo{accounts: []Account{*account}}
+	svc := newStableIdentityPoolService(repo)
+
+	_, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 4001, "old-session")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	reenrolled := *account
+	reenrolled.Extra = shallowCopyMap(account.Extra)
+	reenrolled.Extra[AnthropicStableIdentityDeviceIDExtraKey] = strings.Repeat("c", 64)
+	repo.mu.Lock()
+	repo.accounts = []Account{reenrolled}
+	repo.mu.Unlock()
+	svc.InvalidateAnthropicStableIdentityRoutes()
+
+	route, found, err := svc.ResolveAnthropicStableIdentityRoute(context.Background(), 11, 4001, "old-session")
+	require.Nil(t, route)
+	require.True(t, found)
+	require.ErrorIs(t, err, errAnthropicStableIdentityRouteUnavailable)
+}
+
+func TestAnthropicStableIdentityDirectoryKeepsManagedGroupFailClosedOnRefreshFailure(t *testing.T) {
+	account := newStableIdentityAccountForTest(57, []int64{11})
+	repo := &stableIdentityDirectoryRepo{accounts: []Account{*account}}
+	svc := newStableIdentityPoolService(repo)
+
+	managed, err := svc.HasAnthropicStableIdentityGroup(context.Background(), 11)
+	require.NoError(t, err)
+	require.True(t, managed)
+
+	repo.mu.Lock()
 	repo.err = errors.New("database unavailable")
+	repo.mu.Unlock()
 	svc.anthropicStableIdentityRoutes.mu.Lock()
 	svc.anthropicStableIdentityRoutes.loadedAt = time.Now().Add(-2 * anthropicStableIdentityRouteRefreshInterval)
 	svc.anthropicStableIdentityRoutes.mu.Unlock()
-	_, found, err = svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 101)
-	require.True(t, found)
+	managed, err = svc.HasAnthropicStableIdentityGroup(context.Background(), 11)
+	require.True(t, managed)
 	require.Error(t, err)
 
-	_, found, err = svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 999)
-	require.NoError(t, err, "ordinary keys must not suffer a global outage from the optional directory")
-	require.False(t, found)
+	managed, err = svc.HasAnthropicStableIdentityGroup(context.Background(), 99)
+	require.NoError(t, err)
+	require.False(t, managed)
 }
 
-func TestAnthropicStableIdentityRouteDirectoryFailsExactTrafficClosedWithoutAnySnapshot(t *testing.T) {
+func TestAnthropicStableIdentityDirectoryFailsClaudeTrafficClosedWithoutSnapshot(t *testing.T) {
 	repo := &stableIdentityDirectoryRepo{err: errors.New("database unavailable")}
-	svc := &GatewayService{
-		cfg:                           stableIdentityTestConfig(),
-		accountRepo:                   repo,
-		anthropicStableIdentityRoutes: newAnthropicStableIdentityRouteDirectory(),
-	}
-
-	route, found, err := svc.LookupAnthropicStableIdentityRoute(context.Background(), 11, 101)
-	require.Nil(t, route)
-	require.True(t, found, "a cold process must not fail open an enrolled key through the generic scheduler")
+	svc := newStableIdentityPoolService(repo)
+	managed, err := svc.HasAnthropicStableIdentityGroup(context.Background(), 11)
+	require.True(t, managed)
 	require.Error(t, err)
 }
 
-func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTestFixture, apiKeyID int64) *AnthropicStableIdentityRoute {
+func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTestFixture, _ int64) *AnthropicStableIdentityRoute {
 	t.Helper()
 	groupID := fixture.account.GroupIDs[0]
 	deviceID := fixture.account.AnthropicStableCanaryDeviceID()
@@ -276,11 +639,7 @@ func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTes
 		AnthropicStableIdentityDeviceIDExtraKey:            deviceID,
 		AnthropicStableIdentityPreviousSchedulableExtraKey: true,
 		AnthropicStableIdentityPreviousConcurrencyExtraKey: 1,
-		AnthropicStableIdentityPreviousGroupIDsExtraKey:    []int64{groupID},
 		AnthropicStableIdentityProfileExtraKey:             AnthropicStableIngressProfileCLI211222V1,
-		AnthropicStableIdentityGroupIDsExtraKey:            []int64{groupID},
-		AnthropicStableIdentityAPIKeyIDsExtraKey:           []int64{apiKeyID},
-		AnthropicStableIdentityAPIKeyGroupIDsExtraKey:      stableIdentityKeyGroupJSON(map[int64]int64{apiKeyID: groupID}),
 		AnthropicStableIdentityGenerationExtraKey:          int64(1),
 		AnthropicStableIdentityBlockedExtraKey:             false,
 		AnthropicStableIdentityBlockedReasonExtraKey:       "",
@@ -307,8 +666,9 @@ func convertStableCanaryFixtureToIdentity(t *testing.T, fixture *stableCanaryTes
 }
 
 func TestAnthropicStableIdentitySessionScopeSeparatesAccountsAndReenrollment(t *testing.T) {
-	first := newStableIdentityAccountForTest(61, []int64{11}, []int64{101}, map[int64]int64{101: 11})
-	second := newStableIdentityAccountForTest(62, []int64{11}, []int64{102}, map[int64]int64{102: 11})
+	first := newStableIdentityAccountForTest(61, []int64{11})
+	second := newStableIdentityAccountForTest(62, []int64{11})
+	second.Extra[AnthropicStableIdentityDeviceIDExtraKey] = strings.Repeat("b", 64)
 	firstRoute, err := stableIdentityRouteFromAccount(stableIdentityTestConfig(), *first)
 	require.NoError(t, err)
 	secondRoute, err := stableIdentityRouteFromAccount(stableIdentityTestConfig(), *second)

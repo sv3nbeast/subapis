@@ -378,7 +378,11 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	// 执行更新
-	if err := s.accountRepo.Update(ctx, account); err != nil {
+	persistCtx := ctx
+	if account.HasAnthropicStableIdentityManagedFields() {
+		persistCtx = withAnthropicStableIdentityMutationAuthorization(ctx, account.ID)
+	}
+	if err := s.accountRepo.Update(persistCtx, account); err != nil {
 		return nil, fmt.Errorf("update account: %w", err)
 	}
 
@@ -396,9 +400,12 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	// 绑定分组
-	if req.GroupIDs != nil && !(account.HasAnthropicStableIdentityManagedFields() &&
-		sameStableIdentityIDSet(*req.GroupIDs, account.GroupIDs)) {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, *req.GroupIDs); err != nil {
+	if req.GroupIDs != nil && !sameStableIdentityIDSet(*req.GroupIDs, account.GroupIDs) {
+		bindCtx := ctx
+		if account.HasAnthropicStableIdentityManagedFields() {
+			bindCtx = WithAnthropicStableIdentityGroupMutationAuthorization(bindCtx, account.ID)
+		}
+		if err := s.accountRepo.BindGroups(bindCtx, account.ID, *req.GroupIDs); err != nil {
 			return nil, fmt.Errorf("bind groups: %w", err)
 		}
 	}

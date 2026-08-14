@@ -191,9 +191,22 @@ func TestAnthropicStableReservationRejectsIdentityAndMembershipMutation(t *testi
 	require.ErrorIs(t, fixture.groups.Delete(ctx, fixture.groupID), service.ErrAnthropicStableCanaryReserved)
 }
 
-func TestAnthropicStableIdentityReservationRejectsGenericMembershipAndDelete(t *testing.T) {
+func TestAnthropicStableIdentityReservationAllowsOnlyAuthorizedLiveMembershipChanges(t *testing.T) {
 	ctx := context.Background()
 	apiKeys, client := newAPIKeyRepoSQLite(t)
+	_, err := apiKeys.sql.ExecContext(ctx, `
+		CREATE TABLE scheduler_outbox (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_type TEXT NOT NULL,
+			account_id INTEGER,
+			group_id INTEGER,
+			payload BLOB,
+			dedup_key TEXT
+		);
+		CREATE UNIQUE INDEX idx_scheduler_outbox_test_dedup
+			ON scheduler_outbox (dedup_key) WHERE dedup_key IS NOT NULL;
+	`)
+	require.NoError(t, err)
 	group, err := client.Group.Create().
 		SetName("existing-anthropic-group").
 		SetPlatform(service.PlatformAnthropic).
@@ -221,11 +234,27 @@ func TestAnthropicStableIdentityReservationRejectsGenericMembershipAndDelete(t *
 	repo := newAccountRepositoryWithSQL(client, apiKeys.sql, nil)
 	groups := newGroupRepositoryWithSQL(client, apiKeys.sql)
 	require.ErrorIs(t, repo.BindGroups(ctx, account.ID, []int64{group.ID}), service.ErrAnthropicStableIdentityManaged)
+
+	otherGroup, err := client.Group.Create().
+		SetName("second-existing-anthropic-group").
+		SetPlatform(service.PlatformAnthropic).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	groupMutationCtx := service.WithAnthropicStableIdentityGroupMutationAuthorization(ctx, account.ID)
+	require.NoError(t, repo.BindGroups(groupMutationCtx, account.ID, []int64{group.ID, otherGroup.ID}))
+	boundGroups, err := repo.GetGroups(ctx, account.ID)
+	require.NoError(t, err)
+	require.Len(t, boundGroups, 2)
+
+	require.ErrorIs(t, lockAnthropicStableCanaryMutationAccount(groupMutationCtx, client, account.ID), service.ErrAnthropicStableIdentityManaged)
+	require.ErrorIs(t, repo.Delete(groupMutationCtx, account.ID), service.ErrAnthropicStableIdentityManaged)
 	require.ErrorIs(t, repo.Delete(ctx, account.ID), service.ErrAnthropicStableIdentityManaged)
-	_, err = groups.DeleteAccountGroupsByGroupID(ctx, group.ID)
-	require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
-	_, err = groups.DeleteCascade(ctx, group.ID)
-	require.ErrorIs(t, err, service.ErrAnthropicStableIdentityManaged)
+	affected, err := groups.DeleteAccountGroupsByGroupID(ctx, group.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
+	_, err = groups.DeleteCascade(ctx, otherGroup.ID)
+	require.NoError(t, err)
 }
 
 func TestAnthropicStableReservationStateGuardWorksOnSQLite(t *testing.T) {

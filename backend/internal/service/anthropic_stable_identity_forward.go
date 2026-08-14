@@ -70,7 +70,12 @@ func claimAnthropicStableIdentitySession(ctx context.Context, repo AnthropicStab
 	if route == nil || repo == nil || ownerUserID <= 0 || route.GroupID <= 0 || route.SessionScopeID <= 0 || route.AccountID <= 0 || route.Generation <= 0 {
 		return ErrAnthropicStableCanarySessionBindingUnavailable
 	}
-	sessionHash, err := HashAnthropicStableCanarySessionForRouting(route.SessionHMACKey, route.SessionScopeID, route.Generation, sessionID)
+	// Owner identity is part of the inner binding too. Even if two users import
+	// the same raw Claude session UUID, they receive independent conversations
+	// under the shared fixed device rather than an owner conflict or shared
+	// transcript namespace.
+	sessionMaterial := fmt.Sprintf("owner:%d:%s", ownerUserID, sessionID)
+	sessionHash, err := HashAnthropicStableCanarySessionForRouting(route.SessionHMACKey, route.SessionScopeID, route.Generation, sessionMaterial)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAnthropicStableCanarySessionBindingUnavailable, err)
 	}
@@ -97,8 +102,9 @@ func (s *GatewayService) ForwardAnthropicStableIdentityRaw(
 	if startTime.IsZero() {
 		startTime = time.Now()
 	}
-	if route.AccountID != account.ID || route.GroupID <= 0 || !route.AllowsAPIKey(apiKeyID) {
-		// A missing API-key id fails closed; raw key material is never passed.
+	if route.AccountID != account.ID || route.GroupID <= 0 || apiKeyID <= 0 {
+		// Authentication stays authoritative at the normal middleware; raw key
+		// material is never passed into this stable route.
 		return nil, stableIdentityReject(c, http.StatusServiceUnavailable, errAnthropicStableIdentityInvalid)
 	}
 	if route.IsPaused() || account.IsAnthropicStableIdentityPaused() || account.IsAnthropicStableIdentityBlocked() {
@@ -169,8 +175,6 @@ func (s *GatewayService) ForwardAnthropicStableIdentityRaw(
 	if err := ValidateAnthropicStableIdentityEnrolledAccount(freshAccount); err != nil ||
 		!freshAccount.IsAnthropicStableIdentityEnabled() || freshAccount.IsAnthropicStableIdentityPaused() ||
 		freshAccount.IsAnthropicStableIdentityBlocked() || !accountBelongsToGroup(freshAccount, route.GroupID) ||
-		!containsStableIdentityID(freshAccount.AnthropicStableIdentityAPIKeyIDs(), apiKeyID) ||
-		freshAccount.AnthropicStableIdentityAPIKeyGroupIDs()[apiKeyID] != route.GroupID ||
 		freshAccount.AnthropicStableIdentityGeneration() != route.Generation ||
 		freshAccount.AnthropicStableIdentityDeviceID() != route.DeviceID {
 		if err == nil {

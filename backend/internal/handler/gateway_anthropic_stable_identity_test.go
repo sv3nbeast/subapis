@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -27,7 +26,6 @@ func convertStableCanaryHandlerFixtureToIdentity(
 	require.NotNil(t, apiKey)
 	require.NotNil(t, apiKey.GroupID)
 
-	groupID := *apiKey.GroupID
 	deviceID := repo.account.AnthropicStableCanaryDeviceID()
 	h.cfg.Gateway.AnthropicStableCanary.Enabled = false
 	h.cfg.JWT.Secret = strings.Repeat("j", 48)
@@ -37,18 +35,12 @@ func convertStableCanaryHandlerFixtureToIdentity(
 		service.AnthropicStableIdentityDeviceIDExtraKey:            deviceID,
 		service.AnthropicStableIdentityPreviousSchedulableExtraKey: true,
 		service.AnthropicStableIdentityPreviousConcurrencyExtraKey: 1,
-		service.AnthropicStableIdentityPreviousGroupIDsExtraKey:    []int64{groupID},
 		service.AnthropicStableIdentityProfileExtraKey:             service.AnthropicStableIngressProfileCLI211222V1,
-		service.AnthropicStableIdentityGroupIDsExtraKey:            []int64{groupID},
-		service.AnthropicStableIdentityAPIKeyIDsExtraKey:           []int64{apiKey.ID},
-		service.AnthropicStableIdentityAPIKeyGroupIDsExtraKey: map[string]any{
-			strconv.FormatInt(apiKey.ID, 10): groupID,
-		},
-		service.AnthropicStableIdentityGenerationExtraKey:    int64(1),
-		service.AnthropicStableIdentityCreatedAtExtraKey:     "2026-08-14T00:00:00Z",
-		service.AnthropicStableIdentityUpdatedAtExtraKey:     "2026-08-14T00:00:00Z",
-		service.AnthropicStableIdentityBlockedExtraKey:       false,
-		service.AnthropicStableIdentityBlockedReasonExtraKey: "",
+		service.AnthropicStableIdentityGenerationExtraKey:          int64(1),
+		service.AnthropicStableIdentityCreatedAtExtraKey:           "2026-08-14T00:00:00Z",
+		service.AnthropicStableIdentityUpdatedAtExtraKey:           "2026-08-14T00:00:00Z",
+		service.AnthropicStableIdentityBlockedExtraKey:             false,
+		service.AnthropicStableIdentityBlockedReasonExtraKey:       "",
 	}
 	repo.account.Schedulable = false
 	repo.account.Concurrency = 1
@@ -97,7 +89,7 @@ func TestGatewayHandlerCountTokens_AnthropicStableIdentityNonClaudeClientFallsBa
 	require.Zero(t, accountRepo.getCalls)
 }
 
-func TestGatewayHandlerMessages_AnthropicStableIdentityUsesSelectedExistingGroupRoute(t *testing.T) {
+func TestGatewayHandlerMessages_AnthropicStableIdentityUsesCurrentGroupPool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
 	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
@@ -163,7 +155,7 @@ func TestGatewayHandlerCountTokens_AnthropicStableIdentityRejectsUnreviewedClaud
 	require.Zero(t, accountRepo.getCalls)
 }
 
-func TestGatewayHandlerMessages_AnthropicStableIdentityFailsSelectedKeyClosedAfterGroupPlatformDrift(t *testing.T) {
+func TestGatewayHandlerMessages_AnthropicStableIdentityFailsManagedGroupClosedAfterPlatformDrift(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, accountRepo, _, apiKey, subject, _ := newStableCanaryHandlerFixture(t)
 	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)

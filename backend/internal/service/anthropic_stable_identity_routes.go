@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,7 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,20 +21,14 @@ const anthropicStableIdentityRouteRefreshInterval = 5 * time.Second
 
 var errAnthropicStableIdentityRouteUnavailable = errors.New("stable identity route is unavailable")
 
-type anthropicStableIdentityRouteKey struct {
-	groupID  int64
-	apiKeyID int64
-}
-
-// AnthropicStableIdentityRoute is an in-memory, redacted runtime policy. The
-// derived HMAC key never leaves the process and is regenerated from the server
-// secret plus the account generation after every restart.
+// AnthropicStableIdentityRoute is an in-memory, redacted fixed-account policy.
+// GroupID is bound from the account's current ordinary membership. No API-key
+// allow-list is stored: authentication and group membership are already
+// enforced by the normal API-key middleware.
 type AnthropicStableIdentityRoute struct {
 	GroupID           int64
 	AccountID         int64
 	Generation        int64
-	APIKeyIDs         []int64
-	APIKeyGroupIDs    map[int64]int64
 	DeviceID          string
 	ProfileID         string
 	SessionHMACKey    string
@@ -45,24 +40,32 @@ type AnthropicStableIdentityRoute struct {
 	PausedReason      string
 }
 
-// deriveAnthropicStableIdentitySessionScope allocates an opaque positive
-// namespace in the upper quarter of BIGINT. The durable canary tables use a
-// column historically named group_id, but existing-group mode can have many
-// accounts (and repeated enrollments) in one real group. Scoping by account,
-// group, generation and device prevents those independent identities from
-// colliding without changing the established canary schema. Normal sequence
-// group IDs remain in the low range and therefore cannot overlap this domain.
+// deriveAnthropicStableIdentitySessionScope allocates an opaque namespace in
+// the upper quarter of BIGINT for the existing durable owner-binding table.
+// Account, group, generation, and device are all in the domain so independent
+// stable identities cannot collide.
 func deriveAnthropicStableIdentitySessionScope(route *AnthropicStableIdentityRoute, groupID int64) (int64, error) {
 	if route == nil || groupID <= 0 || route.AccountID <= 0 || route.Generation <= 0 ||
 		!IsValidAnthropicStableIdentityDeviceID(route.DeviceID) || len(route.SessionHMACKey) < 32 {
 		return 0, errors.New("stable identity session scope inputs are incomplete")
 	}
 	mac := hmac.New(sha256.New, []byte(route.SessionHMACKey))
-	_, _ = fmt.Fprintf(mac, "sub2api:anthropic-stable-identity:scope:v1:%d:%d:%d:%s",
+	_, _ = fmt.Fprintf(mac, "sub2api:anthropic-stable-identity:scope:v2:%d:%d:%d:%s",
 		route.AccountID, groupID, route.Generation, route.DeviceID)
 	value := binary.BigEndian.Uint64(mac.Sum(nil)[:8]) & ((uint64(1) << 62) - 1)
 	value |= uint64(1) << 62
 	return int64(value), nil
+}
+
+func stableIdentityRoutePolicyFingerprint(route *AnthropicStableIdentityRoute, groupID int64) (string, error) {
+	if route == nil || route.AccountID <= 0 || route.Generation <= 0 || groupID <= 0 ||
+		len(route.KeyFingerprint) != 64 {
+		return "", errors.New("stable identity route policy inputs are incomplete")
+	}
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "sub2api:anthropic-stable-identity:account-policy:v2:%d:%d:%d:%s",
+		route.AccountID, route.Generation, groupID, route.KeyFingerprint)
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func bindAnthropicStableIdentityRouteGroup(route *AnthropicStableIdentityRoute, groupID int64) error {
@@ -70,26 +73,29 @@ func bindAnthropicStableIdentityRouteGroup(route *AnthropicStableIdentityRoute, 
 	if err != nil {
 		return err
 	}
+	policyFingerprint, err := stableIdentityRoutePolicyFingerprint(route, groupID)
+	if err != nil {
+		return err
+	}
 	route.GroupID = groupID
 	route.SessionScopeID = scopeID
+	route.PolicyFingerprint = policyFingerprint
 	return nil
 }
 
 type anthropicStableIdentityRouteDirectory struct {
-	mu          sync.RWMutex
-	refreshMu   sync.Mutex
-	routes      map[anthropicStableIdentityRouteKey]*AnthropicStableIdentityRoute
-	ambiguous   map[anthropicStableIdentityRouteKey]struct{}
-	managedKeys map[int64]struct{}
-	loadedAt    time.Time
-	loaded      bool
+	mu            sync.RWMutex
+	refreshMu     sync.Mutex
+	pools         map[int64][]*AnthropicStableIdentityRoute
+	managedGroups map[int64]struct{}
+	loadedAt      time.Time
+	loaded        bool
 }
 
 func newAnthropicStableIdentityRouteDirectory() *anthropicStableIdentityRouteDirectory {
 	return &anthropicStableIdentityRouteDirectory{
-		routes:      make(map[anthropicStableIdentityRouteKey]*AnthropicStableIdentityRoute),
-		ambiguous:   make(map[anthropicStableIdentityRouteKey]struct{}),
-		managedKeys: make(map[int64]struct{}),
+		pools:         make(map[int64][]*AnthropicStableIdentityRoute),
+		managedGroups: make(map[int64]struct{}),
 	}
 }
 
@@ -108,65 +114,25 @@ func (d *anthropicStableIdentityRouteDirectory) snapshotFresh(now time.Time) boo
 }
 
 func deriveAnthropicStableIdentitySessionKey(cfg *config.Config, accountID, generation int64) (string, error) {
-	if cfg == nil || accountID <= 0 || generation <= 0 {
+	if accountID <= 0 || generation <= 0 {
 		return "", errors.New("stable identity session key inputs are incomplete")
 	}
-	secret := strings.TrimSpace(cfg.JWT.Secret)
-	if len(secret) < 32 {
-		// TOTP's encryption key is also a deployment-scoped high entropy secret.
-		// It is only a fallback for installations that intentionally leave JWT
-		// configuration to the bootstrap wizard; the domain separator keeps the
-		// derived value independent from TOTP ciphertext.
-		secret = strings.TrimSpace(cfg.Totp.EncryptionKey)
-	}
-	if len(secret) < 32 {
-		return "", errors.New("stable identity requires a configured server secret")
+	secret, err := anthropicStableIdentityDeploymentSecret(cfg)
+	if err != nil {
+		return "", err
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(mac, "sub2api:anthropic-stable-identity:session:v1:%d:%d", accountID, generation)
+	_, _ = fmt.Fprintf(mac, "sub2api:anthropic-stable-identity:session:v2:%d:%d", accountID, generation)
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func stableIdentityPolicyFingerprint(groupIDs, apiKeyIDs []int64, keyGroups map[int64]int64) (string, error) {
-	groups, err := normalizeStableIdentityIDs(groupIDs)
-	if err != nil {
-		return "", err
-	}
-	keys, err := normalizeStableIdentityIDs(apiKeyIDs)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	_, _ = hash.Write([]byte("sub2api:anthropic-stable-identity:policy:v1\x00"))
-	for _, id := range groups {
-		_, _ = fmt.Fprintf(hash, "g:%d\x00", id)
-	}
-	for _, id := range keys {
-		groupID := keyGroups[id]
-		if groupID <= 0 || !containsStableIdentityID(groups, groupID) {
-			return "", errors.New("stable identity API-key route mapping is incomplete")
-		}
-		_, _ = fmt.Fprintf(hash, "k:%d:g:%d\x00", id, groupID)
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 func stableIdentityRouteFromAccount(cfg *config.Config, account Account) (*AnthropicStableIdentityRoute, error) {
-	if !account.IsAnthropicStableIdentityEnabled() {
+	if !account.IsAnthropicStableIdentityEnabled() || account.IsAnthropicStableIdentityPaused() || account.IsAnthropicStableIdentityBlocked() {
 		return nil, errors.New("stable identity is not active")
-	}
-	if account.IsAnthropicStableIdentityBlocked() {
-		return nil, errors.New("stable identity is blocked")
 	}
 	if err := ValidateAnthropicStableIdentityEnrolledAccount(&account); err != nil {
 		return nil, err
 	}
-	groupIDs, _ := normalizeStableIdentityIDs(account.AnthropicStableIdentityGroupIDs())
-	keyIDs, err := normalizeStableIdentityIDs(account.AnthropicStableIdentityAPIKeyIDs())
-	if err != nil {
-		return nil, err
-	}
-	keyGroups := account.AnthropicStableIdentityAPIKeyGroupIDs()
 	deviceID := account.AnthropicStableIdentityDeviceID()
 	if !IsValidAnthropicStableIdentityDeviceID(deviceID) {
 		return nil, errors.New("stable identity device id is invalid")
@@ -187,34 +153,66 @@ func stableIdentityRouteFromAccount(cfg *config.Config, account Account) (*Anthr
 	if err != nil {
 		return nil, err
 	}
-	policyFingerprint, err := stableIdentityPolicyFingerprint(groupIDs, keyIDs, keyGroups)
-	if err != nil {
-		return nil, err
-	}
+	// Generation can restart at one after a deliberate disable/re-enrol. Bind
+	// durable conversations to the complete fixed identity, not just the
+	// generation-derived session key, so a newly generated device can never
+	// inherit an old route tombstone.
+	identityHash := sha256.New()
+	_, _ = fmt.Fprintf(identityHash,
+		"sub2api:anthropic-stable-identity:identity:v1:%d:%d:%s:%s:%s",
+		account.ID, generation, deviceID, profileID, keyFingerprint,
+	)
+	identityFingerprint := hex.EncodeToString(identityHash.Sum(nil))
 	return &AnthropicStableIdentityRoute{
-		AccountID:         account.ID,
-		Generation:        generation,
-		APIKeyIDs:         keyIDs,
-		APIKeyGroupIDs:    keyGroups,
-		DeviceID:          deviceID,
-		ProfileID:         profileID,
-		SessionHMACKey:    secret,
-		KeyFingerprint:    keyFingerprint,
-		PolicyFingerprint: policyFingerprint,
-		MaxBodyBytes:      AnthropicStableIngressMaxBodyBytes,
-		State:             account.AnthropicStableIdentityState(),
-		PausedReason:      account.AnthropicStableIdentityBlockedReason(),
+		AccountID:      account.ID,
+		Generation:     generation,
+		DeviceID:       deviceID,
+		ProfileID:      profileID,
+		SessionHMACKey: secret,
+		KeyFingerprint: identityFingerprint,
+		MaxBodyBytes:   AnthropicStableIngressMaxBodyBytes,
+		State:          account.AnthropicStableIdentityState(),
+		PausedReason:   account.AnthropicStableIdentityBlockedReason(),
 	}, nil
 }
 
-func (d *anthropicStableIdentityRouteDirectory) replace(routes map[anthropicStableIdentityRouteKey]*AnthropicStableIdentityRoute, ambiguous map[anthropicStableIdentityRouteKey]struct{}, managedKeys map[int64]struct{}) {
+func (d *anthropicStableIdentityRouteDirectory) replace(pools map[int64][]*AnthropicStableIdentityRoute, managedGroups map[int64]struct{}) {
 	d.mu.Lock()
-	d.routes = routes
-	d.ambiguous = ambiguous
-	d.managedKeys = managedKeys
+	d.pools = pools
+	d.managedGroups = managedGroups
 	d.loadedAt = time.Now()
 	d.loaded = true
 	d.mu.Unlock()
+}
+
+// currentAnthropicStableRouteGroupIDs uses eagerly loaded group entities when
+// available, excluding inactive or non-Anthropic memberships. Narrow test
+// repositories may provide only GroupIDs; the forwarder still performs an
+// authoritative group read immediately before upstream egress.
+func currentAnthropicStableRouteGroupIDs(account *Account) []int64 {
+	if account == nil {
+		return nil
+	}
+	allowed := make(map[int64]struct{}, len(account.GroupIDs))
+	if len(account.Groups) > 0 {
+		for _, group := range account.Groups {
+			if group != nil && group.ID > 0 && group.Platform == PlatformAnthropic && group.IsActive() {
+				allowed[group.ID] = struct{}{}
+			}
+		}
+	} else {
+		for _, groupID := range account.GroupIDs {
+			if groupID > 0 {
+				allowed[groupID] = struct{}{}
+			}
+		}
+	}
+	ids := make([]int64, 0, len(allowed))
+	for groupID := range allowed {
+		ids = append(ids, groupID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func (s *GatewayService) RefreshAnthropicStableIdentityRoutes(ctx context.Context) error {
@@ -233,62 +231,179 @@ func (s *GatewayService) RefreshAnthropicStableIdentityRoutes(ctx context.Contex
 	if fresh {
 		return nil
 	}
+
 	accounts, err := s.accountRepo.FindByExtraField(ctx, AnthropicStableIdentityEnabledExtraKey, true)
 	if err != nil {
 		return fmt.Errorf("load stable identity accounts: %w", err)
 	}
-	routes := make(map[anthropicStableIdentityRouteKey]*AnthropicStableIdentityRoute)
-	ambiguous := make(map[anthropicStableIdentityRouteKey]struct{})
-	managedKeys := make(map[int64]struct{})
+	pools := make(map[int64][]*AnthropicStableIdentityRoute)
+	managedGroups := make(map[int64]struct{})
 	for _, account := range accounts {
-		for _, keyID := range account.AnthropicStableIdentityAPIKeyIDs() {
-			if keyID > 0 {
-				managedKeys[keyID] = struct{}{}
-			}
+		if account.Platform != PlatformAnthropic || !account.IsAnthropicStableIdentityEnabled() {
+			continue
+		}
+		groupIDs := currentAnthropicStableRouteGroupIDs(&account)
+		for _, groupID := range groupIDs {
+			managedGroups[groupID] = struct{}{}
 		}
 		route, routeErr := stableIdentityRouteFromAccount(s.cfg, account)
 		if routeErr != nil {
-			logger.LegacyPrintf("service.gateway", "[Anthropic Stable Identity] skip account=%d reason=%v", account.ID, routeErr)
+			logger.LegacyPrintf("service.gateway", "[Anthropic Stable Identity] keep group managed but skip account=%d reason=%v", account.ID, routeErr)
 			continue
 		}
-		for _, groupID := range account.AnthropicStableIdentityGroupIDs() {
-			if !accountBelongsToGroup(&account, groupID) {
-				logger.LegacyPrintf("service.gateway", "[Anthropic Stable Identity] skip account=%d group=%d: account is not bound to group", account.ID, groupID)
+		for _, groupID := range groupIDs {
+			copyRoute := *route
+			if bindErr := bindAnthropicStableIdentityRouteGroup(&copyRoute, groupID); bindErr != nil {
+				logger.LegacyPrintf("service.gateway", "[Anthropic Stable Identity] skip account=%d group=%d: %v", account.ID, groupID, bindErr)
 				continue
 			}
-			for _, keyID := range route.APIKeyIDs {
-				if route.APIKeyGroupIDs[keyID] != groupID {
-					continue
-				}
-				key := anthropicStableIdentityRouteKey{groupID: groupID, apiKeyID: keyID}
-				if _, exists := routes[key]; exists {
-					delete(routes, key)
-					ambiguous[key] = struct{}{}
-					continue
-				}
-				if _, exists := ambiguous[key]; exists {
-					continue
-				}
-				copyRoute := *route
-				copyRoute.APIKeyIDs = append([]int64(nil), route.APIKeyIDs...)
-				copyRoute.APIKeyGroupIDs = cloneStableIdentityKeyGroups(route.APIKeyGroupIDs)
-				if bindErr := bindAnthropicStableIdentityRouteGroup(&copyRoute, groupID); bindErr != nil {
-					logger.LegacyPrintf("service.gateway", "[Anthropic Stable Identity] skip account=%d group=%d: %v", account.ID, groupID, bindErr)
-					continue
-				}
-				routes[key] = &copyRoute
-			}
+			pools[groupID] = append(pools[groupID], &copyRoute)
 		}
 	}
-	s.anthropicStableIdentityRoutes.replace(routes, ambiguous, managedKeys)
+	for groupID := range pools {
+		sort.Slice(pools[groupID], func(i, j int) bool {
+			if pools[groupID][i].AccountID == pools[groupID][j].AccountID {
+				return pools[groupID][i].Generation < pools[groupID][j].Generation
+			}
+			return pools[groupID][i].AccountID < pools[groupID][j].AccountID
+		})
+	}
+	d.replace(pools, managedGroups)
 	return nil
 }
 
-// GetAnthropicStableIdentityAccount reloads the account behind a route from
-// the repository.  Route entries are intentionally short-lived; the fresh
-// read closes the window where an operator rotates credentials, pauses the
-// account, or changes the selected API-key set while a request is waiting for
-// a local/cross-process lease.
+func cloneAnthropicStableIdentityRoute(route *AnthropicStableIdentityRoute) *AnthropicStableIdentityRoute {
+	if route == nil {
+		return nil
+	}
+	copyRoute := *route
+	return &copyRoute
+}
+
+func cloneAnthropicStableIdentityPool(routes []*AnthropicStableIdentityRoute) []*AnthropicStableIdentityRoute {
+	out := make([]*AnthropicStableIdentityRoute, 0, len(routes))
+	for _, route := range routes {
+		if route != nil {
+			out = append(out, cloneAnthropicStableIdentityRoute(route))
+		}
+	}
+	return out
+}
+
+// lookupAnthropicStableIdentityPool returns managed=true for a stable group
+// even when all accounts are paused/blocked. Such traffic must fail closed and
+// must never drift into the generic scheduler.
+func (s *GatewayService) lookupAnthropicStableIdentityPool(ctx context.Context, groupID int64) ([]*AnthropicStableIdentityRoute, bool, error) {
+	if s == nil || s.accountRepo == nil || groupID <= 0 || s.anthropicStableIdentityRoutes == nil {
+		return nil, false, nil
+	}
+	d := s.anthropicStableIdentityRoutes
+	d.mu.RLock()
+	if d.snapshotFresh(time.Now()) {
+		_, managed := d.managedGroups[groupID]
+		pool := cloneAnthropicStableIdentityPool(d.pools[groupID])
+		d.mu.RUnlock()
+		return pool, managed, nil
+	}
+	d.mu.RUnlock()
+
+	if err := s.RefreshAnthropicStableIdentityRoutes(ctx); err != nil {
+		d.mu.RLock()
+		loaded := d.loaded
+		_, managed := d.managedGroups[groupID]
+		d.mu.RUnlock()
+		if !loaded || managed {
+			return nil, true, err
+		}
+		return nil, false, nil
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	_, managed := d.managedGroups[groupID]
+	return cloneAnthropicStableIdentityPool(d.pools[groupID]), managed, nil
+}
+
+func (s *GatewayService) HasAnthropicStableIdentityGroup(ctx context.Context, groupID int64) (bool, error) {
+	_, managed, err := s.lookupAnthropicStableIdentityPool(ctx, groupID)
+	return managed, err
+}
+
+func selectAnthropicStableIdentityCandidate(sessionHash string, pool []*AnthropicStableIdentityRoute) *AnthropicStableIdentityRoute {
+	var selected *AnthropicStableIdentityRoute
+	var selectedScore [sha256.Size]byte
+	for _, route := range pool {
+		if route == nil || route.AccountID <= 0 || route.Generation <= 0 {
+			continue
+		}
+		score := sha256.Sum256([]byte(fmt.Sprintf(
+			"sub2api:anthropic-stable-identity:rendezvous:v1:%s:%d:%d:%s",
+			sessionHash, route.AccountID, route.Generation, route.KeyFingerprint,
+		)))
+		if selected == nil || bytes.Compare(score[:], selectedScore[:]) > 0 {
+			selected = route
+			selectedScore = score
+		}
+	}
+	return selected
+}
+
+// ResolveAnthropicStableIdentityRoute selects one account only for a new
+// logical session. The repository returns the first durable binding for later
+// turns, so adding/removing pool accounts cannot migrate an existing session.
+func (s *GatewayService) ResolveAnthropicStableIdentityRoute(
+	ctx context.Context,
+	groupID, ownerUserID int64,
+	sessionID string,
+) (*AnthropicStableIdentityRoute, bool, error) {
+	pool, managed, err := s.lookupAnthropicStableIdentityPool(ctx, groupID)
+	if err != nil || !managed {
+		return nil, managed, err
+	}
+	if len(pool) == 0 {
+		return nil, true, errAnthropicStableIdentityRouteUnavailable
+	}
+	sessionHash, err := hashAnthropicStableIdentityPoolSession(s.cfg, groupID, ownerUserID, sessionID)
+	if err != nil {
+		return nil, true, err
+	}
+	candidate := selectAnthropicStableIdentityCandidate(sessionHash, pool)
+	if candidate == nil {
+		return nil, true, errAnthropicStableIdentityRouteUnavailable
+	}
+	repo, ok := s.accountRepo.(AnthropicStableIdentitySessionRouteRepository)
+	if !ok || repo == nil {
+		return nil, true, ErrAnthropicStableIdentitySessionRouteUnavailable
+	}
+	bound, err := repo.ResolveAnthropicStableIdentitySessionRoute(ctx, AnthropicStableIdentitySessionRouteBinding{
+		GroupID:             groupID,
+		OwnerUserID:         ownerUserID,
+		SessionHash:         sessionHash,
+		AccountID:           candidate.AccountID,
+		AccountGeneration:   candidate.Generation,
+		IdentityFingerprint: candidate.KeyFingerprint,
+		CandidateDeviceID:   candidate.DeviceID,
+		CandidateProfileID:  candidate.ProfileID,
+	})
+	if err != nil || bound == nil {
+		if err == nil {
+			err = ErrAnthropicStableIdentitySessionRouteUnavailable
+		}
+		return nil, true, err
+	}
+	for _, route := range pool {
+		if route != nil && route.AccountID == bound.AccountID &&
+			route.Generation == bound.AccountGeneration &&
+			route.KeyFingerprint == bound.IdentityFingerprint {
+			return cloneAnthropicStableIdentityRoute(route), true, nil
+		}
+	}
+	// Existing sessions fail closed if their account is paused, blocked,
+	// disabled, re-enrolled, or removed from the group. Never switch identity.
+	return nil, true, errAnthropicStableIdentityRouteUnavailable
+}
+
+// GetAnthropicStableIdentityAccount reloads the account after durable routing
+// and again under the forwarder's cross-process account lease.
 func (s *GatewayService) GetAnthropicStableIdentityAccount(ctx context.Context, route *AnthropicStableIdentityRoute) (*Account, error) {
 	if s == nil || s.accountRepo == nil || route == nil || route.AccountID <= 0 || route.GroupID <= 0 {
 		return nil, errAnthropicStableIdentityRouteUnavailable
@@ -332,124 +447,18 @@ func accountBelongsToGroup(account *Account, groupID int64) bool {
 	return false
 }
 
-// LookupAnthropicStableIdentityRoute returns (route, true, nil) only for an
-// explicitly allow-listed API key. Unknown clients/keys stay on the existing
-// scheduler path. Ambiguous enrollment fails closed rather than choosing an
-// arbitrary account.
-func (s *GatewayService) LookupAnthropicStableIdentityRoute(ctx context.Context, groupID, apiKeyID int64) (*AnthropicStableIdentityRoute, bool, error) {
-	// Alternate/simple-mode GatewayService instances may intentionally omit an
-	// account repository. In that shape stable identity is not installed, so it
-	// must remain an optional no-op rather than intercepting every Claude Code
-	// request as an uninitialized fail-closed directory. Production instances
-	// have a repository; once installed, load/refresh failures still fail managed
-	// and cold-start Claude traffic closed below.
-	if s == nil || s.accountRepo == nil || groupID <= 0 || apiKeyID <= 0 || s.anthropicStableIdentityRoutes == nil {
-		return nil, false, nil
-	}
-	d := s.anthropicStableIdentityRoutes
-	now := time.Now()
-	d.mu.RLock()
-	fresh := d.snapshotFresh(now)
-	if fresh {
-		key := anthropicStableIdentityRouteKey{groupID: groupID, apiKeyID: apiKeyID}
-		if _, blocked := d.ambiguous[key]; blocked {
-			d.mu.RUnlock()
-			return nil, true, errors.New("stable identity route is ambiguous")
-		}
-		route := d.routes[key]
-		if route == nil {
-			_, managed := d.managedKeys[apiKeyID]
-			d.mu.RUnlock()
-			if managed {
-				return nil, true, errAnthropicStableIdentityRouteUnavailable
-			}
-			return nil, false, nil
-		}
-		copyRoute := *route
-		copyRoute.APIKeyIDs = append([]int64(nil), route.APIKeyIDs...)
-		copyRoute.APIKeyGroupIDs = cloneStableIdentityKeyGroups(route.APIKeyGroupIDs)
-		d.mu.RUnlock()
-		return &copyRoute, true, nil
-	}
-	d.mu.RUnlock()
-	if err := s.RefreshAnthropicStableIdentityRoutes(ctx); err != nil {
-		// Preserve the last known deny-only set on transient repository errors.
-		// Ordinary keys must not suffer a global Anthropic outage merely because
-		// the optional stable directory could not refresh; a key that was already
-		// known as managed still fails closed.
-		d.mu.RLock()
-		loaded := d.loaded
-		_, managed := d.managedKeys[apiKeyID]
-		d.mu.RUnlock()
-		if !loaded || managed {
-			// With no authoritative snapshot at all, availability and identity
-			// cannot both be proven. Fail exact Claude Code traffic closed rather
-			// than accidentally sending an enrolled key through another account.
-			return nil, true, err
-		}
-		return nil, false, nil
-	}
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	key := anthropicStableIdentityRouteKey{groupID: groupID, apiKeyID: apiKeyID}
-	if _, blocked := d.ambiguous[key]; blocked {
-		return nil, true, errors.New("stable identity route is ambiguous")
-	}
-	route := d.routes[key]
-	if route == nil {
-		if _, managed := d.managedKeys[apiKeyID]; managed {
-			return nil, true, errAnthropicStableIdentityRouteUnavailable
-		}
-		return nil, false, nil
-	}
-	copyRoute := *route
-	copyRoute.APIKeyIDs = append([]int64(nil), route.APIKeyIDs...)
-	copyRoute.APIKeyGroupIDs = cloneStableIdentityKeyGroups(route.APIKeyGroupIDs)
-	return &copyRoute, true, nil
-}
-
-// InvalidateAnthropicStableIdentityRoutes is called by the admin lifecycle
-// after a mutation. It deliberately does not synchronously touch the gateway
-// hot path; the next lookup performs one bounded refresh.
 func (s *GatewayService) InvalidateAnthropicStableIdentityRoutes() {
 	if s != nil && s.anthropicStableIdentityRoutes != nil {
 		s.anthropicStableIdentityRoutes.invalidate()
 	}
 }
 
-// ClearAnthropicStableIdentityRuntimeBlock is called only after an explicit
-// successful configure/resume/disable lifecycle action. Durable state remains
-// authoritative; this merely removes the process-local fast-fail copy so an
-// operator recovery does not require a service restart.
 func (s *GatewayService) ClearAnthropicStableIdentityRuntimeBlock(accountID int64) {
 	if s != nil && s.anthropicStableCanary != nil {
 		s.anthropicStableCanary.clearBlock(accountID)
 	}
 }
 
-func (r *AnthropicStableIdentityRoute) AllowsAPIKey(apiKeyID int64) bool {
-	if r == nil || apiKeyID <= 0 {
-		return false
-	}
-	for _, id := range r.APIKeyIDs {
-		if id == apiKeyID {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *AnthropicStableIdentityRoute) IsPaused() bool {
 	return r != nil && NormalizeAnthropicStableIdentityState(r.State) == AnthropicStableIdentityStatePaused
-}
-
-func cloneStableIdentityKeyGroups(in map[int64]int64) map[int64]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int64]int64, len(in))
-	for keyID, groupID := range in {
-		out[keyID] = groupID
-	}
-	return out
 }

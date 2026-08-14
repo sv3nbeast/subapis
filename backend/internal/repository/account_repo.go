@@ -112,7 +112,7 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	if account.HasAnthropicStableCanaryManagedFields() {
 		return service.ErrAnthropicStableCanaryReserved
 	}
-	if account.HasAnthropicStableIdentityManagedFields() {
+	if account.HasAnthropicStableIdentityManagedFields() && !service.AnthropicStableIdentityCreateAuthorized(ctx) {
 		return service.ErrAnthropicStableIdentityManaged
 	}
 
@@ -191,7 +191,7 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if account.HasAnthropicStableCanaryManagedFields() {
 		return service.ErrAnthropicStableCanaryReserved
 	}
-	if account.HasAnthropicStableIdentityManagedFields() {
+	if account.HasAnthropicStableIdentityManagedFields() && !service.AnthropicStableIdentityCreateAuthorized(ctx) {
 		return service.ErrAnthropicStableIdentityManaged
 	}
 	tx, err := r.client.Tx(ctx)
@@ -1978,7 +1978,7 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 		return err
 	}
-	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
+	if err := lockAnthropicStableCanaryGroupMembershipAccount(ctx, client, accountID); err != nil {
 		return err
 	}
 	_, err = client.AccountGroup.Create().
@@ -2022,7 +2022,7 @@ func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, grou
 	if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 		return err
 	}
-	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
+	if err := lockAnthropicStableCanaryGroupMembershipAccount(ctx, client, accountID); err != nil {
 		return err
 	}
 	_, err = client.AccountGroup.Delete().
@@ -2085,23 +2085,13 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 	if err != nil {
 		return err
 	}
-	expectedGroupIDs, compareExpectedGroups := service.AnthropicStableIdentityExpectedGroupIDs(ctx, accountID)
-	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(existingGroupIDs, groupIDs, expectedGroupIDs) {
+	for _, groupID := range sortedUniqueAnthropicStableGroupIDs(existingGroupIDs, groupIDs) {
 		if err := lockAnthropicStableCanaryGroupMutation(ctx, client, groupID); err != nil {
 			return err
 		}
 	}
-	if err := lockAnthropicStableCanaryMutationAccount(ctx, client, accountID); err != nil {
+	if err := lockAnthropicStableCanaryGroupMembershipAccount(ctx, client, accountID); err != nil {
 		return err
-	}
-	if compareExpectedGroups {
-		currentGroupIDs, loadErr := loadAccountGroupIDsWithClient(ctx, client, accountID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if !sameOrderedAccountGroupIDs(currentGroupIDs, expectedGroupIDs) {
-			return service.ErrAnthropicStableIdentityConflict
-		}
 	}
 	if _, err := client.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
 		return err

@@ -1632,6 +1632,41 @@
         </div>
       </div>
 
+      <div
+        v-if="form.platform === 'anthropic' && isOAuthFlow"
+        class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800/60"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <label class="text-sm font-semibold text-gray-950 dark:text-white">
+              {{ t('admin.accounts.anthropic.stableIdentity.title') }}
+            </label>
+            <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+              {{ t('admin.accounts.anthropic.stableIdentity.createDescription') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            data-testid="create-anthropic-stable-identity-toggle"
+            :aria-checked="anthropicStableIdentityEnabled"
+            :aria-label="t('admin.accounts.anthropic.stableIdentity.title')"
+            :class="[
+              'relative mt-0.5 inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 active:scale-[0.97] dark:focus:ring-offset-dark-800',
+              anthropicStableIdentityEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="toggleAnthropicStableIdentityCreate"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200',
+                anthropicStableIdentityEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
       <!-- API Key input (only for apikey type, excluding Antigravity and Kiro which have their own fields) -->
       <div
         v-if="form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'kiro'"
@@ -3427,10 +3462,12 @@
           <button
             type="button"
             role="switch"
+            data-testid="create-anthropic-oauth-passthrough-toggle"
             :aria-checked="anthropicOAuthPassthroughEnabled"
-            @click="anthropicOAuthPassthroughEnabled = !anthropicOAuthPassthroughEnabled"
+            :disabled="anthropicStableIdentityEnabled"
+            @click="!anthropicStableIdentityEnabled && (anthropicOAuthPassthroughEnabled = !anthropicOAuthPassthroughEnabled)"
             :class="[
-              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              'relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
               anthropicOAuthPassthroughEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
             ]"
           >
@@ -4478,6 +4515,7 @@ const codexFingerprintModeOptions = computed(() => [
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicOAuthPassthroughEnabled = ref(false)
+const anthropicStableIdentityEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -4860,6 +4898,26 @@ const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
 const customBaseUrlEnabled = ref(false)
 const customBaseUrl = ref('')
+
+const toggleAnthropicStableIdentityCreate = () => {
+  anthropicStableIdentityEnabled.value = !anthropicStableIdentityEnabled.value
+  if (!anthropicStableIdentityEnabled.value) return
+
+  // Stable mode owns one coherent upstream identity. Clear incompatible
+  // request/transport overrides instead of asking the operator to coordinate
+  // several unrelated switches manually.
+  anthropicOAuthPassthroughEnabled.value = false
+  form.proxy_id = null
+  tlsFingerprintEnabled.value = false
+  tlsFingerprintProfileId.value = null
+  sessionIdMaskingEnabled.value = false
+  cacheTTLOverrideEnabled.value = false
+  customBaseUrlEnabled.value = false
+  customBaseUrl.value = ''
+  headerOverrideEnabled.value = false
+  headerOverrideRows.value = []
+  modelMappings.value = []
+}
 
 // Gemini tier selection (used as fallback when auto-detection is unavailable/fails)
 const geminiTierGoogleOne = ref<'google_one_free' | 'google_ai_pro' | 'google_ai_ultra'>('google_one_free')
@@ -5245,6 +5303,7 @@ watch(
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
       anthropicOAuthPassthroughEnabled.value = false
+      anthropicStableIdentityEnabled.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
       webSearchEmulationMode.value = 'default'
     }
@@ -5283,6 +5342,7 @@ watch([accountCategory, () => form.platform], ([category, platform]) => {
   }
   if (platform !== 'anthropic' || category !== 'oauth-based') {
     anthropicOAuthPassthroughEnabled.value = false
+    anthropicStableIdentityEnabled.value = false
   }
   if (platform === 'kiro') {
     if (category === 'apikey-relay' && form.priority === KIRO_DEFAULT_PRIORITY) {
@@ -5597,10 +5657,56 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
   }
 }
 
+const shouldCreateStableIdentity = (payload: CreateAccountRequest) =>
+  anthropicStableIdentityEnabled.value &&
+  payload.platform === 'anthropic' &&
+  (payload.type === 'oauth' || payload.type === 'setup-token')
+
+const prepareStableIdentityCreatePayload = (payload: CreateAccountRequest): CreateAccountRequest => {
+  if (!shouldCreateStableIdentity(payload)) return payload
+
+  const credentials = { ...(payload.credentials || {}) } as Record<string, unknown>
+  for (const key of [
+    'base_url',
+    'model_mapping',
+    'compact_model_mapping',
+    'header_override_enabled',
+    'header_overrides'
+  ]) {
+    delete credentials[key]
+  }
+  const extra = { ...((payload.extra || {}) as Record<string, unknown>) }
+  for (const key of [
+    'anthropic_oauth_passthrough',
+    'enable_tls_fingerprint',
+    'tls_fingerprint_profile_id',
+    'session_id_masking_enabled',
+    'cache_ttl_override_enabled',
+    'cache_ttl_override_target',
+    'custom_base_url_enabled',
+    'custom_base_url'
+  ]) {
+    delete extra[key]
+  }
+  return {
+    ...payload,
+    credentials,
+    extra: Object.keys(extra).length > 0 ? extra : undefined,
+    proxy_id: null,
+    anthropic_stable_identity_enabled: true
+  }
+}
+
+const createAccountWithOptionalStableMode = async (payload: CreateAccountRequest) => {
+  return adminAPI.accounts.create(
+    withAntigravityConfirmFlag(prepareStableIdentityCreatePayload(payload))
+  )
+}
+
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    const account = await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
+    const account = await createAccountWithOptionalStableMode(payload)
     if (
       payload.type === 'apikey' &&
       payload.upstream_billing_probe_enabled === true
@@ -5630,7 +5736,10 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
       return
     }
     appStore.showError(
-      error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToCreate')
+      error.response?.data?.message ||
+        error.response?.data?.detail ||
+        error.message ||
+        t('admin.accounts.failedToCreate')
     )
   } finally {
     submitting.value = false
@@ -5702,6 +5811,7 @@ const resetForm = () => {
   codexFingerprintMode.value = 'session'
   anthropicPassthroughEnabled.value = false
   anthropicOAuthPassthroughEnabled.value = false
+  anthropicStableIdentityEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   // Reset quota control state
@@ -7543,7 +7653,8 @@ const handleAnthropicExchange = async (authCode: string) => {
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
     await createAccountAndFinish(form.platform, addMethod.value as AccountType, credentials, extra)
   } catch (error: any) {
-    oauth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    oauth.error.value =
+      error.response?.data?.detail || error.message || t('admin.accounts.oauth.authFailed')
     appStore.showError(oauth.error.value)
   } finally {
     oauth.loading.value = false
@@ -7671,7 +7782,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithOptionalStableMode({
           name: accountName,
           notes: form.notes,
           platform: form.platform,
@@ -7694,7 +7805,8 @@ const handleCookieAuth = async (sessionKey: string) => {
         errors.push(
           t('admin.accounts.oauth.keyAuthFailed', {
             index: i + 1,
-            error: error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+            error:
+              error.response?.data?.detail || error.message || t('admin.accounts.oauth.authFailed')
           })
         )
       }

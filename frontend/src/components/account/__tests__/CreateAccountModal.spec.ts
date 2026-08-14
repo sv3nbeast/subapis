@@ -264,6 +264,22 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.upstream_billing_probe_enabled).toBe(false)
   })
 
+  it('offers one Anthropic stable-mode switch and disables the incompatible passthrough switch', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'admin.accounts.claudeCode')
+
+    const stableToggle = wrapper.get('[data-testid="create-anthropic-stable-identity-toggle"]')
+    const passthroughToggle = wrapper.get('[data-testid="create-anthropic-oauth-passthrough-toggle"]')
+    expect(stableToggle.attributes('aria-checked')).toBe('false')
+    expect(passthroughToggle.attributes()).not.toHaveProperty('disabled')
+
+    await stableToggle.trigger('click')
+
+    expect(stableToggle.attributes('aria-checked')).toBe('true')
+    expect(passthroughToggle.attributes('aria-checked')).toBe('false')
+    expect(passthroughToggle.attributes()).toHaveProperty('disabled')
+  })
+
   it('antigravity upstream 创建默认携带上游倍率探测开关', async () => {
     // antigravity upstream 走独立创建 helper，
     // 也必须与其余 API-key 平台一样默认开启探测并传递开关。

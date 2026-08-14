@@ -34,7 +34,6 @@ export interface AnthropicStableIdentityStatus {
   blocked: boolean
   blocked_reason?: string
   group_ids: number[]
-  api_key_ids: number[]
   generation: number
   profile_id: string
   device_fingerprint?: string
@@ -45,12 +44,6 @@ export interface AnthropicStableIdentityStatus {
   requires_restart: boolean
   configured_at?: string
   updated_at?: string
-}
-
-export interface AnthropicStableIdentityConfigureRequest {
-  group_ids: number[]
-  api_key_ids?: number[]
-  profile_id?: string
 }
 
 /**
@@ -1030,12 +1023,11 @@ export async function getAnthropicStableIdentity(id: number): Promise<AnthropicS
 }
 
 export async function configureAnthropicStableIdentity(
-  id: number,
-  input: AnthropicStableIdentityConfigureRequest
+  id: number
 ): Promise<AnthropicStableIdentityStatus> {
   const { data } = await apiClient.put<AnthropicStableIdentityStatus>(
     `/admin/accounts/${id}/anthropic-stable-identity`,
-    input
+    {}
   )
   return data
 }

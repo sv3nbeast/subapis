@@ -158,6 +158,7 @@ type CreateAccountRequest struct {
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
 	ProbeEnabled            *bool          `json:"upstream_billing_probe_enabled"`
+	AnthropicStableIdentity bool           `json:"anthropic_stable_identity_enabled"`
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
@@ -873,22 +874,23 @@ func (h *AccountHandler) Create(c *gin.Context) {
 
 	result, err := executeAdminIdempotent(c, "admin.accounts.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		account, execErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
-			Name:                  req.Name,
-			Notes:                 req.Notes,
-			Platform:              req.Platform,
-			Type:                  req.Type,
-			Credentials:           req.Credentials,
-			Extra:                 req.Extra,
-			ProxyID:               req.ProxyID,
-			Concurrency:           req.Concurrency,
-			Priority:              req.Priority,
-			RateMultiplier:        req.RateMultiplier,
-			LoadFactor:            req.LoadFactor,
-			GroupIDs:              req.GroupIDs,
-			ExpiresAt:             req.ExpiresAt,
-			AutoPauseOnExpired:    req.AutoPauseOnExpired,
-			ProbeEnabled:          req.ProbeEnabled,
-			SkipMixedChannelCheck: skipCheck,
+			Name:                    req.Name,
+			Notes:                   req.Notes,
+			Platform:                req.Platform,
+			Type:                    req.Type,
+			Credentials:             req.Credentials,
+			Extra:                   req.Extra,
+			ProxyID:                 req.ProxyID,
+			Concurrency:             req.Concurrency,
+			Priority:                req.Priority,
+			RateMultiplier:          req.RateMultiplier,
+			LoadFactor:              req.LoadFactor,
+			GroupIDs:                req.GroupIDs,
+			ExpiresAt:               req.ExpiresAt,
+			AutoPauseOnExpired:      req.AutoPauseOnExpired,
+			ProbeEnabled:            req.ProbeEnabled,
+			AnthropicStableIdentity: req.AnthropicStableIdentity,
+			SkipMixedChannelCheck:   skipCheck,
 		})
 		if execErr != nil {
 			return nil, execErr
@@ -925,6 +927,9 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	// OpenAI APIKey 账号创建后异步探测上游 /v1/responses 能力。
 	// 探测失败不影响账号创建响应。
 	h.scheduleOpenAIResponsesProbe(createdAccount)
+	if req.AnthropicStableIdentity && h.stableIdentityGateway != nil {
+		h.stableIdentityGateway.InvalidateAnthropicStableIdentityRoutes()
+	}
 	response.Success(c, result.Data)
 }
 
@@ -1035,6 +1040,9 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	// 异步执行，探测失败不影响账号更新响应。
 	if len(req.Credentials) > 0 {
 		h.scheduleOpenAIResponsesProbe(account)
+	}
+	if req.GroupIDs != nil && h.stableIdentityGateway != nil {
+		h.stableIdentityGateway.InvalidateAnthropicStableIdentityRoutes()
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
@@ -2191,6 +2199,9 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		}
 		response.ErrorFrom(c, err)
 		return
+	}
+	if req.GroupIDs != nil && h.stableIdentityGateway != nil {
+		h.stableIdentityGateway.InvalidateAnthropicStableIdentityRoutes()
 	}
 
 	response.Success(c, result)

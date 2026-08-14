@@ -14,10 +14,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// tryAnthropicStableIdentityCountTokens keeps the stable identity completely
-// off the count_tokens upstream path.  Claude Code treats the local 404 as a
-// signal to use its own estimator.  The decision is made from the authenticated
-// group/API-key tuple and exact capture profile before the request body is read.
+// tryAnthropicStableIdentityCountTokens keeps every managed stable group off
+// the count_tokens upstream path. Claude Code treats the local 404 as a signal
+// to use its own estimator. No API-key allow-list is needed: the normal auth
+// middleware has already validated this key for the group.
 func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, apiKey *service.APIKey) bool {
 	if h == nil || h.gatewayService == nil || c == nil || c.Request == nil || apiKey == nil ||
 		apiKey.GroupID == nil {
@@ -26,7 +26,7 @@ func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, a
 	if !service.LooksLikeAnthropicStableClaudeCode(c.GetHeader("User-Agent")) {
 		return false
 	}
-	_, found, err := h.gatewayService.LookupAnthropicStableIdentityRoute(c.Request.Context(), *apiKey.GroupID, apiKey.ID)
+	found, err := h.gatewayService.HasAnthropicStableIdentityGroup(c.Request.Context(), *apiKey.GroupID)
 	if err != nil {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity is temporarily unavailable")
 		return true
@@ -47,10 +47,9 @@ func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, a
 	return true
 }
 
-// tryAnthropicStableIdentityMessages handles only an explicitly enrolled
-// account/key route and an exact capture-backed Claude Code request. Returning
-// false restores the original body and lets the existing OAuth mimicry path
-// process every other client without any behavior change.
+// tryAnthropicStableIdentityMessages handles an exact capture-backed Claude
+// Code request whenever the authenticated group contains at least one stable
+// account. Non-Claude clients continue through the existing scheduler.
 func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	c *gin.Context,
 	apiKey *service.APIKey,
@@ -63,14 +62,14 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	if !service.LooksLikeAnthropicStableClaudeCode(c.GetHeader("User-Agent")) {
 		return false
 	}
-	route, found, err := h.gatewayService.LookupAnthropicStableIdentityRoute(c.Request.Context(), *apiKey.GroupID, apiKey.ID)
+	found, err := h.gatewayService.HasAnthropicStableIdentityGroup(c.Request.Context(), *apiKey.GroupID)
 	if err != nil {
 		// A request that looks like the enrolled native client must not silently
 		// fall through to mimicry while the route authority is unavailable.
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity is temporarily unavailable")
 		return true
 	}
-	if !found || route == nil {
+	if !found {
 		return false
 	}
 	if apiKey.Status != service.StatusAPIKeyActive || apiKey.IsExpired() || apiKey.Group == nil ||
@@ -80,24 +79,17 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	}
 	profileID := service.DetectAnthropicStableIngressProfile(c.GetHeader("User-Agent"), c.GetHeader("anthropic-beta"))
 	if profileID == "" {
-		// A selected key must never drift to a generic account just because the
+		// A managed group must never drift to a generic account just because the
 		// local Claude Code binary was upgraded before its wire profile was
 		// reviewed. Non-Claude clients still fall through unchanged above.
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This Claude Code version is not approved for the configured stable identity")
-		return true
-	}
-	if route.IsPaused() {
-		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity is paused")
 		return true
 	}
 	if requestStartedAt.IsZero() {
 		requestStartedAt = time.Now()
 	}
 	ctx := c.Request.Context()
-	limit := route.MaxBodyBytes
-	if limit <= 0 || limit > service.AnthropicStableIngressMaxBodyBytes {
-		limit = service.AnthropicStableIngressMaxBodyBytes
-	}
+	limit := int64(service.AnthropicStableIngressMaxBodyBytes)
 	body, err := readAnthropicStableRawBody(c, limit)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
@@ -125,6 +117,13 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 		c, nil, apiKey, subject, service.ContentModerationProtocolAnthropicMessages, ingress.Model, body,
 	); decision != nil && !decision.AllowNextStage {
 		h.anthropicSecurityAuditError(c, decision)
+		return true
+	}
+	route, resolved, err := h.gatewayService.ResolveAnthropicStableIdentityRoute(
+		ctx, *apiKey.GroupID, subject.UserID, ingress.SessionID,
+	)
+	if err != nil || !resolved || route == nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity is temporarily unavailable")
 		return true
 	}
 	account, err := h.gatewayService.GetAnthropicStableIdentityAccount(ctx, route)

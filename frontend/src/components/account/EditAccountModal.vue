@@ -2054,10 +2054,8 @@
       <AnthropicStableIdentityPanel
         v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
         :account="account"
-        :groups="groups"
-        :oauth-passthrough-enabled="anthropicOAuthPassthroughEnabled"
         @changed="emit('updated', $event)"
-        @status-change="anthropicStableIdentityManaged = $event.enabled"
+        @status-change="handleAnthropicStableIdentityStatusChange"
       />
 
       <div
@@ -2893,7 +2891,6 @@
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
         :openai-kiro-bridge-enabled="openAIKiroBridgeEnabled"
-        :disabled="anthropicStableIdentityManaged"
         data-tour="account-form-groups"
       />
     </form>
@@ -2943,6 +2940,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import type { AnthropicStableIdentityStatus } from '@/api/admin/accounts'
 import type {
   Account,
   Proxy,
@@ -3201,6 +3199,15 @@ type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicOAuthPassthroughEnabled = ref(false)
 const anthropicStableIdentityManaged = ref(false)
+
+const handleAnthropicStableIdentityStatusChange = (status: AnthropicStableIdentityStatus) => {
+  anthropicStableIdentityManaged.value = status.enabled
+  if (status.enabled) {
+    // The dedicated lifecycle removes the mutually exclusive legacy mode in
+    // the same backend write. Keep this form from submitting the stale value.
+    anthropicOAuthPassthroughEnabled.value = false
+  }
+}
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)

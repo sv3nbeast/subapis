@@ -389,6 +389,9 @@ type CreateAccountInput struct {
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
+	// AnthropicStableIdentity atomically creates an Anthropic OAuth/SetupToken
+	// account already fenced from the generic scheduler with one fixed device.
+	AnthropicStableIdentity bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
@@ -3366,6 +3369,12 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			}
 		}
 	}
+	if input.AnthropicStableIdentity {
+		groupIDs, err = s.validateAnthropicStableIdentityCreateGroups(ctx, groupIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// 检查混合渠道风险（除非用户已确认）
 	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
@@ -3380,6 +3389,27 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
 		return nil, err
+	}
+	if input.AnthropicStableIdentity {
+		if err := prepareAnthropicStableIdentityAccountForCreate(account, groupIDs); err != nil {
+			return nil, err
+		}
+		bindings := make([]AccountGroup, 0, len(groupIDs))
+		for index, groupID := range groupIDs {
+			bindings = append(bindings, AccountGroup{GroupID: groupID, Priority: index + 1})
+		}
+		createCtx := withAnthropicStableIdentityCreateAuthorization(ctx)
+		createRepo := s.accountDuplicateRepo
+		if createRepo == nil {
+			createRepo, _ = s.accountRepo.(AccountDuplicateRepository)
+		}
+		if createRepo == nil {
+			return nil, errors.New("atomic stable identity account creation is unavailable")
+		}
+		if err := createRepo.CreateWithAccountGroups(createCtx, account, bindings); err != nil {
+			return nil, err
+		}
+		return account, nil
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
@@ -3740,6 +3770,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	billingSettingsAppliedAtomically := false
+	persistCtx := ctx
+	if account.HasAnthropicStableIdentityManagedFields() {
+		// All lifecycle-owned fields were compared and preserved above. The
+		// private marker lets the repository persist the remaining ordinary
+		// account edits without exposing a generic bypass.
+		persistCtx = withAnthropicStableIdentityMutationAuthorization(ctx, account.ID)
+	}
 	updater := s.accountBillingRepo
 	if updater == nil {
 		// Unit tests and narrow internal callers may construct adminServiceImpl
@@ -3749,7 +3786,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if updater != nil {
 		if err := updater.UpdateWithAccountBillingSettings(
-			ctx,
+			persistCtx,
 			account,
 			requestedProbeEnabledUpdate,
 			requestedRateSyncEnabledUpdate,
@@ -3760,7 +3797,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		billingSettingsAppliedAtomically = true
 	}
 	if !billingSettingsAppliedAtomically {
-		if err := s.accountRepo.Update(ctx, account); err != nil {
+		if err := s.accountRepo.Update(persistCtx, account); err != nil {
 			return nil, err
 		}
 		if (requestedProbeEnabledUpdate != nil || requestedRateSyncEnabledUpdate != nil) &&
@@ -3772,7 +3809,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			if requestedRateSyncEnabledUpdate != nil {
 				settings[UpstreamBillingRateSyncEnabledExtraKey] = *requestedRateSyncEnabledUpdate
 			}
-			if err := s.accountRepo.UpdateExtra(ctx, account.ID, settings); err != nil {
+			if err := s.accountRepo.UpdateExtra(persistCtx, account.ID, settings); err != nil {
 				return nil, err
 			}
 		}
@@ -3787,9 +3824,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	// 绑定分组
-	if input.GroupIDs != nil && !(account.HasAnthropicStableIdentityManagedFields() &&
-		sameStableIdentityIDSet(*input.GroupIDs, account.GroupIDs)) {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
+	if input.GroupIDs != nil && !sameStableIdentityIDSet(*input.GroupIDs, account.GroupIDs) {
+		bindCtx := ctx
+		if account.HasAnthropicStableIdentityManagedFields() {
+			bindCtx = WithAnthropicStableIdentityGroupMutationAuthorization(bindCtx, account.ID)
+		}
+		if err := s.accountRepo.BindGroups(bindCtx, account.ID, *input.GroupIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -3925,7 +3965,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	var cachedTargets []*Account
 	canaryProtectedUpdate := anthropicStableCanaryBulkUpdateTouchesManagedFields(input)
 	stableIdentityProtectedUpdate := anthropicStableIdentityBulkUpdateTouchesProtectedFields(input)
-	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil || canaryProtectedUpdate || stableIdentityProtectedUpdate {
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || input.GroupIDs != nil || needMixedChannelCheck || hasModelMappingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil || canaryProtectedUpdate || stableIdentityProtectedUpdate {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -3943,6 +3983,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		for _, account := range cachedTargets {
 			if account != nil && account.HasAnthropicStableIdentityManagedFields() {
 				return nil, ErrAnthropicStableIdentityManaged
+			}
+		}
+	}
+	stableIdentityAccounts := make(map[int64]struct{})
+	if input.GroupIDs != nil {
+		for _, account := range cachedTargets {
+			if account != nil && account.HasAnthropicStableIdentityManagedFields() {
+				stableIdentityAccounts[account.ID] = struct{}{}
 			}
 		}
 	}
@@ -4125,7 +4173,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		entry := BulkUpdateAccountResult{AccountID: accountID}
 
 		if input.GroupIDs != nil {
-			if err := s.accountRepo.BindGroups(ctx, accountID, *input.GroupIDs); err != nil {
+			bindCtx := ctx
+			if _, managed := stableIdentityAccounts[accountID]; managed {
+				bindCtx = WithAnthropicStableIdentityGroupMutationAuthorization(ctx, accountID)
+			}
+			if err := s.accountRepo.BindGroups(bindCtx, accountID, *input.GroupIDs); err != nil {
 				entry.Success = false
 				entry.Error = err.Error()
 				result.Failed++

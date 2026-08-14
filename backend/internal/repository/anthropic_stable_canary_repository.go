@@ -300,6 +300,18 @@ func isAnthropicStableIdentityManaged(ctx context.Context, exec sqlExecutor, id 
 }
 
 func lockAnthropicStableCanaryMutationAccount(ctx context.Context, client *dbent.Client, id int64) error {
+	return lockAnthropicStableCanaryAccount(ctx, client, id, false)
+}
+
+// lockAnthropicStableCanaryGroupMembershipAccount is deliberately used only
+// by account-group membership methods. The group-only context marker must never
+// authorize Update, Delete, credentials, scheduler state, or any other account
+// mutation merely because those operations share the same row-lock helper.
+func lockAnthropicStableCanaryGroupMembershipAccount(ctx context.Context, client *dbent.Client, id int64) error {
+	return lockAnthropicStableCanaryAccount(ctx, client, id, true)
+}
+
+func lockAnthropicStableCanaryAccount(ctx context.Context, client *dbent.Client, id int64, allowStableIdentityGroupMutation bool) error {
 	if client == nil || id <= 0 {
 		return service.ErrAccountNotFound
 	}
@@ -315,7 +327,8 @@ func lockAnthropicStableCanaryMutationAccount(ctx context.Context, client *dbent
 		return service.ErrAnthropicStableCanaryReserved
 	}
 	if service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(row.Extra) &&
-		!service.AnthropicStableIdentityMutationAuthorized(ctx, id) {
+		!service.AnthropicStableIdentityMutationAuthorized(ctx, id) &&
+		!(allowStableIdentityGroupMutation && service.AnthropicStableIdentityGroupMutationAuthorized(ctx, id)) {
 		return service.ErrAnthropicStableIdentityManaged
 	}
 	return nil
@@ -349,33 +362,6 @@ func lockAnthropicStableCanaryGroupMutation(ctx context.Context, client *dbent.C
 	for _, account := range accounts {
 		if service.AnthropicStableCanaryExtraUpdateTouchesManagedFields(account.Extra) {
 			return service.ErrAnthropicStableCanaryReserved
-		}
-	}
-	return nil
-}
-
-// rejectAnthropicStableIdentityGroupDestruction protects the rollback anchor
-// without freezing ordinary policy edits on a shared existing group. Stable
-// identity accounts may coexist with other accounts, so rate/name/model changes
-// remain available; deleting the group or all of its memberships requires the
-// operator to reconfigure/disable stable mode first.
-func rejectAnthropicStableIdentityGroupDestruction(ctx context.Context, client *dbent.Client, groupID int64) error {
-	if client == nil || groupID <= 0 {
-		return service.ErrGroupNotFound
-	}
-	accounts, err := client.Account.Query().
-		Where(
-			dbaccount.DeletedAtIsNil(),
-			dbaccount.HasGroupsWith(dbgroup.IDEQ(groupID), dbgroup.DeletedAtIsNil()),
-		).
-		Select(dbaccount.FieldID, dbaccount.FieldExtra).
-		All(ctx)
-	if err != nil {
-		return err
-	}
-	for _, account := range accounts {
-		if service.AnthropicStableIdentityExtraUpdateTouchesManagedFields(account.Extra) {
-			return service.ErrAnthropicStableIdentityManaged
 		}
 	}
 	return nil
