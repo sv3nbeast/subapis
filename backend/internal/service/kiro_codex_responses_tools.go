@@ -9,9 +9,10 @@ import (
 const kiroCodexCustomToolInputField = "input"
 
 type kiroCodexResponsesToolMetadata struct {
-	DeclaredToolCount  int
-	ForwardedToolCount int
-	CustomToolNames    map[string]struct{}
+	DeclaredToolCount         int
+	ForwardedToolCount        int
+	RecoveredHistoryToolCount int
+	CustomToolNames           map[string]struct{}
 }
 
 // normalizeKiroCodexResponsesTools adapts Codex Responses Lite tool
@@ -35,20 +36,23 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 
 	// Responses Lite embeds dynamic tools in the input history. Remove only
 	// the declaration carrier after extracting it; all actual conversation
-	// items retain their original order and representation.
+	// items retain their original order. History normalization runs after the
+	// declarations are flattened so pre-fix bare names can be repaired only
+	// when they resolve to one unambiguous namespace child.
+	var filteredInput []any
+	inputIsArray := false
 	if input, ok := request["input"].([]any); ok {
-		filtered := make([]any, 0, len(input))
+		inputIsArray = true
+		filteredInput = make([]any, 0, len(input))
 		for _, rawItem := range input {
 			item, isObject := rawItem.(map[string]any)
 			if !isObject {
-				filtered = append(filtered, rawItem)
+				filteredInput = append(filteredInput, rawItem)
 				continue
 			}
 			typ := strings.TrimSpace(stringValue(item["type"]))
 			if typ != "additional_tools" {
-				normalizedItem, itemChanged := normalizeKiroCodexToolHistoryItem(item)
-				changed = changed || itemChanged
-				filtered = append(filtered, normalizedItem)
+				filteredInput = append(filteredInput, rawItem)
 				continue
 			}
 			changed = true
@@ -57,7 +61,7 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 				declared = append(declared, tools...)
 			}
 		}
-		request["input"] = filtered
+		request["input"] = filteredInput
 	}
 
 	flattened := make([]any, 0, len(declared))
@@ -67,6 +71,22 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 	metadata.ForwardedToolCount = len(flattened)
 	if metadata.DeclaredToolCount > 0 && metadata.ForwardedToolCount == 0 {
 		return nil, metadata, fmt.Errorf("Kiro Codex Responses tool conversion dropped all %d declared tools", metadata.DeclaredToolCount)
+	}
+	if inputIsArray {
+		historyAliases := buildKiroCodexToolHistoryAliases(flattened)
+		for index, rawItem := range filteredInput {
+			item, isObject := rawItem.(map[string]any)
+			if !isObject {
+				continue
+			}
+			normalizedItem, itemChanged, recovered := normalizeKiroCodexToolHistoryItem(item, historyAliases)
+			changed = changed || itemChanged
+			if recovered {
+				metadata.RecoveredHistoryToolCount++
+			}
+			filteredInput[index] = normalizedItem
+		}
+		request["input"] = filteredInput
 	}
 	if metadata.DeclaredToolCount == 0 && !changed {
 		return body, metadata, nil
@@ -84,46 +104,96 @@ func normalizeKiroCodexResponsesTools(body []byte) ([]byte, kiroCodexResponsesTo
 	return normalized, metadata, nil
 }
 
-func normalizeKiroCodexToolHistoryItem(item map[string]any) (map[string]any, bool) {
+func normalizeKiroCodexToolHistoryItem(item map[string]any, historyAliases map[string]string) (map[string]any, bool, bool) {
 	typ := strings.TrimSpace(stringValue(item["type"]))
 	switch typ {
 	case "function_call":
 		normalized := cloneStringAnyMap(item)
-		if !qualifyKiroCodexToolHistoryName(normalized) {
-			return item, false
+		changed, recovered := qualifyKiroCodexToolHistoryName(normalized, historyAliases)
+		if !changed {
+			return item, false, false
 		}
-		return normalized, true
+		return normalized, true, recovered
 	case "custom_tool_call":
 		normalized := cloneStringAnyMap(item)
 		normalized["type"] = "function_call"
-		qualifyKiroCodexToolHistoryName(normalized)
+		_, recovered := qualifyKiroCodexToolHistoryName(normalized, historyAliases)
 		if input, ok := item["input"].(string); ok {
 			normalized["arguments"] = mustJSONText(map[string]any{kiroCodexCustomToolInputField: input})
 		}
 		delete(normalized, "input")
-		return normalized, true
+		return normalized, true, recovered
 	case "custom_tool_call_output":
 		normalized := cloneStringAnyMap(item)
 		normalized["type"] = "function_call_output"
-		return normalized, true
+		return normalized, true, false
 	default:
-		return item, false
+		return item, false, false
 	}
 }
 
-func qualifyKiroCodexToolHistoryName(item map[string]any) bool {
+func qualifyKiroCodexToolHistoryName(item map[string]any, historyAliases map[string]string) (bool, bool) {
 	// Codex 0.147+ exposes namespace children to the client as separate
 	// namespace/name fields. Kiro history and declarations must use the same
 	// flattened identity or the translator will inject a second placeholder
 	// tool for the client-visible short name on continuation turns.
 	namespace := strings.TrimSpace(stringValue(item["namespace"]))
 	name := strings.TrimSpace(stringValue(item["name"]))
-	if namespace == "" || name == "" {
-		return false
+	if namespace != "" && name != "" {
+		item["name"] = joinKiroCodexToolNamespace(namespace, name)
+		delete(item, "namespace")
+		return true, false
 	}
-	item["name"] = joinKiroCodexToolNamespace(namespace, name)
+	if namespace != "" || name == "" {
+		return false, false
+	}
+	qualified := strings.TrimSpace(historyAliases[strings.ToLower(name)])
+	if qualified == "" || strings.EqualFold(qualified, name) {
+		return false, false
+	}
+	item["name"] = qualified
 	delete(item, "namespace")
-	return true
+	return true, true
+}
+
+func buildKiroCodexToolHistoryAliases(flattened []any) map[string]string {
+	exactNames := make(map[string]struct{}, len(flattened))
+	candidates := make(map[string]string)
+	ambiguous := make(map[string]struct{})
+	for _, rawTool := range flattened {
+		tool, ok := rawTool.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(stringValue(tool["name"]))
+		if name == "" {
+			continue
+		}
+		exactNames[strings.ToLower(name)] = struct{}{}
+		separator := strings.LastIndex(name, "__")
+		if separator <= 0 || separator+2 >= len(name) {
+			continue
+		}
+		shortName := strings.TrimSpace(name[separator+2:])
+		shortKey := strings.ToLower(shortName)
+		if shortKey == "" {
+			continue
+		}
+		if existing, exists := candidates[shortKey]; exists && !strings.EqualFold(existing, name) {
+			delete(candidates, shortKey)
+			ambiguous[shortKey] = struct{}{}
+			continue
+		}
+		if _, isAmbiguous := ambiguous[shortKey]; !isAmbiguous {
+			candidates[shortKey] = name
+		}
+	}
+	for shortKey := range candidates {
+		if _, hasExactDeclaration := exactNames[shortKey]; hasExactDeclaration {
+			delete(candidates, shortKey)
+		}
+	}
+	return candidates
 }
 
 func mustJSONText(value any) string {

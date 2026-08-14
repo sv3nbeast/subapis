@@ -66,6 +66,7 @@ func (s *GatewayService) ForwardAsResponses(
 				zap.Int64("account_id", account.ID),
 				zap.Int("declared_tool_count", kiroCodexTools.DeclaredToolCount),
 				zap.Int("forwarded_tool_count", kiroCodexTools.ForwardedToolCount),
+				zap.Int("recovered_history_tool_count", kiroCodexTools.RecoveredHistoryToolCount),
 				zap.Int("custom_tool_count", len(kiroCodexTools.CustomToolNames)),
 			)
 		}

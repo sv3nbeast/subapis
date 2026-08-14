@@ -128,6 +128,62 @@ func TestNormalizeKiroCodexResponsesToolsRequalifiesNamespacedFunctionHistory(t 
 	require.Equal(t, "{}", gjson.GetBytes(normalized, "input.0.arguments").String())
 }
 
+func TestNormalizeKiroCodexResponsesToolsRepairsPreFixBareHistoryAgainstUniqueNamespace(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"function_call","call_id":"call_exec","name":"exec","arguments":"{\"input\":\"text(\\\"hello\\\")\"}"},
+			{"type":"function_call_output","call_id":"call_exec","output":"hello"},
+			{"type":"additional_tools","tools":[
+				{"type":"namespace","name":"functions","tools":[
+					{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+				]}
+			]}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Equal(t, 1, metadata.RecoveredHistoryToolCount)
+	require.Equal(t, "functions__exec", gjson.GetBytes(normalized, "tools.0.name").String())
+	require.Equal(t, "functions__exec", gjson.GetBytes(normalized, "input.0.name").String())
+}
+
+func TestNormalizeKiroCodexResponsesToolsPreservesBareHistoryForLegacyDeclaration(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"tools":[{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}],
+		"input":[
+			{"type":"function_call","call_id":"call_exec","name":"exec","arguments":"{\"input\":\"text(\\\"hello\\\")\"}"},
+			{"type":"function_call_output","call_id":"call_exec","output":"hello"}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Zero(t, metadata.RecoveredHistoryToolCount)
+	require.Equal(t, "exec", gjson.GetBytes(normalized, "tools.0.name").String())
+	require.Equal(t, "exec", gjson.GetBytes(normalized, "input.0.name").String())
+}
+
+func TestNormalizeKiroCodexResponsesToolsDoesNotGuessAmbiguousNamespaceHistory(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"function_call","call_id":"call_exec","name":"exec","arguments":"{}"},
+			{"type":"additional_tools","tools":[
+				{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]},
+				{"type":"namespace","name":"other","tools":[{"type":"custom","name":"exec"}]}
+			]}
+		]
+	}`)
+
+	normalized, metadata, err := normalizeKiroCodexResponsesTools(body)
+	require.NoError(t, err)
+	require.Zero(t, metadata.RecoveredHistoryToolCount)
+	require.Equal(t, "exec", gjson.GetBytes(normalized, "input.0.name").String())
+}
+
 func TestNormalizeKiroCodexResponsesToolsPromotesCodexLiteToolChoiceNoneToAuto(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.6-sol",

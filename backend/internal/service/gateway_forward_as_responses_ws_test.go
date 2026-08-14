@@ -275,6 +275,25 @@ func TestProxyResponsesWebSocketFromClientKiroBridgeContinuesCustomToolTurn(t *t
 			kiroToolName:    "functionsExec",
 			clientNamespace: "functions",
 		},
+		{
+			name: "namespaced custom tool with pre-fix bare history",
+			firstPayload: `{
+				"model":"gpt-5.6-sol",
+				"input":[
+					{"role":"user","content":[{"type":"input_text","text":"inspect the workspace"}]},
+					{"type":"function_call","call_id":"call_stale_exec","name":"exec","arguments":"{\"input\":\"text(\\\"stale\\\")\"}"},
+					{"type":"function_call_output","call_id":"call_stale_exec","output":"stale ok"},
+					{"type":"additional_tools","tools":[
+						{"type":"namespace","name":"functions","tools":[
+							{"type":"custom","name":"exec","description":"Run JavaScript orchestration"}
+						]}
+					]}
+				],
+				"stream":true
+			}`,
+			kiroToolName:    "functionsExec",
+			clientNamespace: "functions",
+		},
 	}
 
 	for _, tt := range tests {
