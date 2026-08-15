@@ -297,10 +297,11 @@ func TestAnthropicStableIdentityIngressAllowsBillingBlockAndOptionalSessionHeade
 	require.Equal(t, body, parsed.RawBody)
 }
 
-func TestHasAnthropicStableIdentityEnvelopeOnlyMatchesNonEmptyMetadata(t *testing.T) {
+func TestHasAnthropicStableIdentityEnvelopeOnlyMatchesStableIdentityShape(t *testing.T) {
 	valid := stableTestBody(stableTestDeviceA, "", stableTestSession)
 	for _, body := range [][]byte{
 		valid,
+		[]byte(`{"metadata":{"user_id":"ordinary-user"},"messages":[]}`),
 		[]byte(`{"metadata":{"user_id":""},"messages":[]}`),
 		[]byte(`{"metadata":{},"messages":[]}`),
 		[]byte(`{"metadata":{"user_id":123},"messages":[]}`),
@@ -313,6 +314,12 @@ func TestHasAnthropicStableIdentityEnvelopeOnlyMatchesNonEmptyMetadata(t *testin
 		}
 		require.False(t, HasAnthropicStableIdentityEnvelope(body))
 	}
+	require.True(t, HasAnthropicStableIdentityEnvelope([]byte(
+		`{"metadata":{"user_id":"{\"device_id\":null}"},"messages":[]}`,
+	)))
+	require.True(t, HasAnthropicStableIdentityEnvelope([]byte(
+		`{"metadata":{"user_id":"{\"device_id\":\"`+stableTestDeviceA+`\"}"},"messages":[]}`,
+	)))
 }
 
 func TestAnthropicStableIngressAcceptsDurableCustomBaseAlias(t *testing.T) {

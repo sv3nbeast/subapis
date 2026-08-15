@@ -176,6 +176,26 @@ func TestGatewayHandlerMessages_AnthropicStableIdentityRestoresBodyForClaudeFall
 	require.Zero(t, accountRepo.sessionClaims)
 }
 
+func TestGatewayHandlerMessages_AnthropicStableIdentityRestoresBodyForOpaqueMetadataUserID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, _, apiKey, subject, _ := newStableCanaryHandlerFixture(t)
+	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+	apiKey.Group.ClaudeCodeOnly = false
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hello"}],"metadata":{"user_id":"ordinary-user"},"stream":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "anthropic-sdk-go/1.0")
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	require.False(t, h.tryAnthropicStableIdentityMessages(c, apiKey, subject, time.Time{}))
+	restored, err := io.ReadAll(c.Request.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, restored)
+	require.Zero(t, accountRepo.sessionClaims)
+}
+
 func TestGatewayHandlerMessages_AnthropicStableIdentityUsesCurrentGroupPool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)

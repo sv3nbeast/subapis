@@ -375,16 +375,36 @@ func ParseAnthropicStableIdentityIngress(
 
 // HasAnthropicStableIdentityEnvelope reports whether a request advertises the
 // metadata.user_id envelope that the account-scoped stable scheduler needs for
-// deterministic multi-user session routing. It is intentionally a cheap
-// precheck used only to distinguish an ordinary Anthropic request (which should
-// continue through compatibility) from a malformed attempted stable request
-// (which should fail closed instead of being normalized by the generic parser).
+// deterministic multi-user session routing. Ordinary Anthropic clients are
+// allowed to use metadata.user_id as an opaque string, so the precheck only
+// claims an identity envelope when the nested value is object-shaped and
+// contains one of the reserved stable identity fields. Object-shaped malformed
+// values still fail closed instead of being normalized by the generic parser.
 func HasAnthropicStableIdentityEnvelope(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
 	userID := gjson.GetBytes(body, "metadata.user_id")
-	return userID.Type == gjson.String && strings.TrimSpace(userID.String()) != ""
+	if userID.Type != gjson.String {
+		return false
+	}
+	raw := strings.TrimSpace(userID.String())
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return false
+	}
+	if !json.Valid([]byte(raw)) {
+		return true
+	}
+	nested := gjson.Parse(raw)
+	if !nested.IsObject() {
+		return false
+	}
+	for _, key := range []string{"device_id", "account_uuid", "session_id"} {
+		if nested.Get(key).Exists() {
+			return true
+		}
+	}
+	return false
 }
 
 // PatchDevice is retained as a small compatibility utility for older callers
