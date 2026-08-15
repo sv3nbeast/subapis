@@ -1,9 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -14,16 +20,77 @@ import (
 	"go.uber.org/zap"
 )
 
+func restoreAnthropicStableRawBody(c *gin.Context, body []byte) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.ContentLength = int64(len(body))
+}
+
+// parseAnthropicStableIdentityProbeRequest extracts only the fields used by
+// SetClaudeCodeClientContext's Electron connection-probe exception. It never
+// becomes the forwarded body and deliberately ignores all other fields.
+func parseAnthropicStableIdentityProbeRequest(body []byte) *service.ParsedRequest {
+	if len(body) == 0 {
+		return nil
+	}
+	var shape struct {
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+		Stream    bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &shape); err != nil {
+		return nil
+	}
+	return &service.ParsedRequest{Model: shape.Model, MaxTokens: shape.MaxTokens, Stream: shape.Stream}
+}
+
+func stableIdentityJSONContentType(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(c.GetHeader("Content-Type")))
+	return err == nil && strings.EqualFold(mediaType, "application/json")
+}
+
+// enforceAnthropicStableIdentityGroupRestriction applies the same effective
+// group/fallback resolution as ordinary scheduler requests. It returns
+// (useStable, handledResponse). A false useStable with no handled response
+// means the caller must restore the body and continue through compatibility.
+func (h *GatewayHandler) enforceAnthropicStableIdentityGroupRestriction(
+	c *gin.Context,
+	apiKey *service.APIKey,
+	body []byte,
+	parsedReq *service.ParsedRequest,
+) (bool, bool) {
+	if h == nil || h.gatewayService == nil || c == nil || c.Request == nil || apiKey == nil || apiKey.GroupID == nil {
+		return false, true
+	}
+	SetClaudeCodeClientContext(c, body, parsedReq)
+	_, effectiveGroupID, err := h.gatewayService.ResolveClaudeCodeRestriction(c.Request.Context(), apiKey.GroupID)
+	if err != nil {
+		if errors.Is(err, service.ErrClaudeCodeOnly) {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+			h.errorResponse(c, http.StatusForbidden, "permission_error", "This group only allows Claude Code clients")
+			return false, true
+		}
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity group is temporarily unavailable")
+		return false, true
+	}
+	if effectiveGroupID == nil || *effectiveGroupID != *apiKey.GroupID {
+		return false, false
+	}
+	return true, false
+}
+
 // tryAnthropicStableIdentityCountTokens keeps every managed stable group off
 // the count_tokens upstream path. Claude Code treats the local 404 as a signal
-// to use its own estimator. No API-key allow-list is needed: the normal auth
-// middleware has already validated this key for the group.
+// to use its own estimator. The decision is made from the authenticated group;
+// it is not an additional Claude CLI version/profile gate.
 func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, apiKey *service.APIKey) bool {
 	if h == nil || h.gatewayService == nil || c == nil || c.Request == nil || apiKey == nil ||
 		apiKey.GroupID == nil {
-		return false
-	}
-	if !service.LooksLikeAnthropicStableClaudeCode(c.GetHeader("User-Agent")) {
 		return false
 	}
 	found, err := h.gatewayService.HasAnthropicStableIdentityGroup(c.Request.Context(), *apiKey.GroupID)
@@ -39,17 +106,50 @@ func (h *GatewayHandler) tryAnthropicStableIdentityCountTokens(c *gin.Context, a
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity group is unavailable")
 		return true
 	}
-	if service.DetectAnthropicStableIdentityIngressProfile(c.GetHeader("User-Agent")) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request does not use a supported Claude Code client identity")
+	if encoding := strings.TrimSpace(c.GetHeader("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		// Leave compressed/encoded traffic to the ordinary parser rather than
+		// turning the stable route into a new client-specific rejection point.
+		return false
+	}
+	// Preserve the generic scheduler's ClaudeCodeOnly/fallback semantics even
+	// though this endpoint is answered locally. Most Claude CLI count_tokens
+	// requests need no body read: the shared classifier recognizes the endpoint
+	// from its UA. Desktop's connection probe is the one exception because its
+	// Electron UA is only trusted for max_tokens=1, non-stream requests.
+	var probeBody []byte
+	var probeReq *service.ParsedRequest
+	probeBodyRead := false
+	if service.IsClaudeCodeDesktopProbeUserAgent(c.GetHeader("User-Agent")) {
+		probeBody, err = readAnthropicStableRawBody(c, service.AnthropicStableIngressMaxBodyBytes)
+		if err != nil {
+			if maxErr, ok := extractMaxBytesError(err); ok {
+				h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+			} else {
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+			}
+			return true
+		}
+		probeBodyRead = true
+		restoreAnthropicStableRawBody(c, probeBody)
+		probeReq = parseAnthropicStableIdentityProbeRequest(probeBody)
+	}
+	if useStable, handled := h.enforceAnthropicStableIdentityGroupRestriction(c, apiKey, probeBody, probeReq); handled {
 		return true
+	} else if !useStable {
+		if probeBodyRead {
+			restoreAnthropicStableRawBody(c, probeBody)
+		}
+		return false
 	}
 	h.errorResponse(c, http.StatusNotFound, "not_found_error", "Not found")
 	return true
 }
 
-// tryAnthropicStableIdentityMessages handles a native Claude Code request
-// whenever the authenticated group contains at least one stable account.
-// Non-Claude clients continue through the existing scheduler.
+// tryAnthropicStableIdentityMessages handles a request whenever the
+// authenticated group contains at least one stable account and the request has
+// the identity fields needed for safe session routing. Client UA/version/query
+// values are not an admission allow-list; group ClaudeCodeOnly remains the
+// single configurable client restriction.
 func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	c *gin.Context,
 	apiKey *service.APIKey,
@@ -59,13 +159,10 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 	if h == nil || h.gatewayService == nil || c == nil || c.Request == nil || apiKey == nil || apiKey.GroupID == nil {
 		return false
 	}
-	if !service.LooksLikeAnthropicStableClaudeCode(c.GetHeader("User-Agent")) {
-		return false
-	}
 	found, err := h.gatewayService.HasAnthropicStableIdentityGroup(c.Request.Context(), *apiKey.GroupID)
 	if err != nil {
-		// A request that looks like the enrolled native client must not silently
-		// fall through to mimicry while the route authority is unavailable.
+		// Do not silently use a generic account while the stable route authority
+		// is unavailable for a group that explicitly enrolled stable accounts.
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity is temporarily unavailable")
 		return true
 	}
@@ -77,13 +174,10 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "The configured Claude Code stable identity group is unavailable")
 		return true
 	}
-	profileID := service.DetectAnthropicStableIdentityIngressProfile(c.GetHeader("User-Agent"))
-	if profileID == "" {
-		// A managed group must never drift to a generic account when a malformed
-		// Claude-looking identity reaches the stable route. Native cli/sdk-cli
-		// versions remain compatible without a finite version or beta allow-list.
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request does not use a supported Claude Code client identity")
-		return true
+	if encoding := strings.TrimSpace(c.GetHeader("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		// Leave compressed/encoded traffic to the ordinary parser rather than
+		// turning the stable route into a new client-specific rejection point.
+		return false
 	}
 	if requestStartedAt.IsZero() {
 		requestStartedAt = time.Now()
@@ -100,17 +194,54 @@ func (h *GatewayHandler) tryAnthropicStableIdentityMessages(
 		return true
 	}
 	if len(body) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
-		return true
+		restoreAnthropicStableRawBody(c, body)
+		return false
+	}
+	if !stableIdentityJSONContentType(c) {
+		restoreAnthropicStableRawBody(c, body)
+		return false
 	}
 	ingress, err := service.InspectAnthropicStableIdentityIngress(c, body)
 	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request is not a supported Claude Code /v1/messages request")
+		if !service.HasAnthropicStableIdentityEnvelope(body) {
+			// A client that does not carry the stable session/device envelope
+			// belongs to the existing compatibility path. Restore the body before
+			// returning so ordinary SDK/Desktop traffic keeps its old route.
+			restoreAnthropicStableRawBody(c, body)
+			return false
+		}
+		// Once a request advertises the stable envelope, malformed/duplicate
+		// identity data fails closed instead of being normalized by the generic
+		// parser and silently changing session/account semantics.
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request is not a valid Anthropic /v1/messages request")
 		return true
 	}
-	// The native stable path is the only branch allowed to consume the body. A
-	// recognized client with a malformed body is an explicit client error, not a
-	// reason to retry through the compatibility translator.
+	// Classify the request exactly as the generic handler does before applying
+	// the group restriction. For Electron probes only, the minimal parsed shape
+	// preserves the existing max_tokens=1/non-stream exception without making
+	// Desktop UA a stable-route allow-list.
+	var classifierReq *service.ParsedRequest
+	if service.IsClaudeCodeDesktopProbeUserAgent(c.GetHeader("User-Agent")) {
+		classifierReq = &service.ParsedRequest{Model: ingress.Model, Stream: ingress.Stream, MaxTokens: int(ingress.MaxTokens)}
+	}
+	// Match the generic handler's probe context before classification. Without
+	// this, a valid Claude Code connection probe (max_tokens=1, non-stream)
+	// would be mistaken for a non-Claude client solely because it omits the
+	// normal system prompt.
+	if isClaudeCodeConnectionProbeRequest(int(ingress.MaxTokens), ingress.Stream) {
+		probeCtx := service.WithIsClaudeCodeConnectionProbeRequest(c.Request.Context(), true, h.metadataBridgeEnabled())
+		c.Request = c.Request.WithContext(probeCtx)
+	}
+	if isMaxTokensOneHaikuRequest(ingress.Model, int(ingress.MaxTokens)) {
+		probeCtx := service.WithIsMaxTokensOneHaikuRequest(c.Request.Context(), true, h.metadataBridgeEnabled())
+		c.Request = c.Request.WithContext(probeCtx)
+	}
+	if useStable, handled := h.enforceAnthropicStableIdentityGroupRestriction(c, apiKey, body, classifierReq); handled {
+		return true
+	} else if !useStable {
+		restoreAnthropicStableRawBody(c, body)
+		return false
+	}
 	setOpsRequestContext(c, ingress.Model, ingress.Stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(ingress.Stream, false)))
 	if decision := h.checkSecurityAudit(

@@ -2,10 +2,12 @@ package handler
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -68,7 +70,7 @@ func TestGatewayHandlerCountTokens_AnthropicStableIdentityReturnsLocal404BeforeB
 	require.Zero(t, accountRepo.getCalls, "the route directory should not select or refresh an account for count_tokens")
 }
 
-func TestGatewayHandlerCountTokens_AnthropicStableIdentityNonClaudeClientFallsBack(t *testing.T) {
+func TestGatewayHandlerCountTokens_AnthropicStableIdentityHonorsClaudeCodeOnlyRestriction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, accountRepo, _, apiKey, subject, _ := newStableCanaryHandlerFixture(t)
 	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
@@ -84,9 +86,94 @@ func TestGatewayHandlerCountTokens_AnthropicStableIdentityNonClaudeClientFallsBa
 
 	h.CountTokens(c)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	require.Greater(t, body.reads, 0, "non-Claude traffic must continue through the ordinary handler")
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "This group only allows Claude Code clients")
+	require.Zero(t, body.reads, "the group restriction should reject before reading a non-Desktop count_tokens body")
 	require.Zero(t, accountRepo.getCalls)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableIdentityAcceptsDesktopShapeWhenGroupAllows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+	apiKey.Group.ClaudeCodeOnly = false
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	// Desktop/SDK traffic may omit the CLI query, x-app, session header and
+	// feature headers, and may use a non-stream request. The stable route still
+	// has the body session/device envelope needed for independent routing.
+	desktopBody := []byte(strings.Replace(string(body), `,"stream":true`, `,"stream":false`, 1))
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(desktopBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "Mozilla/5.0 Claude/1.12603.1 Electron/36.3.1")
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	h.Messages(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "session is temporarily unavailable")
+	require.Equal(t, 1, accountRepo.sessionClaims, "Desktop-shaped traffic should reach stable session routing")
+	require.Equal(t, 2, accountRepo.getCalls)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableIdentityKeepsClaudeProbeAllowedByGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+	probeBody := []byte(strings.Replace(strings.Replace(string(body), `"max_tokens":4096`, `"max_tokens":1`, 1), `,"stream":true`, `,"stream":false`, 1))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(probeBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.223")
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	h.Messages(c)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "session is temporarily unavailable")
+	require.Equal(t, 1, accountRepo.sessionClaims)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableIdentityRejectsNonClaudeWhenGroupRestricted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, _, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "anthropic-sdk-go/1.0")
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	h.Messages(c)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "This group only allows Claude Code clients")
+	require.Zero(t, accountRepo.sessionClaims)
+	require.Zero(t, accountRepo.getCalls)
+}
+
+func TestGatewayHandlerMessages_AnthropicStableIdentityRestoresBodyForClaudeFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, accountRepo, groupRepo, apiKey, subject, body := newStableCanaryHandlerFixture(t)
+	convertStableCanaryHandlerFixtureToIdentity(t, h, accountRepo, apiKey)
+	fallbackID := int64(7102)
+	fallback := &service.Group{ID: fallbackID, Name: "stable-fallback", Platform: service.PlatformAnthropic, Status: service.StatusActive, Hydrated: true}
+	groupRepo.fallback = fallback
+	apiKey.Group.FallbackGroupID = &fallbackID
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "anthropic-sdk-go/1.0")
+	setStableCanaryHandlerContext(c, apiKey, subject)
+
+	require.False(t, h.tryAnthropicStableIdentityMessages(c, apiKey, subject, time.Time{}))
+	restored, err := io.ReadAll(c.Request.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, restored, "fallback must receive the exact original body")
+	require.Zero(t, accountRepo.sessionClaims)
 }
 
 func TestGatewayHandlerMessages_AnthropicStableIdentityUsesCurrentGroupPool(t *testing.T) {

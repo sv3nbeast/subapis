@@ -90,15 +90,23 @@ func (r *stableCanaryHandlerAccountRepo) ClaimAnthropicStableCanarySession(
 type stableCanaryHandlerGroupRepo struct {
 	service.GroupRepository
 	group    *service.Group
+	fallback *service.Group
 	getCalls int
 }
 
 func (r *stableCanaryHandlerGroupRepo) GetByID(_ context.Context, id int64) (*service.Group, error) {
 	r.getCalls++
-	if r.group == nil || r.group.ID != id {
-		return nil, service.ErrGroupNotFound
+	if r.group != nil && r.group.ID == id {
+		return r.group, nil
 	}
-	return r.group, nil
+	if r.fallback != nil && r.fallback.ID == id {
+		return r.fallback, nil
+	}
+	return nil, service.ErrGroupNotFound
+}
+
+func (r *stableCanaryHandlerGroupRepo) GetByIDLite(ctx context.Context, id int64) (*service.Group, error) {
+	return r.GetByID(ctx, id)
 }
 
 type stableCanaryUnreadBody struct{ reads int }

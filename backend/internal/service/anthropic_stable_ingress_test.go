@@ -213,20 +213,27 @@ func TestAnthropicStableIngressSDKCLI211222AcceptsOnlyCapturedVariants(t *testin
 
 func TestAnthropicStableIdentityIngressAcceptsNativeClientVersionsWithoutBetaAdmission(t *testing.T) {
 	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
-	for _, userAgent := range []string{
-		"claude-cli/2.1.222 (external, cli)",
-		"claude-cli/2.1.223 (external, cli)",
-		"claude-cli/3.0.0 (external, sdk-cli)",
+	for _, tc := range []struct {
+		name          string
+		userAgent     string
+		rawQuery      string
+		xApp          string
+		sessionHeader string
+	}{
+		{name: "cli current", userAgent: "claude-cli/2.1.222 (external, cli)", rawQuery: AnthropicStableIngressQueryV1, xApp: AnthropicStableIngressXAppV1, sessionHeader: stableTestSession},
+		{name: "cli upgraded", userAgent: "claude-cli/2.1.223 (external, cli)", rawQuery: "beta=true&client=desktop", xApp: "", sessionHeader: ""},
+		{name: "sdk upgraded", userAgent: "claude-cli/3.0.0 (external, sdk-cli)", rawQuery: "", xApp: "sdk", sessionHeader: ""},
+		{name: "electron desktop", userAgent: "Mozilla/5.0 Claude/1.12603.1 Electron/36.3.1", rawQuery: "", xApp: "", sessionHeader: ""},
+		{name: "anthropic sdk", userAgent: "anthropic-sdk-go/1.0", rawQuery: "trace=1", xApp: "", sessionHeader: ""},
 	} {
-		t.Run(userAgent, func(t *testing.T) {
-			require.Equal(t, AnthropicStableIngressProfileClaudeCLICustomBaseV1,
-				DetectAnthropicStableIdentityIngressProfile(userAgent))
+		t.Run(tc.name, func(t *testing.T) {
 			result, err := ParseAnthropicStableIdentityIngress(
-				http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
-				userAgent, AnthropicStableIngressXAppV1, stableTestSession, body,
+				http.MethodPost, "/v1/messages", tc.rawQuery, "identity",
+				tc.userAgent, tc.xApp, tc.sessionHeader, body,
 			)
 			require.NoError(t, err)
 			require.Equal(t, AnthropicStableIngressProfileClaudeCLICustomBaseV1, result.ProfileID)
+			require.Equal(t, stableTestSession, result.SessionID)
 		})
 	}
 
@@ -258,11 +265,12 @@ func TestAnthropicStableIdentityIngressRetainsSessionAndNativeShapeGuards(t *tes
 	body := stableTestBody(stableTestDeviceA, "", stableTestSession)
 	userAgent := "claude-cli/2.1.223 (external, cli)"
 
-	_, err := ParseAnthropicStableIdentityIngress(
+	result, err := ParseAnthropicStableIdentityIngress(
 		http.MethodPost, "/v1/messages", "beta=true&extra=1", "identity",
-		userAgent, AnthropicStableIngressXAppV1, stableTestSession, body,
+		userAgent, "", "", body,
 	)
-	require.ErrorIs(t, err, ErrAnthropicStableIngressNotClaudeCode)
+	require.NoError(t, err)
+	require.Equal(t, stableTestSession, result.SessionID)
 
 	_, err = ParseAnthropicStableIdentityIngress(
 		http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
@@ -273,9 +281,38 @@ func TestAnthropicStableIdentityIngressRetainsSessionAndNativeShapeGuards(t *tes
 	nonStreaming := []byte(strings.Replace(string(body), `"stream":true`, `"stream":false`, 1))
 	_, err = ParseAnthropicStableIdentityIngress(
 		http.MethodPost, "/v1/messages", AnthropicStableIngressQueryV1, "identity",
-		userAgent, AnthropicStableIngressXAppV1, stableTestSession, nonStreaming,
+		userAgent, "", "", nonStreaming,
 	)
-	require.ErrorIs(t, err, ErrAnthropicStableIngressMalformed)
+	require.NoError(t, err)
+}
+
+func TestAnthropicStableIdentityIngressAllowsBillingBlockAndOptionalSessionHeader(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"desktop"}],"system":[{"type":"text","text":"x-anthropic-billing-header: cch=300c5"}],"metadata":{"user_id":"{\"device_id\":\"` + stableTestDeviceA + `\",\"account_uuid\":\"\",\"session_id\":\"` + stableTestSession + `\"}"},"stream":false}`)
+	parsed, err := ParseAnthropicStableIdentityIngress(
+		http.MethodPost, "/v1/messages", "", "identity",
+		"Mozilla/5.0 Claude/1.12603.1 Electron/36.3.1", "", "", body,
+	)
+	require.NoError(t, err)
+	require.False(t, parsed.Stream)
+	require.Equal(t, body, parsed.RawBody)
+}
+
+func TestHasAnthropicStableIdentityEnvelopeOnlyMatchesNonEmptyMetadata(t *testing.T) {
+	valid := stableTestBody(stableTestDeviceA, "", stableTestSession)
+	for _, body := range [][]byte{
+		valid,
+		[]byte(`{"metadata":{"user_id":""},"messages":[]}`),
+		[]byte(`{"metadata":{},"messages":[]}`),
+		[]byte(`{"metadata":{"user_id":123},"messages":[]}`),
+		[]byte(`{"messages":[]}`),
+		[]byte(`not-json`),
+	} {
+		if string(body) == string(valid) {
+			require.True(t, HasAnthropicStableIdentityEnvelope(body))
+			continue
+		}
+		require.False(t, HasAnthropicStableIdentityEnvelope(body))
+	}
 }
 
 func TestAnthropicStableIngressAcceptsDurableCustomBaseAlias(t *testing.T) {

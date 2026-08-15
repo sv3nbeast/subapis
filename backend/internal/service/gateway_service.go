@@ -4048,6 +4048,15 @@ func (s *GatewayService) checkClaudeCodeRestriction(ctx context.Context, groupID
 	return group, resolvedID, nil
 }
 
+// ResolveClaudeCodeRestriction exposes the same group/fallback resolution used
+// by the normal scheduler to gateway entry points that must make a routing
+// decision before the generic scheduler runs (for example, the account-scoped
+// Anthropic stable path). Keeping this as a thin wrapper prevents those early
+// paths from accidentally bypassing ClaudeCodeOnly or its fallback group.
+func (s *GatewayService) ResolveClaudeCodeRestriction(ctx context.Context, groupID *int64) (*Group, *int64, error) {
+	return s.checkClaudeCodeRestriction(ctx, groupID)
+}
+
 func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, group *Group) (string, bool, error) {
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
 	if hasForcePlatform && forcePlatform != "" {

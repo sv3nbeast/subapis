@@ -209,10 +209,19 @@ func ParseAnthropicStableIngress(method, path, contentEncoding, userAgent string
 	if strings.TrimSpace(contentEncoding) != "" && !strings.EqualFold(strings.TrimSpace(contentEncoding), "identity") {
 		return nil, fmt.Errorf("%w: content encoding is not identity", ErrAnthropicStableIngressMalformed)
 	}
+	return parseAnthropicStableIngressBody(body, userAgent, true, true)
+}
+
+// parseAnthropicStableIngressBody performs the body-only checks shared by the
+// capture-backed canary and the account-scoped stable route. The canary keeps
+// its Claude Code/CCH admission policy; the account route deliberately turns
+// those client-identity checks off and only uses the parsed session/device
+// fields needed for safe routing.
+func parseAnthropicStableIngressBody(body []byte, userAgent string, requireClaudeCode, rejectCCH bool) (*AnthropicStableIngressRequest, error) {
 	if len(body) == 0 || len(body) > AnthropicStableIngressMaxBodyBytes {
 		return nil, fmt.Errorf("%w: body size %d", ErrAnthropicStableIngressMalformed, len(body))
 	}
-	if !claudeStableUserAgentPattern.MatchString(strings.TrimSpace(userAgent)) {
+	if requireClaudeCode && !claudeStableUserAgentPattern.MatchString(strings.TrimSpace(userAgent)) {
 		return nil, fmt.Errorf("%w: user-agent", ErrAnthropicStableIngressNotClaudeCode)
 	}
 
@@ -225,7 +234,7 @@ func ParseAnthropicStableIngress(method, path, contentEncoding, userAgent string
 	// the first-party billing system block so an ordinary user prompt that
 	// happens to contain the text "cch=" is not rejected.  The strict scanner
 	// above remains authoritative for JSON validity and duplicate keys.
-	if stableAnthropicBillingCCHPresent(body) {
+	if rejectCCH && stableAnthropicBillingCCHPresent(body) {
 		return nil, fmt.Errorf("%w: %w", ErrAnthropicStableIngressMalformed, ErrAnthropicStableIngressCCHPresent)
 	}
 	userID, deviceStartInDecoded, deviceEndInDecoded, accountUUID, sessionID, err := parseStableMetadataUserID(
@@ -329,32 +338,53 @@ func ParseAnthropicStableIngressProfile(
 	return result, nil
 }
 
-// ParseAnthropicStableIdentityIngress is the shared scheduler's native Claude
-// Code admission boundary. It retains the structural checks needed for safe
-// multi-user session binding and equal-length device replacement, but it does
-// not use the client version, anthropic-beta or anthropic-version as a feature
-// allow-list. Those headers are preserved by BuildAnthropicStableMessageRequest
-// and the OAuth beta is appended only when absent.
+// ParseAnthropicStableIdentityIngress is the account-scoped stable scheduler's
+// structural boundary. It retains the checks needed for safe multi-user
+// session binding and raw identity preservation, but client UA/version, query,
+// x-app, stream mode and feature headers are not admission criteria. Feature
+// headers are handled later by BuildAnthropicStableMessageRequest.
 func ParseAnthropicStableIdentityIngress(
 	method, path, rawQuery, contentEncoding, userAgent, xApp, sessionHeader string,
 	body []byte,
 ) (*AnthropicStableIngressRequest, error) {
-	profileID := DetectAnthropicStableIdentityIngressProfile(userAgent)
-	if profileID == "" || rawQuery != AnthropicStableIngressQueryV1 || xApp != AnthropicStableIngressXAppV1 {
-		return nil, fmt.Errorf("%w: native Claude Code identity mismatch", ErrAnthropicStableIngressNotClaudeCode)
+	if method != http.MethodPost || path != AnthropicStableMessagesPath {
+		return nil, fmt.Errorf("%w: method/path", ErrAnthropicStableIngressNotClaudeCode)
 	}
-	result, err := ParseAnthropicStableIngress(method, path, contentEncoding, userAgent, body)
+	if strings.TrimSpace(contentEncoding) != "" && !strings.EqualFold(strings.TrimSpace(contentEncoding), "identity") {
+		return nil, fmt.Errorf("%w: content encoding is not identity", ErrAnthropicStableIngressMalformed)
+	}
+	// Account-scoped stable mode is selected by the authenticated group and
+	// account enrollment, not by a finite Claude CLI UA/version profile. Keep
+	// the native body bytes and routing identity checks, but accept Desktop,
+	// SDK and future Claude clients with different query/header combinations.
+	result, err := parseAnthropicStableIngressBody(body, userAgent, false, false)
 	if err != nil {
 		return nil, err
 	}
-	if sessionHeader != result.SessionID {
+	// Claude Code sends this header, while Desktop/SDK variants may omit it.
+	// When present it remains a useful consistency guard; absence is valid.
+	if strings.TrimSpace(sessionHeader) != "" && sessionHeader != result.SessionID {
 		return nil, fmt.Errorf("%w: session header does not match body", ErrAnthropicStableIngressMalformed)
 	}
-	if !result.HasStream || !result.Stream || !result.HasMaxTokens {
-		return nil, fmt.Errorf("%w: native Claude Code requires stream=true and max_tokens", ErrAnthropicStableIngressMalformed)
-	}
-	result.ProfileID = profileID
+	// This is an internal transport-family marker only. It must not be treated
+	// as proof that the inbound client is Claude CLI; account enrollment still
+	// validates the persisted outbound family before forwarding.
+	result.ProfileID = AnthropicStableIngressProfileClaudeCLICustomBaseV1
 	return result, nil
+}
+
+// HasAnthropicStableIdentityEnvelope reports whether a request advertises the
+// metadata.user_id envelope that the account-scoped stable scheduler needs for
+// deterministic multi-user session routing. It is intentionally a cheap
+// precheck used only to distinguish an ordinary Anthropic request (which should
+// continue through compatibility) from a malformed attempted stable request
+// (which should fail closed instead of being normalized by the generic parser).
+func HasAnthropicStableIdentityEnvelope(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	userID := gjson.GetBytes(body, "metadata.user_id")
+	return userID.Type == gjson.String && strings.TrimSpace(userID.String()) != ""
 }
 
 // PatchDevice is retained as a small compatibility utility for older callers
