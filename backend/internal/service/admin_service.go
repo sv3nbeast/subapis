@@ -390,8 +390,9 @@ type CreateAccountInput struct {
 	AutoPauseOnExpired *bool
 	ProbeEnabled       *bool
 	// AnthropicStableIdentity atomically creates an Anthropic OAuth/SetupToken
-	// account fenced from the generic scheduler with one fixed device and its
-	// currently selected static proxy.
+	// account fenced from the generic scheduler with an enrollment identity
+	// marker and its currently selected static proxy. Native client identity
+	// fields are forwarded unchanged at request time.
 	AnthropicStableIdentity bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool

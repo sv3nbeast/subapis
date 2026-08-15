@@ -886,7 +886,7 @@ func TestAnthropicStableIdentitySessionScopeSeparatesAccountsAndReenrollment(t *
 		"disable and re-enroll must not reuse old owner bindings even if generation restarts")
 }
 
-func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *testing.T) {
+func TestAnthropicStableIdentityRawForwardPreservesIdentityAndSSE(t *testing.T) {
 	const apiKeyID = int64(91)
 	const ownerUserID = int64(1002)
 	const clientBeta = "new-client-beta,reordered-client-beta"
@@ -913,6 +913,7 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 	route := convertStableCanaryFixtureToIdentity(t, fixture, apiKeyID)
 	clientDevice := strings.Repeat("b", 64)
 	fixture.body = bytes.Replace(fixture.body, []byte(strings.Repeat("a", 64)), []byte(clientDevice), 1)
+	fixture.body = bytes.Replace(fixture.body, []byte(`account_uuid\":\"\"`), []byte(`account_uuid\":\"22222222-2222-4222-8222-222222222222\"`), 1)
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 	fixture.ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.223 (external, cli)")
 	fixture.ctx.Request.Header.Set("anthropic-beta", clientBeta)
@@ -924,9 +925,8 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, rawSSE, fixture.rec.Body.String())
-	expectedBody := bytes.Replace(fixture.body, []byte(clientDevice), []byte(route.DeviceID), 1)
-	require.Equal(t, expectedBody, upstreamBody)
-	require.Len(t, upstreamBody, len(fixture.body), "device patch must not re-encode or reorder JSON")
+	require.Equal(t, fixture.body, upstreamBody)
+	require.Len(t, upstreamBody, len(fixture.body), "native forwarding must not re-encode or reorder JSON")
 	require.Equal(t, AnthropicStableMessagesOriginV1+AnthropicStableMessagesPath, upstreamURL)
 	require.Equal(t, "Bearer "+fixture.account.GetCredential("access_token"), upstreamHeader.Get("Authorization"))
 	require.Equal(t, clientBeta+","+AnthropicStableOAuthBetaV1, upstreamHeader.Get("anthropic-beta"))
@@ -943,7 +943,7 @@ func TestAnthropicStableIdentityRawForwardPatchesOnlyDeviceAndPreservesSSE(t *te
 	require.Equal(t, "stable_identity", mode)
 }
 
-func TestAnthropicStableIdentity401RefreshReplaysTheSamePatchedBodyOnce(t *testing.T) {
+func TestAnthropicStableIdentity401RefreshReplaysTheSameRawBodyOnce(t *testing.T) {
 	const apiKeyID = int64(91)
 	const rawSSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-refresh\"}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
@@ -966,6 +966,7 @@ func TestAnthropicStableIdentity401RefreshReplaysTheSamePatchedBodyOnce(t *testi
 		}
 	}))
 	route := convertStableCanaryFixtureToIdentity(t, fixture, apiKeyID)
+	fixture.body = bytes.Replace(fixture.body, []byte(`account_uuid\":\"\"`), []byte(`account_uuid\":\"33333333-3333-4333-8333-333333333333\"`), 1)
 	strictStableCanaryProfileHeader(fixture.ctx, AnthropicStableIngressProfileCLI211222V1)
 
 	result, err := fixture.service.ForwardAnthropicStableIdentityRaw(
@@ -975,6 +976,7 @@ func TestAnthropicStableIdentity401RefreshReplaysTheSamePatchedBodyOnce(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, requests, 3, "only first 401 may trigger one refresh and one replay")
+	require.Equal(t, fixture.body, bodies[0])
 	require.Equal(t, bodies[0], bodies[2])
 	require.Equal(t, "Bearer sk-ant-oat-stable-refreshed", requests[2].Header.Get("Authorization"))
 	require.Equal(t, rawSSE, fixture.rec.Body.String())

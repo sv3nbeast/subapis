@@ -58,7 +58,6 @@ func TestParseAnthropicStableIngressRejectsProfileDrift(t *testing.T) {
 		{name: "wrong path", method: http.MethodPost, path: "/v1/messages?beta=true", userAgent: "claude-cli/2.1.222", body: stableTestBody(stableTestDeviceA, "", stableTestSession), want: ErrAnthropicStableIngressNotClaudeCode},
 		{name: "gzip", method: http.MethodPost, path: "/v1/messages", encoding: "gzip", userAgent: "claude-cli/2.1.222", body: stableTestBody(stableTestDeviceA, "", stableTestSession), want: ErrAnthropicStableIngressMalformed},
 		{name: "sdk ua", method: http.MethodPost, path: "/v1/messages", userAgent: "anthropic-sdk-go/1.0", body: stableTestBody(stableTestDeviceA, "", stableTestSession), want: ErrAnthropicStableIngressNotClaudeCode},
-		{name: "account uuid", method: http.MethodPost, path: "/v1/messages", userAgent: "claude-cli/2.1.222", body: stableTestBody(stableTestDeviceA, "account-uuid", stableTestSession), want: ErrAnthropicStableIngressMalformed},
 		{name: "uppercase session", method: http.MethodPost, path: "/v1/messages", userAgent: "claude-cli/2.1.222", body: stableTestBody(stableTestDeviceA, "", strings.ToUpper(stableTestSession)), want: ErrAnthropicStableIngressMalformed},
 		{name: "duplicate top-level key", method: http.MethodPost, path: "/v1/messages", userAgent: "claude-cli/2.1.222", body: []byte(`{"model":"a","model":"b","messages":[],"metadata":{"user_id":"{\"device_id\":\"` + stableTestDeviceA + `\",\"account_uuid\":\"\",\"session_id\":\"` + stableTestSession + `\"}"}}`), want: ErrAnthropicStableIngressMalformed},
 		{name: "duplicate nested key", method: http.MethodPost, path: "/v1/messages", userAgent: "claude-cli/2.1.222", body: []byte(`{"model":"a","messages":[],"metadata":{"user_id":"{\"device_id\":\"` + stableTestDeviceA + `\",\"device_id\":\"` + stableTestDeviceA + `\",\"account_uuid\":\"\",\"session_id\":\"` + stableTestSession + `\"}"}}`), want: ErrAnthropicStableIngressMalformed},
@@ -72,6 +71,17 @@ func TestParseAnthropicStableIngressRejectsProfileDrift(t *testing.T) {
 			require.ErrorIs(t, err, tt.want)
 		})
 	}
+}
+
+func TestParseAnthropicStableIngressAcceptsClientAccountUUID(t *testing.T) {
+	const accountUUID = "oauth-account-uuid-from-claude-code"
+	body := stableTestBody(stableTestDeviceA, accountUUID, stableTestSession)
+	parsed, err := ParseAnthropicStableIngress(
+		http.MethodPost, "/v1/messages", "", "claude-cli/2.1.222 (external, cli)", body,
+	)
+	require.NoError(t, err)
+	require.Equal(t, accountUUID, parsed.AccountUUID)
+	require.Equal(t, body, parsed.RawBody)
 }
 
 func TestParseAnthropicStableIngressAcceptsFieldOrderAndPreservesRawBody(t *testing.T) {

@@ -72,8 +72,8 @@ func claimAnthropicStableIdentitySession(ctx context.Context, repo AnthropicStab
 	}
 	// Owner identity is part of the inner binding too. Even if two users import
 	// the same raw Claude session UUID, they receive independent conversations
-	// under the shared fixed device rather than an owner conflict or shared
-	// transcript namespace.
+	// rather than an owner conflict or shared transcript namespace. This routing
+	// state is separate from the native device_id/account_uuid sent upstream.
 	sessionMaterial := fmt.Sprintf("owner:%d:%s", ownerUserID, sessionID)
 	sessionHash, err := HashAnthropicStableCanarySessionForRouting(route.SessionHMACKey, route.SessionScopeID, route.Generation, sessionMaterial)
 	if err != nil {
@@ -196,10 +196,11 @@ func (s *GatewayService) ForwardAnthropicStableIdentityRaw(
 	if !AnthropicStableIngressProfilesEquivalent(ingress.ProfileID, account.AnthropicStableIdentityProfileID()) {
 		return nil, stableIdentityReject(c, http.StatusServiceUnavailable, errAnthropicStableIdentityInvalid)
 	}
-	upstreamBody, err := ingress.PatchDevice(account.AnthropicStableIdentityDeviceID())
-	if err != nil {
-		return nil, stableIdentityReject(c, http.StatusBadRequest, err)
-	}
+	// Stable identity enrollment controls account eligibility and transport
+	// routing; it must not replace the Claude client's identity fields. Keep the
+	// original bytes so device_id, account_uuid, field order and all request
+	// features match the native claude-gateway forwarding contract.
+	upstreamBody := rawBody
 	claimCtx, claimCancel := context.WithTimeout(ctx, anthropicStableCanarySessionClaimTimeout)
 	defer claimCancel()
 	if repo, ok := s.accountRepo.(AnthropicStableCanarySessionBindingRepository); !ok {

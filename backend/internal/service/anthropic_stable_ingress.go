@@ -181,8 +181,9 @@ var (
 )
 
 // AnthropicStableIngressRequest is a zero-copy view over the inbound body.
-// RawBody is never modified. PatchDevice is used only by reviewed shared mode;
-// the D1 canary still rejects a different device without rewriting it.
+// RawBody is never modified or rewritten on the stable forwarding paths. The
+// parsed identity fields are used only for admission and session routing; the
+// client device_id and account_uuid remain part of the original upstream body.
 type AnthropicStableIngressRequest struct {
 	RawBody       []byte
 	ProfileID     string
@@ -233,9 +234,6 @@ func ParseAnthropicStableIngress(method, path, contentEncoding, userAgent string
 	)
 	if err != nil {
 		return nil, err
-	}
-	if accountUUID != "" {
-		return nil, fmt.Errorf("%w: account_uuid must be empty", ErrAnthropicStableIngressMalformed)
 	}
 	if !claudeStableUUIDPattern.MatchString(sessionID) {
 		return nil, fmt.Errorf("%w: session_id must be a lowercase canonical UUID", ErrAnthropicStableIngressMalformed)
@@ -359,9 +357,9 @@ func ParseAnthropicStableIdentityIngress(
 	return result, nil
 }
 
-// PatchDevice prepares the fixed-device body used by the reviewed shared
-// coordinator. Both identifiers are exactly 64 lowercase hex characters, so
-// all bytes outside the identifier retain their original offsets and values.
+// PatchDevice is retained as a small compatibility utility for older callers
+// and tests. Native stable forwarding does not call it: the upstream request
+// must retain the client's original device_id and account_uuid.
 func (r *AnthropicStableIngressRequest) PatchDevice(deviceID string) ([]byte, error) {
 	if r == nil || r.RawBody == nil || r.DeviceStart < 0 || r.DeviceEnd <= r.DeviceStart ||
 		r.DeviceEnd > len(r.RawBody) || r.DeviceEnd-r.DeviceStart != 64 ||

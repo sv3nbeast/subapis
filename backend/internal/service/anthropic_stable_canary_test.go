@@ -298,7 +298,7 @@ func TestAnthropicStableCanaryRawEntryPreservesWireAndStatus(t *testing.T) {
 	require.NotNil(t, result.FirstTokenMs, "the first semantic text delta must define client-visible TTFT")
 }
 
-func TestAnthropicStableCanarySharedModePatchesOnlyDeviceAndClaimsOwner(t *testing.T) {
+func TestAnthropicStableCanarySharedModePreservesIdentityAndClaimsOwner(t *testing.T) {
 	const rawSSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_shared\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	var fixture *stableCanaryTestFixture
 	var upstreamBody []byte
@@ -310,6 +310,7 @@ func TestAnthropicStableCanarySharedModePatchesOnlyDeviceAndClaimsOwner(t *testi
 	}))
 	clientDevice := strings.Repeat("b", 64)
 	fixture.body = []byte(strings.Replace(string(fixture.body), strings.Repeat("a", 64), clientDevice, 1))
+	fixture.body = []byte(strings.Replace(string(fixture.body), `account_uuid\":\"\"`, `account_uuid\":\"22222222-2222-4222-8222-222222222222\"`, 1))
 	fixture.ctx.Request.Body = io.NopCloser(bytes.NewReader(fixture.body))
 	fixture.service.cfg.Gateway.AnthropicStableCanary.OwnerUserID = 0
 	fixture.service.cfg.Gateway.AnthropicStableCanary.APIKeyID = 0
@@ -323,8 +324,7 @@ func TestAnthropicStableCanarySharedModePatchesOnlyDeviceAndClaimsOwner(t *testi
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	expected := strings.Replace(string(fixture.body), clientDevice, fixture.account.AnthropicStableCanaryDeviceID(), 1)
-	require.Equal(t, expected, string(upstreamBody))
+	require.Equal(t, fixture.body, upstreamBody)
 	require.Len(t, upstreamBody, len(fixture.body))
 	repo := fixture.service.accountRepo.(*stableCanaryRefreshRepoStub)
 	require.Equal(t, int64(1002), repo.sessionOwner)
@@ -745,11 +745,20 @@ func TestAnthropicStableCanaryRejectsUnknownPersistedProfileBeforeUpstream(t *te
 	require.Equal(t, http.StatusServiceUnavailable, fixture.rec.Code)
 }
 
-func TestAnthropicStableCanaryRejectsDifferentDeviceBeforeUpstream(t *testing.T) {
+func TestAnthropicStableCanaryPreservesDifferentDeviceBeforeUpstream(t *testing.T) {
 	requests := 0
-	fixture := newStableCanaryTestFixture(t, stableCanaryRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+	var fixture *stableCanaryTestFixture
+	fixture = newStableCanaryTestFixture(t, stableCanaryRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		requests++
-		return nil, errors.New("unexpected upstream request")
+		body, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		require.Equal(t, fixture.body, body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_identity\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")),
+			Request:    req,
+		}, nil
 	}))
 	fixture.body = bytes.Replace(
 		fixture.body,
@@ -764,9 +773,9 @@ func TestAnthropicStableCanaryRejectsDifferentDeviceBeforeUpstream(t *testing.T)
 		context.Background(), fixture.ctx, fixture.account, fixture.body, int64(9101), time.Now(),
 	)
 
-	require.ErrorIs(t, err, ErrAnthropicStableIngressDevicePatch)
-	require.Zero(t, requests, "a mismatched installation must be rejected before any egress")
-	require.Equal(t, http.StatusBadRequest, fixture.rec.Code)
+	require.NoError(t, err)
+	require.Equal(t, 1, requests, "the native client device must be forwarded without a gateway rewrite")
+	require.Equal(t, http.StatusOK, fixture.rec.Code)
 }
 
 func TestAnthropicStableCanaryRejectsInvalidAccountIsolationBeforeUpstream(t *testing.T) {

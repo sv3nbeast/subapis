@@ -6,7 +6,8 @@ package service
 // Anthropic group memberships are the live pool definition; the lifecycle does
 // not store a second group list, select API keys, create groups, or roll group
 // membership back. This keeps normal group administration authoritative while
-// the fixed device and scheduler reservation remain protected.
+// the enrollment marker, fixed transport and scheduler reservation remain
+// protected; the native client's device_id is still forwarded unchanged.
 
 import (
 	"context"

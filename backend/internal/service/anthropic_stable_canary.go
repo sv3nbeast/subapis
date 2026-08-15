@@ -3,9 +3,10 @@ package service
 // This file is the deliberately small, local-only Anthropic OAuth identity
 // canary. It is kept separate from both the legacy OAuth mimicry path and the
 // unfinished multi-account stable-identity executor. The canary has one exact
-// group/account pair, one fixed account device id, no application failover,
-// and only the single reactive 401 refresh/replay permitted by the reference
-// claude-gateway implementation.
+// group/account pair and an enrolled account identity marker for lifecycle
+// validation, but forwards the native client's identity fields unchanged. It
+// has no application failover and only the single reactive 401 refresh/replay
+// permitted by the reference claude-gateway implementation.
 
 import (
 	"context"
@@ -1172,16 +1173,12 @@ func (s *GatewayService) ForwardAnthropicStableCanaryRaw(
 	if !AnthropicStableIngressProfilesEquivalent(ingress.ProfileID, account.AnthropicStableCanaryProfileID()) {
 		return nil, s.stableCanaryReject(c, http.StatusServiceUnavailable, errAnthropicStableCanaryAccountInvalid)
 	}
+	// Match claude-gateway's native forwarding contract: the account marker is
+	// retained for enrollment/lifecycle validation, but the client's device_id,
+	// account_uuid, field order and every other body byte are forwarded as-is.
+	// Shared-user isolation is provided by the durable session claim below, not
+	// by rewriting a client identity into a shared account identity.
 	upstreamBody := rawBody
-	if canary.SharedUsers {
-		upstreamBody, err = ingress.PatchDevice(account.AnthropicStableCanaryDeviceID())
-		if err != nil {
-			return nil, s.stableCanaryReject(c, http.StatusBadRequest, err)
-		}
-	} else if ingress.InboundDevice != account.AnthropicStableCanaryDeviceID() {
-		// D1 remains a same-installation canary and does not patch body bytes.
-		return nil, s.stableCanaryReject(c, http.StatusBadRequest, ErrAnthropicStableIngressDevicePatch)
-	}
 	claimCtx, claimCancel := context.WithTimeout(ctx, anthropicStableCanarySessionClaimTimeout)
 	defer claimCancel()
 	if err := s.ClaimAnthropicStableCanarySession(claimCtx, canary.GroupID, ownerUserID, ingress.SessionID); err != nil {
@@ -1373,7 +1370,7 @@ func HashAnthropicStableCanarySessionID(sessionID string) string {
 }
 
 // loggerFromStableCanary records only bounded identity metadata. In
-// particular, it never logs the fixed device id, access token or request body.
+// particular, it never logs a device/account UUID, access token or request body.
 func loggerFromStableCanary(c *gin.Context, account *Account, ingress *AnthropicStableIngressRequest) {
 	if account == nil || ingress == nil {
 		return

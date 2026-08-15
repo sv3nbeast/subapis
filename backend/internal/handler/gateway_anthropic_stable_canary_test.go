@@ -328,7 +328,7 @@ func TestGatewayHandlerMessages_AnthropicStableSharedBindingUnavailableBeforeEgr
 	require.GreaterOrEqual(t, groupRepo.getCalls, 1)
 }
 
-func TestGatewayHandlerMessages_AnthropicStableSharedModePatchesDeviceAndBindsUserBeforeEgress(t *testing.T) {
+func TestGatewayHandlerMessages_AnthropicStableSharedModePreservesIdentityAndBindsUserBeforeEgress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var upstreamCalls int
 	var upstreamBody []byte
@@ -360,6 +360,7 @@ func TestGatewayHandlerMessages_AnthropicStableSharedModePatchesDeviceAndBindsUs
 	accountRepo.sessionSupported = true
 	clientDevice := strings.Repeat("b", 64)
 	body = []byte(strings.Replace(string(body), strings.Repeat("a", 64), clientDevice, 1))
+	body = []byte(strings.Replace(string(body), `account_uuid\":\"\"`, `account_uuid\":\"44444444-4444-4444-8444-444444444444\"`, 1))
 	canary := &h.cfg.Gateway.AnthropicStableCanary
 	canary.OwnerUserID = 0
 	canary.APIKeyID = 0
@@ -381,8 +382,7 @@ func TestGatewayHandlerMessages_AnthropicStableSharedModePatchesDeviceAndBindsUs
 	require.Equal(t, "keep-alive", recorder.Header().Get("Connection"))
 	require.Equal(t, "no", recorder.Header().Get("X-Accel-Buffering"))
 	require.Equal(t, 1, upstreamCalls)
-	expectedBody := strings.Replace(string(body), clientDevice, accountRepo.account.AnthropicStableCanaryDeviceID(), 1)
-	require.Equal(t, expectedBody, string(upstreamBody))
+	require.Equal(t, body, upstreamBody)
 	require.Equal(t, 1, accountRepo.sessionClaims)
 	require.Equal(t, subject.UserID, accountRepo.sessionOwner)
 	require.NotContains(t, recorder.Body.String(), "session binding")
