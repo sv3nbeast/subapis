@@ -1588,12 +1588,16 @@ func (s *GatewayService) newSelectionResultNianzs(ctx context.Context, account *
 	if err != nil {
 		return nil, err
 	}
-	return attachSelectionProfitGate(ctx, &AccountSelectionResult{
+	selection := &AccountSelectionResult{
 		Account:     hydrated,
 		Acquired:    acquired,
 		ReleaseFunc: release,
 		WaitPlan:    waitPlan,
-	}), nil
+	}
+	if hydrated != nil && hydrated.Platform == PlatformKiro {
+		selection.DeferStickyMigration = true
+	}
+	return attachSelectionProfitGate(ctx, selection), nil
 }
 
 // nianzsFilterByMinPriority 过滤出优先级最小的账号集合

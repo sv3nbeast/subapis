@@ -1337,11 +1337,12 @@ func (s *GatewayService) stickySessionTTLForGroupID(ctx context.Context, groupID
 }
 
 // bindGatewayStickySessionDuringSelection preserves the normal eager sticky
-// behavior unless a profit gate is installed. Profit-controlled requests bind
-// only after the terminal post-slot check, otherwise a rejected candidate could
-// overwrite a healthy pre-existing sticky binding.
+// behavior unless a profit gate is installed. The nianzs Kiro scheduler also
+// defers binding until the handler observes a complete downstream success;
+// otherwise a pre-semantic failover can replace a warm sticky account with the
+// last account that timed out.
 func (s *GatewayService) bindGatewayStickySessionDuringSelection(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
-	if gatewayProfitControlGateActive(ctx) {
+	if gatewayProfitControlGateActive(ctx) || s.useNianzsKiroScheduler(ctx, groupID) {
 		return nil
 	}
 	return s.BindStickySessionWithTTL(ctx, groupID, sessionHash, accountID, s.stickySessionTTLForGroupID(ctx, groupID))

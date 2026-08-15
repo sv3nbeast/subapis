@@ -314,7 +314,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			)
 			return
 		}
-		if fs.KiroResilienceEnforced && sessionHash != "" &&
+		if (fs.KiroResilienceEnforced || selection.DeferStickyMigration) && sessionHash != "" &&
 			(selection.DeferStickyMigration || fs.HasFailedAccountID(sessionBoundAccountID) || fs.HasKiro429Retries() ||
 				(account.Platform == service.PlatformKiro && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID || !selection.PreserveStickyBinding))) {
 			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())

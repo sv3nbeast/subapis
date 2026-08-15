@@ -617,8 +617,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 				// Slot acquired: no longer waiting in queue.
 				releaseWait()
-				deferKiroMigration := account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
-					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
+				deferKiroMigration := account.Platform == service.PlatformKiro &&
+					(selection.DeferStickyMigration ||
+						((fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
+							sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
 				if !deferKiroMigration {
 					if err := h.gatewayService.BindStickySession(c.Request.Context(), apiKey.GroupID, sessionKey, account.ID); err != nil {
 						reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -1076,8 +1078,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					zap.String("session_key", sessionKey),
 					zap.Int64("account_id", account.ID),
 				)
-				deferKiroMigration := account.Platform == service.PlatformKiro && (fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
-					(selection.DeferStickyMigration || (sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
+				deferKiroMigration := account.Platform == service.PlatformKiro &&
+					(selection.DeferStickyMigration ||
+						((fs.KiroResilienceEnforced || service.KiroAnthropicFallbackPolicyFromContext(c.Request.Context()).Enabled) &&
+							sessionBoundAccountID > 0 && sessionBoundAccountID != account.ID))
 				if !deferKiroMigration {
 					if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
 						reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))

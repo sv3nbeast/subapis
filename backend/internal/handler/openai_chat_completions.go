@@ -393,7 +393,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), true, nil)
 		}
-		if kiroBridgeRequested && kiroFailoverState.KiroResilienceEnforced && sessionHash != "" &&
+		if kiroBridgeRequested && (kiroFailoverState.KiroResilienceEnforced || selection.DeferStickyMigration) && sessionHash != "" &&
 			(len(failedAccountIDs) > 0 || selection.DeferStickyMigration ||
 				(account.Platform == service.PlatformKiro && !selection.PreserveStickyBinding)) {
 			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())

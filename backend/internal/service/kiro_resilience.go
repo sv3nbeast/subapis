@@ -1124,7 +1124,8 @@ func (s *GatewayService) applyKiroSelectionBindingPolicy(selection *AccountSelec
 	}
 	selection.PreserveStickyBinding = preserve
 	selection.DeferStickyMigration = !preserve && (deferMigration ||
-		(strings.TrimSpace(sessionHash) != "" && selection.Account != nil && selection.Account.Platform == PlatformKiro && s.kiroResilienceEnforced(groupID)))
+		(strings.TrimSpace(sessionHash) != "" && selection.Account != nil && selection.Account.Platform == PlatformKiro &&
+			(s.kiroResilienceEnforced(groupID) || s.useNianzsKiroEngine(groupID))))
 }
 
 func (s *GatewayService) shouldBindSelectionBeforeSuccess(ctx context.Context, account *Account, groupID *int64, sessionHash string, preserve, deferMigration bool) bool {
@@ -1136,7 +1137,8 @@ func (s *GatewayService) shouldBindSelectionBeforeSuccess(ctx context.Context, a
 	if strings.TrimSpace(sessionHash) == "" || preserve || deferMigration {
 		return false
 	}
-	return account == nil || account.Platform != PlatformKiro || !s.kiroResilienceEnforced(groupID)
+	return account == nil || account.Platform != PlatformKiro ||
+		(!s.kiroResilienceEnforced(groupID) && !s.useNianzsKiroEngine(groupID))
 }
 
 // StartKiroResilienceBudget lazily starts the current Kiro account-attempt

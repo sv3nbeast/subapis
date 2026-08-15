@@ -406,6 +406,48 @@ func TestSelectAccountWithLoadAwarenessMixedKiroFailoverDefersStickyMigration(t 
 	selection.ReleaseFunc()
 }
 
+func TestSelectAccountWithLoadAwarenessNianzsKiroFailoverPreservesStickyUntilSuccess(t *testing.T) {
+	sessionHash := "nianzs-kiro-failover"
+	groupID := int64(29)
+	accounts := []Account{
+		{ID: 2536, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1},
+		{ID: 2537, Platform: PlatformKiro, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1},
+	}
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{sessionHash: 2536}}
+	svc := &GatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: accounts},
+		cache:              cache,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{2537: true}}),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroEngine: config.KiroEngineNianzs,
+			Scheduling: config.GatewaySchedulingConfig{
+				LoadBatchEnabled: true,
+			},
+		}},
+	}
+	ctx := svc.withGroupContext(context.Background(), &Group{
+		ID:       groupID,
+		Platform: PlatformKiro,
+		Status:   StatusActive,
+		Hydrated: true,
+	})
+
+	selection, err := svc.SelectAccountWithLoadAwarenessNianzs(
+		ctx,
+		&groupID,
+		sessionHash,
+		"claude-opus-4-6",
+		map[int64]struct{}{2536: {}},
+		"",
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(2537), selection.Account.ID)
+	require.True(t, selection.DeferStickyMigration)
+	require.Equal(t, int64(2536), cache.sessionBindings[sessionHash], "a failed physical attempt must not poison the next logical turn")
+	selection.ReleaseFunc()
+}
+
 func TestSelectAccountWithLoadAwarenessKiroClearsStaleStickyBinding(t *testing.T) {
 	kiroSchedulerCursor.Store(0)
 	sessionHash := "same-session"

@@ -808,7 +808,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), openAIForwardSucceededForScheduling(result), nil)
 		}
-		if kiroBridgeRequested && kiroFailoverState.KiroResilienceEnforced && sessionHash != "" &&
+		if kiroBridgeRequested && (kiroFailoverState.KiroResilienceEnforced || selection.DeferStickyMigration) && sessionHash != "" &&
 			(len(failedAccountIDs) > 0 || selection.DeferStickyMigration ||
 				(account.Platform == service.PlatformKiro && !selection.PreserveStickyBinding)) {
 			stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
@@ -1722,7 +1722,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		return nil, false, nil
 	}
 	if fastAcquired {
-		if !kiroEnforced {
+		if !kiroEnforced && !selection.DeferStickyMigration {
 			if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 				reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			}
@@ -1777,7 +1777,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 
 	// Slot acquired: no longer waiting in queue.
 	releaseWait()
-	if !kiroEnforced {
+	if !kiroEnforced && !selection.DeferStickyMigration {
 		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
