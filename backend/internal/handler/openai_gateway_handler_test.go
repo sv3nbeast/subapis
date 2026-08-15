@@ -1532,6 +1532,25 @@ func TestOpenAIResponsesWebSocket_UnchangedChannelTargetOutsideAccountMappingKey
 	}
 }
 
+func TestOpenAIResponsesWebSocket_ChannelMappingPreservesGPT56SolWMOnWire(t *testing.T) {
+	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+		firstPayload: `{"type":"response.create","model":"gpt-5.6-sol","stream":false}`,
+		channelMapping: map[string]string{
+			"gpt-5.6-sol": "gpt-5.6-sol-wm",
+		},
+	})
+
+	require.Len(t, got.upstreamPayloads, 1)
+	require.Equal(t, "gpt-5.6-sol-wm", gjson.GetBytes(got.upstreamPayloads[0], "model").String(),
+		"渠道映射后的 -wm 模型名必须原样发送给 ChatGPT 上游")
+	require.Len(t, got.logs, 1)
+	require.Equal(t, "gpt-5.6-sol", got.logs[0].RequestedModel)
+	require.NotNil(t, got.logs[0].UpstreamModel)
+	require.Equal(t, "gpt-5.6-sol-wm", *got.logs[0].UpstreamModel)
+	require.NotNil(t, got.logs[0].ModelMappingChain)
+	require.Equal(t, "gpt-5.6-sol→gpt-5.6-sol-wm", *got.logs[0].ModelMappingChain)
+}
+
 func TestOpenAIResponsesWebSocket_PassthroughKeepsTurnMappingSnapshot(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 		firstPayload:  `{"type":"response.create","model":"sol","stream":false}`,

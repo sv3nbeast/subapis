@@ -33,4 +33,8 @@ func TestUsageBillingModelCandidates_BareGPT56IncludesSol(t *testing.T) {
 		[]string{"openai/gpt-5.6", "gpt-5.6", "gpt-5.6-sol"},
 		usageBillingModelCandidates("openai/gpt-5.6"),
 	)
+	require.Equal(t,
+		[]string{"gpt-5.6-sol-wm", "gpt-5.6-sol"},
+		usageBillingModelCandidates("gpt-5.6-sol-wm"),
+	)
 }

@@ -769,6 +769,7 @@ func TestListChannelPricingModelNamesByProvider_OpenAIMergesLocalStaticModels(t 
 	require.Contains(t, got, "gpt-4o")
 	require.Contains(t, got, "gpt-5.5")
 	require.Contains(t, got, "gpt-5.6-sol")
+	require.Contains(t, got, "gpt-5.6-sol-wm")
 	require.Contains(t, got, "gpt-5.6-terra")
 	require.Contains(t, got, "gpt-5.6-luna")
 	require.Contains(t, got, "gpt-5.3-codex")

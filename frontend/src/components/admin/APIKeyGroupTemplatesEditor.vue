@@ -257,7 +257,7 @@ function defaultModels(groupID: number): Record<string, unknown> {
         "claude-haiku-4-5": { name: "Claude Haiku 4.5", limit: { context: 200000, output: 64000 } },
       };
     case "openai":
-      return modelEntries(["gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]);
+      return modelEntries(["gpt-5.6-sol", "gpt-5.6-sol-wm", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]);
     case "gemini":
       return modelEntries(["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"]);
     default:

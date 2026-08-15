@@ -621,6 +621,13 @@ func normalizeCodexModel(model string) string {
 	if model == "" {
 		return "gpt-5.4"
 	}
+	// ChatGPT Codex accepts gpt-5.6-sol-wm as an explicit upstream model ID.
+	// Keep this exact alias on the wire instead of letting the broader
+	// gpt-5.6-sol family normalizer collapse it to gpt-5.6-sol. Billing and
+	// capability lookup still canonicalize it to the Sol family separately.
+	if canonical := canonicalizeOpenAIModelAliasSpelling(model); canonical == "gpt-5.6-sol-wm" {
+		return canonical
+	}
 	if mapped, ok := normalizeKnownCodexModel(model); ok {
 		return mapped
 	}
