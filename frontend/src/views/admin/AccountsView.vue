@@ -702,6 +702,7 @@ import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRules
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { accountSupportsBatchUsage, isKiroRelayAccount } from '@/utils/accountUsageBatch'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { formatMultiplier } from '@/utils/formatters'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
@@ -923,17 +924,6 @@ const buildDefaultTodayStats = (): WindowStats => ({
   standard_cost: 0,
   user_cost: 0
 })
-
-const accountSupportsBatchUsage = (account: Account) => {
-  if (account.platform === 'anthropic') {
-    return account.type === 'oauth' || account.type === 'setup-token'
-  }
-  if (account.platform === 'gemini') return true
-  if (account.platform === 'antigravity') return account.type === 'oauth'
-  if (account.platform === 'openai') return account.type === 'oauth'
-  if (account.platform === 'grok') return account.type === 'oauth'
-  return false
-}
 
 const setUsageBatchLoading = (accountID: number, loadingState: boolean) => {
   usageBatchLoadingByAccountId.value = {
@@ -1463,15 +1453,6 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
 
 const isKiroOveragesEnabled = (account: Account) => {
   return account.platform === 'kiro' && account.credentials?.kiro_overages_enabled === true
-}
-
-const isKiroRelayAccount = (account: Account): boolean => {
-  return (
-    account.platform === 'kiro' &&
-    account.type === 'apikey' &&
-    typeof account.credentials?.base_url === 'string' &&
-    account.credentials.base_url.trim() !== ''
-  )
 }
 
 const getKiroCreditUnitPriceUsd = (account: Account): number => {
