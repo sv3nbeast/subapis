@@ -12,6 +12,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -322,7 +323,7 @@ func TestNianzsKiroCacheEmulationOneHourBucket(t *testing.T) {
 	}
 }
 
-func TestNianzsKiroCacheEmulationPrefixPartialHit(t *testing.T) {
+func TestNianzsKiroCacheEmulationLeavesUnmarkedConversationTailUncached(t *testing.T) {
 	resetNianzsKiroCacheTracker()
 	svc := &GatewayService{}
 	account := &Account{ID: 6, Platform: PlatformKiro}
@@ -334,8 +335,8 @@ func TestNianzsKiroCacheEmulationPrefixPartialHit(t *testing.T) {
 		t.Fatalf("unexpected first usage: %+v", first)
 	}
 	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-sonnet-4-6", 6000)
-	if second == nil || second.CacheReadInputTokens <= 0 || second.CacheReadInputTokens >= first.CacheCreationInputTokens || second.CacheCreationInputTokens <= 0 {
-		t.Fatalf("expected partial prefix hit: %+v", second)
+	if second == nil || second.CacheReadInputTokens != first.CacheCreationInputTokens || second.CacheCreationInputTokens != 0 || second.InputTokens <= 0 {
+		t.Fatalf("expected cached marked prefix with uncached conversation tail: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -352,6 +353,124 @@ func TestNianzsKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	}
 }
 
+func TestNianzsKiroInputTokenEstimateCountsFullToolDefinition(t *testing.T) {
+	shortBody := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"inspect","input_schema":{"type":"object"}}]}`)
+	longBody := []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object","properties":{"path":{"type":"string","description":%q}}},"cache_control":{"type":"ephemeral"}}]}`,
+		strings.Repeat("Inspect repository files and report precise findings. ", 400),
+		strings.Repeat("Absolute path. ", 200),
+	))
+
+	shortEstimate := nianzsEstimateKiroInputTokens(context.Background(), shortBody)
+	longEstimate := nianzsEstimateKiroInputTokens(context.Background(), longBody)
+	if longEstimate <= shortEstimate+nianzsKiroTokensPerTool {
+		t.Fatalf("long tool schema must contribute its serialized prompt content: short=%d long=%d", shortEstimate, longEstimate)
+	}
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(longBody, &payload))
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), longBody, "claude-sonnet-4-6", longEstimate)
+	require.True(t, ok)
+	require.NotEmpty(t, profile.blocks)
+	tools := payload["tools"].([]any)
+	require.Equal(t, nianzsCountKiroToolDefinitionTokens(tools[0]), profile.blocks[0].cumulativeTokens)
+}
+
+func TestNianzsModernClaudeInputAccountingMatchesProviderBaseline(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-5","max_tokens":64,"stream":false,"system":[{"type":"text","text":"You are a precise assistant. Follow the tool schema exactly and answer concisely.","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"lookup_record","description":"Look up a record by its exact identifier and return the matching fields.","input_schema":{"type":"object","properties":{"record_id":{"type":"string","description":"Exact record identifier."},"include_history":{"type":"boolean","description":"Whether to include prior versions."}},"required":["record_id"]}}],"messages":[{"role":"user","content":"Answer with the word ready."}]}`)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	systemBlocks := nianzsNormalizeKiroSystemBlocks(payload["system"])
+	tools := payload["tools"].([]any)
+	require.Len(t, systemBlocks, 1)
+	require.Len(t, tools, 1)
+	require.Equal(t, 28, nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0]))
+	require.Equal(t, 417, nianzsCountModernClaudeToolDefinitionTokens(tools[0]))
+	require.Equal(t, 463, nianzsEstimateKiroInputTokens(context.Background(), body))
+
+	legacyBody := bytes.Replace(body, []byte(`claude-opus-5`), []byte(`claude-sonnet-4-6`), 1)
+	require.Equal(t, 188, nianzsEstimateKiroInputTokens(context.Background(), legacyBody))
+}
+
+func TestNianzsModernClaudeLongClaudeCodePrefixMatchesProviderBaseline(t *testing.T) {
+	// Captured Opus 5 Claude Code fingerprint request: two system blocks and
+	// 28 tool definitions. The native Messages stream reports 34,246 cached
+	// input tokens for this exact raw-token split. Keep the higher-precision
+	// scales pinned without embedding the 100 KiB request fixture.
+	const rawSystemTokens = 6902
+	const rawToolTokens = 17337
+	systemTokens := nianzsScaleModernClaudeTokens(
+		rawSystemTokens,
+		nianzsModernClaudeSystemScaleNumerator,
+		nianzsModernClaudeSystemScaleDenominator,
+	) + 2*nianzsModernClaudeSystemBlockOverhead
+	toolTokens := nianzsScaleModernClaudeTokens(
+		rawToolTokens,
+		nianzsModernClaudeToolScaleNumerator,
+		nianzsModernClaudeToolScaleDenominator,
+	) + 28*nianzsModernClaudeToolEnvelopeTokens
+	require.Equal(t, 8688, systemTokens)
+	require.Equal(t, 25558, toolTokens)
+	require.Equal(t, 34246, systemTokens+toolTokens)
+}
+
+func TestNianzsModernClaudeHighEntropyMessageUsesProviderFraming(t *testing.T) {
+	messages := []any{map[string]any{
+		"role":    "user",
+		"content": strings.Repeat("请分析以下协议合规性并严格返回结果：测试编号2025-01。", 20),
+	}}
+	sanitized, imageTokens := nianzsSanitizeKiroImagesForTokenEstimate(context.Background(), messages)
+	canonical, err := nianzsCanonicalJSON(sanitized)
+	require.NoError(t, err)
+	legacy := anthropictokenizer.CountTokens(string(canonical)) + imageTokens + nianzsKiroTokensPerMessage
+	modern := anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + nianzsKiroTokensPerMessage
+	require.Greater(t, modern, legacy*2)
+	want := max(nianzsScaleModernClaudeTokens(modern, nianzsModernClaudeHighEntropyScaleNum, nianzsModernClaudeHighEntropyScaleDen)-nianzsModernClaudeMessageFramingTokens, legacy)
+	require.Equal(t, want, nianzsCountModernClaudeMessagesTokens(context.Background(), messages))
+}
+
+func TestNianzsModernClaudeCacheStopsAtExplicitSystemBreakpoint(t *testing.T) {
+	systemText := strings.Repeat("cacheable system guidance ", 6000)
+	body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"tools":[{"name":"lookup","description":"Look up one exact value.","input_schema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}],"messages":[{"role":"user","content":"uncached conversation tail"}]}`, systemText))
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-5", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+	cacheTokens := last.cumulativeTokens
+	require.Greater(t, cacheTokens, nianzsKiroCacheMinTokensOpus)
+	require.Less(t, cacheTokens, inputTokens)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	tools := payload["tools"].([]any)
+	systemBlocks := nianzsNormalizeKiroSystemBlocks(payload["system"])
+	expectedCacheTokens := nianzsCountModernClaudeToolDefinitionTokens(tools[0]) + nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0])
+	require.Equal(t, expectedCacheTokens, cacheTokens)
+}
+
+func TestNianzsMessagesCacheIdentityIncludesThinkingConfiguration(t *testing.T) {
+	prefix := strings.Repeat("stable cached prefix ", 3000)
+	bodyAdaptive := []byte(fmt.Sprintf(`{"model":"claude-opus-5","thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}]}`, prefix))
+	bodyPlain := []byte(fmt.Sprintf(`{"model":"claude-opus-5","system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hello"}]}`, prefix))
+	adaptive, ok := nianzsBuildKiroCacheProfile(context.Background(), bodyAdaptive, "claude-opus-5", nianzsEstimateKiroInputTokens(context.Background(), bodyAdaptive))
+	require.True(t, ok)
+	plain, ok := nianzsBuildKiroCacheProfile(context.Background(), bodyPlain, "claude-opus-5", nianzsEstimateKiroInputTokens(context.Background(), bodyPlain))
+	require.True(t, ok)
+	adaptiveLast := adaptive.lastCacheableBreakpoint()
+	plainLast := plain.lastCacheableBreakpoint()
+	require.NotNil(t, adaptiveLast)
+	require.NotNil(t, plainLast)
+	require.NotEqual(t, adaptive.blocks[adaptiveLast.blockIndex].prefixFingerprint, plain.blocks[plainLast.blockIndex].prefixFingerprint)
+}
+
+func TestNianzsEnsureClaudeResponseVary(t *testing.T) {
+	headers := http.Header{"Vary": []string{"Origin"}}
+	nianzsEnsureClaudeResponseVary(headers)
+	nianzsEnsureClaudeResponseVary(headers)
+	require.Equal(t, []string{"Origin", "Accept-Encoding"}, headers.Values("Vary"))
+}
+
 func TestNianzsKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	if got := anthropictokenizer.CountTokens("abc def"); got != 1 {
 		t.Fatalf("english tokens = %d, want 1", got)
@@ -361,6 +480,23 @@ func TestNianzsKiroTokenCountersMatchReferenceRules(t *testing.T) {
 	}
 	if nianzsKiroTokensPerTool != 150 {
 		t.Fatalf("tool tokens = %d, want 150", nianzsKiroTokensPerTool)
+	}
+	shortTool := map[string]any{"name": "short", "input_schema": map[string]any{"type": "object"}}
+	if got := nianzsCountKiroToolDefinitionTokens(shortTool); got != nianzsKiroTokensPerTool {
+		t.Fatalf("short tool tokens = %d, want floor %d", got, nianzsKiroTokensPerTool)
+	}
+	longTool := map[string]any{
+		"name":          "long",
+		"description":   strings.Repeat("Inspect repository files and report precise findings. ", 400),
+		"input_schema":  map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string", "description": strings.Repeat("Absolute path. ", 200)}}},
+		"cache_control": map[string]any{"type": "ephemeral"},
+	}
+	withoutCacheControl := nianzsStripKiroCacheControl(longTool)
+	canonical, err := nianzsCanonicalJSON(withoutCacheControl)
+	require.NoError(t, err)
+	wantLong := max(anthropictokenizer.CountTokens(string(canonical)), nianzsKiroTokensPerTool)
+	if got := nianzsCountKiroToolDefinitionTokens(longTool); got != wantLong || got <= nianzsKiroTokensPerTool {
+		t.Fatalf("long tool tokens = %d, want %d and greater than floor", got, wantLong)
 	}
 	if got := nianzsCountKiroMessageContentTokens(context.Background(), map[string]any{"thinking": "abc def"}); got != 1 {
 		t.Fatalf("thinking tokens = %d, want 1", got)

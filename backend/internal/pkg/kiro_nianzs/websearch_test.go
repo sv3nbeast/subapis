@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,55 @@ func TestReplaceWebSearchToolDescriptionUsesTypeFallback(t *testing.T) {
 	require.Equal(t, "The search query to execute", gjson.GetBytes(updated, "tools.0.input_schema.properties.query.description").String())
 	require.Equal(t, "query", gjson.GetBytes(updated, "tools.0.input_schema.required.0").String())
 	require.True(t, gjson.GetBytes(updated, "tools.0.input_schema.additionalProperties").Bool() == false)
+}
+
+func TestExtractSearchQueryAcceptsClaudeCodePrefixCaseInsensitively(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"perform a web search for the query: latest Go release"}]}`)
+	require.Equal(t, "latest Go release", ExtractSearchQuery(body))
+}
+
+func TestExtractSearchQueryFallsBackToUserText(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"latest Go release"}]}`)
+	require.Equal(t, "latest Go release", ExtractSearchQuery(body))
+}
+
+func TestExtractWebSearchToolConfigAndFilterDomains(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"web_search_20250305","max_uses":2,"allowed_domains":["go.dev","example.com"],"blocked_domains":["blog.example.com"]}]}`)
+	config := ExtractWebSearchToolConfig(body)
+	require.Equal(t, 2, config.MaxUses)
+	require.Equal(t, []string{"go.dev", "example.com"}, config.AllowedDomains)
+	require.Equal(t, []string{"blog.example.com"}, config.BlockedDomains)
+
+	filtered := ApplyWebSearchDomainFilters(&WebSearchResults{Results: []WebSearchResult{
+		{Title: "Go", URL: "https://pkg.go.dev/net/http"},
+		{Title: "Allowed", URL: "https://docs.example.com/page"},
+		{Title: "Blocked", URL: "https://blog.example.com/post"},
+		{Title: "Outside", URL: "https://outside.test"},
+	}}, config)
+	require.Len(t, filtered.Results, 2)
+	require.Equal(t, "Go", filtered.Results[0].Title)
+	require.Equal(t, "Allowed", filtered.Results[1].Title)
+}
+
+func TestRemoveWebSearchToolsKeepsOtherToolsAndNormalizesSearchHistory(t *testing.T) {
+	body := []byte(`{
+		"tools":[{"type":"web_search_20250305","name":"web_search"},{"name":"lookup","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"search Go"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tool_search","name":"web_search","input":{"query":"Go docs"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_search","content":"Found https://go.dev"}]}
+		]
+	}`)
+	updated, err := RemoveWebSearchTools(body)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), gjson.GetBytes(updated, "tools.#").Int())
+	require.Equal(t, "lookup", gjson.GetBytes(updated, "tools.0.name").String())
+	require.Equal(t, "text", gjson.GetBytes(updated, "messages.1.content.0.type").String())
+	require.Contains(t, gjson.GetBytes(updated, "messages.1.content.0.text").String(), "Go docs")
+	require.Equal(t, "text", gjson.GetBytes(updated, "messages.2.content.0.type").String())
+	require.Contains(t, gjson.GetBytes(updated, "messages.2.content.0.text").String(), "https://go.dev")
+	require.NotContains(t, string(updated), `"type":"tool_use"`)
+	require.NotContains(t, string(updated), `"type":"tool_result"`)
 }
 
 func TestInjectToolResultsClaudeAppendsMessages(t *testing.T) {
@@ -88,11 +138,201 @@ func TestInjectSearchIndicatorsInResponse(t *testing.T) {
 	require.Equal(t, "server_tool_use", gjson.GetBytes(updated, "content.0.type").String())
 	require.Equal(t, "srvtoolu_test", gjson.GetBytes(updated, "content.0.id").String())
 	require.Equal(t, "web_search_tool_result", gjson.GetBytes(updated, "content.1.type").String())
-	require.False(t, gjson.GetBytes(updated, "content.1.tool_use_id").Exists())
-	require.Equal(t, "result snippet", gjson.GetBytes(updated, "content.1.content.0.encrypted_content").String())
+	require.Equal(t, "direct", gjson.GetBytes(updated, "content.1.caller.type").String())
+	require.Equal(t, gjson.GetBytes(updated, "content.0.id").String(), gjson.GetBytes(updated, "content.1.tool_use_id").String())
+	opaqueContent := gjson.GetBytes(updated, "content.1.content.0.encrypted_content").String()
+	require.NotEmpty(t, opaqueContent)
+	require.NotEqual(t, "result snippet", opaqueContent)
+	envelope, ok := openWebSearchOpaquePayload(opaqueContent)
+	require.True(t, ok)
+	require.Equal(t, "content", envelope.Kind)
+	require.Equal(t, "result snippet", envelope.Snippet)
 	require.Equal(t, "null", gjson.GetBytes(updated, "content.1.content.0.page_age").Raw)
 	require.False(t, gjson.GetBytes(updated, "content.1.content.0.page_content").Exists())
 	require.Equal(t, "text", gjson.GetBytes(updated, "content.2.type").String())
+	require.Equal(t, "web_search_result_location", gjson.GetBytes(updated, "content.2.citations.0.type").String())
+	require.Equal(t, "https://go.dev", gjson.GetBytes(updated, "content.2.citations.0.url").String())
+	require.Equal(t, "Go", gjson.GetBytes(updated, "content.2.citations.0.title").String())
+	require.Equal(t, "result snippet", gjson.GetBytes(updated, "content.2.citations.0.cited_text").String())
+	require.NotEmpty(t, gjson.GetBytes(updated, "content.2.citations.0.encrypted_index").String())
+	require.Equal(t, int64(1), gjson.GetBytes(updated, "usage.server_tool_use.web_search_requests").Int())
+}
+
+func TestInjectSearchIndicatorsInResponseSegmentsCitationsWithTheirSourceLines(t *testing.T) {
+	const answer = "Summary\n\n- First [source](https://one.example)\n\nBridge\n\n- Second [source](https://two.example)\n\nConclusion"
+	response, err := json.Marshal(map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": answer}},
+		"usage":   map[string]any{},
+	})
+	require.NoError(t, err)
+	firstSnippet := "first result"
+	secondSnippet := "second result"
+	updated, err := InjectSearchIndicatorsInResponse(response, []SearchIndicator{{
+		ToolUseID: "srvtoolu_segmented",
+		Query:     "segmented citations",
+		Results: &WebSearchResults{Results: []WebSearchResult{
+			{Title: "One", URL: "https://one.example", Snippet: &firstSnippet},
+			{Title: "Two", URL: "https://two.example", Snippet: &secondSnippet},
+		}},
+	}})
+	require.NoError(t, err)
+
+	content := gjson.GetBytes(updated, "content").Array()
+	require.Len(t, content, 7)
+	var joined strings.Builder
+	for _, block := range content[2:] {
+		require.Equal(t, "text", block.Get("type").String())
+		joined.WriteString(block.Get("text").String())
+	}
+	require.Equal(t, answer, joined.String())
+	require.False(t, content[2].Get("citations").Exists())
+	require.Equal(t, "https://one.example", content[3].Get("citations.0.url").String())
+	require.False(t, content[4].Get("citations").Exists())
+	require.Equal(t, "https://two.example", content[5].Get("citations.0.url").String())
+	require.False(t, content[6].Get("citations").Exists())
+}
+
+func TestWebSearchOpaquePayloadIsEncryptedAndRandomized(t *testing.T) {
+	snippet := "private result text"
+	result := WebSearchResult{Title: "Example", URL: "https://example.com", Snippet: &snippet}
+	first := sealWebSearchOpaquePayload("content", result)
+	second := sealWebSearchOpaquePayload("content", result)
+
+	require.NotEqual(t, first, second)
+	require.NotContains(t, first, snippet)
+	opened, ok := openWebSearchOpaquePayload(first)
+	require.True(t, ok)
+	require.Equal(t, "content", opened.Kind)
+	require.Equal(t, result.Title, opened.Title)
+	require.Equal(t, result.URL, opened.URL)
+	require.Equal(t, snippet, opened.Snippet)
+
+	wire, err := decodeWebSearchOpaqueBase64(first)
+	require.NoError(t, err)
+	outerBytes, outerVarints, ok := parseWebSearchOpaqueProto(wire)
+	require.True(t, ok)
+	require.Equal(t, uint64(0), outerVarints[3])
+	require.Equal(t, byte(0x12), wire[0], "opaque envelope must begin with protobuf field 2")
+	innerBytes, _, ok := parseWebSearchOpaqueProto(outerBytes[2])
+	require.True(t, ok)
+	require.Len(t, innerBytes[2], 12)
+	require.Len(t, innerBytes[3], 12)
+	require.Len(t, innerBytes[4], 48)
+	require.NotEmpty(t, innerBytes[5])
+	headerBytes, headerVarints, ok := parseWebSearchOpaqueProto(innerBytes[1])
+	require.True(t, ok)
+	require.Equal(t, uint64(18), headerVarints[1])
+	require.Equal(t, uint64(2), headerVarints[3])
+	require.Len(t, headerBytes[4], 36)
+	require.Equal(t, 4, strings.Count(string(headerBytes[4]), "-"))
+}
+
+func TestWebSearchOpaqueValuesShareResponseIDAndDistinguishContentFromIndex(t *testing.T) {
+	snippet := "same search result"
+	results := &WebSearchResults{Results: []WebSearchResult{{
+		Title: "Example", URL: "https://example.com", Snippet: &snippet,
+	}}}
+	content := buildSearchResultContent(results)
+	citations := buildWebSearchCitations(
+		[]SearchIndicator{{Results: results}}, "See https://example.com",
+	)
+	require.Len(t, content, 1)
+	require.Len(t, citations, 1)
+
+	contentID, contentKind, contentPayloadBytes := requireWebSearchOpaqueShapeForTest(
+		t, content[0]["encrypted_content"].(string),
+	)
+	indexID, indexKind, indexPayloadBytes := requireWebSearchOpaqueShapeForTest(
+		t, citations[0]["encrypted_index"].(string),
+	)
+	require.Equal(t, contentID, indexID)
+	require.Equal(t, uint64(0), contentKind)
+	require.Equal(t, uint64(4), indexKind)
+	require.Greater(t, contentPayloadBytes, 19)
+	require.Equal(t, 19, indexPayloadBytes)
+}
+
+func requireWebSearchOpaqueShapeForTest(t *testing.T, value string) (string, uint64, int) {
+	t.Helper()
+	wire, err := decodeWebSearchOpaqueBase64(value)
+	require.NoError(t, err)
+	outerBytes, outerVarints, ok := parseWebSearchOpaqueProto(wire)
+	require.True(t, ok)
+	innerBytes, _, ok := parseWebSearchOpaqueProto(outerBytes[2])
+	require.True(t, ok)
+	headerBytes, _, ok := parseWebSearchOpaqueProto(innerBytes[1])
+	require.True(t, ok)
+	return string(headerBytes[4]), outerVarints[3], len(innerBytes[5])
+}
+
+func TestBuildWebSearchResultBlockFormatsPublishedDate(t *testing.T) {
+	published := int64(1710000000000)
+	block := buildWebSearchResultBlock(WebSearchResult{
+		Title: "Example", URL: "https://example.com", PublishedDate: &published,
+	})
+	require.Equal(t, "March 9, 2024", block["page_age"])
+}
+
+func TestBuildWebSearchCitationsPrefersURLsUsedInAnswerAndCapsQuotedText(t *testing.T) {
+	longSnippet := strings.Repeat("界", 180)
+	otherSnippet := "other"
+	searches := []SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{
+		{Title: "Other", URL: "https://other.example", Snippet: &otherSnippet},
+		{Title: "Matched", URL: "https://matched.example", Snippet: &longSnippet},
+	}}}}
+
+	citations := buildWebSearchCitations(searches, "See https://matched.example for details")
+	require.Len(t, citations, 1)
+	require.Equal(t, "https://matched.example", citations[0]["url"])
+	require.Len(t, []rune(citations[0]["cited_text"].(string)), 150)
+	require.NotEmpty(t, citations[0]["encrypted_index"])
+}
+
+func TestNormalizeWebSearchHistoryForKiroRestoresSealedResultAndRemovesServerBlocks(t *testing.T) {
+	snippet := "official documentation"
+	result := WebSearchResult{Title: "Go", URL: "https://go.dev", Snippet: &snippet}
+	serverID := "srvtoolu_01history"
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-opus-5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "search go"},
+			map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "server_tool_use", "id": serverID, "name": "web_search", "input": map[string]any{"query": "go"}},
+				map[string]any{"type": "web_search_tool_result", "tool_use_id": serverID, "content": []any{buildWebSearchResultBlock(result)}},
+				map[string]any{"type": "text", "text": "Go is documented here.", "citations": buildWebSearchCitations([]SearchIndicator{{Results: &WebSearchResults{Results: []WebSearchResult{result}}}}, "")},
+			}},
+			map[string]any{"role": "user", "content": "continue"},
+		},
+		"tools": []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}},
+	})
+	require.NoError(t, err)
+
+	normalized, err := NormalizeWebSearchHistoryForKiro(body)
+	require.NoError(t, err)
+	require.NotContains(t, string(normalized), `"server_tool_use"`)
+	require.NotContains(t, string(normalized), `"web_search_tool_result"`)
+	require.NotContains(t, string(normalized), `"citations"`)
+	require.Contains(t, string(normalized), "Go is documented here.")
+	require.Contains(t, gjson.GetBytes(normalized, "messages.1.content.1.text").String(), "<web_search_history>")
+	require.Contains(t, string(normalized), "official documentation")
+	require.Contains(t, string(normalized), "https://go.dev")
+}
+
+func TestInjectSearchIndicatorsInResponse_DoesNotBillFailedSearch(t *testing.T) {
+	response := []byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	updated, err := InjectSearchIndicatorsInResponse(response, []SearchIndicator{
+		{ToolUseID: "srvtoolu_failed", Query: "unavailable", Results: nil, ErrorCode: WebSearchErrorUnavailable},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "web_search_tool_result_error", gjson.GetBytes(updated, "content.1.content.type").String())
+	require.Equal(t, "direct", gjson.GetBytes(updated, "content.1.caller.type").String())
+	require.Equal(t, WebSearchErrorUnavailable, gjson.GetBytes(updated, "content.1.content.error_code").String())
+	require.False(t, gjson.GetBytes(updated, "usage.server_tool_use").Exists())
+}
+
+func TestNormalizeWebSearchToolResultErrorCodeRejectsProviderValues(t *testing.T) {
+	require.Equal(t, WebSearchErrorQueryTooLong, normalizeWebSearchToolResultErrorCode(" QUERY_TOO_LONG "))
+	require.Empty(t, normalizeWebSearchToolResultErrorCode("provider_timeout"))
 }
 
 func TestParseSearchResults_PreservesExtendedFields(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
@@ -87,9 +88,19 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if next := account.GetMappedModel(originalModel); next != "" {
 		mappedModel = next
 	}
-	body := parsed.Body.Bytes()
+	clientBody := parsed.Body.Bytes()
+	body := clientBody
 	if mappedModel != originalModel {
 		body = s.replaceModelInBody(body, mappedModel)
+	}
+	if s.debugBodyCaptureEnabled(c) {
+		s.debugLogGatewaySnapshot("KIRO_CLIENT_ORIGINAL", c.Request.Header, clientBody, map[string]string{
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"mapped_model": mappedModel,
+			"model":        originalModel,
+			"stream":       strconv.FormatBool(parsed.Stream),
+			"user_id":      strconv.FormatInt(s.ginUserIDForDebug(c), 10),
+		})
 	}
 	configureKiroNativeToolProgressGuard(parsed, mappedModel, hasKiroNativeToolProgressInput(body), IsOpenAIKiroBridgeModel(originalModel))
 	logger.L().Debug("gateway forward_kiro_messages: request prepared",
@@ -108,7 +119,6 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		parsedForEmulation.Model = mappedModel
 		return s.handleWebSearchEmulation(ctx, c, account, parsedForEmulation)
 	}
-
 	if parsed.Stream {
 		resp, _, err := s.openKiroAnthropicStreamResponseNianzs(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil)
 		if err != nil {
@@ -175,6 +185,54 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if tokenType != "oauth" && tokenType != "apikey" {
 		return nil, fmt.Errorf("kiro requires oauth or apikey token, got %s", tokenType)
 	}
+	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(body) {
+		codeResult, codeErr := s.executeKiroCodeExecutionNianzs(
+			ctx, account, parsed, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header, runner,
+		)
+		switch {
+		case errors.Is(codeErr, nianzsErrKiroCodeExecutionFallback):
+		case codeErr == nil:
+			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
+			c.Header("Content-Type", "application/json")
+			nianzsEnsureClaudeResponseVary(c.Writer.Header())
+			requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
+			c.Data(http.StatusOK, "application/json", codeResult.ResponseBody)
+			return &ForwardResult{
+				RequestID:     requestID,
+				Usage:         codeResult.Usage,
+				Model:         originalModel,
+				UpstreamModel: upstreamModel,
+				Stream:        false,
+				Duration:      time.Since(startTime),
+			}, nil
+		default:
+			var httpErr *nianzsKiroCodeExecutionHTTPError
+			if errors.As(codeErr, &httpErr) && httpErr.Response != nil {
+				return nil, s.handleKiroHTTPErrorNianzs(ctx, httpErr.Response, c, account, mappedModel, body)
+			}
+			var failoverErr *UpstreamFailoverError
+			if errors.As(codeErr, &failoverErr) {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "failover",
+					Message:            sanitizeUpstreamErrorMessage(codeErr.Error()),
+				})
+				return nil, failoverErr
+			}
+			safeErr := sanitizeUpstreamErrorMessage(codeErr.Error())
+			c.JSON(http.StatusBadGateway, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "api_error",
+					"message": "Upstream request failed",
+				},
+			})
+			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		}
+	}
 	if isOnlyWebSearchToolInBody(body) {
 		webSearchResult, webSearchErr := s.executeKiroWebSearchNianzs(ctx, account, parsed.Group, body, mappedModel, originalModel, token, c.Request.Header)
 		switch {
@@ -182,12 +240,11 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		case webSearchErr == nil:
 			upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
 			c.Header("Content-Type", "application/json")
-			claudeReqID := nianzskiro.NewClaudeRequestID()
-			c.Header("x-request-id", claudeReqID)
-			c.Header("request-id", claudeReqID)
+			nianzsEnsureClaudeResponseVary(c.Writer.Header())
+			requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 			c.Data(http.StatusOK, "application/json", webSearchResult.ResponseBody)
 			return &ForwardResult{
-				RequestID:     webSearchResult.RequestID,
+				RequestID:     requestID,
 				Usage:         webSearchResult.Usage,
 				Model:         originalModel,
 				UpstreamModel: upstreamModel,
@@ -254,6 +311,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	}
 
 	cachePlan := s.prepareKiroCacheEmulationUsageNianzs(ctx, account, parsed.Group, body, mappedModel, inputTokens)
+	requestCtx.RequireTerminalEvent = true
 	cacheUsage := cachePlan.result()
 	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 	requestCtx.EstimatedInputTokens = inputTokens
@@ -295,12 +353,23 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
 		requestCtx.EstimatedInputTokens = inputTokens
 	}
+	// A 2xx response only proves that Kiro accepted the request. Persist the
+	// emulated prefix after the Event Stream has supplied terminal evidence and
+	// the complete response has been parsed.
+	cachePlan.commit()
+	if schema, strict := nianzsKiroStructuredOutputSchema(body); strict {
+		var normalized bool
+		parseResult.ResponseBody, normalized = nianzsNormalizeStructuredOutputResponseJSONWithStatus(parseResult.ResponseBody, schema)
+		logger.L().Debug("kiro strict structured output completed",
+			zap.Int64("account_id", account.ID),
+			zap.Bool("normalized", normalized),
+			zap.Bool("stream", false),
+		)
+	}
 
 	c.Header("Content-Type", "application/json")
-	requestID := nianzsBuildKiroRequestID(resp)
-	claudeReqID := nianzskiro.NewClaudeRequestID()
-	c.Header("x-request-id", claudeReqID)
-	c.Header("request-id", claudeReqID)
+	nianzsEnsureClaudeResponseVary(c.Writer.Header())
+	requestID := nianzsSetClaudeResponseRequestID(c.Writer.Header())
 	c.Data(http.StatusOK, "application/json", parseResult.ResponseBody)
 
 	upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
@@ -332,14 +401,59 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	defer releaseUpstreamCtx()
 
 	inputTokens := nianzsEstimateKiroInputTokens(ctx, anthropicBody)
+	if runner := s.nianzsKiroCodeExecutionRunnerForRequest(); runner != nil && nianzskiro.IsOnlyLegacyCodeExecutionTool(anthropicBody) {
+		plan := cachePlanOverride
+		if plan == nil {
+			plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
+		}
+		preparedBody, prepareErr := nianzskiro.ReplaceLegacyCodeExecutionTool(anthropicBody)
+		if prepareErr != nil {
+			return nil, inputTokens, prepareErr
+		}
+		initialResponse, initialRequestCtx, err := s.executeKiroUpstreamWithParsedNianzs(
+			upstreamCtx, account, parsed, preparedBody, mappedModel, requestModel, token, headers,
+		)
+		if err != nil {
+			return nil, inputTokens, err
+		}
+		if initialResponse.StatusCode < 200 || initialResponse.StatusCode >= 300 {
+			return initialResponse, inputTokens, nil
+		}
+		// The first upstream request is accepted before the pipe is exposed. The
+		// cache plan is committed only after its Event Stream reaches a verified
+		// terminal event inside streamKiroCodeExecutionAsAnthropicNianzs.
+		pr, pw := io.Pipe()
+		wrappedHeaders := make(http.Header)
+		wrappedHeaders.Set("Content-Type", "text/event-stream")
+		nianzsEnsureClaudeResponseVary(wrappedHeaders)
+		nianzsSetClaudeResponseRequestID(wrappedHeaders)
+		go func() {
+			streamErr := s.streamKiroCodeExecutionAsAnthropicNianzs(
+				upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel,
+				token, inputTokens, headers, pw, plan, runner, initialResponse, initialRequestCtx,
+			)
+			if streamErr != nil {
+				_ = pw.CloseWithError(streamErr)
+				return
+			}
+			_ = pw.Close()
+		}()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     wrappedHeaders,
+			Body:       pr,
+		}, inputTokens, nil
+	}
 	if isOnlyWebSearchToolInBody(anthropicBody) {
 		plan := cachePlanOverride
 		if plan == nil {
 			plan = s.prepareKiroCacheEmulationUsageNianzs(ctx, account, group, anthropicBody, mappedModel, inputTokens)
 		}
 		pr, pw := io.Pipe()
-		headers := make(http.Header)
-		headers.Set("Content-Type", "text/event-stream")
+		wrappedHeaders := make(http.Header)
+		wrappedHeaders.Set("Content-Type", "text/event-stream")
+		nianzsEnsureClaudeResponseVary(wrappedHeaders)
+		nianzsSetClaudeResponseRequestID(wrappedHeaders)
 		go func() {
 			streamErr := s.streamKiroWebSearchAsAnthropicNianzs(upstreamCtx, account, anthropicBody, mappedModel, requestModel, token, inputTokens, headers, pw, plan)
 			if streamErr != nil {
@@ -350,7 +464,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		}()
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     headers,
+			Header:     wrappedHeaders,
 			Body:       pr,
 		}, inputTokens, nil
 	}
@@ -373,23 +487,42 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	// 仅在 translator 确认完整终态后提交缓存前缀；2xx 本身不代表上游
 	// 生成已被接受，内部编排泄漏/截断仍可能需要丢弃并重试。
 	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
+	requestCtx.RequireTerminalEvent = true
 
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()
 	wrappedHeaders.Set("Content-Type", "text/event-stream")
-	claudeReqID := nianzskiro.NewClaudeRequestID()
-	wrappedHeaders.Set("x-request-id", claudeReqID)
-	wrappedHeaders.Set("request-id", claudeReqID)
+	nianzsEnsureClaudeResponseVary(wrappedHeaders)
+	nianzsSetClaudeResponseRequestID(wrappedHeaders)
 
+	structuredSchema, strictStructuredOutput := nianzsKiroStructuredOutputSchema(anthropicBody)
 	go func() {
+		defer func() { _ = resp.Body.Close() }()
+		streamWriter := io.Writer(pw)
+		var structuredWriter *nianzsStructuredOutputSSEWriter
+		if strictStructuredOutput {
+			// Kiro does not expose constrained decoding. For the object schema
+			// shape supported by Anthropic, incrementally project each completed
+			// member so extra fields are removed without full-response buffering.
+			if next, ok := newNianzsStructuredOutputSSEWriter(pw, structuredSchema); ok {
+				structuredWriter = next
+				streamWriter = structuredWriter
+			}
+		}
 		currentResp := resp
 		currentRequestCtx := requestCtx
 		nativeRetryUsed := false
 		for attempt := 0; ; attempt++ {
 			currentRequestCtx.BodyAttempt = attempt
-			_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, currentResp.Body, pw, requestModel, inputTokens, currentRequestCtx)
+			_, streamErr := nianzskiro.StreamEventStreamAsAnthropicWithContext(upstreamCtx, currentResp.Body, streamWriter, requestModel, inputTokens, currentRequestCtx)
 			_ = currentResp.Body.Close()
 			if streamErr == nil {
+				if structuredWriter != nil {
+					if finishErr := structuredWriter.Finish(); finishErr != nil {
+						_ = pw.CloseWithError(finishErr)
+						return
+					}
+				}
 				plan.commit()
 				_ = pw.Close()
 				return
@@ -423,6 +556,36 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		Header:     wrappedHeaders,
 		Body:       pr,
 	}, inputTokens, nil
+}
+
+func nianzsEnsureClaudeResponseVary(headers http.Header) {
+	for _, value := range headers.Values("Vary") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "Accept-Encoding") {
+				return
+			}
+		}
+	}
+	headers.Add("Vary", "Accept-Encoding")
+}
+
+func nianzsSetClaudeResponseRequestID(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	// Native Anthropic Messages responses currently expose an RFC 4122 UUID in
+	// x-request-id. Keep this transport-level identifier distinct from the
+	// msg_01... identifier inside the response body. A synthetic req_01...
+	// value is structurally plausible, but differs from the successful native
+	// Claude route and is observable by protocol-fingerprint probes.
+	requestID := uuid.NewString()
+	headers.Set("x-request-id", requestID)
+	headers.Del("request-id")
+	// x-client-request-id is an upstream Kiro/AWS echo, not an Anthropic
+	// Messages response header. Keeping it exposes the provider transport and
+	// can make a valid Claude-compatible response fail protocol clients.
+	headers.Del("x-client-request-id")
+	return requestID
 }
 
 func (s *GatewayService) executeKiroUpstreamNianzs(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header) (*http.Response, nianzskiro.KiroRequestContext, error) {

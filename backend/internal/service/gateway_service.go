@@ -1032,6 +1032,7 @@ type GatewayService struct {
 	balanceNotifyService       *BalanceNotifyService
 	claudeCodeCompanionProbe   *ClaudeCodeCompanionProbeService
 	userPlatformQuotaRepo      UserPlatformQuotaRepository
+	kiroCodeExecutionRunner    nianzsKiroCodeExecutionRunner
 	// anthropicStableCanary is an in-process D1 coordinator. It is deliberately
 	// not shared with the normal scheduler or the unfinished multi-user V1
 	// admission state.

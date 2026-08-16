@@ -36,6 +36,24 @@ const (
 	// 缓存粒度，不应随 default 一起调整。见 nianzsKiroMinimumCacheableTokens。
 	nianzsKiroCacheMinTokensGPT        = 1024
 	nianzsKiroCachePrefixLookbackLimit = 10
+
+	// Claude 4.7+ changed its input accounting substantially, especially for
+	// tool schemas. These constants are calibrated against provider-native
+	// Messages usage: system text uses the modern text vocabulary, while every
+	// tool also carries a sizeable provider envelope that is absent from the
+	// client JSON. Keep this model-gated so the pinned 4.6-and-earlier cache
+	// accounting remains unchanged.
+	nianzsModernClaudeSystemScaleNumerator   = 12579
+	nianzsModernClaudeSystemScaleDenominator = 10000
+	nianzsModernClaudeSystemBlockOverhead    = 3
+	nianzsModernClaudeToolScaleNumerator     = 9299
+	nianzsModernClaudeToolScaleDenominator   = 10000
+	nianzsModernClaudeToolEnvelopeTokens     = 337
+	nianzsModernClaudeCachedToolBoundaryNum  = 5
+	nianzsModernClaudeCachedToolBoundaryDen  = 2
+	nianzsModernClaudeHighEntropyScaleNum    = 955
+	nianzsModernClaudeHighEntropyScaleDen    = 1000
+	nianzsModernClaudeMessageFramingTokens   = 4
 )
 
 type nianzsKiroCacheEmulationUsage struct {
@@ -288,13 +306,18 @@ func nianzsBuildKiroCacheProfile(ctx context.Context, body []byte, model string,
 	if len(blocks) == 0 {
 		return nil, false
 	}
+	if nianzsUsesModernClaudeInputAccounting(model) {
+		nianzsApplyModernClaudeCacheBlockTokens(ctx, blocks)
+	}
 	totalTokens := inputTokens
 	if totalTokens <= 0 {
 		totalTokens = nianzsCountKiroInputTokensFromPayload(ctx, payload)
 	}
 	prelude := map[string]any{
-		"model":       payload["model"],
-		"tool_choice": payload["tool_choice"],
+		"model":         payload["model"],
+		"tool_choice":   payload["tool_choice"],
+		"thinking":      payload["thinking"],
+		"output_config": payload["output_config"],
 	}
 	return nianzsBuildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
 }
@@ -439,7 +462,7 @@ func nianzsFlattenKiroCacheBlocks(ctx context.Context, payload map[string]any) [
 			value := nianzsStripKiroCacheControl(tool)
 			blocks = append(blocks, nianzsKiroPendingBlock{
 				value:  map[string]any{"kind": "tool", "tool_index": toolIndex, "tool": value},
-				tokens: nianzsKiroTokensPerTool, breakpointTTL: nianzsExtractKiroCacheTTL(tool),
+				tokens: nianzsCountKiroToolDefinitionTokens(tool), breakpointTTL: nianzsExtractKiroCacheTTL(tool),
 			})
 		}
 	}
@@ -461,17 +484,19 @@ func nianzsFlattenKiroCacheBlocks(ctx context.Context, payload map[string]any) [
 			mi := messageIndex
 			block := map[string]any{"type": "text", "text": typed}
 			blocks = append(blocks, nianzsKiroPendingBlock{
-				value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": 0, "block": block},
-				tokens: nianzsCountKiroMessageContentTokens(ctx, block), messageIndex: &mi, isMessageEnd: true,
+				value:        map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": 0, "block": block},
+				tokens:       nianzsCountKiroMessageContentTokens(ctx, block),
+				messageIndex: &mi,
 			})
 		case []any:
-			lastBlockIndex := len(typed) - 1
 			for blockIndex, rawBlock := range typed {
 				mi := messageIndex
 				value := nianzsStripKiroCacheControl(rawBlock)
 				blocks = append(blocks, nianzsKiroPendingBlock{
-					value:  map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": blockIndex, "block": value},
-					tokens: nianzsCountKiroMessageContentTokens(ctx, rawBlock), breakpointTTL: nianzsExtractKiroCacheTTL(rawBlock), messageIndex: &mi, isMessageEnd: blockIndex == lastBlockIndex,
+					value:         map[string]any{"kind": "message", "message_index": messageIndex, "role": role, "block_index": blockIndex, "block": value},
+					tokens:        nianzsCountKiroMessageContentTokens(ctx, rawBlock),
+					breakpointTTL: nianzsExtractKiroCacheTTL(rawBlock),
+					messageIndex:  &mi,
 				})
 			}
 		}
@@ -1014,6 +1039,10 @@ func nianzsCountKiroInputTokensFromPayload(ctx context.Context, payload map[stri
 	if payload == nil {
 		return 1
 	}
+	model, _ := payload["model"].(string)
+	if nianzsUsesModernClaudeInputAccounting(model) {
+		return nianzsCountModernClaudeInputTokensFromPayload(ctx, payload, model)
+	}
 	tokens := 0
 	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
 		tokens += nianzsCountKiroSystemBlockTokens(block)
@@ -1029,9 +1058,201 @@ func nianzsCountKiroInputTokensFromPayload(ctx context.Context, payload map[stri
 		tokens += len(messages) * nianzsKiroTokensPerMessage
 	}
 	if tools, ok := payload["tools"].([]any); ok {
-		tokens += len(tools) * nianzsKiroTokensPerTool
+		for _, tool := range tools {
+			tokens += nianzsCountKiroToolDefinitionTokens(tool)
+		}
 	}
 	return max(tokens, 1)
+}
+
+func nianzsUsesModernClaudeInputAccounting(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	for _, prefix := range []string{
+		"claude-opus-4-7", "claude-opus-4.7",
+		"claude-opus-4-8", "claude-opus-4.8",
+		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5",
+		"claude-fable-5", "claude-mythos-5",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func nianzsScaleModernClaudeTokens(tokens, numerator, denominator int) int {
+	if tokens <= 0 || numerator <= 0 || denominator <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(tokens) * float64(numerator) / float64(denominator)))
+}
+
+func nianzsCountModernClaudeSystemBlockTokens(value any) int {
+	legacy := nianzsCountKiroSystemBlockTokens(value)
+	if legacy <= 0 {
+		return 0
+	}
+	return nianzsScaleModernClaudeTokens(
+		legacy,
+		nianzsModernClaudeSystemScaleNumerator,
+		nianzsModernClaudeSystemScaleDenominator,
+	) + nianzsModernClaudeSystemBlockOverhead
+}
+
+func nianzsCountModernClaudeToolDefinitionTokens(value any) int {
+	canonical, err := nianzsCanonicalJSON(nianzsStripKiroCacheControl(value))
+	if err != nil {
+		return nianzsModernClaudeToolEnvelopeTokens
+	}
+	raw := anthropictokenizer.CountTokens(string(canonical))
+	return nianzsScaleModernClaudeTokens(
+		raw,
+		nianzsModernClaudeToolScaleNumerator,
+		nianzsModernClaudeToolScaleDenominator,
+	) + nianzsModernClaudeToolEnvelopeTokens
+}
+
+func nianzsCountModernClaudeMessageContentTokens(ctx context.Context, value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case string:
+		return anthropictokenizer.EstimateModernClaudeTextTokens(typed)
+	case []any:
+		total := 0
+		for _, item := range typed {
+			total += nianzsCountModernClaudeMessageContentTokens(ctx, item)
+		}
+		return total
+	case map[string]any:
+		if mediaType, source, ok := nianzsKiroImageTokenSource(typed); ok {
+			return nianzskiro.EstimateImageTokens(ctx, mediaType, source)
+		}
+		if text, ok := typed["text"].(string); ok {
+			return anthropictokenizer.EstimateModernClaudeTextTokens(text)
+		}
+		if thinking, ok := typed["thinking"].(string); ok {
+			return anthropictokenizer.EstimateModernClaudeTextTokens(thinking)
+		}
+		if input, ok := typed["input"]; ok {
+			canonical, err := nianzsCanonicalJSON(input)
+			if err == nil {
+				return anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical))
+			}
+		}
+		if content, ok := typed["content"]; ok {
+			return nianzsCountModernClaudeMessageContentTokens(ctx, content)
+		}
+	}
+	return 0
+}
+
+func nianzsCountModernClaudeMessagesTokens(ctx context.Context, messages []any) int {
+	if len(messages) == 0 {
+		return 0
+	}
+	sanitizedMessages, imageTokens := nianzsSanitizeKiroImagesForTokenEstimate(ctx, messages)
+	canonical, err := nianzsCanonicalJSON(sanitizedMessages)
+	if err != nil {
+		return len(messages) * nianzsKiroTokensPerMessage
+	}
+	legacy := anthropictokenizer.CountTokens(string(canonical)) + imageTokens + len(messages)*nianzsKiroTokensPerMessage
+	modern := anthropictokenizer.EstimateModernClaudeTextTokens(string(canonical)) + imageTokens + len(messages)*nianzsKiroTokensPerMessage
+	// Claude Code's nonce-heavy metadata is the main case where the modern
+	// tokenizer is several times larger than the legacy vocabulary. Provider
+	// usage is consistently just below the raw modern estimate because the
+	// Messages framing is not tokenized as client JSON. Keep ordinary prose on
+	// the established estimate and only trim this high-entropy branch.
+	if modern > legacy*2 {
+		adjusted := nianzsScaleModernClaudeTokens(
+			modern,
+			nianzsModernClaudeHighEntropyScaleNum,
+			nianzsModernClaudeHighEntropyScaleDen,
+		) - nianzsModernClaudeMessageFramingTokens
+		return max(adjusted, legacy)
+	}
+	return legacy
+}
+
+func nianzsCountModernClaudeInputTokensFromPayload(ctx context.Context, payload map[string]any, model string) int {
+	tokens := 0
+	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
+		tokens += nianzsCountModernClaudeSystemBlockTokens(block)
+	}
+	tools, _ := payload["tools"].([]any)
+	for _, tool := range tools {
+		tokens += nianzsCountModernClaudeToolDefinitionTokens(tool)
+	}
+	messages, _ := payload["messages"].([]any)
+	tokens += nianzsCountModernClaudeMessagesTokens(ctx, messages)
+	tokens += nianzsModernClaudeCachedToolBoundaryTokens(payload, model)
+	return max(tokens, 1)
+}
+
+func nianzsModernClaudeCachedToolBoundaryTokens(payload map[string]any, model string) int {
+	tools, _ := payload["tools"].([]any)
+	if len(tools) == 0 {
+		return 0
+	}
+	cachedTools := 0
+	for index, tool := range tools {
+		if nianzsExtractKiroCacheTTL(tool) != nil {
+			cachedTools = index + 1
+		}
+	}
+	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
+		if nianzsExtractKiroCacheTTL(block) != nil {
+			cachedTools = len(tools)
+		}
+	}
+	messages, _ := payload["messages"].([]any)
+	for _, rawMessage := range messages {
+		message, _ := rawMessage.(map[string]any)
+		if content, ok := message["content"].([]any); ok {
+			for _, block := range content {
+				if nianzsExtractKiroCacheTTL(block) != nil {
+					cachedTools = len(tools)
+				}
+			}
+		}
+	}
+	if cachedTools == 0 {
+		return 0
+	}
+	cacheableEstimate := 0
+	for _, tool := range tools[:cachedTools] {
+		cacheableEstimate += nianzsCountModernClaudeToolDefinitionTokens(tool)
+	}
+	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
+		cacheableEstimate += nianzsCountModernClaudeSystemBlockTokens(block)
+	}
+	if cacheableEstimate < nianzsKiroMinimumCacheableTokens(model) {
+		return 0
+	}
+	return int(math.Round(float64(cachedTools*nianzsModernClaudeCachedToolBoundaryNum) / float64(nianzsModernClaudeCachedToolBoundaryDen)))
+}
+
+func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, blocks []nianzsKiroPendingBlock) {
+	for index := range blocks {
+		wrapper, _ := blocks[index].value.(map[string]any)
+		kind, _ := wrapper["kind"].(string)
+		switch kind {
+		case "tool":
+			blocks[index].tokens = nianzsCountModernClaudeToolDefinitionTokens(wrapper["tool"])
+		case "system":
+			blocks[index].tokens = nianzsCountModernClaudeSystemBlockTokens(wrapper["block"])
+		case "message":
+			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokens(ctx, wrapper["block"])
+		}
+	}
+}
+
+func nianzsCountKiroToolDefinitionTokens(value any) int {
+	canonical, err := nianzsCanonicalJSON(nianzsStripKiroCacheControl(value))
+	if err != nil {
+		return nianzsKiroTokensPerTool
+	}
+	return max(anthropictokenizer.CountTokens(string(canonical)), nianzsKiroTokensPerTool)
 }
 
 func nianzsCountKiroSystemBlockTokens(value any) int {

@@ -196,11 +196,11 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 				nextContentBlockIndex = maxIndex + 1
 			}
 			query = analysis.WebSearchQuery
-			if strings.TrimSpace(analysis.WebSearchToolUseID) == "" {
-				currentToolUseID = "srvtoolu_" + kiropkg.GenerateToolUseID()
-			} else {
-				currentToolUseID = analysis.WebSearchToolUseID
-			}
+			// The upstream custom-tool ID (typically toolu_bdrk_*) belongs to
+			// Kiro's private namespace. Generate a fresh Anthropic server-tool ID
+			// for the next synthetic request/result pair instead of forwarding or
+			// reusing it in the client-visible protocol.
+			currentToolUseID = "srvtoolu_" + kiropkg.GenerateToolUseID()
 			continue
 		}
 
@@ -245,7 +245,7 @@ func (s *GatewayService) openKiroWebSearchStreamResponse(
 	rawReader, rawWriter := io.Pipe()
 	clientReader, clientWriter := io.Pipe()
 	ready := make(chan error, 1)
-	gateDone := startKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytesForRequest(streamCtx, groupID), s.kiroSemanticGateMaxLineSize(), ready)
+	gateDone := startKiroFirstSemanticGate(streamCtx, rawReader, clientWriter, s.kiroPreSemanticBufferBytes(groupID), s.kiroSemanticGateMaxLineSize(), ready)
 
 	requestID := kiropkg.NewClaudeRequestID()
 	accountID := int64(0)
@@ -418,7 +418,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			requestID = buildKiroRequestID(resp)
 		}
 
-		nextToolUseID, nextQuery, hasNext := kiropkg.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
+		_, nextQuery, hasNext := kiropkg.ExtractWebSearchToolUseFromResponse(parseResult.ResponseBody)
 		if !hasNext || strings.TrimSpace(nextQuery) == "" || iteration+1 >= kiroMaxWebSearchIterations {
 			finalBody, injectErr := kiropkg.InjectSearchIndicatorsInResponse(parseResult.ResponseBody, searches)
 			if injectErr == nil {
@@ -433,10 +433,9 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 		}
 
 		query = nextQuery
-		if strings.TrimSpace(nextToolUseID) == "" {
-			nextToolUseID = "srvtoolu_" + kiropkg.GenerateToolUseID()
-		}
-		currentToolUseID = nextToolUseID
+		// Never reuse a private Kiro custom-tool ID as an Anthropic server-tool
+		// ID when constructing the next search turn.
+		currentToolUseID = "srvtoolu_" + kiropkg.GenerateToolUseID()
 	}
 
 	return nil, fmt.Errorf("kiro web search exceeded max iterations")

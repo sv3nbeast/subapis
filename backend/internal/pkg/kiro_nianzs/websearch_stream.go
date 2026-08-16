@@ -13,30 +13,12 @@ type BufferedStreamResult struct {
 	WebSearchToolUseIndex int
 }
 
-func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchResults, startIndex int) [][]byte {
-	searchContent := make([]map[string]any, 0)
-	if results != nil {
-		for _, result := range results.Results {
-			snippet := ""
-			if result.Snippet != nil {
-				snippet = strings.TrimSpace(*result.Snippet)
-			}
-			searchContent = append(searchContent, map[string]any{
-				"type":              "web_search_result",
-				"title":             result.Title,
-				"url":               result.URL,
-				"encrypted_content": snippet,
-				"page_age":          nil,
-			})
-		}
-	}
-
+func GenerateSearchToolUseEvents(query, toolUseID string, index int) [][]byte {
 	inputJSON, _ := json.Marshal(map[string]string{"query": query})
-
 	events := []map[string]any{
 		{
 			"type":  "content_block_start",
-			"index": startIndex,
+			"index": index,
 			"content_block": map[string]any{
 				"type":  "server_tool_use",
 				"id":    toolUseID,
@@ -46,7 +28,7 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 		},
 		{
 			"type":  "content_block_delta",
-			"index": startIndex,
+			"index": index,
 			"delta": map[string]any{
 				"type":         "input_json_delta",
 				"partial_json": string(inputJSON),
@@ -54,19 +36,7 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 		},
 		{
 			"type":  "content_block_stop",
-			"index": startIndex,
-		},
-		{
-			"type":  "content_block_start",
-			"index": startIndex + 1,
-			"content_block": map[string]any{
-				"type":    "web_search_tool_result",
-				"content": searchContent,
-			},
-		},
-		{
-			"type":  "content_block_stop",
-			"index": startIndex + 1,
+			"index": index,
 		},
 	}
 
@@ -79,85 +49,142 @@ func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchRe
 	return result
 }
 
+func GenerateSearchToolResultEvents(toolUseID string, results *WebSearchResults, errorCode string, index int) [][]byte {
+	events := []map[string]any{
+		{
+			"type":  "content_block_start",
+			"index": index,
+			"content_block": map[string]any{
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"caller":      map[string]any{"type": "direct"},
+				"content":     buildWebSearchToolResultContent(results, errorCode),
+			},
+		},
+		{
+			"type":  "content_block_stop",
+			"index": index,
+		},
+	}
+
+	result := make([][]byte, 0, len(events))
+	for _, event := range events {
+		eventType, _ := event["type"].(string)
+		payload, _ := json.Marshal(event)
+		result = append(result, []byte("event: "+eventType+"\ndata: "+string(payload)+"\n\n"))
+	}
+	return result
+}
+
+func GenerateSearchIndicatorEvents(query, toolUseID string, results *WebSearchResults, startIndex int) [][]byte {
+	return GenerateSearchIndicatorEventsWithError(query, toolUseID, results, "", startIndex)
+}
+
+func GenerateSearchIndicatorEventsWithError(query, toolUseID string, results *WebSearchResults, errorCode string, startIndex int) [][]byte {
+	result := GenerateSearchToolUseEvents(query, toolUseID, startIndex)
+	result = append(result, GenerateSearchToolResultEvents(toolUseID, results, errorCode, startIndex+1)...)
+	return result
+}
+
 func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 	result := BufferedStreamResult{WebSearchToolUseIndex: -1}
 	var currentToolName string
 	currentToolIndex := -1
+	currentToolID := ""
 	var toolInputBuilder strings.Builder
+	resetTool := func() {
+		currentToolName = ""
+		currentToolIndex = -1
+		currentToolID = ""
+		toolInputBuilder.Reset()
+	}
 
-	for _, chunk := range chunks {
-		lines := strings.Split(string(chunk), "\n")
-		for _, line := range lines {
-			if !strings.HasPrefix(line, "data: ") {
+	for _, frame := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(frame)
+		if len(payload) == 0 || string(payload) == "[DONE]" {
+			continue
+		}
+
+		var event map[string]any
+		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+
+		switch eventType, _ := event["type"].(string); eventType {
+		case "message_delta":
+			if delta, ok := event["delta"].(map[string]any); ok {
+				if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
+					result.StopReason = stopReason
+				}
+			}
+		case "content_block_start":
+			// Native server_tool_use/result blocks must never inherit the
+			// preceding custom tool's input accumulator.
+			resetTool()
+			contentBlock, ok := event["content_block"].(map[string]any)
+			if !ok {
 				continue
 			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
-			if payload == "" || payload == "[DONE]" {
+			blockType, _ := contentBlock["type"].(string)
+			if blockType != "tool_use" {
 				continue
 			}
-
-			var event map[string]any
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			currentToolName, _ = contentBlock["name"].(string)
+			currentToolName = strings.ToLower(strings.TrimSpace(currentToolName))
+			if idx, ok := event["index"].(float64); ok {
+				currentToolIndex = int(idx)
+			}
+			currentToolID, _ = contentBlock["id"].(string)
+			if isWebSearchToolName(currentToolName, "") && strings.TrimSpace(result.WebSearchToolUseID) == "" {
+				result.WebSearchToolUseID = strings.TrimSpace(currentToolID)
+			}
+			if input, ok := contentBlock["input"].(map[string]any); ok {
+				if query, ok := input["query"].(string); ok {
+					_, _ = toolInputBuilder.WriteString(`{"query":`)
+					encoded, _ := json.Marshal(query)
+					_, _ = toolInputBuilder.Write(encoded)
+					_, _ = toolInputBuilder.WriteString(`}`)
+				}
+			}
+		case "content_block_delta":
+			if currentToolName == "" {
 				continue
 			}
-
-			switch eventType, _ := event["type"].(string); eventType {
-			case "message_delta":
-				if delta, ok := event["delta"].(map[string]any); ok {
-					if stopReason, ok := delta["stop_reason"].(string); ok && strings.TrimSpace(stopReason) != "" {
-						result.StopReason = stopReason
-					}
-				}
-			case "content_block_start":
-				contentBlock, ok := event["content_block"].(map[string]any)
-				if !ok {
-					continue
-				}
-				blockType, _ := contentBlock["type"].(string)
-				if blockType != "tool_use" {
-					continue
-				}
-				currentToolName, _ = contentBlock["name"].(string)
-				currentToolName = strings.ToLower(strings.TrimSpace(currentToolName))
-				if idx, ok := event["index"].(float64); ok {
-					currentToolIndex = int(idx)
-				}
-				if toolUseID, ok := contentBlock["id"].(string); ok && isWebSearchToolName(currentToolName, "") {
-					result.WebSearchToolUseID = strings.TrimSpace(toolUseID)
-				}
-				toolInputBuilder.Reset()
-			case "content_block_delta":
-				if currentToolName == "" {
-					continue
-				}
-				delta, ok := event["delta"].(map[string]any)
-				if !ok {
-					continue
-				}
-				deltaType, _ := delta["type"].(string)
-				if deltaType != "input_json_delta" {
-					continue
-				}
-				if partialJSON, ok := delta["partial_json"].(string); ok {
-					_, _ = toolInputBuilder.WriteString(partialJSON)
-				}
-			case "content_block_stop":
-				if !isWebSearchToolName(currentToolName, "") {
-					currentToolName = ""
-					currentToolIndex = -1
-					toolInputBuilder.Reset()
-					continue
-				}
-				result.HasWebSearchToolUse = true
-				result.WebSearchToolUseIndex = currentToolIndex
-				var input map[string]string
+			if idx, ok := event["index"].(float64); ok && currentToolIndex >= 0 && int(idx) != currentToolIndex {
+				continue
+			}
+			delta, ok := event["delta"].(map[string]any)
+			if !ok {
+				continue
+			}
+			deltaType, _ := delta["type"].(string)
+			if deltaType != "input_json_delta" {
+				continue
+			}
+			if partialJSON, ok := delta["partial_json"].(string); ok {
+				_, _ = toolInputBuilder.WriteString(partialJSON)
+			}
+		case "content_block_stop":
+			if currentToolName == "" {
+				continue
+			}
+			if idx, ok := event["index"].(float64); ok && currentToolIndex >= 0 && int(idx) != currentToolIndex {
+				continue
+			}
+			if isWebSearchToolName(currentToolName, "") {
+				var input map[string]any
+				query := ""
 				if err := json.Unmarshal([]byte(toolInputBuilder.String()), &input); err == nil {
-					result.WebSearchQuery = strings.TrimSpace(input["query"])
+					query, _ = input["query"].(string)
+					query = strings.TrimSpace(query)
 				}
-				currentToolName = ""
-				currentToolIndex = -1
-				toolInputBuilder.Reset()
+				if query != "" && !result.HasWebSearchToolUse {
+					result.HasWebSearchToolUse = true
+					result.WebSearchToolUseIndex = currentToolIndex
+					result.WebSearchQuery = query
+				}
 			}
+			resetTool()
 		}
 	}
 
@@ -165,9 +192,16 @@ func AnalyzeBufferedStream(chunks [][]byte) BufferedStreamResult {
 }
 
 func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset int) [][]byte {
-	filtered := make([][]byte, 0, len(chunks))
-	for _, chunk := range chunks {
-		adjusted, shouldForward := filterSSEChunk(chunk, webSearchToolUseIndex, indexOffset)
+	frames := splitSSEFrames(chunks)
+	suppressedIndices := privateWebSearchToolUseIndices(frames)
+	if webSearchToolUseIndex >= 0 {
+		suppressedIndices[webSearchToolUseIndex] = struct{}{}
+	}
+	filtered := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
+		adjusted, shouldForward := filterSSEChunkWithServerToolUsageIndices(
+			frame, suppressedIndices, indexOffset, true, 0, 0, false,
+		)
 		if shouldForward {
 			filtered = append(filtered, adjusted)
 		}
@@ -175,38 +209,294 @@ func FilterChunksForClient(chunks [][]byte, webSearchToolUseIndex, indexOffset i
 	return filtered
 }
 
+// privateWebSearchToolUseIndices finds every Kiro-private search tool block in
+// one translated turn. Kiro can emit multiple searches in parallel, while the
+// adapter executes one refinement at a time. All private blocks must therefore
+// be consumed even when AnalyzeBufferedStream selects only the first query for
+// the next server-side MCP request.
+func privateWebSearchToolUseIndices(chunks [][]byte) map[int]struct{} {
+	indices := make(map[int]struct{})
+	for _, frame := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(frame)
+		if len(payload) == 0 {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_start" {
+			continue
+		}
+		block, _ := event["content_block"].(map[string]any)
+		blockType, _ := block["type"].(string)
+		toolName, _ := block["name"].(string)
+		if blockType != "tool_use" || !isWebSearchToolName(toolName, "") {
+			continue
+		}
+		if index, ok := event["index"].(float64); ok {
+			indices[int(index)] = struct{}{}
+		}
+	}
+	return indices
+}
+
+// splitSSEFrames joins arbitrary writer fragments and restores complete SSE
+// records before any event-level filtering or index rewriting is attempted.
+func splitSSEFrames(chunks [][]byte) [][]byte {
+	var wire strings.Builder
+	for _, chunk := range chunks {
+		if len(chunk) > 0 {
+			_, _ = wire.Write(chunk)
+		}
+	}
+	normalized := strings.ReplaceAll(wire.String(), "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Split(normalized, "\n\n")
+	frames := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		frames = append(frames, []byte(part+"\n\n"))
+	}
+	return frames
+}
+
+// AdjustSSEChunk rewrites a final buffered Kiro turn into the already-open
+// Anthropic response stream. The outer web-search adapter owns message_start,
+// while the final translated turn still owns the single message_delta and
+// message_stop terminal pair. Intermediate turns use FilterChunksForClient and
+// deliberately suppress their terminal envelope.
 func AdjustSSEChunk(chunk []byte, offset int) ([]byte, bool) {
-	return filterSSEChunk(chunk, -1, offset)
+	return AdjustSSEChunkWithWebSearchUsage(chunk, offset, 0)
+}
+
+// AdjustSSEChunkWithWebSearchUsage preserves the final terminal envelope and
+// reports successful server-side web-search calls in the same usage object as
+// Anthropic. A zero count is a byte-compatible no-op for non-search usage.
+func AdjustSSEChunkWithWebSearchUsage(chunk []byte, offset, webSearchRequests int) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, -1, offset, false, webSearchRequests, 0)
+}
+
+// FinalizeWebSearchSSEChunks rewrites the final Kiro turn into the already-open
+// Anthropic stream and segments its final text into cited and uncited blocks.
+// Claude begins every cited block with citations:[] and emits its citation
+// deltas before the text they qualify, so preserve both topology and ordering.
+func FinalizeWebSearchSSEChunks(chunks [][]byte, offset, webSearchRequests int, searches []SearchIndicator) [][]byte {
+	adjusted := make([][]byte, 0, len(chunks)+4)
+	frames := splitSSEFrames(chunks)
+	suppressedIndices := privateWebSearchToolUseIndices(frames)
+	for _, chunk := range frames {
+		rewritten, shouldForward := filterSSEChunkWithServerToolUsageIndices(
+			chunk, suppressedIndices, offset, false, webSearchRequests, 0, true,
+		)
+		if shouldForward {
+			adjusted = append(adjusted, rewritten)
+		}
+	}
+
+	textIndex, text := finalSSETextBlock(adjusted)
+	if textIndex < 0 {
+		return adjusted
+	}
+	segments := buildWebSearchCitationSegments(searches, text)
+	if len(segments) == 0 {
+		return adjusted
+	}
+
+	result := make([][]byte, 0, len(adjusted)+len(segments)*3)
+	replaced := false
+	indexDelta := len(segments) - 1
+	for _, chunk := range adjusted {
+		payload := firstSSEJSONPayload(chunk)
+		var event map[string]any
+		if len(payload) > 0 && json.Unmarshal(payload, &event) == nil {
+			eventType, _ := event["type"].(string)
+			index, hasIndex := event["index"].(float64)
+			if hasIndex && int(index) == textIndex && isContentBlockSSEEvent(eventType) {
+				if !replaced && eventType == "content_block_start" {
+					for segmentOffset, segment := range segments {
+						segmentIndex := textIndex + segmentOffset
+						block := map[string]any{"type": "text", "text": ""}
+						if len(segment.Citations) > 0 {
+							block["citations"] = []any{}
+						}
+						result = append(result, marshalSSEEvent("content_block_start", map[string]any{
+							"type": "content_block_start", "index": segmentIndex, "content_block": block,
+						}))
+						for _, citation := range segment.Citations {
+							result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+								"type":  "content_block_delta",
+								"index": segmentIndex,
+								"delta": map[string]any{
+									"type":     "citations_delta",
+									"citation": citation,
+								},
+							}))
+						}
+						result = append(result, marshalSSEEvent("content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": segmentIndex,
+							"delta": map[string]any{"type": "text_delta", "text": segment.Text},
+						}))
+						result = append(result, marshalSSEEvent("content_block_stop", map[string]any{
+							"type": "content_block_stop", "index": segmentIndex,
+						}))
+					}
+					replaced = true
+				}
+				continue
+			}
+			if replaced && indexDelta > 0 && hasIndex && int(index) > textIndex && isContentBlockSSEEvent(eventType) {
+				event["index"] = int(index) + indexDelta
+				result = append(result, marshalSSEEvent(eventType, event))
+				continue
+			}
+		}
+		result = append(result, chunk)
+	}
+	return result
+}
+
+func isContentBlockSSEEvent(eventType string) bool {
+	switch eventType {
+	case "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func finalSSETextBlock(chunks [][]byte) (int, string) {
+	textBlocks := make(map[int]*strings.Builder)
+	lastTextIndex := -1
+	for _, chunk := range chunks {
+		payload := firstSSEJSONPayload(chunk)
+		if len(payload) == 0 {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal(payload, &event) != nil {
+			continue
+		}
+		index, ok := event["index"].(float64)
+		if !ok {
+			continue
+		}
+		idx := int(index)
+		switch eventType, _ := event["type"].(string); eventType {
+		case "content_block_start":
+			block, _ := event["content_block"].(map[string]any)
+			if blockType, _ := block["type"].(string); blockType == "text" {
+				builder := &strings.Builder{}
+				if initial, _ := block["text"].(string); initial != "" {
+					_, _ = builder.WriteString(initial)
+				}
+				textBlocks[idx] = builder
+				lastTextIndex = idx
+			}
+		case "content_block_delta":
+			delta, _ := event["delta"].(map[string]any)
+			if deltaType, _ := delta["type"].(string); deltaType == "text_delta" {
+				if builder := textBlocks[idx]; builder != nil {
+					if value, _ := delta["text"].(string); value != "" {
+						_, _ = builder.WriteString(value)
+					}
+				}
+			}
+		}
+	}
+	if lastTextIndex < 0 || textBlocks[lastTextIndex] == nil {
+		return -1, ""
+	}
+	return lastTextIndex, textBlocks[lastTextIndex].String()
+}
+
+func firstSSEJSONPayload(chunk []byte) []byte {
+	for _, line := range strings.Split(string(chunk), "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			if payload != "" && payload != "[DONE]" {
+				return []byte(payload)
+			}
+		}
+	}
+	return nil
+}
+
+func isSSEContentBlockStop(chunk []byte, index int) bool {
+	payload := firstSSEJSONPayload(chunk)
+	if len(payload) == 0 {
+		return false
+	}
+	var event map[string]any
+	if json.Unmarshal(payload, &event) != nil || event["type"] != "content_block_stop" {
+		return false
+	}
+	idx, ok := event["index"].(float64)
+	return ok && int(idx) == index
+}
+
+func marshalSSEEvent(eventType string, event map[string]any) []byte {
+	payload, _ := json.Marshal(event)
+	return []byte("event: " + eventType + "\ndata: " + string(payload) + "\n\n")
+}
+
+// AdjustSSEChunkWithCodeExecutionUsage reuses the final Kiro terminal envelope
+// while reporting the server-side Python executions performed by Sub2API.
+func AdjustSSEChunkWithCodeExecutionUsage(chunk []byte, offset, codeExecutionRequests int) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, -1, offset, false, 0, codeExecutionRequests)
 }
 
 func MaxContentBlockIndex(chunks [][]byte) int {
 	maxIndex := -1
-	for _, chunk := range chunks {
-		lines := strings.Split(string(chunk), "\n")
-		for _, line := range lines {
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
-			if payload == "" || payload == "[DONE]" {
-				continue
-			}
-			var event map[string]any
-			if err := json.Unmarshal([]byte(payload), &event); err != nil {
-				continue
-			}
-			switch eventType, _ := event["type"].(string); eventType {
-			case "content_block_start", "content_block_delta", "content_block_stop":
-				if idx, ok := event["index"].(float64); ok && int(idx) > maxIndex {
-					maxIndex = int(idx)
-				}
+	for _, chunk := range splitSSEFrames(chunks) {
+		payload := firstSSEJSONPayload(chunk)
+		if len(payload) == 0 || string(payload) == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+		switch eventType, _ := event["type"].(string); eventType {
+		case "content_block_start", "content_block_delta", "content_block_stop":
+			if idx, ok := event["index"].(float64); ok && int(idx) > maxIndex {
+				maxIndex = int(idx)
 			}
 		}
 	}
 	return maxIndex
 }
 
-func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byte, bool) {
+func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, 0, 0)
+}
+
+func filterSSEChunkWithWebSearchUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests int) ([]byte, bool) {
+	return filterSSEChunkWithServerToolUsage(chunk, webSearchToolUseIndex, indexOffset, suppressMessageTerminal, webSearchRequests, 0)
+}
+
+func filterSSEChunkWithServerToolUsage(chunk []byte, webSearchToolUseIndex, indexOffset int, suppressMessageTerminal bool, webSearchRequests, codeExecutionRequests int) ([]byte, bool) {
+	suppressedIndices := make(map[int]struct{})
+	if webSearchToolUseIndex >= 0 {
+		suppressedIndices[webSearchToolUseIndex] = struct{}{}
+	}
+	return filterSSEChunkWithServerToolUsageIndices(
+		chunk, suppressedIndices, indexOffset, suppressMessageTerminal,
+		webSearchRequests, codeExecutionRequests, false,
+	)
+}
+
+func filterSSEChunkWithServerToolUsageIndices(
+	chunk []byte,
+	suppressedContentBlockIndices map[int]struct{},
+	indexOffset int,
+	suppressMessageTerminal bool,
+	webSearchRequests, codeExecutionRequests int,
+	normalizeSuppressedToolStop bool,
+) ([]byte, bool) {
 	lines := strings.Split(string(chunk), "\n")
 	var builder strings.Builder
 	hasContent := false
@@ -216,7 +506,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 		if strings.HasPrefix(line, "event: ") {
 			if i+1 < len(lines) && strings.HasPrefix(lines[i+1], "data: ") {
 				payload := strings.TrimSpace(strings.TrimPrefix(lines[i+1], "data: "))
-				if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+				if shouldSuppressEventPayload(payload, suppressedContentBlockIndices, suppressMessageTerminal) {
 					i++
 					continue
 				}
@@ -231,10 +521,13 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 			if payload == "[DONE]" {
 				continue
 			}
-			if shouldSuppressEventPayload(payload, webSearchToolUseIndex) {
+			if shouldSuppressEventPayload(payload, suppressedContentBlockIndices, suppressMessageTerminal) {
 				continue
 			}
-			adjusted := adjustEventPayload(payload, indexOffset)
+			adjusted := adjustEventPayload(
+				payload, indexOffset, suppressedContentBlockIndices,
+				webSearchRequests, codeExecutionRequests, normalizeSuppressedToolStop,
+			)
 			if adjusted == "" {
 				continue
 			}
@@ -255,7 +548,7 @@ func filterSSEChunk(chunk []byte, webSearchToolUseIndex, indexOffset int) ([]byt
 	return []byte(builder.String()), true
 }
 
-func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool {
+func shouldSuppressEventPayload(payload string, suppressedContentBlockIndices map[int]struct{}, suppressMessageTerminal bool) bool {
 	if payload == "" {
 		return false
 	}
@@ -264,33 +557,94 @@ func shouldSuppressEventPayload(payload string, webSearchToolUseIndex int) bool 
 		return false
 	}
 	eventType, _ := event["type"].(string)
-	if eventType == "message_start" || eventType == "message_delta" || eventType == "message_stop" {
+	if eventType == "message_start" {
 		return true
 	}
-	if webSearchToolUseIndex < 0 {
-		return false
-	}
-	if idx, ok := event["index"].(float64); ok && int(idx) == webSearchToolUseIndex {
+	if suppressMessageTerminal && (eventType == "message_delta" || eventType == "message_stop") {
 		return true
+	}
+	// Kiro expresses a refinement as a private client tool_use. The adapter
+	// consumes that block to execute the next MCP search, then exposes the next
+	// call as a fresh Anthropic server_tool_use/result pair. Forwarding the
+	// private block would leave a client-visible tool_use with no tool_result
+	// and make Claude Code treat the server-side search loop as unfinished.
+	if len(suppressedContentBlockIndices) > 0 {
+		switch eventType {
+		case "content_block_start", "content_block_delta", "content_block_stop":
+			if index, ok := event["index"].(float64); ok {
+				_, shouldSuppress := suppressedContentBlockIndices[int(index)]
+				return shouldSuppress
+			}
+		}
 	}
 	return false
 }
 
-func adjustEventPayload(payload string, indexOffset int) string {
-	if payload == "" || indexOffset == 0 {
+func adjustEventPayload(
+	payload string,
+	indexOffset int,
+	suppressedContentBlockIndices map[int]struct{},
+	webSearchRequests, codeExecutionRequests int,
+	normalizeSuppressedToolStop bool,
+) string {
+	if payload == "" || (indexOffset == 0 && len(suppressedContentBlockIndices) == 0 && webSearchRequests <= 0 && codeExecutionRequests <= 0 && !normalizeSuppressedToolStop) {
 		return payload
 	}
 	var event map[string]any
 	if err := json.Unmarshal([]byte(payload), &event); err != nil {
 		return payload
 	}
+	changed := false
 	switch eventType, _ := event["type"].(string); eventType {
 	case "content_block_start", "content_block_delta", "content_block_stop":
 		if idx, ok := event["index"].(float64); ok {
-			event["index"] = int(idx) + indexOffset
-			if adjusted, err := json.Marshal(event); err == nil {
-				return string(adjusted)
+			sourceIndex := int(idx)
+			removedBefore := 0
+			for suppressedIndex := range suppressedContentBlockIndices {
+				if suppressedIndex < sourceIndex {
+					removedBefore++
+				}
 			}
+			adjustedIndex := sourceIndex + indexOffset - removedBefore
+			// Removing the private refinement block must also close its index
+			// slot. Otherwise a later narrative block keeps its original index
+			// and the client observes a gap in the Anthropic SSE sequence.
+			if adjustedIndex != sourceIndex {
+				event["index"] = adjustedIndex
+				changed = true
+			}
+		}
+	case "message_delta":
+		if webSearchRequests > 0 || codeExecutionRequests > 0 {
+			usage, ok := event["usage"].(map[string]any)
+			if !ok {
+				usage = map[string]any{}
+				event["usage"] = usage
+			}
+			serverUsage, _ := usage["server_tool_use"].(map[string]any)
+			if serverUsage == nil {
+				serverUsage = map[string]any{}
+				usage["server_tool_use"] = serverUsage
+			}
+			if webSearchRequests > 0 {
+				serverUsage["web_search_requests"] = webSearchRequests
+			}
+			if codeExecutionRequests > 0 {
+				serverUsage["code_execution_requests"] = codeExecutionRequests
+			}
+			changed = true
+		}
+		if normalizeSuppressedToolStop && len(suppressedContentBlockIndices) > 0 {
+			delta, _ := event["delta"].(map[string]any)
+			if stopReason, _ := delta["stop_reason"].(string); stopReason == "tool_use" {
+				delta["stop_reason"] = "end_turn"
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if adjusted, err := json.Marshal(event); err == nil {
+			return string(adjusted)
 		}
 	}
 	return payload
