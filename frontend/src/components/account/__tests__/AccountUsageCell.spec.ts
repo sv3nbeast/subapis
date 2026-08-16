@@ -521,6 +521,74 @@ describe('AccountUsageCell', () => {
 	expect(wrapper.text()).toContain('7d|0|27700')
   })
 
+  it('OpenAI OAuth usage 请求失败时使用持久化 Codex 快照而不是空白', async () => {
+    getUsage.mockRejectedValue(new Error('usage unavailable'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2011,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {
+            codex_usage_updated_at: '2099-03-07T10:00:00Z',
+            codex_5h_used_percent: 12,
+            codex_5h_reset_at: '2099-03-07T12:00:00Z',
+            codex_7d_used_percent: 34,
+            codex_7d_reset_at: '2099-03-13T12:00:00Z'
+          }
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledWith(2011)
+    expect(wrapper.text()).toContain('5h|12')
+    expect(wrapper.text()).toContain('7d|34')
+    expect(wrapper.text()).not.toContain('common.error')
+    errorSpy.mockRestore()
+  })
+
+  it('OpenAI OAuth 没有快照且 usage 请求失败时显示错误和重试入口', async () => {
+    getUsage.mockRejectedValue(new Error('usage unavailable'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 2012,
+          platform: 'openai',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          AccountQuotaInfo: true,
+          OpenAIQuotaResetCell: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('common.error')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.activeQuery')
+    errorSpy.mockRestore()
+  })
+
   it('OpenAI OAuth 在行数据刷新但仍无 codex 快照时会重新拉取 usage', async () => {
 	getUsage
 	  .mockResolvedValueOnce({

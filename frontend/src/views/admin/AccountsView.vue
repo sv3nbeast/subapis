@@ -375,7 +375,7 @@
                 :batched-usage="usageBatchByAccountId[String(row.id)] ?? null"
                 :batched-usage-error="usageBatchErrorByAccountId[String(row.id)] ?? null"
                 :batched-usage-loading="usageBatchLoadingByAccountId[String(row.id)] ?? false"
-                :request-batched-usage="queueBatchedUsage"
+                :request-batched-usage="isDesktopViewport ? queueBatchedUsage : null"
                 @kiro-usage-meta="handleKiroUsageMeta(row, $event)"
                 @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
               />

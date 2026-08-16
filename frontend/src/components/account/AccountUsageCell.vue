@@ -116,24 +116,31 @@
       </div>
     </template>
 
-    <!-- OpenAI OAuth accounts: single source from /usage API -->
+    <!-- OpenAI OAuth accounts: live /usage data with persisted snapshot fallback -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
+        <div
+          v-if="usageInfo?.error"
+          class="text-xs text-amber-600 dark:text-amber-400 truncate max-w-[200px]"
+          :title="usageInfo.error"
+        >
+          {{ usageInfo.error }}
+        </div>
         <UsageProgressBar
-          v-if="usageInfo?.five_hour"
+          v-if="openAIFiveHour"
           label="5h"
-          :utilization="usageInfo.five_hour.utilization"
-          :resets-at="usageInfo.five_hour.resets_at"
-          :window-stats="usageInfo.five_hour.window_stats"
+          :utilization="openAIFiveHour.utilization"
+          :resets-at="openAIFiveHour.resets_at"
+          :window-stats="openAIFiveHour.window_stats"
           :show-now-when-idle="true"
           color="indigo"
         />
         <UsageProgressBar
-          v-if="usageInfo?.seven_day"
+          v-if="openAISevenDay"
           label="7d"
-          :utilization="usageInfo.seven_day.utilization"
-          :resets-at="usageInfo.seven_day.resets_at"
-          :window-stats="usageInfo.seven_day.window_stats"
+          :utilization="openAISevenDay.utilization"
+          :resets-at="openAISevenDay.resets_at"
+          :window-stats="openAISevenDay.window_stats"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -180,6 +187,37 @@
           <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
           <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
         </div>
+      </div>
+      <div v-else-if="error || usageInfo?.error" class="space-y-1">
+        <div
+          class="text-xs text-amber-600 dark:text-amber-400"
+          :title="error || usageInfo?.error"
+        >
+          {{ error || usageInfo?.error }}
+        </div>
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="loading"
+          @click="loadUsage({ bypassCache: true })"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': loading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+        <OpenAIQuotaResetCell :account="account" @account-updated="handleQuotaResetAccountUpdated" />
       </div>
       <div v-else>
         <div class="text-xs text-gray-400">-</div>
@@ -779,8 +817,16 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, KiroCreditProgress, WindowStats } from '@/types'
+import type {
+  Account,
+  AccountUsageInfo,
+  GeminiCredentials,
+  KiroCreditProgress,
+  UsageProgress,
+  WindowStats
+} from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { resolveCodexUsageWindow } from '@/utils/codexUsage'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
 import UsageProgressBar from './UsageProgressBar.vue'
@@ -912,9 +958,34 @@ const geminiUsageAvailable = computed(() => {
   )
 })
 
+const toSnapshotProgress = (window: ReturnType<typeof resolveCodexUsageWindow>): UsageProgress | null => {
+  if (window.usedPercent == null) return null
+  const remainingSeconds = window.resetAt
+    ? Math.max(0, Math.floor((Date.parse(window.resetAt) - Date.now()) / 1000))
+    : 0
+  return {
+    utilization: window.usedPercent,
+    resets_at: window.resetAt,
+    remaining_seconds: remainingSeconds
+  }
+}
+
+const openAISnapshotWindows = computed(() => ({
+  fiveHour: toSnapshotProgress(resolveCodexUsageWindow(props.account.extra, '5h')),
+  sevenDay: toSnapshotProgress(resolveCodexUsageWindow(props.account.extra, '7d'))
+}))
+
+const openAIFiveHour = computed<UsageProgress | null>(() => {
+  return usageInfo.value?.five_hour ?? openAISnapshotWindows.value.fiveHour
+})
+
+const openAISevenDay = computed<UsageProgress | null>(() => {
+  return usageInfo.value?.seven_day ?? openAISnapshotWindows.value.sevenDay
+})
+
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
-  return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+  return !!openAIFiveHour.value || !!openAISevenDay.value
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
