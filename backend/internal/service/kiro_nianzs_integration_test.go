@@ -402,6 +402,65 @@ func newNianzsKiroRouteTestRuntime(t *testing.T, response *http.Response) (*Gate
 	return svc, upstream, account
 }
 
+func nianzsKiroContextUsageResponse(t *testing.T, percentage float64, outputTokens int) *http.Response {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "context usage ok"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "contextUsageEvent", map[string]any{
+		"contextUsageEvent": map[string]any{"contextUsagePercentage": percentage},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{
+			"tokenUsage": map[string]any{"outputTokens": outputTokens, "totalTokens": outputTokens},
+		},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}, "x-request-id": []string{"rid_kiro_context_usage"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+}
+
+func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			streamValue := "false"
+			if stream {
+				streamValue = "true"
+			}
+			body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"context threshold"}],"stream":` + streamValue + `}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			svc, _, account := newNianzsKiroRouteTestRuntime(t, nianzsKiroContextUsageResponse(t, 85.0, 10))
+
+			result, err := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			totalContextTokens := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
+			require.Equal(t, 850_000, totalContextTokens)
+			require.Equal(t, 849_990, result.Usage.InputTokens)
+			if stream {
+				require.Contains(t, recorder.Body.String(), `"input_tokens":849990`)
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+				require.NotContains(t, recorder.Body.String(), "_sub2api_kiro_usage_final")
+			} else {
+				require.Equal(t, int64(849_990), gjson.Get(recorder.Body.String(), "usage.input_tokens").Int())
+			}
+		})
+	}
+}
+
 func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
