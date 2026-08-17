@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	nianzskiro "github.com/Wei-Shaw/sub2api/internal/pkg/kiro_nianzs"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/cespare/xxhash/v2"
@@ -76,6 +77,23 @@ func nianzsResolveKiroUpstreamModel(mappedModel string) string {
 		upstreamModel = mappedModel
 	}
 	return upstreamModel
+}
+
+// nianzsKiroFirstSemanticTimeoutForRequest keeps the Nianzs streaming adapter
+// on the same group policy as the Kiro-first scheduler. Subscription fallback
+// groups own the most specific request-local value; otherwise an enforced Kiro
+// resilience group uses its configured deadline. Unlisted groups retain the
+// shared gateway default.
+func (s *GatewayService) nianzsKiroFirstSemanticTimeoutForRequest(ctx context.Context, groupID *int64) time.Duration {
+	if policy := KiroAnthropicFallbackPolicyFromContext(ctx); policy.Enabled && policy.FirstSemanticTimeout > 0 {
+		return policy.FirstSemanticTimeout
+	}
+	if s != nil && s.cfg != nil && s.kiroResilienceMode(groupID) == config.KiroResilienceModeEnforce {
+		if seconds := s.cfg.Gateway.KiroResilience.FirstSemanticTimeoutSeconds; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return s.firstSemanticTimeout()
 }
 
 func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
@@ -158,6 +176,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			return nil, s.handleKiroHTTPErrorNianzs(ctx, resp, c, account, mappedModel, body)
 		}
 		upstreamModel := nianzsResolveKiroUpstreamModel(mappedModel)
+		ctx = withGatewayFirstSemanticTimeoutOverride(ctx, s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, parsed.GroupID))
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
 			return nil, err

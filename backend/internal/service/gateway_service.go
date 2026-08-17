@@ -861,6 +861,32 @@ func (s *GatewayService) firstSemanticTimeout() time.Duration {
 	return time.Duration(s.cfg.Gateway.FirstSemanticTimeout) * time.Second
 }
 
+type gatewayFirstSemanticTimeoutOverride struct {
+	timeout time.Duration
+}
+
+type gatewayFirstSemanticTimeoutOverrideContextKey struct{}
+
+// withGatewayFirstSemanticTimeoutOverride installs a request-local deadline
+// for the shared SSE reader. Provider adapters use it when a group-specific
+// policy must take precedence over gateway.first_semantic_timeout without
+// changing unrelated providers or groups.
+func withGatewayFirstSemanticTimeoutOverride(ctx context.Context, timeout time.Duration) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, gatewayFirstSemanticTimeoutOverrideContextKey{}, gatewayFirstSemanticTimeoutOverride{timeout: timeout})
+}
+
+func (s *GatewayService) firstSemanticTimeoutForContext(ctx context.Context) time.Duration {
+	if ctx != nil {
+		if override, ok := ctx.Value(gatewayFirstSemanticTimeoutOverrideContextKey{}).(gatewayFirstSemanticTimeoutOverride); ok {
+			return override.timeout
+		}
+	}
+	return s.firstSemanticTimeout()
+}
+
 func newAnthropicFirstSemanticTimeoutFailover(account *Account, model string) *UpstreamFailoverError {
 	accountID := int64(0)
 	if account != nil {
@@ -10741,7 +10767,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
 		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
 	}
-	firstSemanticInterval := s.firstSemanticTimeout()
+	firstSemanticInterval := s.firstSemanticTimeoutForContext(ctx)
 	var firstSemanticTimer *time.Timer
 	if firstSemanticInterval > 0 {
 		firstSemanticTimer = time.NewTimer(firstSemanticInterval)
