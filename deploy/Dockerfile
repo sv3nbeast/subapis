@@ -57,6 +57,9 @@ ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+# Populated automatically by BuildKit for the requested target platform.
+# It must be re-declared inside the stage before RUN can expand it.
+ARG TARGETARCH
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
@@ -93,7 +96,11 @@ RUN VERSION_VALUE="${VERSION}" && \
     CGO_ENABLED=1 GOOS=linux GOEXPERIMENT=boringcrypto go build \
     -ldflags="-s -w" \
     -o /app/antigravityworker-boringcrypto \
-    ./cmd/antigravityworker
+    ./cmd/antigravityworker && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w" \
+    -o /app/kirocodeexecworker \
+    ./cmd/kirocodeexecworker
 
 # -----------------------------------------------------------------------------
 # Stage 3: Final Runtime Image
@@ -111,6 +118,7 @@ RUN apk add --no-cache \
     tzdata \
     curl \
     su-exec \
+    python3 \
     && rm -rf /var/cache/apk/*
 
 # Create non-root user
@@ -124,6 +132,7 @@ WORKDIR /app
 COPY --from=backend-builder /app/sub2api /app/sub2api
 COPY --from=backend-builder /app/antigravityworker /app/antigravityworker
 COPY --from=backend-builder /app/antigravityworker-boringcrypto /app/antigravityworker-boringcrypto
+COPY --from=backend-builder /app/kirocodeexecworker /app/kirocodeexecworker
 
 # Create data directory
 RUN mkdir -p /app/data && chown -R sub2api:sub2api /app

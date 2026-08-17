@@ -49,6 +49,8 @@ Environment variables:
                                    DEPLOY_DIR/anthropic-stable-canary.env.
                                    When absent, stable mode remains unconfigured.
   SERVICE_NAME                     Compose service name. Default: sub2api
+  KIRO_CODE_EXECUTION_SERVICE_NAME Isolated Kiro code execution worker service.
+                                   Default: kiro-code-exec
   HEALTH_TIMEOUT_SECONDS           Health wait timeout. Default: 180
   SKIP_BUILD                       Set to 1 to skip docker build and only switch image
 EOF
@@ -68,6 +70,8 @@ IMAGE_REPO="${IMAGE_REPO:-sub2api}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 DEPLOY_DIR="${DEPLOY_DIR:-/root/sub2api-deploy}"
 SERVICE_NAME="${SERVICE_NAME:-sub2api}"
+KIRO_CODE_EXECUTION_SERVICE_NAME="${KIRO_CODE_EXECUTION_SERVICE_NAME:-kiro-code-exec}"
+KIRO_CODE_EXECUTION_SOCKET="/app/kiro-code-exec/worker.sock"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ANTIGRAVITY_VERSION="${ANTIGRAVITY_USER_AGENT_VERSION:-1.23.2}"
@@ -414,19 +418,96 @@ fi
 
 cat > "${OVERRIDE_FILE}" <<EOF
 services:
+  ${KIRO_CODE_EXECUTION_SERVICE_NAME}:
+    image: ${IMAGE_REF}
+    command:
+      - /app/kirocodeexecworker
+      - -socket
+      - /app/data/worker.sock
+      - -timeout
+      - 15s
+      - -max-code-bytes
+      - "131072"
+      - -max-output-bytes
+      - "262144"
+    # Start through the image entrypoint as root only long enough to chown the
+    # newly-created socket volume; the entrypoint then execs the worker as the
+    # unprivileged sub2api user.
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      # The root entrypoint needs CHOWN exactly once to initialize a fresh
+      # named volume, plus SETUID/SETGID to exec the worker as uid/gid 1000.
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    cpus: 1.0
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    volumes:
+      - kiro_code_exec_socket:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /app/data/worker.sock"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
   ${SERVICE_NAME}:
     image: ${IMAGE_REF}
+    depends_on:
+      ${KIRO_CODE_EXECUTION_SERVICE_NAME}:
+        condition: service_healthy
+    volumes:
+      - kiro_code_exec_socket:/app/kiro-code-exec
 ${STABLE_CANARY_ENV_FILE_YAML}
     environment:
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_VERSION}
       - ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=${PREFER_BORINGCRYPTO}
       - GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=${OPENAI_KIRO_BRIDGE_ENABLED}
       - GATEWAY_FIRST_SEMANTIC_TIMEOUT=${FIRST_SEMANTIC_TIMEOUT_SECONDS}
+      - KIRO_CODE_EXECUTION_SOCKET=${KIRO_CODE_EXECUTION_SOCKET}
 ${KIRO_RESILIENCE_ENV%$'\n'}
 ${KIRO_EVENT_DIAGNOSTICS_ENV%$'\n'}
+volumes:
+  kiro_code_exec_socket:
+    driver: local
 EOF
 
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" config >/dev/null
+docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --no-deps "${KIRO_CODE_EXECUTION_SERVICE_NAME}"
+
+WORKER_CONTAINER_ID="$(docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps -q "${KIRO_CODE_EXECUTION_SERVICE_NAME}")"
+if [[ -z "${WORKER_CONTAINER_ID}" ]]; then
+  echo "Failed to resolve container id for service: ${KIRO_CODE_EXECUTION_SERVICE_NAME}" >&2
+  exit 1
+fi
+
+worker_deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+while true; do
+  worker_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${WORKER_CONTAINER_ID}")"
+  echo "kiro_code_execution_worker_health=${worker_health}"
+  if [[ "${worker_health}" == "healthy" ]]; then
+    break
+  fi
+  if [[ "${worker_health}" == "unhealthy" || "${worker_health}" == "exited" || "${worker_health}" == "dead" ]]; then
+    docker logs --tail 120 "${WORKER_CONTAINER_ID}" >&2
+    exit 1
+  fi
+  if (( SECONDS >= worker_deadline )); then
+    echo "Kiro code execution worker health check timed out after ${HEALTH_TIMEOUT_SECONDS}s" >&2
+    docker logs --tail 120 "${WORKER_CONTAINER_ID}" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --no-deps "${SERVICE_NAME}"
 
 CONTAINER_ID="$(docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" ps -q "${SERVICE_NAME}")"
@@ -523,5 +604,15 @@ if ! docker exec "${CONTAINER_ID}" test -x /app/antigravityworker-boringcrypto; 
   echo "boringcrypto worker missing in running container" >&2
   exit 1
 fi
+echo "--- Kiro code execution worker ---"
+if ! docker exec "${WORKER_CONTAINER_ID}" test -x /app/kirocodeexecworker; then
+  echo "Kiro code execution worker binary missing" >&2
+  exit 1
+fi
+if ! docker exec "${WORKER_CONTAINER_ID}" test -S /app/data/worker.sock; then
+  echo "Kiro code execution worker socket missing" >&2
+  exit 1
+fi
+assert_container_env KIRO_CODE_EXECUTION_SOCKET "${KIRO_CODE_EXECUTION_SOCKET}"
 echo "--- container health endpoint ---"
 docker exec "${CONTAINER_ID}" wget -q -T 5 -S -O /dev/null http://localhost:8080/health

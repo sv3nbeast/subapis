@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -17,6 +18,7 @@ ANTIGRAVITY_USER_AGENT_VERSION=1.23.2
 ANTIGRAVITY_EXTERNAL_WORKER_PREFER_BORINGCRYPTO=true
 GATEWAY_OPENAI_KIRO_BRIDGE_ENABLED=true
 GATEWAY_FIRST_SEMANTIC_TIMEOUT=50
+KIRO_CODE_EXECUTION_SOCKET=/app/kiro-code-exec/worker.sock
 GATEWAY_KIRO_RESILIENCE_MODE=enforce
 GATEWAY_KIRO_RESILIENCE_GROUP_IDS=9,10,11,23,29,33
 GATEWAY_KIRO_RESILIENCE_RESPONSE_HEADER_TIMEOUT_SECONDS=60
@@ -45,6 +47,10 @@ if [[ "$1" == "inspect" && "${2:-}" == "--format" ]]; then
 fi
 if [[ "$1" == "compose" ]]; then
   for arg in "$@"; do
+    if [[ "${arg}" == "ps" && "${*: -1}" == "kiro-code-exec" ]]; then
+      printf 'worker-container-id\n'
+      exit 0
+    fi
     if [[ "${arg}" == "ps" && "${*: -1}" == "sub2api" ]]; then
       printf 'container-id\n'
       exit 0
@@ -87,7 +93,24 @@ run_rebuild() {
 
 run_rebuild
 
+grep -Fq -- 'ARG TARGETARCH' "${REPO_ROOT}/deploy/Dockerfile"
+grep -Fq -- 'GOARCH=${TARGETARCH} go build' "${REPO_ROOT}/deploy/Dockerfile"
 grep -Fq -- 'required: false' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'kiro-code-exec:' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'network_mode: none' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'read_only: true' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'cap_drop:' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'cap_add:' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- '      - CHOWN' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- '      - SETGID' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- '      - SETUID' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'no-new-privileges:true' "${DEPLOY_DIR}/docker-compose.override.yml"
+if grep -Fq -- 'user: "1000:1000"' "${DEPLOY_DIR}/docker-compose.override.yml"; then
+  echo "Kiro code execution worker must allow the image entrypoint to initialize the socket volume" >&2
+  exit 1
+fi
+grep -Fq -- 'KIRO_CODE_EXECUTION_SOCKET=/app/kiro-code-exec/worker.sock' "${DEPLOY_DIR}/docker-compose.override.yml"
+grep -Fq -- 'kiro_code_exec_socket:/app/kiro-code-exec' "${DEPLOY_DIR}/docker-compose.override.yml"
 if grep -Fq -- 'GATEWAY_ANTHROPIC_STABLE_CANARY_ENABLED=' "${DEPLOY_DIR}/docker-compose.override.yml"; then
   echo "stable canary runtime settings leaked into the generated override" >&2
   exit 1
