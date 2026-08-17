@@ -155,6 +155,10 @@ type KiroRequestContext struct {
 	// BuildKiroPayloadWithContext enables it for every client-requested thinking
 	// turn; direct translator callers may leave it false for unsigned fixtures.
 	RequireProviderThinkingSignature bool
+	// SuppressUnauthenticatedThinking drops a thinking block when Kiro omits its
+	// provider signature. Never mint a local signature, but keep a valid visible
+	// answer or tool result instead of failing the whole turn.
+	SuppressUnauthenticatedThinking bool
 	// SuppressAdaptiveThinkingText preserves the Anthropic adaptive-thinking
 	// block lifecycle and opaque signature while keeping provider-only reasoning
 	// summaries out of the public thinking field. Claude's adaptive Messages
@@ -544,6 +548,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 	}
 	requestCtx.ThinkingEnabled = thinking != nil
 	requestCtx.RequireProviderThinkingSignature = requestCtx.ThinkingEnabled
+	requestCtx.SuppressUnauthenticatedThinking = requestCtx.ThinkingEnabled
 	// Opus 4.7/4.8 即便客户端未请求 thinking,上游仍会以 <thinking>...</thinking> 文本流出 CoT;
 	// 此处仅为流式/非流式解析器开启 tag 抽取,不会改写 system prompt,避免将思考内容泄露到正文。
 	requestCtx.StripImplicitThinking = !requestCtx.ThinkingEnabled && requiresImplicitThinkingTagStripping(modelID)
@@ -887,7 +892,17 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if currentThinking.Len() > 0 {
 			sig := strings.TrimSpace(upstreamThinkingSignature)
 			if sig == "" && requestCtx.RequireProviderThinkingSignature {
-				return errors.New("missing provider-native Kiro thinking signature")
+				if !requestCtx.SuppressUnauthenticatedThinking {
+					return errors.New("missing provider-native Kiro thinking signature")
+				}
+				// Kiro can omit the opaque signature on long Claude turns. Do not
+				// synthesize one or expose unverified reasoning; continue with the
+				// visible answer or tool result that follows it.
+				currentThinking.Reset()
+				pendingAuthenticatedThinkingDeltas = nil
+				upstreamThinkingSignature = ""
+				thinkingBlockOpen = false
+				return nil
 			}
 			if sig != "" {
 				if _, err := validateProviderThinkingSignature(sig); err != nil {
@@ -4099,7 +4114,12 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	cleanText, embeddedToolUses, pending := drainEmbeddedToolTextForRequest(content.String(), requestCtx)
 	cleanText += preserveUnparsedToolTail(pending, requestCtx)
 	if requestCtx.RequireProviderThinkingSignature && findRealThinkingStartTag(cleanText, 0) >= 0 && strings.TrimSpace(reasoningArtifacts.Signature) == "" {
-		return "", nil, usage, stopReason, reasoningArtifacts, errors.New("missing provider-native Kiro thinking signature")
+		if !requestCtx.SuppressUnauthenticatedThinking {
+			return "", nil, usage, stopReason, reasoningArtifacts, errors.New("missing provider-native Kiro thinking signature")
+		}
+		// The provider-only reasoning is not authenticated. Strip it before
+		// constructing the Claude response rather than fabricating a signature.
+		cleanText = stripImplicitThinkingContent(cleanText)
 	}
 	toolUses = append(toolUses, embeddedToolUses...)
 	toolUses = deduplicateToolUses(toolUses)

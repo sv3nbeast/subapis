@@ -443,6 +443,88 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 	}
 }
 
+func TestNianzsMessagesThinkingWithoutProviderSignatureKeepsVisibleAnswer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"continue"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider omitted its opaque signature"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "visible answer"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	wire := recorder.Body.String()
+	var visible strings.Builder
+	for _, delta := range nianzsSSEPayloadsByType(wire, "content_block_delta") {
+		if delta.Get("delta.type").String() == "text_delta" {
+			visible.WriteString(delta.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "visible answer", visible.String())
+	require.NotContains(t, wire, "provider omitted its opaque signature")
+	require.NotContains(t, wire, "api_error")
+	require.Equal(t, 1, strings.Count(wire, "event: message_stop"), "wire=%q", wire)
+}
+
+func TestNianzsMessagesThinkingWithoutProviderSignatureKeepsVisibleAnswerNonStreaming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":false,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"continue"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(kiroEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider omitted its opaque signature"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "visible answer"},
+	}))
+	_, _ = stream.Write(kiroEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(stream.Bytes())),
+	})
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	wire := recorder.Body.String()
+	require.Equal(t, "visible answer", gjson.Get(wire, "content.0.text").String())
+	require.NotContains(t, wire, "provider omitted its opaque signature")
+	require.NotContains(t, wire, "api_error")
+}
+
 func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {

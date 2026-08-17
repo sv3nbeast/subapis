@@ -471,6 +471,7 @@ func TestBuildKiroPayloadInjectsAdaptiveThinkingForOpus5ThinkingModel(t *testing
 	require.Equal(t, "high", gjson.GetBytes(payload, "additionalModelRequestFields.output_config.effort").String())
 	require.True(t, kiroBuildResult.Context.ThinkingEnabled)
 	require.True(t, kiroBuildResult.Context.SuppressAdaptiveThinkingText)
+	require.True(t, kiroBuildResult.Context.SuppressUnauthenticatedThinking)
 }
 
 func TestBuildKiroPayloadPreservesNativeClaudeCodeSystemPrompt(t *testing.T) {
@@ -2433,6 +2434,42 @@ func TestStreamEventStreamAsAnthropicRejectsUnauthenticatedThinkingBeforeClientO
 	}
 }
 
+func TestStreamEventStreamAsAnthropicSuppressesMissingThinkingSignature(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider-only reasoning"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "visible answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	var out bytes.Buffer
+	result, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "claude-opus-5", 11,
+		KiroRequestContext{
+			ThinkingEnabled:                  true,
+			RequireProviderThinkingSignature: true,
+			SuppressUnauthenticatedThinking:  true,
+			RequireTerminalEvent:             true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "end_turn", result.StopReason)
+	events := parseAnthropicSSEEventsForTest(t, out.String())
+	var visibleText strings.Builder
+	for _, event := range events {
+		require.NotEqual(t, "thinking", event.Get("content_block.type").String())
+		if event.Get("delta.type").String() == "text_delta" {
+			visibleText.WriteString(event.Get("delta.text").String())
+		}
+	}
+	require.Equal(t, "visible answer", visibleText.String())
+	require.NotContains(t, out.String(), "provider-only reasoning")
+}
+
 func TestParseNonStreamingEventStreamRejectsUnauthenticatedThinking(t *testing.T) {
 	for _, signature := range []string{"", "not-a-provider-signature", providerThinkingSignatureFixture(t, false)} {
 		stream := bytes.NewBuffer(nil)
@@ -2450,6 +2487,31 @@ func TestParseNonStreamingEventStreamRejectsUnauthenticatedThinking(t *testing.T
 		})
 		require.Error(t, err)
 	}
+}
+
+func TestParseNonStreamingEventStreamSuppressesMissingThinkingSignature(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "reasoningContentEvent", map[string]any{
+		"reasoningContentEvent": map[string]any{"text": "provider-only reasoning"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "visible answer"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{
+		ThinkingEnabled:                  true,
+		RequireProviderThinkingSignature: true,
+		SuppressUnauthenticatedThinking:  true,
+		RequireTerminalEvent:             true,
+	})
+	require.NoError(t, err)
+	response := gjson.ParseBytes(result.ResponseBody)
+	require.Equal(t, "text", response.Get("content.0.type").String())
+	require.Equal(t, "visible answer", response.Get("content.0.text").String())
+	require.NotContains(t, string(result.ResponseBody), "provider-only reasoning")
 }
 
 func TestParseNonStreamingEventStreamSuppressesAdaptiveThinkingText(t *testing.T) {
