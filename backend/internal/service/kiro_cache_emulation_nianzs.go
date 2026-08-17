@@ -34,8 +34,12 @@ const (
 	nianzsKiroCacheMinTokensOpus    = 4096
 	// nianzsKiroCacheMinTokensGPT 与 default 同值但语义独立：1024 对齐 OpenAI 官方的最小
 	// 缓存粒度，不应随 default 一起调整。见 nianzsKiroMinimumCacheableTokens。
-	nianzsKiroCacheMinTokensGPT        = 1024
-	nianzsKiroCachePrefixLookbackLimit = 10
+	nianzsKiroCacheMinTokensGPT = 1024
+	// Anthropic prompt caching checks the explicit cache breakpoint plus the
+	// preceding 20 content blocks. Claude CLI moves its explicit breakpoint to
+	// the newest turn, so looking at explicit breakpoints alone loses the prior
+	// turn and repeatedly classifies the whole conversation tail as creation.
+	nianzsKiroCacheProtocolLookback = 20
 
 	// Claude 4.7+ changed its input accounting substantially, especially for
 	// tool schemas. These constants are calibrated against provider-native
@@ -861,6 +865,51 @@ func (p *nianzsKiroCacheProfile) lastCacheableBreakpoint() *nianzsKiroResolvedBr
 	return &last
 }
 
+// nianzsBuildKiroCacheLookupCandidates mirrors Anthropic's automatic prefix
+// matching window. A stored entry is still published only by an explicit
+// cache breakpoint, but a later explicit breakpoint may reuse a matching raw
+// content-block prefix within the preceding protocol lookback window. This is
+// what preserves cache continuity when Claude CLI moves cache_control from the
+// previous latest message to the new latest message.
+func nianzsBuildKiroCacheLookupCandidates(profile *nianzsKiroCacheProfile) []nianzsKiroResolvedBreakpoint {
+	if profile == nil {
+		return nil
+	}
+	breakpoints := profile.cacheableBreakpoints()
+	if len(breakpoints) == 0 {
+		return nil
+	}
+
+	byFingerprint := make(map[[32]byte]nianzsKiroResolvedBreakpoint)
+	for i := len(breakpoints) - 1; i >= 0; i-- {
+		breakpoint := breakpoints[i]
+		start := max(breakpoint.blockIndex-nianzsKiroCacheProtocolLookback, 0)
+		for blockIndex := breakpoint.blockIndex; blockIndex >= start; blockIndex-- {
+			block := profile.blocks[blockIndex]
+			if block.cumulativeTokens < profile.minCacheable {
+				continue
+			}
+			candidate := nianzsKiroResolvedBreakpoint{
+				blockIndex:       blockIndex,
+				cumulativeTokens: block.cumulativeTokens,
+				ttl:              breakpoint.ttl,
+			}
+			if existing, ok := byFingerprint[block.prefixFingerprint]; !ok || candidate.cumulativeTokens > existing.cumulativeTokens {
+				byFingerprint[block.prefixFingerprint] = candidate
+			}
+		}
+	}
+
+	candidates := make([]nianzsKiroResolvedBreakpoint, 0, len(byFingerprint))
+	for _, candidate := range byFingerprint {
+		candidates = append(candidates, candidate)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].cumulativeTokens > candidates[j].cumulativeTokens
+	})
+	return candidates
+}
+
 func (t *nianzsKiroCacheTracker) compute(cacheKey uint64, profile *nianzsKiroCacheProfile) *nianzsKiroCacheEmulationUsage {
 	out := &nianzsKiroCacheEmulationUsage{}
 	if t == nil || profile == nil || cacheKey == 0 {
@@ -871,6 +920,10 @@ func (t *nianzsKiroCacheTracker) compute(cacheKey uint64, profile *nianzsKiroCac
 		return out
 	}
 	lastBreakpointTokens := profile.cacheTokensForBreakpoint(lastBreakpoint.cumulativeTokens)
+	// Candidate construction hashes no shared state. Build and sort it before
+	// taking the tracker mutex so large Responses/Chat histories do not extend
+	// the global cache lock's critical section.
+	lookupCandidates := nianzsBuildKiroCacheLookupCandidates(profile)
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -878,17 +931,15 @@ func (t *nianzsKiroCacheTracker) compute(cacheKey uint64, profile *nianzsKiroCac
 
 	matchedTokens := 0
 	if accountEntries := t.entries[cacheKey]; accountEntries != nil {
-		breakpoints := profile.cacheableBreakpoints()
-		for i, seen := len(breakpoints)-1, 0; i >= 0 && seen < nianzsKiroCachePrefixLookbackLimit; i, seen = i-1, seen+1 {
-			breakpoint := breakpoints[i]
-			candidate := profile.blocks[breakpoint.blockIndex]
-			entry, ok := accountEntries[candidate.prefixFingerprint]
+		for _, candidate := range lookupCandidates {
+			block := profile.blocks[candidate.blockIndex]
+			entry, ok := accountEntries[block.prefixFingerprint]
 			if !ok || !entry.expiresAt.After(now) {
 				continue
 			}
 			entry.expiresAt = now.Add(entry.ttl)
-			accountEntries[candidate.prefixFingerprint] = entry
-			matchedTokens = profile.cacheTokensForBreakpoint(breakpoint.cumulativeTokens)
+			accountEntries[block.prefixFingerprint] = entry
+			matchedTokens = profile.cacheTokensForBreakpoint(candidate.cumulativeTokens)
 			break
 		}
 	}

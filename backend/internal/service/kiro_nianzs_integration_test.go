@@ -1218,6 +1218,69 @@ func TestNianzsMessagesRoutePreservesAccountCachePolicyInMixedAnthropicGroup(t *
 	}
 }
 
+func TestNianzsMessagesRouteMovingExplicitBreakpointReusesPreviousTurn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			resetNianzsKiroCacheTracker()
+			firstBody, secondBody := nianzsTestKiroMovingBreakpointWindowBodies(3, false, "5m")
+			streamValue := map[bool]string{false: "false", true: "true"}[stream]
+			firstBody = bytes.Replace(firstBody, []byte(`"model"`), []byte(`"stream":`+streamValue+`,"model"`), 1)
+			secondBody = bytes.Replace(secondBody, []byte(`"model"`), []byte(`"stream":`+streamValue+`,"model"`), 1)
+
+			groupID := int64(29)
+			group := &Group{
+				ID:                        groupID,
+				Platform:                  PlatformKiro,
+				Status:                    StatusActive,
+				KiroCacheEmulationEnabled: true,
+				KiroCacheEmulationRatio:   1,
+			}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+			account.Extra = map[string]any{
+				"kiro_cache_emulation_enabled": true,
+				"kiro_cache_emulation_ratio":   1.0,
+			}
+			firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+			secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+			upstream.responses = []*http.Response{
+				kiroEventStreamResponse(t, "first answer", firstInput, 4),
+				kiroEventStreamResponse(t, "second answer", secondInput, 4),
+			}
+
+			forward := func(body []byte) (*ForwardResult, string) {
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+				require.NoError(t, err)
+				parsed.GroupID = &groupID
+				parsed.Group = group
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+				result, err := svc.Forward(context.Background(), c, account, parsed)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				return result, recorder.Body.String()
+			}
+
+			first, firstWire := forward(firstBody)
+			require.Greater(t, first.Usage.CacheCreationInputTokens, 0)
+			require.Zero(t, first.Usage.CacheReadInputTokens)
+			second, secondWire := forward(secondBody)
+			require.Equal(t, first.Usage.CacheCreationInputTokens, second.Usage.CacheReadInputTokens)
+			require.Greater(t, second.Usage.CacheCreationInputTokens, 0)
+			require.Less(t, second.Usage.CacheCreationInputTokens, second.Usage.CacheReadInputTokens)
+			for _, wire := range []string{firstWire, secondWire} {
+				require.NotContains(t, wire, "api_error")
+				if stream {
+					require.Equal(t, 1, strings.Count(wire, "event: message_stop"), "wire=%q", wire)
+				}
+			}
+			require.Len(t, upstream.requests, 2)
+		})
+	}
+}
+
 func TestNianzsMessagesStreamFlushesBeforeUpstreamTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"messages":[{"role":"user","content":"flush early"}],"stream":true}`)

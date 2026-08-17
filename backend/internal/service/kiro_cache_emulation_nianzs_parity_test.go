@@ -340,6 +340,142 @@ func TestNianzsKiroCacheEmulationLeavesUnmarkedConversationTailUncached(t *testi
 	}
 }
 
+func TestNianzsKiroCacheEmulationMovingExplicitBreakpointReusesPreviousTurn(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := nianzsTestKiroCacheAccount(6001, "moving-breakpoint-refresh", "access-a")
+	group := nianzsTestKiroCacheGroup(1)
+
+	stableToolDescription := strings.Repeat("stable repository inspection tool schema ", 900)
+	stableHistory := strings.Repeat("stable long conversation history ", 1400)
+	firstLatest := strings.Repeat("first latest user turn ", 500)
+	firstBody := []byte(fmt.Sprintf(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":%q}]},
+			{"role":"assistant","content":[{"type":"text","text":"stable answer"}]},
+			{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]}
+		]
+	}`, stableToolDescription, stableHistory, firstLatest))
+	firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+	first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, firstBody, "claude-opus-5", firstInput)
+	require.NotNil(t, first)
+	require.Zero(t, first.CacheReadInputTokens)
+	require.Greater(t, first.CacheCreationInputTokens, 0)
+
+	secondLatest := strings.Repeat("second latest user turn ", 200)
+	secondBody := []byte(fmt.Sprintf(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":%q}]},
+			{"role":"assistant","content":[{"type":"text","text":"stable answer"}]},
+			{"role":"user","content":[{"type":"text","text":%q}]},
+			{"role":"assistant","content":[{"type":"text","text":"new answer"}]},
+			{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]}
+		]
+	}`, stableToolDescription, stableHistory, firstLatest, secondLatest))
+	secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-opus-5", secondInput)
+	require.NotNil(t, second)
+	require.Equal(t, first.CacheCreationInputTokens, second.CacheReadInputTokens,
+		"moving cache_control to the newest turn must reuse the previous explicit prefix")
+	require.Greater(t, second.CacheCreationInputTokens, 0)
+	require.Less(t, second.CacheCreationInputTokens, second.CacheReadInputTokens)
+}
+
+func TestNianzsKiroCacheEmulationMovingBreakpointHonorsProtocolLookbackBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		spacerBlocks         int
+		changePreviousPrefix bool
+		wantPreviousTurnHit  bool
+	}{
+		{name: "twenty_blocks_inclusive", spacerBlocks: 19, wantPreviousTurnHit: true},
+		{name: "twenty_one_blocks_misses", spacerBlocks: 20, wantPreviousTurnHit: false},
+		{name: "changed_prefix_misses", spacerBlocks: 4, changePreviousPrefix: true, wantPreviousTurnHit: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetNianzsKiroCacheTracker()
+			svc := &GatewayService{}
+			account := nianzsTestKiroCacheAccount(6100+int64(tc.spacerBlocks), "lookback-"+tc.name, "access")
+			group := nianzsTestKiroCacheGroup(1)
+			firstBody, secondBody := nianzsTestKiroMovingBreakpointWindowBodies(tc.spacerBlocks, tc.changePreviousPrefix, "5m")
+
+			firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+			first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, firstBody, "claude-opus-5", firstInput)
+			require.NotNil(t, first)
+			require.Zero(t, first.CacheReadInputTokens)
+
+			firstProfile, ok := nianzsBuildKiroCacheProfile(context.Background(), firstBody, "claude-opus-5", firstInput)
+			require.True(t, ok)
+			breakpoints := firstProfile.cacheableBreakpoints()
+			require.Len(t, breakpoints, 2)
+			stableToolTokens := firstProfile.cacheTokensForBreakpoint(breakpoints[0].cumulativeTokens)
+
+			secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+			second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-opus-5", secondInput)
+			require.NotNil(t, second)
+			if tc.wantPreviousTurnHit {
+				require.Equal(t, first.CacheCreationInputTokens, second.CacheReadInputTokens)
+				require.Less(t, second.CacheCreationInputTokens, second.CacheReadInputTokens)
+				return
+			}
+			require.Equal(t, stableToolTokens, second.CacheReadInputTokens)
+			require.Less(t, second.CacheReadInputTokens, first.CacheCreationInputTokens)
+			require.Greater(t, second.CacheCreationInputTokens, 0)
+		})
+	}
+}
+
+func TestNianzsKiroCacheEmulationMovingBreakpointPreservesOneHourCreationBucket(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := nianzsTestKiroCacheAccount(6201, "moving-one-hour", "access")
+	group := nianzsTestKiroCacheGroup(1)
+	firstBody, secondBody := nianzsTestKiroMovingBreakpointWindowBodies(3, false, "1h")
+
+	firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+	first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, firstBody, "claude-opus-5", firstInput)
+	require.NotNil(t, first)
+	require.Equal(t, first.CacheCreationInputTokens, first.CacheCreation1hInputTokens)
+	require.Zero(t, first.CacheCreation5mInputTokens)
+
+	secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-opus-5", secondInput)
+	require.NotNil(t, second)
+	require.Equal(t, first.CacheCreationInputTokens, second.CacheReadInputTokens)
+	require.Greater(t, second.CacheCreationInputTokens, 0)
+	require.Equal(t, second.CacheCreationInputTokens, second.CacheCreation1hInputTokens)
+	require.Zero(t, second.CacheCreation5mInputTokens)
+}
+
+func BenchmarkNianzsKiroCacheEmulationMovingBreakpointLookup(b *testing.B) {
+	firstBody, secondBody := nianzsTestKiroMovingBreakpointWindowBodies(19, false, "5m")
+	firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+	firstProfile, ok := nianzsBuildKiroCacheProfile(context.Background(), firstBody, "claude-opus-5", firstInput)
+	if !ok {
+		b.Fatal("failed to build seed cache profile")
+	}
+	secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+	secondProfile, ok := nianzsBuildKiroCacheProfile(context.Background(), secondBody, "claude-opus-5", secondInput)
+	if !ok {
+		b.Fatal("failed to build lookup cache profile")
+	}
+	tracker := &nianzsKiroCacheTracker{entries: make(map[uint64]map[[32]byte]nianzsKiroCacheEntry)}
+	tracker.update(1, firstProfile)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		usage := tracker.compute(1, secondProfile)
+		if usage.CacheReadInputTokens == 0 {
+			b.Fatal("moving breakpoint lookup unexpectedly missed")
+		}
+	}
+}
+
 func TestNianzsKiroInputTokenEstimateIgnoresClientMetadata(t *testing.T) {
 	bodyWithoutMetadata := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello world"}]}`)
 	bodyWithMetadata := []byte(`{"model":"claude-sonnet-4-6","metadata":{"input_tokens":999999},"messages":[{"role":"user","content":"hello world"}]}`)
@@ -950,6 +1086,38 @@ func nianzsTestKiroCacheMultiMessageBody(prefixLabel, tailLabel string) []byte {
 	prefix := strings.Repeat("cacheable prompt chunk "+prefixLabel+" ", 512)
 	tail := strings.Repeat("conversation growth chunk "+tailLabel+" ", 160)
 	return []byte(fmt.Sprintf(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}]},{"role":"user","content":[{"type":"text","text":%q}]}]}`, prefix, tail))
+}
+
+func nianzsTestKiroMovingBreakpointWindowBodies(spacerBlocks int, changePreviousPrefix bool, ttl string) ([]byte, []byte) {
+	toolDescription := strings.Repeat("stable protocol tool schema ", 850)
+	previousPrefix := strings.Repeat("previous explicit cache prefix ", 950)
+	firstTTL := ""
+	secondTTL := ""
+	if ttl == "1h" {
+		firstTTL = `,"ttl":"1h"`
+		secondTTL = firstTTL
+	}
+	firstBody := []byte(fmt.Sprintf(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"%s}}],
+		"messages":[{"role":"user","content":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"%s}}]}]
+	}`, toolDescription, firstTTL, previousPrefix, firstTTL))
+
+	secondPreviousPrefix := previousPrefix
+	if changePreviousPrefix {
+		secondPreviousPrefix += " changed"
+	}
+	contentBlocks := []string{fmt.Sprintf(`{"type":"text","text":%q}`, secondPreviousPrefix)}
+	for i := 0; i < spacerBlocks; i++ {
+		contentBlocks = append(contentBlocks, fmt.Sprintf(`{"type":"text","text":"new uncached block %d"}`, i))
+	}
+	contentBlocks = append(contentBlocks, fmt.Sprintf(`{"type":"text","text":"new explicit latest turn","cache_control":{"type":"ephemeral"%s}}`, secondTTL))
+	secondBody := []byte(fmt.Sprintf(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"inspect","description":%q,"input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"%s}}],
+		"messages":[{"role":"user","content":[%s]}]
+	}`, toolDescription, firstTTL, strings.Join(contentBlocks, ",")))
+	return firstBody, secondBody
 }
 
 func nianzsTestKiroChatCompletionsConversationBody(messages []string) []byte {
