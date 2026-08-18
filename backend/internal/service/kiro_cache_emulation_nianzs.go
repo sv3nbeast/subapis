@@ -273,6 +273,7 @@ type nianzsKiroCacheProfile struct {
 	totalInputTokens              int
 	minCacheable                  int
 	scaleBreakpointsToInputTokens bool
+	completeBreakpointUsesTotal   bool
 	blocks                        []nianzsKiroCacheBlock
 	breakpoints                   []nianzsKiroCacheBreakpoint
 }
@@ -310,12 +311,13 @@ func nianzsBuildKiroCacheProfile(ctx context.Context, body []byte, model string,
 	if len(blocks) == 0 {
 		return nil, false
 	}
-	if nianzsUsesModernClaudeInputAccounting(model) {
-		nianzsApplyModernClaudeCacheBlockTokens(ctx, blocks)
-	}
 	totalTokens := inputTokens
 	if totalTokens <= 0 {
 		totalTokens = nianzsCountKiroInputTokensFromPayload(ctx, payload)
+	}
+	modernClaudeAccounting := nianzsUsesModernClaudeInputAccounting(model)
+	if modernClaudeAccounting {
+		nianzsApplyModernClaudeCacheBlockTokens(ctx, payload, model, totalTokens, blocks)
 	}
 	prelude := map[string]any{
 		"model":         payload["model"],
@@ -323,7 +325,11 @@ func nianzsBuildKiroCacheProfile(ctx context.Context, body []byte, model string,
 		"thinking":      payload["thinking"],
 		"output_config": payload["output_config"],
 	}
-	return nianzsBuildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
+	profile, ok := nianzsBuildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
+	if ok && modernClaudeAccounting {
+		profile.completeBreakpointUsesTotal = true
+	}
+	return profile, ok
 }
 
 func nianzsBuildKiroResponsesCacheProfile(ctx context.Context, body []byte, model string, inputTokens int) (*nianzsKiroCacheProfile, bool) {
@@ -940,6 +946,14 @@ func (t *nianzsKiroCacheTracker) compute(cacheKey uint64, profile *nianzsKiroCac
 			entry.expiresAt = now.Add(entry.ttl)
 			accountEntries[block.prefixFingerprint] = entry
 			matchedTokens = profile.cacheTokensForBreakpoint(candidate.cumulativeTokens)
+			if profile.completeBreakpointUsesTotal {
+				// The cached entry records the token total at the time this exact
+				// prefix was created. Use it instead of re-deriving the amount from
+				// the longer current request: a breakpoint that covered the complete
+				// prior request also cached its message-envelope remainder, which is
+				// no longer the final remainder in the appended request's block split.
+				matchedTokens = min(max(entry.tokens, 0), lastBreakpointTokens)
+			}
 			break
 		}
 	}
@@ -954,10 +968,15 @@ func (p *nianzsKiroCacheProfile) cacheTokensForBreakpoint(cumulativeTokens int) 
 	if p == nil {
 		return 0
 	}
+	lastBreakpoint := p.lastCacheableBreakpoint()
+	if p.completeBreakpointUsesTotal && lastBreakpoint != nil &&
+		lastBreakpoint.blockIndex == len(p.blocks)-1 &&
+		cumulativeTokens >= lastBreakpoint.cumulativeTokens {
+		return p.totalInputTokens
+	}
 	if !p.scaleBreakpointsToInputTokens {
 		return min(max(cumulativeTokens, 0), p.totalInputTokens)
 	}
-	lastBreakpoint := p.lastCacheableBreakpoint()
 	if lastBreakpoint == nil || lastBreakpoint.cumulativeTokens <= 0 {
 		return min(max(cumulativeTokens, 0), p.totalInputTokens)
 	}
@@ -995,10 +1014,14 @@ func (t *nianzsKiroCacheTracker) update(cacheKey uint64, profile *nianzsKiroCach
 	}
 	for _, breakpoint := range profile.cacheableBreakpoints() {
 		block := profile.blocks[breakpoint.blockIndex]
+		storedTokens := block.cumulativeTokens
+		if profile.completeBreakpointUsesTotal {
+			storedTokens = profile.cacheTokensForBreakpoint(block.cumulativeTokens)
+		}
 		expiresAt := now.Add(breakpoint.ttl)
 		entry, ok := accountEntries[block.prefixFingerprint]
 		if ok {
-			entry.tokens = max(entry.tokens, block.cumulativeTokens)
+			entry.tokens = max(entry.tokens, storedTokens)
 			entry.ttl = nianzsMaxDuration(entry.ttl, breakpoint.ttl)
 			if expiresAt.After(entry.expiresAt) {
 				entry.expiresAt = expiresAt
@@ -1006,7 +1029,7 @@ func (t *nianzsKiroCacheTracker) update(cacheKey uint64, profile *nianzsKiroCach
 			accountEntries[block.prefixFingerprint] = entry
 			continue
 		}
-		accountEntries[block.prefixFingerprint] = nianzsKiroCacheEntry{tokens: block.cumulativeTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
+		accountEntries[block.prefixFingerprint] = nianzsKiroCacheEntry{tokens: storedTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
 	}
 }
 
@@ -1245,6 +1268,166 @@ func nianzsModernClaudeCachedToolBoundaryTokens(payload map[string]any, model st
 	if len(tools) == 0 {
 		return 0
 	}
+	cachedTools := nianzsModernClaudeCachedToolCount(payload)
+	if cachedTools == 0 {
+		return 0
+	}
+	cacheableEstimate := 0
+	for _, tool := range tools[:cachedTools] {
+		cacheableEstimate += nianzsCountModernClaudeToolDefinitionTokens(tool)
+	}
+	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
+		cacheableEstimate += nianzsCountModernClaudeSystemBlockTokens(block)
+	}
+	if cacheableEstimate < nianzsKiroMinimumCacheableTokens(model) {
+		return 0
+	}
+	return int(math.Round(float64(cachedTools*nianzsModernClaudeCachedToolBoundaryNum) / float64(nianzsModernClaudeCachedToolBoundaryDen)))
+}
+
+func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, payload map[string]any, model string, totalTokens int, blocks []nianzsKiroPendingBlock) {
+	messageBlockIndexes := make([]int, 0, len(blocks))
+	messageMetadataWeights := make([]int, 0, len(blocks))
+	toolBlockIndexes := make([]int, 0, len(blocks))
+	for index := range blocks {
+		wrapper, _ := blocks[index].value.(map[string]any)
+		kind, _ := wrapper["kind"].(string)
+		switch kind {
+		case "tool":
+			blocks[index].tokens = nianzsCountModernClaudeToolDefinitionTokens(wrapper["tool"])
+			toolBlockIndexes = append(toolBlockIndexes, index)
+		case "system":
+			blocks[index].tokens = nianzsCountModernClaudeSystemBlockTokens(wrapper["block"])
+		case "message":
+			messageBlockIndexes = append(messageBlockIndexes, index)
+			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokens(ctx, wrapper["block"])
+			role, _ := wrapper["role"].(string)
+			messageMetadataWeights = append(messageMetadataWeights, nianzsModernClaudeMessageMetadataWeight(wrapper["block"])+len(role)+nianzsKiroTokensPerMessage)
+		}
+	}
+
+	// The provider's modern Messages usage counts protocol metadata that the
+	// content-only cache estimator historically ignored: thinking signatures,
+	// tool call identifiers, block types, roles and message framing. In a long
+	// Claude CLI replay those fields can be larger than the visible text, so
+	// subtracting content-only cache blocks from the complete message estimate
+	// misclassifies hundreds of thousands of already-cached tokens as input.
+	// Count semantic content directly. The remaining request-level message
+	// tokens are protocol metadata (thinking signatures, tool IDs, block types,
+	// roles and framing), so distribute that exact remainder only among the
+	// blocks that own those metadata bytes. This keeps a large signed history in
+	// the cached prefix instead of leaking it into an unrelated current text
+	// tail. Prefix hits still use the exact total stored with the old fingerprint,
+	// so appending a turn cannot retroactively change the amount read from it.
+
+	// Claude 4.7+ also reports a small hidden envelope at the cached tool
+	// boundary. It belongs to the cached prefix rather than the uncached tail.
+	// Attach it to the last covered tool so a breakpoint on a tool, system or
+	// message includes the same total that the request-level estimator adds.
+	boundaryTokens := nianzsModernClaudeCachedToolBoundaryTokens(payload, model)
+	if boundaryTokens > 0 && len(toolBlockIndexes) > 0 {
+		cachedTools := min(nianzsModernClaudeCachedToolCount(payload), len(toolBlockIndexes))
+		if cachedTools > 0 {
+			blocks[toolBlockIndexes[cachedTools-1]].tokens += boundaryTokens
+		}
+	}
+	nonMessageTokens := 0
+	for index := range blocks {
+		wrapper, _ := blocks[index].value.(map[string]any)
+		kind, _ := wrapper["kind"].(string)
+		if kind != "message" {
+			nonMessageTokens += max(blocks[index].tokens, 0)
+		}
+	}
+	nianzsDistributeModernClaudeMessageTokens(blocks, messageBlockIndexes, messageMetadataWeights, max(totalTokens-nonMessageTokens, 0))
+}
+
+func nianzsModernClaudeMessageMetadataWeight(value any) int {
+	block, ok := value.(map[string]any)
+	if !ok || len(block) == 0 {
+		return 0
+	}
+	_, _, imageBlock := nianzsKiroImageTokenSource(block)
+	metadata := make(map[string]any, len(block))
+	for key, child := range block {
+		switch key {
+		case "cache_control", "text", "thinking", "input", "content":
+			continue
+		case "source":
+			if imageBlock {
+				continue
+			}
+		}
+		metadata[key] = child
+	}
+	canonical, err := nianzsCanonicalJSON(metadata)
+	if err != nil {
+		return 0
+	}
+	return len(canonical)
+}
+
+func nianzsDistributeModernClaudeMessageTokens(blocks []nianzsKiroPendingBlock, indexes, metadataWeights []int, target int) {
+	if len(indexes) == 0 || len(indexes) != len(metadataWeights) {
+		return
+	}
+	baseTotal := 0
+	for _, index := range indexes {
+		baseTotal += max(blocks[index].tokens, 0)
+	}
+	if target <= 0 {
+		for _, index := range indexes {
+			blocks[index].tokens = 0
+		}
+		return
+	}
+	if baseTotal >= target {
+		nianzsScaleModernClaudeBlockComponent(blocks, indexes, nil, target, false)
+		return
+	}
+	nianzsScaleModernClaudeBlockComponent(blocks, indexes, metadataWeights, target-baseTotal, true)
+}
+
+func nianzsScaleModernClaudeBlockComponent(blocks []nianzsKiroPendingBlock, indexes, weights []int, target int, add bool) {
+	weightTotal := 0
+	for offset, index := range indexes {
+		weight := max(blocks[index].tokens, 0)
+		if weights != nil {
+			weight = max(weights[offset], 0)
+		}
+		weightTotal += weight
+	}
+	if weightTotal <= 0 {
+		last := indexes[len(indexes)-1]
+		if add {
+			blocks[last].tokens += target
+		} else {
+			blocks[last].tokens = target
+		}
+		return
+	}
+	weightCumulative := 0
+	scaledCumulative := 0
+	for offset, index := range indexes {
+		weight := max(blocks[index].tokens, 0)
+		if weights != nil {
+			weight = max(weights[offset], 0)
+		}
+		weightCumulative += weight
+		nextScaled := int(math.Round(float64(weightCumulative) * float64(target) / float64(weightTotal)))
+		nextScaled = min(max(nextScaled, scaledCumulative), target)
+		component := nextScaled - scaledCumulative
+		if add {
+			blocks[index].tokens += component
+		} else {
+			blocks[index].tokens = component
+		}
+		scaledCumulative = nextScaled
+	}
+}
+
+func nianzsModernClaudeCachedToolCount(payload map[string]any) int {
+	tools, _ := payload["tools"].([]any)
 	cachedTools := 0
 	for index, tool := range tools {
 		if nianzsExtractKiroCacheTTL(tool) != nil {
@@ -1267,35 +1450,7 @@ func nianzsModernClaudeCachedToolBoundaryTokens(payload map[string]any, model st
 			}
 		}
 	}
-	if cachedTools == 0 {
-		return 0
-	}
-	cacheableEstimate := 0
-	for _, tool := range tools[:cachedTools] {
-		cacheableEstimate += nianzsCountModernClaudeToolDefinitionTokens(tool)
-	}
-	for _, block := range nianzsNormalizeKiroSystemBlocks(payload["system"]) {
-		cacheableEstimate += nianzsCountModernClaudeSystemBlockTokens(block)
-	}
-	if cacheableEstimate < nianzsKiroMinimumCacheableTokens(model) {
-		return 0
-	}
-	return int(math.Round(float64(cachedTools*nianzsModernClaudeCachedToolBoundaryNum) / float64(nianzsModernClaudeCachedToolBoundaryDen)))
-}
-
-func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, blocks []nianzsKiroPendingBlock) {
-	for index := range blocks {
-		wrapper, _ := blocks[index].value.(map[string]any)
-		kind, _ := wrapper["kind"].(string)
-		switch kind {
-		case "tool":
-			blocks[index].tokens = nianzsCountModernClaudeToolDefinitionTokens(wrapper["tool"])
-		case "system":
-			blocks[index].tokens = nianzsCountModernClaudeSystemBlockTokens(wrapper["block"])
-		case "message":
-			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokens(ctx, wrapper["block"])
-		}
-	}
+	return cachedTools
 }
 
 func nianzsCountKiroToolDefinitionTokens(value any) int {

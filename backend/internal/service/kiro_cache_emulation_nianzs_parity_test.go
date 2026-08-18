@@ -565,6 +565,175 @@ func TestNianzsModernClaudeHighEntropyMessageUsesProviderFraming(t *testing.T) {
 	require.Equal(t, want, nianzsCountModernClaudeMessagesTokens(context.Background(), messages))
 }
 
+func TestNianzsModernClaudeCachedProtocolMetadataDoesNotLeakIntoInput(t *testing.T) {
+	body := nianzsModernClaudeSignedHistoryBody(t, 150, true)
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-4-8", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+
+	// The final explicit breakpoint covers the complete request. Signatures,
+	// tool IDs and message framing are part of that cached prefix; none of them
+	// may remain behind as ordinary input merely because they are protocol
+	// metadata rather than visible text.
+	require.Equal(t, inputTokens, profile.cacheTokensForBreakpoint(last.cumulativeTokens))
+}
+
+func TestNianzsModernClaudeSignedPrefixLeavesOnlyCurrentTailAsInput(t *testing.T) {
+	prefixBody := nianzsModernClaudeSignedHistoryBody(t, 150, true)
+	prefixTokens := nianzsEstimateKiroInputTokens(context.Background(), prefixBody)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(prefixBody, &payload))
+	messages, _ := payload["messages"].([]any)
+	payload["messages"] = append(messages, map[string]any{
+		"role": "user",
+		"content": []any{map[string]any{
+			"type": "text",
+			"text": strings.Repeat("uncached current request ", 1000),
+		}},
+	})
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-4-8", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+	cacheTokens := profile.cacheTokensForBreakpoint(last.cumulativeTokens)
+
+	// The signed history owns the protocol-metadata remainder while the new,
+	// unmarked text remains ordinary input. Request-level framing can differ by
+	// a handful of tokens when the new message is appended, but not by thousands.
+	require.InDelta(t, prefixTokens, cacheTokens, 32)
+	require.InDelta(t, inputTokens-prefixTokens, inputTokens-cacheTokens, 32)
+}
+
+func TestNianzsModernClaudeSystemBreakpointKeepsRealMessageTailAsInput(t *testing.T) {
+	body := nianzsModernClaudeSignedHistoryBody(t, 40, false)
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-4-8", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	messages, _ := payload["messages"].([]any)
+	messageTokens := nianzsCountModernClaudeMessagesTokens(context.Background(), messages)
+	cacheTokens := profile.cacheTokensForBreakpoint(last.cumulativeTokens)
+	require.Equal(t, messageTokens, inputTokens-cacheTokens)
+	require.Greater(t, cacheTokens, nianzsKiroCacheMinTokensOpus)
+}
+
+func TestNianzsModernClaudeMovingBreakpointCachesSignedHistory(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := nianzsTestKiroCacheAccount(9048, "refresh-modern-signed", "access-modern-signed")
+	group := nianzsTestKiroCacheGroup(1)
+
+	firstBody := nianzsModernClaudeMovingSignedHistoryBody(t, 40, false)
+	firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+	first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, firstBody, "claude-opus-4-8", firstInput)
+	require.NotNil(t, first)
+	require.Zero(t, first.InputTokens)
+	require.Equal(t, firstInput, first.CacheCreationInputTokens)
+
+	secondBody := nianzsModernClaudeMovingSignedHistoryBody(t, 40, true)
+	secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-opus-4-8", secondInput)
+	require.NotNil(t, second)
+	require.Zero(t, second.InputTokens)
+	require.Equal(t, first.CacheCreationInputTokens, second.CacheReadInputTokens)
+	require.Greater(t, second.CacheCreationInputTokens, 0)
+	require.Equal(t, secondInput, second.CacheReadInputTokens+second.CacheCreationInputTokens)
+}
+
+func nianzsModernClaudeSignedHistoryBody(t testing.TB, turns int, cacheFinalMessage bool) []byte {
+	t.Helper()
+	messages := make([]any, 0, turns+1)
+	for i := 0; i < turns; i++ {
+		messages = append(messages, map[string]any{
+			"role": "assistant",
+			"content": []any{map[string]any{
+				"type":      "thinking",
+				"thinking":  "brief thought",
+				"signature": strings.Repeat(fmt.Sprintf("SIG%06d", i), 150),
+				"id":        fmt.Sprintf("toolu_%08d", i),
+			}},
+		})
+	}
+	finalBlock := map[string]any{"type": "text", "text": "continue"}
+	if cacheFinalMessage {
+		finalBlock["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": []any{finalBlock}})
+	payload := map[string]any{
+		"model": "claude-opus-4-8",
+		"system": []any{map[string]any{
+			"type":          "text",
+			"text":          strings.Repeat("system guidance ", 10000),
+			"cache_control": map[string]any{"type": "ephemeral"},
+		}},
+		"messages": messages,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return body
+}
+
+func BenchmarkNianzsModernClaudeSignedHistoryAccounting(b *testing.B) {
+	body := nianzsModernClaudeSignedHistoryBody(b, 150, true)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for range b.N {
+		inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
+		if _, ok := nianzsBuildKiroCacheProfile(ctx, body, "claude-opus-4-8", inputTokens); !ok {
+			b.Fatal("failed to build modern Claude cache profile")
+		}
+	}
+}
+
+func nianzsModernClaudeMovingSignedHistoryBody(t *testing.T, turns int, appendTail bool) []byte {
+	t.Helper()
+	messages := make([]any, 0, turns+2)
+	for i := 0; i < turns; i++ {
+		messages = append(messages, map[string]any{
+			"role": "assistant",
+			"content": []any{map[string]any{
+				"type":      "thinking",
+				"thinking":  "brief thought",
+				"signature": strings.Repeat(fmt.Sprintf("SIG%06d", i), 120),
+			}},
+		})
+	}
+	stable := map[string]any{"type": "text", "text": "stable checkpoint"}
+	if !appendTail {
+		stable["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": []any{stable}})
+	if appendTail {
+		messages = append(messages, map[string]any{"role": "assistant", "content": []any{
+			map[string]any{"type": "text", "text": "new answer"},
+			map[string]any{"type": "text", "text": "new checkpoint", "cache_control": map[string]any{"type": "ephemeral"}},
+		}})
+	}
+	payload := map[string]any{
+		"model": "claude-opus-4-8",
+		"system": []any{map[string]any{
+			"type":          "text",
+			"text":          strings.Repeat("system guidance ", 10000),
+			"cache_control": map[string]any{"type": "ephemeral"},
+		}},
+		"messages": messages,
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return body
+}
+
 func TestNianzsModernClaudeCacheStopsAtExplicitSystemBreakpoint(t *testing.T) {
 	systemText := strings.Repeat("cacheable system guidance ", 6000)
 	body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"tools":[{"name":"lookup","description":"Look up one exact value.","input_schema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}],"messages":[{"role":"user","content":"uncached conversation tail"}]}`, systemText))
@@ -581,7 +750,9 @@ func TestNianzsModernClaudeCacheStopsAtExplicitSystemBreakpoint(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &payload))
 	tools := payload["tools"].([]any)
 	systemBlocks := nianzsNormalizeKiroSystemBlocks(payload["system"])
-	expectedCacheTokens := nianzsCountModernClaudeToolDefinitionTokens(tools[0]) + nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0])
+	expectedCacheTokens := nianzsCountModernClaudeToolDefinitionTokens(tools[0]) +
+		nianzsCountModernClaudeSystemBlockTokens(systemBlocks[0]) +
+		nianzsModernClaudeCachedToolBoundaryTokens(payload, "claude-opus-5")
 	require.Equal(t, expectedCacheTokens, cacheTokens)
 }
 
