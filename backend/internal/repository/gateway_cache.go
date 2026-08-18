@@ -24,6 +24,7 @@ const kiroCacheShadowStreamKey = "kiro_cache_shadow_samples:v1"
 const kiroCacheShadowMetricsPrefix = "kiro_cache_shadow_metrics:v1:"
 const kiroCacheShadowRetention = 7 * 24 * time.Hour
 const kiroCacheShadowMaxSamples = 200000
+const gatewayRetryBillingPrefix = "gateway_retry_billing:v1:"
 
 const commitKiroCacheFingerprintsScript = `
 local existing = {}
@@ -51,6 +52,47 @@ var _ service.KiroCacheShadowStore = (*gatewayCache)(nil)
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 	return &gatewayCache{rdb: rdb}
+}
+
+func gatewayRetryBillingKey(fingerprint string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(fingerprint)))
+	return gatewayRetryBillingPrefix + hex.EncodeToString(digest[:])
+}
+
+// MarkPreSemanticFailure records a retryable gateway failure without creating
+// a usage row. SETNX keeps the first logical request ID stable if multiple
+// accounts fail before a client retry arrives.
+func (c *gatewayCache) MarkPreSemanticFailure(ctx context.Context, fingerprint, logicalRequestID string, ttl time.Duration) error {
+	if c == nil || c.rdb == nil || strings.TrimSpace(fingerprint) == "" || strings.TrimSpace(logicalRequestID) == "" || ttl <= 0 {
+		return nil
+	}
+	_, err := c.rdb.SetNX(ctx, gatewayRetryBillingKey(fingerprint), strings.TrimSpace(logicalRequestID), ttl).Result()
+	return err
+}
+
+// GetPreSemanticFailure reads (without deleting) the retry marker. Keeping the
+// marker until settlement lets concurrent or repeated client retries share one
+// logical billing identity; the handler clears it only after usage settlement.
+func (c *gatewayCache) GetPreSemanticFailure(ctx context.Context, fingerprint string) (string, bool, error) {
+	if c == nil || c.rdb == nil || strings.TrimSpace(fingerprint) == "" {
+		return "", false, nil
+	}
+	logicalRequestID, err := c.rdb.Get(ctx, gatewayRetryBillingKey(fingerprint)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	logicalRequestID = strings.TrimSpace(logicalRequestID)
+	return logicalRequestID, logicalRequestID != "", nil
+}
+
+func (c *gatewayCache) ClearPreSemanticFailure(ctx context.Context, fingerprint string) error {
+	if c == nil || c.rdb == nil || strings.TrimSpace(fingerprint) == "" {
+		return nil
+	}
+	return c.rdb.Del(ctx, gatewayRetryBillingKey(fingerprint)).Err()
 }
 
 // buildSessionKey 构建 session key，包含 groupID 实现分组隔离

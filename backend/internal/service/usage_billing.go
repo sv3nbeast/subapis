@@ -50,7 +50,13 @@ func (c *UsageBillingCommand) Normalize() {
 		return
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
-	if strings.TrimSpace(c.RequestFingerprint) == "" {
+	if IsGatewayRetryLogicalRequestID(c.RequestID) {
+		// A linked gateway retry may settle on a different physical account and
+		// report a different provider token split. Its logical ID is the source
+		// of truth; account-scoped fingerprints would turn a valid duplicate
+		// claim into a conflict instead of suppressing it.
+		c.RequestFingerprint = BuildGatewayRetryBillingFingerprint(c.RequestID)
+	} else if strings.TrimSpace(c.RequestFingerprint) == "" {
 		c.RequestFingerprint = buildUsageBillingFingerprint(c)
 	}
 	// 量化必须在指纹计算之后：指纹是请求幂等键，保持由原始金额派生可以避免

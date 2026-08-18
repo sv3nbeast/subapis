@@ -439,6 +439,111 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 	// 判断是否真的绑定了粘性会话：有 sessionKey 且已经绑定到某个账号
 	hasBoundSession := sessionKey != "" && sessionBoundAccountID > 0
+	// The middleware-generated client request ID changes when Claude/Codex
+	// retries an HTTP request. Keep a separate, body-bound retry fingerprint so
+	// a pre-semantic gateway failure can be settled exactly once by the next
+	// matching request without collapsing ordinary repeated prompts.
+	retryFingerprint, retryMarkerID := service.BuildGatewayRetryFingerprint(
+		subject.UserID,
+		apiKey.ID,
+		apiKey.GroupID,
+		platform,
+		reqModel,
+		service.ExtractClientSessionID(c),
+		body,
+	)
+	logicalRetryRequestID := ""
+	// Read lazily immediately before the first real upstream Forward. This keeps
+	// a marker alive when account selection, warmup interception, or a local
+	// queue check rejects the request without touching the upstream. The marker
+	// is cleared only after usage settlement so concurrent retries share it.
+	consumeGatewayPreSemanticRetry := func() {
+		if retryFingerprint == "" || logicalRetryRequestID != "" {
+			return
+		}
+		markerID, ok, err := h.gatewayService.GetGatewayPreSemanticRetry(c.Request.Context(), retryFingerprint)
+		if err != nil {
+			reqLog.Warn("gateway.retry_billing.marker_read_failed",
+				zap.String("retry_fingerprint", retryFingerprint),
+				zap.Error(err),
+			)
+			return
+		}
+		if !ok {
+			return
+		}
+		logicalRetryRequestID = strings.TrimSpace(markerID)
+		if logicalRetryRequestID == "" {
+			logicalRetryRequestID = retryMarkerID
+		}
+		reqLog.Info("gateway.retry_billing.retry_linked",
+			zap.String("logical_request_id", logicalRetryRequestID),
+			zap.String("retry_fingerprint", retryFingerprint),
+		)
+	}
+	markGatewayPreSemanticFailure := func(accountID int64, failoverErr *service.UpstreamFailoverError) {
+		if retryFingerprint == "" || !service.IsGatewayPreSemanticRetryableFailure(failoverErr) {
+			return
+		}
+		markerID := retryMarkerID
+		if logicalRetryRequestID != "" {
+			markerID = logicalRetryRequestID
+		}
+		stateCtx, stateCancel := gatewayPostForwardStateContext(c.Request.Context())
+		defer stateCancel()
+		if err := h.gatewayService.MarkGatewayPreSemanticFailure(stateCtx, retryFingerprint, markerID); err != nil {
+			reqLog.Warn("gateway.retry_billing.marker_write_failed",
+				zap.Int64("account_id", accountID),
+				zap.String("logical_request_id", markerID),
+				zap.String("retry_fingerprint", retryFingerprint),
+				zap.Error(err),
+			)
+			return
+		}
+		reqLog.Warn("gateway.retry_billing.presemantic_failure_marked",
+			zap.Int64("account_id", accountID),
+			zap.String("logical_request_id", markerID),
+			zap.String("retry_fingerprint", retryFingerprint),
+			zap.Int("upstream_status", failoverErr.StatusCode),
+		)
+	}
+	markGatewayPreSemanticNetworkFailure := func(accountID int64, writerSizeBeforeForward int, err error) {
+		// A plain transport error is only retry-billing-safe when Forward did
+		// not write anything to the client. Once bytes are visible, the request
+		// may have produced semantic output and must retain its own usage record.
+		if c.Writer.Size() != writerSizeBeforeForward {
+			return
+		}
+		if !service.IsGatewayPreSemanticNetworkError(err) {
+			return
+		}
+		markGatewayPreSemanticFailure(accountID, &service.UpstreamFailoverError{
+			StatusCode:  http.StatusBadGateway,
+			FailureKind: service.UpstreamFailureTransportError,
+			Cause:       err,
+		})
+	}
+	clearGatewayPreSemanticRetryMarker := func(parent context.Context, accountID int64) {
+		if retryFingerprint == "" || logicalRetryRequestID == "" {
+			return
+		}
+		stateCtx, stateCancel := gatewayPostForwardStateContext(parent)
+		defer stateCancel()
+		if err := h.gatewayService.ClearGatewayPreSemanticRetry(stateCtx, retryFingerprint); err != nil {
+			reqLog.Warn("gateway.retry_billing.marker_clear_failed",
+				zap.Int64("account_id", accountID),
+				zap.String("logical_request_id", logicalRetryRequestID),
+				zap.String("retry_fingerprint", retryFingerprint),
+				zap.Error(err),
+			)
+			return
+		}
+		reqLog.Info("gateway.retry_billing.settled",
+			zap.Int64("account_id", accountID),
+			zap.String("logical_request_id", logicalRetryRequestID),
+			zap.String("retry_fingerprint", retryFingerprint),
+		)
+	}
 	sessionDiag := gatewaySessionDiagEnabled(subject.UserID, apiKey.ID)
 	if sessionDiag {
 		reqLog.Info("gateway.session_diag.initial",
@@ -636,6 +741,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
+			consumeGatewayPreSemanticRetry()
 			requestCtx := c.Request.Context()
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
@@ -690,13 +796,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					case FailoverContinue:
 						continue
 					case FailoverExhausted:
+						markGatewayPreSemanticFailure(account.ID, fs.LastFailoverErr)
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, service.PlatformGemini, streamStarted)
 						return
 					case FailoverCanceled:
+						markGatewayPreSemanticFailure(account.ID, fs.LastFailoverErr)
 						markClientClosedRequest(c)
 						return
 					}
 				}
+				markGatewayPreSemanticNetworkFailure(account.ID, writerSizeBeforeForward, err)
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -766,6 +875,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					SessionID:          sessionID,
+					LogicalRequestID:   logicalRetryRequestID,
 					RequestPayloadHash: requestPayloadHash,
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
@@ -779,6 +889,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.Int64("account_id", account.ID),
 					).Error("gateway.record_usage_failed", zap.Error(err))
+				} else {
+					clearGatewayPreSemanticRetryMarker(ctx, account.ID)
 				}
 			})
 			return
@@ -1225,6 +1337,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
 			var result *service.ForwardResult
+			consumeGatewayPreSemanticRetry()
 			requestCtx := c.Request.Context()
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
@@ -1284,6 +1397,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						UserAgent:          userAgent,
 						IPAddress:          clientIP,
 						SessionID:          sessionID,
+						LogicalRequestID:   logicalRetryRequestID,
 						RequestPayloadHash: requestPayloadHash,
 						ForceCacheBilling:  forceCacheBilling,
 						APIKeyService:      h.apiKeyService,
@@ -1297,6 +1411,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 							zap.String("model", reqModel),
 							zap.Int64("account_id", account.ID),
 						).Error("gateway.record_partial_usage_failed", zap.Error(recordErr))
+					} else {
+						clearGatewayPreSemanticRetryMarker(ctx, account.ID)
 					}
 				})
 			}
@@ -1397,9 +1513,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					case FailoverContinue:
 						continue
 					case FailoverExhausted:
+						markGatewayPreSemanticFailure(account.ID, fs.LastFailoverErr)
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, streamStarted)
 						return
 					case FailoverCanceled:
+						markGatewayPreSemanticFailure(account.ID, fs.LastFailoverErr)
 						markClientClosedRequest(c)
 						return
 					}
@@ -1407,6 +1525,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if account.Platform == service.PlatformKiro && c.Writer.Size() == writerSizeBeforeForward && switchToAnthropicFallback("kiro_forward_error") {
 					continue
 				}
+				markGatewayPreSemanticNetworkFailure(account.ID, writerSizeBeforeForward, err)
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -1518,6 +1637,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
 					SessionID:          sessionID,
+					LogicalRequestID:   logicalRetryRequestID,
 					RequestPayloadHash: requestPayloadHash,
 					ForceCacheBilling:  forceCacheBilling,
 					BillableUsage:      logicalFallbackUsage,
@@ -1532,6 +1652,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.String("model", reqModel),
 						zap.Int64("account_id", account.ID),
 					).Error("gateway.record_usage_failed", zap.Error(err))
+				} else {
+					clearGatewayPreSemanticRetryMarker(ctx, account.ID)
 				}
 			})
 			return

@@ -11686,17 +11686,21 @@ func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, use
 // RecordUsageInput 记录使用量的输入参数。
 // 异步 worker 只接收计费所需快照，不能持有 ParsedRequest/RequestBodyRef 这类大请求体引用。
 type RecordUsageInput struct {
-	Result             *ForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription  // 可选：订阅信息
-	PricingAt          time.Time          // 请求级冻结的定价时刻
-	InboundEndpoint    string             // 入站端点（客户端请求路径）
-	UpstreamEndpoint   string             // 上游端点（标准化后的上游路径）
-	UserAgent          string             // 请求的 User-Agent
-	IPAddress          string             // 请求的客户端 IP 地址
-	SessionID          string             // 客户端显式会话标识，仅用于用量行关联
+	Result           *ForwardResult
+	APIKey           *APIKey
+	User             *User
+	Account          *Account
+	Subscription     *UserSubscription // 可选：订阅信息
+	PricingAt        time.Time         // 请求级冻结的定价时刻
+	InboundEndpoint  string            // 入站端点（客户端请求路径）
+	UpstreamEndpoint string            // 上游端点（标准化后的上游路径）
+	UserAgent        string            // 请求的 User-Agent
+	IPAddress        string            // 请求的客户端 IP 地址
+	SessionID        string            // 客户端显式会话标识，仅用于用量行关联
+	// LogicalRequestID is set when a new client HTTP request is proven to be a
+	// retry of a gateway attempt that failed before semantic output. It replaces
+	// the middleware-generated request ID for usage/billing idempotency only.
+	LogicalRequestID   string
 	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
 	BillableUsage      *UsageTokens       // 可选：逻辑缓存计费覆盖；Result.Usage 保留真实上游用量
@@ -12251,6 +12255,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
 		SessionID:          input.SessionID,
+		LogicalRequestID:   input.LogicalRequestID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		BillableUsage:      input.BillableUsage,
@@ -12273,6 +12278,7 @@ type RecordUsageLongContextInput struct {
 	UserAgent             string             // 请求的 User-Agent
 	IPAddress             string             // 请求的客户端 IP 地址
 	SessionID             string             // 客户端显式会话标识，仅用于用量行关联
+	LogicalRequestID      string             // 逻辑重试请求 ID（仅用于幂等计费）
 	RequestPayloadHash    string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	LongContextThreshold  int                // 长上下文阈值（如 200000）
 	LongContextMultiplier float64            // 超出阈值部分的倍率（如 2.0）
@@ -12298,6 +12304,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
 		SessionID:          input.SessionID,
+		LogicalRequestID:   input.LogicalRequestID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		ForceCacheBilling:  input.ForceCacheBilling,
 		BillableUsage:      input.BillableUsage,
@@ -12323,6 +12330,7 @@ type recordUsageCoreInput struct {
 	UserAgent          string
 	IPAddress          string
 	SessionID          string
+	LogicalRequestID   string
 	RequestPayloadHash string
 	ForceCacheBilling  bool
 	BillableUsage      *UsageTokens
@@ -12478,7 +12486,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		quotaPlatform = PlatformFromAPIKey(apiKey)
 	}
 	requestID := usageLog.RequestID
-	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
+	billingApplied, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
 		Cost:                  cost,
 		User:                  user,
 		APIKey:                apiKey,
@@ -12494,6 +12502,14 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	if billingErr != nil {
 		return billingErr
+	}
+	// A client retry linked to a pre-semantic gateway failure reuses the same
+	// logical billing key. The billing transaction is the source of truth; when
+	// it reports a duplicate claim, suppress the second usage row as well so the
+	// admin usage view cannot suggest that the user was charged twice.
+	if !billingApplied && IsGatewayRetryLogicalRequestID(requestID) {
+		logger.LegacyPrintf("service.gateway", "[Billing] duplicate logical gateway retry suppressed: request_id=%s", requestID)
+		return nil
 	}
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 
@@ -12736,7 +12752,10 @@ func (s *GatewayService) buildRecordUsageLog(
 	opts *recordUsageOpts,
 ) *UsageLog {
 	durationMs := int(result.Duration.Milliseconds())
-	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	requestID := strings.TrimSpace(input.LogicalRequestID)
+	if requestID == "" {
+		requestID = resolveUsageBillingRequestID(ctx, result.RequestID)
+	}
 	usageLog := &UsageLog{
 		UserID:                user.ID,
 		APIKeyID:              apiKey.ID,
