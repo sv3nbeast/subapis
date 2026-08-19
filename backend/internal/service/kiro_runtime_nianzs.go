@@ -96,6 +96,22 @@ func (s *GatewayService) nianzsKiroFirstSemanticTimeoutForRequest(ctx context.Co
 	return s.firstSemanticTimeout()
 }
 
+// Nianzs owns its transport loop and therefore does not use the legacy Kiro
+// resilience gate. Preserve the configured enforce-mode scheduling contract at
+// the handoff to the generic handler: an incomplete 2xx stream must switch
+// accounts immediately instead of replaying the same stable conversation three
+// more times.
+func (s *GatewayService) applyNianzsKiroFailoverPolicy(groupID *int64, failoverErr *UpstreamFailoverError) *UpstreamFailoverError {
+	if failoverErr == nil {
+		return nil
+	}
+	if failoverErr.FailureKind == UpstreamFailureIncompleteStream &&
+		s.kiroResilienceMode(groupID) == config.KiroResilienceModeEnforce {
+		failoverErr.RetryableOnSameAccount = false
+	}
+	return failoverErr
+}
+
 func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
@@ -193,7 +209,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				})
 				return nil, err
 			}
-			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+			if failoverErr := s.applyNianzsKiroFailoverPolicy(parsed.GroupID, s.kiroStreamErrorToFailover(ctx, account, err)); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
 					AccountID:          account.ID,
@@ -266,7 +282,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				})
 				return nil, failoverErr
 			}
-			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, codeErr); failoverErr != nil {
+			if failoverErr := s.applyNianzsKiroFailoverPolicy(parsed.GroupID, s.kiroStreamErrorToFailover(ctx, account, codeErr)); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
 					AccountID:          account.ID,
@@ -323,7 +339,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				})
 				return nil, failoverErr
 			}
-			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, webSearchErr); failoverErr != nil {
+			if failoverErr := s.applyNianzsKiroFailoverPolicy(parsed.GroupID, s.kiroStreamErrorToFailover(ctx, account, webSearchErr)); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
 					AccountID:          account.ID,
@@ -392,7 +408,7 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			break
 		}
 		if attempt > 0 || !nianzskiro.IsNativeToolProgressStalled(err) {
-			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+			if failoverErr := s.applyNianzsKiroFailoverPolicy(parsed.GroupID, s.kiroStreamErrorToFailover(ctx, account, err)); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
 					AccountID:          account.ID,
@@ -565,6 +581,11 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 	// 生成已被接受，内部编排泄漏/截断仍可能需要丢弃并重试。
 	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
 	requestCtx.RequireTerminalEvent = true
+	// Direct KRS streams can end on a clean EventStream EOF without a separate
+	// messageStop/usage frame. This branch has already excluded gateway-owned
+	// web-search and code-execution loops, so it is safe to synthesize the
+	// downstream terminal lifecycle after semantic output has started.
+	requestCtx.AllowFrameAlignedSemanticEOF = true
 
 	pr, pw := io.Pipe()
 	wrappedHeaders := resp.Header.Clone()

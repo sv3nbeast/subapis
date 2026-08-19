@@ -525,7 +525,7 @@ func TestNianzsMessagesThinkingWithoutProviderSignatureKeepsVisibleAnswerNonStre
 	require.NotContains(t, wire, "api_error")
 }
 
-func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
+func TestNianzsMessagesCleanEOFSemanticsGateCacheCommit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {
 		stream := stream
@@ -569,31 +569,32 @@ func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 
 				result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
-				if terminal {
+				expectSuccess := terminal || stream
+				if expectSuccess {
 					require.NoError(t, forwardErr)
 					require.NotNil(t, result)
+					if stream {
+						wire := recorder.Body.String()
+						require.Equal(t, 1, strings.Count(wire, "event: message_stop"))
+						require.Contains(t, wire, `"stop_reason":"end_turn"`)
+						require.NotContains(t, wire, "event: error")
+					}
 				} else {
 					require.Nil(t, result)
 					require.NotContains(t, recorder.Body.String(), "event: message_stop")
-					if stream {
-						require.ErrorContains(t, forwardErr, "missing completion evidence")
-						var failoverErr *UpstreamFailoverError
-						require.False(t, errors.As(forwardErr, &failoverErr), "partial downstream output must never be replayed")
-					} else {
-						var failoverErr *UpstreamFailoverError
-						require.ErrorAs(t, forwardErr, &failoverErr)
-						require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
-						require.True(t, failoverErr.RetryableOnSameAccount)
-						require.True(t, failoverErr.SuppressTempUnschedule)
-						require.True(t, nianzskiro.IsIncompleteStream(failoverErr.Cause))
-						require.Empty(t, recorder.Body.String(), "non-stream parse failure must remain uncommitted for handler failover")
-					}
+					var failoverErr *UpstreamFailoverError
+					require.ErrorAs(t, forwardErr, &failoverErr)
+					require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+					require.True(t, failoverErr.RetryableOnSameAccount)
+					require.True(t, failoverErr.SuppressTempUnschedule)
+					require.True(t, nianzskiro.IsIncompleteStream(failoverErr.Cause))
+					require.Empty(t, recorder.Body.String(), "non-stream parse failure must remain uncommitted for handler failover")
 				}
 
 				nianzsGlobalKiroCacheTracker.mu.Lock()
 				committedEntries := len(nianzsGlobalKiroCacheTracker.entries[expectedPlan.cacheKey])
 				nianzsGlobalKiroCacheTracker.mu.Unlock()
-				if terminal {
+				if expectSuccess {
 					require.Greater(t, committedEntries, 0, "verified terminal response should commit its prefix")
 				} else {
 					require.Equal(t, 0, committedEntries, "bare EOF must not commit cache state")
@@ -604,7 +605,7 @@ func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 				)
 				require.NotNil(t, probe)
 				require.NotNil(t, probe.result())
-				if terminal {
+				if expectSuccess {
 					require.Equal(t, expectedPlan.cacheKey, probe.cacheKey)
 				} else {
 					require.Equal(t, 0, probe.result().CacheReadInputTokens, "bare EOF must not create a phantom cache hit")
@@ -613,6 +614,68 @@ func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestNianzsEnforceIncompleteStreamSkipsSameAccountReplay(t *testing.T) {
+	groupID := int64(29)
+	otherGroupID := int64(30)
+	svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		KiroEngine: config.KiroEngineNianzs,
+		KiroResilience: config.GatewayKiroResilienceConfig{
+			Mode:     config.KiroResilienceModeEnforce,
+			GroupIDs: []int64{groupID},
+		},
+	}}}
+
+	incomplete := &UpstreamFailoverError{
+		FailureKind:            UpstreamFailureIncompleteStream,
+		RetryableOnSameAccount: true,
+	}
+	require.Same(t, incomplete, svc.applyNianzsKiroFailoverPolicy(&groupID, incomplete))
+	require.False(t, incomplete.RetryableOnSameAccount)
+
+	outsideAllowlist := &UpstreamFailoverError{
+		FailureKind:            UpstreamFailureIncompleteStream,
+		RetryableOnSameAccount: true,
+	}
+	svc.applyNianzsKiroFailoverPolicy(&otherGroupID, outsideAllowlist)
+	require.True(t, outsideAllowlist.RetryableOnSameAccount)
+
+	otherFailure := &UpstreamFailoverError{
+		FailureKind:            UpstreamFailureRateLimited,
+		RetryableOnSameAccount: true,
+	}
+	svc.applyNianzsKiroFailoverPolicy(&groupID, otherFailure)
+	require.True(t, otherFailure.RetryableOnSameAccount)
+
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"continue after compact"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	parsed.GroupID = &groupID
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	svc.cfg.Gateway.KiroResilience = config.GatewayKiroResilienceConfig{
+		Mode:     config.KiroResilienceModeEnforce,
+		GroupIDs: []int64{groupID},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.Nil(t, result)
+	var forwardedFailover *UpstreamFailoverError
+	require.ErrorAs(t, forwardErr, &forwardedFailover)
+	require.Equal(t, UpstreamFailureIncompleteStream, forwardedFailover.FailureKind)
+	require.False(t, forwardedFailover.RetryableOnSameAccount)
+	require.Len(t, upstream.requests, 1)
+	require.Empty(t, recorder.Body.String())
 }
 
 func TestNianzsMessagesStreamingBareEOFFailsOverBeforeOutput(t *testing.T) {
