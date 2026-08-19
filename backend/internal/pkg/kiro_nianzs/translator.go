@@ -210,16 +210,10 @@ type KiroRequestContext struct {
 	StopSequences            []string
 	MaxOutputTokens          int
 	// RequireTerminalEvent prevents callers that perform server-side work from
-	// treating an empty transport EOF as a successful model turn. Kiro may prove
+	// treating a bare transport EOF as a successful model turn. Kiro may prove
 	// completion with messageStop, an explicit stop reason, a stopped tool call,
 	// or final usage metadata depending on the endpoint/runtime version.
-	RequireTerminalEvent bool
-	// AllowFrameAlignedSemanticEOF lets a direct client stream use a clean,
-	// frame-aligned EOF as its completion boundary after Anthropic output has
-	// started. Keep this disabled for gateway-owned multi-turn workflows (such
-	// as web search and code execution), which need explicit completion evidence
-	// before committing cache state or starting the next server-side turn.
-	AllowFrameAlignedSemanticEOF bool
+	RequireTerminalEvent         bool
 	forcedToolChoiceName         string
 	NativeToolProgressRequired   bool
 	NativeToolCallMarkerRequired bool
@@ -1779,12 +1773,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			}
 		}
 	}
-	// KRS sometimes closes a valid, frame-aligned direct Event Stream after the
-	// final assistant delta without a separate metadata/messageStop frame. The
-	// direct-stream caller opts into synthesizing the normal terminal lifecycle;
-	// empty streams and gateway-owned multi-turn workflows remain failover errors.
-	semanticEOFAllowed := requestCtx.AllowFrameAlignedSemanticEOF && messageStartSent
-	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence && !semanticEOFAllowed {
+	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
 		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing completion evidence"}
 	}
 
