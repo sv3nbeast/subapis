@@ -52,7 +52,7 @@
                   platformBadgeClass(entry.group.platform),
                 ]"
               >
-                {{ platformLabel(entry.group.platform) }}
+                {{ availableGroupPlatformLabel(entry.group.platform) }}
               </span>
               <span
                 :class="[
@@ -77,7 +77,7 @@
               <span class="h-1 w-1 rounded-full bg-gray-300 dark:bg-dark-600"></span>
               <span class="truncate">
                 {{ t('availableChannels.groupCards.groupHint', {
-                  platform: platformLabel(entry.group.platform),
+                  platform: availableGroupPlatformLabel(entry.group.platform),
                   rate: `${effectiveRate(entry.group)}x`,
                 }) }}
               </span>
@@ -195,12 +195,10 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import type { GroupPlatform } from '@/types'
 import type { UserAvailableGroup } from '@/api/channels'
-import {
-  platformBadgeClass,
-  platformLabel,
-} from '@/utils/platformColors'
+import { platformBadgeClass } from '@/utils/platformColors'
 import SupportedModelPriceRow from './SupportedModelPriceRow.vue'
 import type { AvailableGroupView } from './availableGroupTypes'
+import { availableGroupPlatformLabel } from './availableGroupPresentation'
 
 const props = defineProps<{
   groups: AvailableGroupView[]

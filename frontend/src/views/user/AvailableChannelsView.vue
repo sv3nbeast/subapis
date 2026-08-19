@@ -44,7 +44,7 @@
                 :key="platform"
                 :value="platform"
               >
-                {{ platformLabel(platform) }}
+                {{ availableGroupPlatformLabel(platform) }}
               </option>
             </select>
 
@@ -105,11 +105,11 @@ import userChannelsAPI, {
 import userGroupsAPI from '@/api/groups'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { platformLabel } from '@/utils/platformColors'
 import type {
   AvailableGroupChannelView,
   AvailableGroupView,
 } from '@/components/channels/availableGroupTypes'
+import { availableGroupPlatformLabel } from '@/components/channels/availableGroupPresentation'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -128,7 +128,9 @@ const platformOptions = computed(() => {
   for (const entry of groupViews.value) {
     if (entry.group.platform) platforms.add(entry.group.platform)
   }
-  return Array.from(platforms).sort((a, b) => platformLabel(a).localeCompare(platformLabel(b)))
+  return Array.from(platforms).sort((a, b) =>
+    availableGroupPlatformLabel(a).localeCompare(availableGroupPlatformLabel(b)),
+  )
 })
 
 const filteredGroupViews = computed(() => {
@@ -142,7 +144,7 @@ const filteredGroupViews = computed(() => {
     return (
       entry.group.name.toLowerCase().includes(q) ||
       entry.group.platform.toLowerCase().includes(q) ||
-      platformLabel(entry.group.platform).toLowerCase().includes(q) ||
+      availableGroupPlatformLabel(entry.group.platform).toLowerCase().includes(q) ||
       entry.channels.some((ch) =>
         ch.channelName.toLowerCase().includes(q) ||
         (ch.channelDescription || '').toLowerCase().includes(q) ||
