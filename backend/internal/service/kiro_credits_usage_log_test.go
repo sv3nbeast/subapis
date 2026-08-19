@@ -88,11 +88,12 @@ func TestBuildRecordUsageLogOmitsZeroKiroCredits(t *testing.T) {
 }
 
 func TestStripSub2apiInternalUsageFieldsRemovesKiroCredits(t *testing.T) {
-	line := `data: {"type":"message_delta","usage":{"output_tokens":7,"_sub2api_kiro_credits":0.17,"_sub2api_kiro_usage_final":true}}`
+	line := `data: {"type":"message_delta","usage":{"output_tokens":7,"_sub2api_kiro_credits":0.17,"_sub2api_kiro_usage_final":true,"_sub2api_billing_usage":{"input_tokens":3}}}`
 
 	cleaned := stripSub2apiInternalUsageFields(line)
 
 	require.NotContains(t, cleaned, "_sub2api_kiro_credits")
 	require.NotContains(t, cleaned, "_sub2api_kiro_usage_final")
+	require.NotContains(t, cleaned, "_sub2api_billing_usage")
 	require.Contains(t, cleaned, `"output_tokens":7`)
 }

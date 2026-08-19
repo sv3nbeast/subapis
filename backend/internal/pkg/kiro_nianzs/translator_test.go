@@ -3894,13 +3894,14 @@ func TestKiroContextUsageAt85PercentReturnsCompactionThresholdNonStreaming(t *te
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.Usage.InputTokensFromContext)
+	// Provider context occupancy is a client compaction signal. Billing keeps
+	// the cache-emulated request usage instead of charging the synthetic 850k.
+	require.False(t, result.Usage.InputTokensFromContext)
 	require.Equal(t, 85.0, result.Usage.ContextUsagePercentage)
-	require.Equal(t, 850_000, result.Usage.TotalTokens)
-	require.Equal(t, 849_990, result.Usage.InputTokens+result.Usage.CacheReadInputTokens+result.Usage.CacheCreationInputTokens)
-	require.Equal(t, 84_999, result.Usage.InputTokens)
-	require.Equal(t, 679_992, result.Usage.CacheReadInputTokens)
-	require.Equal(t, 84_999, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 100_010, result.Usage.TotalTokens)
+	require.Equal(t, 10_000, result.Usage.InputTokens)
+	require.Equal(t, 80_000, result.Usage.CacheReadInputTokens)
+	require.Equal(t, 10_000, result.Usage.CacheCreationInputTokens)
 	require.Equal(t, result.Usage.CacheCreationInputTokens, result.Usage.CacheCreation5mInputTokens+result.Usage.CacheCreation1hInputTokens)
 	require.Equal(t, int64(84_999), gjson.GetBytes(result.ResponseBody, "usage.input_tokens").Int())
 	require.Equal(t, int64(679_992), gjson.GetBytes(result.ResponseBody, "usage.cache_read_input_tokens").Int())
@@ -3944,9 +3945,9 @@ func TestKiroStreamingContextUsageReturnsAuthoritativeTerminalUsage(t *testing.T
 		ContextWindowTokens: 1_000_000,
 	})
 	require.NoError(t, err)
-	require.True(t, result.Usage.InputTokensFromContext)
-	require.Equal(t, 855_837, result.Usage.TotalTokens)
-	require.Equal(t, 855_832, result.Usage.InputTokens)
+	require.False(t, result.Usage.InputTokensFromContext)
+	require.Equal(t, 100_005, result.Usage.TotalTokens)
+	require.Equal(t, 100_000, result.Usage.InputTokens)
 	require.Contains(t, out.String(), `"input_tokens":100000`)
 	require.Contains(t, out.String(), `"input_tokens":855832`)
 	require.Contains(t, out.String(), `"_sub2api_kiro_usage_final":true`)
