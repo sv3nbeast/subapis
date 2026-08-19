@@ -136,6 +136,23 @@ type ParseResult struct {
 	StopReason   string
 }
 
+// IncompleteStreamError means the upstream Event Stream ended before Kiro
+// supplied evidence that the model turn completed. Callers may safely retry or
+// fail over only when no semantic response has been committed downstream.
+type IncompleteStreamError struct{ Message string }
+
+func (e *IncompleteStreamError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "incomplete kiro event stream"
+	}
+	return e.Message
+}
+
+func IsIncompleteStream(err error) bool {
+	var target *IncompleteStreamError
+	return errors.As(err, &target)
+}
+
 type NativeToolProgressStalledError struct{ KiroCredits float64 }
 
 func (e *NativeToolProgressStalledError) Error() string {
@@ -1757,7 +1774,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 	}
 	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
-		return nil, errors.New("incomplete kiro event stream: missing completion evidence")
+		return nil, &IncompleteStreamError{Message: "incomplete kiro event stream: missing completion evidence"}
 	}
 
 	if err := closeOpenStreamingTool(); err != nil {
@@ -4096,7 +4113,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 		}
 	}
 	if requestCtx.RequireTerminalEvent && !sawCompletionEvidence {
-		return "", nil, usage, stopReason, reasoningArtifacts, errors.New("incomplete kiro event stream: missing completion evidence")
+		return "", nil, usage, stopReason, reasoningArtifacts, &IncompleteStreamError{Message: "incomplete kiro event stream: missing completion evidence"}
 	}
 	closeReasoning()
 

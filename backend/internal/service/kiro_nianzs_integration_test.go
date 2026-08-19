@@ -573,9 +573,21 @@ func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 					require.NoError(t, forwardErr)
 					require.NotNil(t, result)
 				} else {
-					require.ErrorContains(t, forwardErr, "missing completion evidence")
 					require.Nil(t, result)
 					require.NotContains(t, recorder.Body.String(), "event: message_stop")
+					if stream {
+						require.ErrorContains(t, forwardErr, "missing completion evidence")
+						var failoverErr *UpstreamFailoverError
+						require.False(t, errors.As(forwardErr, &failoverErr), "partial downstream output must never be replayed")
+					} else {
+						var failoverErr *UpstreamFailoverError
+						require.ErrorAs(t, forwardErr, &failoverErr)
+						require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+						require.True(t, failoverErr.RetryableOnSameAccount)
+						require.True(t, failoverErr.SuppressTempUnschedule)
+						require.True(t, nianzskiro.IsIncompleteStream(failoverErr.Cause))
+						require.Empty(t, recorder.Body.String(), "non-stream parse failure must remain uncommitted for handler failover")
+					}
 				}
 
 				nianzsGlobalKiroCacheTracker.mu.Lock()
@@ -601,6 +613,31 @@ func TestNianzsMessagesTerminalEvidenceGatesCacheCommit(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestNianzsMessagesStreamingBareEOFFailsOverBeforeOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+	}
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, forwardErr, &failoverErr)
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.True(t, nianzskiro.IsIncompleteStream(failoverErr.Cause))
+	require.Empty(t, recorder.Body.String(), "bare EOF before semantics must remain replayable")
 }
 
 func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
@@ -749,9 +786,13 @@ func TestNianzsMessagesWebSearchNonStreamingRejectsBareEOF(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 
 	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
-	require.ErrorContains(t, forwardErr, "missing completion evidence")
 	require.Nil(t, result)
-	require.Equal(t, http.StatusBadGateway, recorder.Code)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, forwardErr, &failoverErr)
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.True(t, nianzskiro.IsIncompleteStream(failoverErr.Cause))
+	require.Empty(t, recorder.Body.String(), "handler must be able to fail over before committing an error")
 	require.NotContains(t, recorder.Body.String(), "partial answer")
 }
 

@@ -179,6 +179,31 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		ctx = withGatewayFirstSemanticTimeoutOverride(ctx, s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, parsed.GroupID))
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
+			// Once semantic SSE bytes have been emitted, replaying the turn would
+			// duplicate output. Before output, however, a truncated Kiro Event
+			// Stream is a normal failover signal and must reach the handler.
+			if HasGatewaySSEErrorWritten(c) {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: 0,
+					Kind:               "stream_partial_error",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, err
+			}
+			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "stream_failover",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, failoverErr
+			}
 			return nil, err
 		}
 		if streamResult.usage == nil {
@@ -241,6 +266,17 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				})
 				return nil, failoverErr
 			}
+			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, codeErr); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "parse_failover",
+					Message:            sanitizeUpstreamErrorMessage(codeErr.Error()),
+				})
+				return nil, failoverErr
+			}
 			safeErr := sanitizeUpstreamErrorMessage(codeErr.Error())
 			c.JSON(http.StatusBadGateway, gin.H{
 				"type": "error",
@@ -283,6 +319,17 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 					AccountName:        account.Name,
 					UpstreamStatusCode: failoverErr.StatusCode,
 					Kind:               "failover",
+					Message:            sanitizeUpstreamErrorMessage(webSearchErr.Error()),
+				})
+				return nil, failoverErr
+			}
+			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, webSearchErr); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "parse_failover",
 					Message:            sanitizeUpstreamErrorMessage(webSearchErr.Error()),
 				})
 				return nil, failoverErr
@@ -345,6 +392,17 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			break
 		}
 		if attempt > 0 || !nianzskiro.IsNativeToolProgressStalled(err) {
+			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					Kind:               "parse_failover",
+					Message:            sanitizeUpstreamErrorMessage(err.Error()),
+				})
+				return nil, failoverErr
+			}
 			c.JSON(http.StatusBadGateway, gin.H{
 				"type": "error",
 				"error": gin.H{

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	nianzskiro "github.com/Wei-Shaw/sub2api/internal/pkg/kiro_nianzs"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
@@ -885,6 +886,26 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 			"error": map[string]string{
 				"type":    "upstream_error",
 				"message": sanitizeUpstreamErrorMessage(incompleteStreamErr.Error()),
+			},
+		})
+		return &UpstreamFailoverError{
+			StatusCode:             http.StatusBadGateway,
+			ResponseBody:           body,
+			RetryableOnSameAccount: true,
+			SuppressTempUnschedule: true,
+			FailureKind:            UpstreamFailureIncompleteStream,
+			UpstreamDone:           upstreamDone,
+			Cause:                  err,
+		}
+	}
+
+	var nianzsIncompleteStreamErr *nianzskiro.IncompleteStreamError
+	if errors.As(err, &nianzsIncompleteStreamErr) {
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": sanitizeUpstreamErrorMessage(nianzsIncompleteStreamErr.Error()),
 			},
 		})
 		return &UpstreamFailoverError{
