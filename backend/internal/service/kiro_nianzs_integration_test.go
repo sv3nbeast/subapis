@@ -377,6 +377,52 @@ func TestNianzsOpenAIBridgeSchedulerRecoversEarliestTransientCooldown(t *testing
 	require.Nil(t, state)
 }
 
+func TestNianzsOpenAIBridgeZeroFrameExclusionSelectsPeer(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	groupID := int64(33)
+	failedSticky := bridgeTestAccount(2570, PlatformKiro, 1, groupID)
+	peer := bridgeTestAccount(2571, PlatformKiro, 2, groupID)
+	repo := openAIKiroBridgeAccountRepo{schedulerTestOpenAIAccountRepo{accounts: []Account{failedSticky, peer}}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:zero_frame_session": failedSticky.ID}}
+	bridge := &GatewayService{
+		accountRepo:             repo,
+		nianzsKiroCooldownStore: &trackingNianzsCooldownStore{states: map[string]*nianzscooldown.State{}},
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			KiroEngine: config.KiroEngineNianzs,
+		}},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo: repo,
+		cache:       cache,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{
+			failedSticky.ID: true,
+			peer.ID:         true,
+		}}),
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			OpenAIKiroBridgeEnabled: true,
+			OpenAIWS: config.GatewayOpenAIWSConfig{
+				LBTopK:                1,
+				SchedulerScoreWeights: config.GatewayOpenAIWSSchedulerScoreWeights{Priority: 1},
+			},
+		}},
+	}
+	svc.SetKiroBridgeService(bridge)
+
+	selection, _, err := svc.SelectAccountWithSchedulerForKiroBridge(
+		context.Background(), &groupID, "zero_frame_session",
+		OpenAIKiroBridgeModel, OpenAIKiroBridgeModel,
+		map[int64]struct{}{failedSticky.ID: {}},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, peer.ID, selection.Account.ID, "the request-scoped exclusion produced by a zero-frame EOF must bypass the sticky account")
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func newNianzsKiroRouteTestRuntime(t *testing.T, response *http.Response) (*GatewayService, *httpUpstreamRecorder, *Account) {
 	t.Helper()
 	upstream := &httpUpstreamRecorder{resp: response}
