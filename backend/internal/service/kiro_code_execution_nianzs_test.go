@@ -273,12 +273,12 @@ func TestNianzsMessagesLegacyCodeExecutionFirstBodyErrorStaysPreOutput(t *testin
 	resp, _, err := svc.openKiroAnthropicStreamResponseNianzs(
 		context.Background(), account, parsed, body, "claude-opus-5", "claude-opus-5", nil, nil, plan,
 	)
-	require.Nil(t, resp)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
-	require.False(t, failoverErr.RetryableOnSameAccount)
-	require.True(t, failoverErr.SuppressTempUnschedule)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	defer func() { _ = resp.Body.Close() }()
+	responseBody, readErr := io.ReadAll(resp.Body)
+	require.Error(t, readErr)
+	require.Empty(t, responseBody)
 	require.Empty(t, runner.codes)
 	require.Len(t, upstream.requests, 1)
 	require.False(t, nianzsCodeExecutionCachePlanCommittedForTest(cacheKey))

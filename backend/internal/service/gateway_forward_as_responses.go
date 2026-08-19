@@ -394,9 +394,6 @@ func (s *GatewayService) forwardKiroAsResponses(
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	}
 	if err != nil {
-		if s.handleKiroContextLimitError(c, account, err) {
-			return nil, err
-		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -407,10 +404,9 @@ func (s *GatewayService) forwardKiroAsResponses(
 		}
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
-	strictTerminal := s.kiroResilienceEnforced(kiroParsed.GroupID) || s.useNianzsKiroEngine(kiroParsed.GroupID)
 	if clientStream {
 		result, streamErr := s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
-			StrictTerminal:          strictTerminal,
+			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			ClientToolMapping:       clientToolMapping,
@@ -429,11 +425,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 		reasoningEffort,
 		startTime,
 		responsesStreamingBridgeOptions{
-			// A compacted continuation is durable conversation state. Never
-			// accept a partial summary merely because the group's generic Kiro
-			// resilience mode is observe/off; without completion evidence Codex
-			// would continue from an untrustworthy summary and become stuck.
-			StrictTerminal:          compactOptions != nil || strictTerminal,
+			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),
@@ -442,12 +434,6 @@ func (s *GatewayService) forwardKiroAsResponses(
 		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
-	if compactOptions != nil && bufferErr != nil {
-		// Compaction is a single durable state transition. Never rotate accounts
-		// or replay it after an incomplete stream; doing so can consume the same
-		// logical user turn multiple times and still mint divergent summaries.
-		bufferErr = kiroPostSemanticFailure(bufferErr)
-	}
 	return result, bufferErr
 }
 
@@ -523,18 +509,6 @@ func ExtractResponsesReasoningEffortFromBody(body []byte) *string {
 
 func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if dst == nil {
-		return
-	}
-	if billing := src.BillingUsage; billing != nil {
-		dst.InputTokens = billing.InputTokens
-		dst.OutputTokens = billing.OutputTokens
-		dst.CacheCreationInputTokens = billing.CacheCreationInputTokens
-		dst.CacheReadInputTokens = billing.CacheReadInputTokens
-		dst.CacheCreation5mTokens = billing.CacheCreation5mTokens
-		dst.CacheCreation1hTokens = billing.CacheCreation1hTokens
-		if src.KiroCredits > 0 {
-			dst.KiroCredits = src.KiroCredits
-		}
 		return
 	}
 	if src.InputTokens > 0 {

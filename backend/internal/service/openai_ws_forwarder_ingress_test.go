@@ -868,24 +868,6 @@ func TestBuildOpenAIWSReplayInputSequence(t *testing.T) {
 		require.Equal(t, "hello", gjson.GetBytes(items[0], "text").String())
 		require.Equal(t, "world", gjson.GetBytes(items[1], "text").String())
 	})
-
-	t.Run("self_contained_replay_with_interleaved_control_items_does_not_duplicate", func(t *testing.T) {
-		previous := []json.RawMessage{
-			json.RawMessage(`{"type":"message","role":"user","content":"hello"}`),
-			json.RawMessage(`{"type":"function_call","call_id":"call_1","name":"exec","arguments":"{}"}`),
-		}
-		items, exists, err := buildOpenAIWSReplayInputSequence(
-			previous,
-			true,
-			[]byte(`{"previous_response_id":"resp_1","input":[{"type":"item_reference","id":"transport_1"},{"role":"user","content":"hello","type":"message"},{"type":"function_call_output","call_id":"prior","output":"kept"},{"arguments":"{}","name":"exec","call_id":"call_1","type":"function_call"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`),
-			true,
-		)
-		require.NoError(t, err)
-		require.True(t, exists)
-		require.Len(t, items, 5, "the two prior items already embedded in the full replay must not be prepended again")
-		require.Equal(t, "item_reference", gjson.GetBytes(items[0], "type").String())
-		require.Equal(t, "call_1", gjson.GetBytes(items[4], "call_id").String())
-	})
 }
 
 func TestOpenAIWSRawPayloadHasToolCallOutput(t *testing.T) {

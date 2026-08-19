@@ -277,7 +277,7 @@ func TestExpandKiroCompactionInputKeepsOrdinaryInputByteIdentical(t *testing.T) 
 	require.Zero(t, allocs, "ordinary Kiro GPT input must stay on the allocation-free compact fast path")
 }
 
-func TestForwardAsResponsesKiroCompactMissingTerminalDoesNotMintTokenWithoutEnforceMode(t *testing.T) {
+func TestForwardAsResponsesKiroCompactMissingTerminalDoesNotMintToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldStore := globalKiroResponsesHistoryStore
 	globalKiroResponsesHistoryStore = newKiroResponsesHistoryStoreForDir("")
@@ -288,6 +288,7 @@ func TestForwardAsResponsesKiroCompactMissingTerminalDoesNotMintTokenWithoutEnfo
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(body))
 	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "")
+	enableKiroNativeGPTEnforceMode(svc)
 	upstream.resp = &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},

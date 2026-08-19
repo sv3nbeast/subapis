@@ -41,8 +41,6 @@ const (
 	kiroToolResultKeepHead     = 4000
 	kiroToolResultKeepTail     = 2000
 	kiroDefaultMaxOutputTokens = 64000
-	kiroDefaultContextTokens   = 200_000
-	kiroExtendedContextTokens  = 1_000_000
 	kiroRemoteImageMaxBytes    = 10 << 20
 	kiroRemoteImageTimeout     = 8 * time.Second
 )
@@ -126,10 +124,6 @@ type Usage struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
-	InputTokensFromUpstream    bool
-	InputTokensFromContext     bool
-	HasContextUsage            bool
-	ContextUsagePercentage     float64
 }
 
 type StreamResult struct {
@@ -238,14 +232,6 @@ type KiroRequestContext struct {
 	NativeToolTextPreludeGuard   bool
 	PriorAttemptKiroCredits      float64
 	BodyAttempt                  int
-	// ContextWindowTokens is the model's actual Kiro context capacity. Kiro's
-	// contextUsageEvent reports only a percentage, so this value turns the
-	// provider signal into the terminal Anthropic usage that Claude clients use
-	// to decide when to compact. It never truncates or rejects the request.
-	ContextWindowTokens int
-	// ContextWindowSource is "upstream_model_metadata" when ListAvailableModels
-	// supplied the limit and "static_fallback" otherwise.
-	ContextWindowSource string
 	// EstimatedInputTokens 是调用方预估的输入 token 数，用于非流式路径兜底：
 	// Kiro 上游只上报 credits(meteringEvent),不发 tokenUsage,解析结果里的
 	// InputTokens 恒为 0。流式路径通过独立的 inputTokens 参数种入初值,非流式
@@ -526,26 +512,6 @@ func kiroMaxOutputTokensForModel(model string) int {
 	}
 }
 
-func contextWindowTokensForModel(model string) int {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	normalized = strings.TrimSuffix(normalized, "-thinking")
-	if strings.Contains(normalized, "[1m]") || strings.HasSuffix(normalized, "-1m") {
-		return kiroExtendedContextTokens
-	}
-	switch normalizeModelAlias(normalized) {
-	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-		"claude-opus-5",
-		"claude-sonnet-5", "claude-sonnet-5.0",
-		"claude-sonnet-4-6", "claude-sonnet-4.6",
-		"claude-opus-4-6", "claude-opus-4.6",
-		"claude-opus-4-7", "claude-opus-4.7",
-		"claude-opus-4-8", "claude-opus-4.8":
-		return kiroExtendedContextTokens
-	default:
-		return kiroDefaultContextTokens
-	}
-}
-
 func clampFloat(value, minValue, maxValue float64) float64 {
 	if value < minValue {
 		return minValue
@@ -561,11 +527,7 @@ func BuildKiroPayloadWithContext(claudeBody []byte, modelID, profileArn, origin 
 }
 
 func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, headers http.Header, options KiroPayloadOptions) (*KiroBuildResult, error) {
-	requestCtx := KiroRequestContext{
-		ToolNameMap:         map[string]string{},
-		ContextWindowTokens: contextWindowTokensForModel(modelID),
-		ContextWindowSource: "static_fallback",
-	}
+	requestCtx := KiroRequestContext{ToolNameMap: map[string]string{}}
 	requestCtx.EmitProtocolPing = anthropicBetaHeaderContains(headers, "claude-code-20250219")
 	requestCtx.ReportUsageIterations = requestCtx.EmitProtocolPing
 	requestCtx.ReportContextManagement = anthropicBetaHeaderContains(headers, "context-management-2025-06-27")
@@ -757,12 +719,12 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	if err != nil {
 		return nil, err
 	}
-	if requestCtx.NativeToolProgressRequired && len(toolUses) == 0 && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, content) {
-		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits + requestCtx.PriorAttemptKiroCredits}
+	if requestCtx.PriorAttemptKiroCredits > 0 {
+		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
 	}
-	// Keep the billing usage independent from the provider context percentage.
-	// The latter is a client-side compaction signal, not additional billable
-	// uncached input.
+	if requestCtx.NativeToolProgressRequired && len(toolUses) == 0 && shouldRetryKiroNativeToolProgress(requestCtx.NativeToolCallMarkerRequired, content) {
+		return nil, &NativeToolProgressStalledError{KiroCredits: usage.KiroCredits}
+	}
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
@@ -771,14 +733,15 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 	} else {
 		usage = normalizeClaudeCodeSimulatedInputUsage(usage, requestCtx)
 	}
-	// Kiro 当前通常不上报精确 tokenUsage；用调用方预估值补齐计费基础 bucket。
+	// Kiro 不上报 tokenUsage,解析结果的 InputTokens 恒为 0；缓存模拟生效时会
+	// 顺带填上（inputTokens 减去缓存部分），未生效时用调用方预估值兜底,
+	// 避免响应体 usage.input_tokens 输出 0。放在 merge 之后,让缓存模拟的
+	// 更精确取值优先。
 	if usage.InputTokens == 0 && requestCtx.EstimatedInputTokens > 0 {
 		usage.InputTokens = requestCtx.EstimatedInputTokens
 	}
-	usage = addKiroPriorCredits(usage, requestCtx)
-	clientUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	return &ParseResult{
-		ResponseBody: buildClaudeResponse(content, toolUses, model, clientUsage, stopReason, reasoningArtifacts, requestCtx),
+		ResponseBody: buildClaudeResponse(content, toolUses, model, usage, stopReason, reasoningArtifacts, requestCtx),
 		Usage:        usage,
 		StopReason:   stopReason,
 	}, nil
@@ -1902,10 +1865,12 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	if requestCtx.PriorAttemptKiroCredits > 0 {
+		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
+	}
 	if requestCtx.CacheEmulationUsage != nil {
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
-	usage = addKiroPriorCredits(usage, requestCtx)
 	switch stopReason {
 	case "max_tokens", "stop_sequence", "pause_turn", "refusal", "model_context_window_exceeded":
 		// These terminal conditions take precedence over emitted tool blocks.
@@ -1930,38 +1895,23 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	// first client-visible event is delayed until EOF do not apply Claude Code
 	// framing twice (once here and once inside ensureMessageStart).
 	usage = normalizeClaudeCodeSimulatedInputUsage(usage, requestCtx)
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	clientUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	if err := releaseStreamOutput(); err != nil {
 		return nil, err
 	}
 	finalUsageMap := map[string]any{
-		"input_tokens":                clientUsage.InputTokens,
-		"output_tokens":               clientUsage.OutputTokens,
-		"cache_read_input_tokens":     clientUsage.CacheReadInputTokens,
-		"cache_creation_input_tokens": clientUsage.CacheCreationInputTokens,
-		"_sub2api_kiro_usage_final":   true,
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
 	}
 	finalUsageMap["output_tokens_details"] = map[string]any{
 		"thinking_tokens": kiroThinkingTokenEstimate(allThinking.String(), model),
-	}
-	if clientUsage.InputTokens != usage.InputTokens ||
-		clientUsage.CacheReadInputTokens != usage.CacheReadInputTokens ||
-		clientUsage.CacheCreationInputTokens != usage.CacheCreationInputTokens {
-		finalUsageMap["_sub2api_billing_usage"] = map[string]any{
-			"input_tokens":                   usage.InputTokens,
-			"output_tokens":                  usage.OutputTokens,
-			"cache_creation_input_tokens":    usage.CacheCreationInputTokens,
-			"cache_read_input_tokens":        usage.CacheReadInputTokens,
-			"cache_creation_5m_input_tokens": usage.CacheCreation5mInputTokens,
-			"cache_creation_1h_input_tokens": usage.CacheCreation1hInputTokens,
-		}
 	}
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits
 	}
 	if requestCtx.ReportUsageIterations {
-		finalUsageMap["iterations"] = []any{kiroUsageIteration(clientUsage)}
+		finalUsageMap["iterations"] = []any{kiroUsageIteration(usage)}
 	}
 	messageDelta := map[string]any{
 		"type": "message_delta",
@@ -6060,19 +6010,9 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	if len(meta) == 0 {
 		meta = event
 	}
-	if strings.EqualFold(strings.TrimSpace(eventType), "contextUsageEvent") {
-		if value, ok := toPositiveFiniteFloat(meta["contextUsagePercentage"]); ok {
-			usage.HasContextUsage = true
-			usage.ContextUsagePercentage = value
-		} else if value, ok := toPositiveFiniteFloat(event["contextUsagePercentage"]); ok {
-			usage.HasContextUsage = true
-			usage.ContextUsagePercentage = value
-		}
-	}
 	if tokenUsage, ok := meta["tokenUsage"].(map[string]any); ok {
 		if value, ok := toInt(tokenUsage["uncachedInputTokens"]); ok {
 			usage.InputTokens = value
-			usage.InputTokensFromUpstream = true
 		}
 		if value, ok := toInt(tokenUsage["outputTokens"]); ok {
 			usage.OutputTokens = value
@@ -6089,7 +6029,6 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	updateKiroCreditsFromMap(usage, meta)
 	if value, ok := toInt(event["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
-		usage.InputTokensFromUpstream = true
 	}
 	if value, ok := toInt(event["outputTokens"]); ok && value > 0 {
 		usage.OutputTokens = value
@@ -6099,7 +6038,6 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 	}
 	if value, ok := toInt(meta["inputTokens"]); ok && value > 0 {
 		usage.InputTokens = value
-		usage.InputTokensFromUpstream = true
 	}
 	if value, ok := toInt(meta["outputTokens"]); ok && value > 0 {
 		usage.OutputTokens = value
@@ -6246,125 +6184,6 @@ func mergeKiroCacheEmulationUsage(base Usage, simulated *Usage) Usage {
 	base.CacheCreation1hInputTokens = simulated.CacheCreation1hInputTokens
 	base.TotalTokens = base.InputTokens + base.OutputTokens + base.CacheReadInputTokens + base.CacheCreationInputTokens
 	return base
-}
-
-// addKiroPriorCredits keeps provider credits in the billing usage without
-// treating the client-only context signal as billable input.
-func addKiroPriorCredits(usage Usage, requestCtx KiroRequestContext) Usage {
-	if requestCtx.PriorAttemptKiroCredits > 0 {
-		usage.KiroCredits += requestCtx.PriorAttemptKiroCredits
-	}
-	return usage
-}
-
-// reconcileKiroUsageWithContext derives the client-visible context occupancy
-// from Kiro's provider percentage. Callers must keep returning the original
-// usage for billing and persistence.
-func reconcileKiroUsageWithContext(usage Usage, contextWindowTokens int) Usage {
-	if usage.InputTokensFromUpstream || !usage.HasContextUsage || contextWindowTokens <= 0 {
-		return usage
-	}
-	percentage := math.Max(0, math.Min(100, usage.ContextUsagePercentage))
-	if percentage <= 0 {
-		return usage
-	}
-	contextTotal := int(math.Round(percentage / 100 * float64(contextWindowTokens)))
-	inputTokens := max(contextTotal-usage.OutputTokens, 0)
-	if inputTokens <= 0 {
-		return usage
-	}
-	normalized := rescaleKiroUsageInputBuckets(usage, inputTokens)
-	normalized.OutputTokens = usage.OutputTokens
-	normalized.KiroCredits = usage.KiroCredits
-	normalized.InputTokensFromUpstream = false
-	normalized.InputTokensFromContext = true
-	normalized.HasContextUsage = true
-	normalized.ContextUsagePercentage = usage.ContextUsagePercentage
-	normalized.TotalTokens = normalized.InputTokens + normalized.OutputTokens + normalized.CacheReadInputTokens + normalized.CacheCreationInputTokens
-	return normalized
-}
-
-// rescaleKiroUsageInputBuckets preserves uncached/read/creation proportions
-// while making their sum exactly target. Largest-remainder allocation prevents
-// rounding from creating or losing a token, including the 5m/1h sub-buckets.
-func rescaleKiroUsageInputBuckets(usage Usage, target int) Usage {
-	normalized := usage
-	if target <= 0 {
-		normalized.InputTokens = 0
-		normalized.CacheReadInputTokens = 0
-		normalized.CacheCreationInputTokens = 0
-		normalized.CacheCreation5mInputTokens = 0
-		normalized.CacheCreation1hInputTokens = 0
-		normalized.TotalTokens = normalized.OutputTokens
-		return normalized
-	}
-
-	scaled := proportionalKiroUsageBuckets([]int{
-		usage.InputTokens,
-		usage.CacheReadInputTokens,
-		usage.CacheCreationInputTokens,
-	}, target)
-	normalized.InputTokens = scaled[0]
-	normalized.CacheReadInputTokens = scaled[1]
-	normalized.CacheCreationInputTokens = scaled[2]
-
-	if normalized.CacheCreationInputTokens <= 0 {
-		normalized.CacheCreation5mInputTokens = 0
-		normalized.CacheCreation1hInputTokens = 0
-	} else if usage.CacheCreation5mInputTokens > 0 || usage.CacheCreation1hInputTokens > 0 {
-		creation := proportionalKiroUsageBuckets([]int{
-			usage.CacheCreation5mInputTokens,
-			usage.CacheCreation1hInputTokens,
-		}, normalized.CacheCreationInputTokens)
-		normalized.CacheCreation5mInputTokens = creation[0]
-		normalized.CacheCreation1hInputTokens = creation[1]
-	} else {
-		normalized.CacheCreation5mInputTokens = 0
-		normalized.CacheCreation1hInputTokens = 0
-	}
-	normalized.TotalTokens = target + normalized.OutputTokens
-	return normalized
-}
-
-func proportionalKiroUsageBuckets(values []int, target int) []int {
-	result := make([]int, len(values))
-	if len(values) == 0 || target <= 0 {
-		return result
-	}
-	total := int64(0)
-	for _, value := range values {
-		if value > 0 {
-			total += int64(value)
-		}
-	}
-	if total <= 0 {
-		result[0] = target
-		return result
-	}
-
-	remainders := make([]int64, len(values))
-	allocated := 0
-	for index, value := range values {
-		if value <= 0 {
-			remainders[index] = -1
-			continue
-		}
-		product := int64(value) * int64(target)
-		result[index] = int(product / total)
-		remainders[index] = product % total
-		allocated += result[index]
-	}
-	for remaining := target - allocated; remaining > 0; remaining-- {
-		best := 0
-		for index := 1; index < len(remainders); index++ {
-			if remainders[index] > remainders[best] {
-				best = index
-			}
-		}
-		result[best]++
-		remainders[best] = -1
-	}
-	return result
 }
 
 // normalizeClaudeCodeSimulatedInputUsage accounts for the Messages framing

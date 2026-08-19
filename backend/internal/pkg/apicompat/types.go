@@ -162,19 +162,6 @@ type AnthropicUsage struct {
 	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
 	KiroCredits              float64 `json:"_sub2api_kiro_credits,omitempty"`
-	// BillingUsage carries the request-local usage before Kiro's provider
-	// context percentage is projected onto the client-visible token total. The
-	// gateway consumes and strips it; Responses/Anthropic clients never see it.
-	BillingUsage *AnthropicBillingUsage `json:"_sub2api_billing_usage,omitempty"`
-}
-
-type AnthropicBillingUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	CacheCreation5mTokens    int `json:"cache_creation_5m_input_tokens"`
-	CacheCreation1hTokens    int `json:"cache_creation_1h_input_tokens"`
 }
 
 // ---------------------------------------------------------------------------
