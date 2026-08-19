@@ -497,6 +497,30 @@ func TestHandleFailoverError_TempUnschedule(t *testing.T) {
 	})
 }
 
+func TestHandleFailoverError_NianzsKiroZeroFrameEOFSwitchesPeerImmediately(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	// /v1/responses creates the Kiro failover state without the legacy
+	// bound-session cache-billing fallback. Kiro cache accounting is committed
+	// only from the final verified upstream result.
+	fs := NewFailoverState(10, false)
+	err := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusServiceUnavailable,
+		FailureKind:            service.UpstreamFailureIncompleteStream,
+		RetryableOnSameAccount: false,
+		SuppressTempUnschedule: true,
+		FailoverProhibited:     false,
+	}
+
+	action := fs.HandleFailoverError(context.Background(), mock, 2570, service.PlatformKiro, err)
+
+	require.Equal(t, FailoverContinue, action)
+	require.Contains(t, fs.FailedAccountIDs, int64(2570), "the sticky zero-frame account must be excluded for this logical request")
+	require.Zero(t, fs.SameAccountRetryCount[2570], "a deterministic empty stream must not be retried on the same account")
+	require.Equal(t, 1, fs.SwitchCount, "the next selection must move to a peer account")
+	require.Empty(t, mock.calls, "a request-scoped empty stream must not globally unschedule an otherwise healthy account")
+	require.False(t, fs.ForceCacheBilling, "the failed pre-semantic attempt must not alter user cache billing")
+}
+
 func TestHandleFailoverError_Kiro429StateMachine(t *testing.T) {
 	t.Run("达到软切换阈值前立即重试同账号", func(t *testing.T) {
 		mock := &mockTempUnscheduler{}
