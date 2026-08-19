@@ -14,3 +14,11 @@ hook points in snapshot files may call those additions when the pinned upstream
 does not expose an extension point. Refresh the snapshot atomically from the
 pinned upstream commit, reapply only the documented hook points, then run the
 parity and gateway regression suites.
+
+Documented compatibility hook points:
+
+- EventStream header/exception parsing and redacted diagnostics call helpers in
+  `sub2api_eventstream_compat.go`.
+- Request construction flattens completed historical tool cycles before KRS.
+  KRS can otherwise return only metadata/context usage and no assistant output;
+  the active final tool/result pair remains structured.

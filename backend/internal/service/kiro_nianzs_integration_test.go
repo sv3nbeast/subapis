@@ -715,6 +715,48 @@ func TestNianzsMessagesContextLimitAfterOutputTerminatesInBandExactlyOnce(t *tes
 	require.True(t, HasGatewaySSEErrorWritten(c))
 }
 
+func TestNianzsMessagesForwardFlattensCompletedToolCyclesBeforeKRS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"max_tokens":128,
+		"stream":true,
+		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"run build"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"old-tool","name":"exec_command","input":{"cmd":"make"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old-tool","content":"build ok"}]},
+			{"role":"assistant","content":"build completed"},
+			{"role":"user","content":"run tests"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"active-tool","name":"exec_command","input":{"cmd":"go test ./..."}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"active-tool","content":"tests pass"}]}
+		]
+	}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+	upstreamResponse := kiroEventStreamResponse(t, "continue after tool result", 64, 5)
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.NoError(t, forwardErr)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	payload := upstream.lastBody
+	require.NotContains(t, string(payload), `"toolUseId":"old-tool"`)
+	require.Contains(t, string(payload), "Tool results:")
+	require.Contains(t, string(payload), "[exec_command] build ok")
+	history := gjson.GetBytes(payload, "conversationState.history").Array()
+	require.NotEmpty(t, history)
+	last := history[len(history)-1]
+	require.Equal(t, "active-tool", last.Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "active-tool", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+}
+
 func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)

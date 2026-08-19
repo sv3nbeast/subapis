@@ -35,6 +35,8 @@ const (
 	kiroMaxToolDescLen         = 10237
 	kiroMaxToolNameLen         = 63
 	kiroHistoryImageKeepCount  = 5
+	kiroMinimalFallbackContent = "."
+	kiroToolResultsPrefix      = "Tool results:"
 	kiroToolResultCompactLimit = 12000
 	kiroToolResultKeepHead     = 4000
 	kiroToolResultKeepTail     = 2000
@@ -631,12 +633,21 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
 		}
 		currentToolResults = deduplicateToolResults(currentToolResults)
+		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
+		if !isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+			currentToolResultIDs = nil
+			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
+			currentToolResults = nil
+		}
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx)
 		if len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				Tools:       kiroTools,
 				ToolResults: currentToolResults,
 			}
 		}
+	} else {
+		history = sanitizeKiroToolHistory(history, nil, requestCtx)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -3299,6 +3310,180 @@ func collectHistoryToolNames(history []KiroHistoryMessage) []string {
 		}
 	}
 	return names
+}
+
+func isKiroActiveToolResultTurn(history []KiroHistoryMessage, currentToolResultIDs map[string]bool) bool {
+	if len(history) == 0 || len(currentToolResultIDs) == 0 {
+		return false
+	}
+	last := history[len(history)-1]
+	if last.AssistantResponseMessage == nil || len(last.AssistantResponseMessage.ToolUses) == 0 {
+		return false
+	}
+	if len(currentToolResultIDs) != len(last.AssistantResponseMessage.ToolUses) {
+		return false
+	}
+	for _, toolUse := range last.AssistantResponseMessage.ToolUses {
+		if !currentToolResultIDs[toolUse.ToolUseID] {
+			return false
+		}
+	}
+	return true
+}
+
+func collectKiroToolResultIDs(toolResults []KiroToolResult) map[string]bool {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	ids := make(map[string]bool, len(toolResults))
+	for _, result := range toolResults {
+		if result.ToolUseID != "" {
+			ids[result.ToolUseID] = true
+		}
+	}
+	return ids
+}
+
+func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRequestContext) map[string]string {
+	names := make(map[string]string)
+	for _, item := range history {
+		if item.AssistantResponseMessage == nil {
+			continue
+		}
+		for _, toolUse := range item.AssistantResponseMessage.ToolUses {
+			if toolUse.ToolUseID != "" && toolUse.Name != "" {
+				names[toolUse.ToolUseID] = restoreResponseToolName(toolUse.Name, requestCtx)
+			}
+		}
+	}
+	return names
+}
+
+// KRS accepts older completed tool cycles but can answer with only metadata
+// and context usage. Keep only the active final tool turn structured and
+// preserve completed tool output as ordinary conversation text.
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext) []KiroHistoryMessage {
+	if len(history) == 0 {
+		return history
+	}
+
+	toolNames := collectKiroHistoryToolNames(history, requestCtx)
+	flattenedToolMessages := make(map[*KiroUserInputMessage]bool)
+	activeAssistantIdx := -1
+	if isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+		activeAssistantIdx = len(history) - 1
+	}
+
+	for i := range history {
+		msg := &history[i]
+		if msg.AssistantResponseMessage != nil {
+			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
+			if len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
+				msg.AssistantResponseMessage.ToolUses = nil
+			}
+		}
+		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
+			ctx := msg.UserInputMessage.UserInputMessageContext
+			if len(ctx.ToolResults) > 0 {
+				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames))
+				flattenedToolMessages[msg.UserInputMessage] = true
+				ctx.ToolResults = nil
+			}
+			ctx.Tools = nil
+			if len(ctx.Tools) == 0 && len(ctx.ToolResults) == 0 {
+				msg.UserInputMessage.UserInputMessageContext = nil
+			}
+		}
+		if msg.UserInputMessage != nil && strings.TrimSpace(msg.UserInputMessage.Content) == "" && len(msg.UserInputMessage.Images) == 0 {
+			msg.UserInputMessage.Content = kiroMinimalFallbackContent
+		}
+	}
+
+	cleaned := history[:0:0]
+	for _, msg := range history {
+		if msg.AssistantResponseMessage != nil && len(msg.AssistantResponseMessage.ToolUses) == 0 {
+			content := strings.TrimSpace(msg.AssistantResponseMessage.Content)
+			if content == "" || content == kiroMinimalFallbackContent {
+				continue
+			}
+		}
+		if msg.UserInputMessage != nil && len(cleaned) > 0 {
+			last := cleaned[len(cleaned)-1]
+			content := strings.TrimSpace(msg.UserInputMessage.Content)
+			if last.UserInputMessage != nil &&
+				content != "" &&
+				len(msg.UserInputMessage.Images) == 0 &&
+				!flattenedToolMessages[msg.UserInputMessage] &&
+				!flattenedToolMessages[last.UserInputMessage] &&
+				strings.TrimSpace(last.UserInputMessage.Content) == content {
+				continue
+			}
+		}
+		cleaned = append(cleaned, msg)
+	}
+	return trimLeadingKiroAssistantHistory(cleaned)
+}
+
+func narrateKiroToolResults(toolResults []KiroToolResult, names map[string]string) string {
+	if len(toolResults) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(toolResults))
+	for _, result := range toolResults {
+		texts := make([]string, 0, len(result.Content))
+		for _, content := range result.Content {
+			if text := strings.TrimSpace(content.Text); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		body := strings.Join(texts, "\n")
+		if strings.TrimSpace(body) == "" {
+			body = "(no output)"
+		}
+		if name := strings.TrimSpace(names[result.ToolUseID]); name != "" {
+			parts = append(parts, fmt.Sprintf("[%s] %s", name, body))
+		} else {
+			parts = append(parts, body)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return kiroToolResultsPrefix + "\n\n" + strings.Join(parts, "\n\n")
+}
+
+func joinKiroHistoryText(existing, addition string) string {
+	existing = strings.TrimSpace(existing)
+	addition = strings.TrimSpace(addition)
+	switch {
+	case existing != "" && addition != "":
+		return existing + "\n\n" + addition
+	case addition != "":
+		return addition
+	default:
+		return existing
+	}
+}
+
+var (
+	kiroPollutedToolCallTextPattern = regexp.MustCompile(`\[Called tool [^\]]*\]`)
+	kiroExcessNewlinePattern        = regexp.MustCompile(`\n{3,}`)
+)
+
+func stripKiroPollutedToolCallText(content string) string {
+	if !strings.Contains(content, "[Called tool ") {
+		return content
+	}
+	cleaned := kiroPollutedToolCallTextPattern.ReplaceAllString(content, "")
+	cleaned = kiroExcessNewlinePattern.ReplaceAllString(cleaned, "\n\n")
+	return strings.TrimSpace(cleaned)
+}
+
+func trimLeadingKiroAssistantHistory(history []KiroHistoryMessage) []KiroHistoryMessage {
+	for len(history) > 0 && history[0].AssistantResponseMessage != nil {
+		history = history[1:]
+	}
+	return history
 }
 
 func appendMissingPlaceholderTools(tools []KiroToolWrapper, historyToolNames []string) []KiroToolWrapper {

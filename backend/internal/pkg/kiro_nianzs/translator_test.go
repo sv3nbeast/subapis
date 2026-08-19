@@ -999,6 +999,84 @@ func TestParseNonStreamingEventStreamPreservesLargeIntegerInMapInput(t *testing.
 	require.Equal(t, "9007199254740993", gjson.GetBytes(result.ResponseBody, "content.0.input.id").Raw)
 }
 
+func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"messages":[
+			{"role":"user","content":"run the build"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"running build"},
+				{"type":"tool_use","id":"t1","name":"exec_command","input":{"cmd":"make"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t1","content":"build ok"}
+			]},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"t2","name":"exec_command","input":{"cmd":"test"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t2","content":"tests pass"}
+			]},
+			{"role":"user","content":"Summarize everything that happened above."}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	foundT1ToolUse := false
+	foundT2ToolUse := false
+	var historyText strings.Builder
+	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
+		for _, toolUse := range msg.Get("assistantResponseMessage.toolUses").Array() {
+			switch toolUse.Get("toolUseId").String() {
+			case "t1":
+				foundT1ToolUse = true
+			case "t2":
+				foundT2ToolUse = true
+			}
+		}
+		require.False(t, msg.Get("userInputMessage.userInputMessageContext.toolResults").IsArray())
+		historyText.WriteString(msg.Get("userInputMessage.content").String())
+		historyText.WriteString("\n")
+		historyText.WriteString(msg.Get("assistantResponseMessage.content").String())
+		historyText.WriteString("\n")
+	}
+	require.False(t, foundT1ToolUse)
+	require.True(t, foundT2ToolUse)
+	require.Contains(t, historyText.String(), "[exec_command] build ok")
+	require.Equal(t, "t2", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+	require.Equal(t, "tests pass", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.content.0.text").String())
+	require.Contains(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String(), "Summarize everything")
+	require.Contains(t, string(payload), "Tool results:")
+}
+
+func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+		"messages":[
+			{"role":"user","content":"run ls"},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"t9","name":"exec_command","input":{"cmd":"ls"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t9","content":"file1 file2"}
+			]}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+	history := gjson.GetBytes(payload, "conversationState.history").Array()
+	require.NotEmpty(t, history)
+	last := history[len(history)-1]
+	require.Equal(t, "t9", last.Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+	require.Equal(t, "t9", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+}
+
 // Kiro 上游只发 meteringEvent(credits),不发 tokenUsage,所以非流式解析出的
 // InputTokens 恒为 0。流式路径靠 inputTokens 参数种入初值,非流式没有对应入口,
 // 需由 requestCtx.EstimatedInputTokens 兜底,否则响应体 usage.input_tokens 为 0。
@@ -3192,14 +3270,10 @@ func TestBuildKiroPayloadRemovesHistoryOrphanToolUse(t *testing.T) {
 	require.NoError(t, err)
 	payload := kiroBuildResult.Payload
 	history := gjson.GetBytes(payload, "conversationState.history").Array()
-	foundAssistantWithoutToolUses := false
 	for _, msg := range history {
-		if msg.Get("assistantResponseMessage").Exists() && msg.Get("assistantResponseMessage.content").String() == " " {
-			foundAssistantWithoutToolUses = true
-			require.False(t, msg.Get("assistantResponseMessage.toolUses").Exists())
-		}
+		require.NotEqual(t, " ", msg.Get("assistantResponseMessage.content").String())
+		require.False(t, msg.Get("assistantResponseMessage.toolUses").Exists())
 	}
-	require.True(t, foundAssistantWithoutToolUses)
 	require.False(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools").Exists())
 }
 
