@@ -394,6 +394,9 @@ func (s *GatewayService) forwardKiroAsResponses(
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	}
 	if err != nil {
+		if s.handleKiroContextLimitError(c, account, err) {
+			return nil, err
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -404,9 +407,10 @@ func (s *GatewayService) forwardKiroAsResponses(
 		}
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
+	strictTerminal := s.kiroResilienceEnforced(kiroParsed.GroupID) || s.useNianzsKiroEngine(kiroParsed.GroupID)
 	if clientStream {
 		result, streamErr := s.handleResponsesStreamingResponseWithOptions(resp, c, originalModel, mappedModel, reasoningEffort, startTime, responsesStreamingBridgeOptions{
-			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			StrictTerminal:          strictTerminal,
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			ClientToolMapping:       clientToolMapping,
@@ -429,7 +433,7 @@ func (s *GatewayService) forwardKiroAsResponses(
 			// accept a partial summary merely because the group's generic Kiro
 			// resilience mode is observe/off; without completion evidence Codex
 			// would continue from an untrustworthy summary and become stuck.
-			StrictTerminal:          compactOptions != nil || s.kiroResilienceEnforced(kiroParsed.GroupID),
+			StrictTerminal:          compactOptions != nil || strictTerminal,
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),

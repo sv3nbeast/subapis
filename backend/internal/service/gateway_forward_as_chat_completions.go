@@ -245,6 +245,9 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, kiroParsed, anthropicBody, mappedModel, originalModel, c.Request.Header, kiroParsed.Group)
 	}
 	if err != nil {
+		if s.handleKiroContextLimitError(c, account, err) {
+			return nil, err
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -255,6 +258,7 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 		}
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, anthropicBody)
 	}
+	strictTerminal := s.kiroResilienceEnforced(kiroParsed.GroupID) || s.useNianzsKiroEngine(kiroParsed.GroupID)
 	if clientStream {
 		result, streamErr := s.handleCCStreamingFromAnthropicWithOptions(
 			resp,
@@ -265,7 +269,7 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 			startTime,
 			includeUsage,
 			responsesStreamingBridgeOptions{
-				StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+				StrictTerminal:          strictTerminal,
 				CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			},
 		)
@@ -283,7 +287,7 @@ func (s *GatewayService) forwardKiroAsChatCompletions(
 		reasoningEffort,
 		startTime,
 		responsesStreamingBridgeOptions{
-			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			StrictTerminal:          strictTerminal,
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 		},
 	)
