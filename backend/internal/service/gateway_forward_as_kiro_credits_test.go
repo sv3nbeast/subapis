@@ -20,6 +20,32 @@ func TestMergeAnthropicUsageCapturesKiroCredits(t *testing.T) {
 	require.InDelta(t, 0.17, usage.KiroCredits, 0.000001)
 }
 
+func TestMergeAnthropicUsagePrefersInternalBillingUsageOverContextProjection(t *testing.T) {
+	var usage ClaudeUsage
+
+	mergeAnthropicUsage(&usage, apicompat.AnthropicUsage{
+		InputTokens:              84_999,
+		OutputTokens:             10,
+		CacheReadInputTokens:     679_992,
+		CacheCreationInputTokens: 84_999,
+		BillingUsage: &apicompat.AnthropicBillingUsage{
+			InputTokens:              10_000,
+			OutputTokens:             10,
+			CacheReadInputTokens:     80_000,
+			CacheCreationInputTokens: 10_000,
+			CacheCreation5mTokens:    3_000,
+			CacheCreation1hTokens:    7_000,
+		},
+	})
+
+	require.Equal(t, 10_000, usage.InputTokens)
+	require.Equal(t, 10, usage.OutputTokens)
+	require.Equal(t, 80_000, usage.CacheReadInputTokens)
+	require.Equal(t, 10_000, usage.CacheCreationInputTokens)
+	require.Equal(t, 3_000, usage.CacheCreation5mTokens)
+	require.Equal(t, 7_000, usage.CacheCreation1hTokens)
+}
+
 func TestOpenAICompatResponseOmitsInternalKiroCredits(t *testing.T) {
 	stopReason := "end_turn"
 	resp := &apicompat.AnthropicResponse{

@@ -425,7 +425,11 @@ func (s *GatewayService) forwardKiroAsResponses(
 		reasoningEffort,
 		startTime,
 		responsesStreamingBridgeOptions{
-			StrictTerminal:          s.kiroResilienceEnforced(kiroParsed.GroupID),
+			// A compacted continuation is durable conversation state. Never
+			// accept a partial summary merely because the group's generic Kiro
+			// resilience mode is observe/off; without completion evidence Codex
+			// would continue from an untrustworthy summary and become stuck.
+			StrictTerminal:          compactOptions != nil || s.kiroResilienceEnforced(kiroParsed.GroupID),
 			CoalesceInterleavedText: IsOpenAIKiroBridgeModel(originalModel),
 			CustomToolNames:         toolMetadata.CustomToolNames,
 			NormalizeBufferedInput:  IsOpenAIKiroBridgeModel(originalModel),
@@ -434,6 +438,12 @@ func (s *GatewayService) forwardKiroAsResponses(
 		},
 	)
 	bufferErr = s.finishKiroStreamResponse(ctx, resp, kiroParsed.GroupID, bufferErr)
+	if compactOptions != nil && bufferErr != nil {
+		// Compaction is a single durable state transition. Never rotate accounts
+		// or replay it after an incomplete stream; doing so can consume the same
+		// logical user turn multiple times and still mint divergent summaries.
+		bufferErr = kiroPostSemanticFailure(bufferErr)
+	}
 	return result, bufferErr
 }
 
@@ -509,6 +519,18 @@ func ExtractResponsesReasoningEffortFromBody(body []byte) *string {
 
 func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if dst == nil {
+		return
+	}
+	if billing := src.BillingUsage; billing != nil {
+		dst.InputTokens = billing.InputTokens
+		dst.OutputTokens = billing.OutputTokens
+		dst.CacheCreationInputTokens = billing.CacheCreationInputTokens
+		dst.CacheReadInputTokens = billing.CacheReadInputTokens
+		dst.CacheCreation5mTokens = billing.CacheCreation5mTokens
+		dst.CacheCreation1hTokens = billing.CacheCreation1hTokens
+		if src.KiroCredits > 0 {
+			dst.KiroCredits = src.KiroCredits
+		}
 		return
 	}
 	if src.InputTokens > 0 {

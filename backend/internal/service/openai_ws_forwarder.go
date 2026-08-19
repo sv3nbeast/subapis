@@ -1647,6 +1647,31 @@ func openAIWSRawItemsHasPrefix(items []json.RawMessage, prefix []json.RawMessage
 	return true
 }
 
+// openAIWSRawItemsContainsInOrder recognizes a self-contained client replay
+// even when Codex inserts transport/control items before or between the prior
+// conversation items. Re-prepending the same prior items would make long
+// store=false tool sessions grow on every HTTP-bridge turn.
+func openAIWSRawItemsContainsInOrder(items []json.RawMessage, previous []json.RawMessage) bool {
+	if len(previous) == 0 {
+		return true
+	}
+	if len(items) < len(previous) {
+		return false
+	}
+	next := 0
+	want := normalizeOpenAIWSJSONForCompareOrRaw(previous[next])
+	for _, item := range items {
+		if bytes.Equal(normalizeOpenAIWSJSONForCompareOrRaw(item), want) {
+			next++
+			if next == len(previous) {
+				return true
+			}
+			want = normalizeOpenAIWSJSONForCompareOrRaw(previous[next])
+		}
+	}
+	return false
+}
+
 func openAIWSRawItemsHasFunctionCallOutput(items []json.RawMessage) bool {
 	for _, item := range items {
 		if isCodexToolCallOutputItemType(gjson.GetBytes(item, "type").String()) {
@@ -1729,7 +1754,7 @@ func buildOpenAIWSReplayInputSequence(
 	if !currentExists || len(currentItems) == 0 {
 		return cloneOpenAIWSRawMessages(previousFullInput), true, nil
 	}
-	if openAIWSRawItemsHasPrefix(currentItems, previousFullInput) {
+	if openAIWSRawItemsHasPrefix(currentItems, previousFullInput) || openAIWSRawItemsContainsInOrder(currentItems, previousFullInput) {
 		return cloneOpenAIWSRawMessages(currentItems), true, nil
 	}
 	merged := make([]json.RawMessage, 0, len(previousFullInput)+len(currentItems))

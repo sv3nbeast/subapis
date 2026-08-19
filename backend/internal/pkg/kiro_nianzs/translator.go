@@ -1930,6 +1930,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	// first client-visible event is delayed until EOF do not apply Claude Code
 	// framing twice (once here and once inside ensureMessageStart).
 	usage = normalizeClaudeCodeSimulatedInputUsage(usage, requestCtx)
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	clientUsage := reconcileKiroUsageWithContext(usage, requestCtx.ContextWindowTokens)
 	if err := releaseStreamOutput(); err != nil {
 		return nil, err
@@ -1943,6 +1944,18 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	finalUsageMap["output_tokens_details"] = map[string]any{
 		"thinking_tokens": kiroThinkingTokenEstimate(allThinking.String(), model),
+	}
+	if clientUsage.InputTokens != usage.InputTokens ||
+		clientUsage.CacheReadInputTokens != usage.CacheReadInputTokens ||
+		clientUsage.CacheCreationInputTokens != usage.CacheCreationInputTokens {
+		finalUsageMap["_sub2api_billing_usage"] = map[string]any{
+			"input_tokens":                   usage.InputTokens,
+			"output_tokens":                  usage.OutputTokens,
+			"cache_creation_input_tokens":    usage.CacheCreationInputTokens,
+			"cache_read_input_tokens":        usage.CacheReadInputTokens,
+			"cache_creation_5m_input_tokens": usage.CacheCreation5mInputTokens,
+			"cache_creation_1h_input_tokens": usage.CacheCreation1hInputTokens,
+		}
 	}
 	if usage.KiroCredits > 0 {
 		finalUsageMap["_sub2api_kiro_credits"] = usage.KiroCredits

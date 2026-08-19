@@ -447,18 +447,42 @@ func TestNianzsMessagesRouteReturns85PercentContextUsageForClaudeCompaction(t *t
 
 			require.NoError(t, err)
 			require.NotNil(t, result)
-			totalContextTokens := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
-			require.Equal(t, 850_000, totalContextTokens)
-			require.Equal(t, 849_990, result.Usage.InputTokens)
+			billingTotal := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
+			require.Less(t, billingTotal, 850_000, "provider context occupancy must not become billable input")
+			require.Equal(t, 10, result.Usage.OutputTokens)
 			if stream {
 				require.Contains(t, recorder.Body.String(), `"input_tokens":849990`)
 				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
 				require.NotContains(t, recorder.Body.String(), "_sub2api_kiro_usage_final")
+				require.NotContains(t, recorder.Body.String(), "_sub2api_billing_usage")
 			} else {
 				require.Equal(t, int64(849_990), gjson.Get(recorder.Body.String(), "usage.input_tokens").Int())
 			}
 		})
 	}
+}
+
+func TestNianzsResponsesRouteReturns85PercentContextUsageWithoutBillingIt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"context threshold"}],"stream":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, nianzsKiroContextUsageResponse(t, 85.0, 10))
+	groupID := int64(33)
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol", GroupID: &groupID}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, parsed)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	billingTotal := result.Usage.InputTokens + result.Usage.CacheReadInputTokens + result.Usage.CacheCreationInputTokens + result.Usage.OutputTokens
+	require.Less(t, billingTotal, 850_000, "the 85% context projection is client-only and must not be persisted as billing usage")
+	wire := recorder.Body.String()
+	require.Contains(t, wire, `"input_tokens":849990`)
+	require.Equal(t, 1, strings.Count(wire, "event: response.completed"))
+	require.NotContains(t, wire, "_sub2api_billing_usage")
+	require.NotContains(t, wire, "_sub2api_kiro_usage_final")
 }
 
 func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {

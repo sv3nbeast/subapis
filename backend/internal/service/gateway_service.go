@@ -8651,7 +8651,9 @@ func extractAnthropicSSEDataLine(line string) (string, bool) {
 }
 
 func stripSub2apiInternalUsageFields(line string) string {
-	if !strings.Contains(line, "_sub2api_kiro_credits") && !strings.Contains(line, kiroUsageFinalMarker) {
+	if !strings.Contains(line, "_sub2api_kiro_credits") &&
+		!strings.Contains(line, kiroUsageFinalMarker) &&
+		!strings.Contains(line, "_sub2api_billing_usage") {
 		return line
 	}
 	data, ok := extractAnthropicSSEDataLine(line)
@@ -8663,6 +8665,10 @@ func stripSub2apiInternalUsageFields(line string) string {
 		return line
 	}
 	cleaned, err = sjson.Delete(cleaned, "usage."+kiroUsageFinalMarker)
+	if err != nil {
+		return line
+	}
+	cleaned, err = sjson.Delete(cleaned, "usage._sub2api_billing_usage")
 	if err != nil {
 		return line
 	}
@@ -8718,6 +8724,14 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 			}
 			if v := deltaUsage.Get("_sub2api_kiro_credits"); v.Exists() && v.Float() > 0 {
 				usage.KiroCredits = v.Float()
+			}
+			if billing := deltaUsage.Get("_sub2api_billing_usage"); billing.Exists() {
+				usage.InputTokens = int(billing.Get("input_tokens").Int())
+				usage.OutputTokens = int(billing.Get("output_tokens").Int())
+				usage.CacheCreationInputTokens = int(billing.Get("cache_creation_input_tokens").Int())
+				usage.CacheReadInputTokens = int(billing.Get("cache_read_input_tokens").Int())
+				usage.CacheCreation5mTokens = int(billing.Get("cache_creation_5m_input_tokens").Int())
+				usage.CacheCreation1hTokens = int(billing.Get("cache_creation_1h_input_tokens").Int())
 			}
 		}
 	}
@@ -11033,6 +11047,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if u, ok := event["usage"].(map[string]any); ok {
 				delete(u, "_sub2api_kiro_credits")
 				delete(u, kiroUsageFinalMarker)
+				delete(u, "_sub2api_billing_usage")
 				eventChanged = true
 			}
 		}
@@ -11396,6 +11411,20 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 		if v, ok := parseSSEUsageFloat(usageObj["_sub2api_kiro_credits"]); ok && v > 0 {
 			patch.kiroCredits = v
 			patch.hasKiroCredits = true
+		}
+		if billing, ok := usageObj["_sub2api_billing_usage"].(map[string]any); ok {
+			patch.hasInputTokens = true
+			patch.inputTokens, _ = parseSSEUsageInt(billing["input_tokens"])
+			patch.hasOutputTokens = true
+			patch.outputTokens, _ = parseSSEUsageInt(billing["output_tokens"])
+			patch.hasCacheCreationInput = true
+			patch.cacheCreationInputTokens, _ = parseSSEUsageInt(billing["cache_creation_input_tokens"])
+			patch.hasCacheReadInput = true
+			patch.cacheReadInputTokens, _ = parseSSEUsageInt(billing["cache_read_input_tokens"])
+			patch.hasCacheCreation5m = true
+			patch.cacheCreation5mTokens, _ = parseSSEUsageInt(billing["cache_creation_5m_input_tokens"])
+			patch.hasCacheCreation1h = true
+			patch.cacheCreation1hTokens, _ = parseSSEUsageInt(billing["cache_creation_1h_input_tokens"])
 		}
 		return patch
 	}
