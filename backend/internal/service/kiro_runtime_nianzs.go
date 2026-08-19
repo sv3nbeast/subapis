@@ -96,6 +96,39 @@ func (s *GatewayService) nianzsKiroFirstSemanticTimeoutForRequest(ctx context.Co
 	return s.firstSemanticTimeout()
 }
 
+func configureNianzsKiroEventDiagnostics(requestCtx *nianzskiro.KiroRequestContext, parsed *ParsedRequest, accountID int64, requestID, upstreamRequestID string) {
+	if requestCtx == nil || !kiroEventDiagnosticsEnabledForUser(parsed) {
+		return
+	}
+	requestCtx.EventDiagnosticSink = func(event nianzskiro.KiroEventDiagnostic) {
+		logger.L().Info("kiro.nianzs_event_diagnostic",
+			zap.Int64("user_id", parsed.SessionContext.UserID),
+			zap.Int64("account_id", accountID),
+			zap.String("request_id", requestID),
+			zap.String("upstream_request_id", upstreamRequestID),
+			zap.Int("body_attempt", event.BodyAttempt),
+			zap.String("event_type", event.EventType),
+			zap.String("message_type", event.MessageType),
+			zap.String("exception_type", event.ExceptionType),
+			zap.String("decode_status", event.DecodeStatus),
+			zap.Int("payload_bytes", event.PayloadBytes),
+			zap.String("payload_hash", event.PayloadHash),
+			zap.Strings("top_level_keys", event.TopLevelKeys),
+			zap.Strings("nested_keys", event.NestedKeys),
+			zap.String("stop_reason", event.StopReason),
+			zap.Int("content_bytes", event.ContentBytes),
+			zap.Int("tool_use_count", event.ToolUseCount),
+			zap.Bool("has_usage", event.HasUsage),
+			zap.Bool("has_semantic_candidate", event.HasSemanticCandidate),
+			zap.Int("frame_count", event.FrameCount),
+			zap.Int("decoded_frame_count", event.DecodedFrameCount),
+			zap.Int("semantic_candidate_frames", event.SemanticCandidateFrames),
+			zap.Bool("has_completion_evidence", event.HasCompletionEvidence),
+			zap.Strings("observed_event_types", event.ObservedEventTypes),
+		)
+	}
+}
+
 func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest, startTime time.Time) (*ForwardResult, error) {
 	if account == nil || parsed == nil {
 		return nil, fmt.Errorf("kiro forward: missing account or request")
@@ -179,6 +212,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 		ctx = withGatewayFirstSemanticTimeoutOverride(ctx, s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, parsed.GroupID))
 		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
 		if err != nil {
+			if s.handleKiroContextLimitError(c, account, err) {
+				return nil, err
+			}
 			// Once semantic SSE bytes have been emitted, replaying the turn would
 			// duplicate output. Before output, however, a truncated Kiro Event
 			// Stream is a normal failover signal and must reach the handler.
@@ -250,6 +286,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				Duration:      time.Since(startTime),
 			}, nil
 		default:
+			if s.handleKiroContextLimitError(c, account, codeErr) {
+				return nil, codeErr
+			}
 			var httpErr *nianzsKiroCodeExecutionHTTPError
 			if errors.As(codeErr, &httpErr) && httpErr.Response != nil {
 				return nil, s.handleKiroHTTPErrorNianzs(ctx, httpErr.Response, c, account, mappedModel, body)
@@ -307,6 +346,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 				Duration:      time.Since(startTime),
 			}, nil
 		default:
+			if s.handleKiroContextLimitError(c, account, webSearchErr) {
+				return nil, webSearchErr
+			}
 			var httpErr *nianzsKiroWebSearchHTTPError
 			if errors.As(webSearchErr, &httpErr) && httpErr.Response != nil {
 				return nil, s.handleKiroHTTPErrorNianzs(ctx, httpErr.Response, c, account, mappedModel, body)
@@ -392,6 +434,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 			break
 		}
 		if attempt > 0 || !nianzskiro.IsNativeToolProgressStalled(err) {
+			if s.handleKiroContextLimitError(c, account, err) {
+				return nil, err
+			}
 			if failoverErr := s.kiroStreamErrorToFailover(ctx, account, err); failoverErr != nil {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
@@ -850,6 +895,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 					_ = resp.Body.Close()
 					return nil, requestCtx, err
 				}
+				upstreamRequestID := nianzsBuildKiroRequestID(resp)
+				configureNianzsKiroEventDiagnostics(&requestCtx, parsed, account.ID, upstreamRequestID, upstreamRequestID)
 			}
 			return resp, requestCtx, nil
 		}

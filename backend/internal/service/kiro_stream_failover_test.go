@@ -16,6 +16,7 @@ import (
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	nianzskiro "github.com/Wei-Shaw/sub2api/internal/pkg/kiro_nianzs"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/kirocooldown"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,21 @@ func TestKiroEventDiagnosticsIsScopedToConfiguredUser(t *testing.T) {
 	}))
 }
 
+func TestNianzsKiroEventDiagnosticsUsesExistingUserScope(t *testing.T) {
+	t.Setenv(kiroEventDiagnosticsUserIDsEnv, "565")
+	parsed := &ParsedRequest{SessionContext: &SessionContext{UserID: 565}}
+	requestCtx := nianzskiro.KiroRequestContext{}
+
+	configureNianzsKiroEventDiagnostics(&requestCtx, parsed, 44, "request-id", "upstream-id")
+
+	require.NotNil(t, requestCtx.EventDiagnosticSink)
+	requestCtx.EventDiagnosticSink(nianzskiro.KiroEventDiagnostic{EventType: "__stream_summary__", DecodeStatus: "clean_eof"})
+
+	disabled := nianzskiro.KiroRequestContext{}
+	configureNianzsKiroEventDiagnostics(&disabled, &ParsedRequest{SessionContext: &SessionContext{UserID: 566}}, 44, "request-id", "upstream-id")
+	require.Nil(t, disabled.EventDiagnosticSink)
+}
+
 func TestKiroContextLimitErrorReturnsClaudeCodeCompactionSignal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -55,6 +71,33 @@ func TestKiroContextLimitErrorReturnsClaudeCodeCompactionSignal(t *testing.T) {
 	require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
 	require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
 	require.True(t, IsResponseCommitted(c))
+}
+
+func TestNianzsKiroContextLimitErrorReturnsClaudeCodeCompactionSignal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	svc := &GatewayService{}
+	err := &nianzskiro.ContextLimitError{Reason: "ContentLengthExceededException"}
+
+	require.True(t, svc.handleKiroContextLimitError(c, &Account{ID: 9, Platform: PlatformKiro, Name: "kiro"}, err))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Equal(t, "prompt is too long", gjson.Get(rec.Body.String(), "error.message").String())
+	require.True(t, IsResponseCommitted(c))
+}
+
+func TestNianzsKiroExceptionClassificationPreservesThrottleFailover(t *testing.T) {
+	svc := &GatewayService{}
+	failoverErr := svc.kiroStreamErrorToFailover(context.Background(), &Account{ID: 9}, &nianzskiro.UpstreamExceptionError{
+		ExceptionType: "ThrottlingException",
+		Message:       "Too many requests",
+	})
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.KiroRateLimited)
 }
 
 func TestKiroContextLimitErrorUsesSSEAfterResponseStarted(t *testing.T) {

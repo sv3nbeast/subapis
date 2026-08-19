@@ -209,6 +209,9 @@ type KiroRequestContext struct {
 	StructuredOutputUserHint string
 	StopSequences            []string
 	MaxOutputTokens          int
+	// EventDiagnosticSink receives redacted EventStream metadata. It is nil on
+	// the normal hot path and never receives prompt or assistant content.
+	EventDiagnosticSink KiroEventDiagnosticSink
 	// RequireTerminalEvent prevents callers that perform server-side work from
 	// treating a bare transport EOF as a successful model turn. Kiro may prove
 	// completion with messageStop, an explicit stop reason, a stopped tool call,
@@ -346,8 +349,10 @@ type toolUseState struct {
 }
 
 type eventStreamMessage struct {
-	EventType string
-	Payload   []byte
+	EventType     string
+	MessageType   string
+	ExceptionType string
+	Payload       []byte
 }
 
 type kiroSemanticEventType string
@@ -776,6 +781,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		return nil
 	}
 	sawCompletionEvidence := false
+	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	protocolPingSent := false
 	claudeCodeFirstTextDeltaSent := false
 	pendingClaudeProtocolText := ""
@@ -1711,32 +1717,44 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	for {
 		select {
 		case <-ctx.Done():
+			eventDiagnostics.finish("context_done")
 			return nil, ctx.Err()
 		default:
 		}
 
 		msg, err := readEventStreamMessage(reader)
 		if err == io.EOF {
+			eventDiagnostics.finish("clean_eof")
 			break
 		}
 		if err != nil {
+			eventDiagnostics.finish("frame_error")
 			return nil, err
 		}
+		if exceptionErr := msg.ExceptionError(); exceptionErr != nil {
+			event, _ := decodeNianzsKiroEventPayload(msg.Payload)
+			eventDiagnostics.observe(msg, event, "exception", false)
+			eventDiagnostics.finish("exception")
+			return nil, markNianzsKiroContextResponseStarted(exceptionErr, streamOutputReleased && messageStartSent)
+		}
 		if msg == nil || len(msg.Payload) == 0 {
+			eventDiagnostics.observe(msg, nil, "empty_payload", false)
 			continue
 		}
 
-		var event map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
-		decoder.UseNumber()
-		if err := decoder.Decode(&event); err != nil {
+		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
+		if decodeStatus != "decoded" {
+			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			continue
+		if contextErr := contextLimitErrorFromNianzsEvent(msg.EventType, event); contextErr != nil {
+			eventDiagnostics.observe(msg, event, "context_limit", false)
+			eventDiagnostics.finish("context_limit")
+			return nil, markNianzsKiroContextResponseStarted(contextErr, streamOutputReleased && messageStartSent)
 		}
-		if kiroEventProvidesCompletionEvidence(msg.EventType, event) {
+		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
+		if completionEvidence {
 			sawCompletionEvidence = true
 		}
 		// Keep the first Claude-compatible text suffix paced to Claude's native
@@ -4021,6 +4039,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	var reasoningArtifacts kiroReasoningArtifacts
 	stopReason := ""
 	sawCompletionEvidence := false
+	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
@@ -4035,29 +4054,40 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	for {
 		msg, err := readEventStreamMessage(reader)
 		if err == io.EOF {
+			eventDiagnostics.finish("clean_eof")
 			break
 		}
 		if err != nil {
+			eventDiagnostics.finish("frame_error")
 			return "", nil, usage, stopReason, reasoningArtifacts, err
 		}
+		if exceptionErr := msg.ExceptionError(); exceptionErr != nil {
+			event, _ := decodeNianzsKiroEventPayload(msg.Payload)
+			eventDiagnostics.observe(msg, event, "exception", false)
+			eventDiagnostics.finish("exception")
+			return "", nil, usage, stopReason, reasoningArtifacts, exceptionErr
+		}
 		if msg == nil || len(msg.Payload) == 0 {
+			eventDiagnostics.observe(msg, nil, "empty_payload", false)
 			continue
 		}
 
-		var event map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
-		decoder.UseNumber()
-		if err := decoder.Decode(&event); err != nil {
+		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
+		if decodeStatus != "decoded" {
+			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			continue
+		if contextErr := contextLimitErrorFromNianzsEvent(msg.EventType, event); contextErr != nil {
+			eventDiagnostics.observe(msg, event, "context_limit", false)
+			eventDiagnostics.finish("context_limit")
+			return "", nil, usage, stopReason, reasoningArtifacts, contextErr
 		}
 		if sr := normalizeAnthropicStopReason(readStopReason(event)); sr != "" {
 			stopReason = preferAnthropicStopReason(stopReason, sr)
 		}
-		if kiroEventProvidesCompletionEvidence(msg.EventType, event) {
+		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
+		if completionEvidence {
 			sawCompletionEvidence = true
 		}
 		switch msg.EventType {
@@ -4822,56 +4852,23 @@ func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
 	if _, err := io.ReadFull(reader, remaining); err != nil {
 		return nil, err
 	}
-	eventType := extractEventType(remaining[:headersLength])
+	headers := parseNianzsEventStreamHeaders(remaining[:headersLength])
+	eventType := headers.EventType
 	payloadStart := headersLength
 	payloadEnd := uint32(len(remaining)) - 4
 	if payloadStart >= payloadEnd {
-		return &eventStreamMessage{EventType: eventType}, nil
+		return &eventStreamMessage{
+			EventType:     eventType,
+			MessageType:   headers.MessageType,
+			ExceptionType: headers.ExceptionType,
+		}, nil
 	}
 	return &eventStreamMessage{
-		EventType: eventType,
-		Payload:   remaining[payloadStart:payloadEnd],
+		EventType:     eventType,
+		MessageType:   headers.MessageType,
+		ExceptionType: headers.ExceptionType,
+		Payload:       remaining[payloadStart:payloadEnd],
 	}, nil
-}
-
-func extractEventType(headers []byte) string {
-	offset := 0
-	for offset < len(headers) {
-		nameLen := int(headers[offset])
-		offset++
-		if offset+nameLen > len(headers) {
-			break
-		}
-		name := string(headers[offset : offset+nameLen])
-		offset += nameLen
-		if offset >= len(headers) {
-			break
-		}
-		valueType := headers[offset]
-		offset++
-		if valueType == 7 {
-			if offset+2 > len(headers) {
-				break
-			}
-			valueLen := int(binary.BigEndian.Uint16(headers[offset : offset+2]))
-			offset += 2
-			if offset+valueLen > len(headers) {
-				break
-			}
-			value := string(headers[offset : offset+valueLen])
-			offset += valueLen
-			if name == ":event-type" {
-				return value
-			}
-			continue
-		}
-		next, ok := skipHeaderValue(headers, offset, valueType)
-		if !ok {
-			break
-		}
-		offset = next
-	}
-	return ""
 }
 
 func skipHeaderValue(headers []byte, offset int, valueType byte) (int, bool) {

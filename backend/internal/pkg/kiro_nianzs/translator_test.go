@@ -857,6 +857,129 @@ func TestParseNonStreamingEventStream(t *testing.T) {
 	require.True(t, strings.Contains(firstText, "hello from kiro"))
 }
 
+func TestStreamEventStreamAsAnthropicReturnsContextLimitFromExceptionFrame(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamExceptionFrame(t, "ContentLengthExceededException", map[string]any{
+		"message": "Input length and max_tokens exceed context limit",
+	}))
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 200_000, KiroRequestContext{
+		RequireTerminalEvent: true,
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.Nil(t, result)
+	var contextErr *ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, "prompt is too long", err.Error())
+	require.Empty(t, out.String())
+	require.Len(t, diagnostics, 2)
+	require.Equal(t, "exception", diagnostics[0].MessageType)
+	require.Equal(t, "ContentLengthExceededException", diagnostics[0].ExceptionType)
+	require.Equal(t, "exception", diagnostics[0].DecodeStatus)
+	require.Equal(t, []string{"message"}, diagnostics[0].TopLevelKeys)
+	require.NotEmpty(t, diagnostics[0].PayloadHash)
+	require.Equal(t, "__stream_summary__", diagnostics[1].EventType)
+	require.Equal(t, "exception", diagnostics[1].DecodeStatus)
+	require.Equal(t, 1, diagnostics[1].FrameCount)
+}
+
+func TestParseNonStreamingEventStreamReturnsContextLimitFromInvalidStateEvent(t *testing.T) {
+	stream := bytes.NewBuffer(buildEventStreamFrame(t, "invalidStateEvent", map[string]any{
+		"invalidStateEvent": map[string]any{
+			"reason":  "CONTENT_LENGTH_EXCEEDS_THRESHOLD",
+			"message": "Maximum prompt length exceeded",
+		},
+	}))
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{RequireTerminalEvent: true})
+
+	require.Nil(t, result)
+	var contextErr *ContextLimitError
+	require.ErrorAs(t, err, &contextErr)
+	require.Equal(t, "CONTENT_LENGTH_EXCEEDS_THRESHOLD", contextErr.Reason)
+}
+
+func TestStreamEventDiagnosticsSummarizeCleanEmptyEOF(t *testing.T) {
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), bytes.NewReader(nil), &out, "claude-opus-5", 10, KiroRequestContext{
+		RequireTerminalEvent: true,
+		BodyAttempt:          2,
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "missing completion evidence")
+	require.Empty(t, out.String())
+	require.Len(t, diagnostics, 1)
+	require.Equal(t, "__stream_summary__", diagnostics[0].EventType)
+	require.Equal(t, "clean_eof", diagnostics[0].DecodeStatus)
+	require.Equal(t, 2, diagnostics[0].BodyAttempt)
+	require.Zero(t, diagnostics[0].FrameCount)
+	require.False(t, diagnostics[0].HasCompletionEvidence)
+}
+
+func TestStreamEventDiagnosticsEmitOnlySummaryForSuccessfulKnownFrames(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "ok"},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageMetadataEvent", map[string]any{
+		"messageMetadataEvent": map[string]any{"tokenUsage": map[string]any{"outputTokens": 1}},
+	}))
+	_, _ = stream.Write(buildEventStreamFrame(t, "messageStopEvent", map[string]any{
+		"messageStopEvent": map[string]any{"stop_reason": "end_turn"},
+	}))
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 10, KiroRequestContext{
+		RequireTerminalEvent: true,
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, diagnostics, 1)
+	require.Equal(t, "__stream_summary__", diagnostics[0].EventType)
+	require.Equal(t, 3, diagnostics[0].FrameCount)
+	require.Equal(t, 3, diagnostics[0].DecodedFrameCount)
+	require.Equal(t, 1, diagnostics[0].SemanticCandidateFrames)
+	require.True(t, diagnostics[0].HasCompletionEvidence)
+	require.Equal(t, []string{"assistantResponseEvent", "messageMetadataEvent", "messageStopEvent"}, diagnostics[0].ObservedEventTypes)
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+}
+
+func TestStreamEventDiagnosticsCaptureInvalidJSONWithoutPayloadContent(t *testing.T) {
+	stream := bytes.NewBuffer(buildRawEventStreamFrame(t, "unknownEvent", []byte(`not-json-sensitive-content`)))
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 10, KiroRequestContext{
+		RequireTerminalEvent: true,
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "missing completion evidence")
+	require.Len(t, diagnostics, 2)
+	require.Equal(t, "invalid_json", diagnostics[0].DecodeStatus)
+	require.Equal(t, len(`not-json-sensitive-content`), diagnostics[0].PayloadBytes)
+	require.NotEmpty(t, diagnostics[0].PayloadHash)
+	require.Empty(t, diagnostics[0].TopLevelKeys)
+}
+
 func TestParseNonStreamingEventStreamPreservesLargeIntegerInMapInput(t *testing.T) {
 	stream := bytes.NewBuffer(nil)
 	_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
@@ -3979,6 +4102,37 @@ func buildRawEventStreamFrame(t *testing.T, eventType string, payloadBytes []byt
 	_, _ = frame.Write(payloadBytes)
 	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
 	return frame.Bytes()
+}
+
+func buildEventStreamExceptionFrame(t *testing.T, exceptionType string, payload any) []byte {
+	t.Helper()
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	headers := bytes.NewBuffer(nil)
+	writeEventStreamStringHeader(t, headers, ":message-type", "exception")
+	writeEventStreamStringHeader(t, headers, ":exception-type", exceptionType)
+
+	totalLength := uint32(12 + headers.Len() + len(payloadBytes) + 4)
+	frame := bytes.NewBuffer(nil)
+	require.NoError(t, binary.Write(frame, binary.BigEndian, totalLength))
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(headers.Len())))
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
+	_, _ = frame.Write(headers.Bytes())
+	_, _ = frame.Write(payloadBytes)
+	require.NoError(t, binary.Write(frame, binary.BigEndian, uint32(0)))
+	return frame.Bytes()
+}
+
+func writeEventStreamStringHeader(t *testing.T, dst *bytes.Buffer, name, value string) {
+	t.Helper()
+	require.LessOrEqual(t, len(name), 255)
+	require.LessOrEqual(t, len(value), 65535)
+	_ = dst.WriteByte(byte(len(name)))
+	_, _ = dst.WriteString(name)
+	_ = dst.WriteByte(7)
+	require.NoError(t, binary.Write(dst, binary.BigEndian, uint16(len(value))))
+	_, _ = dst.WriteString(value)
 }
 
 func TestBuildKiroPayloadTrailingInlineSystemPreservesCurrentUserAndTools(t *testing.T) {

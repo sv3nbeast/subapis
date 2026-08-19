@@ -9,6 +9,8 @@ This directory is a source-faithful snapshot of backend/internal/pkg/kiro from:
 The Go package name intentionally remains kiro; callers should import this
 directory with the alias nianzskiro.
 
-Do not edit snapshot files directly. Compatibility and Sub2API integration code
-belongs outside this directory. Refresh the snapshot atomically from the pinned
-upstream commit, then run the parity and gateway regression suites.
+Sub2API compatibility additions live in files prefixed with `sub2api_`. Minimal
+hook points in snapshot files may call those additions when the pinned upstream
+does not expose an extension point. Refresh the snapshot atomically from the
+pinned upstream commit, reapply only the documented hook points, then run the
+parity and gateway regression suites.

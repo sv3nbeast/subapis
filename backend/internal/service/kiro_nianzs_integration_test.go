@@ -640,6 +640,81 @@ func TestNianzsMessagesStreamingBareEOFFailsOverBeforeOutput(t *testing.T) {
 	require.Empty(t, recorder.Body.String(), "bare EOF before semantics must remain replayable")
 }
 
+func TestNianzsMessagesContextLimitExceptionSignalsCompactionWithoutAccountFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream_%t", stream), func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","max_tokens":8192,"stream":%t,"messages":[{"role":"user","content":"long context"}]}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+
+			upstreamBody := buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+				":message-type":   "exception",
+				":exception-type": "ContentLengthExceededException",
+			}, []byte(`{"message":"Input length and max_tokens exceed context limit"}`))
+			upstreamResponse := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+				Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+			}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.Nil(t, result)
+			var contextErr *nianzskiro.ContextLimitError
+			require.ErrorAs(t, forwardErr, &contextErr)
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
+			require.Equal(t, "prompt is too long", gjson.Get(recorder.Body.String(), "error.message").String())
+			require.Len(t, upstream.requests, 1, "request-content failure must not probe another account or body")
+			require.True(t, HasOpsClientBusinessLimitedReason(c, OpsClientBusinessLimitedReasonContextLimit))
+		})
+	}
+}
+
+func TestNianzsMessagesContextLimitAfterOutputTerminatesInBandExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":8192,"stream":true,"messages":[{"role":"user","content":"long context"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+	require.NoError(t, err)
+
+	upstreamBody := bytes.NewBuffer(nil)
+	_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+		"assistantResponseEvent": map[string]any{"content": "partial answer"},
+	}))
+	_, _ = upstreamBody.Write(buildKiroEventStreamFrameWithHeaders(t, map[string]string{
+		":message-type":   "exception",
+		":exception-type": "ContentLengthExceededException",
+	}, []byte(`{"message":"Input length and max_tokens exceed context limit"}`)))
+	upstreamResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody.Bytes())),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+	require.Nil(t, result)
+	var contextErr *nianzskiro.ContextLimitError
+	require.ErrorAs(t, forwardErr, &contextErr)
+	require.True(t, contextErr.ResponseStarted)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"text":"part"`)
+	require.Contains(t, recorder.Body.String(), "prompt is too long")
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: error"))
+	require.NotContains(t, recorder.Body.String(), "event: message_stop")
+	require.Len(t, upstream.requests, 1, "client-visible output must never be replayed")
+	require.True(t, HasGatewaySSEErrorWritten(c))
+}
+
 func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"Perform a web search for the query: golang concurrency"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`)

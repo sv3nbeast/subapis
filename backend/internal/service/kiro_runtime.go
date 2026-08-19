@@ -879,6 +879,43 @@ func (s *GatewayService) kiroStreamErrorToFailover(ctx context.Context, account 
 		}
 	}
 
+	var nianzsExceptionErr *nianzskiro.UpstreamExceptionError
+	if errors.As(err, &nianzsExceptionErr) {
+		statusCode := http.StatusBadGateway
+		retryableOnSameAccount := true
+		exceptionType := strings.ToLower(strings.TrimSpace(nianzsExceptionErr.ExceptionType))
+		exceptionMsg := strings.ToLower(strings.TrimSpace(nianzsExceptionErr.Message))
+		if strings.Contains(exceptionType, "throttl") ||
+			strings.Contains(exceptionType, "ratelimit") ||
+			strings.Contains(exceptionType, "rate_limit") ||
+			strings.Contains(exceptionMsg, "too many requests") ||
+			strings.Contains(exceptionMsg, "rate limit") {
+			statusCode = http.StatusTooManyRequests
+			retryableOnSameAccount = false
+		}
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": sanitizeUpstreamErrorMessage(nianzsExceptionErr.Error()),
+			},
+		})
+		return &UpstreamFailoverError{
+			StatusCode:             statusCode,
+			ResponseBody:           body,
+			RetryableOnSameAccount: retryableOnSameAccount,
+			KiroRateLimited:        statusCode == http.StatusTooManyRequests,
+			FailureKind: func() UpstreamFailureKind {
+				if statusCode == http.StatusTooManyRequests {
+					return UpstreamFailureRateLimited
+				}
+				return UpstreamFailureIncompleteStream
+			}(),
+			UpstreamDone: upstreamDone,
+			Cause:        err,
+		}
+	}
+
 	var incompleteStreamErr *kiropkg.IncompleteStreamError
 	if errors.As(err, &incompleteStreamErr) {
 		body, _ := json.Marshal(map[string]any{
@@ -992,17 +1029,35 @@ func isKiroMetadataOnlyStreamError(err error) bool {
 
 func isKiroContextLimitError(err error) bool {
 	var contextErr *kiropkg.ContextLimitError
-	return errors.As(err, &contextErr)
+	if errors.As(err, &contextErr) {
+		return true
+	}
+	var nianzsContextErr *nianzskiro.ContextLimitError
+	return errors.As(err, &nianzsContextErr)
 }
 
 func kiroContextLimitResponseStarted(err error) bool {
 	var contextErr *kiropkg.ContextLimitError
-	return errors.As(err, &contextErr) && contextErr.ResponseStarted
+	if errors.As(err, &contextErr) {
+		return contextErr.ResponseStarted
+	}
+	var nianzsContextErr *nianzskiro.ContextLimitError
+	return errors.As(err, &nianzsContextErr) && nianzsContextErr.ResponseStarted
 }
 
 func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Account, err error) bool {
 	var contextErr *kiropkg.ContextLimitError
-	if c == nil || !errors.As(err, &contextErr) {
+	reason := ""
+	if errors.As(err, &contextErr) {
+		reason = contextErr.Reason
+	} else {
+		var nianzsContextErr *nianzskiro.ContextLimitError
+		if !errors.As(err, &nianzsContextErr) {
+			return false
+		}
+		reason = nianzsContextErr.Reason
+	}
+	if c == nil {
 		return false
 	}
 
@@ -1018,7 +1073,7 @@ func (s *GatewayService) handleKiroContextLimitError(c *gin.Context, account *Ac
 		platform = account.Platform
 	}
 	detail := ""
-	if reason := strings.TrimSpace(contextErr.Reason); reason != "" {
+	if reason = strings.TrimSpace(reason); reason != "" {
 		detail = "reason=" + reason
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
