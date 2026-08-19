@@ -35,7 +35,9 @@ var (
 		"resource has been exhausted",
 	}
 
-	antigravityQuotaTempUnschedKeywords = []string{
+	// These quota-like 429 responses receive one delayed retry on the same
+	// account. They must never persist a cooldown or trigger account failover.
+	antigravityQuotaSameAccountRetryKeywords = []string{
 		"quota_exhausted",
 		"quota exhausted",
 		"check quota",
@@ -126,12 +128,12 @@ func classifyAntigravity429(body []byte) antigravity429Category {
 	return antigravity429Unknown
 }
 
-func matchAntigravityQuotaTempUnschedKeyword(body []byte) string {
+func matchAntigravityQuotaSameAccountRetryKeyword(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
 	lowerBody := strings.ToLower(string(body))
-	for _, keyword := range antigravityQuotaTempUnschedKeywords {
+	for _, keyword := range antigravityQuotaSameAccountRetryKeywords {
 		if strings.Contains(lowerBody, keyword) {
 			return keyword
 		}

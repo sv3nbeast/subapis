@@ -1002,7 +1002,8 @@ type GatewayConfig struct {
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
-	// Antigravity 配额耗尽时自动临时不可调度时长（分钟），0 表示关闭自动摘除
+	// Deprecated: Antigravity 429 no longer persists temporary-unschedulable
+	// state. Retained only so existing configuration files continue to decode.
 	AntigravityQuotaExhaustedTempUnschedMinutes int `mapstructure:"antigravity_quota_exhausted_temp_unsched_minutes"`
 
 	// Scheduling: 账号调度相关配置

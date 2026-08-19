@@ -81,7 +81,7 @@ func saveAndSetBaseURLs(t *testing.T) {
 
 func newRetryParams(account *Account, upstream HTTPUpstream, handleError func(context.Context, string, *Account, int, http.Header, []byte, string, int64, string, bool) *handleModelRateLimitResult) antigravityRetryLoopParams {
 	return antigravityRetryLoopParams{
-		ctx:            context.Background(),
+		ctx:            withAntigravityQuota429RetryDelay(context.Background(), 0),
 		prefix:         "[ep-test]",
 		account:        account,
 		accessToken:    "token",
@@ -243,30 +243,32 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		require.Equal(t, 1, upstream.calls, "should not retry")
 	})
 
-	t.Run("429_rate_limited_keyword_matches_rule", func(t *testing.T) {
+	t.Run("429_quota_keyword_rule_does_not_override_same_account_retry", func(t *testing.T) {
 		saveAndSetBaseURLs(t)
 
-		upstream := &epFixedUpstream{statusCode: 429, body: `rate limited keyword`}
+		upstream := &epFixedUpstream{statusCode: 429, body: `rate limited keyword; check quota`}
 		repo := &epAccountRepo{}
 		rlSvc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 		svc := &AntigravityGatewayService{rateLimitService: rlSvc}
 
 		account := tempRulesAccount([]any{rateLimitRule})
 		p := newRetryParams(account, upstream, func(_ context.Context, _ string, _ *Account, _ int, _ http.Header, _ []byte, _ string, _ int64, _ string, _ bool) *handleModelRateLimitResult {
-			t.Error("handleError should not be called for temp unschedulable")
+			t.Error("quota 429 should not reach persistent error handling")
 			return nil
 		})
 
 		result, err := svc.antigravityRetryLoop(p)
 
-		require.Nil(t, result)
-		var switchErr *AntigravityAccountSwitchError
-		require.ErrorAs(t, err, &switchErr)
-		require.Equal(t, account.ID, switchErr.OriginalAccountID)
-		require.Equal(t, 1, upstream.calls, "should not retry")
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+		require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
+		require.Zero(t, repo.tempCalls, "Antigravity 429 rules must not persist temporary-unschedulable state")
+		require.Nil(t, account.TempUnschedulableUntil)
+		require.Empty(t, account.TempUnschedulableReason)
 	})
 
-	t.Run("429_quota_exhausted_auto_temp_unschedulables", func(t *testing.T) {
+	t.Run("429_quota_exhausted_retries_same_account_without_persistent_cooldown", func(t *testing.T) {
 		saveAndSetBaseURLs(t)
 
 		upstream := &epFixedUpstream{
@@ -274,13 +276,8 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 			body:       `{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`,
 		}
 		repo := &epAccountRepo{}
-		cfg := &config.Config{}
-		cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes = 60
-		rlSvc := NewRateLimitService(repo, nil, cfg, nil, nil)
 		svc := &AntigravityGatewayService{
-			accountRepo:      repo,
-			rateLimitService: rlSvc,
-			settingService:   &SettingService{cfg: cfg},
+			accountRepo: repo,
 		}
 
 		account := &Account{
@@ -292,19 +289,20 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 			Concurrency: 1,
 		}
 		p := newRetryParams(account, upstream, func(_ context.Context, _ string, _ *Account, _ int, _ http.Header, _ []byte, _ string, _ int64, _ string, _ bool) *handleModelRateLimitResult {
-			t.Error("handleError should not be called for auto quota temp unschedulable")
+			t.Error("handleError should not be called for same-account quota retry")
 			return nil
 		})
 
 		result, err := svc.antigravityRetryLoop(p)
 
-		require.Nil(t, result)
-		var switchErr *AntigravityAccountSwitchError
-		require.ErrorAs(t, err, &switchErr)
-		require.Equal(t, account.ID, switchErr.OriginalAccountID)
-		require.Equal(t, 1, upstream.calls, "quota exhausted should switch immediately")
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+		require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
 		require.Zero(t, repo.modelRateLimitCalls)
-		require.Equal(t, 1, repo.tempCalls)
+		require.Zero(t, repo.tempCalls)
+		require.Nil(t, account.TempUnschedulableUntil)
+		require.Empty(t, account.TempUnschedulableReason)
 	})
 
 	t.Run("503_body_no_match_continues_default_retry", func(t *testing.T) {

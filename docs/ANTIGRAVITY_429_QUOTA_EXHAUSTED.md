@@ -1,20 +1,20 @@
-# Antigravity 429 配额耗尽自动临时不可调度说明
+# Antigravity 429 同账号延迟重试说明
 
 ## 背景
 
-当 Antigravity 上游返回 `429 RESOURCE_EXHAUSTED` 且错误内容明确表示账号当前配额/额度已耗尽时，原有逻辑主要依赖：
+当 Antigravity 上游返回 `429 RESOURCE_EXHAUSTED` 时，这个响应只说明本次调用没有获得资源，不能据此判断：
 
-- 模型级 cooldown
-- 手工配置的 `temp_unschedulable_rules`
-- 调度器切换下一个账号
+- 账号整体已经不可用
+- 当前模型在该账号上会持续不可用
+- 后续请求一定还会失败
 
-这对“单个账号短时限流”有效，但对“同一批账号在一段时间内陆续进入额度耗尽状态”的场景不够稳定。线上会出现持续切号，但仍频繁撞到已耗尽额度账号，导致对话中断。
+因此不能把一次 `429` 扩大为账号级长期状态。
 
 ## 本次新增行为
 
-本次新增了 **Antigravity 配额耗尽自动临时不可调度** 机制。
+Antigravity 的 quota/credits 类 `429` 采用 **同账号延迟重试**：
 
-当满足以下条件时，系统会自动把当前账号标记为临时不可调度：
+当满足以下条件时：
 
 - 平台是 `Antigravity`
 - 上游返回 `429`
@@ -24,91 +24,49 @@
   - `not enough credits`
   - `credit exhausted`
 
-命中后会执行：
+系统只会执行：
 
-1. 将账号写入 `temp_unschedulable`
-2. 当前请求立刻切换下一个账号
-3. 调度缓存立即同步，后续请求也会避开该账号
+1. 保留当前账号和粘性绑定
+2. 等待 `5s` 后在同一账号上重试一次
+3. 重试成功则继续正常响应
+4. 重试仍为同类 429，则把本次 429 返回客户端，不切换账号
+5. 不写入账号级 `temp_unschedulable`
+6. 不为 quota/credits 类响应写入模型级 cooldown
+7. 后续新请求仍可正常调度该账号和模型
 
 ## 与现有功能的关系
 
-本次不是重复造功能，而是在现有框架上补充“系统级自动触发”：
+其他错误保护保持独立：
 
-- **手工配置的 `temp_unschedulable_rules` 仍然优先**
-- **普通 `RATE_LIMIT_EXCEEDED` 429 仍然走原有模型级 cooldown**
-- **只有明确的 quota exhausted / credits exhausted 类 429，才会触发这次新增的自动临时不可调度**
+- Antigravity 的 `429` 即使命中手工 `temp_unschedulable_rules`，也不持久化账号临时不可调度状态
+- 明确带 `RetryInfo` 的普通 `RATE_LIMIT_EXCEEDED` 可以保留短时、模型级 cooldown
+- `401`、`403`、`5xx` 等非 429 状态仍按各自现有策略处理
 
-也就是说：
-
-- 你已有的手工规则不会失效
-- 现有模型级 cooldown 不会被替代
-- 这次只是补上“明确额度耗尽”这一类场景的自动隔离
-
-## 默认时长
-
-默认自动临时不可调度时长为 `60` 分钟。
-
-可通过环境变量调整：
-
-```env
-GATEWAY_ANTIGRAVITY_QUOTA_EXHAUSTED_TEMP_UNSCHED_MINUTES=60
-```
-
-说明：
-
-- `0`：关闭这项自动摘除
-- 正整数：表示临时不可调度分钟数
-
-## 恢复方式
-
-账号不会被永久停用。
-
-恢复方式与现有机制保持一致：
-
-- 到达 `temp_unschedulable_until` 后自动恢复参与调度
-- 如果你启用了定时测试并开启 `auto_recover`，测试成功后也可以提前清理运行时状态
+旧配置 `GATEWAY_ANTIGRAVITY_QUOTA_EXHAUSTED_TEMP_UNSCHED_MINUTES` 仅为兼容历史配置文件而保留，运行时不再生效。
 
 ## 适用场景
 
-推荐用于以下场景：
+适用于以下场景：
 
 - Antigravity 渠道账号较多
-- 同一组里混有大量会阶段性额度耗尽的账号
-- 线上高峰期经常出现大量 `429 RESOURCE_EXHAUSTED`
+- 同一账号偶发 `RESOURCE_EXHAUSTED`，随后又能成功
+- 并发请求短时间命中多个 429，但账号测试仍然正常
+- 希望保留当前账号重试机会，又不希望污染后续调度状态
 
 ## 不适用场景
 
-这项功能不能解决所有 429：
+同账号延迟重试不会掩盖账号池整体容量不足：
 
-- 如果是普通短时限流，仍主要依赖原有模型级 cooldown
-- 如果生产组里真正健康可用的账号本来就不够，自动摘除只能缓解，不能凭空增加额度
-
-## 建议配置
-
-建议先从下面的值开始：
-
-```env
-GATEWAY_ANTIGRAVITY_QUOTA_EXHAUSTED_TEMP_UNSCHED_MINUTES=60
-```
-
-如果你的账号恢复速度更快，可以尝试：
-
-```env
-GATEWAY_ANTIGRAVITY_QUOTA_EXHAUSTED_TEMP_UNSCHED_MINUTES=30
-```
-
-如果你希望极度保守、尽量避免反复命中，可提高到：
-
-```env
-GATEWAY_ANTIGRAVITY_QUOTA_EXHAUSTED_TEMP_UNSCHED_MINUTES=90
-```
+- 如果同一账号重试后仍然返回同类 429，本次请求仍会失败
+- 该策略不会自动探测其他账号
+- 普通带明确重试窗口的模型限流仍可短时隔离该账号的对应模型
 
 ## 运维建议
 
-这项功能最适合作为“自动隔离层”，建议搭配以下实践一起使用：
+建议关注：
 
-- 生产组尽量只保留近期稳定成功的账号
-- 恢复中的账号通过定时测试观察后再放回生产
-- 持续关注日志中的 `quota_exhausted_temp_unsched`
+- `quota_retry_same_account` 和 `quota_retry_same_account_exhausted` 日志
+- 同账号延迟重试的成功率和最终结果
+- 同一账号在后续请求中的恢复成功率
 
-这样可以比单纯依赖切号或短 cooldown 更稳定。
+不要再把单次 Antigravity 429 作为账号整体不可用的证据。

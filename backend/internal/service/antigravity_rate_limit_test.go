@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
@@ -238,15 +237,10 @@ func TestHandleUpstreamError_429_NonModelRateLimit_UsesMappedModelKey(t *testing
 	require.Equal(t, "claude-opus-4-6-thinking", repo.modelRateLimitCalls[0].modelKey)
 }
 
-func TestHandleUpstreamError_429_QuotaExhausted_TempUnschedulablesAccount(t *testing.T) {
+func TestHandleUpstreamError_429_QuotaExhausted_RetriesWithoutPersistentCooldown(t *testing.T) {
 	repo := &stubAntigravityAccountRepo{}
-	cfg := &config.Config{}
-	cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes = 60
-	rlSvc := NewRateLimitService(repo, nil, cfg, nil, nil)
 	svc := &AntigravityGatewayService{
-		accountRepo:      repo,
-		rateLimitService: rlSvc,
-		settingService:   &SettingService{cfg: cfg},
+		accountRepo: repo,
 	}
 	account := &Account{ID: 21, Name: "acc-21", Platform: PlatformAntigravity}
 
@@ -256,11 +250,12 @@ func TestHandleUpstreamError_429_QuotaExhausted_TempUnschedulablesAccount(t *tes
 
 	require.NotNil(t, result)
 	require.True(t, result.Handled)
-	require.NotNil(t, result.SwitchError)
+	require.Nil(t, result.SwitchError)
 	require.Empty(t, repo.modelRateLimitCalls)
-	require.Len(t, repo.tempUnschedCalls, 1)
-	require.Equal(t, int64(21), repo.tempUnschedCalls[0].accountID)
-	require.Nil(t, result.SwitchError.RateLimitResetAt)
+	require.Empty(t, repo.tempUnschedCalls)
+	require.Empty(t, repo.rateCalls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
 }
 
 // TestHandleUpstreamError_503_ModelCapacityExhausted 测试 503 模型容量不足场景

@@ -45,7 +45,9 @@ const (
 	antigravitySmartRetryMinWait        = 1 * time.Second  // 智能重试最小等待时间
 	antigravitySmartRetryMaxAttempts    = 1                // 智能重试最大次数（仅重试 1 次，防止重复限流/长期等待）
 	antigravityDefaultRateLimitDuration = 30 * time.Second // 默认限流时间（无 retryDelay 时使用）
-	antigravityDefaultQuotaTempUnsched  = 60 * time.Minute // 配额耗尽时默认账号级临时不可调度时长
+	// quota/credits 类 429 只在原账号上延迟重试一次；第二次仍失败则原样返回 429。
+	antigravityQuota429RetryDelay  = 5 * time.Second
+	antigravityQuota429MaxAttempts = 2
 
 	// MODEL_CAPACITY_EXHAUSTED 专用重试参数
 	// 模型容量不足时保留有限的原地重试窗口，兼顾短暂恢复机会和请求时延。
@@ -201,9 +203,10 @@ func resolveAntigravityForwardBaseURL() string {
 type smartRetryAction int
 
 const (
-	smartRetryActionContinue      smartRetryAction = iota // 继续默认重试逻辑
-	smartRetryActionBreakWithResp                         // 结束循环并返回 resp
-	smartRetryActionContinueURL                           // 继续 URL fallback 循环
+	smartRetryActionContinue         smartRetryAction = iota // 继续默认重试逻辑
+	smartRetryActionBreakWithResp                            // 结束循环并返回 resp
+	smartRetryActionContinueURL                              // 继续 URL fallback 循环
+	smartRetryActionRetrySameAccount                         // 延迟后使用原账号重试
 )
 
 // smartRetryResult 智能重试的结果
@@ -212,6 +215,7 @@ type smartRetryResult struct {
 	resp        *http.Response
 	err         error
 	switchError *AntigravityAccountSwitchError // 模型限流时返回账号切换信号
+	retryDelay  time.Duration
 }
 
 // handleSmartRetry 处理 OAuth 账号的智能重试逻辑
@@ -247,20 +251,24 @@ func (s *AntigravityGatewayService) handleSmartRetry(p antigravityRetryLoopParam
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		if modelKey, _, ok := s.tryTempUnschedQuotaExhausted(p.ctx, p.prefix, p.account, p.requestedModel, p.groupID, p.sessionHash, respBody); ok {
-			displayModel := strings.TrimSpace(p.requestedModel)
+		if keyword := matchAntigravityQuotaSameAccountRetryKeyword(respBody); keyword != "" {
+			retryDelay := antigravityQuota429RetryDelayForContext(p.ctx)
+			displayModel := strings.TrimSpace(modelName)
 			if displayModel == "" {
-				displayModel = modelKey
+				displayModel = strings.TrimSpace(p.requestedModel)
 			}
+			logger.LegacyPrintf(
+				"service.antigravity_gateway",
+				"%s status=429 quota_retry_same_account account=%d model=%s keyword=%q delay=%v",
+				p.prefix,
+				p.account.ID,
+				displayModel,
+				keyword,
+				retryDelay,
+			)
 			return &smartRetryResult{
-				action: smartRetryActionBreakWithResp,
-				switchError: &AntigravityAccountSwitchError{
-					OriginalAccountID: p.account.ID,
-					StatusCode:        resp.StatusCode,
-					RateLimitedModel:  displayModel,
-					IsStickySession:   p.isStickySession,
-					ResponseBody:      append([]byte(nil), respBody...),
-				},
+				action:     smartRetryActionRetrySameAccount,
+				retryDelay: retryDelay,
 			}
 		}
 	}
@@ -827,6 +835,40 @@ urlFallbackLoop:
 						}
 						resp = smartResult.resp
 						break urlFallbackLoop
+					case smartRetryActionRetrySameAccount:
+						if attempt < antigravityQuota429MaxAttempts {
+							upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
+							upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+							appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+								Platform:           p.account.Platform,
+								AccountID:          p.account.ID,
+								AccountName:        p.account.Name,
+								UpstreamStatusCode: resp.StatusCode,
+								UpstreamRequestID:  resp.Header.Get("x-request-id"),
+								UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+								Kind:               "same_account_retry",
+								Message:            upstreamMsg,
+								Detail:             getUpstreamDetail(respBody),
+							})
+							if err := sleepWithContext(p.ctx, smartResult.retryDelay); err != nil {
+								logger.LegacyPrintf("service.antigravity_gateway", "%s status=context_canceled_during_quota_retry", p.prefix)
+								return nil, err
+							}
+							continue
+						}
+						logger.LegacyPrintf(
+							"service.antigravity_gateway",
+							"%s status=429 quota_retry_same_account_exhausted account=%d attempts=%d no_cooldown=true no_failover=true",
+							p.prefix,
+							p.account.ID,
+							attempt,
+						)
+						resp = &http.Response{
+							StatusCode: resp.StatusCode,
+							Header:     resp.Header.Clone(),
+							Body:       io.NopCloser(bytes.NewReader(respBody)),
+						}
+						break urlFallbackLoop
 					}
 					// smartRetryActionContinue: 继续默认重试逻辑
 
@@ -1166,6 +1208,34 @@ func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, accoun
 // applyErrorPolicy 应用错误策略结果，返回是否应终止当前循环及应返回的状态码。
 // ErrorPolicySkipped 时 outStatus 为 500（前端约定：未命中的错误返回 500）。
 func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParams, statusCode int, headers http.Header, respBody []byte) (handled bool, outStatus int, retErr error) {
+	// Antigravity 429 must never persist account-level temporary-unschedulable
+	// state. Quota-like responses always reach the bounded same-account retry;
+	// other custom error-code policies retain their existing precedence.
+	if statusCode == http.StatusTooManyRequests &&
+		p.account != nil &&
+		p.account.Platform == PlatformAntigravity {
+		if keyword := matchAntigravityQuotaSameAccountRetryKeyword(respBody); keyword != "" {
+			slog.Info("antigravity_quota_429_policy_bypassed_for_same_account_retry",
+				"prefix", p.prefix,
+				"account_id", p.account.ID,
+				"model", strings.TrimSpace(p.requestedModel),
+				"keyword", keyword,
+			)
+			return false, statusCode, nil
+		}
+		if !p.account.IsCustomErrorCodesEnabled() {
+			if matches := matchTempUnschedulableRules(p.account, statusCode, respBody); len(matches) > 0 {
+				slog.Info("antigravity_429_temp_rule_ignored_for_account_state",
+					"prefix", p.prefix,
+					"account_id", p.account.ID,
+					"model", strings.TrimSpace(p.requestedModel),
+					"rule_index", matches[0].ruleIndex,
+				)
+			}
+			return false, statusCode, nil
+		}
+	}
+
 	modelKey := resolveFinalAntigravityModelKey(p.ctx, p.account, p.requestedModel)
 	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody, modelKey) {
 	case ErrorPolicySkipped:
@@ -1308,19 +1378,13 @@ type AntigravityTestConnectionOptions struct {
 	ModelCapacityRetryMaxAttempts int
 }
 
-func buildAntigravityTestConnectionSwitchError(account *Account, switchErr *AntigravityAccountSwitchError) error {
+func buildAntigravityTestConnectionSwitchError(switchErr *AntigravityAccountSwitchError) error {
 	if switchErr != nil && switchErr.RateLimitResetAt != nil {
 		until := switchErr.RateLimitResetAt.Local().Format("15:04:05")
 		return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已按模型隔离至 %s", switchErr.RateLimitedModel, until)
 	}
-	if account != nil {
-		var state TempUnschedState
-		if reason := strings.TrimSpace(account.TempUnschedulableReason); reason != "" && json.Unmarshal([]byte(reason), &state) == nil {
-			if state.StatusCode == http.StatusTooManyRequests && state.MatchedKeyword != "" && state.UntilUnix > 0 {
-				until := time.Unix(state.UntilUnix, 0).Local().Format("15:04:05")
-				return fmt.Errorf("本次测试已请求上游并收到 429 配额耗尽响应，该账号模型 %s 已按模型隔离至 %s", switchErr.RateLimitedModel, until)
-			}
-		}
+	if switchErr != nil && switchErr.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("本次测试已请求上游并收到 429 模型限流响应；账号未被标记为临时不可调度")
 	}
 	return fmt.Errorf("该账号模型 %s 当前限流中，请稍后重试", switchErr.RateLimitedModel)
 }
@@ -1423,7 +1487,7 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 		// AccountSwitchError → 测试时不切换账号，返回友好提示
 		var switchErr *AntigravityAccountSwitchError
 		if errors.As(err, &switchErr) {
-			return nil, buildAntigravityTestConnectionSwitchError(account, switchErr)
+			return nil, buildAntigravityTestConnectionSwitchError(switchErr)
 		}
 		return nil, err
 	}
@@ -1439,6 +1503,9 @@ func (s *AntigravityGatewayService) TestConnectionWithOptions(ctx context.Contex
 	}
 
 	if result.resp.StatusCode >= 400 {
+		if result.resp.StatusCode == http.StatusTooManyRequests && matchAntigravityQuotaSameAccountRetryKeyword(respBody) != "" {
+			return nil, fmt.Errorf("API 返回 429：同账号延迟重试后仍收到配额响应；账号和模型均未被标记为不可调度")
+		}
 		if isAntigravityValidationRequiredResponse(result.resp.StatusCode, respBody) {
 			if legacyResult, legacyErr := s.tryAntigravityLegacyWakeupTest(ctx, account, accessToken, proxyURL, projectID, modelID, mappedModel, opts); legacyErr == nil {
 				return legacyResult, nil
@@ -2359,7 +2426,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				}
 			}
 
-			if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			if s.shouldFailoverAntigravityUpstreamError(resp.StatusCode, respBody) {
 				upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 				upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 				upstreamDetail := s.getUpstreamErrorDetail(respBody)
@@ -3083,7 +3150,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: unwrappedForOps, RetryableOnSameAccount: true}
 		}
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if s.shouldFailoverAntigravityUpstreamError(resp.StatusCode, respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -3182,6 +3249,13 @@ func (s *AntigravityGatewayService) shouldFailoverUpstreamError(statusCode int) 
 	}
 }
 
+func (s *AntigravityGatewayService) shouldFailoverAntigravityUpstreamError(statusCode int, body []byte) bool {
+	if statusCode == http.StatusTooManyRequests && matchAntigravityQuotaSameAccountRetryKeyword(body) != "" {
+		return false
+	}
+	return s.shouldFailoverUpstreamError(statusCode)
+}
+
 // isGoogleProjectConfigError 判断（已提取的小写）错误消息是否属于 Google 服务端配置类问题。
 // 只精确匹配已知的服务端侧错误，避免对客户端请求错误做无意义重试。
 // 适用于所有走 Google 后端的平台（Antigravity、Gemini）。
@@ -3244,6 +3318,24 @@ func sleepAntigravityBackoffWithContext(ctx context.Context, attempt int) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+type antigravityQuota429RetryDelayContextKey struct{}
+
+func withAntigravityQuota429RetryDelay(ctx context.Context, delay time.Duration) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, antigravityQuota429RetryDelayContextKey{}, delay)
+}
+
+func antigravityQuota429RetryDelayForContext(ctx context.Context) time.Duration {
+	if ctx != nil {
+		if delay, ok := ctx.Value(antigravityQuota429RetryDelayContextKey{}).(time.Duration); ok && delay >= 0 {
+			return delay
+		}
+	}
+	return antigravityQuota429RetryDelay
 }
 
 // isSingleAccountRetry 检查 context 中是否设置了单账号退避重试标记
@@ -3648,76 +3740,6 @@ func (s *AntigravityGatewayService) clearAccountModelCapacityCooldownByRequested
 	s.clearAccountModelCapacityCooldownByModel(ctx, prefix, account, resolveRequestedModelKey(ctx, account, requestedModel))
 }
 
-func (s *AntigravityGatewayService) getQuotaExhaustedTempUnschedDuration() time.Duration {
-	duration := antigravityDefaultQuotaTempUnsched
-	if s.settingService != nil && s.settingService.cfg != nil {
-		if minutes := s.settingService.cfg.Gateway.AntigravityQuotaExhaustedTempUnschedMinutes; minutes >= 0 {
-			duration = time.Duration(minutes) * time.Minute
-		}
-	}
-	return duration
-}
-
-func (s *AntigravityGatewayService) tryTempUnschedQuotaExhausted(
-	ctx context.Context,
-	prefix string,
-	account *Account,
-	requestedModel string,
-	groupID int64,
-	sessionHash string,
-	body []byte,
-) (string, time.Time, bool) {
-	if s.accountRepo == nil || account == nil {
-		return "", time.Time{}, false
-	}
-	matchedKeyword := matchAntigravityQuotaTempUnschedKeyword(body)
-	if matchedKeyword == "" {
-		return "", time.Time{}, false
-	}
-	duration := s.getQuotaExhaustedTempUnschedDuration()
-	if duration <= 0 {
-		return "", time.Time{}, false
-	}
-	modelKey := resolveCreditsOveragesModelKey(ctx, account, "", requestedModel)
-	if strings.TrimSpace(modelKey) == "" {
-		return "", time.Time{}, false
-	}
-	until := time.Now().Add(duration)
-	var reason string
-	if s.rateLimitService != nil {
-		var ok bool
-		until, reason, ok = s.rateLimitService.TriggerSystemTempUnschedulable(
-			ctx,
-			account,
-			http.StatusTooManyRequests,
-			duration,
-			matchedKeyword,
-			body,
-		)
-		if !ok {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched_failed account=%d model=%s",
-				prefix, account.ID, modelKey)
-			return "", time.Time{}, false
-		}
-	} else {
-		state := buildTempUnschedState(time.Now(), until, http.StatusTooManyRequests, matchedKeyword, -1, body)
-		reason = marshalTempUnschedReason(state)
-		if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-			logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched_failed account=%d model=%s error=%v",
-				prefix, account.ID, modelKey, err)
-			return "", time.Time{}, false
-		}
-	}
-	account.TempUnschedulableUntil = &until
-	account.TempUnschedulableReason = reason
-	if s.cache != nil && sessionHash != "" {
-		_ = s.cache.DeleteSessionAccountID(ctx, groupID, sessionHash)
-	}
-	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 quota_exhausted_temp_unsched account=%d model=%s until=%v keyword=%q",
-		prefix, account.ID, modelKey, until.Format("15:04:05"), matchedKeyword)
-	return modelKey, until, true
-}
-
 func (s *AntigravityGatewayService) handleUpstreamError(
 	ctx context.Context, prefix string, account *Account,
 	statusCode int, headers http.Header, body []byte,
@@ -3755,20 +3777,21 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 		if logBody, maxBytes := s.getLogConfig(); logBody {
 			logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity-Debug] 429 response body: %s", truncateString(string(body), maxBytes))
 		}
-		if modelKey, _, ok := s.tryTempUnschedQuotaExhausted(ctx, prefix, account, requestedModel, groupID, sessionHash, body); ok {
-			displayModel := strings.TrimSpace(requestedModel)
-			if displayModel == "" {
-				displayModel = modelKey
+		if matchedKeyword := matchAntigravityQuotaSameAccountRetryKeyword(body); matchedKeyword != "" {
+			modelKey := resolveCreditsOveragesModelKey(ctx, account, "", requestedModel)
+			if strings.TrimSpace(modelKey) == "" {
+				modelKey = strings.TrimSpace(requestedModel)
 			}
+			logger.LegacyPrintf(
+				"service.antigravity_gateway",
+				"%s status=429 quota_retry_same_account_no_cooldown account=%d model=%s keyword=%q",
+				prefix,
+				account.ID,
+				modelKey,
+				matchedKeyword,
+			)
 			return &handleModelRateLimitResult{
 				Handled: true,
-				SwitchError: &AntigravityAccountSwitchError{
-					OriginalAccountID: account.ID,
-					StatusCode:        429,
-					RateLimitedModel:  displayModel,
-					IsStickySession:   isStickySession,
-					ResponseBody:      append([]byte(nil), body...),
-				},
 			}
 		}
 

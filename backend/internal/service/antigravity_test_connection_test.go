@@ -618,9 +618,12 @@ func TestAccountTestService_RunTestBackground_AntigravityNotFilteredByTempUnsche
 	require.Equal(t, 1, upstream.calls, "计划测试不应被 temp_unsched 状态本身挡住")
 }
 
-type quotaExhaustedUpstream struct{}
+type quotaExhaustedUpstream struct {
+	calls int
+}
 
 func (q *quotaExhaustedUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	q.calls++
 	return &http.Response{
 		StatusCode: http.StatusTooManyRequests,
 		Header:     http.Header{},
@@ -659,21 +662,26 @@ func TestAntigravityGatewayService_TestConnection_QuotaExhaustedReturnsAccurateM
 	}
 
 	repo := &stubAntigravityAccountRepo{}
+	upstream := &quotaExhaustedUpstream{}
 	rateLimitSvc := NewRateLimitService(repo, nil, nil, nil, nil)
 	svc := &AntigravityGatewayService{
 		accountRepo:      repo,
 		rateLimitService: rateLimitSvc,
 		tokenProvider:    &AntigravityTokenProvider{},
-		httpUpstream:     &quotaExhaustedUpstream{},
+		httpUpstream:     upstream,
 		settingService: &SettingService{cfg: &config.Config{Gateway: config.GatewayConfig{
 			AntigravityQuotaExhaustedTempUnschedMinutes: 60,
 		}}},
 	}
 
-	_, err := svc.TestConnection(context.Background(), account, "claude-opus-4-6-thinking")
+	ctx := withAntigravityQuota429RetryDelay(context.Background(), 0)
+	_, err := svc.TestConnection(ctx, account, "claude-opus-4-6-thinking")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "本次测试已请求上游")
-	require.Contains(t, err.Error(), "429 配额耗尽响应")
-	require.Contains(t, err.Error(), "已按模型隔离至")
+	require.Contains(t, err.Error(), "同账号延迟重试后仍收到配额响应")
+	require.Contains(t, err.Error(), "账号和模型均未被标记为不可调度")
 	require.NotContains(t, err.Error(), "当前限流中")
+	require.Equal(t, antigravityQuota429MaxAttempts, upstream.calls)
+	require.Empty(t, repo.tempUnschedCalls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
 }
