@@ -485,6 +485,63 @@ func TestNianzsResponsesRouteReturns85PercentContextUsageWithoutBillingIt(t *tes
 	require.NotContains(t, wire, "_sub2api_kiro_usage_final")
 }
 
+func TestNianzsResponsesZeroFrameEOFFailsBeforeClientCommitForAccountSwitch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"continue"}],"stream":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	empty := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, empty)
+	groupID := int64(33)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol", Stream: true, GroupID: &groupID, Group: group}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, parsed)
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+	require.False(t, failoverErr.RetryableOnSameAccount, "a deterministic zero-frame EOF must switch Kiro accounts directly")
+	require.True(t, failoverErr.SuppressTempUnschedule, "request-scoped empty EOF must not globally punish a credential")
+	require.False(t, failoverErr.FailoverProhibited, "no semantic output was exposed, so peer-account replay is safe")
+	require.Empty(t, recorder.Body.String(), "the bridge must not commit response.created or an empty HTTP 200 before failover")
+	require.Len(t, upstream.requests, 1)
+}
+
+func TestNianzsResponsesPostSemanticEOFReturnsTerminalFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-sol","input":[{"role":"user","content":"continue"}],"stream":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	partial := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+		Body: io.NopCloser(bytes.NewReader(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": "partial answer"},
+		}))),
+	}
+	svc, _, account := newNianzsKiroRouteTestRuntime(t, partial)
+	groupID := int64(33)
+	group := &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}
+	parsed := &ParsedRequest{Body: NewRequestBodyRef(body), Model: "gpt-5.6-sol", Stream: true, GroupID: &groupID, Group: group}
+
+	result, err := svc.ForwardAsResponses(context.Background(), c, account, body, parsed)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	wire := recorder.Body.String()
+	require.Contains(t, wire, "partial answer")
+	require.Equal(t, 1, strings.Count(wire, "event: response.failed"), "a committed partial stream needs one terminal failure")
+	require.NotContains(t, wire, "event: response.completed")
+}
+
 func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, stream := range []bool{false, true} {

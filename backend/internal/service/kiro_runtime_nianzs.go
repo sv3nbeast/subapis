@@ -173,6 +173,9 @@ func (s *GatewayService) forwardKiroMessagesNianzs(ctx context.Context, c *gin.C
 	if parsed.Stream {
 		resp, _, err := s.openKiroAnthropicStreamResponseNianzs(ctx, account, parsed, body, mappedModel, originalModel, c.Request.Header, parsed.Group, nil)
 		if err != nil {
+			if s.handleKiroContextLimitError(c, account, err) {
+				return nil, err
+			}
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -560,11 +563,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			}
 			_ = pw.Close()
 		}()
-		return &http.Response{
+		response := &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     wrappedHeaders,
 			Body:       pr,
-		}, inputTokens, nil
+		}
+		return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
 	}
 	if isOnlyWebSearchToolInBody(anthropicBody) {
 		plan := cachePlanOverride
@@ -584,11 +588,12 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 			}
 			_ = pw.Close()
 		}()
-		return &http.Response{
+		response := &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     wrappedHeaders,
 			Body:       pr,
-		}, inputTokens, nil
+		}
+		return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
 	}
 
 	resp, requestCtx, err := s.executeKiroUpstreamWithParsedOptionsNianzs(upstreamCtx, account, parsed, anthropicBody, mappedModel, requestModel, token, headers, nianzsKiroUpstreamRequestOptions{})
@@ -673,11 +678,128 @@ func (s *GatewayService) openKiroAnthropicStreamResponseNianzs(ctx context.Conte
 		}
 	}()
 
-	return &http.Response{
+	response := &http.Response{
 		StatusCode: resp.StatusCode,
 		Header:     wrappedHeaders,
 		Body:       pr,
-	}, inputTokens, nil
+	}
+	return s.gateNianzsKiroResponseBeforeSemantic(ctx, account, parsedGroupID(parsed), response, inputTokens)
+}
+
+// gateNianzsKiroResponseBeforeSemantic keeps the synthetic Anthropic preamble
+// private until Kiro has produced real assistant content or a tool call. The
+// nianzs engine does not enable the legacy Kiro resilience state machine, but
+// it still needs the same replay boundary: a 2xx EventStream that closes with
+// zero frames must fail before the downstream response is committed so the
+// handler can exclude the sticky account and select a peer.
+func (s *GatewayService) gateNianzsKiroResponseBeforeSemantic(
+	ctx context.Context,
+	account *Account,
+	groupID *int64,
+	resp *http.Response,
+	inputTokens int,
+) (*http.Response, int, error) {
+	if resp == nil || resp.Body == nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return resp, inputTokens, nil
+	}
+
+	pr, pw := io.Pipe()
+	ready := make(chan error, 1)
+	gateDone := startKiroFirstSemanticGate(
+		ctx,
+		resp.Body,
+		pw,
+		s.kiroPreSemanticBufferBytesForRequest(ctx, groupID),
+		s.kiroSemanticGateMaxLineSize(),
+		ready,
+	)
+
+	var gateErr error
+	firstSemanticTimeout := time.Duration(0)
+	if !KiroGPTTimeoutsDisabled(ctx) {
+		firstSemanticTimeout = s.nianzsKiroFirstSemanticTimeoutForRequest(ctx, groupID)
+	}
+	if firstSemanticTimeout > 0 {
+		timer := time.NewTimer(firstSemanticTimeout)
+		select {
+		case gateErr = <-ready:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			gateErr = context.Cause(ctx)
+			if gateErr == nil {
+				gateErr = ctx.Err()
+			}
+		case <-timer.C:
+			gateErr = errKiroFirstSemanticTimeout
+		}
+	} else {
+		select {
+		case gateErr = <-ready:
+		case <-ctx.Done():
+			gateErr = context.Cause(ctx)
+			if gateErr == nil {
+				gateErr = ctx.Err()
+			}
+		}
+	}
+	if gateErr == nil {
+		resp.Body = pr
+		return resp, inputTokens, nil
+	}
+
+	_ = pr.CloseWithError(gateErr)
+	_ = resp.Body.Close()
+	select {
+	case <-gateDone:
+	default:
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return nil, inputTokens, gateErr
+	}
+	if isKiroContextLimitError(gateErr) {
+		return nil, inputTokens, gateErr
+	}
+
+	failoverErr := s.kiroStreamErrorToFailover(ctx, account, gateErr)
+	if failoverErr == nil {
+		body, _ := json.Marshal(map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "upstream_error",
+				"message": "Kiro upstream stream did not produce output",
+			},
+		})
+		failoverErr = &UpstreamFailoverError{ResponseBody: body, Cause: gateErr}
+	}
+	// A pre-semantic EOF is safe to replay, but retrying the same sticky
+	// credential only repeats the deterministic empty stream. Exclude it for
+	// this logical request and move directly to another Kiro account. Do not
+	// globally punish the account: it may still serve other models normally.
+	failoverErr.StatusCode = http.StatusServiceUnavailable
+	if errors.Is(gateErr, errKiroFirstSemanticTimeout) {
+		failoverErr.FailureKind = UpstreamFailureFirstSemanticTimeout
+		failoverErr.PreSemanticTimeout = true
+	} else {
+		failoverErr.FailureKind = UpstreamFailureIncompleteStream
+	}
+	failoverErr.RetryableOnSameAccount = false
+	failoverErr.SuppressTempUnschedule = true
+	failoverErr.FailoverProhibited = false
+	if failoverErr.RetryAfter <= 0 {
+		failoverErr.RetryAfter = defaultKiroTransportRetryAfter
+	}
+	return nil, inputTokens, failoverErr
 }
 
 func nianzsEnsureClaudeResponseVary(headers http.Header) {
