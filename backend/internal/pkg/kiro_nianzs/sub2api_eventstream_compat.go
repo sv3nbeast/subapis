@@ -239,6 +239,76 @@ type nianzsKiroEventDiagnosticState struct {
 	observedEventTypes      map[string]struct{}
 }
 
+// nianzsKiroSemanticTailState recognizes the completion shape emitted by KRS
+// for some long-context turns: at least one assistant/tool response frame,
+// followed by contextUsageEvent, followed by a frame-aligned clean EOF. The
+// context-usage marker must occur after the last response frame so an earlier
+// progress update cannot turn a later truncated response into a success.
+type nianzsKiroSemanticTailState struct {
+	sawResponseCandidate        bool
+	contextUsageAfterLastOutput bool
+	allowReasoning              bool
+}
+
+func newNianzsKiroSemanticTailState(requestCtx KiroRequestContext) *nianzsKiroSemanticTailState {
+	return &nianzsKiroSemanticTailState{allowReasoning: requestCtx.ThinkingEnabled}
+}
+
+func (s *nianzsKiroSemanticTailState) observe(msg *eventStreamMessage, event map[string]any, decodeStatus string) {
+	if s == nil {
+		return
+	}
+	if decodeStatus != "decoded" || msg == nil {
+		// Do not synthesize a terminal event across an undecodable payload.
+		s.contextUsageAfterLastOutput = false
+		return
+	}
+	eventType := strings.TrimSpace(msg.EventType)
+	if nianzsKiroSemanticTailResponseCandidate(eventType, event, s.allowReasoning) {
+		s.sawResponseCandidate = true
+		s.contextUsageAfterLastOutput = false
+		return
+	}
+	if strings.EqualFold(eventType, "contextUsageEvent") && s.sawResponseCandidate {
+		s.contextUsageAfterLastOutput = true
+		return
+	}
+	if s.contextUsageAfterLastOutput {
+		// contextUsageEvent must be the final decoded frame. A later provider
+		// event needs its own explicit terminal evidence or the turn stays
+		// incomplete.
+		s.contextUsageAfterLastOutput = false
+	}
+}
+
+func (s *nianzsKiroSemanticTailState) canCompleteAtCleanEOF() bool {
+	return s != nil && s.sawResponseCandidate && s.contextUsageAfterLastOutput
+}
+
+func nianzsKiroSemanticTailResponseCandidate(eventType string, event map[string]any, allowReasoning bool) bool {
+	switch strings.TrimSpace(eventType) {
+	case "assistantResponseEvent":
+		assistant := nestedEvent(event, "assistantResponseEvent")
+		if assistant == nil {
+			assistant = event
+		}
+		return getString(assistant, "content") != "" || len(readToolUses(assistant, event)) > 0
+	case "toolUseEvent":
+		return true
+	case "reasoningContentEvent":
+		if !allowReasoning {
+			return false
+		}
+		reasoning := nestedEvent(event, "reasoningContentEvent")
+		if reasoning == nil {
+			reasoning = event
+		}
+		return getString(reasoning, "text") != "" || getString(reasoning, "redactedContent") != ""
+	default:
+		return false
+	}
+}
+
 func newNianzsKiroEventDiagnosticState(requestCtx KiroRequestContext) *nianzsKiroEventDiagnosticState {
 	if requestCtx.EventDiagnosticSink == nil {
 		return nil
@@ -290,6 +360,12 @@ func (s *nianzsKiroEventDiagnosticState) finish(status string) {
 		HasCompletionEvidence:   s.hasCompletionEvidence,
 		ObservedEventTypes:      sortedNianzsKiroStringSet(s.observedEventTypes),
 	})
+}
+
+func (s *nianzsKiroEventDiagnosticState) acceptSemanticTailCompletion() {
+	if s != nil {
+		s.hasCompletionEvidence = true
+	}
 }
 
 func shouldEmitNianzsKiroFrameDiagnostic(msg *eventStreamMessage, decodeStatus string) bool {

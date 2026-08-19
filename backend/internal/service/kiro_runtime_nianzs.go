@@ -753,6 +753,10 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		}
 		payload := buildResult.Payload
 		requestCtx = buildResult.Context
+		// KRS can finish a valid long-context turn with response frames followed
+		// by contextUsageEvent and a frame-aligned EOF, omitting the separate
+		// metering/messageStop frame. Q endpoints retain strict terminal proof.
+		requestCtx.AcceptSemanticTailEOF = endpoint.Name == "KiroRuntime"
 		nianzsLogKiroStatelessReplay(account, buildResult.Payload)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {

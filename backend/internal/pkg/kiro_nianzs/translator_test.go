@@ -959,6 +959,168 @@ func TestStreamEventDiagnosticsEmitOnlySummaryForSuccessfulKnownFrames(t *testin
 	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
 }
 
+func buildKiroSemanticTailEOFStream(t *testing.T, events ...struct {
+	typ     string
+	payload map[string]any
+}) *bytes.Buffer {
+	t.Helper()
+	stream := bytes.NewBuffer(nil)
+	for _, event := range events {
+		_, _ = stream.Write(buildEventStreamFrame(t, event.typ, event.payload))
+	}
+	return stream
+}
+
+func TestStreamEventStreamAcceptsKRSResponseFollowedByContextUsageAndCleanEOF(t *testing.T) {
+	stream := buildKiroSemanticTailEOFStream(t,
+		struct {
+			typ     string
+			payload map[string]any
+		}{"assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "complete long-context answer"}}},
+		struct {
+			typ     string
+			payload map[string]any
+		}{"metadataEvent", map[string]any{"metadataEvent": map[string]any{"requestId": "provider-request"}}},
+		struct {
+			typ     string
+			payload map[string]any
+		}{"contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 72.5}}},
+	)
+	var diagnostics []KiroEventDiagnostic
+	var out bytes.Buffer
+
+	result, err := StreamEventStreamAsAnthropicWithContext(context.Background(), stream, &out, "claude-opus-5", 200_000, KiroRequestContext{
+		RequireTerminalEvent:  true,
+		AcceptSemanticTailEOF: true,
+		EventDiagnosticSink: func(event KiroEventDiagnostic) {
+			diagnostics = append(diagnostics, event)
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, out.String(), `"text":"complete long-context answer"`)
+	require.Equal(t, 1, strings.Count(out.String(), "event: message_stop"))
+	require.NotEmpty(t, diagnostics)
+	summary := diagnostics[len(diagnostics)-1]
+	require.Equal(t, "__stream_summary__", summary.EventType)
+	require.Equal(t, "semantic_tail_eof", summary.DecodeStatus)
+	require.True(t, summary.HasCompletionEvidence)
+}
+
+func TestParseNonStreamingEventStreamAcceptsKRSResponseFollowedByContextUsageAndCleanEOF(t *testing.T) {
+	stream := buildKiroSemanticTailEOFStream(t,
+		struct {
+			typ     string
+			payload map[string]any
+		}{"assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "compaction result"}}},
+		struct {
+			typ     string
+			payload map[string]any
+		}{"contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 79.1}}},
+	)
+
+	result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{
+		RequireTerminalEvent:  true,
+		AcceptSemanticTailEOF: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "compaction result", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+	require.Equal(t, "end_turn", result.StopReason)
+}
+
+func TestSemanticTailEOFRequiresKRSOptInAndContextUsageAfterLastOutput(t *testing.T) {
+	event := func(typ string, payload map[string]any) struct {
+		typ     string
+		payload map[string]any
+	} {
+		return struct {
+			typ     string
+			payload map[string]any
+		}{typ: typ, payload: payload}
+	}
+	tests := []struct {
+		name   string
+		optIn  bool
+		events []struct {
+			typ     string
+			payload map[string]any
+		}
+	}{
+		{
+			name:  "fallback disabled",
+			optIn: false,
+			events: []struct {
+				typ     string
+				payload map[string]any
+			}{
+				event("assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "answer"}}),
+				event("contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 50}}),
+			},
+		},
+		{
+			name:  "context usage before output",
+			optIn: true,
+			events: []struct {
+				typ     string
+				payload map[string]any
+			}{
+				event("contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 50}}),
+				event("assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "answer"}}),
+			},
+		},
+		{
+			name:  "output after context usage",
+			optIn: true,
+			events: []struct {
+				typ     string
+				payload map[string]any
+			}{
+				event("assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "first"}}),
+				event("contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 50}}),
+				event("assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "second"}}),
+			},
+		},
+		{
+			name:  "decoded event after context usage",
+			optIn: true,
+			events: []struct {
+				typ     string
+				payload map[string]any
+			}{
+				event("assistantResponseEvent", map[string]any{"assistantResponseEvent": map[string]any{"content": "answer"}}),
+				event("contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 50}}),
+				event("invalidStateEvent", map[string]any{"invalidStateEvent": map[string]any{"reason": "STALE_STATE"}}),
+			},
+		},
+		{
+			name:  "metadata only",
+			optIn: true,
+			events: []struct {
+				typ     string
+				payload map[string]any
+			}{
+				event("metadataEvent", map[string]any{"metadataEvent": map[string]any{"requestId": "provider-request"}}),
+				event("contextUsageEvent", map[string]any{"contextUsageEvent": map[string]any{"contextUsagePercentage": 50}}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := buildKiroSemanticTailEOFStream(t, tt.events...)
+			result, err := ParseNonStreamingEventStreamWithContext(stream, "claude-opus-5", KiroRequestContext{
+				RequireTerminalEvent:  true,
+				AcceptSemanticTailEOF: tt.optIn,
+			})
+			require.Nil(t, result)
+			require.ErrorContains(t, err, "missing completion evidence")
+		})
+	}
+}
+
 func TestStreamEventDiagnosticsCaptureInvalidJSONWithoutPayloadContent(t *testing.T) {
 	stream := bytes.NewBuffer(buildRawEventStreamFrame(t, "unknownEvent", []byte(`not-json-sensitive-content`)))
 	var diagnostics []KiroEventDiagnostic

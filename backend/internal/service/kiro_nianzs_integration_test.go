@@ -443,6 +443,162 @@ func TestNianzsMessagesRouteStreamingAndNonStreaming(t *testing.T) {
 	}
 }
 
+func TestNianzsKRSMessagesFinalizesSemanticContextUsageTailWithoutRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","max_tokens":8192,"stream":%t,"messages":[{"role":"user","content":"summarize the long conversation"}]}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			groupID := int64(29)
+			parsed.GroupID = &groupID
+			parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}
+
+			upstreamBody := bytes.NewBuffer(nil)
+			_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": "semantic tail answer"},
+			}))
+			_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "metadataEvent", map[string]any{
+				"metadataEvent": map[string]any{"requestId": "provider-request"},
+			}))
+			_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "contextUsageEvent", map[string]any{
+				"contextUsageEvent": map[string]any{"contextUsagePercentage": 81.2},
+			}))
+			upstreamResponse := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+				Body:       io.NopCloser(bytes.NewReader(upstreamBody.Bytes())),
+			}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.Len(t, upstream.requests, 1, "completed semantic tail must never retry the account")
+			require.Equal(t, nianzsKiroKRSEndpointURL, upstream.lastReq.URL.String())
+			if stream {
+				var visible strings.Builder
+				for _, delta := range nianzsSSEPayloadsByType(recorder.Body.String(), "content_block_delta") {
+					if delta.Get("delta.type").String() == "text_delta" {
+						visible.WriteString(delta.Get("delta.text").String())
+					}
+				}
+				require.Equal(t, "semantic tail answer", visible.String())
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+				require.NotContains(t, recorder.Body.String(), "event: error")
+			} else {
+				require.Equal(t, "semantic tail answer", gjson.Get(recorder.Body.String(), "content.0.text").String())
+				require.Equal(t, "end_turn", gjson.Get(recorder.Body.String(), "stop_reason").String())
+			}
+		})
+	}
+}
+
+func TestNianzsKRSMessagesSemanticEOFWithoutContextUsageStaysIncomplete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"model":"claude-opus-5","max_tokens":8192,"stream":%t,"messages":[{"role":"user","content":"continue"}]}`, stream))
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+			require.NoError(t, err)
+			groupID := int64(29)
+			parsed.GroupID = &groupID
+			parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}
+
+			upstreamBody := bytes.NewBuffer(nil)
+			_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": "truncated answer"},
+			}))
+			upstreamResponse := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+				Body:       io.NopCloser(bytes.NewReader(upstreamBody.Bytes())),
+			}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+			result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+			require.Nil(t, result)
+			require.Len(t, upstream.requests, 1)
+			require.NotContains(t, recorder.Body.String(), "event: message_stop")
+			if stream {
+				require.ErrorContains(t, forwardErr, "missing completion evidence")
+				var failoverErr *UpstreamFailoverError
+				require.False(t, errors.As(forwardErr, &failoverErr), "client-visible partial output must not be replayed")
+			} else {
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, forwardErr, &failoverErr)
+				require.Equal(t, UpstreamFailureIncompleteStream, failoverErr.FailureKind)
+				require.ErrorContains(t, failoverErr.Cause, "missing completion evidence")
+				require.Empty(t, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestNianzsKRSSemanticTailCommitsCacheForStreamingAndNonStreaming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stream := range []bool{false, true} {
+		stream := stream
+		t.Run(map[bool]string{false: "non_stream", true: "stream"}[stream], func(t *testing.T) {
+			resetNianzsKiroCacheTracker()
+			group := nianzsTestKiroCacheGroup(1)
+			group.ID = 29
+			group.KiroEndpointMode = KiroEndpointModeKRS
+			body := nianzsTestKiroCacheRequestBody("semantic tail cache", false)
+			if stream {
+				body = bytes.Replace(body, []byte(`"messages"`), []byte(`"stream":true,"messages"`), 1)
+			}
+			semanticTailResponse := func() *http.Response {
+				upstreamBody := bytes.NewBuffer(nil)
+				_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+					"assistantResponseEvent": map[string]any{"content": "cached semantic tail"},
+				}))
+				_, _ = upstreamBody.Write(kiroEventStreamFrame(t, "contextUsageEvent", map[string]any{
+					"contextUsageEvent": map[string]any{"contextUsagePercentage": 64.2},
+				}))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}},
+					Body:       io.NopCloser(bytes.NewReader(upstreamBody.Bytes())),
+				}
+			}
+			svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+			upstream.responses = []*http.Response{semanticTailResponse(), semanticTailResponse()}
+			forward := func() *ForwardResult {
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+				require.NoError(t, err)
+				parsed.GroupID = &group.ID
+				parsed.Group = group
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+				result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+				require.NoError(t, forwardErr)
+				require.NotNil(t, result)
+				return result
+			}
+
+			first := forward()
+			require.Greater(t, first.Usage.CacheCreationInputTokens, 0)
+			require.Zero(t, first.Usage.CacheReadInputTokens)
+			second := forward()
+			require.Zero(t, second.Usage.CacheCreationInputTokens)
+			require.Greater(t, second.Usage.CacheReadInputTokens, 0)
+			require.Len(t, upstream.requests, 2)
+		})
+	}
+}
+
 func TestNianzsMessagesThinkingWithoutProviderSignatureKeepsVisibleAnswer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-opus-5","max_tokens":128,"stream":true,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"continue"}]}`)
@@ -620,6 +776,9 @@ func TestNianzsMessagesStreamingBareEOFFailsOverBeforeOutput(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-6","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
+	groupID := int64(29)
+	parsed.GroupID = &groupID
+	parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeKRS}
 
 	upstreamResponse := &http.Response{
 		StatusCode: http.StatusOK,

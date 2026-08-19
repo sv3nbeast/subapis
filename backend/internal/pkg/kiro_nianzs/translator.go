@@ -218,7 +218,13 @@ type KiroRequestContext struct {
 	// treating a bare transport EOF as a successful model turn. Kiro may prove
 	// completion with messageStop, an explicit stop reason, a stopped tool call,
 	// or final usage metadata depending on the endpoint/runtime version.
-	RequireTerminalEvent         bool
+	RequireTerminalEvent bool
+	// AcceptSemanticTailEOF is a KRS compatibility fallback. Some long-context
+	// turns end with response content followed by contextUsageEvent and a clean
+	// EventStream EOF, but omit metering/messageStop. That ordered tail is safe
+	// to finalize; a bare EOF, metadata-only turn, or EOF before context usage
+	// remains incomplete and retryable.
+	AcceptSemanticTailEOF        bool
 	forcedToolChoiceName         string
 	NativeToolProgressRequired   bool
 	NativeToolCallMarkerRequired bool
@@ -793,6 +799,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 	}
 	sawCompletionEvidence := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
+	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
 	protocolPingSent := false
 	claudeCodeFirstTextDeltaSent := false
 	pendingClaudeProtocolText := ""
@@ -1735,7 +1742,13 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 
 		msg, err := readEventStreamMessage(reader)
 		if err == io.EOF {
-			eventDiagnostics.finish("clean_eof")
+			status := "clean_eof"
+			if requestCtx.RequireTerminalEvent && requestCtx.AcceptSemanticTailEOF && !sawCompletionEvidence && semanticTailState.canCompleteAtCleanEOF() {
+				sawCompletionEvidence = true
+				eventDiagnostics.acceptSemanticTailCompletion()
+				status = "semantic_tail_eof"
+			}
+			eventDiagnostics.finish(status)
 			break
 		}
 		if err != nil {
@@ -1749,12 +1762,14 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil, markNianzsKiroContextResponseStarted(exceptionErr, streamOutputReleased && messageStartSent)
 		}
 		if msg == nil || len(msg.Payload) == 0 {
+			semanticTailState.observe(msg, nil, "empty_payload")
 			eventDiagnostics.observe(msg, nil, "empty_payload", false)
 			continue
 		}
 
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
+			semanticTailState.observe(msg, nil, decodeStatus)
 			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
@@ -1764,6 +1779,7 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 			return nil, markNianzsKiroContextResponseStarted(contextErr, streamOutputReleased && messageStartSent)
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		semanticTailState.observe(msg, event, "decoded")
 		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
 		if completionEvidence {
 			sawCompletionEvidence = true
@@ -4225,6 +4241,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	stopReason := ""
 	sawCompletionEvidence := false
 	eventDiagnostics := newNianzsKiroEventDiagnosticState(requestCtx)
+	semanticTailState := newNianzsKiroSemanticTailState(requestCtx)
 	processedIDs := make(map[string]bool)
 	var currentTool *toolUseState
 	reasoningOpen := false
@@ -4239,7 +4256,13 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 	for {
 		msg, err := readEventStreamMessage(reader)
 		if err == io.EOF {
-			eventDiagnostics.finish("clean_eof")
+			status := "clean_eof"
+			if requestCtx.RequireTerminalEvent && requestCtx.AcceptSemanticTailEOF && !sawCompletionEvidence && semanticTailState.canCompleteAtCleanEOF() {
+				sawCompletionEvidence = true
+				eventDiagnostics.acceptSemanticTailCompletion()
+				status = "semantic_tail_eof"
+			}
+			eventDiagnostics.finish(status)
 			break
 		}
 		if err != nil {
@@ -4253,12 +4276,14 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 			return "", nil, usage, stopReason, reasoningArtifacts, exceptionErr
 		}
 		if msg == nil || len(msg.Payload) == 0 {
+			semanticTailState.observe(msg, nil, "empty_payload")
 			eventDiagnostics.observe(msg, nil, "empty_payload", false)
 			continue
 		}
 
 		event, decodeStatus := decodeNianzsKiroEventPayload(msg.Payload)
 		if decodeStatus != "decoded" {
+			semanticTailState.observe(msg, nil, decodeStatus)
 			eventDiagnostics.observe(msg, nil, decodeStatus, false)
 			continue
 		}
@@ -4271,6 +4296,7 @@ func parseEventStream(body io.Reader, model string, requestCtx KiroRequestContex
 			stopReason = preferAnthropicStopReason(stopReason, sr)
 		}
 		completionEvidence := kiroEventProvidesCompletionEvidence(msg.EventType, event)
+		semanticTailState.observe(msg, event, "decoded")
 		eventDiagnostics.observe(msg, event, "decoded", completionEvidence)
 		if completionEvidence {
 			sawCompletionEvidence = true
