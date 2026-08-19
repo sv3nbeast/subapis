@@ -318,6 +318,16 @@ func nianzsBuildKiroCacheProfile(ctx context.Context, body []byte, model string,
 	modernClaudeAccounting := nianzsUsesModernClaudeInputAccounting(model)
 	if modernClaudeAccounting {
 		nianzsApplyModernClaudeCacheBlockTokens(ctx, payload, model, totalTokens, blocks)
+	} else if nianzsUsesLegacyClaudeProtocolAccounting(model) {
+		// Claude 4.6 and earlier use the established tokenizer calibration, but
+		// their cache profile still has to own protocol metadata from cached
+		// messages. The request-level estimate includes thinking signatures,
+		// tool IDs, block types, roles and framing while the historical block
+		// estimator counted only semantic content. On long Claude Code tool
+		// loops that difference can exceed 100k tokens and was incorrectly left
+		// behind as ordinary input even when the explicit breakpoint covered the
+		// whole history.
+		nianzsApplyLegacyClaudeProtocolCacheBlockTokens(totalTokens, blocks)
 	}
 	prelude := map[string]any{
 		"model":         payload["model"],
@@ -326,7 +336,7 @@ func nianzsBuildKiroCacheProfile(ctx context.Context, body []byte, model string,
 		"output_config": payload["output_config"],
 	}
 	profile, ok := nianzsBuildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
-	if ok && modernClaudeAccounting {
+	if ok && (modernClaudeAccounting || nianzsUsesLegacyClaudeProtocolAccounting(model)) {
 		profile.completeBreakpointUsesTotal = true
 	}
 	return profile, ok
@@ -1154,6 +1164,42 @@ func nianzsUsesModernClaudeInputAccounting(model string) bool {
 	return false
 }
 
+func nianzsUsesLegacyClaudeProtocolAccounting(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "claude-") && !nianzsUsesModernClaudeInputAccounting(normalized)
+}
+
+// nianzsApplyLegacyClaudeProtocolCacheBlockTokens keeps the legacy 4.6-and-
+// earlier total-token calibration intact and only fixes where those tokens are
+// classified. System/tool block estimates already match the components used by
+// nianzsCountKiroInputTokensFromPayload. The remaining request-level tokens
+// belong to messages, including their protocol metadata, so distribute that
+// exact total over the message blocks before resolving cache breakpoints.
+func nianzsApplyLegacyClaudeProtocolCacheBlockTokens(totalTokens int, blocks []nianzsKiroPendingBlock) {
+	messageBlockIndexes := make([]int, 0, len(blocks))
+	messageMetadataWeights := make([]int, 0, len(blocks))
+	nonMessageTokens := 0
+	for index := range blocks {
+		wrapper, _ := blocks[index].value.(map[string]any)
+		kind, _ := wrapper["kind"].(string)
+		if kind != "message" {
+			nonMessageTokens += max(blocks[index].tokens, 0)
+			continue
+		}
+		messageBlockIndexes = append(messageBlockIndexes, index)
+		messageMetadataWeights = append(messageMetadataWeights, nianzsClaudeMessageMetadataWeight(wrapper["block"])+len(nianzsKiroCacheAsString(wrapper["role"]))+nianzsKiroTokensPerMessage)
+	}
+	if len(messageBlockIndexes) == 0 {
+		return
+	}
+	nianzsDistributeModernClaudeMessageTokens(
+		blocks,
+		messageBlockIndexes,
+		messageMetadataWeights,
+		max(totalTokens-nonMessageTokens, 0),
+	)
+}
+
 func nianzsScaleModernClaudeTokens(tokens, numerator, denominator int) int {
 	if tokens <= 0 || numerator <= 0 || denominator <= 0 {
 		return 0
@@ -1302,7 +1348,7 @@ func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, payload map[st
 			messageBlockIndexes = append(messageBlockIndexes, index)
 			blocks[index].tokens = nianzsCountModernClaudeMessageContentTokens(ctx, wrapper["block"])
 			role, _ := wrapper["role"].(string)
-			messageMetadataWeights = append(messageMetadataWeights, nianzsModernClaudeMessageMetadataWeight(wrapper["block"])+len(role)+nianzsKiroTokensPerMessage)
+			messageMetadataWeights = append(messageMetadataWeights, nianzsClaudeMessageMetadataWeight(wrapper["block"])+len(role)+nianzsKiroTokensPerMessage)
 		}
 	}
 
@@ -1342,7 +1388,7 @@ func nianzsApplyModernClaudeCacheBlockTokens(ctx context.Context, payload map[st
 	nianzsDistributeModernClaudeMessageTokens(blocks, messageBlockIndexes, messageMetadataWeights, max(totalTokens-nonMessageTokens, 0))
 }
 
-func nianzsModernClaudeMessageMetadataWeight(value any) int {
+func nianzsClaudeMessageMetadataWeight(value any) int {
 	block, ok := value.(map[string]any)
 	if !ok || len(block) == 0 {
 		return 0

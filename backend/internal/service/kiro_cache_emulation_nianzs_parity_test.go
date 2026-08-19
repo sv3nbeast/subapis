@@ -580,6 +580,80 @@ func TestNianzsModernClaudeCachedProtocolMetadataDoesNotLeakIntoInput(t *testing
 	require.Equal(t, inputTokens, profile.cacheTokensForBreakpoint(last.cumulativeTokens))
 }
 
+func TestNianzsClaude46CachedProtocolMetadataDoesNotLeakIntoInput(t *testing.T) {
+	body := bytes.Replace(
+		nianzsModernClaudeSignedHistoryBody(t, 400, true),
+		[]byte(`claude-opus-4-8`),
+		[]byte(`claude-opus-4-6`),
+		1,
+	)
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-4-6", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+
+	// Reproduces the captured Claude CLI shape without retaining prompt text:
+	// hundreds of signed tool-history blocks followed by a complete explicit
+	// cache breakpoint. Protocol metadata is part of that cached prefix and
+	// must not remain as a six-figure ordinary-input residue.
+	require.Equal(t, inputTokens, profile.cacheTokensForBreakpoint(last.cumulativeTokens))
+}
+
+func TestNianzsClaude46SystemOnlyBreakpointLeavesMessageHistoryAsInput(t *testing.T) {
+	body := bytes.Replace(
+		nianzsModernClaudeSignedHistoryBody(t, 400, false),
+		[]byte(`claude-opus-4-8`),
+		[]byte(`claude-opus-4-6`),
+		1,
+	)
+	inputTokens := nianzsEstimateKiroInputTokens(context.Background(), body)
+	profile, ok := nianzsBuildKiroCacheProfile(context.Background(), body, "claude-opus-4-6", inputTokens)
+	require.True(t, ok)
+	last := profile.lastCacheableBreakpoint()
+	require.NotNil(t, last)
+
+	// A breakpoint on the system prompt must not claim the uncached signed
+	// message history merely because the legacy request-level estimate includes
+	// its protocol metadata.
+	cachedTokens := profile.cacheTokensForBreakpoint(last.cumulativeTokens)
+	require.Greater(t, cachedTokens, 0)
+	require.Less(t, cachedTokens, inputTokens)
+}
+
+func TestNianzsClaude46MovingBreakpointCachesSignedHistory(t *testing.T) {
+	resetNianzsKiroCacheTracker()
+	svc := &GatewayService{}
+	account := nianzsTestKiroCacheAccount(9046, "refresh-46-signed", "access-46-signed")
+	group := nianzsTestKiroCacheGroup(1)
+
+	firstBody := bytes.Replace(
+		nianzsModernClaudeMovingSignedHistoryBody(t, 120, false),
+		[]byte(`claude-opus-4-8`),
+		[]byte(`claude-opus-4-6`),
+		1,
+	)
+	firstInput := nianzsEstimateKiroInputTokens(context.Background(), firstBody)
+	first := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, firstBody, "claude-opus-4-6", firstInput)
+	require.NotNil(t, first)
+	require.Zero(t, first.InputTokens)
+	require.Equal(t, firstInput, first.CacheCreationInputTokens)
+
+	secondBody := bytes.Replace(
+		nianzsModernClaudeMovingSignedHistoryBody(t, 120, true),
+		[]byte(`claude-opus-4-8`),
+		[]byte(`claude-opus-4-6`),
+		1,
+	)
+	secondInput := nianzsEstimateKiroInputTokens(context.Background(), secondBody)
+	second := svc.buildKiroCacheEmulationUsageNianzs(context.Background(), account, group, secondBody, "claude-opus-4-6", secondInput)
+	require.NotNil(t, second)
+	require.Zero(t, second.InputTokens)
+	require.Equal(t, first.CacheCreationInputTokens, second.CacheReadInputTokens)
+	require.Greater(t, second.CacheCreationInputTokens, 0)
+	require.Equal(t, secondInput, second.CacheReadInputTokens+second.CacheCreationInputTokens)
+}
+
 func TestNianzsModernClaudeSignedPrefixLeavesOnlyCurrentTailAsInput(t *testing.T) {
 	prefixBody := nianzsModernClaudeSignedHistoryBody(t, 150, true)
 	prefixTokens := nianzsEstimateKiroInputTokens(context.Background(), prefixBody)
@@ -692,6 +766,25 @@ func BenchmarkNianzsModernClaudeSignedHistoryAccounting(b *testing.B) {
 		inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
 		if _, ok := nianzsBuildKiroCacheProfile(ctx, body, "claude-opus-4-8", inputTokens); !ok {
 			b.Fatal("failed to build modern Claude cache profile")
+		}
+	}
+}
+
+func BenchmarkNianzsLegacyClaudeSignedHistoryAccounting(b *testing.B) {
+	body := bytes.Replace(
+		nianzsModernClaudeSignedHistoryBody(b, 400, true),
+		[]byte(`claude-opus-4-8`),
+		[]byte(`claude-opus-4-6`),
+		1,
+	)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for range b.N {
+		inputTokens := nianzsEstimateKiroInputTokens(ctx, body)
+		if _, ok := nianzsBuildKiroCacheProfile(ctx, body, "claude-opus-4-6", inputTokens); !ok {
+			b.Fatal("failed to build legacy Claude cache profile")
 		}
 	}
 }
