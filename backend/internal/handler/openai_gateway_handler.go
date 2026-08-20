@@ -2360,6 +2360,18 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// 届时 defer 已清除标记）。
 				defer clearCyberPolicyTurnState(c)
 				releaseTurnSlotsAfterForward(turnErr)
+				// Codex sends generate=false as a transport-only prewarm before the
+				// business turn. Kiro does not implement that Responses WS semantic,
+				// so the bridge completes it locally. It selected an account only to
+				// establish bridge scope: no upstream inference happened and no user
+				// usage/scheduler sample may be recorded for this synthetic turn.
+				if result != nil && result.SyntheticPrewarm {
+					reqLog.Debug("openai.websocket_kiro_synthetic_prewarm_completed",
+						zap.Int64("account_id", account.ID),
+						zap.String("response_id", result.ResponseID),
+					)
+					return
+				}
 				h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockKey, turnMapping.ToUsageFields(turnRequestedModel, ""), requestPayloadHash)
 				if service.GetOpsCyberPolicy(c) != nil {
 					cyberBlockedThisConn = true

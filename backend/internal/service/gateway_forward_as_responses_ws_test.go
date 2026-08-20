@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestIsOpenAIResponsesGenerateFalse(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{name: "explicit_false", payload: `{"generate":false}`, want: true},
+		{name: "missing_business_default", payload: `{}`},
+		{name: "explicit_true", payload: `{"generate":true}`},
+		{name: "string_false_is_not_contract", payload: `{"generate":"false"}`},
+		{name: "null_is_not_contract", payload: `{"generate":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isOpenAIResponsesGenerateFalse([]byte(tt.payload)))
+		})
+	}
+}
 
 func TestForwardAsResponsesWebSocketTurnRelaysKiroEventsWithoutBuffering(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -65,6 +86,245 @@ func TestForwardAsResponsesWebSocketTurnRelaysKiroEventsWithoutBuffering(t *test
 	assertKiroNativeGPTUpstreamRequest(t, upstream)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "type").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "generate").Exists())
+}
+
+func TestForwardAsResponsesWebSocketTurnCompletesGenerateFalsePrewarmLocally(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	longDescription := strings.Repeat("exec prewarm contract ", 3600)
+	payload := []byte(`{
+		"type":"response.create",
+		"generate":false,
+		"model":"gpt-5.6-sol",
+		"store":false,
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec","description":` + strconv.Quote(longDescription) + `}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"prewarm system context"}]}
+		],
+		"stream":true
+	}`)
+	require.Greater(t, len(payload), 70*1024, "fixture must retain the production-sized prewarm shape")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(payload), "responses")
+	require.NoError(t, err)
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "must never be generated")
+
+	events := make([][]byte, 0, 2)
+	result, err := svc.ForwardAsResponsesWebSocketTurn(
+		context.Background(), c, account, payload, parsed, true,
+		func(message []byte) error {
+			events = append(events, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.SyntheticPrewarm)
+	require.NotEmpty(t, result.ResponseID)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.Usage.OutputTokens)
+	require.Empty(t, upstream.requests, "generate=false must never call Kiro upstream")
+	require.Len(t, events, 1)
+	require.Equal(t, "response.completed", gjson.GetBytes(events[0], "type").String())
+	require.Equal(t, result.ResponseID, gjson.GetBytes(events[0], "response.id").String())
+	require.Equal(t, "completed", gjson.GetBytes(events[0], "response.status").String())
+	require.Equal(t, int64(0), gjson.GetBytes(events[0], "response.usage.total_tokens").Int())
+
+	history, ok := globalKiroResponsesHistoryStore.load(result.ResponseID)
+	require.True(t, ok, "synthetic prewarm must remain a valid continuation anchor")
+	require.Contains(t, string(history.Input), "prewarm system context")
+	require.NotContains(t, string(history.Input), "additional_tools", "tool declaration carrier is not conversation history")
+}
+
+func TestForwardAsResponsesWebSocketTurnSyntheticPrewarmClientDisconnectDoesNotReplay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	payload := []byte(`{"type":"response.create","generate":false,"model":"gpt-5.6-sol","input":[],"stream":true}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(payload), "responses")
+	require.NoError(t, err)
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "must never run")
+
+	result, err := svc.ForwardAsResponsesWebSocketTurn(
+		context.Background(), c, account, payload, parsed, true,
+		func([]byte) error { return context.Canceled },
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.SyntheticPrewarm)
+	require.True(t, result.ClientDisconnect)
+	require.Empty(t, upstream.requests, "client disconnect during local prewarm must not trigger upstream or replay")
+}
+
+func TestForwardAsResponsesWebSocketTurnContinuesFromSyntheticPrewarmAcrossConnections(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	svc, upstream, account := newKiroNativeGPTTestRuntime(t, "business turn completed")
+	prewarmPayload := []byte(`{
+		"type":"response.create",
+		"generate":false,
+		"model":"gpt-5.6-sol",
+		"store":false,
+		"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"durable prewarm instruction"}]}],
+		"stream":true
+	}`)
+	prewarmContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	prewarmContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(prewarmPayload))
+	prewarmParsed, err := ParseGatewayRequest(NewRequestBodyRef(prewarmPayload), "responses")
+	require.NoError(t, err)
+	prewarmResult, err := svc.ForwardAsResponsesWebSocketTurn(
+		context.Background(), prewarmContext, account, prewarmPayload, prewarmParsed, true, func([]byte) error { return nil },
+	)
+	require.NoError(t, err)
+	require.True(t, prewarmResult.SyntheticPrewarm)
+	require.Empty(t, upstream.requests)
+
+	businessPayload := []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-sol",
+		"previous_response_id":"` + prewarmResult.ResponseID + `",
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"run the business turn"}]}],
+		"stream":true
+	}`)
+	businessContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	businessContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(businessPayload))
+	businessParsed, err := ParseGatewayRequest(NewRequestBodyRef(businessPayload), "responses")
+	require.NoError(t, err)
+	events := make([][]byte, 0, 8)
+	businessResult, err := svc.ForwardAsResponsesWebSocketTurn(
+		context.Background(), businessContext, account, businessPayload, businessParsed, true,
+		func(message []byte) error {
+			events = append(events, append([]byte(nil), message...))
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, businessResult)
+	require.False(t, businessResult.SyntheticPrewarm)
+	require.Len(t, upstream.requests, 1, "only the business turn may reach Kiro")
+	require.Equal(t, 1, countWSResponseTerminals(events))
+	history, ok := globalKiroResponsesHistoryStore.load(prewarmResult.ResponseID)
+	require.True(t, ok)
+	require.Contains(t, string(history.Input), "durable prewarm instruction")
+	require.Contains(t, string(upstream.lastBody), "run the business turn")
+}
+
+func TestProxyResponsesWebSocketKiroSyntheticPrewarmThenBusinessTurn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resetKiroResponsesHistoryStoreForTest()
+	kiroSvc, upstream, account := newKiroNativeGPTTestRuntime(t, "business after prewarm")
+	proxySvc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+	turnResults := make([]*OpenAIForwardResult, 0, 2)
+	turnErrors := make([]error, 0, 2)
+	hooks := &OpenAIWSIngressHooks{
+		BridgeTurn: func(
+			ctx context.Context,
+			bridgeContext *gin.Context,
+			bridgeAccount *Account,
+			payload []byte,
+			turn int,
+			writeClientMessage func([]byte) error,
+		) (*OpenAIForwardResult, error) {
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(payload), "responses")
+			if err != nil {
+				return nil, err
+			}
+			result, err := kiroSvc.ForwardAsResponsesWebSocketTurn(
+				ctx, bridgeContext, bridgeAccount, payload, parsed, turn == 1, writeClientMessage,
+			)
+			return openAIForwardResultForKiroProxyTest(result), err
+		},
+		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
+			turnResults = append(turnResults, result)
+			turnErrors = append(turnErrors, turnErr)
+		},
+	}
+
+	errCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		_, firstMessage, err := conn.Read(r.Context())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = r.Clone(r.Context())
+		errCh <- proxySvc.ProxyResponsesWebSocketFromClient(r.Context(), c, conn, account, "", firstMessage, hooks)
+	}))
+	defer server.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	client, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = client.CloseNow() }()
+
+	writeWSMessage(t, client, `{
+		"type":"response.create",
+		"generate":false,
+		"model":"gpt-5.6-sol",
+		"store":false,
+		"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"prewarm"}]}],
+		"stream":true
+	}`)
+	prewarmEvents := readWSResponsesTurn(t, client)
+	require.Equal(t, 1, countWSResponseTerminals(prewarmEvents))
+	prewarmID := responseIDFromWSEvents(prewarmEvents)
+	require.NotEmpty(t, prewarmID)
+	require.Empty(t, upstream.requests, "prewarm must complete before any Kiro request")
+
+	writeWSMessage(t, client, `{
+		"type":"response.create",
+		"model":"gpt-5.6-sol",
+		"previous_response_id":"`+prewarmID+`",
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"do business"}]}],
+		"stream":true
+	}`)
+	businessEvents := readWSResponsesTurn(t, client)
+	require.Equal(t, 1, countWSResponseTerminals(businessEvents))
+	require.True(t, wsEventsContainText(businessEvents, "business after prewarm"))
+	require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case proxyErr := <-errCh:
+		require.NoError(t, proxyErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Kiro websocket bridge to close")
+	}
+	require.Len(t, upstream.requests, 1, "one client business turn must produce one upstream request")
+	require.Len(t, turnResults, 2)
+	require.Len(t, turnErrors, 2)
+	require.NoError(t, turnErrors[0])
+	require.NoError(t, turnErrors[1])
+	require.True(t, turnResults[0].SyntheticPrewarm)
+	require.Zero(t, turnResults[0].Usage.InputTokens)
+	require.Zero(t, turnResults[0].Usage.OutputTokens)
+	require.False(t, turnResults[1].SyntheticPrewarm)
+	require.Greater(t, turnResults[1].Usage.InputTokens, 0)
+}
+
+func openAIForwardResultForKiroProxyTest(result *ForwardResult) *OpenAIForwardResult {
+	if result == nil {
+		return nil
+	}
+	return &OpenAIForwardResult{
+		RequestID:        result.RequestID,
+		ResponseID:       result.ResponseID,
+		Usage:            OpenAIUsage{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens},
+		Model:            result.Model,
+		Stream:           result.Stream,
+		Duration:         result.Duration,
+		SyntheticPrewarm: result.SyntheticPrewarm,
+	}
 }
 
 func TestForwardAsResponsesWebSocketTurnFlushesBeforeKiroTerminal(t *testing.T) {

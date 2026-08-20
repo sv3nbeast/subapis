@@ -3,18 +3,124 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 type gatewayResponsesWSBridgeOutcome struct {
 	result *ForwardResult
 	err    error
+}
+
+// isOpenAIResponsesGenerateFalse reports only an explicit JSON boolean false.
+// A missing generate field is the normal business request and must continue to
+// Kiro. Invalid/non-boolean values remain on the ordinary validation path.
+func isOpenAIResponsesGenerateFalse(payload []byte) bool {
+	generate := gjson.GetBytes(payload, "generate")
+	return generate.Exists() && generate.Type == gjson.False
+}
+
+// completeKiroResponsesPrewarm emulates the Responses WebSocket
+// generate=false contract locally. OpenAI uses this frame to establish request
+// context without inference; forwarding it to Kiro incorrectly starts a real
+// model request that deterministically ends as a 2xx zero-frame EOF for Codex's
+// large tool/system prewarm payload.
+func (s *GatewayService) completeKiroResponsesPrewarm(
+	c *gin.Context,
+	account *Account,
+	payload []byte,
+	parsed *ParsedRequest,
+	writeClientMessage func([]byte) error,
+) (*ForwardResult, error) {
+	startedAt := time.Now()
+	body, err := prepareOpenAIWSHTTPBridgeBodyWithPreviousResponseID(payload, true)
+	if err != nil {
+		return nil, fmt.Errorf("prepare Kiro Responses prewarm body: %w", err)
+	}
+	normalizedBody, toolMetadata, err := normalizeKiroCodexResponsesTools(body)
+	if err != nil {
+		return nil, fmt.Errorf("normalize Kiro Responses prewarm tools: %w", err)
+	}
+	var request apicompat.ResponsesRequest
+	if err := json.Unmarshal(normalizedBody, &request); err != nil {
+		return nil, fmt.Errorf("parse Kiro Responses prewarm request: %w", err)
+	}
+	model := strings.TrimSpace(request.Model)
+	if !IsOpenAIKiroBridgeModel(model) {
+		return nil, fmt.Errorf("unsupported Kiro Responses prewarm model: %s", model)
+	}
+
+	responseID := "resp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	response := map[string]any{
+		"id":     responseID,
+		"object": "response",
+		"model":  model,
+		"status": "completed",
+		"output": []any{},
+		"usage": map[string]any{
+			"input_tokens":  0,
+			"output_tokens": 0,
+			"total_tokens":  0,
+		},
+	}
+	event, err := json.Marshal(map[string]any{
+		"type":            "response.completed",
+		"sequence_number": 0,
+		"response":        response,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal Kiro Responses prewarm completion: %w", err)
+	}
+
+	result := &ForwardResult{
+		RequestID:        responseID,
+		ResponseID:       responseID,
+		Model:            model,
+		Stream:           true,
+		Duration:         time.Since(startedAt),
+		SyntheticPrewarm: true,
+	}
+	if writeErr := writeClientMessage(event); writeErr != nil {
+		if isOpenAIWSClientDisconnectError(writeErr) {
+			result.ClientDisconnect = true
+			return result, nil
+		}
+		return result, fmt.Errorf("write Kiro Responses prewarm completion: %w", writeErr)
+	}
+
+	// Codex may reference the synthetic response ID on a later connection.
+	// Retain the normalized (declaration carrier removed) context even when
+	// store=false: this is protocol continuation state, not billable model work.
+	scope := kiroResponsesScopeForRequest(c, parsed)
+	globalKiroResponsesHistoryStore.saveEphemeral(kiroResponsesHistoryEntry{
+		ID:                 responseID,
+		PreviousResponseID: request.PreviousResponseID,
+		Model:              model,
+		Instructions:       request.Instructions,
+		Input:              append(json.RawMessage(nil), request.Input...),
+		APIKeyID:           scope.APIKeyID,
+		GroupID:            scope.GroupID,
+	})
+	logger.L().Debug("kiro.responses_synthetic_prewarm_completed",
+		zap.Int64("account_id", account.ID),
+		zap.String("response_id", responseID),
+		zap.Int("payload_bytes", len(payload)),
+		zap.Int("declared_tool_count", toolMetadata.DeclaredToolCount),
+		zap.Int("forwarded_tool_count", toolMetadata.ForwardedToolCount),
+	)
+	return result, nil
 }
 
 // ForwardAsResponsesWebSocketTurn runs the existing Responses compatibility
@@ -44,6 +150,11 @@ func (s *GatewayService) ForwardAsResponsesWebSocketTurn(
 	}
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
+	}
+	if account.Platform == PlatformKiro &&
+		IsOpenAIKiroBridgeModel(strings.TrimSpace(gjson.GetBytes(payload, "model").String())) &&
+		isOpenAIResponsesGenerateFalse(payload) {
+		return s.completeKiroResponsesPrewarm(c, account, payload, parsed, writeClientMessage)
 	}
 
 	body, err := prepareOpenAIWSHTTPBridgeBodyWithPreviousResponseID(payload, preservePreviousResponseID)

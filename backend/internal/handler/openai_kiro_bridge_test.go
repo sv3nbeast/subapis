@@ -39,10 +39,11 @@ func TestOpenAIForwardResultFromGatewayPreservesKiroUsage(t *testing.T) {
 			CacheReadInputTokens:     30,
 			KiroCredits:              0.17,
 		},
-		Stream:          true,
-		Duration:        2 * time.Second,
-		FirstTokenMs:    &firstTokenMs,
-		ReasoningEffort: &effort,
+		Stream:           true,
+		Duration:         2 * time.Second,
+		FirstTokenMs:     &firstTokenMs,
+		ReasoningEffort:  &effort,
+		SyntheticPrewarm: true,
 	})
 
 	require.NotNil(t, result)
@@ -53,6 +54,7 @@ func TestOpenAIForwardResultFromGatewayPreservesKiroUsage(t *testing.T) {
 	require.InDelta(t, 0.17, result.Usage.KiroCredits, 1e-9)
 	require.Equal(t, &effort, result.ReasoningEffort)
 	require.Equal(t, &firstTokenMs, result.FirstTokenMs)
+	require.True(t, result.SyntheticPrewarm)
 }
 
 func TestOpenAIKiroBridgeEndpointScope(t *testing.T) {

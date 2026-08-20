@@ -772,6 +772,10 @@ type ForwardResult struct {
 	FirstTokenMs                  *int // 首字时间（流式请求）
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
 	ReasoningEffort               *string
+	// SyntheticPrewarm marks a transport-only Responses generate=false turn
+	// completed locally by the Kiro bridge. It never reached an upstream model
+	// and therefore must not affect scheduling, usage records, or billing.
+	SyntheticPrewarm bool
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount         int    // 生成的图片数量

@@ -14,6 +14,8 @@ import (
 const (
 	kiroResponsesHistoryTTL      = 30 * 24 * time.Hour
 	kiroResponsesMaxHistoryDepth = 64
+	kiroResponsesEphemeralTTL    = 15 * time.Minute
+	kiroResponsesMaxEphemeral    = 1024
 )
 
 var globalKiroResponsesHistoryStore = &kiroResponsesHistoryStore{
@@ -41,6 +43,7 @@ type kiroResponsesHistoryEntry struct {
 	GroupID            int64
 	CompactSummary     string
 	StoredAt           time.Time
+	Ephemeral          bool
 }
 
 type kiroResponsesHistoryDiskEntry struct {
@@ -95,6 +98,58 @@ func (s *kiroResponsesHistoryStore) save(entry kiroResponsesHistoryEntry) {
 	s.items[entry.ID] = entry
 	_ = s.saveToDiskLocked(entry)
 	s.purgeExpiredDiskEntriesLocked()
+}
+
+// saveEphemeral keeps a continuation anchor in process memory without adding
+// synchronous disk I/O to a transport-only turn. Synthetic generate=false
+// prewarms are replay hints rather than durable model output; the active WS
+// bridge already retains their full input, while this entry covers reconnects
+// to the same gateway process.
+func (s *kiroResponsesHistoryStore) saveEphemeral(entry kiroResponsesHistoryEntry) {
+	if s == nil || strings.TrimSpace(entry.ID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry.StoredAt.IsZero() {
+		entry.StoredAt = s.currentTime()
+	}
+	entry.Ephemeral = true
+	s.items[entry.ID] = entry
+	s.purgeEphemeralLocked()
+}
+
+func (s *kiroResponsesHistoryStore) purgeEphemeralLocked() {
+	if s == nil {
+		return
+	}
+	now := s.currentTime()
+	type candidate struct {
+		id       string
+		storedAt time.Time
+	}
+	candidates := make([]candidate, 0)
+	for id, entry := range s.items {
+		if !entry.Ephemeral {
+			continue
+		}
+		if !entry.StoredAt.IsZero() && now.Sub(entry.StoredAt) > kiroResponsesEphemeralTTL {
+			delete(s.items, id)
+			continue
+		}
+		candidates = append(candidates, candidate{id: id, storedAt: entry.StoredAt})
+	}
+	for len(candidates) > kiroResponsesMaxEphemeral {
+		oldest := 0
+		for idx := 1; idx < len(candidates); idx++ {
+			if candidates[idx].storedAt.Before(candidates[oldest].storedAt) {
+				oldest = idx
+			}
+		}
+		delete(s.items, candidates[oldest].id)
+		candidates[oldest] = candidates[len(candidates)-1]
+		candidates = candidates[:len(candidates)-1]
+	}
 }
 
 func (s *kiroResponsesHistoryStore) expand(prevID string) (json.RawMessage, []apicompat.AnthropicMessage) {
@@ -275,7 +330,11 @@ func (s *kiroResponsesHistoryStore) entryExpired(entry kiroResponsesHistoryEntry
 	if entry.StoredAt.IsZero() {
 		return false
 	}
-	return s.currentTime().Sub(entry.StoredAt) > kiroResponsesHistoryTTL
+	ttl := kiroResponsesHistoryTTL
+	if entry.Ephemeral {
+		ttl = kiroResponsesEphemeralTTL
+	}
+	return s.currentTime().Sub(entry.StoredAt) > ttl
 }
 
 func (s *kiroResponsesHistoryStore) saveToDiskLocked(entry kiroResponsesHistoryEntry) error {

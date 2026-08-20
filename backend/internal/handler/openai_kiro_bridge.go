@@ -123,6 +123,7 @@ func openAIForwardResultFromGateway(result *service.ForwardResult) *service.Open
 		Duration:           result.Duration,
 		FirstTokenMs:       result.FirstTokenMs,
 		ClientDisconnect:   result.ClientDisconnect,
+		SyntheticPrewarm:   result.SyntheticPrewarm,
 		ImageCount:         result.ImageCount,
 		ImageSize:          result.ImageSize,
 		ImageOutputSize:    result.ImageOutputSize,
