@@ -266,6 +266,10 @@ type KiroPayloadOptions struct {
 	RequireNativeToolProgress    bool
 	RequireNativeToolCallMarker  bool
 	RequireNativeToolTextPrelude bool
+	// FlattenCompletedToolHistory enables the KRS-only compatibility rewrite
+	// for completed historical tool cycles. Amazon Q accepts the native
+	// structured history and must not inherit this KRS workaround.
+	FlattenCompletedToolHistory bool
 }
 
 type KiroPayload struct {
@@ -677,13 +681,16 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			currentUserMsg.Content = appendTextBlock(currentUserMsg.Content, requestCtx.StructuredOutputUserHint)
 		}
 		currentToolResults = deduplicateToolResults(currentToolResults)
-		currentToolResultIDs := collectKiroToolResultIDs(currentToolResults)
-		if !isKiroActiveToolResultTurn(history, currentToolResultIDs) {
-			currentToolResultIDs = nil
-			currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
-			currentToolResults = nil
+		var currentToolResultIDs map[string]bool
+		if options.FlattenCompletedToolHistory {
+			currentToolResultIDs = collectKiroToolResultIDs(currentToolResults)
+			if !isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+				currentToolResultIDs = nil
+				currentUserMsg.Content = joinKiroHistoryText(currentUserMsg.Content, narrateKiroToolResults(currentToolResults, collectKiroHistoryToolNames(history, requestCtx)))
+				currentToolResults = nil
+			}
 		}
-		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx)
+		history = sanitizeKiroToolHistory(history, currentToolResultIDs, requestCtx, options.FlattenCompletedToolHistory)
 		if len(kiroTools) > 0 || len(currentToolResults) > 0 {
 			currentUserMsg.UserInputMessageContext = &KiroUserInputMessageContext{
 				Tools:       kiroTools,
@@ -691,7 +698,7 @@ func BuildKiroPayloadWithOptions(claudeBody []byte, modelID, profileArn string, 
 			}
 		}
 	} else {
-		history = sanitizeKiroToolHistory(history, nil, requestCtx)
+		history = sanitizeKiroToolHistory(history, nil, requestCtx, options.FlattenCompletedToolHistory)
 	}
 
 	var currentMessage KiroCurrentMessage
@@ -3426,9 +3433,11 @@ func collectKiroHistoryToolNames(history []KiroHistoryMessage, requestCtx KiroRe
 }
 
 // KRS accepts older completed tool cycles but can answer with only metadata
-// and context usage. Keep only the active final tool turn structured and
-// preserve completed tool output as ordinary conversation text.
-func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext) []KiroHistoryMessage {
+// and context usage. When flattenCompletedToolHistory is enabled, keep only
+// the active final tool turn structured and preserve completed tool output as
+// ordinary conversation text. Amazon Q retains its native structured cycles
+// while sharing the endpoint-neutral empty/orphan history cleanup.
+func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs map[string]bool, requestCtx KiroRequestContext, flattenCompletedToolHistory bool) []KiroHistoryMessage {
 	if len(history) == 0 {
 		return history
 	}
@@ -3436,7 +3445,7 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 	toolNames := collectKiroHistoryToolNames(history, requestCtx)
 	flattenedToolMessages := make(map[*KiroUserInputMessage]bool)
 	activeAssistantIdx := -1
-	if isKiroActiveToolResultTurn(history, currentToolResultIDs) {
+	if flattenCompletedToolHistory && isKiroActiveToolResultTurn(history, currentToolResultIDs) {
 		activeAssistantIdx = len(history) - 1
 	}
 
@@ -3444,13 +3453,13 @@ func sanitizeKiroToolHistory(history []KiroHistoryMessage, currentToolResultIDs 
 		msg := &history[i]
 		if msg.AssistantResponseMessage != nil {
 			msg.AssistantResponseMessage.Content = stripKiroPollutedToolCallText(msg.AssistantResponseMessage.Content)
-			if len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
+			if flattenCompletedToolHistory && len(msg.AssistantResponseMessage.ToolUses) > 0 && i != activeAssistantIdx {
 				msg.AssistantResponseMessage.ToolUses = nil
 			}
 		}
 		if msg.UserInputMessage != nil && msg.UserInputMessage.UserInputMessageContext != nil {
 			ctx := msg.UserInputMessage.UserInputMessageContext
-			if len(ctx.ToolResults) > 0 {
+			if flattenCompletedToolHistory && len(ctx.ToolResults) > 0 {
 				msg.UserInputMessage.Content = joinKiroHistoryText(msg.UserInputMessage.Content, narrateKiroToolResults(ctx.ToolResults, toolNames))
 				flattenedToolMessages[msg.UserInputMessage] = true
 				ctx.ToolResults = nil

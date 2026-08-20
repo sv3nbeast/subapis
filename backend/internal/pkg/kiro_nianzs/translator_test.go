@@ -1161,7 +1161,7 @@ func TestParseNonStreamingEventStreamPreservesLargeIntegerInMapInput(t *testing.
 	require.Equal(t, "9007199254740993", gjson.GetBytes(result.ResponseBody, "content.0.input.id").Raw)
 }
 
-func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
+func TestBuildKiroPayloadFlattensCompletedHistoryToolCyclesForKRS(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"messages":[
@@ -1183,7 +1183,10 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
 		]
 	}`)
 
-	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                      "AI_EDITOR",
+		FlattenCompletedToolHistory: true,
+	})
 	require.NoError(t, err)
 	payload := result.Payload
 
@@ -1214,7 +1217,43 @@ func TestBuildKiroPayloadFlattensCompletedHistoryToolCycles(t *testing.T) {
 	require.Contains(t, string(payload), "Tool results:")
 }
 
-func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
+func TestBuildKiroPayloadPreservesCompletedHistoryToolCyclesForAmazonQ(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-5",
+		"messages":[
+			{"role":"user","content":"run the build"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"running build"},
+				{"type":"tool_use","id":"t1","name":"exec_command","input":{"cmd":"make"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t1","content":"build ok"}
+			]},
+			{"role":"assistant","content":"build completed"},
+			{"role":"user","content":"Summarize everything that happened above."}
+		]
+	}`)
+
+	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	require.NoError(t, err)
+	payload := result.Payload
+
+	foundToolUse := false
+	foundToolResult := false
+	for _, msg := range gjson.GetBytes(payload, "conversationState.history").Array() {
+		if msg.Get("assistantResponseMessage.toolUses.0.toolUseId").String() == "t1" {
+			foundToolUse = true
+		}
+		if msg.Get("userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String() == "t1" {
+			foundToolResult = true
+		}
+	}
+	require.True(t, foundToolUse)
+	require.True(t, foundToolResult)
+	require.NotContains(t, string(payload), kiroToolResultsPrefix)
+}
+
+func TestBuildKiroPayloadKeepsActiveToolTurnStructuredForKRS(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
@@ -1229,7 +1268,10 @@ func TestBuildKiroPayloadKeepsActiveToolTurnStructured(t *testing.T) {
 		]
 	}`)
 
-	result, err := BuildKiroPayloadWithContext(body, "claude-opus-5", "", "AI_EDITOR", nil)
+	result, err := BuildKiroPayloadWithOptions(body, "claude-opus-5", "", nil, KiroPayloadOptions{
+		Origin:                      "AI_EDITOR",
+		FlattenCompletedToolHistory: true,
+	})
 	require.NoError(t, err)
 	payload := result.Payload
 	history := gjson.GetBytes(payload, "conversationState.history").Array()

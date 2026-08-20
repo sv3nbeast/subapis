@@ -869,7 +869,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		if endpoint.Name == "KiroRuntime" {
 			profileArn = nianzsKiroResolveProfileArnForKRS(account)
 		}
-		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, options)
+		flattenCompletedToolHistory := endpoint.Name == "KiroRuntime"
+		buildResult, err := s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, options)
 		if err != nil {
 			return nil, requestCtx, err
 		}
@@ -879,7 +880,7 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 		// by contextUsageEvent and a frame-aligned EOF, omitting the separate
 		// metering/messageStop frame. Q endpoints retain strict terminal proof.
 		requestCtx.AcceptSemanticTailEOF = endpoint.Name == "KiroRuntime"
-		nianzsLogKiroStatelessReplay(account, buildResult.Payload)
+		nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory)
 
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := nianzsNewKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, nianzsBuildKiroMachineID(account), endpoint.AmzTarget, account)
@@ -978,13 +979,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsedOptionsNianzs(ctx context.
 						} else {
 							profileArn = ""
 						}
-						buildResult, err = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, options)
+						buildResult, err = s.buildKiroPayloadForAccountWithArnNianzs(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn, flattenCompletedToolHistory, options)
 						if err != nil {
 							return nil, requestCtx, err
 						}
 						payload = buildResult.Payload
 						requestCtx = buildResult.Context
-						nianzsLogKiroStatelessReplay(account, buildResult.Payload)
+						nianzsLogKiroStatelessReplay(account, buildResult.Payload, endpoint.Name, flattenCompletedToolHistory)
 						if sleepErr := nianzsSleepKiroRetry(ctx, attempt); sleepErr != nil {
 							return nil, requestCtx, sleepErr
 						}
@@ -1080,7 +1081,7 @@ func nianzsKiroEndpointModeForRequest(account *Account, parsed *ParsedRequest) s
 
 // buildKiroPayloadForAccountWithArnNianzs 使用显式 profileArn 构建 Kiro 请求 payload。
 // auto 模式下 Q/KRS 端点需要不同 profileArn，调用方按端点维度传入。
-func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
+func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, modelID, token, requestModel string, headers http.Header, profileArn string, flattenCompletedToolHistory bool, options nianzsKiroUpstreamRequestOptions) (*nianzskiro.KiroBuildResult, error) {
 	_ = s
 	_ = ctx
 	_ = token
@@ -1093,6 +1094,7 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArnNianzs(ctx context.Con
 		RequireNativeToolProgress:    requireNativeToolProgress,
 		RequireNativeToolCallMarker:  requireNativeToolCallMarker,
 		RequireNativeToolTextPrelude: requireNativeToolTextPrelude,
+		FlattenCompletedToolHistory:  flattenCompletedToolHistory,
 	})
 	if err != nil {
 		return nil, err
@@ -1170,7 +1172,7 @@ func nianzsStableKiroConversationSeed(account *Account, parsed *ParsedRequest, a
 	return sb.String()
 }
 
-func nianzsLogKiroStatelessReplay(account *Account, payload []byte) {
+func nianzsLogKiroStatelessReplay(account *Account, payload []byte, endpointName string, flattenCompletedToolHistory bool) {
 	if account == nil {
 		return
 	}
@@ -1179,6 +1181,8 @@ func nianzsLogKiroStatelessReplay(account *Account, payload []byte) {
 	currentContent := gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String()
 	logger.L().Info("kiro.stateless_replay",
 		zap.Int64("selected_account_id", account.ID),
+		zap.String("endpoint_name", strings.TrimSpace(endpointName)),
+		zap.Bool("flatten_completed_tool_history", flattenCompletedToolHistory),
 		zap.Bool("stateless_replay", true),
 		zap.Int("history_count", len(gjson.GetBytes(payload, "conversationState.history").Array())),
 		zap.Bool("has_agent_continuation_id", gjson.GetBytes(payload, "conversationState.agentContinuationId").Exists()),

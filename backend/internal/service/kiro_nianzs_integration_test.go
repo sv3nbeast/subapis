@@ -1060,27 +1060,122 @@ func TestNianzsMessagesContextLimitAfterOutputTerminatesInBandExactlyOnce(t *tes
 	require.True(t, HasGatewaySSEErrorWritten(c))
 }
 
-func TestNianzsMessagesForwardFlattensCompletedToolCyclesBeforeKRS(t *testing.T) {
+func TestNianzsMessagesForwardScopesCompletedToolHistoryByEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, endpoint := range []struct {
+		name              string
+		mode              string
+		host              string
+		flattenOldHistory bool
+	}{
+		{name: "amazon_q", mode: KiroEndpointModeQ, host: "q.us-east-1.amazonaws.com", flattenOldHistory: false},
+		{name: "krs", mode: KiroEndpointModeKRS, host: "runtime.us-east-1.kiro.dev", flattenOldHistory: true},
+	} {
+		endpoint := endpoint
+		for _, stream := range []bool{false, true} {
+			stream := stream
+			t.Run(fmt.Sprintf("%s/stream_%t", endpoint.name, stream), func(t *testing.T) {
+				body := []byte(fmt.Sprintf(`{
+					"model":"claude-opus-5",
+					"max_tokens":128,
+					"stream":%t,
+					"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
+					"messages":[
+						{"role":"user","content":"run build"},
+						{"role":"assistant","content":[{"type":"tool_use","id":"old-tool","name":"exec_command","input":{"cmd":"make"}}]},
+						{"role":"user","content":[{"type":"tool_result","tool_use_id":"old-tool","content":"build ok"}]},
+						{"role":"assistant","content":"build completed"},
+						{"role":"user","content":"run tests"},
+						{"role":"assistant","content":[{"type":"tool_use","id":"active-tool","name":"exec_command","input":{"cmd":"go test ./..."}}]},
+						{"role":"user","content":[{"type":"tool_result","tool_use_id":"active-tool","content":"tests pass"}]}
+					]
+				}`, stream))
+				parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
+				require.NoError(t, err)
+				groupID := int64(29)
+				parsed.GroupID = &groupID
+				parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: endpoint.mode}
+				upstreamResponse := kiroEventStreamResponse(t, "continue after tool result", 64, 5)
+				svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+				result, forwardErr := svc.Forward(context.Background(), c, account, parsed)
+
+				require.NoError(t, forwardErr)
+				require.NotNil(t, result)
+				require.Len(t, upstream.requests, 1)
+				require.Equal(t, endpoint.host, upstream.requests[0].URL.Host)
+				payload := upstream.lastBody
+				if endpoint.flattenOldHistory {
+					require.NotContains(t, string(payload), `"toolUseId":"old-tool"`)
+					require.Contains(t, string(payload), "Tool results:")
+					require.Contains(t, string(payload), "[exec_command] build ok")
+				} else {
+					require.Contains(t, string(payload), `"toolUseId":"old-tool"`)
+					require.NotContains(t, string(payload), "Tool results:")
+					foundOldResult := false
+					for _, message := range gjson.GetBytes(payload, "conversationState.history").Array() {
+						if message.Get("userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String() == "old-tool" {
+							foundOldResult = true
+						}
+					}
+					require.True(t, foundOldResult)
+				}
+				history := gjson.GetBytes(payload, "conversationState.history").Array()
+				require.NotEmpty(t, history)
+				last := history[len(history)-1]
+				require.Equal(t, "active-tool", last.Get("assistantResponseMessage.toolUses.0.toolUseId").String())
+				require.Equal(t, "active-tool", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
+				if stream {
+					require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+				} else {
+					require.Equal(t, "continue after tool result", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
+				}
+			})
+		}
+	}
+}
+
+func TestNianzsMessagesAutoRebuildsToolHistoryForEachEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"max_tokens":128,
-		"stream":true,
+		"stream":false,
 		"tools":[{"name":"exec_command","description":"run","input_schema":{"type":"object"}}],
 		"messages":[
 			{"role":"user","content":"run build"},
 			{"role":"assistant","content":[{"type":"tool_use","id":"old-tool","name":"exec_command","input":{"cmd":"make"}}]},
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"old-tool","content":"build ok"}]},
 			{"role":"assistant","content":"build completed"},
-			{"role":"user","content":"run tests"},
-			{"role":"assistant","content":[{"type":"tool_use","id":"active-tool","name":"exec_command","input":{"cmd":"go test ./..."}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"active-tool","content":"tests pass"}]}
+			{"role":"user","content":"summarize"}
 		]
 	}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformKiro)
 	require.NoError(t, err)
-	upstreamResponse := kiroEventStreamResponse(t, "continue after tool result", 64, 5)
-	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, upstreamResponse)
+	groupID := int64(29)
+	parsed.GroupID = &groupID
+	parsed.Group = &Group{ID: groupID, Platform: PlatformKiro, KiroEndpointMode: KiroEndpointModeAuto}
+
+	serviceUnavailable := func() *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"message":"temporary"}`)),
+		}
+	}
+	svc, upstream, account := newNianzsKiroRouteTestRuntime(t, nil)
+	upstream.responses = []*http.Response{
+		serviceUnavailable(),
+		serviceUnavailable(),
+		serviceUnavailable(),
+		kiroEventStreamResponse(t, "recovered on krs", 64, 5),
+	}
+	originalRetrySleep := nianzsKiroRetrySleep
+	nianzsKiroRetrySleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { nianzsKiroRetrySleep = originalRetrySleep })
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
@@ -1089,17 +1184,17 @@ func TestNianzsMessagesForwardFlattensCompletedToolCyclesBeforeKRS(t *testing.T)
 
 	require.NoError(t, forwardErr)
 	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 1)
-	payload := upstream.lastBody
-	require.NotContains(t, string(payload), `"toolUseId":"old-tool"`)
-	require.Contains(t, string(payload), "Tool results:")
-	require.Contains(t, string(payload), "[exec_command] build ok")
-	history := gjson.GetBytes(payload, "conversationState.history").Array()
-	require.NotEmpty(t, history)
-	last := history[len(history)-1]
-	require.Equal(t, "active-tool", last.Get("assistantResponseMessage.toolUses.0.toolUseId").String())
-	require.Equal(t, "active-tool", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.toolResults.0.toolUseId").String())
-	require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: message_stop"))
+	require.Len(t, upstream.requests, 4)
+	require.Len(t, upstream.bodies, 4)
+	for i := 0; i < 3; i++ {
+		require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[i].URL.Host)
+		require.Contains(t, string(upstream.bodies[i]), `"toolUseId":"old-tool"`)
+		require.NotContains(t, string(upstream.bodies[i]), "Tool results:")
+	}
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[3].URL.Host)
+	require.NotContains(t, string(upstream.bodies[3]), `"toolUseId":"old-tool"`)
+	require.Contains(t, string(upstream.bodies[3]), "[exec_command] build ok")
+	require.Equal(t, "recovered on krs", gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String())
 }
 
 func TestNianzsMessagesWebSearchStreamReachesExactlyOneTerminalOutcome(t *testing.T) {
